@@ -352,7 +352,9 @@ impl Packing {
         }
         let descriptors = Buffer::from_host_async(pool.clone(), &descriptors[..order.len() * 3])?;
         let module = module(pool)?;
-        let launch = LaunchConfig1D::new(rows.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
+        let initial = module.prepare_permute::<W>(LaunchConfig1D::new(1, 256, 0))?;
+        let grid = cq_gpu_runtime::launch_grid_for_kernel(initial.function(), rows.div_ceil(256), 256, 0)?;
+        let launch = LaunchConfig1D::new(grid, 256, 0);
         module.permute::<W>(
             pool.stream(),
             &module.prepare_permute::<W>(launch)?,

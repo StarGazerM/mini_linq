@@ -73,6 +73,7 @@ pub fn capture_physical(input: TokenStream) -> TokenStream {
     .into()
 }
 
+/// Capture checked Structures IR; compile pipelines must set `print_input = structures`.
 #[proc_macro]
 pub fn capture_structures(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_testkit::structures::Program, syn::Expr>(input.into(), |p, _| {

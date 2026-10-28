@@ -478,7 +478,7 @@ pub fn full_insert<'a>(layouts: impl IntoIterator<Item = &'a Layout>, next: &Ide
     let mut updates = Vec::new();
     let mut bulk = Vec::new();
     for layout in layouts {
-        if bulk_layout(layout) {
+        if layout.protocol == round::storage::LayoutProtocol::Bulk {
             bulk.push(extend_layout(layout, next));
         } else {
             updates.push(insert_layout(layout, false));
@@ -509,7 +509,7 @@ pub fn delta_swap(relation: &round::Relation) -> TokenStream {
 /// Replace a delta's rows, retaining bulk layout host capacity across rounds.
 pub fn delta_rebuild(layout: &Layout, delta: &Ident) -> TokenStream {
     let host = &layout.host;
-    if bulk_layout(layout) {
+    if layout.protocol == round::storage::LayoutProtocol::Bulk {
         let extend = extend_layout(layout, delta);
         return quote!({
             #host.clear();
@@ -663,11 +663,6 @@ pub fn round_body(
     });
     quote!(#(#allocate)* #(#bodies)*)
 }
-fn bulk_layout(layout: &Layout) -> bool {
-    matches!(&layout.provider, syn::Type::Path(provider)
-        if provider.path.segments.last().is_some_and(|segment|
-            segment.ident == "ShardedLayout" || segment.ident == "RunLayout"))
-}
 
 fn layout_columns(layout: &Layout, borrowed_columns: bool) -> Vec<TokenStream> {
     layout
@@ -698,7 +693,7 @@ pub fn insert_layout(layout: &Layout, borrowed_columns: bool) -> TokenStream {
     let host = &layout.host;
     let columns = layout_columns(layout, borrowed_columns);
     let (keys, values) = columns.split_at(layout.key);
-    if bulk_layout(layout) {
+    if layout.protocol == round::storage::LayoutProtocol::Bulk {
         quote!(#host.push((#(#keys,)*), (#(#values,)*));)
     } else {
         quote!(#host.entry((#(#keys,)*)).or_default().push((#(#values,)*));)

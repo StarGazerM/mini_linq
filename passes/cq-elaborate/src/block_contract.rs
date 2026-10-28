@@ -10,6 +10,45 @@ use std::collections::{BTreeMap, BTreeSet};
 use syn::Ident;
 use vo::syntax as cq_syntax;
 
+/// Formal rule CK-BlockPlacement: Every supplied VO block has RA provenance with exactly its recorded correlation alternative.
+pub(super) fn check_placement(steps: &[vo::Step], target: &ra::Program) -> syn::Result<()> {
+    for step in steps {
+        let vo::Step::Block(block, _) = step else {
+            continue;
+        };
+        let correlated = block.placement == vo::blocks::Placement::Correlated;
+        let origins = target.plan.definitions.iter().filter_map(|definition| {
+            let ra::Operator::Union(union) = &definition.operator else {
+                return None;
+            };
+            union
+                .origin
+                .as_ref()
+                .filter(|origin| origin.occurrence == block.source.clause)
+        });
+        let mut found = false;
+        for origin in origins {
+            found = true;
+            if origin.over.is_some() != correlated {
+                return Err(syn::Error::new_spanned(
+                    block,
+                    "RA block placement differs from the recorded VO placement",
+                ));
+            }
+        }
+        if !found {
+            return Err(syn::Error::new_spanned(
+                block,
+                "RA omits the recorded VO block",
+            ));
+        }
+        for branch in &block.branches {
+            check_placement(&branch.steps, target)?;
+        }
+    }
+    Ok(())
+}
+
 fn paths(
     body: &cq_syntax::CommaList<cq::BodyItem>,
     parent: Option<(&Occurrence, usize)>,
@@ -135,8 +174,9 @@ impl Body<'_, '_> {
                         _ => None,
                     })
                     .expect("VO block coverage");
-                let over = facts.rust.then(|| self.seed());
-                let domain = (!facts.rust && super::needs_domain(block, &facts)).then(|| {
+                let correlated = planned.placement == vo::blocks::Placement::Correlated;
+                let over = correlated.then(|| self.seed());
+                let domain = (!correlated && super::needs_domain(block, &facts)).then(|| {
                     let saved = self.prefix;
                     if !facts.free.keys().all(|name| self.heading.contains(name)) {
                         let mut input = None;
@@ -193,7 +233,7 @@ impl Body<'_, '_> {
                 for (j, (branch, plan)) in block.branches.iter().zip(&planned.branches).enumerate()
                 {
                     let mut input = over.or(domain);
-                    if facts.rust && block.kind == cq::blocks::Kind::Fallback {
+                    if correlated && block.kind == cq::blocks::Kind::Fallback {
                         for previous in &originals {
                             input = Some(self.schedule.anti(
                                 input.expect("correlated seed"),
@@ -209,12 +249,12 @@ impl Body<'_, '_> {
                         body: &branch.body,
                         steps: &plan.steps,
                         parent: Some((child_path, j)),
-                        context: if facts.rust {
+                        context: if correlated {
                             prefix.clone()
                         } else {
                             facts.free.keys().cloned().collect()
                         },
-                        heading: if facts.rust {
+                        heading: if correlated {
                             self.heading.clone()
                         } else if domain.is_some() {
                             facts.free.keys().cloned().collect()
@@ -229,7 +269,7 @@ impl Body<'_, '_> {
                     };
                     child.visit();
                     let input = child.seed();
-                    let kept: BTreeSet<_> = if facts.rust {
+                    let kept: BTreeSet<_> = if correlated {
                         self.heading.union(&common).cloned().collect()
                     } else {
                         common.clone()
@@ -240,7 +280,7 @@ impl Body<'_, '_> {
                         .collect::<Vec<_>>();
                     let original = self.schedule.project(input, &attributes);
                     let mut positive = original;
-                    if !facts.rust && block.kind == cq::blocks::Kind::Fallback {
+                    if !correlated && block.kind == cq::blocks::Kind::Fallback {
                         for previous in &originals {
                             positive = self.schedule.anti(positive, *previous, &columns);
                         }
@@ -266,7 +306,7 @@ impl Body<'_, '_> {
                         domain: None,
                     }),
                 };
-                if facts.rust {
+                if correlated {
                     self.correlated.insert(clause);
                 }
                 self.schedule.union_frame(&operands, &union, over, domain)

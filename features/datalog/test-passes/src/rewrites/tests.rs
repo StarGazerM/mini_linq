@@ -123,6 +123,7 @@ fn storage_alternative_fixture_and_binding_mutations() {
         key: 0,
         provider: syn::parse_quote!(::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>),
         maintenance: syn::parse_quote!(admitted_rows),
+        protocol: storage::LayoutProtocol::GroupedMap,
     });
     expected.reads[0].index = 1;
     expected.reads[0].columns = vec![1, 0];

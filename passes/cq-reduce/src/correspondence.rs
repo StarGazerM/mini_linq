@@ -2,7 +2,7 @@
 
 use super::{Options, Reductions};
 use cq_lang_vo::{self as vo, Reduction, Step};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Check the source domain, unchanged query/steps, and reduction obligations.
 /// A full tree reducer obeys dependencies, but need not use breadth-first order.
@@ -32,7 +32,11 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
         &source.valuation.steps,
         &target.valuation.steps,
         &source_info,
-        &vo::cq::hypergraph::Analysis::of(&source.cq),
+        &super::scope_graph(
+            &source.cq.query.body,
+            &source.valuation.steps,
+            &BTreeSet::new(),
+        ),
         options,
         &source.cq.name,
     )
@@ -102,31 +106,8 @@ fn check_steps(
             ),
         ));
     }
-    // Formal rule CK-Masks: Masks reductions equal the outer-rooted mask schedule recomputed from the source steps.
     if options.semijoins == Reductions::Masks {
-        // Branch-scope occurrences carry their block path; the schedule is
-        // recomputed on scope-local clauses.
-        let local = |step: &Step| match step {
-            Step::Reduce(r, kind) => {
-                let mut r = r.clone();
-                r.clause = super::index(r.clause()).into();
-                let super::Reduction::With(_, support) = &mut r.reduction;
-                support.clause = super::index(support.clause()).into();
-                Some(Step::Reduce(r, *kind))
-            }
-            _ => None,
-        };
-        let expected: Vec<_> = super::mask_steps(body, source_steps, source_info, &graph)
-            .iter()
-            .filter_map(local)
-            .collect();
-        let actual: Vec<_> = target_steps.iter().filter_map(local).collect();
-        if actual != expected {
-            return Err(syn::Error::new_spanned(
-                body,
-                format!("query `{name}`: reductions differ from the outer-rooted mask schedule"),
-            ));
-        }
+        check_masks(body, source_steps, target_steps, source_info, &graph)?;
     }
     let mut edges = BTreeMap::new();
     let parents: BTreeMap<usize, usize> = tree
@@ -330,7 +311,8 @@ fn check_steps(
                 .unwrap_or_default()
                 .into_iter()
                 .collect();
-            let inner = vo::cq::hypergraph::Analysis::of_body(&written.branches[j].body, &context);
+            let inner =
+                super::scope_graph(&written.branches[j].body, &source_branch.steps, &context);
             let options = options.effective(false, !inner.acyclic);
             check_steps(
                 &written.branches[j].body,
@@ -341,6 +323,175 @@ fn check_steps(
                 &options,
                 name,
             )?;
+        }
+    }
+    Ok(())
+}
+
+/// Formal rule CK-Masks: Check exact eligible edges, outer exclusion, filtered components, child dependencies and strongest sibling order independently of mask construction.
+fn check_masks(
+    body: &vo::syntax::CommaList<vo::cq::BodyItem>,
+    source: &[Step],
+    target: &[Step],
+    source_info: &vo::Analysis,
+    graph: &vo::cq::hypergraph::Analysis,
+) -> syn::Result<()> {
+    let fail = |message| syn::Error::new_spanned(body, message);
+    let root = source.iter().find_map(|step| match step {
+        Step::Atom(atom, _) => Some(atom.clause()),
+        Step::Block(block, _) if graph.clauses.contains_key(&block.source.clause()) => {
+            Some(block.source.clause())
+        }
+        _ => None,
+    });
+    let required: BTreeSet<_> = source_info.domain_requires.values().flatten().collect();
+    let boundary = if required.is_empty() {
+        source
+            .iter()
+            .position(|step| matches!(step, Step::Atom(..) | Step::Block(..)))
+    } else {
+        source_info
+            .bound_before
+            .iter()
+            .position(|bound| required.iter().all(|name| bound.contains(name)))
+    };
+    let mut consumed = 0;
+    let mut actual = BTreeMap::new();
+    for (position, step) in target.iter().enumerate() {
+        if let Step::Reduce(reduction, _) = step {
+            if boundary.is_some_and(|boundary| consumed > boundary) {
+                return Err(fail(
+                    "Masks reductions must precede the stream or its first ready domain boundary",
+                ));
+            }
+            let Reduction::With(_, support) = &reduction.reduction;
+            let edge = (reduction.clause(), support.clause());
+            if Some(edge.0) == root || Some(edge.1) == root {
+                return Err(fail("Masks forbids the outer as target or support"));
+            }
+            if actual.insert(edge, position).is_some() {
+                return Err(fail("Masks forbids duplicate reduction edges"));
+            }
+        } else {
+            consumed += 1;
+        }
+    }
+    let Some(root) = root else {
+        return if actual.is_empty() {
+            Ok(())
+        } else {
+            Err(fail("Masks requires a scheduled outer occurrence"))
+        };
+    };
+    let mut adjacent: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for &(node, parent) in &graph.reduction_tree {
+        if let Some(parent) = parent {
+            adjacent.entry(node).or_default().push(parent);
+            adjacent.entry(parent).or_default().push(node);
+        }
+    }
+    // Distance labels orient the undirected tree without using the reducer's
+    // rooting or traversal helpers.
+    let mut distance = BTreeMap::from([(root, 0usize)]);
+    let mut queue = vec![root];
+    let mut cursor = 0;
+    while cursor < queue.len() {
+        let node = queue[cursor];
+        cursor += 1;
+        for &neighbor in adjacent.get(&node).into_iter().flatten() {
+            if !distance.contains_key(&neighbor) {
+                distance.insert(neighbor, distance[&node] + 1);
+                queue.push(neighbor);
+            }
+        }
+    }
+    let cuts: BTreeSet<_> = graph
+        .clauses
+        .keys()
+        .copied()
+        .filter(|&atom| atom != root && body[atom].atom().is_some())
+        .flat_map(|atom| {
+            graph
+                .clauses
+                .keys()
+                .copied()
+                .filter(move |&block| {
+                    block != root
+                        && matches!(&body[block], vo::cq::BodyItem::Block(_))
+                        && !graph.shared(atom, block).is_empty()
+                })
+                .map(move |block| (atom, block))
+        })
+        .collect();
+    let mut local = vo::cq::hypergraph::filter_ranks(body, graph);
+    for &(atom, _) in &cuts {
+        local.entry(atom).and_modify(|rank| *rank = (*rank).min(2));
+    }
+    let mut required = cuts.clone();
+    let mut ranks = BTreeMap::new();
+    for (&child, &depth) in &distance {
+        if child == root {
+            continue;
+        }
+        let parent = adjacent[&child]
+            .iter()
+            .copied()
+            .find(|node| distance.get(node) == Some(&(depth - 1)))
+            .expect("reachable tree node has a parent");
+        // Inspect the support component after removing its parent edge. This
+        // is a declarative filtered-subtree test, not a schedule traversal.
+        let mut pending = vec![(child, parent)];
+        let mut rank = 3;
+        while let Some((node, previous)) = pending.pop() {
+            rank = rank.min(local.get(&node).copied().unwrap_or(3));
+            for &neighbor in adjacent.get(&node).into_iter().flatten() {
+                if neighbor != previous {
+                    pending.push((neighbor, node));
+                }
+            }
+        }
+        if parent != root && body[parent].atom().is_some() && rank < 3 {
+            required.insert((parent, child));
+            if !cuts.contains(&(parent, child)) {
+                ranks.insert((parent, child), rank);
+            }
+        }
+    }
+    if actual.keys().any(|edge| !required.contains(edge)) {
+        return Err(fail(
+            "Masks edge lacks an inner filtered-child or exact block-cut premise",
+        ));
+    }
+    if required.iter().any(|edge| !actual.contains_key(edge)) {
+        return Err(fail(
+            "Masks is missing a filtered-child edge or exact block cut",
+        ));
+    }
+    for (&(parent, child), &position) in &actual {
+        for (&(target, support), &earlier) in &actual {
+            if target == child && earlier >= position {
+                return Err(fail(
+                    "Masks support must include all child reductions before use",
+                ));
+            }
+            if cuts.contains(&(target, support))
+                && !cuts.contains(&(parent, child))
+                && earlier >= position
+            {
+                return Err(fail("Masks block cuts must precede tree reductions"));
+            }
+        }
+        if let Some(&rank) = ranks.get(&(parent, child)) {
+            for (&(other_parent, sibling), &other_rank) in &ranks {
+                if parent == other_parent
+                    && (other_rank, sibling) < (rank, child)
+                    && actual[&(other_parent, sibling)] >= position
+                {
+                    return Err(fail(
+                        "Masks siblings must run strongest first, then written order",
+                    ));
+                }
+            }
         }
     }
     Ok(())

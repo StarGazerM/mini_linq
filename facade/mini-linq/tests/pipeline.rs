@@ -141,7 +141,7 @@ fn ordered_host_fallback_records_must_be_ordered_admissible() {
     });
     let structured = cq_structure_selection::compile(&source).unwrap();
     let mut invalid = structured.clone();
-    let entry = invalid.structures.entries.iter_mut().find(|e| matches!(&e.structure, cq_lang_structures::Structure::Host { reader, .. } if reader == "out")).unwrap();
+    let entry = invalid.structures.entries.iter_mut().find(|e| matches!(&e.structure, cq_lang_structures::Structure::Host { reader, .. } if reader.result().is_some_and(|name| name == "out"))).unwrap();
     if let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure {
         keyed.ty = syn::parse_quote!(::std::collections::HashSet<_>);
     }
@@ -658,4 +658,90 @@ fn named_sequence_planner_swaps_checked_policy_and_preserves_target_delegation()
     }
     .collect();
     assert_eq!(custom, default);
+}
+
+#[test]
+fn facade_observes_every_default_boundary_without_executing_the_query() {
+    macro_rules! observe {
+        ($boundary:ident) => {
+            mini_linq::compile! {
+                observe { boundary = $boundary; stage = ::core::stringify; }
+                pipeline {}
+                struct Observed;
+                relation R(x: i32); relation S(x: i32);
+                answer(x) :- R(x), S(x);
+            }
+        };
+    }
+    let source: cq_lang_cq::Program = syn::parse_str(observe!(cq)).unwrap();
+    let vo: cq_lang_vo::Program = syn::parse_str(observe!(vo)).unwrap();
+    assert_eq!(
+        vo,
+        cq_planning::prefix_valuation(&source, &Default::default()).unwrap()
+    );
+    let ra: cq_lang_ra::Program = syn::parse_str(observe!(relational_plan)).unwrap();
+    assert_eq!(
+        ra,
+        cq_planning::compile_prefix(&source, &Default::default()).unwrap()
+    );
+    syn::parse_str::<cq_lang_ix::Program>(observe!(index_requirements)).unwrap();
+    syn::parse_str::<cq_lang_physical::Program>(observe!(physical)).unwrap();
+    syn::parse_str::<cq_lang_structures::Program>(observe!(structures)).unwrap();
+    syn::parse_str::<cq_lang_structures::Program>(observe!(represent)).unwrap();
+    syn::parse_str::<cq_lang_structures::Program>(observe!(stage)).unwrap();
+    syn::parse_str::<cq_lang_sequence::Program>(observe!(sequence)).unwrap();
+    let decomposed: cq_lang_sequence::Program = syn::parse_str(observe!(decompose)).unwrap();
+    let graded: cq_lang_sequence::Program = syn::parse_str(observe!(grade)).unwrap();
+    assert_eq!(decomposed, graded);
+    cq_lang_sequence::check_grading(&graded, &cq_sequence_pull::machine()).unwrap();
+    let rust = observe!(final_rust);
+    syn::parse_str::<syn::Expr>(rust).unwrap();
+    assert!(rust.contains("profile_select"));
+    assert!(!rust.contains("translate_pull"));
+}
+
+#[test]
+fn observation_keeps_authored_planner_arguments() {
+    let observed = mini_linq::compile! {
+        observe { boundary = relational_plan; stage = ::core::stringify; }
+        pipeline { plan = ::mini_linq::passes::plan(order(S, R), no_reduce); }
+        struct Observed;
+        relation R(x: i32); relation S(x: i32);
+        answer(x) :- R(x), S(x);
+    };
+    let source: cq_lang_cq::Program = syn::parse_quote! {
+        struct Observed;
+        relation R(x: i32); relation S(x: i32);
+        answer(x) :- R(x), S(x);
+    };
+    let options = syn::parse_quote!(order(S, R), no_reduce);
+    let expected = cq_planning::compile_prefix(&source, &options).unwrap();
+    assert_eq!(
+        syn::parse_str::<cq_lang_ra::Program>(observed).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn observed_cq_preserves_embedded_rust_literals() {
+    let observed = mini_linq::compile! {
+        observe { boundary = cq; stage = ::core::stringify; }
+        pipeline {}
+        struct Expressions;
+        relation R(value: i32);
+        relation answer(value: String);
+        answer(format!(" :: ( & * ! > {x}")) :-
+            R(x), let label = " :: ( & * ! >".to_owned(), if *x > 0 && !label.is_empty();
+    };
+    let expected: cq_lang_cq::Program = syn::parse_quote! {
+        struct Expressions;
+        relation R(value: i32);
+        relation answer(value: String);
+        answer(format!(" :: ( & * ! > {x}")) :-
+            R(x), let label = " :: ( & * ! >".to_owned(), if *x > 0 && !label.is_empty();
+    };
+    assert_eq!(
+        syn::parse_str::<cq_lang_cq::Program>(observed).unwrap(),
+        expected
+    );
 }

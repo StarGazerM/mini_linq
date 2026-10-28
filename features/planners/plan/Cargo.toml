@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 description = "Public API implementation of external MiniLinq planners"
 
 [dependencies]
+cq-planning.workspace = true
 cq-lang-cq.workspace = true
 cq-lang-vo.workspace = true
 cq-lang-ra.workspace = true

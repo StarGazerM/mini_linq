@@ -8,7 +8,7 @@ oracle_shared::oracle_programs!(
         storage_rewrites = [cq_datalog_parallel::shard_storage];
         round = [cq_datalog_parallel::partition(threshold = 0, grain = 2)];
         print = cq_datalog_parallel::print_rounds;
-        cq = pipeline { print = ::cq_datalog::passes::print_push; };
+        cq = pipeline { print_input = structures; print = ::cq_datalog::passes::print_push; };
     }
 );
 
@@ -98,14 +98,20 @@ fn all_oracle_programs_match_pull_and_ascent_in_local_pools() {
             .build()
             .unwrap()
             .install(|| {
-                for &(name, push, pull, ascent, scheduled, relational, sharded_layouts, runs) in CASES {
+                for &(name, push, pull, ascent, scheduled, relational, sharded_layouts, runs) in
+                    CASES
+                {
                     let compare = |data: &oracle_shared::Data| {
                         let expected = ascent(data).0;
                         assert_eq!(pull(data).0, expected, "{name} pull/{threads}");
                         assert_eq!(push(data).0, expected, "{name} push/{threads}");
                         assert_eq!(scheduled(data).0, expected, "{name} by_head/{threads}");
                         assert_eq!(relational(data).0, expected, "{name} relational/{threads}");
-                        assert_eq!(sharded_layouts(data).0, expected, "{name} sharded_layouts/{threads}");
+                        assert_eq!(
+                            sharded_layouts(data).0,
+                            expected,
+                            "{name} sharded_layouts/{threads}"
+                        );
                         assert_eq!(runs(data).0, expected, "{name} runs/{threads}");
                     };
                     for scenario in oracle_shared::SCENARIOS {

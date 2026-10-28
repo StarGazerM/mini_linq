@@ -19,6 +19,9 @@ constructs whose meaning the CQ language defines:
 \begin{enumerate}
 \item \emph{Comparisons} \code{== != < <= > >=} and the Boolean connectives
 \code{\&\& || !} over query names, parameters and literals (CQ-GuardRecognize).
+A parameter is a host value: a captured name or a field path rooted at a
+captured name (\code{start}, \code{constants.c\_x}); the root is never a
+query variable or local, and a field of a query variable stays opaque Rust.
 Totality follows from the Leibniz and Order premises; the printer's
 \code{relational\_eq}/\code{relational\_cmp} obligations make rustc check the
 \code{Eq}/\code{Ord} bounds. This is the language's grammar, not an allowlist

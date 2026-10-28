@@ -35,10 +35,15 @@ pub enum Side {
 }
 
 impl<'a> Context<'a> {
-    pub fn fallback_type(&self, result: &str, reader: &str, columns: &[String]) -> &syn::Type {
+    pub fn fallback_type(
+        &self,
+        result: &str,
+        reader: cq_lang_structures::ReaderRef<String>,
+        columns: &[String],
+    ) -> &syn::Type {
         let mut columns = columns.to_vec();
         columns.sort();
-        &self.analysis.fallbacks[&(result.to_owned(), reader.to_owned(), columns)]
+        &self.analysis.fallbacks[&(result.to_owned(), reader, columns)]
     }
 
     /// The host behind a rename, with its key and payload in the rename's
@@ -128,7 +133,7 @@ impl<'a> Context<'a> {
                         .expect("checked occurrence mapping");
                     bindings[position].to_token_stream()
                 });
-                let ty = self.fallback_type(result, "scan", &[]);
+                let ty = self.fallback_type(result, cq_lang_structures::ReaderRef::Scan, &[]);
                 let literals: BTreeMap<_, _> = constants
                     .equalities
                     .iter()
@@ -201,7 +206,7 @@ impl<'a> Context<'a> {
                 quote!(_)
             }
         });
-        let ty = self.fallback_type(result, "scan", &[]);
+        let ty = self.fallback_type(result, cq_lang_structures::ReaderRef::Scan, &[]);
         let rows = source.unwrap_or_else(|| quote!(::cq_storage::rows::Rows::rows(#value)));
         quote! { { let __cq_scan: #ty = ::core::iter::Iterator::map(#rows, move |(#(#payload,)*)| #row); __cq_scan } }
     }
@@ -251,13 +256,16 @@ impl<'a> Context<'a> {
                 .find_map(|((n, rd, cs), ty)| {
                     (n == result
                         && cs == &columns
-                        && rd != "scan"
-                        && !self.physical.get(rd).is_some_and(|d| {
-                            matches!(
-                                d.operator,
-                                Operator::Merge(..) | Operator::Point(..) | Operator::Range(..)
-                            )
-                        }))
+                        && !matches!(rd, cq_lang_structures::ReaderRef::Scan)
+                        && !rd
+                            .result()
+                            .and_then(|name| self.physical.get(name))
+                            .is_some_and(|d| {
+                                matches!(
+                                    d.operator,
+                                    Operator::Merge(..) | Operator::Point(..) | Operator::Range(..)
+                                )
+                            }))
                     .then_some(ty)
                 })
                 .expect("checked fallback");
@@ -301,7 +309,11 @@ impl<'a> Context<'a> {
                 );
             } else {
                 let name = format_ident!("__cq_{}_merge_{}", result, columns.join("_"));
-                let ty = self.fallback_type(result, reader, columns);
+                let ty = self.fallback_type(
+                    result,
+                    cq_lang_structures::ReaderRef::Result(reader.into()),
+                    columns,
+                );
                 let rows = self.profile_stream(result, self.host_scan(result));
                 let pattern = self.bind_columns(result, self.carried(result), false);
                 let key = columns.iter().map(|c| self.access(result, c));

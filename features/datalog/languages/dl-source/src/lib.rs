@@ -4,6 +4,9 @@
 //! Optional `invariants { hoist N using Helper { original_rule; } }` after
 //! the rules records a bounded frozen filter and its independently checked
 //! erasure. Helpers preserve one positive input's bindings and cardinality.
+//! A rule may carry an optional label, `Label: head :- body;`. Labels are
+//! names for advice only: they are unique, have no denotation, and rewrites
+//! that add rules leave the new rules unlabelled.
 use cq_datalog_support::{Fresh, ensure};
 pub use cq_lang_cq::{BodyItem, Query};
 use cq_stage::Language;
@@ -30,6 +33,8 @@ pub struct Program {
     pub declarations: Vec<RelationDecl>,
     pub outputs: Vec<Ident>,
     pub rules: Vec<Query>,
+    /// Optional advice label per rule, parallel to `rules`.
+    pub labels: Vec<Option<Ident>>,
     pub observer: Option<Expr>,
     pub models: BTreeMap<String, Ident>,
     pub invariants: Vec<Invariant>,
@@ -89,8 +94,19 @@ impl Parse for Program {
         }
         input.parse::<Token![;]>()?;
         let mut rules = Vec::new();
-        while input.peek(Ident) && input.peek2(syn::token::Paren) {
+        let mut labels = Vec::new();
+        loop {
+            let label = if input.peek(Ident) && input.peek2(Token![:]) && !input.peek2(Token![::]) {
+                let label = input.parse()?;
+                input.parse::<Token![:]>()?;
+                Some(label)
+            } else if input.peek(Ident) && input.peek2(syn::token::Paren) {
+                None
+            } else {
+                break;
+            };
             rules.push(input.parse()?);
+            labels.push(label);
         }
         let mut invariants = Vec::new();
         if input.peek(kw::invariants) {
@@ -108,7 +124,11 @@ impl Parse for Program {
                 if !original.is_empty() {
                     return Err(original.error("unexpected invariant source text"));
                 }
-                invariants.push(Invariant { rule, helper, source });
+                invariants.push(Invariant {
+                    rule,
+                    helper,
+                    source,
+                });
             }
         }
         Ok(Self {
@@ -116,6 +136,7 @@ impl Parse for Program {
             declarations,
             outputs,
             rules,
+            labels,
             observer,
             models,
             invariants,
@@ -129,6 +150,7 @@ impl ToTokens for Program {
             declarations,
             outputs,
             rules,
+            labels,
             observer,
             models,
             invariants,
@@ -143,6 +165,10 @@ impl ToTokens for Program {
                 tokens.extend(quote!(model #relation #model;));
             }
         }
+        let rules = rules.iter().zip(labels).map(|(rule, label)| match label {
+            Some(label) => quote!(#label: #rule),
+            None => quote!(#rule),
+        });
         tokens.extend(quote!(output #(#outputs),*; #(#rules)*));
         if !invariants.is_empty() {
             let entries = invariants.iter().map(|entry| {
@@ -286,6 +312,19 @@ fn check_source(p: &Program) -> syn::Result<Graph> {
             "duplicate output relation",
         )?;
         g.index(output)?;
+    }
+    ensure(
+        p.labels.len() == p.rules.len(),
+        &p.name,
+        "rule labels must be parallel to rules",
+    )?;
+    let mut labels = BTreeSet::new();
+    for label in p.labels.iter().flatten() {
+        ensure(
+            labels.insert(symbol_name(label)),
+            label,
+            "duplicate rule label",
+        )?;
     }
     let mut queries = QueryChecker::new(p, &p.declarations);
     for q in &p.rules {

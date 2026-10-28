@@ -40,7 +40,7 @@ fn borrowed_filtered_keys_preserve_native_owned_rust_and_push_interfaces() {
     ];
     let result = cq_datalog::datalog! {
         pipeline {
-            cq = pipeline { print = ::cq_datalog::passes::print_push; };
+            cq = pipeline { print = ::cq_datalog::passes::print_push; print_input = structures; };
             print = cq_datalog_test_passes::eval_round;
         }
         struct Names;

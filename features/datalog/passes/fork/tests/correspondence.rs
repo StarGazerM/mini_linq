@@ -912,3 +912,101 @@ fn repeated_negative_columns_are_filtered_once_before_distinct_key_projection() 
     changed_source.negations[0].equalities.clear();
     assert!(cq_lang_datalog_storage::contract::check(&changed_source).is_err());
 }
+
+#[test]
+fn authored_variant_orders_become_explicit_plan_advice_on_their_holes() {
+    let source: cq_lang_datalog_storage::incremental::strata::source::Program = syn::parse_quote! {
+        struct Heaps;
+        relation Alloc(h:i32,t:i32) = (alloc);
+        relation Component(a:i32,c:i32) = (component);
+        relation Super(c:i32,t:i32) = (supers);
+        relation Compat(h:i32,b:i32); relation Reach(x:i32,y:i32);
+        output Compat, Reach;
+        Helper: Compat(*h,*b) :- Alloc(h,t), Alloc(b,a), Component(a,c), Super(c,t);
+        Reach(*x,*y) :- Alloc(x,y);
+        Step: Reach(*x,*z) :- Alloc(x,y), Reach(y,z), Alloc(z,x);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let plans = vec![
+        cq_datalog_incremental::RulePlan {
+            rule: syn::parse_quote!(Helper),
+            delta: None,
+            order: vec![
+                syn::parse_quote!(Super),
+                syn::parse_quote!(Component),
+                syn::parse_quote!(Alloc@1),
+            ],
+        },
+        cq_datalog_incremental::RulePlan {
+            rule: syn::parse_quote!(Step),
+            delta: Some(syn::parse_quote!(Reach)),
+            order: vec![syn::parse_quote!(Reach), syn::parse_quote!(Alloc@2)],
+        },
+    ];
+    let incremental = cq_datalog_incremental::compile_with_advice(
+        &strata,
+        cq_datalog_incremental::DriverPolicy::DeltaFirst,
+        &plans,
+    )
+    .unwrap();
+    assert_eq!(
+        incremental
+            .variants
+            .iter()
+            .map(|v| v.authored)
+            .collect::<Vec<_>>(),
+        [true, false, true]
+    );
+    let fork = compile(&schedule(&incremental).unwrap()).unwrap();
+    let advice = |variant: usize| {
+        let rule = fork
+            .context
+            .strata
+            .iter()
+            .flat_map(|s| s.seeds.iter().chain(&s.steps))
+            .find(|rule| rule.variant == variant)
+            .unwrap();
+        let hole = &fork.holes[rule.hole];
+        let plan = &hole.pipeline.passes[hole.plan.unwrap()];
+        plan.arguments.to_string().replace(' ', "")
+    };
+    // The hole body already follows the authored order (Super is the scan),
+    // so the advice names the hole's inputs by normalized clause position.
+    let helper = fork
+        .context
+        .strata
+        .iter()
+        .flat_map(|s| s.seeds.iter().chain(&s.steps))
+        .find(|rule| rule.variant == 0)
+        .unwrap();
+    let Some(cq_lang_datalog_round::ScanBinding {
+        source: cq_lang_datalog_round::InputSource::Layout(layout),
+        ..
+    }) = &helper.scan
+    else {
+        panic!("seed scans a layout");
+    };
+    let scanned = fork.context.layouts[*layout].relation;
+    assert_eq!(fork.context.relations[scanned].declaration.name, "Super");
+    assert_eq!(
+        advice(0),
+        "order(__cq_datalog_scan_0@0,__cq_datalog_layout_1@1,__cq_datalog_layout_2@2,__cq_datalog_layout_2@3)"
+    );
+    assert_eq!(advice(1), "");
+    assert!(
+        advice(2).starts_with("order(__cq_datalog_scan_"),
+        "{}",
+        advice(2)
+    );
+    // Every hole still compiles through its checked pipeline.
+    check(&schedule(&incremental).unwrap(), &fork).unwrap();
+    let storage = schedule(&incremental).unwrap();
+    let queue = cq_datalog_fork::default_pipeline();
+    assert!(cq_datalog_fork::compile_with(&storage, quote!(cq = #queue; lower = 2;)).is_err());
+    let mut conflicting = queue;
+    conflicting.passes[0].arguments = quote!(no_reduce);
+    assert!(
+        cq_datalog_fork::compile_with(&storage, quote!(cq = #conflicting; lower = 2; plan = 0;))
+            .is_err()
+    );
+}

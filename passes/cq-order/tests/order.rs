@@ -1281,3 +1281,71 @@ fn ordering_negation_preserves_reference_answers_for_constants_repeats_and_wildc
         }
     }
 }
+
+#[test]
+fn branch_policy_rejects_well_formed_spine_pinned_and_cycle_groups() {
+    let options = Options {
+        heuristic: Heuristic::Filtered,
+        split: Split::Coarse,
+    };
+    let source = normal(quote! {
+        struct Q; relation L(o:i32,p:i32,s:i32); relation PS(p:i32,s:i32);
+        relation P(p:i32,label:i32); relation S(s:i32,n:i32); relation O(o:i32);
+        relation N(n:i32);
+        answer(o,p,s) :- L(o,p,s), PS(p,s), P(p,label), if *label == 7,
+            S(s,n), O(o), N(n);
+    });
+    for members in [vec![0usize, 1], vec![1, 2]] {
+        let mut target = plan(&source, Heuristic::Filtered, Split::Coarse);
+        let columns: Vec<_> =
+            valuation::join_branches::interface(&source, &members.iter().copied().collect())
+                .into_iter()
+                .map(|name| syn::Ident::new(&name, proc_macro2::Span::call_site()))
+                .collect();
+        let members: Vec<_> = members
+            .iter()
+            .map(|clause| syn::LitInt::new(&clause.to_string(), proc_macro2::Span::call_site()))
+            .collect();
+        target.valuation.join_branches = Some(syn::parse_quote! {
+            branches { branch [#(#members),*] (#(#columns),*); }
+        });
+        valuation::contract::check(&target).unwrap();
+        assert!(cq_order::check(&source, &target, &options).is_err());
+    }
+
+    let source = normal(quote! {
+        struct Q; relation L(o:i32,p:i32,s:i32); relation O(o:i32,c:i32);
+        relation PS(p:i32,s:i32); relation S(s:i32,n:i32); relation P(p:i32);
+        relation C(c:i32,n:i32); relation N(n:i32);
+        answer(o,p,s,n) :- L(o,p,s), O(o,c), PS(p,s), S(s,n), P(p), C(c,n), N(n);
+    });
+    let mut target = plan(&source, Heuristic::Filtered, Split::Coarse);
+    target.valuation.join_branches = Some(syn::parse_quote! {
+        branches { branch [1,3,5,6] (o,s,n); branch [2,4] (p,s); }
+    });
+    valuation::contract::check(&target).unwrap();
+    assert!(cq_order::check(&source, &target, &options).is_err());
+}
+
+#[test]
+fn branch_policy_accepts_noncanonical_record_order() {
+    let source = normal(quote! {
+        struct Q; relation L(o:i32,p:i32,s:i32); relation O(o:i32,c:i32);
+        relation PS(p:i32,s:i32); relation S(s:i32,n:i32); relation P(p:i32);
+        relation C(c:i32,n:i32); relation N(n:i32);
+        answer(o,p,s,n) :- L(o,p,s), O(o,c), PS(p,s), S(s,n), P(p), C(c,n), N(n);
+    });
+    let mut target = plan(&source, Heuristic::Filtered, Split::Coarse);
+    let groups = &mut target.valuation.join_branches.as_mut().unwrap().branches;
+    assert_eq!(groups.len(), 2);
+    groups.reverse();
+    cq_order::check(
+        &source,
+        &target,
+        &Options {
+            heuristic: Heuristic::Filtered,
+            split: Split::Coarse,
+        },
+    )
+    .unwrap();
+}

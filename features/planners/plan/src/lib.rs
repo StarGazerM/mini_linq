@@ -30,6 +30,8 @@ use syn::{Ident, Token};
 
 mod le;
 
+pub use cq_planning::{PlanOptions, compile_prefix, prefix_valuation};
+
 /// The eleven supported planning passes. Ranking selects written IR at compile
 /// time; it introduces no configuration carried into execution.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -524,6 +526,11 @@ fn written_steps(
                                 .collect(),
                         },
                         kind: block.kind,
+                        placement: if facts.rust {
+                            vo::blocks::Placement::Correlated
+                        } else {
+                            vo::blocks::Placement::Hoisted
+                        },
                         branches,
                     },
                     Default::default(),
@@ -549,4 +556,43 @@ fn written_steps(
         });
     }
     steps
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::*;
+
+    #[test]
+    fn options_reject_duplicate_singletons_and_trailing_commas() {
+        for tokens in [
+            quote!(order(R), order(S)),
+            quote!(no_reduce, no_reduce),
+            quote!(no_reduce,),
+            quote!(reduce(R with S),),
+        ] {
+            assert!(syn::parse2::<PlanOptions>(tokens).is_err());
+        }
+    }
+
+    #[test]
+    fn prefix_exposes_the_same_checked_valuation_it_elaborates() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Query;
+            relation R(x:i32);
+            relation S(x:i32, y:i32);
+            answer(x, y) :- R(x), S(x, y);
+        };
+        for tokens in [
+            quote!(),
+            quote!(no_reduce),
+            quote!(order(S, R), no_reduce, reduce(R with S)),
+        ] {
+            let options = syn::parse2::<PlanOptions>(tokens).unwrap();
+            let valuation = prefix_valuation(&source, &options).unwrap();
+            let target = compile_prefix(&source, &options).unwrap();
+            cq_elaborate::check(&valuation, &target).unwrap();
+        }
+        let invalid = syn::parse2(quote!(no_reduce, skip(R with S))).unwrap();
+        assert!(compile_prefix(&source, &invalid).is_err());
+    }
 }

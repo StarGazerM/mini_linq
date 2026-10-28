@@ -3,6 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 #[test]
 #[allow(non_snake_case)]
 fn consumer_form_matches_pull_with_borrowed_and_owned_columns() {
+    // The endpoint declaration, not this misleading alias, selects Structures.
+    use own_push::push_into as translate_pull;
     let R = [(1_i32,), (2,), (2,), (3,)];
     let S = [(1_i32, 10_i32), (2, 20), (2, 20)];
     let pull: BTreeSet<_> = mini_linq::compile! {
@@ -15,7 +17,8 @@ fn consumer_form_matches_pull_with_borrowed_and_owned_columns() {
     let mut pushed = BTreeSet::new();
     let result: () = mini_linq::compile! {
         pipeline {
-            print = own_push::push_into(consumer {
+            print_input = structures;
+            print = translate_pull(consumer {
                 |(x, label): (&i32, String)| { pushed.insert((*x, label)); }
             };);
         }
@@ -40,6 +43,7 @@ fn consumer_runs_before_the_next_answer_is_evaluated() {
     };
     mini_linq::compile! {
         pipeline {
+            print_input = structures;
             print = own_push::push_into(consumer {
                 |(_x,): (i32,)| { consumed.set(consumed.get() + 1); }
             };);
@@ -84,15 +88,15 @@ fn both_printers_preserve_fused_union_fallback_and_suffix_rust() {
     let R = [(1_i32, 10_i32), (1, 11)];
     let S = [(1_i32, 99_i32), (2, 20)];
     macro_rules! run {
-        ($printer:path) => { mini_linq::compile! {
-            pipeline {print = $printer;}
+        ($endpoint:ident, $printer:path) => { mini_linq::compile! {
+            pipeline {print_input = $endpoint; print = $printer;}
             struct Q; relation P(x:i32); relation R(x:i32,y:i32); relation S(x:i32,y:i32);
             answer(x,y) :- P(x), {{R(x,y), if std::convert::identity(*y)>0} | {R(x,y)}} else {S(x,y), if std::convert::identity(*y)>0},
                 if std::convert::identity(*x)>0;
         }.map(|(x,y)|(*x,*y)).collect::<BTreeSet<_>>() };
     }
-    let push = run!(own_push::push);
-    let pull = run!(mini_linq::passes::translate_pull);
+    let push = run!(structures, own_push::push);
+    let pull = run!(sequence, mini_linq::passes::translate_pull);
     assert_eq!(push, pull);
     assert_eq!(pull, BTreeSet::from([(1, 10), (1, 11), (2, 20)]));
 }
@@ -101,18 +105,18 @@ fn both_printers_preserve_fused_union_fallback_and_suffix_rust() {
 #[allow(non_snake_case)]
 fn both_printers_keep_owned_non_copy_fallback_interfaces() {
     let R = [(1_i32,), (2,)];
-    macro_rules! run { ($printer:path) => { mini_linq::compile! {
-        pipeline {print = $printer;}
+    macro_rules! run { ($endpoint:ident, $printer:path) => { mini_linq::compile! {
+        pipeline {print_input = $endpoint; print = $printer;}
         struct Q; relation R(x:i32);
         answer(y) :- R(x), {if std::convert::identity(*x)==1, let y:String=String::from("first")}
             else {let y:String=String::from("second")};
     }.map(|(y,)|y).collect::<BTreeSet<_>>() }; }
     assert_eq!(
-        run!(own_push::push),
-        run!(mini_linq::passes::translate_pull)
+        run!(structures, own_push::push),
+        run!(sequence, mini_linq::passes::translate_pull)
     );
     assert_eq!(
-        run!(own_push::push),
+        run!(structures, own_push::push),
         BTreeSet::from(["first".to_owned(), "second".to_owned()])
     );
 }
@@ -136,7 +140,7 @@ fn filtered_storage_reconstructs_constants_in_both_printers() {
                 structures {
                     l host scan = ::core::iter::Map<_,_> [];
                     r host scan = ::core::iter::Map<_,_> [];
-                    r host filtered = ::core::iter::Map<_,_> [a];
+                    r host result(filtered) = ::core::iter::Map<_,_> [a];
                     filtered = ::cq_storage::HashIndex<'_,_,_> [k] payload [k] constants {a = 7};
                     out canon = ::std::collections::HashSet<_>;
                 }
@@ -152,13 +156,13 @@ fn filtered_storage_reconstructs_constants_in_both_printers() {
 }
 
 macro_rules! partial {
-    ($printer:path, $r:expr, $s:expr) => {{
+    ($endpoint:ident, $printer:path, $r:expr, $s:expr) => {{
         #[allow(non_snake_case)]
         let R = $r;
         #[allow(non_snake_case)]
         let S = $s;
         mini_linq::compile! {
-            pipeline { print = $printer; }
+            pipeline { print_input = $endpoint; print = $printer; }
             struct Partial;
             relation R(x: i32);
             relation S(w: i32);
@@ -190,12 +194,13 @@ fn push_chain_preserves_guard_and_binds_computed_columns_as_references() {
         for s in [vec![], vec![(1,)], vec![(3,), (3,)]] {
             cq_testkit::harness::check_refinement(
                 || reference(&r, &s),
-                || partial!(own_push::push, r.as_slice(), s.as_slice()),
+                || partial!(structures, own_push::push, r.as_slice(), s.as_slice()),
             )
             .unwrap();
             assert_eq!(
-                partial!(own_push::push, r.as_slice(), s.as_slice()),
+                partial!(structures, own_push::push, r.as_slice(), s.as_slice()),
                 partial!(
+                    sequence,
                     mini_linq::passes::translate_pull,
                     r.as_slice(),
                     s.as_slice()
@@ -368,12 +373,12 @@ fn exists_consumes_the_full_source_and_retains_only_nonemptiness() {
 #[allow(non_snake_case)]
 fn native_and_fallback_point_range_reads_agree_with_pull() {
     macro_rules! windows {
-        ($printer:path, $rows:expr, $low:expr, $high:expr) => {{
+        ($endpoint:ident, $printer:path, $rows:expr, $low:expr, $high:expr) => {{
             let R = $rows;
             let low = $low;
             let high = $high;
             mini_linq::compile! {
-                pipeline { print = $printer; }
+                pipeline { print_input = $endpoint; print = $printer; }
                 struct Window;
                 relation R(x: i32,y: i32);
                 answer(x,y) :- R(x,y), if *x >= low && *x < high, if *y == 7;
@@ -396,20 +401,29 @@ fn native_and_fallback_point_range_reads_agree_with_pull() {
             .filter(|(x, y)| *x >= low && *x < high && *y == 7)
             .collect::<BTreeSet<_>>();
         assert_eq!(
-            windows!(own_push::push, rows.as_slice(), low, high),
+            windows!(structures, own_push::push, rows.as_slice(), low, high),
             expected
         );
-        assert_eq!(windows!(own_push::push, &ordered, low, high), expected);
         assert_eq!(
-            windows!(mini_linq::passes::translate_pull, &ordered, low, high),
+            windows!(structures, own_push::push, &ordered, low, high),
+            expected
+        );
+        assert_eq!(
+            windows!(
+                sequence,
+                mini_linq::passes::translate_pull,
+                &ordered,
+                low,
+                high
+            ),
             expected
         );
     }
     macro_rules! points {
-        ($printer:path, $rows:expr) => {{
+        ($endpoint:ident, $printer:path, $rows:expr) => {{
             let R = $rows;
             mini_linq::compile! {
-                pipeline { print = $printer; }
+                pipeline { print_input = $endpoint; print = $printer; }
                 struct Point;
                 relation R(x: i32,y: i32);
                 answer(x,y) :- R(x,y), if *x == 2;
@@ -419,12 +433,12 @@ fn native_and_fallback_point_range_reads_agree_with_pull() {
         }};
     }
     assert_eq!(
-        points!(own_push::push, rows.as_slice()),
+        points!(structures, own_push::push, rows.as_slice()),
         BTreeSet::from([(2, 7)])
     );
     assert_eq!(
-        points!(own_push::push, &ordered),
-        points!(mini_linq::passes::translate_pull, &ordered)
+        points!(structures, own_push::push, &ordered),
+        points!(sequence, mini_linq::passes::translate_pull, &ordered)
     );
 }
 
@@ -452,7 +466,7 @@ fn full_depth_curried_probes_and_prefix_membership_use_written_levels() {
                 structures {
                     r host scan = ::core::iter::Map<_,_> [];
                     l host scan = ::core::iter::Map<_,_> [];
-                    l host n = ::cq_storage::HashIndex<'_,_,_> [a];
+                    l host result(n) = ::cq_storage::HashIndex<'_,_,_> [a];
                     r = ::cq_storage::Trie<'_,_,::cq_storage::HashIndex<'_,_,_>> [a][b];
                     r rows = ::std::vec::Vec<_>;
                     o canon = ::std::collections::BTreeSet<_>;
@@ -494,7 +508,7 @@ fn written_lazy_host_membership_and_fallback_type_are_preserved() {
                 structures {
                     r host scan = ::core::iter::Map<_,_> [];
                     s host scan = ::core::iter::Map<_,_> [];
-                    s host m = ::cq_storage::dispatch::KeySet<_,false> [x];
+                    s host result(m) = ::cq_storage::dispatch::KeySet<_,false> [x];
                     o canon = ::std::collections::BTreeSet<_>;
                 }
             }
@@ -538,9 +552,9 @@ fn wider_join_answers_use_grouped_keys_and_keep_flat_rows() {
     let R = [(1, 2, 3, 4, 5, 6, 7), (1, 2, 3, 4, 5, 6, 7)];
     let S = [(8, 9, 10, 11, 12, 13), (8, 9, 10, 11, 12, 14)];
     macro_rules! wide {
-        ($printer:path) => {
+        ($endpoint:ident, $printer:path) => {
             mini_linq::compile! {
-                pipeline { print = $printer; }
+                pipeline { print_input = $endpoint; print = $printer; }
                 struct Wide;
                 relation R(a: i32,b: i32,c: i32,d: i32,e: i32,f: i32,g: i32);
                 relation S(h: i32,i: i32,j: i32,k: i32,l: i32,m: i32);
@@ -552,8 +566,8 @@ fn wider_join_answers_use_grouped_keys_and_keep_flat_rows() {
             .collect::<Vec<_>>()
         };
     }
-    let push = wide!(own_push::push);
-    let pull = wide!(mini_linq::passes::translate_pull);
+    let push = wide!(structures, own_push::push);
+    let pull = wide!(sequence, mini_linq::passes::translate_pull);
     let expected = BTreeSet::from([
         vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
         vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14],
@@ -617,7 +631,7 @@ fn literal_point_selection_narrows_the_scan_carrier() {
     let r0: BTreeMap<(i32,), Vec<(i32,)>> =
         BTreeMap::from([((-1,), vec![(-2,)]), ((0,), vec![(5,)])]);
     let rows: Vec<_> = mini_linq::compile! {
-        pipeline { print = ::own_push::push; }
+        pipeline { print_input = structures; print = ::own_push::push; }
         struct Seed29;
         relation r0(c0: i32, c1: i32);
         answer(v0) :- r0(v0, -2), if (*v0 == -1 || *v0 == 0);
@@ -631,9 +645,9 @@ fn literal_point_selection_narrows_the_scan_carrier() {
 fn both_printers_execute_nested_generators_with_owned_tuple_prefixes() {
     let rows = [(2_i32,)];
     macro_rules! run {
-        ($printer:path) => {
+        ($endpoint:ident, $printer:path) => {
             mini_linq::compile! {
-                pipeline { print = $printer; }
+                pipeline { print_input = $endpoint; print = $printer; }
                 struct Q; relation rows(n:i32);
                 relation answer(prefix:String,label:String,index:i32,other:i32);
                 answer(prefix,label,index,other) :- rows(n),
@@ -649,8 +663,8 @@ fn both_printers_execute_nested_generators_with_owned_tuple_prefixes() {
         (String::from("prefix"), String::from("1"), 1, 0),
         (String::from("prefix"), String::from("1"), 1, 1),
     ]);
-    assert_eq!(run!(own_push::push), expected);
-    assert_eq!(run!(mini_linq::passes::translate_pull), expected);
+    assert_eq!(run!(structures, own_push::push), expected);
+    assert_eq!(run!(sequence, mini_linq::passes::translate_pull), expected);
 }
 
 #[test]
@@ -658,9 +672,9 @@ fn both_printers_borrow_collections_and_canonicalize_generator_duplicates() {
     let rows = [(1_i32, vec![1_i32, 2, 1]), (2, vec![])];
     let captured = vec![String::from("b"), String::from("a"), String::from("b")];
     macro_rules! run {
-        ($printer:path) => {
+        ($endpoint:ident, $printer:path) => {
             mini_linq::compile! {
-                pipeline { print = $printer; }
+                pipeline { print_input = $endpoint; print = $printer; }
                 struct Q; relation rows(key:i32,values:Vec<i32>);
                 relation answer(key:i32,value:i32,label:&String);
                 answer(key,value,label) :- rows(key,values),
@@ -669,8 +683,8 @@ fn both_printers_borrow_collections_and_canonicalize_generator_duplicates() {
             .collect::<Vec<_>>()
         };
     }
-    let push = run!(own_push::push);
-    let pull = run!(mini_linq::passes::translate_pull);
+    let push = run!(structures, own_push::push);
+    let pull = run!(sequence, mini_linq::passes::translate_pull);
     assert_eq!(push.len(), 4);
     assert_eq!(pull.len(), 4);
     let expected = BTreeSet::from([
@@ -689,9 +703,9 @@ fn both_printers_join_generated_values_and_preserve_guard_before_chain() {
     let rows = [(0_i32,), (2,)];
     let labels = [(4_i32, String::from("four")), (5, String::from("five"))];
     macro_rules! run {
-        ($printer:path) => {
+        ($endpoint:ident, $printer:path) => {
             mini_linq::compile! {
-                pipeline { print = $printer; }
+                pipeline { print_input = $endpoint; print = $printer; }
                 struct Q; relation rows(n:i32); relation labels(key:i32,label:String);
                 relation answer(value:i32,label:String,next:i32);
                 answer(value,label,next) :- rows(n), if std::convert::identity(*n) != 0,
@@ -702,28 +716,28 @@ fn both_printers_join_generated_values_and_preserve_guard_before_chain() {
         };
     }
     let expected = BTreeSet::from([(4, &labels[0].1, 5)]);
-    assert_eq!(run!(own_push::push), expected);
-    assert_eq!(run!(mini_linq::passes::translate_pull), expected);
+    assert_eq!(run!(structures, own_push::push), expected);
+    assert_eq!(run!(sequence, mini_linq::passes::translate_pull), expected);
 }
 
 #[test]
 fn both_printers_keep_dead_generators_empty_or_nonempty() {
     let seed = [(0_i32,)];
     macro_rules! run {
-        ($printer:path, $end:expr) => {
+        ($endpoint:ident, $printer:path, $end:expr) => {
             mini_linq::compile! {
-                pipeline { print = $printer; }
+                pipeline { print_input = $endpoint; print = $printer; }
                 struct Q; relation seed(x:i32); relation answer(x:i32);
                 answer(x) :- seed(x), for _value in 0..$end;
             }
             .collect::<Vec<_>>()
         };
     }
-    assert!(run!(own_push::push, 0_i32).is_empty());
-    assert!(run!(mini_linq::passes::translate_pull, 0_i32).is_empty());
-    assert_eq!(run!(own_push::push, 3_i32), [(&seed[0].0,)]);
+    assert!(run!(structures, own_push::push, 0_i32).is_empty());
+    assert!(run!(sequence, mini_linq::passes::translate_pull, 0_i32).is_empty());
+    assert_eq!(run!(structures, own_push::push, 3_i32), [(&seed[0].0,)]);
     assert_eq!(
-        run!(mini_linq::passes::translate_pull, 3_i32),
+        run!(sequence, mini_linq::passes::translate_pull, 3_i32),
         [(&seed[0].0,)]
     );
 }
@@ -741,10 +755,10 @@ fn both_printers_propagate_generator_expression_and_iteration_panics() {
         })
     }
     macro_rules! run {
-        ($printer:path, $generator:ident) => {
+        ($endpoint:ident, $printer:path, $generator:ident) => {
             std::panic::catch_unwind(|| {
                 mini_linq::compile! {
-                    pipeline { print = $printer; }
+                    pipeline { print_input = $endpoint; print = $printer; }
                     struct Q; relation seed(x:i32); relation answer(value:i32);
                     answer(value) :- seed(_), for value in $generator();
                 }
@@ -752,10 +766,24 @@ fn both_printers_propagate_generator_expression_and_iteration_panics() {
             })
         };
     }
-    assert!(run!(own_push::push, partial_expression).is_err());
-    assert!(run!(mini_linq::passes::translate_pull, partial_expression).is_err());
-    assert!(run!(own_push::push, partial_iteration).is_err());
-    assert!(run!(mini_linq::passes::translate_pull, partial_iteration).is_err());
+    assert!(run!(structures, own_push::push, partial_expression).is_err());
+    assert!(
+        run!(
+            sequence,
+            mini_linq::passes::translate_pull,
+            partial_expression
+        )
+        .is_err()
+    );
+    assert!(run!(structures, own_push::push, partial_iteration).is_err());
+    assert!(
+        run!(
+            sequence,
+            mini_linq::passes::translate_pull,
+            partial_iteration
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -796,9 +824,9 @@ fn both_printers_borrow_generator_captures_inside_union_and_fallback() {
     let captured = vec![String::from("first"), String::from("second")];
     let alternate = vec![String::from("alternate")];
     macro_rules! union {
-        ($printer:path) => {
+        ($endpoint:ident, $printer:path) => {
             mini_linq::compile! {
-                pipeline { print = $printer; }
+                pipeline { print_input = $endpoint; print = $printer; }
                 struct Q; relation rows(x:i32);
                 relation answer(x:i32,y:&String);
                 answer(x,y) :- rows(x),
@@ -809,9 +837,9 @@ fn both_printers_borrow_generator_captures_inside_union_and_fallback() {
         };
     }
     macro_rules! fallback {
-        ($printer:path) => {
+        ($endpoint:ident, $printer:path) => {
             mini_linq::compile! {
-                pipeline { print = $printer; }
+                pipeline { print_input = $endpoint; print = $printer; }
                 struct Q; relation rows(x:i32);
                 relation answer(x:i32,y:&String);
                 answer(x,y) :- rows(x),
@@ -835,11 +863,14 @@ fn both_printers_borrow_generator_captures_inside_union_and_fallback() {
         (&rows[2].0, &captured[0]),
         (&rows[2].0, &captured[1]),
     ]);
-    assert_eq!(union!(own_push::push), expected_union);
-    assert_eq!(union!(mini_linq::passes::translate_pull), expected_union);
-    assert_eq!(fallback!(own_push::push), expected_fallback);
+    assert_eq!(union!(structures, own_push::push), expected_union);
     assert_eq!(
-        fallback!(mini_linq::passes::translate_pull),
+        union!(sequence, mini_linq::passes::translate_pull),
+        expected_union
+    );
+    assert_eq!(fallback!(structures, own_push::push), expected_fallback);
+    assert_eq!(
+        fallback!(sequence, mini_linq::passes::translate_pull),
         expected_fallback
     );
     assert_eq!(captured.len(), 2);
@@ -893,7 +924,46 @@ fn discharged_host_fact_needs_no_hashable_columns_in_either_printer() {
         };
     }
     assert_eq!(recorded!(own_push::push;).count(), 2);
-    assert_eq!(recorded!(mini_linq::passes::sequence;
-        mini_linq::passes::sequential, mini_linq::passes::translate_pull
-    ).count(), 2);
+    assert_eq!(
+        recorded!(mini_linq::passes::sequence;
+            mini_linq::passes::sequential, mini_linq::passes::translate_pull
+        )
+        .count(),
+        2
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn authored_group_provider_and_role_named_readers_execute() {
+    let L = [(1,), (2,)];
+    let R = [(1, 10), (1, 10), (1, 20), (2, 7)];
+    macro_rules! run {
+        ($reader:ident) => {
+            mini_linq::passes::sequence! {
+                pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
+                physical {
+                    relation L(k:i32); relation R(k:i32,v:i32);
+                    l = pipe rename L@0 {k -> k};
+                    r = pipe rename R@1 {k -> k,v -> v};
+                    $reader = pipe canon probe first[k] l,r;
+                    grouped = pipe group $reader by [k] { n:usize=count(); total:i32=sum(v); };
+                    return grouped as answer(k,n,total);
+                }
+                structures {
+                    l host scan = ::core::iter::Map<_,_> [];
+                    r host scan = ::core::iter::Map<_,_> [];
+                    r host result($reader) = ::cq_storage::HashIndex<'_,_,_> [k];
+                    $reader canon = ::std::collections::BTreeSet<_>;
+                    grouped group = ::std::collections::BTreeMap<_, (usize,i32)>;
+                }
+            }
+            .map(|(k, n, total)| (*k, n, total))
+            .collect::<BTreeSet<_>>()
+        };
+    }
+    let expected = BTreeSet::from([(1, 2, 30), (2, 1, 7)]);
+    assert_eq!(run!(scan), expected);
+    assert_eq!(run!(candidates), expected);
+    assert_eq!(run!(membership), expected);
 }

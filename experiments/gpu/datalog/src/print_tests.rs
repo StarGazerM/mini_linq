@@ -28,10 +28,13 @@ fn program_with_symbols(ty: syn::Type, symbols: proc_macro2::TokenStream) -> cq_
     // to the CUDA oracle using the fully configured Structures/Sequence queue.
     pipeline.passes.insert(pipeline.passes.len() - 1,
         syn::parse_quote!(::cq_gpu_datalog::bind_inputs));
-    cq_datalog_fork::compile_with(&device, quote!(
+    let binding = pipeline.passes.len() - 2;
+    let round = cq_datalog_fork::compile_with(&device, quote!(
         cq = #pipeline;
+        lower = 2;
         terminals = [::cq_gpu_sequence::translate_arena => batch];
-    )).unwrap()
+    )).unwrap();
+    crate::bindings::compile_with(&round, quote!(binding = #binding)).unwrap()
 }
 
 #[test]
@@ -66,9 +69,31 @@ fn rejects_host_observers_and_timing() {
 fn rejects_missing_input_binding_stage() {
     let mut program = program();
     for hole in &mut program.holes {
-        hole.pipeline.passes.retain(|pass| pass.path.segments.last().unwrap().ident != "bind_inputs");
+        hole.binding = None;
     }
-    assert!(print::compile(&program).unwrap_err().to_string().contains("bind_inputs"));
+    assert!(print::compile(&program).unwrap_err().to_string().contains("binding invocation owner"));
+}
+
+#[test]
+fn checked_invocations_survive_roundtrip_and_aliasing() {
+    let mut program = program();
+    for hole in &mut program.holes {
+        let binding = hole.binding.unwrap();
+        hole.pipeline.passes[binding].path = syn::parse_quote!(::consumer::resident_inputs);
+    }
+    let roundtrip = syn::parse2::<cq_lang_datalog_round::Program>(quote!(#program)).unwrap();
+    assert_eq!(roundtrip, program);
+    assert!(print::compile(&roundtrip).is_ok());
+    let binding = program.holes[0].binding.unwrap();
+    program.holes[0].pipeline.passes[binding].arguments = quote!();
+    assert!(print::compile(&program).unwrap_err().to_string().contains("declared inputs"));
+}
+
+#[test]
+fn rejects_unrecorded_batch_arena_arguments() {
+    let mut program = program();
+    program.holes[0].pipeline.passes.last_mut().unwrap().arguments = quote!();
+    assert!(print::compile(&program).unwrap_err().to_string().contains("arena argument"));
 }
 
 #[test]
@@ -87,7 +112,7 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
         structures {
             d host scan = ::core::iter::Map<_,_> [];
             e host scan = ::core::iter::Map<_,_> [];
-            e host joined = ::cq_storage::HashIndex<'_,_,_> [y];
+            e host result(joined) = ::cq_storage::HashIndex<'_,_,_> [y];
         }
     };
     let target = crate::bind_inputs(&source, quote! {

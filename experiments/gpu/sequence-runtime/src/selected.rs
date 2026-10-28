@@ -1,6 +1,6 @@
 //! Stable row-ID selection for resident scans without an index build.
-use crate::{build_module, config, pointer, release, temporary, Pool, RangeSelection, Result};
-use cuda_core::DeviceBuffer;
+use crate::{build_module, pointer, release, temporary, Pool, RangeSelection, Result};
+use cuda_core::{DeviceBuffer, LaunchConfig1D};
 use rccl_thrust::{arithmetic_range, select_flagged, DeviceBufferExt};
 use std::sync::Arc;
 
@@ -61,9 +61,13 @@ pub fn select(pool: Arc<Pool>, selection: &RangeSelection) -> Result<SelectedRow
         let thrust = rccl_thrust::cuda::Program::load(pool.context())?;
         let exec = thrust.par_in(stream, pool.resource())?;
         let flags = temporary::<u32>(stream, base_rows)?;
+        let shape = module.prepare_range_flags(LaunchConfig1D::new(1, 256, 0))?;
+        let blocks = cq_gpu_runtime::launch_grid_for_kernel(
+            shape.function(), base_rows.div_ceil(256), 256, 0,
+        )?;
         module.range_flags(
             stream,
-            &module.prepare_range_flags(config(base_rows))?,
+            &module.prepare_range_flags(LaunchConfig1D::new(blocks, 256, 0))?,
             selection.column.view(),
             base_rows as u32,
             selection.start,

@@ -9,6 +9,9 @@ mod kw {
     syn::custom_keyword!(arguments);
     syn::custom_keyword!(hoist_invariants);
     syn::custom_keyword!(driver);
+    syn::custom_keyword!(plan);
+    syn::custom_keyword!(delta);
+    syn::custom_keyword!(order);
 }
 
 struct Entry {
@@ -91,13 +94,56 @@ fn invariant_arguments(input: ParseStream<'_>) -> syn::Result<bool> {
     Ok(enabled)
 }
 
-fn incremental_arguments(input: ParseStream<'_>) -> syn::Result<(bool, cq_datalog_incremental::DriverPolicy)> {
+struct IncrementalArguments {
+    hoist: bool,
+    driver: cq_datalog_incremental::DriverPolicy,
+    plans: Vec<cq_datalog_incremental::RulePlan>,
+}
+
+/// `plan(Label, delta(Relation@clause), order(Relation, Relation@clause, ...))`:
+/// the CQ `plan(order(...))` selectors for one labelled rule version.
+fn rule_plan(input: ParseStream<'_>) -> syn::Result<cq_datalog_incremental::RulePlan> {
+    let rule = input.parse()?;
+    input.parse::<Token![,]>()?;
+    let delta = if input.peek(kw::delta) {
+        input.parse::<kw::delta>()?;
+        let selector;
+        syn::parenthesized!(selector in input);
+        let delta = selector.parse()?;
+        if !selector.is_empty() {
+            return Err(selector.error("expected one delta(Relation@clause)"));
+        }
+        input.parse::<Token![,]>()?;
+        Some(delta)
+    } else {
+        None
+    };
+    input.parse::<kw::order>()?;
+    let selectors;
+    syn::parenthesized!(selectors in input);
+    let order = selectors
+        .parse_terminated(cq_datalog_incremental::OrderAtom::parse, Token![,])?
+        .into_iter()
+        .collect::<Vec<_>>();
+    if order.is_empty() {
+        return Err(input.error("plan order(...) names no atom"));
+    }
+    if !input.is_empty() {
+        return Err(input.error("expected plan(Label, [delta(..),] order(..))"));
+    }
+    Ok(cq_datalog_incremental::RulePlan { rule, delta, order })
+}
+
+fn incremental_arguments(input: ParseStream<'_>) -> syn::Result<IncrementalArguments> {
     let mut hoist = false;
     let mut driver = None;
+    let mut plans = Vec::new();
     while !input.is_empty() {
         if input.peek(kw::hoist_invariants) {
             input.parse::<kw::hoist_invariants>()?;
-            if hoist { return Err(input.error("duplicate hoist_invariants")); }
+            if hoist {
+                return Err(input.error("duplicate hoist_invariants"));
+            }
             hoist = true;
         } else if input.peek(kw::driver) {
             input.parse::<kw::driver>()?;
@@ -107,16 +153,36 @@ fn incremental_arguments(input: ParseStream<'_>) -> syn::Result<(bool, cq_datalo
             let policy = match name.to_string().as_str() {
                 "written_order" => cq_datalog_incremental::DriverPolicy::WrittenOrder,
                 "delta_first" => cq_datalog_incremental::DriverPolicy::DeltaFirst,
-                _ => return Err(syn::Error::new_spanned(name, "expected written_order or delta_first")),
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "expected written_order or delta_first",
+                    ));
+                }
             };
-            if !argument.is_empty() { return Err(argument.error("expected one driver policy")); }
-            if driver.replace(policy).is_some() { return Err(input.error("duplicate driver policy")); }
+            if !argument.is_empty() {
+                return Err(argument.error("expected one driver policy"));
+            }
+            if driver.replace(policy).is_some() {
+                return Err(input.error("duplicate driver policy"));
+            }
+        } else if input.peek(kw::plan) {
+            input.parse::<kw::plan>()?;
+            let argument;
+            syn::parenthesized!(argument in input);
+            plans.push(rule_plan(&argument)?);
         } else {
-            return Err(input.error("expected hoist_invariants; or driver(delta_first);"));
+            return Err(
+                input.error("expected hoist_invariants;, driver(delta_first); or plan(..);")
+            );
         }
         input.parse::<Token![;]>()?;
     }
-    Ok((hoist, driver.unwrap_or_default()))
+    Ok(IncrementalArguments {
+        hoist,
+        driver: driver.unwrap_or_default(),
+        plans,
+    })
 }
 
 /// Surface tokens → Source tokens, expanding refutable bindings explicitly.
@@ -152,13 +218,21 @@ pub fn incremental(input: TokenStream) -> TokenStream {
         input.into(),
         |source, args| {
             use syn::parse::Parser;
-            let (hoist, driver) = incremental_arguments.parse2(args)?;
-            let hoist = hoist || cfg!(feature = "hoist-invariants");
+            let arguments = incremental_arguments.parse2(args)?;
+            let hoist = arguments.hoist || cfg!(feature = "hoist-invariants");
             if hoist && source.source.invariants.is_empty() {
                 let source = cq_datalog_stratify::invariants::compile(source)?;
-                cq_datalog_incremental::compile_with_driver(&source, driver)
+                cq_datalog_incremental::compile_with_advice(
+                    &source,
+                    arguments.driver,
+                    &arguments.plans,
+                )
             } else {
-                cq_datalog_incremental::compile_with_driver(source, driver)
+                cq_datalog_incremental::compile_with_advice(
+                    source,
+                    arguments.driver,
+                    &arguments.plans,
+                )
             }
         },
     )

@@ -114,6 +114,7 @@
 //! | `trie` | Built entries with multiple written key levels |
 //! | `dedup` | Canonical-boundary and computed-head dedup state |
 //! | `rows` | Recorded retained row collections |
+//! | `group` | Keyed Group accumulator tables; providers implement empty `Default`, `entry/or_insert_with`, and owned `IntoIterator` finite-map operations |
 //! | `selection` | Immutable positional selections, preserving base, lineage and summary policy |
 //! | `keyset` | Exact key-only builds, also matched by `membership` |
 //! | `join_filter` | Conservative filters with a mandatory covering exact probe |
@@ -228,105 +229,23 @@
 
 use proc_macro::TokenStream;
 
-macro_rules! physical_rewrite {
-    ($name:ident) => {
+macro_rules! physical_rewrites {
+    ($($name:ident => $implementation:path;)*) => {$(
         #[proc_macro]
         pub fn $name(input: TokenStream) -> TokenStream {
-            cq_stage::rewrite::<cq_lang_physical::Program>(input.into(), cq_rewrite_passes::$name)
-                .into()
+            cq_stage::rewrite::<cq_lang_physical::Program>(input.into(), $implementation).into()
         }
-    };
+    )*};
 }
 
-physical_rewrite!(merge_joins);
-physical_rewrite!(canon_prefixes);
-physical_rewrite!(smallest_intersections);
-physical_rewrite!(lazy_semijoins);
-/// Retain admissible integral keyed host reads before provider selection.
-#[proc_macro]
-pub fn build_host_reads(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_physical::Program>(
-        input.into(),
-        cq_structure_selection::build_host_reads,
-    )
-    .into()
-}
-physical_rewrite!(host_sets);
-physical_rewrite!(retain_streams);
-physical_rewrite!(hoist);
-
-/// Certify a fully-bound probe as an existential read using checked Structures
-/// membership storage; the Physical operator and query remain unchanged.
-#[proc_macro]
-pub fn membership(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::membership)
-        .into()
+macro_rules! structures_rewrites {
+    ($($name:ident => $implementation:path;)*) => {$(
+        #[proc_macro]
+        pub fn $name(input: TokenStream) -> TokenStream {
+            cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), $implementation).into()
+        }
+    )*};
 }
 
-/// Change only the representation types matched by `selector => RustType`.
-#[proc_macro]
-pub fn retype(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_structure_selection::retype).into()
-}
-
-/// Record an exact join filter on a named eligible scan occurrence.
-#[proc_macro]
-pub fn join_filter(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::join_filter)
-        .into()
-}
-
-/// Record sorted index layouts for built results: a minimum chain cover of
-/// their read keys, columns ordered by binding order; `Rel => [a][b]`
-/// overrides one result's layout. Compose before `sorted_runs`/`prefix_runs`.
-#[proc_macro]
-pub fn sorted_indexes(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(
-        input.into(),
-        cq_rewrite_passes::sorted_indexes,
-    )
-    .into()
-}
-
-/// Retype eligible one-level payload builds to stable sorted runs.
-#[proc_macro]
-pub fn sorted_runs(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::sorted_runs)
-        .into()
-}
-
-/// Record one-level composite scalar HashIndex providers as exact GPU hashed runs.
-/// Compose after `sorted_runs`; this opt-in rewrite leaves CPU defaults unchanged.
-#[proc_macro]
-pub fn hashed_runs(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::hashed_runs)
-        .into()
-}
-
-/// Retain a SortedRun lookup cursor from an eager semijoin until its later probe.
-///
-/// Records checked `share` and `repr ... witness` decisions only when invoked;
-/// ordinary pipelines retain their existing lookup behavior. Compose after
-/// `sorted_runs` to make eligible payload builds expose Copy range cursors.
-#[proc_macro]
-pub fn retain_lookups(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(
-        input.into(),
-        cq_rewrite_passes::retain_lookups,
-    )
-    .into()
-}
-
-/// Record `stage = batch N expand` at probes whose builds expose length-known
-/// ranges, accepted only by the Structures stage contract. Opt-in.
-/// `expand_lookups(N, depth D)` bounds nested frames per stream; omitted depth
-/// defaults to two. Deeper probes stay lane-local without changing providers.
-/// This is a depth bound, not a byte-budget proof for arbitrary carried payloads.
-#[proc_macro]
-pub fn expand_lookups(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(
-        input.into(),
-        cq_rewrite_passes::expand_lookups,
-    )
-    .into()
-}
+cq_rewrite_passes::physical_registry!(physical_rewrites);
+cq_rewrite_passes::structures_registry!(structures_rewrites);

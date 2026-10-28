@@ -60,7 +60,7 @@ fn check(
 #[test]
 fn grouped_count_sum_keep_equal_values_from_distinct_matches() {
     let targets = mini_linq::compile! {
-        pipeline { print = cq_workload_passes::sequence_targets(take); }
+        pipeline { print_input = structures; print = cq_workload_passes::sequence_targets(take); }
         struct Query;
         relation R(k: i32, id: i32, v: i32);
         relation answer(k: i32, n: usize, total: i32);
@@ -87,7 +87,7 @@ fn grouped_count_sum_keep_equal_values_from_distinct_matches() {
 #[test]
 fn global_empty_group_has_monoid_identities() {
     let targets = mini_linq::compile! {
-        pipeline { print = cq_workload_passes::sequence_targets(take); }
+        pipeline { print_input = structures; print = cq_workload_passes::sequence_targets(take); }
         struct Query;
         relation R(id: i32, v: i32);
         relation answer(n: usize, total: i32, low: Option<i32>, high: Option<i32>);
@@ -106,7 +106,7 @@ fn global_empty_group_has_monoid_identities() {
 #[test]
 fn anonymous_witnesses_are_projected_before_the_fold() {
     let targets = mini_linq::compile! {
-        pipeline { print = cq_workload_passes::sequence_targets(take); }
+        pipeline { print_input = structures; print = cq_workload_passes::sequence_targets(take); }
         struct Query;
         relation R(k: i32, witness: i32, v: i32);
         relation answer(k: i32, n: usize, total: i32);
@@ -124,7 +124,7 @@ fn anonymous_witnesses_are_projected_before_the_fold() {
 #[test]
 fn aggregate_expressions_share_the_full_named_valuation_domain() {
     let targets = mini_linq::compile! {
-        pipeline { print = cq_workload_passes::sequence_targets(take); }
+        pipeline { print_input = structures; print = cq_workload_passes::sequence_targets(take); }
         struct Query;
         relation R(k: i32, id: i32, v: i32);
         relation answer(k: i32, total: i32, low: Option<i32>, high: Option<i32>);
@@ -142,7 +142,7 @@ fn aggregate_expressions_share_the_full_named_valuation_domain() {
 #[test]
 fn triangle_count_is_a_head_aggregate() {
     let targets = mini_linq::compile! {
-        pipeline { print = cq_workload_passes::sequence_targets(take); }
+        pipeline { print_input = structures; print = cq_workload_passes::sequence_targets(take); }
         struct Triangles;
         relation Edge(a: i32, b: i32);
         relation answer(n: usize);
@@ -162,7 +162,7 @@ fn triangle_count_is_a_head_aggregate() {
 #[test]
 fn count_only_group_retains_non_head_join_witnesses() {
     let targets = mini_linq::compile! {
-        pipeline { print = cq_workload_passes::sequence_targets(take); }
+        pipeline { print_input = structures; print = cq_workload_passes::sequence_targets(take); }
         struct Query;
         relation Edge(a: i32, b: i32);
         relation answer(x: i32, n: usize);
@@ -180,7 +180,7 @@ fn count_only_group_retains_non_head_join_witnesses() {
 #[test]
 fn global_count_of_existential_body_has_unit_domain() {
     let targets = mini_linq::compile! {
-        pipeline { print = cq_workload_passes::sequence_targets(take); }
+        pipeline { print_input = structures; print = cq_workload_passes::sequence_targets(take); }
         struct Query;
         relation R(witness: i32);
         relation answer(n: usize);
@@ -193,7 +193,7 @@ fn global_count_of_existential_body_has_unit_domain() {
 #[test]
 fn catalog_triangle_rewritten_as_count_matches_its_duckdb_goldens() {
     let (sequential, tasks, canonical) = mini_linq::compile! {
-        pipeline { print = cq_workload_passes::sequence_targets(take); }
+        pipeline { print_input = structures; print = cq_workload_passes::sequence_targets(take); }
         struct TriangleCount;
         relation R(c0: i32, c1: i32);
         relation S(c0: i32, c1: i32);

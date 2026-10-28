@@ -28,7 +28,15 @@ pub struct Program {
     pub negations: Vec<Negative>,
     pub certificates: Vec<HostCanonical>,
     pub policy: Policy,
+    /// Explicit device realization advice, never recovered from provider types.
+    pub device: Option<DeviceStorage>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceStorage {
+    pub symbols: Vec<(Type, Type)>,
+    pub ratio: usize,
+}
+record!(DeviceStorage { symbols: Vec<(Type, Type)>, ratio: usize });
 /// Concrete providers for one relation, indexed by source declaration order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Providers {
@@ -43,6 +51,31 @@ pub struct Providers {
     pub delta_init: Expr,
     pub next_init: Expr,
 }
+/// Formal rule DL-LayoutProtocol: checked maintenance operations are independent of provider spelling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutProtocol {
+    GroupedMap,
+    Bulk,
+}
+impl text::Text for LayoutProtocol {
+    fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let name: Ident = input.parse()?;
+        match name.to_string().as_str() {
+            "grouped_map" => Ok(Self::GroupedMap),
+            "bulk" => Ok(Self::Bulk),
+            _ => Err(syn::Error::new_spanned(
+                name,
+                "unknown layout maintenance protocol",
+            )),
+        }
+    }
+    fn text(&self) -> proc_macro2::TokenStream {
+        match self {
+            Self::GroupedMap => quote::quote!(grouped_map),
+            Self::Bulk => quote::quote!(bulk),
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub relation: Ident,
@@ -50,6 +83,7 @@ pub struct Layout {
     pub key: usize,
     pub provider: Type,
     pub maintenance: Ident,
+    pub protocol: LayoutProtocol,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Read {
@@ -81,7 +115,7 @@ pub struct Policy {
     pub insertion: Ident,
     pub negation_keys: Ident,
 }
-record!(Program { incremental: incremental::Program, providers: Vec<Providers>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, reads: Vec<Read>, negations: Vec<Negative>, certificates: Vec<HostCanonical>, policy: Policy });
+record!(Program { incremental: incremental::Program, providers: Vec<Providers>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, reads: Vec<Read>, negations: Vec<Negative>, certificates: Vec<HostCanonical>, policy: Policy, device: Option<DeviceStorage> });
 record!(Providers {
     canonical_name: Ident,
     canonical_set: Type,
@@ -93,7 +127,7 @@ record!(Providers {
     delta_init: Expr,
     next_init: Expr
 });
-record!(Layout { relation: Ident, columns: Vec<usize>, key: usize, provider: Type, maintenance: Ident });
+record!(Layout { relation: Ident, columns: Vec<usize>, key: usize, provider: Type, maintenance: Ident, protocol: LayoutProtocol });
 record!(Read { variant: usize, position: usize, kind: Ident, index: usize, columns: Vec<usize> });
 record!(Negative { component: usize, relation: usize, columns: Vec<usize>, filters: Vec<(usize, Expr)>, equalities: Vec<(usize, usize)> });
 record!(HostCanonical { kind: Ident, index: usize, source: Ident, columns: Vec<usize> });
@@ -279,6 +313,35 @@ pub mod contract {
     /// Formal rule WF-DL-Storage: admissible bindings, layouts and total maintenance.
     pub fn check(program: &Program) -> syn::Result<Analysis> {
         let analysis = incremental::contract::check(&program.incremental)?;
+        if let Some(device) = &program.device {
+            ensure(
+                device.ratio >= 2,
+                program,
+                "device maintenance ratio must be at least two",
+            )?;
+            for (index, (ty, _)) in device.symbols.iter().enumerate() {
+                ensure(
+                    !device.symbols[..index]
+                        .iter()
+                        .any(|(previous, _)| previous == ty),
+                    program,
+                    "duplicate logical symbol type",
+                )?;
+                ensure(
+                    program
+                        .incremental
+                        .strata
+                        .source
+                        .declarations
+                        .iter()
+                        .any(|declaration| {
+                            declaration.columns.iter().any(|column| column.ty == *ty)
+                        }),
+                    program,
+                    "symbol type does not occur in a relation",
+                )?;
+            }
+        }
         ensure(
             program.providers.len() == program.incremental.strata.source.declarations.len(),
             program,

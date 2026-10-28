@@ -222,7 +222,10 @@ mod tests {
         let mut actual = mini_engine::run(facts.clone());
         actual.check(&mut ascent_engine::run(facts));
         assert_eq!(actual.RegDefUseLiveVarUsed, vec![(3, 7, 30, 0)]);
-        assert_eq!(actual.RegDefUseLiveVarAtBlockEnd, vec![(1, 3, 7), (2, 3, 7)]);
+        assert_eq!(
+            actual.RegDefUseLiveVarAtBlockEnd,
+            vec![(1, 3, 7), (2, 3, 7)]
+        );
         assert_eq!(actual.RegDefUseDefUsed, vec![(25, 8, 31, 1)]);
         assert_eq!(actual.JumpTableTarget, vec![(40, 60)]);
     }

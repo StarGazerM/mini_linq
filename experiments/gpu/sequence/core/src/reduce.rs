@@ -287,7 +287,9 @@ pub fn group(
             let __cq_group_values=unsafe {::cq_gpu_runtime::Buffer::<i64>::uninitialized(__cq_pool.clone(),#length.checked_mul(#width).ok_or("group allocation overflow")?)?};
             #live_buffer
             if #length!=0 {
-                let prepared=__cq_module.#prepare(::cuda_core::LaunchConfig1D::new(#length.div_ceil(256).min(2272) as u32,256,0))?;
+                let shape=__cq_module.#prepare(::cuda_core::LaunchConfig1D::new(1,256,0))?;
+                let grid=::cq_gpu_runtime::launch_grid_for_kernel(shape.function(),#length.div_ceil(256),256,0)?;
+                let prepared=__cq_module.#prepare(::cuda_core::LaunchConfig1D::new(grid,256,0))?;
                 __cq_module.#kernel(__cq_pool.stream(),&prepared,__cq_group_values.ptr(),#length,#input_arguments #(#args),*)?;
             }
             #status

@@ -23,6 +23,7 @@ enum Meaning {
 
 #[derive(Clone)]
 struct Fact {
+    /// Formal rule BE-Length: Derive pre-write Len once; published unknown lengths become runtime inputs, and separated grading consumes checked store lengths.
     len: Len,
     shape: Vec<Len>,
     meaning: Meaning,
@@ -217,6 +218,7 @@ fn analyze_in(
             views: BTreeSet::new(),
             stores: BTreeMap::new(),
             publications: BTreeMap::new(),
+            task_execution: Default::default(),
             host_sources: BTreeMap::new(),
             host_tiles: BTreeMap::new(),
             routed_providers: BTreeMap::new(),
@@ -236,6 +238,18 @@ fn analyze_in(
         prefix: &prefix,
         support: &context.support,
     };
+    for name in &program.sequence.optional_filters {
+        let definition = checker.physical(name)?;
+        if !matches!(definition.operator, Operator::Semi(..))
+            || ModeKind::from(&definition.mode) != ModeKind::Pipe
+        {
+            return fail(
+                name,
+                "PL-OptionalFilter",
+                "optional filter requires a positive pipelined semijoin",
+            );
+        }
+    }
     let mut publication_facts = BTreeMap::new();
     for definition in &program.sequence.definitions {
         let name = symbol_name(&definition.name);
@@ -331,6 +345,7 @@ fn analyze_in(
         );
     }
     publication::derive(program, &mut checker.analysis, &publication_facts)?;
+    checker.analysis.task_execution = crate::task_execution::analyze(program, &checker.analysis);
     program.evidence.check(program, &checker.analysis)?;
     Ok(context.remember(CheckedProof {
         prefix: prefix.clone(),
@@ -581,6 +596,10 @@ impl Checked<'_> {
                 .get(&symbol_name(name))
                 .cloned()
                 .map(|mut fact| {
+                    if fact.materializes && matches!(fact.len, Len::Unknown(_)) {
+                        fact.len = Len::Input(symbol_name(name));
+                        *fact.shape.last_mut().expect("row level") = fact.len.clone();
+                    }
                     fact.materializes = false;
                     fact
                 })
@@ -1106,7 +1125,6 @@ impl Checked<'_> {
                 Ok(fact)
             }
             Term::Store { capacity, inner } => {
-                // Formal rule BE-Length: Host stores may grow; separated unknown stores require capacity.
                 let mut fact = self.term(inner, owner)?;
                 if matches!(fact.len, Len::Unknown(_)) {
                     let carried = match fact.len {
@@ -1230,7 +1248,29 @@ impl Checked<'_> {
                     .structures
                     .fallbacks
                     .iter()
-                    .find(|((result, _, columns), _)| *result == name && columns == keys)
+                    .find(|((result, reader, columns), _)| {
+                        *result == name
+                            && columns == keys
+                            && match reader {
+                                cq_lang_structures::ReaderRef::Scan => false,
+                                cq_lang_structures::ReaderRef::Candidates
+                                | cq_lang_structures::ReaderRef::Membership => true,
+                                cq_lang_structures::ReaderRef::Result(consumer) => self
+                                    .program
+                                    .structures
+                                    .physical
+                                    .program
+                                    .definitions
+                                    .iter()
+                                    .any(|definition| {
+                                        symbol_name(&definition.name) == *consumer
+                                            && !matches!(
+                                                definition.operator,
+                                                Operator::Point(..) | Operator::Range(..)
+                                            )
+                                    }),
+                            }
+                    })
                     .map(|(_, ty)| ty.clone())
             })
             .or_else(|| {
@@ -1387,12 +1427,14 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
                 return true;
             }
             if let Structure::Host { reader, .. } = &entry.structure
-                && reader != "scan"
+                && !matches!(reader, cq_lang_structures::ReaderRef::Scan)
                 && (target_facts.analysis.structures.physical.modes[&symbol_name(&entry.name)]
                     != ModeKind::Pipe
-                    || !definitions
-                        .iter()
-                        .any(|definition| definition.name == *reader))
+                    || !reader.result().is_some_and(|reader| {
+                        definitions
+                            .iter()
+                            .any(|definition| &definition.name == reader)
+                    }))
             {
                 return true;
             }
@@ -1478,6 +1520,7 @@ mod tests {
                 r host scan = Reader [];
                 r canon = Canon;
                 grouped rows = Rows;
+                grouped group = ::std::collections::HashMap<_, (usize,)>;
             }
             sequence {
                 source = canon rows r;

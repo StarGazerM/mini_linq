@@ -283,7 +283,7 @@ fn cyclic_body_keeps_exact_block_cuts_and_reduces_acyclic_branches() {
          relation T(a:i32,c:i32); relation U(a:i32); relation V(a:i32);
          answer(a,b,c) :- R(a,b), S(b,c), T(a,c), {U(a),V(a)} | {U(a)};",
         "R@0(a,b); S@1(b,c); T@2(a,c);
-         block @3(a) {U@3.0.0(a); V@3.0.1(a);} | {U@3.1.0(a);};",
+         block @3(a) hoisted {U@3.0.0(a); V@3.0.1(a);} | {U@3.1.0(a);};",
     );
     assert!(!cq::hypergraph::Analysis::of(&source.cq).acyclic);
     let target = compile(&source, &HYPERGRAPH).unwrap();
@@ -297,6 +297,7 @@ fn cyclic_body_keeps_exact_block_cuts_and_reduces_acyclic_branches() {
     let valuation::Step::Block(block, _) = target.valuation.steps.last().unwrap() else {
         unreachable!()
     };
+    assert_eq!(block.placement, valuation::blocks::Placement::Hoisted);
     // Acyclic does not by itself justify indexing unfiltered supports.
     assert!(direct_reductions(&block.branches[0].steps).is_empty());
     assert!(direct_reductions(&block.branches[1].steps).is_empty());
@@ -323,9 +324,9 @@ fn cyclic_branches_keep_block_cuts_and_plan_descendants_independently() {
         "struct Branch; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
          relation T(a:i32,c:i32); relation U(a:i32); relation V(a:i32);
          answer(a) :- {R(a,b), S(b,c), T(a,c), {U(a),V(a)} | {U(a)}} | {U(a)};",
-        "block @0(a) {
+        "block @0(a) hoisted {
             R@0.0.0(a,b); S@0.0.1(b,c); T@0.0.2(a,c);
-            block @0.0.3(a) {U@0.0.3.0.0(a); V@0.0.3.0.1(a);}
+            block @0.0.3(a) hoisted {U@0.0.3.0.0(a); V@0.0.3.0.1(a);}
                 | {U@0.0.3.1.0(a);};
          } | {U@0.1.0(a);};",
     );
@@ -372,7 +373,7 @@ fn acyclic_body_retains_tree_reductions_and_additional_block_cuts() {
         "struct TreeBlock; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
          relation U(b:i32); relation V(b:i32);
          answer(a,c) :- R(a,b), S(b,c), {U(b)} | {V(b)};",
-        "R@0(a,b); S@1(b,c); block @2(b) {U@2.0.0(b);} | {V@2.1.0(b);};",
+        "R@0(a,b); S@1(b,c); block @2(b) hoisted {U@2.0.0(b);} | {V@2.1.0(b);};",
     );
     assert!(cq::hypergraph::Analysis::of(&source.cq).acyclic);
     let target = compile(&source, &HYPERGRAPH).unwrap();
@@ -665,4 +666,134 @@ fn negation_is_preserved_but_never_used_as_reduction_support_or_target() {
             );
         }
     }
+}
+
+#[test]
+fn masks_checks_edge_premises_and_child_versions_without_schedule_equality() {
+    let source = schedule(
+        "struct Masks; relation A(a:i32); relation B(a:i32,b:i32);
+         relation C(b:i32,c:i32); relation D(c:i32,k:i32);
+         answer(a) :- A(a), B(a,b), C(b,c), D(c,7);",
+        "A@0(a); B@1(a,b); C@2(b,c); D@3(c);",
+    );
+    let options = Options {
+        semijoins: Reductions::Masks,
+    };
+    let target = compile(&source, &options).unwrap();
+    check(&source, &target, &options).unwrap();
+    let mut late = target.clone();
+    let outer = late.valuation.steps.remove(2);
+    late.valuation.steps.insert(0, outer);
+    valuation::contract::check(&late).unwrap();
+    assert!(check(&source, &late, &options).is_err());
+    for reductions in [
+        "reduce B@1 with C@2(b,_);", // missing filtered leaf
+        "reduce B@1 with C@2(b,_); reduce C@2 with D@3(c);", // stale child
+        "reduce C@2 with D@3(c); reduce C@2 with D@3(c); reduce B@1 with C@2(b,_);",
+        "reduce C@2 with D@3(c); reduce B@1 with C@2(b,_); reduce A@0 with B@1(a,_);",
+        "reduce C@2 with D@3(c); reduce B@1 with C@2(b,_); reduce B@1 with A@0(a);",
+        "reduce C@2 with D@3(c); reduce B@1 with C@2(b,_); reduce D@3 with B@1(_,_);",
+    ] {
+        let mut changed = source.clone();
+        let prefix: valuation::Valuation =
+            syn::parse_str(&format!("valuation {{ {reductions} }}")).unwrap();
+        changed.valuation.steps.splice(0..0, prefix.steps);
+        valuation::contract::check(&changed).unwrap();
+        assert!(check(&source, &changed, &options).is_err(), "{reductions}");
+    }
+    let unfiltered = schedule(CHAIN, ATOMS);
+    let mut unsupported = unfiltered.clone();
+    unsupported
+        .valuation
+        .steps
+        .insert(0, syn::parse_quote!(reduce R@1 with S@2(b,_);));
+    valuation::contract::check(&unsupported).unwrap();
+    assert!(check(&unfiltered, &unsupported, &options).is_err());
+}
+
+#[test]
+fn masks_checks_sibling_priority_but_allows_independent_subtree_interleavings() {
+    let source = schedule(
+        "struct Masks; relation A(a:i32,b:i32); relation B(a:i32,c:i32);
+         relation C(c:i32,k:i32); relation D(b:i32,d:i32); relation E(d:i32,k:i32);
+         answer(a,b) :- A(a,b), B(a,c), C(c,7), D(b,d), E(d,9);",
+        "A@0(a,b); B@1(a,c); C@2(c); D@3(b,d); E@4(d);",
+    );
+    let options = Options {
+        semijoins: Reductions::Masks,
+    };
+    let mut target = compile(&source, &options).unwrap();
+    assert!(matches!(
+        target.valuation.steps[0],
+        valuation::Step::Reduce(..)
+    ));
+    assert!(matches!(
+        target.valuation.steps[1],
+        valuation::Step::Reduce(..)
+    ));
+    target.valuation.steps.swap(0, 1);
+    check(&source, &target, &options).unwrap();
+
+    let source = schedule(
+        "struct Siblings; relation A(a:i32); relation B(a:i32,b:i32,c:i32);
+         relation P(b:i32,k:i32); relation Q(c:i32,k:i32);
+         answer(a) :- A(a), B(a,b,c), P(b,7), Q(c,9);",
+        "A@0(a); B@1(a,b,c); P@2(b); Q@3(c);",
+    );
+    let mut target = compile(&source, &options).unwrap();
+    check(&source, &target, &options).unwrap();
+    target.valuation.steps.swap(0, 1);
+    valuation::contract::check(&target).unwrap();
+    assert!(check(&source, &target, &options).is_err());
+}
+
+#[test]
+fn correlated_blocks_are_not_independent_reduction_operands() {
+    let source = schedule(
+        "struct Correlated; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+         relation U(b:i32); relation V(b:i32);
+         answer(a,c) :- R(a,b), S(b,c), {U(b)} | {V(b)};",
+        "R@0(a,b); S@1(b,c);
+         block @2(b) correlated {U@2.0.0(b);} | {V@2.1.0(b);};",
+    );
+    for semijoins in [Reductions::Tree, Reductions::Hypergraph, Reductions::Masks] {
+        let options = Options { semijoins };
+        let target = compile(&source, &options).unwrap();
+        check(&source, &target, &options).unwrap();
+        for seed in 0..8 {
+            let database = databases::binary_database(&source.cq, seed);
+            assert_eq!(
+                evaluator::evaluate(&source, &database),
+                evaluator::evaluate(&target, &database),
+                "{semijoins:?} seed {seed}",
+            );
+        }
+    }
+}
+
+#[test]
+fn masks_never_uses_an_outer_block_as_cut_support() {
+    let source = schedule(
+        "struct OuterBlock; relation U(a:i32); relation V(a:i32);
+         relation R(a:i32,b:i32); relation S(b:i32,k:i32);
+         answer(a) :- {U(a)} | {V(a)}, R(a,b), S(b,7);",
+        "block @0(a) hoisted {U@0.0.0(a);} | {V@0.1.0(a);};
+         R@1(a,b); S@2(b);",
+    );
+    let options = Options {
+        semijoins: Reductions::Masks,
+    };
+    let target = compile(&source, &options).unwrap();
+    check(&source, &target, &options).unwrap();
+    assert_eq!(
+        direct_reductions(&target.valuation.steps),
+        vec![syn::parse_quote!(reduce R@1 with S@2(b);)]
+    );
+    let mut changed = target;
+    changed
+        .valuation
+        .steps
+        .insert(0, syn::parse_quote!(reduce R@1 with block@0(a);));
+    valuation::contract::check(&changed).unwrap();
+    assert!(check(&source, &changed, &options).is_err());
 }

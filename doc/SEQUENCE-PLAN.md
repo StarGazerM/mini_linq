@@ -259,8 +259,12 @@ rejection case (e.g. `tile` over a `store` at an unknown length).
 ```rust
 pub fn translate(p: &cq_lang_sequence::Program, a: &Analysis) -> syn::Result<syn::Expr>;
 ```
-One function per Term constructor; `tile` groups contiguous rows and `choose`
-evaluates recorded first-match guards; lifted constructors preserve outer groups.
+One function per Term constructor; `tile` groups contiguous rows. Ordinary pull
+selects the support-equivalent Else arm for choices without worker guards;
+worker-guarded pull and target hooks evaluate recorded first-match guards.
+Lifted constructors preserve outer groups. Carrier publications for runtime
+Choice and non-borrowable task Tile drivers are recorded in `Analysis.task_execution`
+and charged as symbolic retained-row traffic (BE-CarrierPublication).
 Pull realizes `workers` as `1usize`. The target-hook `translate_with` and
 `translate_profile_with` APIs take an explicit `syn::Expr` worker count before
 the hook; Tasks supplies `rayon::current_num_threads()`. This expression must
@@ -291,16 +295,51 @@ Datalog extension's sharded admission expressible as `tile` + `canon`.
 ## [6] `experiments/gpu/sequence` (CUDA translation; replaces `experiments/gpu/printer` at cutover)
 
 Same signature. Machine `gpu { host > device(separated, dynamic) > block(collaborative) > lane }` (no warp level).
-Templates: dispatch (one kernel per `Dispatch`, grid = length of its outer
-stored space, dynamic claiming), `tile` at block → block of lanes, `items`
-→ per-lane loop, `flatten` at block → scan in shared memory + owner search,
-`store` at device → buffer sized by Len or capacity with overflow flag,
-output protocols, `canon` → runtime provider. Reusable execution primitives
-live in `experiments/gpu/sequence-runtime` (`cq-gpu-sequence-runtime`) and
-reuse `cq-gpu-runtime` pools, streams and `DeviceColumns`. Acceptance: the
-H05 term in the design section translates to two query kernels and RCCL
-build/canonicalization calls; exact at SF1/SF10; target within 20% of 9.7 ms
-at SF10, with measured results reported separately.
+Templates: dispatch (one query kernel plus recorded completion steps per `Dispatch`, dynamic tile claiming), `tile`
+at block → block of lanes, `items` → per-lane loop, `flatten` at block → scan
+in shared memory + owner search, `store` at device → buffer sized by Len or
+capacity with overflow flag, output protocols, `canon` → runtime provider.
+Reusable execution primitives live in `experiments/gpu/sequence-runtime`
+(`cq-gpu-sequence-runtime`) and reuse `cq-gpu-runtime` pools, streams and
+`DeviceColumns`. Acceptance: the H05 term in the design section translates to
+two query kernels and RCCL build/canonicalization calls; exact at SF1/SF10;
+target within 20% of 9.7 ms at SF10, with measured results reported separately.
+
+**Contract (T-Gpu, `backend_ir.tex` §"Refinement and the emitter"):** the
+emitter decides nothing; kernels, barriers and launch shapes are derived from
+the grading and recorded analysis. Recorded today: dispatch boundaries
+(`analysis.dispatches`), publication kinds (BE-Publication), output protocol
+(`output …`), distributed tile parts (`Dispatch::parts`), range access
+(`883d60f8`). The 2026-10-28 launch violations are now recorded in
+`Dispatch::gpu` by `languages/cq-lang-sequence/src/gpu.rs`:
+
+| Decision | Recorded fact / consumer | Status |
+|---|---|---|
+| Grid size | `Partition::{One,Tiles}` plus `Grid::KernelOccupancy`; shared runtime queries SM count and actual kernel residency, capped by tile count | exact (was emitter choice) |
+| Deferred lookup range | `Publication::DeferredRange { provider, keys }`; grading resolves catalog identity and consumers before BE-Resource; accounting and emission share that record | exact (was independent emitter/resource choices) |
+| Range-offset completion | `OffsetScan::DeviceExclusive`; CUB device-wide scan and parallel overflow check before consumers, with per-pool module/workspace reuse | exact (was serial one-block finalize) |
+| Whole-input fold | `FoldCompletion::BlockPartials`; distributed block partials followed by stream-ordered combine | exact (was one-block finalize) |
+| Host metadata synchronization | `Synchronization::{CountAndFailure,RangeOffsets}`; output replay and completed range totals consume these recorded points | exact (was unconditional emitter decision) |
+
+Historical measurement before the cutover (H05 automatic, SF10, `nsys`, 2026-10-28): dispatch 27
+scans all of Lineitem with a deferred range on one block, 783 ms per launch,
+against 1.96–2.02 ms for the seven identical Lineitem scans on 2272 blocks;
+one-block launches are 10.5 s of 10.7 s profiled kernel time.
+
+After the checked-launch cutover and scan workspace reuse (2026-10-28;
+`/tmp/h05-after.json`, five measured runs), all four variants are exact:
+
+| H05 | SF1 total ms | SF10 total ms |
+|---|---:|---:|
+| Automatic | 14.693 | 114.355 |
+| Advised R | 1.113 | 8.562 |
+
+SF10 automatic improves from the historical 1859 ms; advised remains within
+noise of 8.55 ms. An intermediate regression was traced with Nsight to
+1.68–3.72 ms host gaps between the prefix dispatch and offset completion,
+not to the expansion kernel: the prefix remained one block (5–7 μs), and
+expansion used 710 blocks (344–362 μs per count/write attempt). Reusing the
+offset module, CUB program and workspace removed repeated preparation cost.
 
 ## [7] runtime traits (`cq-storage`, `cq-gpu-runtime`)
 
@@ -567,15 +606,17 @@ were respectively 4.28% and 5.13% above their authored references, within the
 
 ## [11] Lookup & Expand planning, evidence advice, swappable planners
 
-**automatic = robust default (no CE); performance plans are authored through the advisory.**
-Unadvised CQ and Sequence entry use the deterministic two-phase Lookup/Expand
-rule: filtering Lookups first in the GYO/LargestRoot transfer order, Expands
-as late as their consumers permit, and segmentation-first resource recovery.
+**automatic = unadvised rule-based plan; performance plans are authored through the advisory.**
+Unadvised Sequence planning (`cq_sequence_plan::plan`) runs `lookup_first`
+(GYO/LargestRoot order, exact-semijoin `transfer` forwards, filtering Lookups
+before Expands, each Expand re-probing its provider), then `adaptive`
+alternatives, then segmentation-first resource recovery. This is not the
+L&E two-phase plan; see "What our implementation does instead" below.
 Explicit ordering, selection, Physical/Structures, realization, staging and decomposition advice retain precedence;
 `plan(preserve_order)` also requests order-preserving decomposition explicitly.
 The 31 `sequence_conformance_*` crates exercise the automatic rule. GPU suite
-generation enables automatic entries by default (`CQ_GPU_TPCH_AUTOMATIC=0`
-opts out). Handoff gates are exact SF1/SF10 execution of all 14 supported entries,
+automatic entries are **opt-in** (`CQ_GPU_TPCH_AUTOMATIC=1`,
+`experiments/gpu/tpch/build.rs`). Handoff gates are exact SF1/SF10 execution of all 14 supported entries,
 all-crate conformance agreement, and scoped API/lint/formal checks. Timings are reported,
 not compared against an automatic-versus-advised performance gate.
 
@@ -584,13 +625,40 @@ Hardened Joins" (VLDB 2024); Zhao et al., "Debunking the Myth of Join
 Ordering" (RPT, SIGMOD 2025); Qiao, Boncz, Zhang, "Robust Predicate
 Transfer with Dynamic Execution" (RPT+, VLDB 2026).
 
-Observation: Sequence terms already have L&E semantics. `lookup` yields
-the match range per row (L&E's iterator), `flatten` is Expand,
-`compact(lookup)` is a filtering Lookup, and a `store` of looked-up rows
-with a provider built over it is "a hash table that stores iterators"
-(L&E §3.2, Figure 4). The authored H05 plan R is L&E's two-phase plan;
-the generic path keeps written atom order and expands first (61 ms vs
-10 ms at SF10). No new primitive is needed, only ordering rewrites.
+What the sources say (read 2026-10-28; quote them, do not paraphrase from
+memory):
+- L&E: a Lookup finds the match iterator, the Expand walks *that* iterator
+  (§3.2); a binary hash join is a Lookup immediately followed by its Expand
+  (Figure 2). Lookups are reordered; Expands go as late as possible (§4).
+  The two-phase guarantee (all Lookups, then all Expands) is for α-acyclic
+  queries (§3.4); cyclic queries use ternary joins and Expand3 with secondary
+  indexes (§3.5). Its sideways information passing (§4.1) builds **Bloom
+  filters during the existing hash-table builds**, one pass ordered small →
+  large by input cardinality, and is evaluated as a separate switch (`SIP`).
+- RPT transfers predicates with Bloom filters; it does not store reduced
+  relations.
+
+What our implementation does instead (verified in code and dumps):
+- `transfer` / forward steps are **exact semijoins** (`semi eager`); in `let`
+  mode they lower to a stored `compact` plus a new `RangeProvider`. This is
+  neither L&E SIP nor RPT (`STATUS.md`: "not the paper's vectorized Bloom
+  pipeline").
+- A pushed Lookup is `compact … lookup P [k]` and its later Expand is a
+  separate `flatten lookup P [k]`: the same provider is **probed twice**
+  (five provider/key pairs in H05 automatic). Sequence can express the
+  fused form `flatten lookup P [k]` (one probe); whether it can carry an
+  unexpanded range across other Lookups is not verified.
+- The authored H05 plan R is **not** a two-phase L&E plan: every join is a
+  fused `flatten lookup` (a binary probe) in Region→Nation→Customer→Orders→
+  Lineitem order, plus a final Supplier membership `compact lookup`. H05 is
+  not α-acyclic (order–customer–nation–supplier cycle), so no plan for it is
+  guaranteed two-phase.
+- Historical pre-cutover measurement (SF10, 2026-10-28): automatic H05
+  1859 ms vs advised (= R) 8.55 ms. That automatic plan had 96 Sequence
+  definitions, 46 global stores, 9 Lineitem scans, 7 `choose` alternatives
+  (all alternatives executed), 33 query kernels vs 2. The checked-launch
+  cutover in [6] measures 114.355 ms automatic and 8.562 ms advised, exact.
+  The remaining automatic/advised gap has not been attributed here.
 
 Rewrites (checked by `check_rewrite`; laws Motion, BE-Offsets, BE-Scope):
 1. `lookup_first`: derive the join graph and deterministic GYO/LargestRoot
@@ -651,6 +719,9 @@ Both arms retain the exact joins and are independently checked.
 `cq_sequence_plan::plan` obtains and replays `LookupFirst`, freezes the complete
 adaptive candidate list before inserting any choices, replays every entry in
 that list, then decomposes the result and prepends the ordering/adaptive trace.
+Discovery reads recorded `Sequence.optional_filters` provenance. Replaying an
+adaptive decision consumes that provider/key class's provenance, not unrelated
+pending candidates; after every frozen decision is replayed, none are rediscovered.
 The separate `decompose` entry preserves authored relational order. Retained
 forward filters and multiply indexed/scanned leaves have explicit row providers;
 the Lookup-first index provider must support Exact and Membership. Retained rows

@@ -24,8 +24,8 @@
 //! `cq-syntax`.
 
 //! Elaboration projects arms to their common heading, emits explicit union/anti equations and names negative originals.
-//! Rust-free blocks hoist over free/interface columns; a named finite prefix domain supplies missing branch generators.
-//! Rust arms retain the prefix and anti Before dependencies.
+//! Recorded hoisted blocks use free/interface columns and a finite prefix domain for missing branch generators.
+//! Recorded correlated arms retain the prefix and anti Before dependencies.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
@@ -53,10 +53,10 @@ pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
     compile_in(source, true)
 }
 
-/// Compile the exact written reference, with no relational hoisting or alias
+/// Compile the exact written reference, with no predicate pushdown or alias
 /// solving. The valuation must contain one full atom per written generator and
 /// every equality/bind/guard at its written position; reductions are forbidden.
-/// This is the executable reference used for partial-expression refinement tests.
+/// Every block must already record Correlated placement.
 pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> {
     valuation::contract::check(source)?;
     if source.valuation.join_branches.is_some() {
@@ -84,6 +84,7 @@ pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> 
                     match (item, step) {
                         (BodyItem::Block(block), valuation::Step::Block(planned, _)) => {
                             block.kind == planned.kind
+                                && planned.placement == valuation::blocks::Placement::Correlated
                                 && planned.source.clause == path
                                 && planned.source.variables().count()
                                     == planned.source.columns.len()
@@ -119,13 +120,13 @@ pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> 
     if !exact {
         return Err(syn::Error::new_spanned(
             &source.valuation,
-            "written reference requires exactly the full written NF steps, without splitting, reductions or reordering",
+            "written reference requires exactly the full written NF steps and correlated blocks, without splitting, reductions or reordering",
         ));
     }
     compile_in(source, false)
 }
 
-fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Result<ra::Program> {
+fn compile_in(source: &valuation::Program, optimize_predicates: bool) -> syn::Result<ra::Program> {
     let analysis = valuation::contract::check(source)?;
     let has_blocks = valuation::cq::blocks::walk(&source.cq.query.body)
         .iter()
@@ -157,12 +158,12 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
         relations: BTreeMap::new(),
         prefix: None,
         heading: BTreeSet::new(),
-        aliases: if relational_hoisting && !has_blocks {
+        aliases: if optimize_predicates && !has_blocks {
             aliases(&source.cq)
         } else {
             BTreeMap::new()
         },
-        relational_hoisting,
+        optimize_predicates,
         constraints: Vec::new(),
         equalities: Vec::new(),
     };
@@ -261,6 +262,7 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
         )
     })?;
     join_branches::check(source, target)?;
+    block_contract::check_placement(&source.valuation.steps, target)?;
     Ok(())
 }
 
@@ -288,7 +290,7 @@ struct State<'a> {
     prefix: Option<Ident>,
     heading: BTreeSet<String>,
     aliases: BTreeMap<String, Ident>,
-    relational_hoisting: bool,
+    optimize_predicates: bool,
     equalities: Vec<(ra::Equality, BTreeSet<usize>)>,
     constraints: Vec<(cq::Constraint, BTreeSet<usize>)>,
 }
@@ -325,7 +327,12 @@ impl<'a> State<'a> {
                 }
                 valuation::cq::BodyItem::Block(block) => {
                     let facts = block.analyze(&prefix);
-                    if self.relational_hoisting && !facts.rust && needs_domain(block, &facts) {
+                    if self.steps.iter().any(|step| {
+                        matches!(step, valuation::Step::Block(planned, _)
+                            if planned.source.clause() == clause
+                                && planned.placement == valuation::blocks::Placement::Hoisted)
+                    }) && needs_domain(block, &facts)
+                    {
                         domain_cuts.insert(clause);
                     }
                     prefix.extend(facts.interface.into_keys());
@@ -454,6 +461,7 @@ impl<'a> State<'a> {
         }
     }
 
+    /// Formal rule E-BlockPlacement: Elaborate the recorded Hoisted or Correlated alternative, never a compiler-mode choice.
     fn block_relation(&mut self, clause: usize) -> Ident {
         let valuation::cq::BodyItem::Block(written) = &self.body[clause] else {
             unreachable!("block clause")
@@ -468,7 +476,7 @@ impl<'a> State<'a> {
             .expect("VO places every block");
         let written_prefix = valuation::cq::blocks::bound_before(self.body, clause, &self.context);
         let facts = written.analyze(&written_prefix);
-        let hoisted = self.relational_hoisting && !facts.rust;
+        let hoisted = planned.placement == valuation::blocks::Placement::Hoisted;
         let correlated_prefix = (!hoisted).then(|| self.prefix_or_unit());
         let common: BTreeSet<_> = facts
             .free
@@ -763,7 +771,7 @@ impl<'a> State<'a> {
             .equalities
             .iter()
             .filter(|(e, targets)| {
-                self.relational_hoisting
+                self.optimize_predicates
                     && targets.contains(&clause)
                     && matches!(e.right, ra::EqualityValue::Literal(_))
             })
@@ -777,7 +785,7 @@ impl<'a> State<'a> {
         }
         // Ordinary relational pushdown: every used column belongs to this
         // occurrence. Group same-column conjuncts into one range selection.
-        if self.relational_hoisting {
+        if self.optimize_predicates {
             let mut groups: Vec<(BTreeSet<String>, Vec<cq::Constraint>)> = Vec::new();
             for (c, targets) in &self.constraints {
                 let columns: BTreeSet<_> = c.variables().map(symbol_name).collect();
@@ -943,7 +951,7 @@ impl<'a> State<'a> {
 
     /// Formal rule E-Constraint: Push a central constraint onto its complete binder or select the prefix.
     fn constraint(&mut self, constraint: &cq::Constraint) {
-        if self.relational_hoisting
+        if self.optimize_predicates
             && self
                 .constraints
                 .iter()
@@ -963,7 +971,7 @@ impl<'a> State<'a> {
     }
 
     fn equality(&mut self, equality: &ra::Equality) {
-        if self.relational_hoisting
+        if self.optimize_predicates
             && matches!(equality.right, ra::EqualityValue::Literal(_))
             && self
                 .equalities

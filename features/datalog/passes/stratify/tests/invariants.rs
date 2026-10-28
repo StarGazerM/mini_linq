@@ -1,5 +1,5 @@
-use cq_datalog_stratify::{self as stratify, invariants};
 use cq_datalog_incremental as seminaive;
+use cq_datalog_stratify::{self as stratify, invariants};
 use cq_lang_datalog_source::{BodyItem, Program};
 use cq_lang_datalog_strata::contract;
 use quote::ToTokens;
@@ -27,8 +27,14 @@ fn frozen_filter_roundtrips_and_erases_independently() {
     assert_eq!(parsed, after);
     invariants::check(&before, &parsed).unwrap();
     let scheduled = seminaive::compile(&parsed).unwrap();
-    cq_lang_datalog_incremental::contract::check(&syn::parse2(scheduled.to_token_stream()).unwrap()).unwrap();
-    assert_eq!(cq_lang_datalog_strata::invariants::erase(&after).unwrap(), before);
+    cq_lang_datalog_incremental::contract::check(
+        &syn::parse2(scheduled.to_token_stream()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        cq_lang_datalog_strata::invariants::erase(&after).unwrap(),
+        before
+    );
 }
 
 #[test]
@@ -96,7 +102,11 @@ fn leaves_drivers_unfiltered_atoms_opaque_clauses_and_expanding_joins_alone() {
         p.rules[1] = syn::parse_str(body).unwrap();
         let p = stratify::compile(&p).unwrap();
         assert!(
-            invariants::compile(&p).unwrap().source.invariants.is_empty(),
+            invariants::compile(&p)
+                .unwrap()
+                .source
+                .invariants
+                .is_empty(),
             "{body}"
         );
     }
@@ -141,8 +151,13 @@ fn benchmark_program(text: &str) -> Program {
     fn find(tokens: TokenStream) -> Option<Program> {
         let tokens: Vec<_> = tokens.into_iter().collect();
         for window in tokens.windows(3) {
-            if let [TokenTree::Ident(name), TokenTree::Punct(bang), TokenTree::Group(body)] = window
-                && name == "datalog" && bang.as_char() == '!'
+            if let [
+                TokenTree::Ident(name),
+                TokenTree::Punct(bang),
+                TokenTree::Group(body),
+            ] = window
+                && name == "datalog"
+                && bang.as_char() == '!'
             {
                 let mut body = body.stream().into_iter().peekable();
                 if matches!(body.peek(), Some(TokenTree::Ident(name)) if name == "pipeline") {
@@ -166,7 +181,12 @@ fn ddisasm_selects_only_the_recursive_register_filter() {
     let before = stratify::compile(&source).unwrap();
     let after = invariants::compile(&before).unwrap();
     assert_eq!(
-        after.source.invariants.iter().map(|h| h.rule).collect::<Vec<_>>(),
+        after
+            .source
+            .invariants
+            .iter()
+            .map(|h| h.rule)
+            .collect::<Vec<_>>(),
         [8]
     );
     invariants::check(&before, &after).unwrap();
@@ -180,7 +200,12 @@ fn doop_invariant_selection_is_checked_without_blanket_join_materialization() {
     let after = invariants::compile(&before).unwrap();
     eprintln!(
         "DOOP invariant rules: {:?}",
-        after.source.invariants.iter().map(|h| h.rule).collect::<Vec<_>>()
+        after
+            .source
+            .invariants
+            .iter()
+            .map(|h| h.rule)
+            .collect::<Vec<_>>()
     );
     invariants::check(&before, &after).unwrap();
     seminaive::compile(&after).unwrap();

@@ -351,7 +351,7 @@ pub fn check(source: &Program, target: &Context, pipeline: &cq_stage::Pipeline) 
             let expected = BodyItem::Constraint(cq_syntax::Constraint::Compare {
                 left: cq_syntax::constraint::Term::Variable(local.clone()),
                 comparison: cq_syntax::constraint::Comparison::Eq(Default::default()),
-                right: cq_syntax::constraint::Term::Parameter(external.clone()),
+                right: cq_syntax::constraint::Term::Parameter(external.clone().into()),
             });
             ensure(
                 body.pop().map(|pair| pair.into_value()) == Some(expected),

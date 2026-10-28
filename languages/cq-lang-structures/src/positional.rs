@@ -114,10 +114,7 @@ pub fn lineages(
                 l.columns.retain(|c, _| facts.headings[&name].contains(c));
                 l
             }),
-            Operator::Semi(_, k)
-                if !matches!(k.choice, Some(physical::Choice::Lazy(_)))
-                    && result.contains_key(&symbol_name(&k.right)) =>
-            {
+            Operator::Semi(_, k) if !matches!(k.choice, Some(physical::Choice::Lazy(_))) => {
                 result.get(&symbol_name(&k.left)).cloned()
             }
             _ => None,
@@ -436,7 +433,11 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
     // Formal rule STR-Read: A summary names only the existing right build of this reader, earlier in Physical.
     for (name, read) in &facts.reads {
         let (position, d) = defs[name];
-        if facts.fallbacks.keys().any(|(_, reader, _)| reader == name) {
+        if facts
+            .fallbacks
+            .keys()
+            .any(|(_, reader, _)| reader.result() == Some(name))
+        {
             return error(
                 &d.name,
                 "positional read replaces its native-reader fallback; record only one adapter",

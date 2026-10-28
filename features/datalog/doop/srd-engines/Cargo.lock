@@ -70,6 +70,7 @@ dependencies = [
  "cq-datalog-support",
  "cq-lang-datalog-incremental",
  "cq-lang-datalog-strata",
+ "cq-order",
  "cq-syntax",
  "proc-macro2",
  "quote",

@@ -254,7 +254,7 @@ fn native_host_lookup_rejects_keys_outside_declared_prefix() {
     source.structures.entries[1] =
         syn::parse_quote!(e host scan = ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [];);
     source.structures.entries[2] =
-        syn::parse_quote!(e host joined = ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [y];);
+        syn::parse_quote!(e host result(joined) = ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [y];);
     let bound = cq_gpu_sequence_core::runs::bind(&source).unwrap();
     let sequence = cq_sequence_lowering::compile(&bound).unwrap();
     let machine = cq_gpu_sequence::machine();

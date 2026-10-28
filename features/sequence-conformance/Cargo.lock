@@ -254,9 +254,23 @@ dependencies = [
  "cq-lang-ra",
  "cq-lang-vo",
  "cq-order",
+ "cq-planning",
  "cq-reduce",
  "proc-macro2",
  "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-planning"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-lang-cq",
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "cq-order",
+ "cq-reduce",
  "syn 2.0.119",
 ]
 
@@ -599,6 +613,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
+ "cq-planning",
  "mini-linq-macros",
 ]
 
@@ -606,7 +621,6 @@ dependencies = [
 name = "mini-linq-macros"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-index-policy",
  "cq-lang-cq",
  "cq-lang-ix",
@@ -615,9 +629,8 @@ dependencies = [
  "cq-lang-sequence",
  "cq-lang-structures",
  "cq-lang-vo",
- "cq-order",
  "cq-physical-lowering",
- "cq-reduce",
+ "cq-planning",
  "cq-represent",
  "cq-sequence-lowering",
  "cq-sequence-plan",

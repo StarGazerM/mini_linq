@@ -35,7 +35,7 @@ pub(super) fn layout(
             if bound.contains(&symbol_name(v)) {
                 Term::Variable(canonical(v))
             } else {
-                Term::Parameter(v.clone())
+                Term::Parameter(v.clone().into())
             }
         });
         if let Some(Term::Variable(v)) = &term {

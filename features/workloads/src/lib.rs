@@ -16,8 +16,9 @@
 //! catalog case also runs visible pairwise rows. Positional advice is slice-only.
 //! UI fixtures pin unsupported printer/host choices and malformed retained layouts.
 //! Pull configurations use checked Sequence lowering, host-only grading and pull
-//! translation by default. Explicit push configurations retain the Structures
-//! terminal. The independent fuzz reference and SQL oracle remain unchanged;
+//! translation by default. Push configurations declare `print_input = structures;`,
+//! as do the Structures-consuming conformance terminals; printer paths are opaque.
+//! The independent fuzz reference and SQL oracle remain unchanged;
 //! counted pull executions use the matching Sequence profile translation.
 //! The corpus's `sequence_conformance` tests replay the pairwise configuration
 //! tables and, for the triangle kernel, planner x join x intersection with host

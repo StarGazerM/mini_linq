@@ -60,14 +60,47 @@ def check_rule_inventory():
         assert source.read_text().count(entry["marker"]) == 1, (
             "source marker must identify exactly one location", entry
         )
-    return len(labels)
+    return labels
+
+
+STATUSES = {"exact", "weaker", "stronger", "unimplemented", "no-rule"}
+
+
+def check_conformance(rules):
+    """Conformance tables name real rules, real files and known statuses."""
+    rules = set(rules)
+    records = sorted((BASE / "conformance").glob("*.md")) + [BASE / "CONFORMANCE.md"]
+    rows = 0
+    for record in records:
+        text = record.read_text()
+        for line in text.splitlines():
+            if not line.startswith("|") or line.startswith("|---") or line.startswith("| Rule") or line.startswith("|Rule"):
+                continue
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            rows += 1
+            # Rule names cited as inline code or bare; '—' and 'No rule' rows are decisions.
+            for name in re.findall(r"\b([A-Z][A-Za-z0-9]*(?:-[A-Z][A-Za-z0-9]*)+)\b", cells[0]):
+                if name in rules:
+                    continue
+                if name.split("-")[0] in {"H", "C", "S", "O", "E", "B", "D", "R", "Y", "L", "A", "G", "T", "FV", "CQ", "WF", "CK", "RA", "IX", "PH", "PL", "BE", "ST", "STR", "EXT", "GPU", "DL", "P", "CTX", "IF", "SEL", "ORD", "CT", "Plan"}:
+                    raise AssertionError(f"{record.name}: unknown rule {name!r} in row {cells[0][:60]!r}")
+            for path in re.findall(r"`([A-Za-z0-9_./-]+\.(?:rs|tex|md|py|tsv))(?::[0-9,\-]+)?`", line):
+                candidate = ROOT / path
+                if not candidate.is_file() and not (BASE / path).is_file():
+                    raise AssertionError(f"{record.name}: cited file missing: {path}")
+            statuses = [s for s in STATUSES if re.search(rf"\*\*{re.escape(s)}\*\*|\b{re.escape(s)}\b", line)]
+            if "Status" not in line and not statuses and len(cells) >= 6 and record.parent.name == "conformance":
+                raise AssertionError(f"{record.name}: row without a known status: {cells[0][:60]!r}")
+    return rows
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args()
     rules = check_rule_inventory()
-    print(f"Documentation inventory: {rules} rules.")
+    print(f"Documentation inventory: {len(rules)} rules.")
+    rows = check_conformance(rules)
+    print(f"Conformance records: {rows} rows name existing rules, files and statuses (doc/formal/CONFORMANCE.md).")
     print("Rule locations identify current sources. This does not establish compiler conformance.")
 
 

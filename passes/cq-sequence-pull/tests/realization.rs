@@ -296,6 +296,7 @@ fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
                     Structure::Rows { ty, .. }
                     | Structure::Dedup { ty, .. }
                     | Structure::HeadDedup { ty, .. }
+                    | Structure::Group { ty, .. }
                     | Structure::Selection { ty, .. }
                     | Structure::KeySet { ty, .. } => ty,
                     Structure::Read { .. }

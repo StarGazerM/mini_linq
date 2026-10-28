@@ -28,8 +28,16 @@ fn assert_exact<T: Ord + std::fmt::Debug>(
     schedule: &str,
 ) {
     let rows: Vec<_> = actual.into_iter().collect();
-    assert_eq!(rows.len(), expected.len(), "duplicate or missing rows: {schedule}/{threads}");
-    assert_eq!(&rows.into_iter().collect::<BTreeSet<_>>(), expected, "{schedule}/{threads}");
+    assert_eq!(
+        rows.len(),
+        expected.len(),
+        "duplicate or missing rows: {schedule}/{threads}"
+    );
+    assert_eq!(
+        &rows.into_iter().collect::<BTreeSet<_>>(),
+        expected,
+        "{schedule}/{threads}"
+    );
 }
 
 macro_rules! closure {
@@ -51,7 +59,9 @@ fn recursive_keyed_joins_match_round_on_2000_node_sparse_graph() {
     let edges = sparse_graph();
     let expected: BTreeSet<_> = closure!(&edges;
         print = cq_datalog_test_passes::eval_round;
-    ).into_iter().collect();
+    )
+    .into_iter()
+    .collect();
     for threads in [1, 4, 8] {
         rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
             macro_rules! check {
@@ -124,7 +134,9 @@ fn keyed_hasher_composes_with_sharded_layouts_in_both_orders() {
     let edges = [(0, 1), (1, 2), (2, 0), (2, 3), (0, 1)];
     let expected: BTreeSet<_> = closure!(&edges;
         print = cq_datalog_test_passes::eval_round;
-    ).into_iter().collect();
+    )
+    .into_iter()
+    .collect();
     rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap().install(|| {
         macro_rules! check {
             ($($storage:tt)*) => {
@@ -138,4 +150,85 @@ fn keyed_hasher_composes_with_sharded_layouts_in_both_orders() {
         check!(cq_datalog_hasher::hasher(keyed), cq_datalog_parallel::shard_storage(layouts(sharded)));
         check!(cq_datalog_parallel::shard_storage(layouts(sharded)), cq_datalog_hasher::hasher(keyed));
     });
+}
+
+static PUBLICATION_TRACE: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+#[derive(Default)]
+struct PublicationHasher<const LAYOUT: usize>;
+
+impl<const LAYOUT: usize> std::hash::BuildHasher for PublicationHasher<LAYOUT> {
+    type Hasher = std::collections::hash_map::DefaultHasher;
+
+    fn build_hasher(&self) -> Self::Hasher {
+        PUBLICATION_TRACE.lock().unwrap().push(LAYOUT);
+        Self::Hasher::new()
+    }
+}
+
+// Deliberately misleading spelling: maintenance follows GroupedMap, not this alias.
+type RunLayout<T> = T;
+
+#[test]
+fn reordered_split_publications_reach_consumers_across_schedules() {
+    let edges = [(0, 1), (1, 2), (2, 0), (2, 3), (0, 1)];
+    let expected: BTreeSet<_> = closure!(&edges;
+        print = cq_datalog_test_passes::eval_round;
+    )
+    .into_iter()
+    .collect();
+    assert_exact(
+        closure!(&edges;
+            storage_rewrites = [cq_datalog_parallel_test_passes::trace_publication(alias)];
+            round = [cq_datalog_parallel_test_passes::reorder_publication];
+        ),
+        &expected,
+        1,
+        "aliased grouped-map providers",
+    );
+    for threads in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                macro_rules! check {
+                ($schedule:ident) => {{
+                    PUBLICATION_TRACE.lock().unwrap().clear();
+                    assert_exact(closure!(&edges;
+                        fork = cq_datalog::passes::fork(timing = none;);
+                        storage_rewrites = [
+                            cq_datalog_parallel::shard_storage,
+                            cq_datalog_parallel_test_passes::trace_publication
+                        ];
+                        round = [
+                            cq_datalog_parallel_test_passes::reorder_publication,
+                            cq_datalog_schedule::schedule($schedule),
+                            cq_datalog_parallel::partition(threshold = 0, grain = 2)
+                        ];
+                        print = cq_datalog_parallel::print_rounds;
+                    ), &expected, threads, stringify!($schedule));
+                    let trace = PUBLICATION_TRACE.lock().unwrap();
+                    let mut groups = trace.iter().copied();
+                    let mut previous = groups.next().expect("full layouts were published");
+                    assert!(previous > 0, "recorded reverse order must not start with owner zero");
+                    // Split singleton operations must finish in descending recorded order,
+                    // including when Rayon can execute their tasks on different workers.
+                    for layout in groups {
+                        if previous == 0 {
+                            break;
+                        }
+                        if layout != previous {
+                            assert_eq!(layout + 1, previous, "publication reordered: {trace:?}");
+                            previous = layout;
+                        }
+                    }
+                    assert_eq!(previous, 0, "every full layout must be published");
+                }};
+            }
+                check!(whole);
+                check!(by_head);
+                check!(relational);
+            });
+    }
 }

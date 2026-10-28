@@ -288,7 +288,7 @@ impl<'a> Context<'a> {
                 .iter()
                 .flat_map(cq_lang_structures::syntax::Constraint::parameters)
             {
-                let name = symbol_name(parameter);
+                let name = parameter.name();
                 if parameters.contains_key(&name) {
                     continue;
                 }

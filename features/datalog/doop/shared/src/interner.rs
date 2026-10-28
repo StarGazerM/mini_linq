@@ -16,7 +16,11 @@ impl IStr {
     /// Panics if the code has never been interned.
     pub fn from_code(code: u32) -> Self {
         let exists = (code as usize)
-            < interner().lock().expect("string interner poisoned").strings.len();
+            < interner()
+                .lock()
+                .expect("string interner poisoned")
+                .strings
+                .len();
         assert!(exists, "symbol code {code} has never been interned");
         Self(code)
     }

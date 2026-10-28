@@ -1746,7 +1746,9 @@ fn raw_negation_names_match_reference_semantics() {
                 )
                 .unwrap();
                 let target = compile(&written).unwrap();
-                let reference = cq_elaborate::compile_written(&written).unwrap();
+                let reference_vo = cq_order::compile_written(&normal).unwrap();
+                let reference = cq_elaborate::compile_written(&reference_vo).unwrap();
+                check(&reference_vo, &reference).unwrap();
                 for seed in 0..32 {
                     let database = databases::binary_database(&source, seed);
                     let expected = cq_oracle::evaluate_cq(&source, &database);

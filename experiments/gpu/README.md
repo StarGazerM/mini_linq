@@ -16,6 +16,14 @@ and `grade` records machine placements. Canonicalization remains a Sequence
 `canon` term with its recorded implementation. Translator rejection is not a
 license to substitute another query or plan.
 
+The translator must decide nothing (T-Gpu, `doc/formal/backend_ir.tex`
+§"Refinement and the emitter"): kernels, barriers and launch shapes come from
+the grading and recorded analysis. `emit.rs` still decides grid size (1 or
+the literal 2272), deferred lookup ranges, one-block offset scans and fold
+finalization, and per-dispatch host synchronization; these are listed as open
+violations in `doc/SEQUENCE-PLAN.md` [6]. Do not add further translator-side
+decisions; record them in grading first.
+
 Computed CQ-Arith bindings in segmented maps are lane-local scalar codes.
 Sibling lanes may read parent-owned codes through their owner index, but map
 assignments never write those shared parent slots.
@@ -87,7 +95,8 @@ maximum word without overflow.
 `DeviceRuns::admit` sorts, deduplicates, subtracts all accepted runs on-device,
 and returns a cheap immutable `Run` delta while accepting it internally.
 It reads back only the unique count and fresh count (empty batches and an empty
-accepted state omit unnecessary readbacks). Ratio-four merges retain sorted,
+accepted state omit unnecessary readbacks). `DeviceRuns::new(pool, ratio)`
+stores the supplied maintenance ratio (at least two); merges retain sorted,
 unique, pairwise-disjoint runs. For another layout, permute the delta with
 `Packing::permute_device`, sort with unsafe `DeviceRuns::sort_known_unique`
 (the column permutation preserves uniqueness and cardinality), and use unsafe
@@ -95,6 +104,9 @@ unique, pairwise-disjoint runs. For another layout, permute the delta with
 readback or compaction; arbitrary inputs still use `sort_unique`. `RunView` and device
 `runs::range` support inclusive prefix searches without materialization.
 All work and frees use the pool's legacy default stream.
+Packed permutation, wide-word radix gather, admission membership and wide merge
+size their grid-stride launches from the loaded kernel's CUDA occupancy,
+capped by the work domain; they do not assume a particular device's grid cap.
 
 ```sh
 cargo oxide test --arch sm_89 -- --release -p gpu-datalog-runtime
@@ -159,9 +171,18 @@ pipeline {
         print = ::cq_gpu_sequence::translate_arena;
     };
     terminals = [::cq_gpu_sequence::translate_arena => batch];
+    round = [::cq_gpu_datalog::bind_round(binding = 5)];
     print = ::cq_gpu_datalog::print_rounds;
 }
 ```
+
+`bind_round` records complete input-layout and arena argument packets before
+printing. Its zero-based invocation ordinal names the binding rewrite after
+plan, index demands, lower, capture constants, and select in this queue.
+Update that ordinal when inserting preceding phases; aliases do not change
+ownership. The printer rejects missing owners or modified packets.
+`device_storage(ratio(8))` overrides the geometric maintenance ratio; omission
+records four. The ratio is printed in Storage and passed to every run state.
 
 Inputs upload once; each round issues the recorded waves in order, admits each
 head's candidate batches into its accepted runs, and publishes the delta into
@@ -179,6 +200,8 @@ Symbol columns are declared with
 injective `code(&IStr) -> u32` mapping and its `decode(u32) -> IStr` inverse.
 Use the same type spelling as the relation declaration; the compiler does not
 resolve Rust aliases. Upload/download performs the conversion on the host.
+The declared codec map is a printable Storage field, independent of opaque
+provider types; `DeviceRuns<W>` contains no logical-schema generic metadata.
 Closed guard, binding and selection expressions are host captures, evaluated
 once per invocation on demand for a nonempty dispatch input. Invocation-local
 `OnceCell` values retain captures across retries and dispatches; symbols use
@@ -442,6 +465,17 @@ rules, and 43 output relations. Prepared integer IDs and `meta.json` constants
 are passed unchanged; there is no symbol codec or alternate GPU query body.
 The pipeline uses `device_storage`, `delta_first`, `capture_constants`,
 `reserve_previous`, `translate_arena`, and `print_rounds`, like `doop-gpu`.
+Each rule keeps its SRDatalog name as a label. Join orders come from the
+planner's connected default; SRDatalog's `with_plan` orders are not emitted
+unless `translate.py --plans` is used, which turns every `with_plan` into
+`plan(Label, [delta(R@k),] order(...))` incremental advice (see the
+`cq-datalog` facade docs; a `var_order` becomes a connected atom order, delta
+first). Translated as atom-at-a-time orders they measured slower on the delta
+versions (batik 9.1 s -> 21.3 s fixpoint). `block_group` and the other kernel
+pragmas are not lowered; `generated.schema.json` records `source_plans` and,
+with `--plans`, `unlowered_plan_flags`. Build with
+`--features default-query` for SRDatalog's default (non-field-flow) program,
+82 source rules and 40 outputs, which is what its default benchmark runs.
 
 The translation comes directly from `build_doopdb_program(meta, field_flow=True)`
 in SRDatalog `fab849f672d43af2a6a1e8a1727ec065201e3720`; multihead splitting

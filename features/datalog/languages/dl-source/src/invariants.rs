@@ -61,9 +61,15 @@ pub fn erase(program: &Program) -> syn::Result<Program> {
         )?;
         original.rules[entry.rule] = entry.source.clone();
     }
-    original
+    let kept: Vec<_> = original
         .rules
-        .retain(|q| !helpers.contains(&symbol_name(&q.head.relation)));
+        .iter()
+        .map(|q| !helpers.contains(&symbol_name(&q.head.relation)))
+        .collect();
+    let mut keep = kept.iter().copied();
+    original.rules.retain(|_| keep.next().unwrap_or(true));
+    let mut keep = kept.iter().copied();
+    original.labels.retain(|_| keep.next().unwrap_or(true));
     original
         .declarations
         .retain(|d| !helpers.contains(&symbol_name(&d.name)));
@@ -103,11 +109,16 @@ pub fn check(program: &Program) -> syn::Result<()> {
                     || (i != head && !analysis.graph.reach[i][head])
             })
         };
-        let changing_positions: Vec<_> = entry.source.body.iter().enumerate()
+        let changing_positions: Vec<_> = entry
+            .source
+            .body
+            .iter()
+            .enumerate()
             .filter_map(|(i, item)| match item {
                 BodyItem::Positive { atom } if !frozen(&atom.relation) => Some(i),
                 _ => None,
-            }).collect();
+            })
+            .collect();
         ensure(
             !changing_positions.is_empty(),
             program,
@@ -231,9 +242,7 @@ pub fn check(program: &Program) -> syn::Result<()> {
             }
         }
         ensure(
-            changing_positions
-                .iter()
-                .any(|&i| i < first)
+            changing_positions.iter().any(|&i| i < first)
                 && names.iter().any(|v| prior.contains(v)),
             program,
             "invariant must be a keyed side after a changing driver",

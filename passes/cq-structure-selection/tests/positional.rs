@@ -135,6 +135,31 @@ fn index_only_rhs_prunes_dependent_candidates_without_changing_the_old_represent
     assert_eq!(original, selected);
 }
 
+#[test]
+fn eager_semi_with_joined_support_admits_left_positional_keyset() {
+    let source = syn::parse_quote! { physical {
+        relation L(a:i64); relation R(b:i64); relation S(c:i64);
+        l = pipe rename L@0 {a -> x};
+        r = pipe rename R@1 {b -> x};
+        s = pipe rename S@2 {c -> x};
+        support = let probe first [x] r,s;
+        filtered = let semi eager [x] l,support;
+        outer = pipe rename L@3 {a -> x};
+        out = pipe canon semi eager [x] outer,filtered;
+        return out as answer(x);
+    }};
+    let mut target = cq_structure_selection::compile(&source).unwrap();
+    target.structures.entries.push(syn::parse_quote!(
+        filtered rows = ::std::vec::Vec<_>;
+    ));
+    target.structures.entries.push(syn::parse_quote!(
+        filtered keyset =
+            ::cq_storage::AdaptiveKeySet<_, ::cq_storage::I64Codec, 67108864>
+            [x] owned base L lineage { x -> a };
+    ));
+    ir::contract::check(&target).unwrap();
+}
+
 fn join_filter_plan(branch: bool) -> ir::Program {
     let build = if branch {
         quote! {

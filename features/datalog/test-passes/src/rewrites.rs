@@ -7,9 +7,11 @@ pub fn deduplicate_source(source: &source::Program) -> syn::Result<source::Progr
     source::contract::check(source)?;
     let mut target = source.clone();
     target.rules.clear();
-    for rule in &source.rules {
+    target.labels.clear();
+    for (rule, label) in source.rules.iter().zip(&source.labels) {
         if !target.rules.contains(rule) {
             target.rules.push(rule.clone());
+            target.labels.push(label.clone());
         }
     }
     Ok(target)
@@ -61,6 +63,7 @@ pub fn alternate_storage(source: &storage::Program) -> syn::Result<storage::Prog
             key: 0,
             provider: syn::parse_quote!(::std::collections::HashMap<(), ::std::vec::Vec<(#(#types,)*)>, ::cq_storage::HashState>),
             maintenance: old.maintenance.clone(),
+            protocol: storage::LayoutProtocol::GroupedMap,
         };
         // The fixed publication policy maintains every declared layout, even
         // one no longer referenced. A key-zero scan is legal at every binding.

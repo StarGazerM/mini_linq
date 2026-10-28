@@ -78,6 +78,18 @@ pub fn bind_runs(input: TokenStream) -> TokenStream {
     .into()
 }
 
+/// Select device providers from the GPU catalog for every computed structure
+/// (filtered supports, built indexes, key sets) that `bind_runs` did not bind
+/// to a declared run input. Bound runs already match a catalog token.
+#[proc_macro]
+pub fn select_catalog(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, arguments| {
+        no_arguments(arguments)?;
+        cq_sequence_plan::select_from_catalog(source, &cq_gpu_sequence_core::catalog())
+    })
+    .into()
+}
+
 /// Expose literal atom arguments as checked guards before provider selection.
 #[proc_macro]
 pub fn capture_constants(input: TokenStream) -> TokenStream {

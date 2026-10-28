@@ -7,6 +7,7 @@ fn main() {
         pipeline {
             plan = cq_planners::order(written, coarse);
             physical = [cq_rewrites::smallest_intersections];
+            print_input = structures;
             print = own_push::push;
         }
         struct Triangle;

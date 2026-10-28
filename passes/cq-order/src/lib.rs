@@ -33,6 +33,7 @@ use cq_lang_vo as valuation;
 use proc_macro2::Span;
 use syn::LitInt;
 
+mod branch_check;
 mod branches;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -645,6 +646,25 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
     Ok(program)
 }
 
+/// Record the exact Written/Coarse reference, including per-prefix block arms.
+/// Formal rule O-WrittenBlocks: Written-reference construction records Correlated on every block recursively.
+pub fn compile_written(source: &cq::Program) -> syn::Result<valuation::Program> {
+    fn correlate(steps: &mut [valuation::Step]) {
+        for step in steps {
+            if let valuation::Step::Block(block, _) = step {
+                block.placement = valuation::blocks::Placement::Correlated;
+                for branch in &mut block.branches {
+                    correlate(&mut branch.steps);
+                }
+            }
+        }
+    }
+    let mut program = compile(source, &Options::default())?;
+    correlate(&mut program.valuation.steps);
+    valuation::contract::check(&program)?;
+    Ok(program)
+}
+
 /// A top-level positive atom selected by relation, optionally qualified by its
 /// zero-based normal-body clause index (the same occurrence used by `R@0` in RA).
 /// `block@i` selects a whole top-level block without reordering its branches.
@@ -673,9 +693,16 @@ impl syn::parse::Parse for OrderAtom {
 impl OrderAtom {
     /// Resolve the selector in an already normalized top-level body.
     pub fn resolve(&self, source: &cq::Program) -> syn::Result<usize> {
+        self.resolve_in(&source.query.body)
+    }
+
+    /// Resolve the selector against one body's clause numbering. Callers that
+    /// order bodies outside a CQ program (such as Datalog rules) share the
+    /// same `Relation` / `Relation@clause` / `block@clause` meaning.
+    pub fn resolve_in(&self, body: &cq::CommaList<BodyItem>) -> syn::Result<usize> {
         let relation = &self.relation;
         if let Some(index) = self.occurrence {
-            let matches = match source.query.body.get(index) {
+            let matches = match body.get(index) {
                 Some(BodyItem::Positive { atom }) => atom.relation == *relation,
                 Some(BodyItem::Block(_)) => relation == "block",
                 _ => false,
@@ -694,15 +721,10 @@ impl OrderAtom {
             }
             Ok(index)
         } else {
-            let mut occurrences = source
-                .query
-                .body
-                .iter()
-                .enumerate()
-                .filter_map(|(i, item)| {
-                    matches!(item, BodyItem::Positive { atom } if atom.relation == *relation)
-                        .then_some(i)
-                });
+            let mut occurrences = body.iter().enumerate().filter_map(|(i, item)| {
+                matches!(item, BodyItem::Positive { atom } if atom.relation == *relation)
+                    .then_some(i)
+            });
             let first = occurrences.next();
             if first.is_none() || occurrences.next().is_some() {
                 return Err(syn::Error::new_spanned(
@@ -799,6 +821,7 @@ fn declared_types(
     cq::blocks::types(&schema, body, &BTreeMap::new())
 }
 
+/// Formal rule O-BlockPlacement: Ordinary ordering hoists Rust-free blocks and correlates blocks containing Rust steps.
 fn compile_body(
     source: &cq::Program,
     options: &Options,
@@ -927,6 +950,11 @@ fn compile_body(
             result.push(valuation::Step::Block(
                 valuation::blocks::Block {
                     source: atom,
+                    placement: if facts.rust {
+                        valuation::blocks::Placement::Correlated
+                    } else {
+                        valuation::blocks::Placement::Hoisted
+                    },
                     kind: block.kind,
                     branches,
                 },
@@ -941,7 +969,7 @@ fn compile_body(
 
 /// Check normal form, unchanged CQ, split granularity and explicit order.
 /// Prefix and elimination rankings are expansion choices, not obligations.
-/// Formal rule CK-Order: Validate unchanged CQ, split, coverage, Rust Before, Written order, Filtered coarse greedy choices and static branch groups.
+/// Formal rule CK-Order: Validate unchanged CQ, split, coverage, Rust Before, Written order, Filtered coarse greedy choices and independently proved branch groups.
 pub fn check(
     source: &cq::Program,
     target: &valuation::Program,
@@ -958,18 +986,11 @@ pub fn check(
             ),
         ));
     }
-    let expected_branches =
-        if options.heuristic == Heuristic::Filtered && options.split == Split::Coarse {
-            branches::choose(source)
-        } else {
-            None
-        };
-    if target.valuation.join_branches != expected_branches {
-        return Err(syn::Error::new_spanned(
-            &target.valuation,
-            "join branches must match the static dimension-ear policy",
-        ));
-    }
+    branch_check::check(
+        source,
+        target.valuation.join_branches.as_ref(),
+        options.heuristic == Heuristic::Filtered && options.split == Split::Coarse,
+    )?;
     check_steps(
         source,
         &source.query.body,

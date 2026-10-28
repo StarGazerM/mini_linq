@@ -12,23 +12,23 @@ pub struct Entry {
 inventory::collect!(Entry);
 
 // Consume precisely the same configuration invocations as the executable corpus.
-// Host choice is preserved in the runtime bindings; only the printer is replaced.
+// Host choice is preserved; the terminal and its input language are replaced together.
 macro_rules! pipeline_configuration {
     ($case:ident, $name:ident; planner: [le_runs]; merge: $merge:tt;
      canon: $canon:tt; intersection: $intersection:tt;
      host: $host:tt $view:ident $advice:tt; dedup: $dedup:tt;
-     payload: [$($payload:tt)*]; membership: $membership:tt; printer: $printer:path;) => {
+     payload: [$($payload:tt)*]; membership: $membership:tt; $(print_input: $print_input:ident;)? printer: $printer:path;) => {
         pipeline_configuration! { $case, $name; planner: [le]; merge: $merge;
             canon: $canon; intersection: $intersection; host: $host $view $advice;
             dedup: $dedup; payload: [cq_rewrites::sorted_runs, $($payload)*];
-            membership: $membership; printer: $printer;
+            membership: $membership; $(print_input: $print_input;)? printer: $printer;
         }
     };
     ($case:ident, $name:ident; planner: [$($plan:tt)*]; merge: [$($merge:tt)*];
      canon: [$($canon:tt)*]; intersection: [$($intersection:tt)*];
      host: [$load:ident] $view:ident [$($advice:ident)?];
      dedup: [$($dedup:tt)*]; payload: [$($payload:tt)*];
-     membership: [$($membership:tt)*]; printer: $printer:path;) => {
+     membership: [$($membership:tt)*]; $(print_input: $print_input:ident;)? printer: $printer:path;) => {
         inventory::submit! {
             crate::conformance::Entry {
                 case: stringify!($case),

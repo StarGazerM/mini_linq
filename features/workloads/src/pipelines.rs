@@ -81,6 +81,7 @@ impl Pipeline {
         } else {
             quote!(::mini_linq::passes::translate_pull)
         };
+        let print_input = self.push.then(|| quote!(print_input = structures;));
         let selection = self.positional.then(|| {
             let hosts = source.inputs().map(|input| &input.name);
             quote!(select = ::mini_linq::passes::select(positional(#(#hosts),*));)
@@ -90,6 +91,7 @@ impl Pipeline {
             plan = ::cq_planners::order(#arguments);
             physical = [#(#physical),*];
             structures = [#(#structures),*];
+            #print_input
             print = #printer;
         }))
     }

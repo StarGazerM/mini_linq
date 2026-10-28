@@ -18,6 +18,7 @@ fn machine() -> Machine {
         }
     }
     Machine {
+        gpu: None,
         name: syn::parse_quote!(gpu),
         items: 1,
         key_partition_threshold: 65536,
@@ -71,7 +72,7 @@ fn string_reader(retained: bool) -> structures::Program {
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r host answer = Reader [a]; answer canon = Canon;
+            r host result(answer) = Reader [a]; answer canon = Canon;
         }
     };
     if retained {
@@ -334,7 +335,7 @@ fn catalog_retyping_composes_with_checked_join_reexpression() {
 
     let mut changed_reader = target;
     let scan = changed_reader.structures.structures.entries.iter_mut().find(|entry|
-        matches!(&entry.structure, structures::Structure::Host { reader, .. } if reader == "scan")
+        matches!(&entry.structure, structures::Structure::Host { reader, .. } if matches!(reader, structures::ReaderRef::Scan))
     ).unwrap();
     if let structures::Structure::Host { keyed, .. } = &mut scan.structure {
         keyed.ty = syn::parse_quote!(DifferentReader);

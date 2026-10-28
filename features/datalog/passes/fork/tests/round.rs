@@ -61,11 +61,21 @@ fn default_negation_sets_use_fx_without_a_hole_dedup_override() {
         assert!(hole.facts.consumer_canonical);
     }
     check(&storage, &target).unwrap();
-    let batch = compile_with(&storage, quote! {
-        terminals = [custom::batch => batch];
-        cq = pipeline { custom::lower, custom::batch };
-    }).unwrap();
-    for key in batch.context.strata.iter().flat_map(|stratum| &stratum.keys) {
+    let batch = compile_with(
+        &storage,
+        quote! {
+            terminals = [custom::batch => batch];
+            cq = pipeline { custom::lower, custom::batch };
+            lower = 0;
+        },
+    )
+    .unwrap();
+    for key in batch
+        .context
+        .strata
+        .iter()
+        .flat_map(|stratum| &stratum.keys)
+    {
         let query = batch.holes[key.hole].cq.to_token_stream().to_string();
         assert!(query.contains(": i32"));
         assert!(!query.contains(": & i32"));
@@ -80,7 +90,13 @@ fn explicit_push_skips_sequence_defaults_but_pull_inherits_them() {
         (quote!(::cq_datalog::passes::print_push), false),
         (quote!(::mini_linq::passes::translate_pull), true),
     ] {
-        let configuration = syn::parse2(quote!(pipeline { print = #terminal; })).unwrap();
+        let input = if sequence {
+            quote!(sequence)
+        } else {
+            quote!(structures)
+        };
+        let configuration =
+            syn::parse2(quote!(pipeline { print = #terminal; print_input = #input; })).unwrap();
         let queue = resolve_cq(configuration).unwrap();
         let sequence_path: syn::Path = syn::parse_quote!(::mini_linq::passes::sequence);
         let grade_path: syn::Path = syn::parse_quote!(::mini_linq::passes::sequential);
@@ -127,6 +143,7 @@ fn per_hole_queues_check_terminal_path_not_incidental_tokens() {
     let facts = &changed.holes[0].facts;
     changed.holes[0].pipeline = syn::parse_quote!(pipeline{custom::lower(#facts), mini_linq::passes::translate_pull(unchecked)});
     changed.holes[0].lower = 0;
+    changed.holes[0].plan = None;
     round::check_rewrite(&target, &changed).unwrap();
 }
 #[test]
@@ -134,12 +151,17 @@ fn fork_arguments_record_queue_and_timing_and_reject_unknown_options() {
     let source = source();
     let target = compile_with(
         &source,
-        quote!(timing=phases;cq=pipeline{custom::plan,custom::lower,mini_linq::passes::translate_pull};),
+        quote!(timing=phases;cq=pipeline{custom::plan,custom::lower,mini_linq::passes::translate_pull};plan=0;lower=1;),
     )
     .unwrap();
     assert_eq!(target.policy.timing, "phases");
     check(&source, &target).unwrap();
-    assert!(target.holes.iter().all(|h| h.pipeline.passes.len() == 3));
+    assert!(
+        target
+            .holes
+            .iter()
+            .all(|h| { h.pipeline.passes.len() == 3 && h.plan == Some(0) && h.lower == 1 })
+    );
     for args in [
         quote!(unknown=none;),
         quote!(timing=none;timing=phases;),
@@ -307,6 +329,7 @@ fn declared_terminal_paths_and_typed_interfaces_survive_round_text() {
         &source,
         quote! {
             cq = pipeline { custom::lower, crate::alias::pull };
+            lower = 0;
             terminals = [crate::alias::pull => pull, ::declared::unused_push => push];
         },
     )
@@ -373,7 +396,7 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
     ] {
         let source = compile_with(
             &storage,
-            quote!(cq = pipeline { custom::lower, #terminal };),
+            quote!(cq = pipeline { custom::lower, #terminal }; lower = 0;),
         )
         .unwrap();
         assert!(source.holes.iter().all(|hole| hole.interface == interface));
@@ -402,8 +425,9 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
         let mut mismatched = changed.clone();
         mismatched.holes[0].pipeline.passes.last_mut().unwrap().path = match interface {
             round::HoleInterface::Pull => syn::parse_quote!(::cq_datalog::passes::print_push),
-            round::HoleInterface::Push | round::HoleInterface::Batch =>
-                syn::parse_quote!(::mini_linq::passes::translate_pull),
+            round::HoleInterface::Push | round::HoleInterface::Batch => {
+                syn::parse_quote!(::mini_linq::passes::translate_pull)
+            }
         };
         assert!(round::check_rewrite(&source, &mismatched).is_err());
         mismatched.holes[0].interface = match interface {
@@ -437,6 +461,7 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
         quote! {
             terminals = [crate::alias::push => push];
             cq = pipeline { custom::lower, crate::alias::push };
+            lower = 0;
         },
     )
     .unwrap();
@@ -463,10 +488,17 @@ fn batch_registry_round_trips_and_fork_records_its_interface() {
         quote! {
             terminals = #registry;
             cq = pipeline { custom::lower, ::cq_gpu_sequence::translate_arena };
+            lower = 0;
         },
-    ).unwrap();
+    )
+    .unwrap();
     assert!(!program.holes.is_empty());
-    assert!(program.holes.iter().all(|hole| hole.interface == round::HoleInterface::Batch));
+    assert!(
+        program
+            .holes
+            .iter()
+            .all(|hole| hole.interface == round::HoleInterface::Batch)
+    );
     let replay: round::Program = syn::parse2(program.to_token_stream()).unwrap();
     assert_eq!(program, replay);
     round::contract::check(&replay).unwrap();

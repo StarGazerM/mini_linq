@@ -196,7 +196,9 @@ pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
                         })
                 });
         if stored.len() == 1
-            && cq_structure_selection::arguments::sorted_key(&analysis.physical.rows[&name].types[stored[0]])
+            && cq_structure_selection::arguments::sorted_key(
+                &analysis.physical.rows[&name].types[stored[0]],
+            )
         {
             keyed.ty = if owned {
                 syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::NoDense>)

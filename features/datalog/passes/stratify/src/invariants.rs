@@ -137,6 +137,7 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
             .source
             .rules
             .push(syn::parse2(quote!(#helper(#(#heads),*) :- #(#body),*;))?);
+        target.source.labels.push(None);
         let replacement: BodyItem = syn::parse2(quote!(#helper(#(#vars),*)))?;
         target.source.rules[rule].body = query
             .body

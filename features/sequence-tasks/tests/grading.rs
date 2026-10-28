@@ -788,7 +788,7 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
         structures {
             l host scan = Reader [];
             r host scan = Reader [];
-            r host joined = Reader [a];
+            r host result(joined) = Reader [a];
             s host scan = Reader [];
             s = ::cq_storage::SortedRun<_, _, _> [b];
             s rows = ::std::vec::Vec<_>;

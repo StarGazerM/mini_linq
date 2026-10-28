@@ -243,6 +243,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-planning"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-lang-cq",
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "cq-order",
+ "cq-reduce",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-print"
 version = "0.1.0"
 dependencies = [
@@ -431,6 +444,7 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
+ "cq-planning",
  "mini-linq-macros",
 ]
 
@@ -438,7 +452,6 @@ dependencies = [
 name = "mini-linq-macros"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-index-policy",
  "cq-lang-cq",
  "cq-lang-ix",
@@ -447,9 +460,8 @@ dependencies = [
  "cq-lang-sequence",
  "cq-lang-structures",
  "cq-lang-vo",
- "cq-order",
  "cq-physical-lowering",
- "cq-reduce",
+ "cq-planning",
  "cq-represent",
  "cq-sequence-lowering",
  "cq-sequence-plan",

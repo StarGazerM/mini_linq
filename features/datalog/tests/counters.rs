@@ -211,3 +211,136 @@ fn repeated_negative_variables_and_constants_use_prepared_keys_without_builds() 
     assert_eq!(cost.index_builds, 0);
     assert_eq!(cost.lookups, domain.len() as u64);
 }
+
+/// SRDatalog DOOP `HeapAllocHelper` as a Datalog rule: the hole's CQ carries
+/// head dereferences and a captured-constant selection written last. The
+/// default hole plan must stay output-bounded (see doc/PLANNING-REDESIGN.md
+/// and facade/mini-linq/tests/doop_heapalloc.rs for the core route).
+#[test]
+fn heapalloc_helper_hole_work_is_bounded_by_input_plus_output() {
+    struct Constants {
+        c_object_array: i32,
+        c_string_array: i32,
+    }
+    const OBJECT_ARRAY: i32 = 1;
+    const STRING_ARRAY: i32 = 2;
+    const INT_ARRAY: i32 = 3;
+    const ELEMENT: [i32; 3] = [11, 12, 13];
+    let mut alloc = Vec::new();
+    let mut heap = 0;
+    for (ty, count) in [
+        (OBJECT_ARRAY, 100),
+        (STRING_ARRAY, 100),
+        (INT_ARRAY, 20),
+        (ELEMENT[0], 100),
+        (ELEMENT[1], 100),
+        (ELEMENT[2], 100),
+    ] {
+        for _ in 0..count {
+            alloc.push((heap, ty));
+            heap += 1;
+        }
+    }
+    let component = vec![
+        (OBJECT_ARRAY, ELEMENT[0]),
+        (STRING_ARRAY, ELEMENT[1]),
+        (INT_ARRAY, ELEMENT[2]),
+    ];
+    let supertype: Vec<_> = ELEMENT
+        .iter()
+        .map(|&e| (e, e))
+        .chain([(ELEMENT[2], OBJECT_ARRAY)])
+        .collect();
+    let constants = Constants {
+        c_object_array: OBJECT_ARRAY,
+        c_string_array: STRING_ARRAY,
+    };
+    cq_storage::counters::reset();
+    let rows: std::collections::BTreeSet<_> = cq_datalog::datalog! {
+        struct Heaps;
+        relation Alloc(h: i32, t: i32) = (alloc);
+        relation Component(a: i32, c: i32) = (component);
+        relation Super(c: i32, t: i32) = (supertype);
+        relation Compat(h: i32, b: i32);
+        output Compat;
+        HeapAllocHelper: Compat(*heap, *baseheap) :-
+            Alloc(heap, heaptype), Alloc(baseheap, baseheaptype),
+            Component(baseheaptype, comptype), Super(comptype, heaptype),
+            if *baseheaptype != constants.c_object_array && *baseheaptype != constants.c_string_array;
+    }
+    .collect();
+    let cost = cq_storage::counters::snapshot();
+    assert_eq!(rows.len(), 4000);
+    let input = (alloc.len() + component.len() + supertype.len()) as u64;
+    let output = rows.len() as u64;
+    let work = cost.rows_tested
+        + cost.rows_enumerated
+        + cost.cursor_steps
+        + cost.lookups
+        + cost.distinct_insertions;
+    let bound = 8 * (input + output);
+    assert!(
+        work <= bound,
+        "work {work} exceeds 8 x (input {input} + output {output}) = {bound}; {cost:?}"
+    );
+}
+
+#[test]
+fn authored_rule_order_is_the_hole_plan() {
+    use mini_linq::passes::plan as renamed_planner;
+    // The same rule with its atoms authored in the written (cross-product)
+    // order: the advice is followed exactly, so the hole does the cross
+    // product work the default planner avoids. Rows agree either way.
+    const OBJECT_ARRAY: i32 = 1_000;
+    const STRING_ARRAY: i32 = 1_001;
+    let alloc: Vec<(i32, i32)> = (0..200).map(|h| (h, h % 20)).collect();
+    let component: Vec<(i32, i32)> = (0..20).map(|t| (t, t / 2)).collect();
+    let supertype: Vec<(i32, i32)> = (0..20).map(|t| (t / 2, t)).collect();
+    struct Constants {
+        c_object_array: i32,
+        c_string_array: i32,
+    }
+    let constants = Constants {
+        c_object_array: OBJECT_ARRAY,
+        c_string_array: STRING_ARRAY,
+    };
+    macro_rules! program {
+        ($($pipeline:tt)*) => {
+            cq_datalog::datalog! {
+                $($pipeline)*
+                struct Heaps;
+                relation Alloc(h: i32, t: i32) = (alloc);
+                relation Component(a: i32, c: i32) = (component);
+                relation Super(c: i32, t: i32) = (supertype);
+                relation Compat(h: i32, b: i32);
+                output Compat;
+                HeapAllocHelper: Compat(*heap, *baseheap) :-
+                    Alloc(heap, heaptype), Alloc(baseheap, baseheaptype),
+                    Component(baseheaptype, comptype), Super(comptype, heaptype),
+                    if *baseheaptype != constants.c_object_array
+                        && *baseheaptype != constants.c_string_array;
+            }
+            .collect::<std::collections::BTreeSet<_>>()
+        };
+    }
+    cq_storage::counters::reset();
+    let planned = program!();
+    let planned_cost = cq_storage::counters::snapshot();
+    cq_storage::counters::reset();
+    let written = program!(pipeline {
+        cq = pipeline { plan = renamed_planner; };
+        incremental = cq_datalog::passes::incremental(
+            plan(HeapAllocHelper, order(Alloc@0, Alloc@1, Component, Super));
+        );
+    });
+    let written_cost = cq_storage::counters::snapshot();
+    assert_eq!(planned, written);
+    let work = |cost: cq_storage::counters::Snapshot| {
+        cost.rows_tested + cost.rows_enumerated + cost.cursor_steps + cost.lookups
+    };
+    let (planned_work, written_work) = (work(planned_cost), work(written_cost));
+    assert!(
+        written_work > 4 * planned_work,
+        "authored cross-product order {written_work} vs planned {planned_work}"
+    );
+}

@@ -85,18 +85,39 @@ fn default_pass_arguments_are_not_silently_ignored() {
 
 #[test]
 fn incremental_driver_advice_is_explicit_and_composes_with_invariants() {
-    use syn::parse::Parser;
     use cq_datalog_incremental::DriverPolicy;
-    assert_eq!(incremental_arguments.parse2(quote!()).unwrap(), (false, DriverPolicy::WrittenOrder));
-    assert_eq!(incremental_arguments.parse2(quote!(driver(delta_first); hoist_invariants;)).unwrap(),
-        (true, DriverPolicy::DeltaFirst));
-    assert_eq!(incremental_arguments.parse2(quote!(hoist_invariants; driver(written_order);)).unwrap(),
-        (true, DriverPolicy::WrittenOrder));
+    use syn::parse::Parser;
+    let parsed = |tokens| {
+        let arguments = incremental_arguments.parse2(tokens).unwrap();
+        (arguments.hoist, arguments.driver)
+    };
+    assert_eq!(parsed(quote!()), (false, DriverPolicy::WrittenOrder));
+    assert_eq!(
+        parsed(quote!(driver(delta_first); hoist_invariants;)),
+        (true, DriverPolicy::DeltaFirst)
+    );
+    assert_eq!(
+        parsed(quote!(hoist_invariants; driver(written_order);)),
+        (true, DriverPolicy::WrittenOrder)
+    );
+    let planned = incremental_arguments
+        .parse2(quote!(
+            driver(delta_first); plan(Cast, order(S@3, R)); plan(Step, delta(T@2), order(T@2, R));
+        ))
+        .unwrap();
+    assert_eq!(planned.plans.len(), 2);
+    assert_eq!(planned.plans[0].delta, None);
+    assert_eq!(planned.plans[0].order[0].occurrence, Some(3));
+    assert_eq!(planned.plans[1].delta.as_ref().unwrap().occurrence, Some(2));
     for invalid in [
         quote!(driver(unknown);),
         quote!(driver(delta_first, written_order);),
         quote!(driver(delta_first); driver(written_order);),
         quote!(hoist_invariants; hoist_invariants;),
+        quote!(plan(Cast, order());),
+        quote!(plan(Cast, delta(T@2));),
+        quote!(plan(Cast, order(R), order(S));),
+        quote!(plan(order(R));),
     ] {
         assert!(incremental_arguments.parse2(invalid).is_err());
     }
@@ -195,13 +216,19 @@ fn configuration_records_batch_terminal_through_fork() {
         cq = pipeline { print = ::cq_gpu_sequence::translate_arena; };
     } };
     let queue = config.resolve(DatalogConfiguration::defaults()).unwrap();
-    let fork = queue.passes.iter()
+    let fork = queue
+        .passes
+        .iter()
         .find(|pass| pass.path.segments.last().unwrap().ident == "fork")
         .unwrap();
     let target = cq_datalog_fork::compile_with(&storage, fork.arguments.clone()).unwrap();
     assert!(!target.holes.is_empty());
-    assert!(target.holes.iter().all(|hole|
-        hole.interface == cq_lang_datalog_round::HoleInterface::Batch));
+    assert!(
+        target
+            .holes
+            .iter()
+            .all(|hole| hole.interface == cq_lang_datalog_round::HoleInterface::Batch)
+    );
     let replay: cq_lang_datalog_round::Program = syn::parse2(quote!(#target)).unwrap();
     assert_eq!(target, replay);
 }

@@ -65,15 +65,23 @@ each binder extends only its body scope. Macro expansion and pattern resolution
 remain hypotheses.\end{proof}
 
 \paragraph{Scope rules.}
-$\Sigma;B\vdash c\Rightarrow B'$ checks one clause in written scope; atom
-arguments fold left to right.
+$\Sigma;B\vdash c\Rightarrow B'$ checks one clause in written scope; clauses
+fold left to right. An atom matches a tuple simultaneously: let
+$\mathsf{bare}(\bar a)$ be its bare variable arguments and
+$\mathsf{computed}(\bar a)$ its remaining arguments. Computed arguments see
+the incoming scope and all bare binders of this atom, regardless of column
+position, but never binders from later clauses. This is intentional:
+A-Local evaluates an atom-dependent expression after matching the tuple;
+permuting relation columns must not change its scope.
 \begin{mathpar}
 \Rule{CQ-Var}{}{\Sigma;B\vdash x\Rightarrow B\cup\{x\}}
 
 \Rule{CQ-Expr}{e\checkmark_B}{\Sigma;B\vdash e\Rightarrow B}
 
 \Rule{CQ-Atom}{R\in\dom\Sigma\quad |\bar a|=|\Sigma(R)|\quad
- \Sigma;B\vdash\bar a\Rightarrow B'}{\Sigma;B\vdash R(\bar a)\Rightarrow B'}
+ B'=B\cup\mathsf{bare}(\bar a)\quad
+ \forall e\in\mathsf{computed}(\bar a).\ e\checkmark_{B'}}
+ {\Sigma;B\vdash R(\bar a)\Rightarrow B'}
 
 \Rule{CQ-Guard}{e\checkmark_B}{\Sigma;B\vdash\mathsf{if}\ e\Rightarrow B}
 

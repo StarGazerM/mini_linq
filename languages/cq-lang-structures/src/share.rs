@@ -45,7 +45,9 @@ pub fn leveled_host_read<'a>(
         let mut recorded = keyed.columns().map(symbol_name).collect::<Vec<_>>();
         recorded.sort();
         (symbol_name(&entry.name) == build
-            && symbol_name(demand) == reader
+            && demand
+                .result()
+                .is_some_and(|name| symbol_name(name) == reader)
             && recorded == keys
             && path.qself.is_none()
             && path.path.segments.len() == 2

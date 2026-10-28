@@ -13,6 +13,26 @@ pub use gpu_device_columns::{
 pub type Error = Box<dyn std::error::Error>;
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// Formal rule GPU-LAUNCH-OCCUPANCY:
+/// Size a grid-stride launch from the concrete function's CUDA occupancy query,
+/// including its register and static shared-memory requirements. `shared` is
+/// dynamic shared memory only. Prepare a one-block launch to obtain the function,
+/// then prepare the final launch with this grid. No kernel is launched by either
+/// preparation. Empty-safe kernels receive one block for a zero-tile domain.
+pub fn launch_grid_for_kernel(
+    function: &cuda_core::CudaFunction,
+    parts: usize,
+    threads: u32,
+    shared: u32,
+) -> Result<u32> {
+    let blocks = function.max_active_blocks_per_multiprocessor(threads, shared)?;
+    let resident = u64::from(function.context().multiprocessor_count()?) * u64::from(blocks);
+    if resident == 0 {
+        return Err("launch shape has no resident CUDA blocks".into());
+    }
+    Ok((parts.max(1) as u64).min(resident).min(u64::from(u32::MAX)) as u32)
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Timings {
     pub upload_ms: f64,

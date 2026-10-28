@@ -27,8 +27,10 @@ use syn::{Ident, LitInt, Token, braced, bracketed, parenthesized};
 
 pub mod contract;
 mod evidence;
+pub mod gpu;
 mod grading;
 mod resources;
+pub mod task_execution;
 
 pub use contract::check_rewrite;
 pub use cq_lang_structures as structures;
@@ -59,6 +61,7 @@ mod kw {
     syn::custom_keyword!(len);
     syn::custom_keyword!(workers);
     syn::custom_keyword!(output);
+    syn::custom_keyword!(optional_filter);
     syn::custom_keyword!(reserve);
     syn::custom_keyword!(reserve_previous);
     syn::custom_keyword!(bounded);
@@ -77,6 +80,9 @@ pub struct Program {
 pub struct Sequence {
     pub definitions: Vec<Definition>,
     pub output: Option<OutputProtocol>,
+    /// Formal rule PL-OptionalFilter: Record positive lookup-filter provenance;
+    /// the checker validates Physical identity and adaptive preparation proves coverage.
+    pub optional_filters: Vec<Ident>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,6 +169,8 @@ pub struct Grade {
 /// A target-supplied machine tree, not an additional language construct.
 #[derive(Clone, Debug)]
 pub struct Machine {
+    /// Native GPU launch policy; absent on non-GPU machines.
+    pub gpu: Option<gpu::Machine>,
     pub name: Ident,
     /// Preferred per-lane item count; the planner also considers one item.
     pub items: usize,
@@ -295,6 +303,8 @@ pub enum Tiling {
 /// A dispatch derived from the grading, including its failure path to host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dispatch {
+    /// Checked target launch/publication steps, printed with the dispatch.
+    pub gpu: Option<gpu::Execution>,
     pub outer_store: String,
     pub members: Vec<String>,
     pub inner_stores: Vec<String>,
@@ -375,6 +385,7 @@ pub struct Analysis {
     pub stores: BTreeMap<String, Len>,
     /// Publication ownership, derived once from checked provenance and consumers.
     pub publications: BTreeMap<String, Publication>,
+    pub task_execution: task_execution::Execution,
     /// Pure Rows/Ref/Store provenance, before any support-equal reheading.
     pub host_sources: BTreeMap<String, String>,
     /// Borrowable base provenance of Tile inputs, in constructor preorder.
@@ -435,6 +446,7 @@ impl Parse for Sequence {
         braced!(body in input);
         let mut definitions = Vec::new();
         let mut output = None;
+        let mut optional_filters = Vec::new();
         while !body.is_empty() {
             if body.peek(kw::output) && !body.peek2(Token![=]) {
                 body.parse::<kw::output>()?;
@@ -443,6 +455,10 @@ impl Parse for Sequence {
                 if !body.is_empty() {
                     return Err(body.error("output must be the final statement in sequence"));
                 }
+            } else if body.peek(kw::optional_filter) && !body.peek2(Token![=]) {
+                body.parse::<kw::optional_filter>()?;
+                optional_filters.push(body.parse()?);
+                body.parse::<Token![;]>()?;
             } else {
                 definitions.push(body.parse()?);
             }
@@ -450,6 +466,7 @@ impl Parse for Sequence {
         Ok(Self {
             definitions,
             output,
+            optional_filters,
         })
     }
 }
@@ -457,11 +474,14 @@ impl Parse for Sequence {
 impl ToTokens for Sequence {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let definitions = &self.definitions;
+        let optional_filters = &self.optional_filters;
         let output = self
             .output
             .as_ref()
             .map(|protocol| quote! { output #protocol; });
-        tokens.extend(quote! { sequence { #(#definitions)* #output } });
+        tokens.extend(quote! { sequence {
+            #(#definitions)* #(optional_filter #optional_filters;)* #output
+        } });
     }
 }
 

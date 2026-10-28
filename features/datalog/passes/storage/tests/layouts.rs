@@ -267,8 +267,10 @@ fn delta_driver_is_recorded_and_independently_checked() {
     };
     let strata = stratify::compile(&source).unwrap();
     let incremental = cq_datalog_incremental::compile_with_driver(
-        &strata, cq_datalog_incremental::DriverPolicy::DeltaFirst,
-    ).unwrap();
+        &strata,
+        cq_datalog_incremental::DriverPolicy::DeltaFirst,
+    )
+    .unwrap();
     let target = cq_datalog_storage::compile(&incremental).unwrap();
     let variant = &target.incremental.variants[1];
     assert_eq!(variant.delta, Some(1));
@@ -276,7 +278,12 @@ fn delta_driver_is_recorded_and_independently_checked() {
     assert!(matches!(&variant.query.body[0], BodyItem::Positive { atom }
         if atom.relation == target.incremental.deltas[0].name));
     assert!(target.delta_layouts.is_empty());
-    assert!(target.to_token_stream().to_string().contains("delta 1 order [1 , 0]"));
+    assert!(
+        target
+            .to_token_stream()
+            .to_string()
+            .contains("delta 1 order [1 , 0]")
+    );
     let replay = syn::parse2(target.to_token_stream()).unwrap();
     check(&incremental, &replay).unwrap();
     let mut wrong = target.clone();
@@ -294,14 +301,24 @@ fn delta_driver_is_recorded_and_independently_checked() {
     let cpu = cq_datalog_incremental::compile(&strata).unwrap();
     assert_eq!(cpu.variants[1].order, [0, 1]);
     let mut wrong = target.clone();
-    let index = wrong.reads.iter().find(|read| read.variant == 1 && read.position == 1).unwrap().index;
+    let index = wrong
+        .reads
+        .iter()
+        .find(|read| read.variant == 1 && read.position == 1)
+        .unwrap()
+        .index;
     wrong.layouts[index].columns.swap(0, 1);
     assert!(contract::check(&wrong).is_err());
 }
 
 #[test]
 fn delta_driver_never_crosses_before_constraints() {
-    for clause in ["if *x > 0", "!Blocked(x)", "let copied = *x", "for copied in [*x]"] {
+    for clause in [
+        "if *x > 0",
+        "!Blocked(x)",
+        "let copied = *x",
+        "for copied in [*x]",
+    ] {
         let source: source::Program = syn::parse_str(&format!(
             "struct Barriers;
              relation E(x:i32) = (e);
@@ -310,14 +327,22 @@ fn delta_driver_never_crosses_before_constraints() {
              output R;
              R(*x) :- E(x);
              R(*x) :- E(x), {clause}, R(x);"
-        )).unwrap();
+        ))
+        .unwrap();
         let strata = stratify::compile(&source).unwrap();
         let target = cq_datalog_incremental::compile_with_driver(
-            &strata, cq_datalog_incremental::DriverPolicy::DeltaFirst,
-        ).unwrap();
+            &strata,
+            cq_datalog_incremental::DriverPolicy::DeltaFirst,
+        )
+        .unwrap();
         assert_eq!(target.variants[1].order, [0, 1, 2]);
         let mut wrong = target.clone();
         wrong.variants[1].order = vec![2, 1, 0];
-        assert!(incremental::contract::check(&wrong).unwrap_err().to_string().contains("Before"));
+        assert!(
+            incremental::contract::check(&wrong)
+                .unwrap_err()
+                .to_string()
+                .contains("Before")
+        );
     }
 }

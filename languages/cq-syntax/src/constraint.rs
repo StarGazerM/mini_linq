@@ -3,7 +3,9 @@
 //! bounds, literal equality disjunction and boolean branch representations.
 //! CQ accepts only Rust guards and constructs these forms through `guard`.
 //! Nested branches represent arbitrary boolean structure without DNF expansion.
-//! Parameters use `@name` internally; CQ Rust guards use bare host names.
+//! Parameters use `@name` or `@name.field` internally; CQ Rust guards use bare
+//! host names and field paths rooted at a host name. A parameter is a host
+//! value read once per evaluation: it names no query variable.
 
 use crate::{CommaList, Equality, EqualityValue, symbol_name};
 use proc_macro2::TokenStream;
@@ -17,10 +19,60 @@ mod kw {
     syn::custom_keyword!(or);
 }
 
+/// A host value: a captured name with an optional field path, such as
+/// `start` or `constants.c_x`. Only the root is a name; it must not be a
+/// query variable. `name()` is the stable key `root.field...`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Parameter {
+    pub root: Ident,
+    pub members: Vec<syn::Member>,
+}
+
+impl Parameter {
+    pub fn name(&self) -> String {
+        let mut name = symbol_name(&self.root);
+        for member in &self.members {
+            name.push('.');
+            name.push_str(&member.to_token_stream().to_string());
+        }
+        name
+    }
+}
+
+impl From<Ident> for Parameter {
+    fn from(root: Ident) -> Self {
+        Self {
+            root,
+            members: Vec::new(),
+        }
+    }
+}
+
+impl syn::parse::Parse for Parameter {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let root = input.parse()?;
+        let mut members = Vec::new();
+        while input.peek(Token![.]) {
+            input.parse::<Token![.]>()?;
+            members.push(input.parse()?);
+        }
+        Ok(Self { root, members })
+    }
+}
+
+impl ToTokens for Parameter {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.root.to_tokens(tokens);
+        for member in &self.members {
+            tokens.extend(quote!(.#member));
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Term {
     Variable(Ident),
-    Parameter(Ident),
+    Parameter(Parameter),
     Literal(Box<syn::Expr>),
 }
 
@@ -72,7 +124,7 @@ impl Term {
     pub fn reference(&self, parameters: &BTreeMap<String, Ident>) -> TokenStream {
         match self {
             Self::Variable(v) => quote!(#v),
-            Self::Parameter(v) => match parameters.get(&symbol_name(v)) {
+            Self::Parameter(v) => match parameters.get(&v.name()) {
                 Some(p) => quote!(#p),
                 None => quote!(&#v),
             },
@@ -88,7 +140,7 @@ impl Term {
     pub fn resolve(&mut self, logical: &BTreeSet<String>) {
         if let Self::Variable(v) = self {
             if !logical.contains(&symbol_name(v)) {
-                *self = Self::Parameter(v.clone());
+                *self = Self::Parameter(Parameter::from(v.clone()));
             }
         }
     }
@@ -393,7 +445,7 @@ impl Constraint {
         })
     }
 
-    pub fn parameters(&self) -> impl Iterator<Item = &Ident> {
+    pub fn parameters(&self) -> impl Iterator<Item = &Parameter> {
         self.terms().into_iter().filter_map(|t| match t {
             Term::Parameter(v) => Some(v),
             _ => None,
@@ -468,7 +520,8 @@ impl Constraint {
     /// Rust guard spelling for normalized constraints; captures are bare names.
     pub fn cq_tokens(&self) -> TokenStream {
         let term = |t: &Term| match t {
-            Term::Variable(v) | Term::Parameter(v) => quote!(#v),
+            Term::Variable(v) => quote!(#v),
+            Term::Parameter(p) => quote!(#p),
             Term::Literal(l) => quote!(#l),
         };
         match self {

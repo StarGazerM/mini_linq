@@ -97,6 +97,16 @@ fn same_atom_expressions_follow_the_atom_even_before_their_binding_column() {
 }
 
 #[test]
+fn computed_atom_arguments_cannot_use_a_later_atoms_binder() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32); relation S(b:i32);
+        answer(x) :- R(10 / *x), S(x);
+    });
+    let error = cq::contract::check(&source).unwrap_err().to_string();
+    assert!(error.contains("`x` is used before it is bound"), "{error}");
+}
+
+#[test]
 fn rust_metadata_includes_host_captures_and_pattern_bindings() {
     let item: cq::BodyItem = syn::parse_quote!(let (y,z): (i32,i32) = (host(*x), *x + captured));
     let metadata = item.rust_step().unwrap();
@@ -269,7 +279,10 @@ fn rust_comparisons_round_trip_and_capture_only_host_names() {
             _ => None,
         }) {
             assert!(c.variables().all(|v| v == "x" || v == "y"));
-            assert!(c.parameters().all(|v| v == "lower" || v == "upper"));
+            assert!(
+                c.parameters()
+                    .all(|v| v.name() == "lower" || v.name() == "upper")
+            );
         }
     }
 }

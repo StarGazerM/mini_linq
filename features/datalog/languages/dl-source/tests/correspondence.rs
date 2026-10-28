@@ -73,6 +73,7 @@ fn rewrites_admit_changed_rules_under_the_semantic_refinement_premise() {
     check_rewrite(&original, &reordered).unwrap();
     let mut redundant = original.clone();
     redundant.rules.push(redundant.rules[0].clone());
+    redundant.labels.push(None);
     check_rewrite(&original, &redundant).unwrap();
     check_rewrite(&redundant, &original).unwrap();
 

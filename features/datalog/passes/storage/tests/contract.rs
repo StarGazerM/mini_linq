@@ -187,6 +187,7 @@ fn alternate_layouts_and_recorded_reads_are_admissible() {
             ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>
         ),
         maintenance: syn::parse_quote!(admitted_rows),
+        protocol: cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
     });
     alternate.reads[0].index = index;
     alternate.reads[0].columns = vec![1, 0];
@@ -219,6 +220,7 @@ fn alternate_layouts_and_recorded_reads_are_admissible() {
             ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>
         ),
         maintenance: syn::parse_quote!(replace_each_run),
+        protocol: cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
     });
     check_rewrite(&original, &alternate).unwrap();
 }
@@ -271,6 +273,7 @@ fn rust_bindings_are_available_only_after_their_written_clause() {
             ::std::collections::HashMap<(i32, i32,), ::std::vec::Vec<()>, ::cq_storage::HashState>
         ),
         maintenance: syn::parse_quote!(admitted_rows),
+        protocol: cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
     });
     alternate.reads[1].index = index;
     alternate.reads[1].columns = vec![1, 0];

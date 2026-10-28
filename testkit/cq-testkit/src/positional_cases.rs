@@ -1,17 +1,18 @@
-//! Terminal-parameterised positional execution fixtures. An optional bracketed
-//! queue lowers Structures before the terminal; omit it for Structures terminals.
+//! Terminal-parameterised positional execution fixtures. The first argument
+//! records the terminal's input stage. An optional bracketed queue lowers
+//! Structures before the terminal; omit it for Structures terminals.
 //! Invokers provide mini-linq, cq-storage and cq-load as test dependencies.
 
 /// Instantiate common positional queries and their authored expected answers.
 #[macro_export]
 macro_rules! positional_cases {
-    ($($printer:ident)::+) => {
-        $crate::positional_cases!(@pipeline [$($printer)::+;] $($printer)::+);
+    ($input:ident; $($printer:ident)::+) => {
+        $crate::positional_cases!(@pipeline $input; [$($printer)::+;] $($printer)::+);
     };
-    ([$($first:ident)::+ $(, $pass:path)*] $($printer:ident)::+) => {
-        $crate::positional_cases!(@pipeline [$($first)::+; $($pass,)* $($printer)::+,] $($printer)::+);
+    ($input:ident; [$($first:ident)::+ $(, $pass:path)*] $($printer:ident)::+) => {
+        $crate::positional_cases!(@pipeline $input; [$($first)::+; $($pass,)* $($printer)::+,] $($printer)::+);
     };
-    (@pipeline [$($first:ident)::+; $($pass:path,)*] $($printer:ident)::+) => {
+    (@pipeline $input:ident; [$($first:ident)::+; $($pass:path,)*] $($printer:ident)::+) => {
 struct PayloadOnly<T>(T);
 impl<T: cq_storage::IndexRead> Clone for PayloadOnly<T> {
     fn clone(&self) -> Self {
@@ -45,7 +46,7 @@ impl cq_storage::rows::Rows for UnusedRight {
 fn conflicting_points_keep_all_residuals_before_the_next_read() {
     let rows = [(1_i64, 10_i64), (2, 10), (3, 20)];
     let result: Vec<_> = mini_linq::compile! {
-        pipeline { print = $($printer)::+; select = mini_linq::passes::select(positional(R)); }
+        pipeline { print_input = $input; print = $($printer)::+; select = mini_linq::passes::select(positional(R)); }
         struct Conflicting;
         relation R(a:i64,b:i64) = (rows);
         answer(a) :- R(a,b), if *a == 1 && *a == 2 && *b == 10;
@@ -62,7 +63,7 @@ fn nonleading_filtered_index_keeps_payload_and_constant_reconstruction() {
         (3, "yes".to_owned(), 30),
     ];
     let result: BTreeSet<_> = mini_linq::compile! {
-        pipeline { print = $($printer)::+; select = mini_linq::passes::select(positional(L,R)); }
+        pipeline { print_input = $input; print = $($printer)::+; select = mini_linq::passes::select(positional(L,R)); }
         struct Filtered;
         relation L(a:i64) = (left);
         relation R(a:i64,label:String,value:i64) = (right);
@@ -133,7 +134,7 @@ fn positional_bindings_do_not_shadow_captured_parameters() {
     let __cq_positional_r = 2_i64;
     let rows = [(1_i64,), (2,), (3,)];
     let values: Vec<_> = mini_linq::compile! {
-        pipeline { print = $($printer)::+; select = mini_linq::passes::select(positional(r)); }
+        pipeline { print_input = $input; print = $($printer)::+; select = mini_linq::passes::select(positional(r)); }
         struct Hygiene;
         relation r(x:i64) = (rows);
         answer(x) :- r(x), if *x < __cq_positional_r;
@@ -170,7 +171,7 @@ fn a_computed_left_key_can_test_an_owned_set_without_becoming_a_selection() {
 fn raw_identifiers_survive_recorded_base_and_column_lineage() {
     let rows = [(1_i64,), (2,)];
     let values: Vec<_> = mini_linq::compile! {
-        pipeline { print = $($printer)::+; select = mini_linq::passes::select(positional(r#type)); }
+        pipeline { print_input = $input; print = $($printer)::+; select = mini_linq::passes::select(positional(r#type)); }
         struct Raw;
         relation r#type(r#match:i64) = (rows);
         answer(r#loop) :- r#type(r#loop), if *r#loop > 1;

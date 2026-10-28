@@ -8,28 +8,18 @@ publish = false
 
 [features]
 default = []
-oracle = ["dep:duckdb", "dep:serde_json", "cq-testkit/duckdb"]
+oracle = ["dep:duckdb", "cq-testkit/duckdb"]
 counters = ["cq-workloads/counters"]
 
 [dependencies]
 cq-workloads = { path = ".." }
 cq-testkit.workspace = true
 cq-lang-cq.workspace = true
-cq-lang-ix.workspace = true
 cq-lang-ra.workspace = true
-cq-index-policy.workspace = true
-cq-physical-lowering.workspace = true
-cq-structure-selection.workspace = true
-cq-represent.workspace = true
-cq-staging.workspace = true
-cq-lang-sequence.workspace = true
-cq-sequence-lowering.workspace = true
-cq-sequence-pull.workspace = true
-cq-planners-plan.workspace = true
 quote.workspace = true
 syn.workspace = true
 duckdb = { version = "=1.10505.0", features = ["bundled", "parquet"], optional = true }
-serde_json = { version = "1", optional = true }
+serde_json = "1"
 
 [dev-dependencies]
 cq-order.workspace = true

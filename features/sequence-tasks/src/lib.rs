@@ -84,6 +84,7 @@ pub fn machine_with(config: Config) -> Machine {
 pub fn machine_with_width(parts: usize) -> Machine {
     assert!(parts > 0, "task machine partition count must be positive");
     Machine {
+        gpu: None,
         layout: None,
         name: syn::parse_quote!(tasks),
         items: 1,
@@ -375,23 +376,15 @@ fn translate_mode(
     config: Config,
     profile: bool,
 ) -> syn::Result<syn::Expr> {
+    let execution = analysis.task_execution.terms(program);
     let mut tiles = std::collections::BTreeMap::new();
-    let mut host_tiles = std::collections::BTreeSet::new();
     for definition in &program.sequence.definitions {
         let name = syn::ext::IdentExt::unraw(&definition.name).to_string();
         let mut nodes = Vec::new();
         tile_nodes(&definition.term, &mut nodes);
         if let Some(kinds) = analysis.tilings.get(&name) {
-            for (index, (node, kind)) in nodes.into_iter().zip(kinds).enumerate() {
+            for (node, kind) in nodes.into_iter().zip(kinds) {
                 tiles.insert(node, kind);
-                if analysis
-                    .host_tiles
-                    .get(&name)
-                    .and_then(|inputs| inputs.get(index))
-                    .is_some_and(Option::is_some)
-                {
-                    host_tiles.insert(node);
-                }
             }
         }
     }
@@ -443,14 +436,7 @@ fn translate_mode(
                 let binding = format_ident!("__cq_task_driver_{}", next_driver);
                 next_driver += 1;
                 let context = emitter.context();
-                let host_result = input.result.as_ref().filter(|result| {
-                    host_tiles.contains(&(term as *const Term))
-                        && context.physical_analysis.hosts.contains_key(*result)
-                        && !context.analysis.selections.contains_key(*result)
-                        && matches!(&context.physical[*result].operator,
-                        cq_lang_sequence::structures::physical::Operator::Rename(rename)
-                            if !context.carries_positions(result) || rename.constants.is_none())
-                });
+                let host_result = execution[&(term as *const Term)].borrowed_host.as_ref();
                 let positional = host_result.filter(|result| {
                     context.carries_positions(result) || context.join_filter_ids(result).is_some()
                 });
@@ -465,6 +451,7 @@ fn translate_mode(
                         .unwrap_or(ids);
                     let rows = context.profile_stream(result, context.positional_rows(result, ids));
                     partitions.push(TaskTile {
+                        producer: execution[&(term as *const Term)].id.clone(),
                         binding,
                         prepare: quote!(),
                         parts: quote!(::cq_sequence_tasks::combine::IndexedTiles::new(
@@ -478,6 +465,7 @@ fn translate_mode(
                         context.host_scan_from(result, Some(quote!(#binding))),
                     );
                     partitions.push(TaskTile {
+                        producer: execution[&(term as *const Term)].id.clone(),
                         binding,
                         prepare: quote! {
                             use ::cq_sequence_tasks::combine::TileRows as _;
@@ -488,8 +476,13 @@ fn translate_mode(
                     });
                     output.rows = quote!(::core::iter::once(#rows));
                 } else {
+                    assert!(matches!(
+                        execution[&(term as *const Term)].staging,
+                        Some(cq_lang_sequence::task_execution::Staging::TileInput)
+                    ));
                     let source = &input.rows;
                     partitions.push(TaskTile {
+                        producer: execution[&(term as *const Term)].id.clone(),
                         binding: binding.clone(),
                         prepare: quote!(let __cq_driver = (#source).collect::<::std::vec::Vec<_>>();),
                         parts: quote!(::cq_sequence_tasks::combine::IndexedTiles::new(
@@ -547,7 +540,11 @@ fn translate_mode(
                 let tile = if partial {
                     partitions
                         .iter()
-                        .position(|tile: &TaskTile| uses_binding(&input.rows, &tile.binding))
+                        .position(|tile: &TaskTile| {
+                            execution[&(term as *const Term)]
+                                .producers
+                                .contains(&tile.producer)
+                        })
                         .map(|index| partitions.remove(index))
                 } else {
                     None
@@ -578,10 +575,11 @@ fn translate_mode(
                 } else {
                     &*output
                 };
-                if let Some(index) = partitions
-                    .iter()
-                    .position(|tile: &TaskTile| uses_binding(&input.rows, &tile.binding))
-                {
+                if let Some(index) = partitions.iter().position(|tile: &TaskTile| {
+                    execution[&(term as *const Term)]
+                        .producers
+                        .contains(&tile.producer)
+                }) {
                     let tile = partitions.remove(index);
                     let mut input = input.clone();
                     input.partitioned = false;
@@ -631,9 +629,11 @@ fn translate_mode(
             }
             if matches!(term, Term::Flatten(_))
                 && output.depth == 0
-                && !partitions
-                    .iter()
-                    .any(|tile| uses_binding(&output.rows, &tile.binding))
+                && !partitions.iter().any(|tile| {
+                    execution[&(term as *const Term)]
+                        .producers
+                        .contains(&tile.producer)
+                })
             {
                 // A completed key cover is no longer a worker-local slice.
                 // Symbolic distributing tiles remain partitioned until joined.
@@ -949,17 +949,10 @@ fn translate_mode(
 }
 
 pub(crate) struct TaskTile {
+    producer: cq_lang_sequence::task_execution::TermId,
     binding: syn::Ident,
     prepare: proc_macro2::TokenStream,
     parts: proc_macro2::TokenStream,
-}
-
-fn uses_binding(tokens: &proc_macro2::TokenStream, binding: &syn::Ident) -> bool {
-    tokens.clone().into_iter().any(|token| match token {
-        proc_macro2::TokenTree::Ident(ident) => ident == *binding,
-        proc_macro2::TokenTree::Group(group) => uses_binding(&group.stream(), binding),
-        _ => false,
-    })
 }
 
 fn join_tile(
@@ -969,6 +962,7 @@ fn join_tile(
     nested: bool,
 ) -> proc_macro2::TokenStream {
     let TaskTile {
+        producer: _,
         binding,
         prepare,
         parts,

@@ -62,8 +62,8 @@ fn leveled_host_lookup_retains_exact_snapshot_ranges() {
     } structures {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
-        r host s = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
-        r host p = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
+        r host result(s) = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
+        r host result(p) = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
         p canon = ::std::collections::HashSet<_>;
     } };
     let target = retain_lookups(&source, quote!()).unwrap();
@@ -73,7 +73,7 @@ fn leveled_host_lookup_retains_exact_snapshot_ranges() {
     assert_eq!(target.physical, source.physical);
     assert_eq!(retain_lookups(&target, quote!()).unwrap(), target);
     source.structures.entries[3] = syn::parse_quote! {
-        r host p = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<1>,),)> [x];
+        r host result(p) = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<1>,),)> [x];
     };
     assert!(retain_lookups(&source, quote!()).is_err());
 }

@@ -21,13 +21,12 @@ fn negative_projection_handles_global_absence_repeated_keys_and_empty_inner() {
     .collect();
     assert!(result.is_empty());
     let S: [(i32, i32); 0] = [];
-    let result: BTreeSet<_> =
-        mini_linq::compile! {
-           pipeline {}
-           struct GlobalEmpty; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32);
-           answer(*x) :- A(x), !S(_,_);
-        }
-        .collect();
+    let result: BTreeSet<_> = mini_linq::compile! {
+       pipeline {}
+       struct GlobalEmpty; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32);
+       answer(*x) :- A(x), !S(_,_);
+    }
+    .collect();
     assert_eq!(result, [(1,), (2,)].into());
 }
 

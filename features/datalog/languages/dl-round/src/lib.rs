@@ -61,6 +61,7 @@ pub struct Layout {
     pub host: Ident,
     pub provider: syn::Type,
     pub maintenance: Ident,
+    pub protocol: storage::LayoutProtocol,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,6 +164,10 @@ pub struct Hole {
     pub facts: cq_stage::Context,
     /// Invocation that introduces this hole's facts through lower arguments.
     pub lower: usize,
+    /// Planning invocation owned by this hole; independent of pass spelling.
+    pub plan: Option<usize>,
+    /// Invocation owning the complete device input binding packet.
+    pub binding: Option<usize>,
 }
 impl PartialEq for Hole {
     fn eq(&self, other: &Self) -> bool {
@@ -170,6 +175,8 @@ impl PartialEq for Hole {
             && self.interface == other.interface
             && self.facts == other.facts
             && self.lower == other.lower
+            && self.plan == other.plan
+            && self.binding == other.binding
             && self.pipeline.to_token_stream().to_string()
                 == other.pipeline.to_token_stream().to_string()
     }
@@ -343,7 +350,9 @@ record!(Hole {
     pipeline: cq_stage::Pipeline,
     interface: HoleInterface,
     facts: cq_stage::Context,
-    lower: usize
+    lower: usize,
+    plan: Option<usize>,
+    binding: Option<usize>
 });
 record!(Execution {
     hole: usize,
@@ -354,7 +363,7 @@ record!(Execution {
 });
 record!(RoundPolicy { timing: Ident });
 record!(Relation { declaration: RelationDecl, providers: storage::Providers, all: Ident, seen: Ident, next: Ident, delta: Option<Ident>, delta_host: Option<Ident>, admit: Vec<usize> });
-record!(Layout { relation: usize, columns: Vec<usize>, key: usize, name: Ident, host: Ident, provider: syn::Type, maintenance: Ident });
+record!(Layout { relation: usize, columns: Vec<usize>, key: usize, name: Ident, host: Ident, provider: syn::Type, maintenance: Ident, protocol: storage::LayoutProtocol });
 record!(KeySet { relation: usize, columns: Vec<usize>, filters: Vec<(usize,Expr)>, equalities: Vec<(usize, usize)>, name: Ident, provider: syn::Type, hole: usize });
 record!(ScanBinding {
     source: InputSource,
@@ -531,6 +540,19 @@ pub fn check_pipeline(hole: &Hole, terminals: &TerminalRegistry) -> syn::Result<
         terminals.interface(&hole.pipeline)? == hole.interface,
         hole,
         "hole interface does not match its registered terminal interface",
+    )?;
+    ensure(
+        hole.plan
+            .is_none_or(|plan| plan < hole.lower && plan < hole.pipeline.passes.len()),
+        hole,
+        "hole planning invocation must precede lowering",
+    )?;
+    ensure(
+        hole.binding.is_none_or(|binding| {
+            binding > hole.lower && binding < hole.pipeline.passes.len().saturating_sub(1)
+        }),
+        hole,
+        "hole binding invocation must follow lowering and precede the terminal",
     )?;
     let reads: BTreeSet<_> = hole
         .cq
@@ -873,6 +895,8 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
     for (before, after) in source.holes.iter_mut().zip(&erased.holes) {
         before.pipeline = after.pipeline.clone();
         before.lower = after.lower;
+        before.plan = after.plan;
+        before.binding = after.binding;
         before.interface = after.interface;
     }
     ensure(

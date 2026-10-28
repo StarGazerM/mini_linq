@@ -82,16 +82,13 @@ pub fn adaptive_candidates_in(
     source: &Program,
 ) -> syn::Result<Vec<AdaptiveCandidate>> {
     let analysis = checker.check_shared(source)?;
-    if !plain(source)? {
-        return Ok(Vec::new());
-    }
     let mut candidates = Vec::new();
     let mut seen = BTreeSet::new();
     for filter in &source.structures.physical.program.definitions {
         let Operator::Semi(_, keyed) = &filter.operator else {
             continue;
         };
-        if !symbol_name(&filter.name).starts_with("__lookup_lookup")
+        if !source.sequence.optional_filters.contains(&filter.name)
             || ModeKind::from(&filter.mode) != ModeKind::Pipe
             || !has_filter(source, &symbol_name(&keyed.right))
         {
@@ -160,16 +157,12 @@ pub fn apply_adaptive_in(
             )?
         };
     }
+    let consumed = filter_group(source, candidate)?;
+    target
+        .sequence
+        .optional_filters
+        .retain(|name| !consumed.contains_key(&symbol_name(name)));
     checked_in(checker, source, target)
-}
-
-fn plain(source: &Program) -> syn::Result<bool> {
-    if source.graded.is_some() {
-        return Ok(false);
-    }
-    let mut lowered = cq_sequence_lowering::compile(&source.structures)?;
-    lowered.sequence.output = source.sequence.output.clone();
-    Ok(lowered.sequence == source.sequence)
 }
 
 fn filter_group(

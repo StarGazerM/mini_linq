@@ -35,6 +35,7 @@ members = [
     "runtime/cq-load",
     "testkit/cq-testkit",
     "facade/cq-stage",
+    "facade/cq-planning",
     "facade/mini-linq",
     "facade/mini-linq-macros",
 ]
@@ -58,6 +59,7 @@ version = "0.1.0"
 cq-testkit = { path = "testkit/cq-testkit", version = "0.1.0" }
 cq-print = { path = "passes/cq-print", version = "0.1.0", default-features = false }
 cq-stage = { path = "facade/cq-stage", version = "0.1.0" }
+cq-planning = { path = "facade/cq-planning", version = "0.1.0" }
 cq-lang-physical = { path = "languages/cq-lang-physical", version = "0.1.0", default-features = false }
 cq-lang-cq = { path = "languages/cq-lang-cq", version = "0.1.0", default-features = false }
 cq-lang-structures = { path = "languages/cq-lang-structures", version = "0.1.0", default-features = false }

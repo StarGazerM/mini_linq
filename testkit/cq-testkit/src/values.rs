@@ -125,7 +125,8 @@ pub fn evaluate_equality(e: &cq_syntax::Equality, row: &Binding) -> bool {
 pub fn evaluate_constraint(c: &cq_syntax::Constraint, row: &Binding) -> bool {
     use cq_syntax::constraint::{Comparison, Constraint, Term};
     let value = |t: &Term| match t {
-        Term::Variable(v) | Term::Parameter(v) => row[&symbol_name(v)],
+        Term::Variable(v) => row[&symbol_name(v)],
+        Term::Parameter(p) => row[&p.name()],
         Term::Literal(l) => evaluate_integer(l, row),
     };
     match c {

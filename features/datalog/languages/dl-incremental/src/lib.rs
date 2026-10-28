@@ -26,6 +26,7 @@ pub mod kw {
     syn::custom_keyword!(variant);
     syn::custom_keyword!(seed);
     syn::custom_keyword!(order);
+    syn::custom_keyword!(authored);
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
@@ -39,6 +40,9 @@ pub struct Variant {
     pub delta: Option<usize>,
     /// Source-body positions in execution order; only the first positive prefix may move.
     pub order: Vec<usize>,
+    /// The order is authored advice, not a driver policy: the hole's CQ plan
+    /// keeps it as an explicit atom order instead of choosing its own.
+    pub authored: bool,
     pub query: Query,
 }
 /// A fresh delta relation inheriting the named IDB's ordered columns.
@@ -83,17 +87,30 @@ impl Parse for Program {
                 body.parse::<kw::order>()?;
                 let positions;
                 syn::bracketed!(positions in body);
-                positions.parse_terminated(syn::LitInt::parse, Token![,])?
-                    .iter().map(syn::LitInt::base10_parse).collect::<syn::Result<Vec<_>>>()?
+                positions
+                    .parse_terminated(syn::LitInt::parse, Token![,])?
+                    .iter()
+                    .map(syn::LitInt::base10_parse)
+                    .collect::<syn::Result<Vec<_>>>()?
             } else {
-                (0..strata.source.rules.get(rule).map_or(0, |query| query.body.len())).collect()
+                (0..strata
+                    .source
+                    .rules
+                    .get(rule)
+                    .map_or(0, |query| query.body.len()))
+                    .collect()
             };
+            let authored = body.peek(kw::authored);
+            if authored {
+                body.parse::<kw::authored>()?;
+            }
             let query;
             syn::braced!(query in body);
             variants.push(Variant {
                 rule,
                 delta,
                 order,
+                authored,
                 query: query.parse()?,
             });
             if !query.is_empty() {
@@ -122,9 +139,11 @@ impl ToTokens for Program {
                     quote!(delta #p)
                 })
                 .unwrap_or(quote!(seed));
-            let order = v.order.iter().map(|position|
-                syn::LitInt::new(&position.to_string(), proc_macro2::Span::call_site()));
-            quote!(variant #rule #kind order [#(#order),*] { #query })
+            let order = v.order.iter().map(|position| {
+                syn::LitInt::new(&position.to_string(), proc_macro2::Span::call_site())
+            });
+            let authored = v.authored.then(|| quote!(authored));
+            quote!(variant #rule #kind order [#(#order),*] #authored { #query })
         });
         let deltas = deltas.iter().map(|d| {
             let Delta { relation, name } = d;
@@ -138,15 +157,35 @@ impl ToTokens for Program {
 /// Check a supplied permutation, without replaying the order-selection heuristic.
 pub fn variant_order<'a>(query: &Query, order: &'a [usize]) -> syn::Result<&'a [usize]> {
     let length = query.body.len();
-    ensure(order.len() == length && order.iter().copied().collect::<BTreeSet<_>>()
-        == (0..length).collect(), query, "variant order must cover every source occurrence exactly once")?;
-    let first = query.body.iter().position(|item| matches!(item, BodyItem::Positive { .. })).unwrap_or(length);
-    let end = first + query.body.iter().skip(first)
-        .take_while(|item| matches!(item, BodyItem::Positive { .. })).count();
-    ensure(order.iter().enumerate().all(|(position, &source)| {
-        if (first..end).contains(&position) { (first..end).contains(&source) }
-        else { position == source }
-    }), query, "variant order must preserve Before constraints outside the first positive prefix")?;
+    ensure(
+        order.len() == length
+            && order.iter().copied().collect::<BTreeSet<_>>() == (0..length).collect(),
+        query,
+        "variant order must cover every source occurrence exactly once",
+    )?;
+    let first = query
+        .body
+        .iter()
+        .position(|item| matches!(item, BodyItem::Positive { .. }))
+        .unwrap_or(length);
+    let end = first
+        + query
+            .body
+            .iter()
+            .skip(first)
+            .take_while(|item| matches!(item, BodyItem::Positive { .. }))
+            .count();
+    ensure(
+        order.iter().enumerate().all(|(position, &source)| {
+            if (first..end).contains(&position) {
+                (first..end).contains(&source)
+            } else {
+                position == source
+            }
+        }),
+        query,
+        "variant order must preserve Before constraints outside the first positive prefix",
+    )?;
     Ok(order)
 }
 /// Formal rule DL-Delta: check variant erasure and coverage of changing positions.
@@ -177,14 +216,21 @@ fn check_variants(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         // Check complete declared schemas and CQ scope independently of erasure.
         checker.check(&v.query)?;
         let order = variant_order(&p.rules[v.rule], &v.order)?;
-        ensure(v.query.body.len() == order.len(), &v.query, "variant changed body coverage")?;
+        ensure(
+            v.query.body.len() == order.len(),
+            &v.query,
+            "variant changed body coverage",
+        )?;
         let mut erased = v.query.clone();
         if let Some(i) = v.delta {
             let original = &p.rules[v.rule].body[i];
             let BodyItem::Positive { atom: original } = original else {
                 unreachable!()
             };
-            let position = order.iter().position(|&position| position == i).expect("complete order");
+            let position = order
+                .iter()
+                .position(|&position| position == i)
+                .expect("complete order");
             let Some(BodyItem::Positive { atom }) = erased.body.iter_mut().nth(position) else {
                 return Err(syn::Error::new_spanned(p, "missing delta atom"));
             };

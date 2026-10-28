@@ -22,6 +22,7 @@ cq-order = { version = "0.1.0", path = "../../passes/cq-order" }
 cq-reduce = { version = "0.1.0", path = "../../passes/cq-reduce" }
 cq-elaborate = { version = "0.1.0", path = "../../passes/cq-elaborate" }
 cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
+cq-planning = { version = "0.1.0", path = "../../facade/cq-planning" }
 cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }

@@ -53,8 +53,11 @@
 //! Raw CQ entry remains fact-free; Fork records facts in the selected lower
 //! argument packet. `Hole.lower` records that invocation's ordinal, and Round
 //! checks its parsed context exactly equals `Hole.facts`. Fork's explicit
-//! `lower = N` argument selects a custom lowering alias by ordinal; otherwise
-//! the queue must have one path ending in `lower`.
+//! `lower = N` argument selects a custom lowering invocation by ordinal;
+//! custom flat queues must declare that owner explicitly.
+//! The named CQ `plan` phase is recorded as `Hole.plan`; custom flat fork
+//! queues supply `plan = N`. Authored Datalog order requires that owner with
+//! empty planner arguments; incompatible advice is rejected, never skipped.
 //! Checked scan renaming updates both facts and the packet, and facts naming
 //! non-read inputs are rejected before erasure.
 //! Once recorded in Physical, they travel in an exact explicit
@@ -86,8 +89,17 @@
 //! argument. The `hoist-invariants` Cargo feature enables this policy by default;
 //! ordinary CPU builds retain the unmodified scheduling policy.
 //!
+//! Per-rule join orders use CQ `plan(order(...))` selectors on labelled rules.
+//! A rule is labelled as `Label: head :- body;`. The incremental pass accepts
+//! `plan(Label, order(R, S@2, ...));` for a rule's non-recursive version and
+//! `plan(Label, delta(R@k), order(...));` for the semi-naive version whose
+//! changing occurrence is clause k. Named atoms run first in the given order,
+//! unnamed ones follow in written order; only the first contiguous positive
+//! prefix may move. Unadvised versions keep `driver(..)`. The resulting
+//! occurrence permutation is checked exactly like a `delta_first` one.
+//!
 //! Select streaming push holes with
-//! `cq = pipeline { print = ::cq_datalog::passes::print_push; };`.
+//! `cq = pipeline { print = ::cq_datalog::passes::print_push; print_input = structures; };`.
 //! Rule answers are passed directly to canonical admission, and negation keys
 //! directly to their key-set provider, without a printer-owned result buffer.
 //! The default registry recognizes both pull and push terminals; custom paths

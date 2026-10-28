@@ -10,6 +10,7 @@ pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
     let (layouts, delta_layouts) = choose_layouts(source, &analysis);
     let mut target = Program {
         incremental: source.clone(),
+        device: None,
         providers: source
             .strata
             .source
@@ -173,6 +174,7 @@ fn choose_layouts(
                             ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
                         >
                     ),
+                    protocol: cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
                     maintenance: if is_delta {
                         syn::parse_quote!(replace_each_run)
                     } else {

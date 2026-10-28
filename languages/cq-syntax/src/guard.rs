@@ -3,11 +3,11 @@
 //! split: its relational conjuncts restrict the domain of its residual guard.
 use crate::{
     Constraint,
-    constraint::{Comparison, Term},
+    constraint::{Comparison, Parameter, Term},
     symbol_name,
 };
 use std::collections::BTreeSet;
-use syn::{BinOp, Expr, UnOp};
+use syn::{BinOp, Expr, Ident, UnOp};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Split {
@@ -115,20 +115,41 @@ fn unparen(mut e: &Expr) -> &Expr {
     }
 }
 
+/// A field path `root.a.b` whose root is a bare name: a host parameter when the
+/// root is neither a query variable nor a local.
+fn field_path(e: &Expr) -> Option<(&Ident, Vec<syn::Member>)> {
+    let mut members = Vec::new();
+    let mut e = unparen(e);
+    while let Expr::Field(field) = e {
+        if !field.attrs.is_empty() {
+            return None;
+        }
+        members.push(field.member.clone());
+        e = unparen(&field.base);
+    }
+    let Expr::Path(p) = e else { return None };
+    if !p.attrs.is_empty() {
+        return None;
+    }
+    let id = crate::rust::variable(e)?;
+    members.reverse();
+    Some((id, members))
+}
+
 pub(crate) fn term(e: &Expr, names: &BTreeSet<String>, locals: &BTreeSet<String>) -> Option<Term> {
     let e = unparen(e);
-    if let Expr::Path(p) = e {
-        if p.attrs.is_empty() {
-            let id = crate::rust::variable(e)?;
-            if locals.contains(&symbol_name(id)) {
-                return None;
-            }
-            return Some(if names.contains(&symbol_name(id)) {
-                Term::Variable(id.clone())
-            } else {
-                Term::Parameter(id.clone())
-            });
+    if let Some((id, members)) = field_path(e) {
+        if locals.contains(&symbol_name(id)) {
+            return None;
         }
+        if names.contains(&symbol_name(id)) {
+            // A field of a query variable is a Rust projection, not a term.
+            return members.is_empty().then(|| Term::Variable(id.clone()));
+        }
+        return Some(Term::Parameter(Parameter {
+            root: id.clone(),
+            members,
+        }));
     }
     let wrapped = match e {
         Expr::Unary(u) if u.attrs.is_empty() && matches!(u.op, UnOp::Deref(_)) => &u.expr,

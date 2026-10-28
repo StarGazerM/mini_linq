@@ -14,45 +14,82 @@ mod rows;
 pub use emit::translate;
 pub use arena::translate_arena;
 
+
+/// Native constructor identities in the GPU catalog. Generic arguments carry
+/// the concrete schema; neither aliases nor unrelated suffixes imply an ABI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeAbi {
+    Runs,
+    Symbol,
+    Columns,
+    Range,
+}
+
+impl NativeAbi {
+    pub fn identity(self) -> syn::Path {
+        match self {
+            Self::Runs => syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout),
+            Self::Symbol => syn::parse_quote!(::gpu_datalog_runtime::Symbol),
+            Self::Columns => syn::parse_quote!(::cq_gpu_runtime::DeviceColumns),
+            Self::Range => syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
+        }
+    }
+}
+
+/// Formal rule GPU-NativeAbi: native ABI and residency follow complete catalog constructor identity.
+pub fn native_abi(ty: &syn::Type) -> Option<NativeAbi> {
+    let syn::Type::Path(ty) = ty else { return None };
+    if ty.qself.is_some() { return None; }
+    [NativeAbi::Runs, NativeAbi::Symbol, NativeAbi::Columns, NativeAbi::Range]
+        .into_iter().find(|abi| {
+            let identity = abi.identity();
+            ty.path.segments.len() == identity.segments.len()
+                && ty.path.segments.iter().zip(&identity.segments)
+                    .all(|(actual, expected)| actual.ident == expected.ident)
+                && ty.path.segments.iter().rev().skip(1)
+                    .all(|segment| matches!(segment.arguments, syn::PathArguments::None))
+        })
+}
 /// Host publication over separated, dynamically scheduled device blocks.
 /// Each block is collaborative; lanes are sequential leaves (no warp level).
 pub fn machine() -> Machine {
-    Machine {
-        name: syn::parse_quote!(gpu),
-        items: 4,
-        key_partition_threshold: 65536,
-        key_partition_cache_threshold: 6 * 1024 * 1024,
-        layout: Some(layout::shared_bytes),
-        root: LevelNode {
-            name: syn::parse_quote!(host),
+    Machine { gpu: Some(cq_lang_sequence::gpu::Machine {
+        block_threads: 256,
+        contiguous_range: |ty| native_abi(ty) == Some(NativeAbi::Range),
+    }), name: syn::parse_quote!(gpu),
+    items: 4,
+    key_partition_threshold: 65536,
+    key_partition_cache_threshold: 6 * 1024 * 1024,
+    layout: Some(layout::shared_bytes),
+    root: LevelNode {
+        name: syn::parse_quote!(host),
+        collaborative: false,
+        dynamic: false,
+        width: None,
+        shared_bytes: None,
+        children: vec![LevelNode {
+            name: syn::parse_quote!(device),
             collaborative: false,
-            dynamic: false,
+            dynamic: true,
             width: None,
             shared_bytes: None,
             children: vec![LevelNode {
-                name: syn::parse_quote!(device),
-                collaborative: false,
-                dynamic: true,
-                width: None,
-                shared_bytes: None,
+                name: syn::parse_quote!(block),
+                collaborative: true,
+                dynamic: false,
+                width: Some(256),
+                shared_bytes: Some(101_376),
                 children: vec![LevelNode {
-                    name: syn::parse_quote!(block),
-                    collaborative: true,
+                    name: syn::parse_quote!(lane),
+                    collaborative: false,
                     dynamic: false,
-                    width: Some(256),
-                    shared_bytes: Some(101_376),
-                    children: vec![LevelNode {
-                        name: syn::parse_quote!(lane),
-                        collaborative: false,
-                        dynamic: false,
-                        width: None,
-                        shared_bytes: None,
-                        children: vec![],
-                    }],
+                    width: None,
+                    shared_bytes: None,
+                    children: vec![],
                 }],
             }],
-        },
-    }
+        }],
+    }, }
 }
 
 /// Resident range reads, order-preserving codes and flat packed publication.
@@ -63,6 +100,8 @@ pub fn machine() -> Machine {
 pub fn catalog() -> cq_lang_sequence::Catalog {
     use cq_lang_sequence::{CanonToken, Capability, Catalog, CodecToken, ProviderToken};
 
+    let range = NativeAbi::Range.identity();
+    let runs = NativeAbi::Runs.identity();
     let levels = vec![
         vec!["host".into(), "device".into()],
         vec!["host".into(), "device".into(), "block".into()],
@@ -76,7 +115,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     Catalog {
         providers: vec![
             ProviderToken {
-                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
+                ty: syn::parse_quote!(#range),
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
                 elements: Some(vec![
                     syn::parse_quote!(i8),
@@ -91,7 +130,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                 levels: levels.clone(),
             },
             ProviderToken {
-                ty: syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<_, _>),
+                ty: syn::parse_quote!(#runs<_, _>),
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
                 // The declared layout checks primitives and Symbol<T, Codec>
                 // columns; logical symbol types do not appear in device rows.

@@ -1,22 +1,27 @@
 //! Proc-macro ABI adapters for the public checked pipeline.
+use cq_planning::PlanOptions;
 use proc_macro::TokenStream;
 use syn::parse::{Parse, ParseStream};
 
 mod load;
+mod observation;
 mod workload;
 
 struct Source {
     config: cq_stage::Configuration,
+    observation: Option<observation::Observation>,
     tokens: proc_macro2::TokenStream,
 }
 impl Parse for Source {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let observation = observation::parse(input)?;
         let config = input.parse()?;
         if input.peek(syn::Token![;]) {
             input.parse::<syn::Token![;]>()?;
         }
         Ok(Self {
             config,
+            observation,
             tokens: input.parse()?,
         })
     }
@@ -81,33 +86,13 @@ fn check_entry(tokens: &proc_macro2::TokenStream) -> syn::Result<()> {
 fn expand_compile(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
     let source: Source = syn::parse2(input)?;
     check_entry(&source.tokens)?;
+    if let Some(observation) = source.observation {
+        return observation.expand(source.config, source.tokens);
+    }
     if syn::parse2::<cq_lang_sequence::Program>(source.tokens.clone()).is_ok() {
         return sequence_pipeline(source.config)?.start(source.tokens);
     }
-    let implicit_sequence = source.config.sequence.is_none()
-        && source.config.grade.is_none()
-        && source.config.decompose.is_empty();
-    let authored_advice = source.config.plan.is_some()
-        || !source.config.physical.is_empty()
-        || source.config.select.is_some()
-        || !source.config.structures.is_empty()
-        || source.config.represent.is_some()
-        || source.config.stage.is_some();
-    let mut pipeline = source.config.resolve(defaults())?;
-    let sequential: syn::Path = syn::parse_quote!(::mini_linq::passes::sequential);
-    if implicit_sequence
-        && !authored_advice
-        && let Some(index) = pipeline
-            .passes
-            .iter()
-            .position(|pass| pass.path == sequential)
-    {
-        pipeline.passes.insert(
-            index,
-            syn::parse_quote!(::mini_linq::passes::plan_sequential),
-        );
-    }
-    pipeline.start(source.tokens)
+    source.config.resolve(defaults())?.start(source.tokens)
 }
 
 /// Complete Sequence input starts at planning, not at the CQ ordering phase.
@@ -141,7 +126,10 @@ fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::P
             .print
             .unwrap_or_else(|| syn::parse_quote!(::mini_linq::passes::translate_pull)),
     );
-    Ok(cq_stage::Pipeline { passes })
+    Ok(cq_stage::Pipeline {
+        passes,
+        observer: None,
+    })
 }
 
 fn expand_mini_linq(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
@@ -160,12 +148,31 @@ pub fn compile(input: TokenStream) -> TokenStream {
 }
 
 /// Compile CQ with the deterministic default pipeline.
-/// Formal rule ST-Entry: Start CQ surface expansion and the selected checked pipeline.
+/// Formal rule ST-Entry: Start the resolved checked queue unchanged; defaults are selected during configuration resolution.
 #[proc_macro]
 pub fn mini_linq(input: TokenStream) -> TokenStream {
     expand_mini_linq(input.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+/// Observe the checked CQ after any configured surface passes.
+#[proc_macro]
+pub fn observe_cq(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_cq::Program>(input.into(), |source, args| {
+        no_arguments(args)?;
+        Ok(source.clone())
+    })
+    .into()
+}
+
+/// Expose the same checked VO prefix used by the default CQ planner.
+#[proc_macro]
+pub fn prefix_valuation(input: TokenStream) -> TokenStream {
+    cq_stage::pass::<cq_lang_cq::Program, cq_lang_vo::Program>(input.into(), |source, args| {
+        cq_planning::prefix_valuation(source, &syn::parse2(args)?)
+    })
+    .into()
 }
 
 fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
@@ -179,73 +186,11 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
     }
 }
 
-#[derive(Default)]
-struct PlanOptions {
-    /// An explicit relation order, checked by the ordinary ordering pass.
-    order: Option<Vec<cq_order::OrderAtom>>,
-    no_reduce: bool,
-    /// `(target, support)` atom selectors to add, in advice order.
-    reduce: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
-    /// `(target, support)` atom selectors whose Masks reduction is dropped.
-    skip: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
-}
-impl Parse for PlanOptions {
-    /// Optional `order(Relation, Relation@clause, ...)`, `no_reduce`, and any number of
-    /// `reduce(Target with Support)` and `skip(Target with Support)`, comma separated.
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut options = Self::default();
-        while !input.is_empty() {
-            let option: syn::Ident = input.parse()?;
-            if option == "order" && options.order.is_none() {
-                let content;
-                syn::parenthesized!(content in input);
-                options.order = Some(
-                    content
-                        .parse_terminated(cq_order::OrderAtom::parse, syn::Token![,])?
-                        .into_iter()
-                        .collect(),
-                );
-            } else if option == "no_reduce" && !options.no_reduce {
-                options.no_reduce = true;
-            } else if option == "reduce" || option == "skip" {
-                let content;
-                syn::parenthesized!(content in input);
-                let target: cq_order::OrderAtom = content.parse()?;
-                let with: syn::Ident = content.parse()?;
-                if with != "with" {
-                    return Err(syn::Error::new_spanned(with, "expected `with`"));
-                }
-                let support: cq_order::OrderAtom = content.parse()?;
-                if !content.is_empty() {
-                    return Err(content.error("expected (Target with Support)"));
-                }
-                if option == "reduce" {
-                    options.reduce.push((target, support));
-                } else {
-                    options.skip.push((target, support));
-                }
-            } else {
-                return Err(syn::Error::new_spanned(
-                    option,
-                    "expected order(Relation, ...), no_reduce, or reduce/skip(Target with Support)",
-                ));
-            }
-            if !input.is_empty() {
-                input.parse::<syn::Token![,]>()?;
-                if input.is_empty() {
-                    return Err(input.error("trailing comma after plan options"));
-                }
-            }
-        }
-        Ok(options)
-    }
-}
-
 /// In a Sequence decomposition list, `plan(target::plan)` delegates to the
 /// target-owned planner macro after all preceding authored advice. The target
 /// supplies its machine/catalog to the shared planner without a target dependency
 /// in this facade. CQ planning options retain their existing meaning.
-/// CQ → RA′: a left-deep plan in written order with checked reductions.
+/// CQ → RA′: a connected-prefix plan with checked reductions.
 /// The first clause of each scope is the outer stream; every other clause is
 /// reduced by its filtered subtrees of the outer-rooted reduction tree before
 /// the stream starts. `plan(no_reduce)` disables implicit reductions, not the order.
@@ -253,7 +198,6 @@ impl Parse for PlanOptions {
 /// by the one reading `S` after any Masks reductions, before the stream;
 /// `plan(skip(T with S))` drops an existing Masks reduction and is rejected
 /// under `no_reduce`, where no Masks reduction exists. Advice remains checked.
-/// Formal rule Plan-Prefix: Normalize, order Written/Coarse, then optionally reduce by outer-rooted masks and advised reductions before IX.
 #[proc_macro]
 pub fn plan(input: TokenStream) -> TokenStream {
     let input: proc_macro2::TokenStream = input.into();
@@ -265,84 +209,7 @@ pub fn plan(input: TokenStream) -> TokenStream {
     }
     cq_stage::pass::<cq_lang_cq::Program, cq_lang_ra::Program>(input, |source, args| {
         let args: PlanOptions = syn::parse2(args)?;
-        let normal = cq_lang_cq::normal::normalize(source)?;
-        let ordering = cq_order::Options {
-            heuristic: cq_order::Heuristic::Written,
-            split: cq_order::Split::Coarse,
-        };
-        let plan = if let Some(relations) = &args.order {
-            cq_order::compile_explicit(&normal, relations)?
-        } else {
-            let plan = cq_order::compile(&normal, &ordering)?;
-            cq_order::check(&normal, &plan, &ordering)?;
-            plan
-        };
-        let options = cq_reduce::Options {
-            semijoins: if args.no_reduce {
-                cq_reduce::Reductions::None
-            } else {
-                cq_reduce::Reductions::Masks
-            },
-        };
-        let mut reduced = cq_reduce::compile(&plan, &options)?;
-        cq_reduce::check(&plan, &reduced, &options)?;
-        if !args.reduce.is_empty() || !args.skip.is_empty() {
-            // Formal rule R-Advice: Advised semijoins of two top-level atoms sharing a variable run after any Masks reductions, before the stream; skip must name an existing Masks reduction.
-            let analysis = cq_lang_vo::contract::check(&reduced)?;
-            let graph = cq_lang_cq::hypergraph::Analysis::of(&reduced.cq);
-            let pair = |target: &cq_order::OrderAtom,
-                        support: &cq_order::OrderAtom|
-             -> syn::Result<(usize, usize)> {
-                let (t, s) = (
-                    target.positive_clause(&reduced.cq)?,
-                    support.positive_clause(&reduced.cq)?,
-                );
-                if t == s || graph.shared(t, s).is_empty() {
-                    return Err(syn::Error::new_spanned(
-                        &support.relation,
-                        "reduce advice needs two atoms sharing a variable",
-                    ));
-                }
-                Ok((t, s))
-            };
-            let mut skipped = Vec::new();
-            for (target, support) in &args.skip {
-                let (t, s) = pair(target, support)?;
-                let step = cq_reduce::semijoin(&analysis, &graph, t, s);
-                if !reduced.valuation.steps.contains(&step) {
-                    return Err(syn::Error::new_spanned(
-                        &target.relation,
-                        "skip advice names no Masks reduction",
-                    ));
-                }
-                skipped.push(step);
-            }
-            reduced
-                .valuation
-                .steps
-                .retain(|step| !skipped.contains(step));
-            let mut steps = Vec::new();
-            for (target, support) in &args.reduce {
-                let (t, s) = pair(target, support)?;
-                steps.push(cq_reduce::semijoin(&analysis, &graph, t, s));
-            }
-            let first = reduced
-                .valuation
-                .steps
-                .iter()
-                .position(|step| {
-                    matches!(
-                        step,
-                        cq_lang_vo::Step::Atom(..) | cq_lang_vo::Step::Block(..)
-                    )
-                })
-                .unwrap_or(reduced.valuation.steps.len());
-            reduced.valuation.steps.splice(first..first, steps);
-            cq_lang_vo::contract::check(&reduced)?;
-        }
-        let target = cq_elaborate::compile(&reduced)?;
-        cq_elaborate::check(&reduced, &target)?;
-        Ok(target)
+        cq_planning::compile_prefix(source, &args)
     })
     .into()
 }

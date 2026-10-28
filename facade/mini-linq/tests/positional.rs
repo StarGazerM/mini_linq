@@ -224,6 +224,7 @@ fn covered_exact_scan_filters_preserve_answers_and_skip_blocks() {
 }
 
 cq_testkit::positional_cases!(
+    sequence;
     [mini_linq::passes::sequence, mini_linq::passes::sequential]
     mini_linq::passes::translate_pull
 );

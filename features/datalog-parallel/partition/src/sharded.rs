@@ -168,18 +168,33 @@ impl syn::parse::Parse for StorageArguments {
             let content;
             syn::parenthesized!(content in input);
             let provider: Ident = content.parse()?;
-            ensure(content.is_empty(), &provider, "unexpected provider arguments")?;
+            ensure(
+                content.is_empty(),
+                &provider,
+                "unexpected provider arguments",
+            )?;
             if name == "layouts" {
-                ensure(layouts.is_none(), &name, "layout selections are mutually exclusive")?;
+                ensure(
+                    layouts.is_none(),
+                    &name,
+                    "layout selections are mutually exclusive",
+                )?;
                 layouts = Some(if provider == "sharded" {
                     LayoutChoice::Sharded
                 } else if provider == "runs" {
                     LayoutChoice::Runs
                 } else {
-                    return Err(syn::Error::new_spanned(provider, "expected sharded or runs"));
+                    return Err(syn::Error::new_spanned(
+                        provider,
+                        "expected sharded or runs",
+                    ));
                 });
             } else if name == "seen" {
-                ensure(!run_seen && provider == "runs", &provider, "expected one seen(runs)")?;
+                ensure(
+                    !run_seen && provider == "runs",
+                    &provider,
+                    "expected one seen(runs)",
+                )?;
                 run_seen = true;
             } else {
                 return Err(syn::Error::new_spanned(name, "expected layouts or seen"));
@@ -231,6 +246,7 @@ pub fn compile_storage_with(
                 };
                 if let Some(provider) = replacement {
                     layout.provider = provider;
+                    layout.protocol = storage::LayoutProtocol::Bulk;
                 }
             }
         }
@@ -292,13 +308,16 @@ pub fn check_storage(source: &storage::Program, target: &storage::Program) -> sy
                 })
         {
             ensure(
-                sharded_layout(&original.provider).as_ref() == Some(&rewritten.provider)
-                    || run_layout(&original.provider).ok().flatten().as_ref()
-                        == Some(&rewritten.provider),
+                original.protocol == storage::LayoutProtocol::GroupedMap
+                    && rewritten.protocol == storage::LayoutProtocol::Bulk
+                    && (sharded_layout(&original.provider).as_ref() == Some(&rewritten.provider)
+                        || run_layout(&original.provider).ok().flatten().as_ref()
+                            == Some(&rewritten.provider)),
                 target,
                 "incorrect layout provider",
             )?;
             rewritten.provider = original.provider.clone();
+            rewritten.protocol = original.protocol;
         }
     }
     ensure(
@@ -645,10 +664,13 @@ fn check_providers(program: &Program) -> syn::Result<()> {
             let seen_arguments = type_arguments(
                 &relation.providers.seen,
                 &["cq_datalog_parallel_runtime", "ShardedSeen"],
-            ).or_else(|| type_arguments(
-                &relation.providers.seen,
-                &["cq_datalog_parallel_runtime", "RunSeen"],
-            ));
+            )
+            .or_else(|| {
+                type_arguments(
+                    &relation.providers.seen,
+                    &["cq_datalog_parallel_runtime", "RunSeen"],
+                )
+            });
             let rows: Type = syn::parse_quote!(::std::vec::Vec<#tuple>);
             ensure(
                 seen_arguments.is_some_and(|arguments| {
@@ -693,14 +715,18 @@ fn check_providers(program: &Program) -> syn::Result<()> {
             && type_arguments(
                 &layout.provider,
                 &["cq_datalog_parallel_runtime", "RunLayout"],
-            ).is_some();
+            )
+            .is_some();
         let arguments = if sharded {
             type_arguments(
                 &layout.provider,
                 &["cq_datalog_parallel_runtime", "ShardedLayout"],
             )
         } else if runs {
-            type_arguments(&layout.provider, &["cq_datalog_parallel_runtime", "RunLayout"])
+            type_arguments(
+                &layout.provider,
+                &["cq_datalog_parallel_runtime", "RunLayout"],
+            )
         } else {
             type_arguments(&layout.provider, &["std", "collections", "HashMap"])
         };
@@ -719,6 +745,16 @@ fn check_providers(program: &Program) -> syn::Result<()> {
             }),
             program,
             "sharded Round requires a native HashMap or an eligible ShardedLayout or RunLayout",
+        )?;
+        ensure(
+            layout.protocol
+                == if sharded || runs {
+                    storage::LayoutProtocol::Bulk
+                } else {
+                    storage::LayoutProtocol::GroupedMap
+                },
+            program,
+            "layout maintenance protocol does not match the certified provider",
         )?;
     }
     Ok(())
@@ -779,12 +815,10 @@ fn run_layout(ty: &Type) -> syn::Result<Option<Type>> {
     let Some(sharded) = sharded_layout(ty) else {
         return Ok(None);
     };
-    let arguments = type_arguments(
-        &sharded, &["cq_datalog_parallel_runtime", "ShardedLayout"],
-    ).expect("constructed sharded layout");
-    let default: Type = syn::parse_quote!(
-        ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-    );
+    let arguments = type_arguments(&sharded, &["cq_datalog_parallel_runtime", "ShardedLayout"])
+        .expect("constructed sharded layout");
+    let default: Type =
+        syn::parse_quote!(::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>);
     ensure(
         argument_type(&arguments[2]) == Some(&default),
         ty,
@@ -792,13 +826,17 @@ fn run_layout(ty: &Type) -> syn::Result<Option<Type>> {
     )?;
     let key = &arguments[0];
     let value = &arguments[1];
-    Ok(Some(syn::parse_quote!(::cq_datalog_parallel_runtime::RunLayout<#key, #value>)))
+    Ok(Some(
+        syn::parse_quote!(::cq_datalog_parallel_runtime::RunLayout<#key, #value>),
+    ))
 }
 
 fn selected_seen(ty: &Type, runs: bool) -> syn::Result<Type> {
     let mut selected = sharded_seen(ty)?;
     if runs {
-        let Type::Path(path) = &mut selected else { unreachable!() };
+        let Type::Path(path) = &mut selected else {
+            unreachable!()
+        };
         path.path.segments.last_mut().expect("seen path").ident =
             Ident::new("RunSeen", proc_macro2::Span::call_site());
     }

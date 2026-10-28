@@ -113,6 +113,7 @@ fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
             PackedField { shift: 80, bits: 0, base: 0 }, Bounds::singleton(0))?
     };
     let gathered = RangeBuilder::new(&pool)?.build(&RangeDescriptor {
+        directory_entries: 2,
         key: vec![KeyDescriptor { column: constant, domain_size: 1 }],
         selection: None,
         payload: vec![PayloadDescriptor { column: source, kind: PayloadKind::I64 }],
@@ -197,6 +198,7 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
         end: 14,
     };
     let descriptor = RangeDescriptor {
+        directory_entries: 4,
         key: vec![
             KeyDescriptor {
                 column: outer,
@@ -324,6 +326,7 @@ fn i64_payloads_preserve_full_width_values_and_partial_vectors() -> Result<()> {
             )?
         };
         let mut descriptor = RangeDescriptor {
+            directory_entries: 5,
             key: vec![KeyDescriptor {
                 column: column(&pool, &keys)?,
                 domain_size: 4,
@@ -382,6 +385,7 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
     };
     drop(rows);
     let mut descriptor = RangeDescriptor {
+        directory_entries: 4,
         key: vec![KeyDescriptor {
             column: key,
             domain_size: 3,
@@ -447,6 +451,7 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
     };
     drop(keys);
     let packed = builder.build(&RangeDescriptor {
+        directory_entries: 3,
         key: vec![KeyDescriptor {
             column: key,
             domain_size: 2,
@@ -504,6 +509,7 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
     };
     drop(keys);
     let shifted = builder.build(&RangeDescriptor {
+        directory_entries: 4,
         key: vec![KeyDescriptor {
             column: key,
             domain_size: 3,
@@ -527,6 +533,7 @@ fn keyless_provider_preserves_one_complete_segment() -> Result<()> {
     let pool = Pool::new(0, 1 << 20, 128 << 20)?;
     let values = column(&pool, &[7, 2, 7, 4])?;
     let mut descriptor = RangeDescriptor {
+        directory_entries: 0,
         key: vec![],
         selection: None,
         payload: vec![PayloadDescriptor {

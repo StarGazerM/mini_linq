@@ -3,10 +3,7 @@
 //! reports contain the resolved invocations, not a second executable query.
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use syn::{
-    Ident, Token,
-    parse::{Parse, ParseStream},
-};
+use syn::Ident;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +21,53 @@ pub struct Pipeline {
     pub complete: bool,
     #[serde(default)]
     pub sequence: Vec<String>,
+    #[serde(default)]
+    pub target: Target,
+    #[serde(default)]
+    pub publication: Placement,
+    #[serde(default)]
+    pub recipe: Recipe,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Target {
+    #[default]
+    Device,
+    Host,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Placement {
+    #[default]
+    Host,
+    Device,
+}
+
+/// Explicit catalog facts; query labels never reach recipe execution.
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Recipe {
+    pub automatic: bool,
+    pub retained_prefixes: Vec<String>,
+    pub filtered_leaves: Vec<String>,
+    pub retained_probe: Option<(String, String)>,
+    pub hoist_inputs: bool,
+    pub membership: bool,
+    pub membership_relations: Vec<String>,
+    pub schedule: Option<Schedule>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Schedule {
+    pub expansions: Vec<String>,
+    pub partition_filters: bool,
+    pub publish_ranges: bool,
+    pub partition: usize,
+    pub segment: usize,
+    pub items: usize,
 }
 
 impl Pipeline {
@@ -35,6 +79,16 @@ impl Pipeline {
             structures: Vec::new(),
             sequence: Vec::new(),
             complete: false,
+            target: Target::Device,
+            publication: Placement::Host,
+            recipe: Recipe::default(),
+        }
+    }
+
+    pub fn automatic() -> Self {
+        Self {
+            recipe: Recipe { automatic: true, ..Recipe::default() },
+            ..Self::baseline()
         }
     }
 
@@ -121,6 +175,7 @@ impl Pipeline {
                 String::new()
             },
             sequence,
+            recipe: catalog_recipe(&format!("{query}.{stage}")),
             ..Self::baseline()
         }
     }
@@ -137,6 +192,8 @@ impl Pipeline {
             structures: Vec::new(),
             sequence: Vec::new(),
             complete: false,
+            recipe: catalog_recipe("h05"),
+            ..Self::baseline()
         }
     }
 
@@ -247,61 +304,45 @@ impl Pipeline {
             } else {
                 vec!["build_host_reads()".into()]
             },
+            recipe: catalog_recipe(query),
             ..Self::baseline()
         })
     }
 }
 
-#[derive(Default)]
-pub struct Plan {
-    no_reduce: bool,
-    order: Vec<cq_order::OrderAtom>,
-    reduce: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
-    skip: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
-}
-
-impl Parse for Plan {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut plan = Self::default();
-        while !input.is_empty() {
-            let key: Ident = input.parse()?;
-            if key == "no_reduce" {
-                plan.no_reduce = true;
-            } else {
-                let arguments;
-                syn::parenthesized!(arguments in input);
-                if key == "order" {
-                    plan.order = arguments
-                        .parse_terminated(cq_order::OrderAtom::parse, Token![,])?
-                        .into_iter()
-                        .collect();
-                } else if key == "reduce" || key == "skip" {
-                    let target = arguments.parse()?;
-                    let with: Ident = arguments.parse()?;
-                    if with != "with" {
-                        return Err(syn::Error::new_spanned(with, "expected with"));
-                    }
-                    let support = arguments.parse()?;
-                    if !arguments.is_empty() {
-                        return Err(arguments.error("unexpected reduction argument"));
-                    }
-                    if key == "reduce" {
-                        plan.reduce.push((target, support));
-                    } else {
-                        plan.skip.push((target, support));
-                    }
-                } else {
-                    return Err(syn::Error::new_spanned(
-                        key,
-                        "expected order, no_reduce, reduce, or skip",
-                    ));
-                }
-            }
-            if !input.is_empty() {
-                input.parse::<Token![,]>()?;
-            }
-        }
-        Ok(plan)
+/// Catalog registration resolves workload labels to printable input facts.
+/// Formal rule DR-Recipe: Execute only explicit recipe facts, never query labels.
+fn catalog_recipe(query: &str) -> Recipe {
+    let simple = matches!(query, "h01" | "h06" | "h12" | "h19" | "h04"
+        | "h02.0" | "h13.0" | "h11.1" | "h11.2" | "h15.0"
+        | "h15.1" | "h18.0" | "h20.0");
+    let expansions: &[&str] = match query {
+        "h05" => &["Orders", "Lineitem"],
+        "h09" | "h08" | "d27" | "d19" | "d85" => &["Lineitem"],
+        "h03" | "h07" | "h07_block" => &["Orders"],
+        "h21_positive" | "d72_inner" => &["Supplier", "Lineitem"],
+        "h11.0" => &["Supplier", "Partsupp"],
+        _ => &[],
+    };
+    let prefixes: &[&str] = match query {
+        "h05" | "d19" | "d85" | "h07" | "h07_block" => &["Customer"],
+        "h21_positive" | "d72_inner" | "d27" => &["Supplier"],
+        _ => &[],
+    };
+    Recipe {
+        retained_prefixes: prefixes.iter().map(|s| (*s).into()).collect(),
+        filtered_leaves: if query == "h09" { vec!["Part".into()] } else { Vec::new() },
+        retained_probe: (query == "h21_positive").then(|| ("Lineitem".into(), "waiting_supplier".into())),
+        hoist_inputs: matches!(query, "h05" | "h08" | "h21_positive" | "d72_inner" | "h04_not_exists"),
+        membership: query != "h04" && query != "h05",
+        membership_relations: if query == "h05" { vec!["Supplier".into()] } else { Vec::new() },
+        schedule: (!simple).then(|| Schedule {
+            expansions: expansions.iter().map(|s| (*s).into()).collect(),
+            partition_filters: query != "h05",
+            publish_ranges: matches!(query, "d72_inner" | "d85" | "h03"),
+            partition: 256, segment: 1024, items: 4,
+        }),
+        ..Recipe::default()
     }
 }
 
@@ -309,92 +350,8 @@ pub fn valuation(
     source: &cq_lang_cq::Program,
     arguments: &str,
 ) -> syn::Result<cq_lang_vo::Program> {
-    let plan: Plan = syn::parse_str(arguments)?;
-    let ordered = if plan.order.is_empty() {
-        let options = cq_order::Options::default();
-        let ordered = cq_order::compile(source, &options)?;
-        cq_order::check(source, &ordered, &options)?;
-        ordered
-    } else {
-        cq_order::compile_explicit(source, &plan.order)?
-    };
-    let options = cq_reduce::Options {
-        semijoins: if plan.no_reduce {
-            cq_reduce::Reductions::None
-        } else {
-            cq_reduce::Reductions::Masks
-        },
-    };
-    let mut reduced = cq_reduce::compile(&ordered, &options)?;
-    cq_reduce::check(&ordered, &reduced, &options)?;
-    if plan.skip.is_empty() && plan.reduce.is_empty() {
-        return Ok(reduced);
-    }
-    let analysis = cq_lang_vo::contract::check(&reduced)?;
-    let graph = cq_lang_cq::hypergraph::Analysis::of(source);
-    let step = |target: &cq_order::OrderAtom,
-                support: &cq_order::OrderAtom|
-     -> syn::Result<cq_lang_vo::Step> {
-        let (t, s) = (
-            target.positive_clause(source)?,
-            support.positive_clause(source)?,
-        );
-        if t == s || graph.shared(t, s).is_empty() {
-            return Err(syn::Error::new_spanned(
-                &target.relation,
-                "reduce advice needs two atoms sharing a variable",
-            ));
-        }
-        Ok(cq_reduce::semijoin(&analysis, &graph, t, s))
-    };
-    for (target, support) in plan.skip {
-        let skipped = step(&target, &support)?;
-        if !reduced.valuation.steps.contains(&skipped) {
-            return Err(syn::Error::new_spanned(
-                &target.relation,
-                "skip advice names no Masks reduction",
-            ));
-        }
-        reduced
-            .valuation
-            .steps
-            .retain(|candidate| *candidate != skipped);
-    }
-    let extra = plan
-        .reduce
-        .iter()
-        .map(|(t, s)| step(t, s))
-        .collect::<syn::Result<Vec<_>>>()?;
-    let first = reduced
-        .valuation
-        .steps
-        .iter()
-        .position(|step| {
-            matches!(
-                step,
-                cq_lang_vo::Step::Atom(..) | cq_lang_vo::Step::Block(..)
-            )
-        })
-        .unwrap_or(reduced.valuation.steps.len());
-    reduced.valuation.steps.splice(first..first, extra);
-    cq_lang_vo::contract::check(&reduced)?;
-    Ok(reduced)
-}
-
-struct Invocation {
-    name: Ident,
-    arguments: TokenStream,
-}
-impl Parse for Invocation {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let name = input.parse()?;
-        let arguments;
-        syn::parenthesized!(arguments in input);
-        Ok(Self {
-            name,
-            arguments: arguments.parse()?,
-        })
-    }
+    let options: cq_planning::PlanOptions = syn::parse_str(arguments)?;
+    cq_planning::prefix_valuation(source, &options)
 }
 
 pub fn physical(
@@ -403,17 +360,8 @@ pub fn physical(
 ) -> syn::Result<cq_lang_physical::Program> {
     let mut current = source.clone();
     for invocation in invocations {
-        let Invocation { name, arguments } = syn::parse_str(invocation)?;
-        current = match name.to_string().as_str() {
-            "retain_streams" => cq_rewrite_passes::retain_streams(&current, arguments)?,
-            "hoist" => cq_rewrite_passes::hoist(&current, arguments)?,
-            "canon_prefixes" => cq_rewrite_passes::canon_prefixes(&current, arguments)?,
-            "smallest_intersections" => {
-                cq_rewrite_passes::smallest_intersections(&current, arguments)?
-            }
-            "build_host_reads" => cq_structure_selection::build_host_reads(&current, arguments)?,
-            _ => return Err(syn::Error::new_spanned(name, "unsupported Physical advice")),
-        };
+        let invocation: cq_stage::Invocation = syn::parse_str(invocation)?;
+        current = cq_rewrite_passes::invoke_physical(&current, &invocation.path, invocation.arguments)?;
     }
     Ok(current)
 }
@@ -424,18 +372,8 @@ pub fn structures(
 ) -> syn::Result<cq_lang_structures::Program> {
     let mut current = source.clone();
     for invocation in invocations {
-        let Invocation { name, arguments } = syn::parse_str(invocation)?;
-        current = match name.to_string().as_str() {
-            "sorted_indexes" => cq_rewrite_passes::sorted_indexes(&current, arguments)?,
-            "retype" => cq_structure_selection::retype(&current, arguments)?,
-            "membership" => cq_rewrite_passes::membership(&current, arguments)?,
-            _ => {
-                return Err(syn::Error::new_spanned(
-                    name,
-                    "unsupported Structures advice",
-                ));
-            }
-        };
+        let invocation: cq_stage::Invocation = syn::parse_str(invocation)?;
+        current = cq_rewrite_passes::invoke_structures(&current, &invocation.path, invocation.arguments)?;
     }
     Ok(current)
 }
@@ -555,72 +493,6 @@ pub fn filtered_leaf(
     ))
 }
 
-/// H05's authored R schedule, expressed only as checked rewrites of the generic
-/// lowering. Placement is shared with the planner; decomposition is authored.
-pub fn h05_schedule(source: &cq_lang_sequence::Program) -> syn::Result<cq_sequence_plan::Planned> {
-    use cq_sequence_plan::Advice;
-    let suggested = cq_sequence_plan::decompose(
-        source,
-        &cq_gpu_sequence::machine(),
-        &cq_gpu_sequence::catalog(),
-    )?;
-    let mut planned = cq_sequence_plan::Planned {
-        program: source.clone(),
-        trace: Vec::new(),
-    };
-    for step in suggested.trace {
-        if matches!(
-            step,
-            Advice::Tile { .. } | Advice::Partition { .. } | Advice::Segment { .. }
-        ) {
-            continue;
-        }
-        planned.program = step.apply(&planned.program)?;
-        planned.trace.push(step);
-    }
-    let output = planned
-        .program
-        .sequence
-        .definitions
-        .last()
-        .unwrap()
-        .name
-        .clone();
-    let mut schedule = vec![Advice::Partition {
-        name: output,
-        n: 256,
-        items: None,
-    }];
-    for relation in ["Orders", "Lineitem"] {
-        let physical = &source.structures.physical;
-        let prefix = joined_prefix(physical, relation)?;
-        let definition = source
-            .sequence
-            .definitions
-            .iter()
-            .find(|d| d.name == prefix)
-            .ok_or_else(|| {
-                syn::Error::new_spanned(&prefix, "expansion has no Sequence definition")
-            })?;
-        if !matches!(definition.term, cq_lang_sequence::Term::Flatten(_)) {
-            return Err(syn::Error::new_spanned(
-                &prefix,
-                "expansion is not a named flatten",
-            ));
-        }
-        schedule.push(Advice::Segment {
-            name: prefix,
-            n: 1024,
-            items: Some(4),
-        });
-    }
-    schedule.push(Advice::Output(cq_lang_sequence::OutputProtocol::Count));
-    for step in schedule {
-        planned.program = step.apply(&planned.program)?;
-        planned.trace.push(step);
-    }
-    Ok(planned)
-}
 
 pub fn apply_sequence(
     source: &cq_lang_sequence::Program,
@@ -645,33 +517,19 @@ pub fn trace_tokens(trace: &[cq_sequence_plan::Advice]) -> String {
 /// Materialize only the measured forward stream, never a reverse reduction.
 pub fn hand_physical(
     program: &cq_lang_physical::Program,
-    query: &str,
+    recipe: &Recipe,
     pipeline: &mut Pipeline,
 ) -> syn::Result<()> {
-    if matches!(query, "h01" | "h06" | "h12" | "h19" | "h04") {
-        return Ok(());
-    }
-    if matches!(
-        query,
-        "h08" | "h21_positive" | "d72_inner" | "h04" | "h04_not_exists"
-    ) {
+    if recipe.hoist_inputs {
         pipeline.physical.push(hoist_inputs(program));
     }
-    let prefix = match query {
-        "h21_positive" | "d72_inner" => Some("Supplier"),
-        "d19" | "d85" | "h07" | "h07_block" => Some("Customer"),
-        "d27" => Some("Supplier"),
-        _ => None,
-    };
-    if let Some(relation) = prefix {
+    for relation in &recipe.retained_prefixes {
         let prefix = joined_prefix(program, relation)?;
         pipeline
             .physical
             .insert(0, quote!(retain_streams(#prefix)).to_string());
     }
-    if query == "h21_positive" {
-        // A 411/4010-supplier root underfills the device. Publish the measured
-        // 156739/1522366 late-line prefix globally before Orders/other-line work.
+    if let Some((relation, column)) = &recipe.retained_probe {
         let prefix = program
             .program
             .definitions
@@ -680,11 +538,11 @@ pub fn hand_physical(
                 let cq_lang_physical::Operator::Probe(_, key) = &definition.operator else {
                     return None;
                 };
-                (relation_of(program, &key.right).is_some_and(|relation| relation == "Lineitem")
+                (relation_of(program, &key.right).is_some_and(|name| name == relation)
                     && key
                         .columns
                         .iter()
-                        .any(|column| column == "waiting_supplier"))
+                        .any(|name| name == column))
                 .then_some(&definition.name)
             })
             .ok_or_else(|| {
@@ -746,7 +604,7 @@ pub fn hand_membership(program: &cq_lang_structures::Program) -> syn::Result<Vec
 /// expansion boundaries, tile/items and output protocol are authored here.
 pub fn hand_schedule(
     source: &cq_lang_sequence::Program,
-    query: &str,
+    recipe: &Schedule,
 ) -> syn::Result<cq_sequence_plan::Planned> {
     use cq_sequence_plan::Advice;
     let suggested = cq_sequence_plan::decompose(
@@ -754,26 +612,6 @@ pub fn hand_schedule(
         &cq_gpu_sequence::machine(),
         &cq_gpu_sequence::catalog(),
     )?;
-    // Keep checked group-input publication boundaries. Group extraction can
-    // consume a flatten, so it must not subsequently receive join segmentation.
-    if matches!(
-        query,
-        "h01"
-            | "h06"
-            | "h12"
-            | "h19"
-            | "h04"
-            | "h02.0"
-            | "h13.0"
-            | "h11.1"
-            | "h11.2"
-            | "h15.0"
-            | "h15.1"
-            | "h18.0"
-            | "h20.0"
-    ) {
-        return Ok(suggested);
-    }
     let mut planned = cq_sequence_plan::Planned {
         program: source.clone(),
         trace: Vec::new(),
@@ -798,12 +636,12 @@ pub fn hand_schedule(
         .clone();
     let mut schedule = vec![Advice::Partition {
         name: output,
-        n: 256,
+        n: recipe.partition,
         items: None,
     }];
     // Partition every independent device-side numeric filter. Tiling only join
     // expansion leaves a 6M/60M-row publication as a scalar producer.
-    for definition in &source.structures.physical.program.definitions {
+    for definition in source.structures.physical.program.definitions.iter().filter(|_| recipe.partition_filters) {
         let device = planned.trace.iter().any(|step| {
             matches!(step,
             Advice::Grade { name, level, .. }
@@ -820,12 +658,12 @@ pub fn hand_schedule(
         {
             schedule.push(Advice::Partition {
                 name: definition.name.clone(),
-                n: 256,
-                items: Some(4),
+                n: recipe.partition,
+                items: Some(recipe.items),
             });
         }
     }
-    if matches!(query, "d72_inner" | "d85" | "h03") {
+    if recipe.publish_ranges {
         // The host filtered-range builder accepts one half-open column only.
         // Publish numeric filtered leaves on device instead: shipdate+quantity
         // and availability are checked map predicates, not host index bounds.
@@ -874,28 +712,18 @@ pub fn hand_schedule(
                 });
                 schedule.push(Advice::Partition {
                     name: name.clone(),
-                    n: 256,
+                    n: recipe.partition,
                     items: None,
                 });
             }
         }
     }
-    // Observed fanouts: h09 Lineitem 7.49; h08 Lineitem 30;
-    // h21 Supplier 411/4010 and late Lineitem 381/380 (other line ~4);
-    // d72 Supplier 400/4000 and filtered Lineitem 13.56/13.49.
-    let expanded: &[&str] = match query {
-        "h09" | "h08" | "d27" | "d19" | "d85" => &["Lineitem"],
-        "h03" | "h07" | "h07_block" => &["Orders"],
-        "h21_positive" | "d72_inner" => &["Supplier", "Lineitem"],
-        "h11.0" => &["Supplier", "Partsupp"],
-        _ => &[],
-    };
     for definition in &source.structures.physical.program.definitions {
         let cq_lang_physical::Operator::Probe(_, key) = &definition.operator else {
             continue;
         };
         if !relation_of(&source.structures.physical, &key.right)
-            .is_some_and(|relation| expanded.iter().any(|name| relation == *name))
+            .is_some_and(|relation| recipe.expansions.iter().any(|name| relation == name))
         {
             continue;
         }
@@ -908,8 +736,8 @@ pub fn hand_schedule(
         {
             schedule.push(Advice::Segment {
                 name: name.clone(),
-                n: 1024,
-                items: Some(4),
+                n: recipe.segment,
+                items: Some(recipe.items),
             });
         }
     }

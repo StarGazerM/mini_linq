@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+# Run SRDatalog's default DOOP formulation instead of field-flow.
+default-query = ["srd-doop-shared/default-query"]
+
 [dependencies]
 srd-doop-shared = { path = "../../../features/datalog/doop/srd" }
 srd-doop-harness = { path = "../../../features/datalog/doop/srd-engines/harness" }

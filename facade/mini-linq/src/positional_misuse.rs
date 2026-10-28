@@ -26,7 +26,7 @@
 //!     structures {
 //!         l host scan = ::core::iter::Map<_,_> [];
 //!         r host scan = ::core::iter::Map<_,_> [];
-//!         r host s = ::core::iter::Map<_,_> [z];
+//!         r host result(s) = ::core::iter::Map<_,_> [z];
 //!         s rows = ::std::vec::Vec<_>;
 //!         s keyset = NoInterval<_> [x] owned base R lineage{x -> b,z -> c};
 //!         t read = positional base L lineage{x -> a} column a

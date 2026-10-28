@@ -15,6 +15,7 @@ use syn::Ident;
 /// The native iterator target executes entirely at the host level.
 pub fn machine() -> cq_lang_sequence::Machine {
     cq_lang_sequence::Machine {
+        gpu: None,
         layout: None,
         name: syn::parse_quote!(sequential),
         items: 1,
@@ -174,6 +175,7 @@ pub struct Emitter<'a> {
     target_published: std::collections::BTreeSet<String>,
     lengths: BTreeMap<String, TokenStream>,
     partial_groups: BTreeMap<*const Term, bool>,
+    execution: BTreeMap<*const Term, &'a cq_lang_sequence::task_execution::Node>,
     owner: String,
     pull: bool,
     workers: syn::Expr,
@@ -201,6 +203,7 @@ impl<'a> Emitter<'a> {
             target_published: std::collections::BTreeSet::new(),
             lengths: BTreeMap::new(),
             partial_groups,
+            execution: analysis.task_execution.terms(program),
             owner: String::new(),
             pull: false,
             workers: syn::parse_quote!(1usize),
@@ -1135,6 +1138,7 @@ impl<'a> Emitter<'a> {
 }
 
 /// Emit a host-only checked Sequence iterator. Analysis belongs to this program.
+/// Formal rule T-Pull: interpret host rows and recorded choice/publication modes without changing support.
 pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
     translate_host(program, analysis, false)
 }
@@ -1330,14 +1334,21 @@ fn translate_with_profile(
             }
             Term::Choose(arms)
                 if emitter.pull
-                    && !arms
-                        .iter()
-                        .any(|(guard, _)| matches!(guard, Guard::WorkersLt(_))) =>
+                    && matches!(
+                        emitter.execution[&(node as *const Term)].staging,
+                        Some(cq_lang_sequence::task_execution::Staging::Choice {
+                            pull_runtime: false
+                        })
+                    ) =>
             {
                 let alternative = emitter.choose(arms)?;
                 term(emitter, alternative, owner, tiles, false, hook)?
             }
             Term::Choose(arms) => {
+                assert!(matches!(
+                    emitter.execution[&(node as *const Term)].staging,
+                    Some(cq_lang_sequence::task_execution::Staging::Choice { .. })
+                ));
                 let mut values = Vec::with_capacity(arms.len());
                 for (guard, arm) in arms {
                     let condition = emitter.runtime_guard(guard)?;
@@ -1380,7 +1391,6 @@ fn translate_with_profile(
         hook(node, emitter, child.as_ref(), &mut value, owner, tiles)?;
         Ok(value)
     }
-    // Formal rule T-Pull: Interpret Sequence by the host iterator algebra.
     let mut emitter = Emitter::new(program, analysis);
     emitter.pull = pull;
     emitter.workers = workers;

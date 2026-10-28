@@ -18,7 +18,7 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
-//! VO records block @path(columns) { steps } | { steps }; or else arms, retaining recursive branch steps and reduction occurrence paths R@c.j.k.
+//! VO records block @path(columns) hoisted/correlated { steps } | { steps }; or else arms, retaining recursive branch steps and reduction occurrence paths R@c.j.k.
 //! Its contract checks coverage, interface scope and Before sets recursively.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
@@ -38,6 +38,7 @@ use syn::{Ident, Token, token};
 
 pub use cq_syntax::{CommaList, Occurrence, symbol_name};
 pub mod blocks;
+pub use blocks::Placement;
 pub mod join_branches;
 pub use join_branches::{JoinBranch, JoinBranches};
 
@@ -220,6 +221,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     )
 }
 
+/// Formal rule WF-VO-Arithmetic: Typed CQ-Arith clauses leave the partial Rust chain but remain Before facts for later partial steps.
+/// Formal rule WF-BlockPlacement: Hoisted arms are Rust-free; correlated arms require their free prefix, and repeated reads preserve placement.
 fn analyze_steps(
     body: &cq_syntax::CommaList<cq::BodyItem>,
     steps: &[Step],
@@ -276,7 +279,13 @@ fn analyze_steps(
                         .collect(),
                 };
                 analysis.atoms.insert(clause, atom);
-                if !facts.rust {
+                if !facts.rust
+                    && steps.iter().any(|step| {
+                        matches!(step, Step::Block(planned, _)
+                            if planned.source.clause() == clause
+                                && planned.placement == blocks::Placement::Hoisted)
+                    })
+                {
                     let missing: BTreeSet<_> = block
                         .branches
                         .iter()
@@ -389,6 +398,10 @@ fn analyze_steps(
                     );
                 }
                 let facts = &block_facts[&clause];
+                if block.placement == blocks::Placement::Hoisted && facts.rust {
+                    return error(block, "hoisted blocks cannot contain Rust steps");
+                }
+                let correlated = block.placement == blocks::Placement::Correlated;
                 if facts.rust {
                     if rust_chain.get(next_rust) != Some(&clause) {
                         return error(
@@ -401,14 +414,15 @@ fn analyze_steps(
                 if facts.rust
                     && (0..clause).any(|earlier| {
                         !complete.contains(&earlier)
-                            && matches!(
-                                &body[earlier],
-                                cq::BodyItem::Positive { .. }
-                                    | cq::BodyItem::Equality(_)
-                                    | cq::BodyItem::Constraint(_)
-                                    | cq::BodyItem::Negation(_)
-                                    | cq::BodyItem::Block(_)
-                            )
+                            && (arithmetic.contains(&earlier)
+                                || matches!(
+                                    &body[earlier],
+                                    cq::BodyItem::Positive { .. }
+                                        | cq::BodyItem::Equality(_)
+                                        | cq::BodyItem::Constraint(_)
+                                        | cq::BodyItem::Negation(_)
+                                        | cq::BodyItem::Block(_)
+                                ))
                     })
                 {
                     return error(
@@ -416,10 +430,13 @@ fn analyze_steps(
                         "Before condition: a Rust branch must follow every written prefix clause",
                     );
                 }
-                if facts.rust && !facts.free.keys().all(|name| bound.contains(name)) {
-                    return error(block, "Rust block requires every free prefix variable");
+                if correlated && !facts.free.keys().all(|name| bound.contains(name)) {
+                    return error(
+                        block,
+                        "correlated block requires every free prefix variable",
+                    );
                 }
-                let branch_context: Vec<_> = if facts.rust {
+                let branch_context: Vec<_> = if correlated {
                     bound.clone()
                 } else {
                     facts.free.keys().cloned().collect()
@@ -679,6 +696,16 @@ fn analyze_steps(
                 let Reduction::With(_, subatom) = &reduce.reduction;
                 let support = subatom.clause();
                 for dependent in [clause, support] {
+                    if steps.iter().any(|step| {
+                        matches!(step, Step::Block(block, _)
+                            if block.source.clause() == dependent
+                                && block.placement == blocks::Placement::Correlated)
+                    }) {
+                        return error(
+                            reduce,
+                            "a correlated block cannot be a reduction target or support",
+                        );
+                    }
                     if analysis
                         .domain_requires
                         .get(&dependent)
@@ -767,7 +794,9 @@ fn analyze_steps(
 fn same_branch_steps(block: &blocks::Block, steps: &[Step], clause: usize) -> bool {
     steps.iter().all(|step| match step {
         Step::Block(other, _) if other.source.clause() == clause => {
-            block.kind == other.kind && block.branches == other.branches
+            block.kind == other.kind
+                && block.placement == other.placement
+                && block.branches == other.branches
         }
         _ => true,
     })

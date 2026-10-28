@@ -26,3 +26,10 @@ pub fn print_rounds(input: TokenStream) -> TokenStream {
 pub fn bind_inputs(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_gpu_datalog_core::bind_inputs).into()
 }
+
+#[proc_macro]
+pub fn bind_round(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_datalog_round::Program>(
+        input.into(), cq_gpu_datalog_core::bindings::compile_with,
+    ).into()
+}

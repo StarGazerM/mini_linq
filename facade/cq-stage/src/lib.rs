@@ -38,7 +38,7 @@
 //! ```text
 //! structures {
 //!   result = ::cq_storage::HashIndex<'_, _, _> [key];
-//!   host_result host reader = ::cq_storage::dispatch::KeySet<_> [key];
+//!   host_result host result(reader) = ::cq_storage::dispatch::KeySet<_> [key];
 //!   host_result host scan = ::core::iter::Map<_, _> [];
 //!   result canon = ::std::collections::HashSet<_>;
 //!   returned head = ::std::collections::HashSet<_>;
@@ -84,6 +84,7 @@ mod kw {
     syn::custom_keyword!(canonical);
     syn::custom_keyword!(host_set);
     syn::custom_keyword!(discharged);
+    syn::custom_keyword!(observe);
 }
 
 /// Public contract implemented by each IR language. Rust expressions terminate
@@ -240,6 +241,8 @@ impl ToTokens for Invocation {
 #[derive(Clone, Debug, Default)]
 pub struct Pipeline {
     pub passes: Vec<Invocation>,
+    /// Diagnostic receiver invoked with the final checked payload, not a continuation.
+    pub observer: Option<syn::Path>,
 }
 impl Parse for Pipeline {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -250,13 +253,28 @@ impl Parse for Pipeline {
             .parse_terminated(Invocation::parse, Token![,])?
             .into_iter()
             .collect();
-        Ok(Self { passes })
+        let observer = if input.peek(kw::observe) {
+            input.parse::<kw::observe>()?;
+            let receiver;
+            braced!(receiver in input);
+            let path = receiver.parse()?;
+            if !receiver.is_empty() {
+                return Err(receiver.error("expected one observer macro path"));
+            }
+            Some(path)
+        } else {
+            None
+        };
+        Ok(Self { passes, observer })
     }
 }
 impl ToTokens for Pipeline {
     fn to_tokens(&self, output: &mut TokenStream) {
         let passes = &self.passes;
         output.extend(quote!(pipeline { #(#passes),* }));
+        if let Some(receiver) = &self.observer {
+            output.extend(quote!(observe { #receiver }));
+        }
     }
 }
 impl Pipeline {
@@ -273,6 +291,9 @@ impl Pipeline {
         context: Context,
     ) -> syn::Result<TokenStream> {
         if self.passes.is_empty() {
+            if let Some(receiver) = self.observer {
+                return Ok(quote!(#receiver! { #program }));
+            }
             return Err(syn::Error::new_spanned(
                 program,
                 "pipeline requires a final printer",
@@ -392,6 +413,7 @@ pub fn delegate(input: TokenStream) -> TokenStream {
         .unwrap_or_else(syn::Error::into_compile_error)
 }
 
+/// Formal rule ST-Observe: Invoke a diagnostic receiver only after checking the selected prefix's result.
 fn run<In: Language, Out: Language>(
     input: TokenStream,
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
@@ -444,7 +466,9 @@ fn run<In: Language, Out: Language>(
             ));
         }
         if input.pipeline.passes.is_empty() {
-            if Out::terminal() {
+            if let Some(receiver) = input.pipeline.observer {
+                Ok(quote!(#receiver! { #target }))
+            } else if Out::terminal() {
                 Ok(target.to_token_stream())
             } else {
                 Err(syn::Error::new_spanned(
@@ -466,7 +490,55 @@ fn run<In: Language, Out: Language>(
     result.unwrap_or_else(syn::Error::into_compile_error)
 }
 
+/// Selectable outputs of the resolved facade queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Boundary {
+    Cq,
+    Vo,
+    RelationalPlan,
+    IndexRequirements,
+    Physical,
+    Structures,
+    Represent,
+    Stage,
+    Sequence,
+    Decompose,
+    Grade,
+    Rust,
+}
+
+impl Parse for Boundary {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let name: syn::Ident = input.parse()?;
+        match name.to_string().as_str() {
+            "cq" => Ok(Self::Cq),
+            "vo" => Ok(Self::Vo),
+            "relational_plan" => Ok(Self::RelationalPlan),
+            "index_requirements" => Ok(Self::IndexRequirements),
+            "physical" => Ok(Self::Physical),
+            "structures" => Ok(Self::Structures),
+            "represent" => Ok(Self::Represent),
+            "stage" => Ok(Self::Stage),
+            "sequence" => Ok(Self::Sequence),
+            "decompose" => Ok(Self::Decompose),
+            "grade" => Ok(Self::Grade),
+            "final_rust" => Ok(Self::Rust),
+            _ => Err(syn::Error::new_spanned(
+                name,
+                "unknown observation boundary",
+            )),
+        }
+    }
+}
+
 /// Parse the named facade grammar. Missing phases inherit from `defaults`.
+/// Declared input language of a configured terminal. Macro spelling is opaque.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrintInput {
+    Structures,
+    Sequence,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Configuration {
     pub plan: Option<Invocation>,
@@ -481,6 +553,7 @@ pub struct Configuration {
     pub decompose: Vec<Invocation>,
     pub grade: Option<Invocation>,
     pub print: Option<Invocation>,
+    pub print_input: Option<PrintInput>,
     pub surface: Vec<Invocation>,
 }
 impl Parse for Configuration {
@@ -506,6 +579,19 @@ impl Parse for Configuration {
                 "sequence" => config.sequence = Some(contents.parse()?),
                 "grade" => config.grade = Some(contents.parse()?),
                 "print" => config.print = Some(contents.parse()?),
+                "print_input" => {
+                    let language: syn::Ident = contents.parse()?;
+                    config.print_input = Some(match language.to_string().as_str() {
+                        "structures" => PrintInput::Structures,
+                        "sequence" => PrintInput::Sequence,
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                language,
+                                "expected structures or sequence",
+                            ));
+                        }
+                    });
+                }
                 "physical" | "structures" | "surface" | "decompose" => {
                     let list;
                     syn::bracketed!(list in contents);
@@ -529,17 +615,42 @@ impl Parse for Configuration {
 }
 impl Configuration {
     pub fn resolve(self, defaults: Self) -> syn::Result<Pipeline> {
+        self.resolve_prefix(defaults, None)
+    }
+
+    /// Resolve the ordinary queue, retaining exactly its requested prefix.
+    pub fn resolve_observed(
+        self,
+        defaults: Self,
+        boundary: Boundary,
+        receiver: syn::Path,
+    ) -> syn::Result<Pipeline> {
+        self.resolve_prefix(defaults, Some((boundary, receiver)))
+    }
+
+    /// Formal rule ST-Endpoint: Terminal routing consumes the declared input language, never the macro path.
+    fn resolve_prefix(
+        self,
+        defaults: Self,
+        observation: Option<(Boundary, syn::Path)>,
+    ) -> syn::Result<Pipeline> {
         let explicit_sequence =
             self.sequence.is_some() || self.grade.is_some() || !self.decompose.is_empty();
+        let authored_advice = self.plan.is_some()
+            || !self.physical.is_empty()
+            || self.select.is_some()
+            || !self.structures.is_empty()
+            || self.represent.is_some()
+            || self.stage.is_some();
         let explicit_print = self.print.is_some();
-        let structures_terminal = !explicit_sequence
-            && self.print.as_ref().is_some_and(|print| {
-                print
-                    .path
-                    .segments
-                    .last()
-                    .is_none_or(|p| p.ident != "translate_pull")
-            });
+        let endpoint = self.print_input.or(defaults.print_input);
+        let structures_terminal = endpoint == Some(PrintInput::Structures);
+        if structures_terminal && explicit_sequence {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "Structures-consuming print cannot follow Sequence phases",
+            ));
+        }
         let default_sequence_target =
             !structures_terminal && defaults.sequence.is_some() && defaults.grade.is_some();
         let sequence = self.sequence.or_else(|| {
@@ -550,41 +661,78 @@ impl Configuration {
         let grade = self
             .grade
             .or_else(|| (!structures_terminal).then_some(defaults.grade).flatten());
-        let sequence_target = sequence.is_some() || grade.is_some() || !self.decompose.is_empty();
+        let sequence_target = sequence.is_some()
+            || grade.is_some()
+            || !self.decompose.is_empty()
+            || endpoint == Some(PrintInput::Sequence);
         let print = self.print.or(defaults.print);
-        let terminal = print.as_ref().and_then(|p| p.path.segments.last());
         if sequence_target
             && (sequence.is_none()
                 || grade.is_none()
-                || (!explicit_print && !default_sequence_target)
-                || terminal.is_some_and(|p| p.ident == "push"))
+                || (!explicit_print && !default_sequence_target))
         {
             return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
-                "sequence, grade and an explicit Sequence-consuming print must be selected together",
-            ));
-        }
-        if !sequence_target && terminal.is_some_and(|p| p.ident == "translate_pull") {
-            return Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "translate_pull requires sequence and grade phases",
+                "sequence, grade and a Sequence-consuming print must be selected together",
             ));
         }
         let mut passes = self.surface;
+        let mut cutoff = None;
+        let mut record = |boundary, length| {
+            if observation
+                .as_ref()
+                .is_some_and(|(selected, _)| *selected == boundary)
+            {
+                cutoff = Some(length);
+            }
+        };
+        record(Boundary::Cq, passes.len());
         let missing =
             || syn::Error::new(proc_macro2::Span::call_site(), "missing pipeline default");
         passes.push(self.plan.or(defaults.plan).ok_or_else(missing)?);
+        record(Boundary::RelationalPlan, passes.len());
         passes.push(self.ix.or(defaults.ix).ok_or_else(missing)?);
+        record(Boundary::IndexRequirements, passes.len());
         passes.push(self.lower.or(defaults.lower).ok_or_else(missing)?);
         passes.extend(self.physical);
+        record(Boundary::Physical, passes.len());
         passes.push(self.select.or(defaults.select).ok_or_else(missing)?);
         passes.extend(self.structures);
+        record(Boundary::Structures, passes.len());
         passes.push(self.represent.or(defaults.represent).ok_or_else(missing)?);
+        record(Boundary::Represent, passes.len());
         passes.push(self.stage.or(defaults.stage).ok_or_else(missing)?);
+        record(Boundary::Stage, passes.len());
         passes.extend(sequence);
-        passes.extend(self.decompose);
+        if sequence_target {
+            record(Boundary::Sequence, passes.len());
+        }
+        if !explicit_sequence && !authored_advice && sequence_target {
+            passes.extend(defaults.decompose);
+        } else {
+            passes.extend(self.decompose);
+        }
+        if sequence_target {
+            record(Boundary::Decompose, passes.len());
+        }
         passes.extend(grade);
+        if sequence_target {
+            record(Boundary::Grade, passes.len());
+        }
         passes.push(print.ok_or_else(missing)?);
-        Ok(Pipeline { passes })
+        record(Boundary::Rust, passes.len());
+        let observer = if let Some((_, receiver)) = observation {
+            let cutoff = cutoff.ok_or_else(|| {
+                syn::Error::new_spanned(
+                    &receiver,
+                    "observation boundary is absent from the configured pipeline",
+                )
+            })?;
+            passes.truncate(cutoff);
+            Some(receiver)
+        } else {
+            None
+        };
+        Ok(Pipeline { passes, observer })
     }
 }

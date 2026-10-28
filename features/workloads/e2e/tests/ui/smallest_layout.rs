@@ -25,7 +25,7 @@ fn main() {
             r0 host scan = ::core::iter::Map<_, _> [];
             r rows = ::std::vec::Vec<_>;
             s host scan = ::core::iter::Map<_, _> [];
-            s host checked = ::cq_storage::dispatch::KeySet<_> [a,c];
+            s host result(checked) = ::cq_storage::dispatch::KeySet<_> [a,c];
             s host candidates = ::cq_storage::HashIndex<'_, _, _> [a];
             s host membership = ::cq_storage::dispatch::KeySet<_> [a,c];
             checked canon = ::cq_storage::HashSet<_>;

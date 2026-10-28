@@ -1,13 +1,14 @@
 //! Device realization of the ordinary Datalog Storage and Round records.
 pub mod storage;
 pub mod print;
+pub mod bindings;
 
 #[cfg(test)]
 mod print_tests;
 
 use quote::ToTokens;
 
-/// Bind only the input layouts explicitly supplied by the Round printer.
+/// Bind only the input layouts explicitly supplied by the checked Round invocation.
 /// This is a Structures refinement, not a query planner or an index builder.
 pub fn bind_inputs(source: &cq_lang_structures::Program, args: proc_macro2::TokenStream)
     -> syn::Result<cq_lang_structures::Program>

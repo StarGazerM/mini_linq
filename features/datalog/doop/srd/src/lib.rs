@@ -1,11 +1,20 @@
-//! Exact integer prepared-input interface for SRDatalog's field-flow DOOP query.
+//! Exact integer prepared-input interface for SRDatalog's DOOP query: the
+//! field-flow formulation by default, or SRDatalog's default formulation with
+//! the `default-query` feature (the program its default benchmark builds).
 use std::{fs::File, io::{BufRead, BufReader, BufWriter, Write}, path::Path};
 
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
+#[cfg(not(feature = "default-query"))]
+mod generated;
+#[cfg(feature = "default-query")]
+#[path = "generated_default.rs"]
 mod generated;
 pub use generated::{SrdConstants, SrdFacts, SrdResults};
 
+// The fixture asserts the 43 field-flow outputs.
+#[cfg(all(feature = "test-fixture", feature = "default-query"))]
+compile_error!("test-fixture covers only the field-flow query");
 #[cfg(feature = "test-fixture")]
 pub mod fixture;
 

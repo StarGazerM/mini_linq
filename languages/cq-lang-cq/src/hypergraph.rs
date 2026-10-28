@@ -138,6 +138,16 @@ impl Analysis {
         Self::of_body(&module.query.body, &BTreeSet::new())
     }
     pub fn of_body(body: &super::CommaList<BodyItem>, context: &BTreeSet<String>) -> Analysis {
+        Self::of_body_excluding(body, context, &BTreeSet::new())
+    }
+
+    /// Analyze a scope without occurrences unavailable as independent relations.
+    /// Excluded clauses still contribute their written binders to later scopes.
+    pub fn of_body_excluding(
+        body: &super::CommaList<BodyItem>,
+        context: &BTreeSet<String>,
+        excluded: &BTreeSet<usize>,
+    ) -> Analysis {
         let mut analysis = Analysis::default();
         let mut prefix = context.clone();
         let mut clauses = BTreeMap::new();
@@ -146,11 +156,13 @@ impl Analysis {
                 BodyItem::Positive { atom } => {
                     let columns: Vec<_> = atom.variables().map(symbol_name).collect();
                     prefix.extend(columns.iter().cloned());
-                    clauses.insert(clause, columns);
+                    if !excluded.contains(&clause) {
+                        clauses.insert(clause, columns);
+                    }
                 }
                 BodyItem::Block(block) => {
                     let facts = block.analyze(&prefix);
-                    if !facts.rust {
+                    if !facts.rust && !excluded.contains(&clause) {
                         clauses.insert(
                             clause,
                             facts

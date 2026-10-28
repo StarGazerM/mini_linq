@@ -2,6 +2,14 @@
 //!
 //! `mini_linq! { <CQ> }` uses deterministic defaults. `compile! { pipeline {
 //! ... } <CQ> }` selects external pass paths and forwards their argument tokens.
+//! `compile! { observe { boundary = grade; stage = ::core::stringify; }
+//! pipeline { ... } <CQ> }` observes the checked output of the selected queue
+//! prefix without executing the query. Boundaries are `cq`, `vo`,
+//! `relational_plan`, `index_requirements`, `physical`, `structures`,
+//! `represent`, `stage`, `sequence`, `decompose`, `grade`, and `final_rust`.
+//! VO exposes the shared default planner's valuation prefix; custom planners
+//! expose their own internal boundaries. Observation preserves pass arguments
+//! and preceding rewrites; terminal Rust is captured after translation.
 //! See [`cq_stage`](https://docs.rs/cq-stage) for the protocol and decision fields.
 //! Queries denote `bottom + Set`: a panic aborts evaluation; relational equality
 //! requires Leibniz-admissible Eq and ordered reads require total, consistent Ord.
@@ -16,6 +24,9 @@
 //! Sequence lowering runs after `stage`, followed by robust Lookup/Expand
 //! planning, `sequential` grading, and `translate_pull`. Authored `decompose`
 //! advice replaces that default; this host-only path returns a pull iterator.
+//! A Structures-consuming terminal declares `print_input = structures;`.
+//! Sequence terminals retain the configured/default Sequence phases regardless
+//! of their macro names; aliases do not change a pipeline's language endpoints.
 //! To fill unauthored Sequence decisions, end `decompose` with
 //! `mini_linq::passes::plan(target::plan)` (for Sequential, the target is
 //! `mini_linq::passes::plan_sequential`). Earlier advice retains precedence;
@@ -37,8 +48,8 @@
 //! `plan_sequential(preserve_order)` explicitly requests that policy.
 //! Target adapters use `cq_sequence_plan::decompose` to preserve order and
 //! `cq_sequence_plan::plan` for the robust two-phase Lookup/Expand rule.
-//! An explicit Structures printer such as `own_push::push` replaces the default
-//! Sequence target; custom Sequence terminals select `sequence` and `grade` too.
+//! A Structures printer declares `print_input = structures` to replace the
+//! default Sequence target; its path or alias does not select a language.
 //! ```
 //! let rows = [(1_i32,), (1,), (2,)];
 //! let answers: Vec<_> = mini_linq::compile! {
@@ -62,11 +73,14 @@
 //!
 pub use mini_linq_macros::{compile, mini_linq, relation_loaders, workload_query};
 
+/// Shared checked default planning composition and its authored options.
+pub use cq_planning as planning;
+
 /// Core default passes. Customization is an external pass or an authored IR.
 pub mod passes {
     pub use mini_linq_macros::{
-        index_demands, lower, plan, plan_sequential, represent, select, sequence, sequential,
-        stage, translate_pull,
+        index_demands, lower, observe_cq, plan, plan_sequential, prefix_valuation, represent,
+        select, sequence, sequential, stage, translate_pull,
     };
 }
 

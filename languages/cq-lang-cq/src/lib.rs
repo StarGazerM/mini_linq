@@ -593,6 +593,8 @@ fn check_query(
     Ok(())
 }
 
+/// Formal rule CQ-Atom: Atom columns bind simultaneously; computed arguments
+/// use the incoming scope plus this atom's bare binders, never later clauses.
 fn check_body(
     schema: &BTreeMap<String, &RelationDecl>,
     body: &CommaList<BodyItem>,
@@ -650,20 +652,21 @@ fn check_body(
                 body_variables = common;
             }
             BodyItem::Positive { atom } => {
-                if let Some(variable) = atom
-                    .variables()
-                    .find(|id| forbidden.contains(&symbol_name(id)))
-                {
+                let binders: BTreeSet<_> = atom.variables().map(symbol_name).collect();
+                if let Some(variable) = binders.intersection(&forbidden).next() {
                     return Err(syn::Error::new_spanned(
-                        variable,
-                        "branch-local variable cannot be used after its block",
+                        atom,
+                        format!(
+                            "branch-local variable `{variable}` cannot be used after its block"
+                        ),
                     ));
                 }
                 check_input_atom(schema, atom)?;
-                // Every bare argument of this atom is available to a same-atom
-                // computed argument, regardless of its column position.
+                // An atom is one tuple match, not a sequence of column reads.
+                // A-Local evaluates dependent computed arguments after the match.
+                // Derive its simultaneous binder scope once for both checks.
                 let mut local = body_variables.clone();
-                local.extend(atom.variables().map(symbol_name));
+                local.extend(binders);
                 for arg in &atom.args {
                     if rust::variable(arg).is_none() {
                         check_uses(arg, &local, &forbidden)?;
@@ -726,7 +729,7 @@ fn check_body(
                 }
                 if let Some(parameter) = constraint
                     .parameters()
-                    .find(|p| logical.contains(&symbol_name(p)))
+                    .find(|p| logical.contains(&symbol_name(&p.root)))
                 {
                     return Err(syn::Error::new_spanned(
                         parameter,

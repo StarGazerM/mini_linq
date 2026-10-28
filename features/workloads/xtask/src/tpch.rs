@@ -48,9 +48,14 @@ impl Options {
                     }
                     config = Some(names);
                 }
-                "--sf" if sf.is_none() => sf = Some(args.next().ok_or("--sf requires 0.1, 1 or 10")?),
+                "--sf" if sf.is_none() => {
+                    sf = Some(args.next().ok_or("--sf requires 0.1, 1 or 10")?)
+                }
                 "--cap-seconds" if cap_seconds.is_none() => {
-                    let seconds = args.next().ok_or("--cap-seconds requires a positive integer")?.parse::<u64>()?;
+                    let seconds = args
+                        .next()
+                        .ok_or("--cap-seconds requires a positive integer")?
+                        .parse::<u64>()?;
                     if seconds == 0 {
                         return Err("--cap-seconds must be positive".into());
                     }
@@ -104,7 +109,9 @@ fn describe(root: &Path, source: &Path, counting: bool) -> Result<Query> {
     describe_with(source, |name| compile::build(root, source, name, counting))
 }
 fn describe_in(root: &Path, source: &Path, cache: &Path) -> Result<Query> {
-    describe_with(source, |name| compile::build_in(root, source, name, cache, true, true))
+    describe_with(source, |name| {
+        compile::build_in(root, source, name, cache, true, true)
+    })
 }
 fn describe_with(
     source: &Path,
@@ -206,7 +213,10 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     if let Some(configs) = &options.config {
         for query in &mut queries {
-            if let Some(missing) = configs.iter().find(|config| !query.configs.contains(config)) {
+            if let Some(missing) = configs
+                .iter()
+                .find(|config| !query.configs.contains(config))
+            {
                 return Err(format!("{} has no configuration {missing}", query.name).into());
             }
             query.configs.retain(|name| configs.contains(name));
@@ -223,18 +233,33 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         }
     }
     if verify_only {
-        let timeouts = verify_all(&bench, &database, &options.sf, &queries, options.cap_seconds)?;
+        let timeouts = verify_all(
+            &bench,
+            &database,
+            &options.sf,
+            &queries,
+            options.cap_seconds,
+        )?;
         if !timeouts.is_empty() {
             return Err(format!("unverified within --cap-seconds: {timeouts:?}").into());
         }
-        println!("all selected configurations matched DuckDB exactly at SF {}", options.sf);
+        println!(
+            "all selected configurations matched DuckDB exactly at SF {}",
+            options.sf
+        );
         return Ok(());
     }
     // Gate every query/configuration on SF 0.1 before timing a larger scale.
     // At SF 0.1 the timed workers check exact answers before any sample.
     let gate_timeouts = match options.sf.as_str() {
         "0.1" => BTreeSet::new(),
-        _ => verify_all(&bench, &data::dbgen(&root, "0.1")?, "0.1", &queries, options.cap_seconds)?,
+        _ => verify_all(
+            &bench,
+            &data::dbgen(&root, "0.1")?,
+            "0.1",
+            &queries,
+            options.cap_seconds,
+        )?,
     };
     let mut suffix = options
         .query
@@ -281,8 +306,15 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         }
         let duck_default = duck_time(&oracle, &query.sql, options.runs)?;
         let mut configs = Vec::new();
-        let unit_ms = query.built.unit_ms.map_or_else(|| "NA".to_owned(), |ms| format!("{ms:.6}"));
-        let count_binary = query.built.count_binary.as_ref().ok_or("missing counting worker")?;
+        let unit_ms = query
+            .built
+            .unit_ms
+            .map_or_else(|| "NA".to_owned(), |ms| format!("{ms:.6}"));
+        let count_binary = query
+            .built
+            .count_binary
+            .as_ref()
+            .ok_or("missing counting worker")?;
         for config in &query.configs {
             let artifact = bench
                 .join("runs")
@@ -293,21 +325,50 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                 "measuring TPC-H-derived {}/{} SF {}...",
                 query.name, config, options.sf
             );
-            let deadline = options.cap_seconds.map(|s| Instant::now() + std::time::Duration::from_secs(s));
+            let deadline = options
+                .cap_seconds
+                .map(|s| Instant::now() + std::time::Duration::from_secs(s));
             let results = (|| -> Result<Option<(Value, Value, Value)>> {
                 if gate_timeouts.contains(&(query.name.clone(), config.clone())) {
                     return Ok(None);
                 }
-                let Some(measured) = execute_worker_limited(query, &query.built.binary,
-                    &directory, config, options.runs, &artifact, &expected, deadline)? else {
+                let Some(measured) = execute_worker_limited(
+                    query,
+                    &query.built.binary,
+                    &directory,
+                    config,
+                    options.runs,
+                    &artifact,
+                    &expected,
+                    deadline,
+                )?
+                else {
                     return Ok(None);
                 };
-                let Some(counted) = execute_worker_limited(query, count_binary,
-                    &directory, config, 0, &artifact.with_extension("counts"), &expected, deadline)? else {
+                let Some(counted) = execute_worker_limited(
+                    query,
+                    count_binary,
+                    &directory,
+                    config,
+                    0,
+                    &artifact.with_extension("counts"),
+                    &expected,
+                    deadline,
+                )?
+                else {
                     return Ok(None);
                 };
-                let Some(repeated) = execute_worker_limited(query, count_binary,
-                    &directory, config, 0, &artifact.with_extension("counts-repeat"), &expected, deadline)? else {
+                let Some(repeated) = execute_worker_limited(
+                    query,
+                    count_binary,
+                    &directory,
+                    config,
+                    0,
+                    &artifact.with_extension("counts-repeat"),
+                    &expected,
+                    deadline,
+                )?
+                else {
                     return Ok(None);
                 };
                 Ok(Some((measured, counted, repeated)))
@@ -336,9 +397,15 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             // Parallel task lifetimes overlap according to the scheduler, so
             // retained-memory high water is an observation, not a work count.
             // All primitive work and final retained bytes must still agree.
-            if counted.as_object().zip(repeated.as_object()).is_none_or(|(left, right)|
-                left.len() != right.len() || left.iter().any(|(name, value)|
-                    name != "bytes_retained_peak" && right.get(name) != Some(value)))
+            if counted
+                .as_object()
+                .zip(repeated.as_object())
+                .is_none_or(|(left, right)| {
+                    left.len() != right.len()
+                        || left.iter().any(|(name, value)| {
+                            name != "bytes_retained_peak" && right.get(name) != Some(value)
+                        })
+                })
             {
                 return Err("separate deterministic counting runs disagree".into());
             }
@@ -482,7 +549,18 @@ fn verify_all(
                 .join(&query.name)
                 .join(config);
             let deadline = cap_seconds.map(|s| Instant::now() + std::time::Duration::from_secs(s));
-            if execute_worker_limited(query, &query.built.binary, &directory, config, 0, &artifact, &expected, deadline)?.is_none() {
+            if execute_worker_limited(
+                query,
+                &query.built.binary,
+                &directory,
+                config,
+                0,
+                &artifact,
+                &expected,
+                deadline,
+            )?
+            .is_none()
+            {
                 eprintln!("{} / {config}: SF {sf} verification timeout", query.name);
                 timeouts.insert((query.name.clone(), config.clone()));
                 continue;
@@ -536,8 +614,10 @@ fn execute_worker_binary(
     artifact: &Path,
     expected: &Answers,
 ) -> Result<Value> {
-    execute_worker_limited(query, binary, directory, config, runs, artifact, expected, None)?
-        .ok_or_else(|| "uncapped worker unexpectedly timed out".into())
+    execute_worker_limited(
+        query, binary, directory, config, runs, artifact, expected, None,
+    )?
+    .ok_or_else(|| "uncapped worker unexpectedly timed out".into())
 }
 
 fn execute_worker_limited(
@@ -698,13 +778,29 @@ mod tests {
             }
         );
         assert_eq!(
-            parse(&["--tpch", "--sf", "1", "--runs", "5", "--config", "default,le"])
-                .unwrap()
-                .config,
+            parse(&[
+                "--tpch",
+                "--sf",
+                "1",
+                "--runs",
+                "5",
+                "--config",
+                "default,le"
+            ])
+            .unwrap()
+            .config,
             Some(vec!["default".to_owned(), "le".to_owned()]),
         );
-        assert_eq!(parse(&["--tpch", "--sf", "1", "--runs", "0"]).unwrap().runs, 0);
-        assert_eq!(parse(&["--tpch", "--sf", "10", "--runs", "1", "--cap-seconds", "2"]).unwrap().cap_seconds, Some(2));
+        assert_eq!(
+            parse(&["--tpch", "--sf", "1", "--runs", "0"]).unwrap().runs,
+            0
+        );
+        assert_eq!(
+            parse(&["--tpch", "--sf", "10", "--runs", "1", "--cap-seconds", "2"])
+                .unwrap()
+                .cap_seconds,
+            Some(2)
+        );
         for args in [
             vec!["--tpch"],
             vec!["--tpch", "--sf", "2"],

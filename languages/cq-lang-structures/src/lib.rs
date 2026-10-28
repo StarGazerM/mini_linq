@@ -11,6 +11,8 @@
 //! written chain. Const supplies use one point read and never justify a build.
 //! ```text
 //! Entry ::= Ident ("=" RustType ("[" Ident,* "]")+
+//!                | "host" ReaderRef "=" RustType ("[" Ident,* "]")+
+//!                | ("rows" | "canon" | "head" | "group") "=" RustType
 //!                | "selection" "=" RustType Origin "summary" Summary
 //!                | "keyset" "=" RustType "[" Ident,* "]" Ownership Origin
 //!                | "read" "=" "positional" Origin "column" Ident
@@ -22,6 +24,7 @@
 //!                | "share" "=" "lookup" Ident "[" Ident,* "]" "first" Ident "force" Ident
 //!                | "stage" "=" "batch" Integer ["expand"]) ";"
 //! Origin ::= "base" Ident "lineage" "{" (Ident "->" Ident),* "}"
+//! ReaderRef ::= "scan" | "candidates" | "membership" | "result" "(" Ident ")"
 //! ```
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
@@ -53,6 +56,10 @@ pub use cq_syntax::{CommaList, symbol_name};
 pub mod kw {
     syn::custom_keyword!(structures);
     syn::custom_keyword!(host);
+    syn::custom_keyword!(scan);
+    syn::custom_keyword!(candidates);
+    syn::custom_keyword!(result);
+    syn::custom_keyword!(group);
     syn::custom_keyword!(canon);
     syn::custom_keyword!(head);
     syn::custom_keyword!(rows);
@@ -117,6 +124,71 @@ pub struct Entry {
     pub name: Ident,
     pub structure: Structure,
     pub semi_token: Token![;],
+}
+
+/// Host roles occupy a different namespace from Physical result identifiers.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ReaderRef<I = Ident> {
+    Scan,
+    Candidates,
+    Membership,
+    Result(I),
+}
+
+impl<I> ReaderRef<I> {
+    pub fn result(&self) -> Option<&I> {
+        match self {
+            Self::Result(name) => Some(name),
+            _ => None,
+        }
+    }
+}
+
+impl ReaderRef {
+    pub fn key(&self) -> ReaderRef<String> {
+        match self {
+            Self::Scan => ReaderRef::Scan,
+            Self::Candidates => ReaderRef::Candidates,
+            Self::Membership => ReaderRef::Membership,
+            Self::Result(name) => ReaderRef::Result(symbol_name(name)),
+        }
+    }
+}
+
+/// Formal rule STR-Reader: Parse disjoint host roles and explicitly named results.
+impl syn::parse::Parse for ReaderRef {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(kw::scan) {
+            input.parse::<kw::scan>()?;
+            Ok(Self::Scan)
+        } else if input.peek(kw::candidates) {
+            input.parse::<kw::candidates>()?;
+            Ok(Self::Candidates)
+        } else if input.peek(kw::membership) {
+            input.parse::<kw::membership>()?;
+            Ok(Self::Membership)
+        } else {
+            input.parse::<kw::result>()?;
+            let body;
+            syn::parenthesized!(body in input);
+            let name = body.parse()?;
+            if !body.is_empty() {
+                return Err(body.error("expected one Physical result identifier"));
+            }
+            Ok(Self::Result(name))
+        }
+    }
+}
+
+impl ToTokens for ReaderRef {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        tokens.extend(match self {
+            Self::Scan => quote::quote!(scan),
+            Self::Candidates => quote::quote!(candidates),
+            Self::Membership => quote::quote!(membership),
+            Self::Result(name) => quote::quote!(result(#name)),
+        });
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -189,7 +261,7 @@ pub enum Structure {
     #[parse(peek = kw::host)]
     Host {
         host_token: kw::host,
-        reader: Ident,
+        reader: ReaderRef,
         eq_token: Token![=],
         keyed: Box<Keyed>,
     },
@@ -208,6 +280,12 @@ pub enum Structure {
     #[parse(peek = kw::rows)]
     Rows {
         rows_token: kw::rows,
+        eq_token: Token![=],
+        ty: syn::Type,
+    },
+    #[parse(peek = kw::group)]
+    Group {
+        group_token: kw::group,
         eq_token: Token![=],
         ty: syn::Type,
     },
@@ -343,8 +421,10 @@ pub struct Analysis {
     pub host_layouts: BTreeMap<String, Vec<String>>,
     /// Built structures per result: (sorted columns of each level, type).
     pub built: BTreeMap<String, Vec<Built>>,
-    /// Exact fallback per (host rename result, reader); scan uses the reader `scan`.
-    pub fallbacks: BTreeMap<(String, String, Vec<String>), syn::Type>,
+    /// Exact fallback per host rename, typed reader role/identity, and key.
+    pub fallbacks: BTreeMap<(String, ReaderRef<String>, Vec<String>), syn::Type>,
+    /// Concrete accumulator tables for keyed Group results.
+    pub groups: BTreeMap<String, syn::Type>,
     pub dedup: BTreeMap<String, syn::Type>,
     pub head_dedup: BTreeMap<String, syn::Type>,
     pub retained: BTreeMap<String, syn::Type>,
@@ -433,6 +513,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         join_filters: BTreeMap::new(),
         built: BTreeMap::new(),
         fallbacks: BTreeMap::new(),
+        groups: BTreeMap::new(),
         dedup: BTreeMap::new(),
         head_dedup: BTreeMap::new(),
         retained: BTreeMap::new(),
@@ -469,7 +550,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     );
                 }
                 if !(analysis.host_read(&name)
-                    || reader == "scan" && analysis.physical.hosts.contains_key(&name))
+                    || matches!(reader, ReaderRef::Scan)
+                        && analysis.physical.hosts.contains_key(&name))
                 {
                     return error(
                         &entry.name,
@@ -483,13 +565,14 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
                 let mut read_columns = columns.concat();
                 read_columns.sort();
-                let reader_name = symbol_name(reader);
-                if let Some(read) = program
-                    .physical
-                    .program
-                    .definitions
-                    .iter()
-                    .find(|d| symbol_name(&d.name) == reader_name)
+                let reader_name = reader.key();
+                if let ReaderRef::Result(result) = &reader_name
+                    && let Some(read) = program
+                        .physical
+                        .program
+                        .definitions
+                        .iter()
+                        .find(|d| symbol_name(&d.name) == *result)
                 {
                     match &read.operator {
                         Operator::Probe(..) => admissible(&keyed.ty, "payload")?,
@@ -497,30 +580,30 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                         _ => {}
                     }
                 }
-                if reader_name == "candidates" {
+                if matches!(reader, ReaderRef::Candidates) {
                     admissible(&keyed.ty, "candidates")?;
                 }
 
-                let valid = if reader_name == "scan" {
-                    columns.len() == 1 && read_columns.is_empty()
-                } else if reader_name == "candidates" || reader_name == "membership" {
-                    candidates.iter().flat_map(|c| &c.sides).any(|(n, p)| {
-                        *n == name
-                            && read_columns
-                                == if reader_name == "candidates" {
-                                    p.clone()
-                                } else {
-                                    heading.clone()
-                                }
-                    })
-                } else {
-                    analysis
+                let valid = match &reader_name {
+                    ReaderRef::Scan => columns.len() == 1 && read_columns.is_empty(),
+                    ReaderRef::Candidates | ReaderRef::Membership => {
+                        candidates.iter().flat_map(|c| &c.sides).any(|(n, p)| {
+                            *n == name
+                                && read_columns
+                                    == if matches!(reader, ReaderRef::Candidates) {
+                                        p.clone()
+                                    } else {
+                                        heading.clone()
+                                    }
+                        })
+                    }
+                    ReaderRef::Result(result) => analysis
                         .physical
                         .keyed_reads
                         .get(&name)
                         .into_iter()
                         .flatten()
-                        .any(|(r, c, _)| *r == reader_name && *c == read_columns)
+                        .any(|(r, c, _)| r == result && *c == read_columns),
                 };
                 if !valid {
                     return error(reader, "fallback does not match a host read");
@@ -531,6 +614,13 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     .is_some()
                 {
                     return error(entry, "duplicate host fallback");
+                }
+                continue;
+            }
+            Structure::Group { ty, .. } => {
+                check_group(program, entry, ty)?;
+                if analysis.groups.insert(name, ty.clone()).is_some() {
+                    return error(entry, "duplicate group accumulator type");
                 }
                 continue;
             }
@@ -674,18 +764,18 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     analysis.layouts = filtered::layouts(program, &analysis);
     let mut shared: BTreeMap<(String, Vec<String>, bool), &syn::Type> = BTreeMap::new();
     for ((name, reader, columns), ty) in &analysis.fallbacks {
-        if reader == "scan"
+        if matches!(reader, ReaderRef::Scan)
             || program.physical.program.definitions.iter().any(|d| {
-                symbol_name(&d.name) == *reader
+                matches!(reader, ReaderRef::Result(result) if symbol_name(&d.name) == *result)
                     && matches!(d.operator, Operator::Point(..) | Operator::Range(..))
             })
         {
             continue;
         }
-        let ordered =
-            program.physical.program.definitions.iter().any(|d| {
-                symbol_name(&d.name) == *reader && matches!(d.operator, Operator::Merge(..))
-            });
+        let ordered = program.physical.program.definitions.iter().any(|d| {
+            matches!(reader, ReaderRef::Result(result) if symbol_name(&d.name) == *result)
+                && matches!(d.operator, Operator::Merge(..))
+        });
         if let Some(other) = shared.insert((name.clone(), columns.clone(), ordered), ty) {
             if other != ty {
                 return error(ty, "shared host fallback types on one key must agree");
@@ -697,12 +787,15 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         for (name, prefix) in candidate.sides {
             if analysis.host_read(&name) {
                 for (reader, key) in [
-                    ("candidates", prefix.clone()),
-                    ("membership", analysis.physical.headings[&name].clone()),
+                    (ReaderRef::Candidates, prefix.clone()),
+                    (
+                        ReaderRef::Membership,
+                        analysis.physical.headings[&name].clone(),
+                    ),
                 ] {
                     if !analysis
                         .fallbacks
-                        .contains_key(&(name.clone(), reader.into(), key))
+                        .contains_key(&(name.clone(), reader, key))
                     {
                         return error(candidate.reader, "missing intersection host fallback type");
                     }
@@ -828,6 +921,11 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     // Uniqueness by key inference, then the canonical return.
     for definition in &program.physical.program.definitions {
         let name = symbol_name(&definition.name);
+        if matches!(&definition.operator, Operator::Group(group) if !group.keys.is_empty())
+            && !analysis.groups.contains_key(&name)
+        {
+            return error(&definition.name, "missing group accumulator type");
+        }
         if definition.canon.is_some() && !analysis.dedup.contains_key(&name) {
             return error(&definition.name, "missing canon dedup type");
         }
@@ -846,7 +944,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         if analysis.physical.hosts.contains_key(&name) {
             if !analysis
                 .fallbacks
-                .contains_key(&(name.clone(), "scan".into(), Vec::new()))
+                .contains_key(&(name.clone(), ReaderRef::Scan, Vec::new()))
             {
                 return error(&definition.name, "missing host scan type");
             }
@@ -862,7 +960,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
                 if !analysis.fallbacks.contains_key(&(
                     name.clone(),
-                    reader.clone(),
+                    ReaderRef::Result(reader.clone()),
                     columns.clone(),
                 )) {
                     return error(
@@ -914,6 +1012,24 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     }
     coalesce_join_filters(program, &mut analysis);
     Ok(analysis)
+}
+
+/// Formal rule STR-Group: Exactly keyed Group results record a concrete accumulator table.
+fn check_group(program: &Program, entry: &Entry, ty: &syn::Type) -> syn::Result<()> {
+    concrete_type(ty)?;
+    if !program
+        .physical
+        .program
+        .definitions
+        .iter()
+        .any(|definition| {
+            definition.name == entry.name
+                && matches!(&definition.operator, Operator::Group(group) if !group.keys.is_empty())
+        })
+    {
+        return error(entry, "group accumulator requires a keyed Group result");
+    }
+    Ok(())
 }
 
 /// Shared syntax used by this language.
@@ -990,6 +1106,7 @@ pub fn storage_layout_eq(left: &Entry, right: &Entry) -> bool {
         (Structure::Dedup { ty: left, .. }, Structure::Dedup { ty: right, .. })
         | (Structure::HeadDedup { ty: left, .. }, Structure::HeadDedup { ty: right, .. })
         | (Structure::Rows { ty: left, .. }, Structure::Rows { ty: right, .. })
+        | (Structure::Group { ty: left, .. }, Structure::Group { ty: right, .. })
         | (Structure::Selection { ty: left, .. }, Structure::Selection { ty: right, .. })
         | (Structure::KeySet { ty: left, .. }, Structure::KeySet { ty: right, .. }) => {
             *left = right.clone()
@@ -1064,7 +1181,7 @@ pub fn check_retention_rewrite(source: &Program, target: &Program) -> syn::Resul
             continue;
         }
         if let Structure::Host { reader, keyed, .. } = &entry.structure
-            && reader != "scan"
+            && !matches!(reader, ReaderRef::Scan)
             && facts.physical.modes.get(&symbol_name(&entry.name)) == Some(&physical::ModeKind::Let)
         {
             let mut keys = keyed.level_names().concat();

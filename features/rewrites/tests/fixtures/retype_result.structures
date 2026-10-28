@@ -4,7 +4,7 @@ structures {
     s = ::cq_storage::HashSet<_> [x];
     t = ::cq_storage::Trie<'_, _, ::cq_storage::HashIndex<'_, _, _>> [x][y];
     l host scan = ::core::iter::Map<_, _> [];
-    l host j = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
+    l host result(j) = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
     o rows = ::std::vec::Vec<_>;
     o host scan = ::core::iter::Map<_, _> [];
     r rows = ::std::vec::Vec<_>;

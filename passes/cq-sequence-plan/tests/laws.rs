@@ -28,6 +28,7 @@ fn node(
 fn machines() -> Vec<Machine> {
     vec![
         Machine {
+            gpu: None,
             layout: None,
             name: syn::parse_quote!(sequential),
             items: 1,
@@ -36,6 +37,7 @@ fn machines() -> Vec<Machine> {
             root: node("host", false, false, None, vec![]),
         },
         Machine {
+            gpu: None,
             layout: None,
             name: syn::parse_quote!(tasks),
             items: 1,
@@ -56,6 +58,7 @@ fn machines() -> Vec<Machine> {
             ),
         },
         Machine {
+            gpu: None,
             layout: None,
             name: syn::parse_quote!(gpu),
             items: 4,
@@ -175,8 +178,8 @@ fn filtered_multi_join() -> Program {
         }
         structures {
             l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
-            q host scan = Reader []; q host qf = Reader [qtag]; qf = Index [a];
-            r host rf = Reader [rtag]; s host sf = Reader [stag];
+            q host scan = Reader []; q host result(qf) = Reader [qtag]; qf = Index [a];
+            r host result(rf) = Reader [rtag]; s host result(sf) = Reader [stag];
             rf = Index [a]; sf = Index [a]; result canon = Canonical;
         }
     };
@@ -247,7 +250,7 @@ fn plan_replays_lookup_then_every_frozen_adaptive_candidate_then_decomposition()
             ["__lookup_forward", "sf"]
         );
         let mut prefix = vec![lookup];
-        for candidate in &frozen {
+        for (index, candidate) in frozen.iter().enumerate() {
             assert_eq!(
                 candidate.select, None,
                 "this fixture needs real runtime branches"
@@ -257,8 +260,15 @@ fn plan_replays_lookup_then_every_frozen_adaptive_candidate_then_decomposition()
             check_rewrite(&prepared, &next).unwrap();
             prepared = next;
             prefix.push(advice);
-            // Re-enumerating after the first rewrite loses the second candidate.
-            assert!(adaptive_candidates(&prepared).unwrap().is_empty());
+            // Replay consumes only this provider/key class's recorded provenance;
+            // later candidates remain discoverable until their own decisions replay.
+            assert!(
+                !prepared
+                    .sequence
+                    .optional_filters
+                    .contains(&candidate.filter)
+            );
+            assert_eq!(adaptive_candidates(&prepared).unwrap(), frozen[index + 1..],);
         }
         let guards: std::collections::BTreeSet<_> = prepared
             .sequence

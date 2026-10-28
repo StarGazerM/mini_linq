@@ -573,7 +573,8 @@ authored; `golden typed --write` regenerates their Parquet copies and answers.
 `golden` compares DuckDB with checked-in CSV answers. `--write` is the only
 mode that changes those answers. `differential` is an alias for `fuzz`, which
 compiles seeded random CQs and compares their execution against DuckDB.
-`explain` records typed CQ, RA and IX payloads; it does not execute a backend."
+`explain` observes checked facade boundaries from CQ and VO through Sequence,
+decomposition, grading and final Rust; it does not execute the query."
     );
 }
 

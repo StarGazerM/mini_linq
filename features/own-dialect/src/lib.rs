@@ -5,7 +5,7 @@
 //! ```rust
 //! let R = [(1_i32,), (1,), (2,)];
 //! let answers: Vec<_> = mini_linq::compile! {
-//!     pipeline { print = own_push::push; }
+//!     pipeline { print_input = structures; print = own_push::push; }
 //!     struct Q;
 //!     relation R(x: i32);
 //!     answer(x) :- R(x);

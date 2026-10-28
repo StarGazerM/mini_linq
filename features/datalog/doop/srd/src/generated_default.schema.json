@@ -1,0 +1,220 @@
+{
+  "expanded_rules": 88,
+  "field_flow": false,
+  "inputs": {
+    "ActualParam": {
+      "arity": 3,
+      "file": "ActualParam.csv"
+    },
+    "ApplicationClass": {
+      "arity": 1,
+      "file": "ApplicationClass.csv"
+    },
+    "ArrayType": {
+      "arity": 1,
+      "file": "ArrayType.csv"
+    },
+    "AssignCast": {
+      "arity": 4,
+      "file": "AssignCast.csv"
+    },
+    "AssignHeapAllocation": {
+      "arity": 3,
+      "file": "AssignHeapAllocation.csv"
+    },
+    "AssignLocal": {
+      "arity": 3,
+      "file": "AssignLocal.csv"
+    },
+    "AssignReturnValue": {
+      "arity": 2,
+      "file": "AssignReturnValue.csv"
+    },
+    "ClassType": {
+      "arity": 1,
+      "file": "ClassType.csv"
+    },
+    "ComponentType": {
+      "arity": 2,
+      "file": "ComponentType.csv"
+    },
+    "DirectSuperclass": {
+      "arity": 2,
+      "file": "DirectSuperclass.csv"
+    },
+    "DirectSuperinterface": {
+      "arity": 2,
+      "file": "DirectSuperinterface.csv"
+    },
+    "Field_DeclaringType": {
+      "arity": 2,
+      "file": "Field_DeclaringType.csv"
+    },
+    "FormalParam": {
+      "arity": 3,
+      "file": "FormalParam.csv"
+    },
+    "HeapAllocation_Type": {
+      "arity": 2,
+      "file": "HeapAllocation_Type.csv"
+    },
+    "Instruction_Method": {
+      "arity": 2,
+      "file": "Instruction_Method.csv"
+    },
+    "InterfaceType": {
+      "arity": 1,
+      "file": "InterfaceType.csv"
+    },
+    "LoadArrayIndex": {
+      "arity": 3,
+      "file": "LoadArrayIndex.csv"
+    },
+    "LoadInstanceField": {
+      "arity": 4,
+      "file": "LoadInstanceField.csv"
+    },
+    "LoadStaticField": {
+      "arity": 3,
+      "file": "LoadStaticField.csv"
+    },
+    "MainClass": {
+      "arity": 1,
+      "file": "MainClass.csv"
+    },
+    "MethodInvocation_Method": {
+      "arity": 2,
+      "file": "MethodInvocation_Method.csv"
+    },
+    "Method_DeclaringType": {
+      "arity": 2,
+      "file": "Method_DeclaringType.csv"
+    },
+    "Method_Descriptor": {
+      "arity": 2,
+      "file": "Method_Descriptor.csv"
+    },
+    "Method_Modifier": {
+      "arity": 2,
+      "file": "Method_Modifier.csv"
+    },
+    "Method_SimpleName": {
+      "arity": 2,
+      "file": "Method_SimpleName.csv"
+    },
+    "ReturnVar": {
+      "arity": 2,
+      "file": "ReturnVar.csv"
+    },
+    "SpecialMethodInvocation_Base": {
+      "arity": 2,
+      "file": "SpecialMethodInvocation_Base.csv"
+    },
+    "StaticMethodInvocation": {
+      "arity": 3,
+      "file": "StaticMethodInvocation.csv"
+    },
+    "StoreArrayIndex": {
+      "arity": 3,
+      "file": "StoreArrayIndex.csv"
+    },
+    "StoreInstanceField": {
+      "arity": 4,
+      "file": "StoreInstanceField.csv"
+    },
+    "StoreStaticField": {
+      "arity": 3,
+      "file": "StoreStaticField.csv"
+    },
+    "ThisVar": {
+      "arity": 2,
+      "file": "ThisVar.csv"
+    },
+    "Var_Type": {
+      "arity": 2,
+      "file": "Var_Type.csv"
+    },
+    "VirtualMethodInvocation_Base": {
+      "arity": 2,
+      "file": "VirtualMethodInvocation_Base.csv"
+    },
+    "VirtualMethodInvocation_Descriptor": {
+      "arity": 2,
+      "file": "VirtualMethodInvocation_Descriptor.csv"
+    },
+    "VirtualMethodInvocation_SimpleName": {
+      "arity": 2,
+      "file": "VirtualMethodInvocation_SimpleName.csv"
+    },
+    "isStaticMethodInvocation_Insn": {
+      "arity": 1,
+      "file": "isStaticMethodInvocation_Insn.csv"
+    }
+  },
+  "metadata_keys": [
+    "abstract",
+    "class_init_method",
+    "clinit",
+    "clinit_descriptor",
+    "desiredAssertionStatus_method",
+    "java_io_Serializable",
+    "java_lang_Class_type",
+    "java_lang_Cloneable",
+    "java_lang_Object",
+    "java_lang_Object_array",
+    "java_lang_String_array",
+    "java_lang_String_type",
+    "main",
+    "main_descriptor",
+    "public",
+    "register_natives_method",
+    "static"
+  ],
+  "outputs": {
+    "ArrayIndexPointsTo": 2,
+    "ArrayTypeCompat": 2,
+    "Assign": 2,
+    "CallGraphEdge": 2,
+    "CastTo": 4,
+    "ClassInitializer": 2,
+    "DirectSubclass": 2,
+    "EligibleObjectArrayHeap": 1,
+    "EligibleStringArrayHeap": 1,
+    "HeapHelper": 5,
+    "HeapHelperNoThis": 4,
+    "InitializedClass": 1,
+    "InstanceFieldPointsTo": 3,
+    "IsCastableToString": 1,
+    "IsObjectArrayHeap": 1,
+    "IsStringArrayHeap": 1,
+    "IsStringHeap": 1,
+    "MainMethodDeclaration": 1,
+    "MethodImplemented": 4,
+    "MethodInvocation_Base": 2,
+    "MethodLookup": 4,
+    "NonStringHeapAllocSuperType": 2,
+    "Reachable": 1,
+    "ReachableInstruction": 1,
+    "ReachableLoadInstanceField": 3,
+    "ReachableSortedIndex": 2,
+    "StaticFieldPointsTo": 2,
+    "Subclass": 2,
+    "SubtypeOf": 2,
+    "SubtypeOfDifferent": 2,
+    "Superclass": 2,
+    "Superinterface": 2,
+    "SupertypeOf": 2,
+    "VarPointsTo": 2,
+    "VirtualMethodInvocation": 4,
+    "isArrayType_IDB": 1,
+    "isClassType_IDB": 1,
+    "isInterfaceType_IDB": 1,
+    "isReferenceType": 1,
+    "isType": 1
+  },
+  "plans": 0,
+  "source_plans": 15,
+  "source_rules": 82,
+  "source_sha256": "332e67f0f38b36708f213e644cf282c065ae5a96864a99eec4fe68a25606d640",
+  "unlowered_plan_flags": {}
+}

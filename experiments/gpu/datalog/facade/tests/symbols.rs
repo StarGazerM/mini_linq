@@ -40,18 +40,21 @@ macro_rules! engine {
     };
 }
 
+use cq_gpu_datalog::bind_inputs as resident_inputs;
+
 engine!(cpu, {});
 engine!(gpu, {
-    storage_rewrites = [::cq_gpu_datalog::device_storage(symbols(TestSymbol => TestCodec))];
+    storage_rewrites = [::cq_gpu_datalog::device_storage(symbols(TestSymbol => TestCodec), ratio(8))];
     cq = pipeline {
         physical = [::cq_gpu_sequence::capture_constants];
-        structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
+        structures = [resident_inputs, ::cq_gpu_sequence::bind_runs];
         sequence = ::mini_linq::passes::sequence;
         decompose = [::cq_gpu_sequence::plan];
         grade = ::cq_gpu_sequence::machine_grade;
         print = ::cq_gpu_sequence::translate_arena;
     };
     terminals = [::cq_gpu_sequence::translate_arena => batch];
+    round = [::cq_gpu_datalog::bind_round(binding = 5)];
     print = ::cq_gpu_datalog::print_rounds;
 });
 

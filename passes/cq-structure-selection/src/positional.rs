@@ -300,7 +300,13 @@ pub(super) fn choose(
         .structures
         .entries
         .retain(|entry| match &entry.structure {
-            Structure::Host { reader, .. } if reads.contains(&symbol_name(reader)) => false,
+            Structure::Host { reader, .. }
+                if reader
+                    .result()
+                    .is_some_and(|name| reads.contains(&symbol_name(name))) =>
+            {
+                false
+            }
             Structure::Rows { .. } => !selections.contains(&symbol_name(&entry.name)),
             Structure::Built { keyed, .. }
                 if keyed.ty == syn::parse_quote!(::cq_storage::HashSet<_>)

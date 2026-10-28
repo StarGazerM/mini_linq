@@ -255,7 +255,8 @@ pub(crate) fn check_storage_with_analysis(
                 && layout.columns == expected.columns
                 && layout.key == expected.key
                 && layout.provider == expected.provider
-                && layout.maintenance == expected.maintenance,
+                && layout.maintenance == expected.maintenance
+                && layout.protocol == expected.protocol,
             source,
             "fork changed a selected host layout",
         )?;
@@ -406,14 +407,17 @@ pub(crate) fn check_storage_with_analysis(
                         column
                     })
                     .collect();
-                key.columns.iter().map(|&i| {
-                    let argument = &atom.args[i];
-                    if batch {
-                        syn::parse_quote!(*#argument)
-                    } else {
-                        argument.clone()
-                    }
-                }).collect()
+                key.columns
+                    .iter()
+                    .map(|&i| {
+                        let argument = &atom.args[i];
+                        if batch {
+                            syn::parse_quote!(*#argument)
+                        } else {
+                            argument.clone()
+                        }
+                    })
+                    .collect()
             };
             let mut expected_declarations = required_inputs(context, &[], &hole.query);
             expected_declarations.push(output);

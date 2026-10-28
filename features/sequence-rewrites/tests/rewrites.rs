@@ -168,7 +168,10 @@ fn output_sets_each_protocol_and_enforces_capacity() {
     }
     let unbounded = program(quote!(a = store rows r;));
     let target = apply(output, &unbounded, quote!(reserve_previous));
-    assert_eq!(target.sequence.output, Some(OutputProtocol::ReservePrevious));
+    assert_eq!(
+        target.sequence.output,
+        Some(OutputProtocol::ReservePrevious)
+    );
     assert_eq!(target.sequence.definitions, unbounded.sequence.definitions);
     assert!(output(&program(quote!(a = rows r;)), quote!(reserve_previous)).is_err());
     assert!(output(&program(quote!(a = store rows r;)), quote!(bounded)).is_err());

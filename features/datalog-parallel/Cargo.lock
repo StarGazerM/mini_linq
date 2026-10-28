@@ -151,6 +151,7 @@ dependencies = [
  "cq-datalog-support",
  "cq-lang-datalog-incremental",
  "cq-lang-datalog-strata",
+ "cq-order",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -584,9 +585,23 @@ dependencies = [
  "cq-lang-ra",
  "cq-lang-vo",
  "cq-order",
+ "cq-planning",
  "cq-reduce",
  "proc-macro2",
  "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-planning"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-lang-cq",
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "cq-order",
+ "cq-reduce",
  "syn 2.0.119",
 ]
 
@@ -1011,6 +1026,7 @@ dependencies = [
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
+ "cq-planning",
  "mini-linq-macros",
 ]
 
@@ -1018,7 +1034,6 @@ dependencies = [
 name = "mini-linq-macros"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-index-policy",
  "cq-lang-cq",
  "cq-lang-ix",
@@ -1027,9 +1042,8 @@ dependencies = [
  "cq-lang-sequence",
  "cq-lang-structures",
  "cq-lang-vo",
- "cq-order",
  "cq-physical-lowering",
- "cq-reduce",
+ "cq-planning",
  "cq-represent",
  "cq-sequence-lowering",
  "cq-sequence-plan",

@@ -125,7 +125,7 @@ fn concatenate_case<W: Word>(packing: Packing) -> Result<()> {
     } else {
         assert!(concatenate_batches::<u64>(pool.clone(), &packing, &batches).is_err());
     }
-    let mut accepted = DeviceRuns::<W>::new(pool)?;
+    let mut accepted = DeviceRuns::<W>::new(pool, 4)?;
     accepted.admit(&output, output.len())?;
     let snapshot = accepted.owned_runs();
     drop(accepted);

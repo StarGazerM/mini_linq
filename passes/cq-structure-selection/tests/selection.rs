@@ -26,6 +26,45 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
     assert_eq!(facts.unique["grouped"], ["k"]);
     assert!(facts.dedup.contains_key("valuations"));
     assert!(!facts.dedup.contains_key("grouped"));
+    assert_eq!(
+        facts.groups["grouped"],
+        syn::parse_quote!(
+            ::std::collections::HashMap<_, (usize, i32, Option<i32>, Option<i32>,)>
+        )
+    );
+    let group_entry = target
+        .structures
+        .entries
+        .iter()
+        .position(|entry| matches!(entry.structure, structures::Structure::Group { .. }))
+        .unwrap();
+    let mut missing = target.clone();
+    missing.structures.entries.remove(group_entry);
+    assert!(
+        structures::contract::check(&missing)
+            .unwrap_err()
+            .to_string()
+            .contains("missing group accumulator")
+    );
+    let mut duplicate = target.clone();
+    duplicate
+        .structures
+        .entries
+        .push(target.structures.entries[group_entry].clone());
+    assert!(
+        structures::contract::check(&duplicate)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate group accumulator")
+    );
+    let mut misplaced = target.clone();
+    misplaced.structures.entries[group_entry].name = syn::parse_quote!(valuations);
+    assert!(
+        structures::contract::check(&misplaced)
+            .unwrap_err()
+            .to_string()
+            .contains("requires a keyed Group")
+    );
     assert_eq!(facts.layouts["valuations"], ["id", "k", "v"]);
     assert_eq!(
         facts.physical.rows["grouped"]
@@ -66,6 +105,18 @@ fn global_group_is_unique_by_the_empty_key() {
     let facts = structures::contract::check(&target).unwrap();
     assert!(facts.unique["grouped"].is_empty());
     assert!(!facts.dedup.contains_key("grouped"));
+    assert!(facts.groups.is_empty());
+    let mut extra = target.clone();
+    extra
+        .structures
+        .entries
+        .push(syn::parse_quote!(grouped group = SomeMap<_,_>;));
+    assert!(
+        structures::contract::check(&extra)
+            .unwrap_err()
+            .to_string()
+            .contains("requires a keyed Group")
+    );
 }
 
 #[test]
@@ -564,17 +615,20 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
             );
             assert!(check(&source, &changed).is_err(), "{replacement}");
         }
-        for reader in ["candidates", "membership"] {
+        for reader in [
+            structures::ReaderRef::Candidates,
+            structures::ReaderRef::Membership,
+        ] {
             let mut missing = target.clone();
             missing.structures.entries.retain(|e| {
                 !(e.name == host
-                    && matches!(&e.structure, structures::Structure::Host { reader: r, .. } if r == reader))
+                    && matches!(&e.structure, structures::Structure::Host { reader: r, .. } if r == &reader))
             });
             assert!(
                 structures::contract::check(&missing).is_err(),
-                "{host}/{reader}"
+                "{host}/{reader:?}"
             );
-            assert!(check(&source, &missing).is_err(), "{host}/{reader}");
+            assert!(check(&source, &missing).is_err(), "{host}/{reader:?}");
         }
     }
 }
@@ -874,4 +928,44 @@ fn redundant_context_packets_preserve_explicit_canon() {
         assert!(facts.dedup.contains_key("r"));
         assert!(facts.head_dedup.is_empty());
     }
+}
+
+#[test]
+fn named_host_consumers_do_not_alias_reader_roles() {
+    for name in ["scan", "candidates", "membership", "result"] {
+        let result = syn::Ident::new(name, proc_macro2::Span::call_site());
+        let source = syn::parse_quote! { physical {
+            relation L(a:i32); relation R(a:i32,b:i32);
+            l = pipe rename L@0 {a -> x};
+            r = pipe rename R@1 {a -> x,b -> y};
+            #result = pipe canon probe first [x] l,r;
+            return #result as answer(x,y);
+        }};
+        let selected = compile(&source).unwrap();
+        let facts = structures::contract::check(&selected).unwrap();
+        assert!(
+            facts
+                .fallbacks
+                .contains_key(&("r".into(), structures::ReaderRef::Scan, vec![]))
+        );
+        assert!(facts.fallbacks.contains_key(&(
+            "r".into(),
+            structures::ReaderRef::Result(name.into()),
+            vec!["x".into()]
+        )));
+        let printed = selected.to_token_stream();
+        assert!(
+            printed
+                .to_string()
+                .contains(&format!("host result ({name})"))
+        );
+        let reparsed = syn::parse2::<structures::Program>(printed).unwrap();
+        assert_eq!(selected, reparsed);
+        check(&source, &reparsed).unwrap();
+    }
+    assert!(syn::parse_str::<structures::Entry>("r host arbitrary = Reader [x];").is_err());
+    assert!(
+        syn::parse_str::<structures::Entry>("r host result(scan, candidates) = Reader [x];")
+            .is_err()
+    );
 }

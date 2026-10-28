@@ -71,6 +71,15 @@ fn grouped_adapter_emits_one_typed_hash_fold_over_complete_valuations() {
     assert!(printed.contains("> __cq_previous"), "{printed}");
     let complete = source_tokens(&selected).unwrap();
     syn::parse2::<syn::Expr>(quote!({ #complete })).unwrap();
+    let authored = cq_structure_selection::retype(
+        &selected,
+        quote!(group => ::std::collections::BTreeMap<_, (usize,i32,Option<i32>,Option<i32>)>),
+    )
+    .unwrap();
+    let printed = source_tokens(&authored).unwrap().to_string();
+    assert!(printed.contains("BTreeMap"), "{printed}");
+    assert!(!printed.contains("HashMap"), "{printed}");
+    assert!(printed.contains("Default :: default"), "{printed}");
 }
 
 #[test]

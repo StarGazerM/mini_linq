@@ -11,7 +11,8 @@
 //! Positive semijoins may distribute into union arms and fallback positive arms.
 //! Negative operands stay original named branch results.
 //! Hypergraph uses a tree reducer only on acyclic scopes, but exact atom-to-block
-//! cuts on any scope. Masks reduces along the reduction tree on every scope.
+//! cuts on any scope. Masks reduces along the filter-carrying edges of the
+//! stream-rooted reduction tree on every scope (not a full reducer).
 //! Each block branch is analyzed as its own scope.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
@@ -71,6 +72,24 @@ pub enum Reductions {
     Masks,
 }
 
+/// Formal rule R-Placement: Only independently hoisted block occurrences enter a reducer graph.
+fn scope_graph(
+    body: &valuation::cq::CommaList<valuation::cq::BodyItem>,
+    steps: &[Step],
+    context: &BTreeSet<String>,
+) -> valuation::cq::hypergraph::Analysis {
+    let excluded = steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Block(block, _) if block.placement == valuation::Placement::Correlated => {
+                Some(block.source.clause())
+            }
+            _ => None,
+        })
+        .collect();
+    valuation::cq::hypergraph::Analysis::of_body_excluding(body, context, &excluded)
+}
+
 /// The first scheduled atom or Rust-free block of a scope: its outer stream.
 pub fn outer(steps: &[Step], graph: &valuation::cq::hypergraph::Analysis) -> Option<usize> {
     steps.iter().find_map(|step| match step {
@@ -120,8 +139,10 @@ pub fn mask_edges(
         children.entry(parent).or_default().push(child);
     }
     let mut local = valuation::cq::hypergraph::filter_ranks(body, graph);
-    for (atom, _) in block_cuts(graph, body) {
-        local.entry(atom).and_modify(|rank| *rank = (*rank).min(2));
+    for (atom, block) in block_cuts(graph, body) {
+        if atom != root && block != root {
+            local.entry(atom).and_modify(|rank| *rank = (*rank).min(2));
+        }
     }
     fn subtree(
         node: usize,
@@ -196,7 +217,7 @@ fn mask_steps(
     };
     let mut edges: Vec<_> = block_cuts(graph, body)
         .into_iter()
-        .filter(|&(atom, _)| atom != root)
+        .filter(|&(atom, block)| atom != root && block != root)
         .collect();
     for edge in mask_edges(graph, body, root) {
         if body[edge.0].atom().is_some() && !edges.contains(&edge) {
@@ -214,7 +235,11 @@ fn mask_steps(
 /// Formal rule R-Tree: Insert the relational tree schedule before the first atom.
 pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<valuation::Program> {
     let analysis = valuation::contract::check(source)?;
-    let graph = valuation::cq::hypergraph::Analysis::of(&source.cq);
+    let graph = scope_graph(
+        &source.cq.query.body,
+        &source.valuation.steps,
+        &BTreeSet::new(),
+    );
     // Independent branches are exact build-side joins, not fact-dependent
     // semijoin supports. The optional Hypergraph policy does not interpose a
     // reducer across this recorded physical decomposition.
@@ -367,10 +392,7 @@ fn compile_steps(
                     .unwrap_or_default()
                     .into_iter()
                     .collect();
-                let inner = valuation::cq::hypergraph::Analysis::of_body(
-                    &written.branches[j].body,
-                    &context,
-                );
+                let inner = scope_graph(&written.branches[j].body, &branch.steps, &context);
                 let options = options.effective(false, !inner.acyclic);
                 branch.steps = compile_steps(
                     &written.branches[j].body,

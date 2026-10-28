@@ -341,6 +341,7 @@ fn sharded_layouts_rewrite_and_erase_exactly() {
                 })
         {
             assert_eq!(after.provider, shard_layout_type(&before.provider));
+            assert_eq!(after.protocol, storage::LayoutProtocol::Bulk);
             changed += 1;
         } else {
             assert_eq!(before, after);
@@ -429,10 +430,14 @@ fn sharded_layout_checker_rejects_ineligible_and_changed_types() {
 }
 
 fn run_layout_type(provider: &syn::Type) -> syn::Type {
-    let syn::Type::Path(mut path) = shard_layout_type(provider) else { unreachable!() };
+    let syn::Type::Path(mut path) = shard_layout_type(provider) else {
+        unreachable!()
+    };
     let segment = path.path.segments.last_mut().unwrap();
     segment.ident = syn::parse_quote!(RunLayout);
-    let syn::PathArguments::AngleBracketed(args) = &mut segment.arguments else { unreachable!() };
+    let syn::PathArguments::AngleBracketed(args) = &mut segment.arguments else {
+        unreachable!()
+    };
     args.args.pop();
     args.args.pop_punct();
     syn::Type::Path(path)
@@ -459,22 +464,33 @@ fn run_selections_are_independent_and_erase_exactly() {
             after.seen = before.seen.clone();
         }
         let mut changed = 0;
-        for (before, after) in source.layouts.iter().chain(&source.delta_layouts)
-            .zip(restored.layouts.iter_mut().chain(&mut restored.delta_layouts))
-        {
+        for (before, after) in source.layouts.iter().chain(&source.delta_layouts).zip(
+            restored
+                .layouts
+                .iter_mut()
+                .chain(&mut restored.delta_layouts),
+        ) {
             if before.provider != after.provider {
-                assert_eq!(after.provider, if text.contains("layouts (runs)") {
-                    run_layout_type(&before.provider)
-                } else {
-                    shard_layout_type(&before.provider)
-                });
+                assert_eq!(
+                    after.provider,
+                    if text.contains("layouts (runs)") {
+                        run_layout_type(&before.provider)
+                    } else {
+                        shard_layout_type(&before.provider)
+                    }
+                );
                 after.provider = before.provider.clone();
+                assert_eq!(after.protocol, storage::LayoutProtocol::Bulk);
+                after.protocol = before.protocol;
                 changed += 1;
             }
         }
         assert_eq!(changed > 0, text.contains("layouts"));
         assert_eq!(restored, source);
-        assert_eq!(syn::parse2::<storage::Program>(target.to_token_stream()).unwrap(), target);
+        assert_eq!(
+            syn::parse2::<storage::Program>(target.to_token_stream()).unwrap(),
+            target
+        );
         compile_sharded(&cq_datalog_fork::compile(&target).unwrap()).unwrap();
     }
     for args in [
@@ -491,22 +507,65 @@ fn run_selections_are_independent_and_erase_exactly() {
 }
 
 #[test]
+fn layout_substitution_checks_recorded_maintenance_protocol() {
+    let source = authored_storage();
+    for arguments in [quote!(layouts(sharded)), quote!(layouts(runs))] {
+        let target = compile_storage_with(&source, arguments).unwrap();
+        for delta in [false, true] {
+            let mut changed = target.clone();
+            let layouts = if delta {
+                &mut changed.delta_layouts
+            } else {
+                &mut changed.layouts
+            };
+            let layout = layouts
+                .iter_mut()
+                .find(|layout| layout.protocol == storage::LayoutProtocol::Bulk)
+                .unwrap();
+            layout.protocol = storage::LayoutProtocol::GroupedMap;
+            assert!(check_storage(&source, &changed).is_err());
+            let round = cq_datalog_fork::compile(&changed).unwrap();
+            assert!(compile_sharded(&round).is_err());
+        }
+    }
+}
+
+#[test]
 fn run_layout_checker_rejects_ineligible_and_changed_types_and_hashers() {
     let source = authored_storage();
     let target = compile_storage_with(&source, quote!(layouts(runs), seen(runs))).unwrap();
     for delta in [false, true] {
-        let layouts = if delta { &source.delta_layouts } else { &source.layouts };
+        let layouts = if delta {
+            &source.delta_layouts
+        } else {
+            &source.layouts
+        };
         for (index, layout) in layouts.iter().enumerate() {
-            let eligible = layout.key > 0 && source.incremental.strata.source.declarations.iter()
-                .any(|d| d.name == layout.relation && d.value.is_none());
+            let eligible = layout.key > 0
+                && source
+                    .incremental
+                    .strata
+                    .source
+                    .declarations
+                    .iter()
+                    .any(|d| d.name == layout.relation && d.value.is_none());
             for argument in 0..3 {
                 let mut changed = target.clone();
-                let layouts = if delta { &mut changed.delta_layouts } else { &mut changed.layouts };
+                let layouts = if delta {
+                    &mut changed.delta_layouts
+                } else {
+                    &mut changed.layouts
+                };
                 layouts[index].provider = run_layout_type(&layout.provider);
                 if eligible {
-                    let syn::Type::Path(path) = &mut layouts[index].provider else { unreachable!() };
+                    let syn::Type::Path(path) = &mut layouts[index].provider else {
+                        unreachable!()
+                    };
                     let syn::PathArguments::AngleBracketed(args) =
-                        &mut path.path.segments.last_mut().unwrap().arguments else { unreachable!() };
+                        &mut path.path.segments.last_mut().unwrap().arguments
+                    else {
+                        unreachable!()
+                    };
                     if argument == 2 {
                         args.args.push(syn::parse_quote!(ChangedHasher));
                     } else {
@@ -525,13 +584,26 @@ fn run_layout_checker_rejects_ineligible_and_changed_types_and_hashers() {
                     syn::parse_quote!(CustomHasher),
                 ] {
                     let mut changed = source.clone();
-                    let layouts = if delta { &mut changed.delta_layouts } else { &mut changed.layouts };
-                    let syn::Type::Path(path) = &mut layouts[index].provider else { unreachable!() };
+                    let layouts = if delta {
+                        &mut changed.delta_layouts
+                    } else {
+                        &mut changed.layouts
+                    };
+                    let syn::Type::Path(path) = &mut layouts[index].provider else {
+                        unreachable!()
+                    };
                     let syn::PathArguments::AngleBracketed(args) =
-                        &mut path.path.segments.last_mut().unwrap().arguments else { unreachable!() };
+                        &mut path.path.segments.last_mut().unwrap().arguments
+                    else {
+                        unreachable!()
+                    };
                     args.args[2] = syn::GenericArgument::Type(hasher);
-                    assert!(compile_storage_with(&changed, quote!(layouts(runs))).unwrap_err()
-                        .to_string().contains("default storage hasher"));
+                    assert!(
+                        compile_storage_with(&changed, quote!(layouts(runs)))
+                            .unwrap_err()
+                            .to_string()
+                            .contains("default storage hasher")
+                    );
                     assert!(check_storage(&changed, &target).is_err());
                     compile_storage_with(&changed, quote!(seen(runs))).unwrap();
                 }
@@ -551,9 +623,19 @@ fn run_seen_preserves_hasher_and_rejects_row_or_hasher_changes() {
         source.providers[2].seen = original;
         let target = compile_storage_with(&source, quote!(seen(runs))).unwrap();
         check_storage(&source, &target).unwrap();
-        let expected: syn::Type = if target.providers[2].seen.to_token_stream().to_string().contains("CustomHasher") {
+        let expected: syn::Type = if target.providers[2]
+            .seen
+            .to_token_stream()
+            .to_string()
+            .contains("CustomHasher")
+        {
             syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32,), CustomHasher>)
-        } else if source.providers[2].seen.to_token_stream().to_string().contains("cq_storage") {
+        } else if source.providers[2]
+            .seen
+            .to_token_stream()
+            .to_string()
+            .contains("cq_storage")
+        {
             syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32,)>)
         } else {
             syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32,), ::std::collections::hash_map::RandomState>)

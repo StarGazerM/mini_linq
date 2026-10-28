@@ -204,7 +204,7 @@ fn host_keyed_read() -> structures::Program {
         structures {
             l host scan = HostColumns [];
             r host scan = HostColumns [];
-            r host answer = HostColumns [a];
+            r host result(answer) = HostColumns [a];
             answer canon = Canon;
         }
     }
@@ -229,7 +229,8 @@ fn integral_host_fallback_is_retained_with_a_catalog_range_index() {
         Some(&gpu_catalog().providers[0].ty)
     );
     for before in &source.structures.entries {
-        if matches!(&before.structure, Structure::Host { reader, .. } if reader == "scan") {
+        if matches!(&before.structure, Structure::Host { reader, .. } if matches!(reader, cq_lang_sequence::structures::ReaderRef::Scan))
+        {
             assert!(
                 selected.structures.entries.contains(before),
                 "host column scans remain unchanged"
@@ -280,7 +281,7 @@ fn catalog_element_capability_checks_both_built_and_host_fallback_rows() {
             structures {
                 l host scan = HostColumns [];
                 r host scan = HostColumns [];
-                r host answer = HostColumns [a];
+                r host result(answer) = HostColumns [a];
                 answer canon = Canon;
             }
         };

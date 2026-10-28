@@ -24,7 +24,11 @@
 
 mod indexes;
 mod physical;
+mod registry;
 mod structures;
+
+pub use cq_structure_selection::{build_host_reads, retype};
+pub use registry::{invoke_physical, invoke_structures};
 
 pub use indexes::{chain_cover, check_chain_cover, sorted_indexes};
 pub use physical::{

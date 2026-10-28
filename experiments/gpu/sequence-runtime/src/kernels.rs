@@ -6,19 +6,19 @@ pub mod build {
     use super::*;
     use cuda_device::{kernel, launch_bounds, launch_contract};
 
-    /// Exact numeric upload bounds. Every lane participates in the warp
-    /// reduction, including lanes outside a short final input prefix.
+    /// Exact numeric source bounds, including strided and packed publications.
+    /// Every lane participates, including lanes outside a short final prefix.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn numeric_bounds(input: *const i64, rows: u32, partial: *mut i64) {
+    pub fn numeric_bounds(input: SourceView, rows: u32, partial: *mut i64) {
         let lane = thread::index_1d().get();
         let stride = thread::gridDim_x() as usize * 256;
         let mut row = lane;
         let mut min = i64::MAX;
         let mut max = i64::MIN;
         while row < rows as usize {
-            let value = unsafe { *input.add(row) };
+            let value = unsafe { gpu_device_columns::decode_source(input, row as u64) };
             min = min.min(value);
             max = max.max(value);
             row += stride;

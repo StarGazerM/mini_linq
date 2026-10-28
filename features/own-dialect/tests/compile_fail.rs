@@ -163,13 +163,13 @@ fn consumer_form_rejects_missing_or_mismatched_consumers() {
     let query = "struct Q; relation R(a:i32,b:i32); answer(a) :- R(a,b);";
     success(compiler.compile(
         "consumer_control",
-        &format!("mini_linq::compile! {{ pipeline {{ print = own_push::push_into(consumer {{ |_: (&i32,)| {{}} }};); }} {query} }}"),
+        &format!("mini_linq::compile! {{ pipeline {{ print_input = structures; print = own_push::push_into(consumer {{ |_: (&i32,)| {{}} }};); }} {query} }}"),
     ));
     failure(
         compiler.compile(
             "missing_consumer",
             &format!(
-                "mini_linq::compile! {{ pipeline {{ print = own_push::push_into; }} {query} }}"
+                "mini_linq::compile! {{ pipeline {{ print_input = structures; print = own_push::push_into; }} {query} }}"
             ),
         ),
         "consumer",
@@ -177,7 +177,7 @@ fn consumer_form_rejects_missing_or_mismatched_consumers() {
     failure(
         compiler.compile(
             "mismatched_consumer",
-            &format!("mini_linq::compile! {{ pipeline {{ print = own_push::push_into(consumer {{ |_: (String,)| {{}} }};); }} {query} }}"),
+            &format!("mini_linq::compile! {{ pipeline {{ print_input = structures; print = own_push::push_into(consumer {{ |_: (String,)| {{}} }};); }} {query} }}"),
         ),
         "mismatched types",
     );
@@ -189,13 +189,13 @@ fn printer_rejects_arguments_and_a_remaining_queue() {
     let query = "struct Q; relation R(a: i32,b: i32); answer(a) :- R(a,b);";
     success(compiler.compile(
         "control",
-        &format!("mini_linq::compile! {{ pipeline {{ print = own_push::push; }} {query} }}"),
+        &format!("mini_linq::compile! {{ pipeline {{ print_input = structures; print = own_push::push; }} {query} }}"),
     ));
     failure(
         compiler.compile(
             "arguments",
             &format!(
-                "mini_linq::compile! {{ pipeline {{ print = own_push::push(unused); }} {query} }}"
+                "mini_linq::compile! {{ pipeline {{ print_input = structures; print = own_push::push(unused); }} {query} }}"
             ),
         ),
         "own_push::push accepts no arguments",

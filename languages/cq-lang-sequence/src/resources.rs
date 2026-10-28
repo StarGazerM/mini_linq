@@ -15,7 +15,11 @@ type Columns = BTreeSet<String>;
 
 #[derive(Clone)]
 enum Operation {
-    Map(Columns),
+    /// Net columns a map reads from its input row, and the columns it binds.
+    Map {
+        uses: Columns,
+        defines: Columns,
+    },
     Lookup {
         keys: Columns,
         payload: Columns,
@@ -63,6 +67,9 @@ fn publication<'a>(
     })
 }
 
+/// Formal rule BE-Resource: derive payload demands from recorded publication
+/// refinements; without deferred-range publication, a range expands in place.
+/// Grading checks the target layout of these demands against level capacity.
 pub(crate) fn dispatch_shape(
     program: &Program,
     analysis: &Analysis,
@@ -184,41 +191,12 @@ pub(crate) fn dispatch_shape(
             .iter()
             .any(|operation| matches!(operation, Operation::Canon))
     });
-    let host_union_operand = program.sequence.definitions.iter().any(|definition| {
-        analysis
-            .levels
-            .get(&symbol_name(&definition.name))
-            .is_some_and(|level| level.len() == 1)
-            && builder.host_union(&definition.term).is_some_and(|arms| {
-                arms.iter().any(
-                    |arm| matches!(arm, Term::Ref(reference) if symbol_name(reference) == *name),
-                )
-            })
+    let virtual_range = dispatch.gpu.as_ref().is_some_and(|execution| {
+        matches!(
+            execution.publication,
+            crate::gpu::Publication::DeferredRange { .. }
+        )
     });
-    let virtual_range = !final_output
-        && !canonical
-        && !host_union_operand
-        && chains.len() == 1
-        && !analysis.structures.built.contains_key(&chains[0].result)
-        && !builder.host_consumed_results().contains(&chains[0].result)
-        && chains[0]
-            .operations
-            .iter()
-            .rposition(|operation| {
-                matches!(
-                    operation,
-                    Operation::Lookup {
-                        membership: false,
-                        ..
-                    }
-                )
-            })
-            .is_some_and(|at| {
-                terminal_range(&chains[0].operations[at + 1..])
-                    && chains[0].operations[at + 1..]
-                        .iter()
-                        .any(|operation| matches!(operation, Operation::Flatten))
-            });
     let outputs = if final_output {
         let returned = symbol_name(&program.structures.physical.program.returned);
         program
@@ -389,8 +367,8 @@ impl<'p> Builder<'p> {
                 let mut chains = self.chains(inner)?;
                 let result = symbol_name(name);
                 for chain in &mut chains {
-                    let dependencies = self.map_columns(&result, &chain.result)?;
-                    chain.operations.push(Operation::Map(dependencies));
+                    let (uses, defines) = self.map_columns(&result, &chain.result)?;
+                    chain.operations.push(Operation::Map { uses, defines });
                     chain.result.clone_from(&result);
                 }
                 Ok(chains)
@@ -431,10 +409,15 @@ impl<'p> Builder<'p> {
         let mut chains = self.chains(inner)?;
         let provider = symbol_name(provider);
         let keys: Columns = keys.iter().map(symbol_name).collect();
+        // A lookup key equals its parent's value: a key still live after the
+        // lookup is carried as a parent, never re-read from the provider row,
+        // whichever provider representation stores it.
         let payload = if membership {
             Columns::new()
         } else {
-            self.payload(&provider, &keys)?
+            let mut payload = self.payload(&provider, &keys)?;
+            payload.retain(|column| !keys.contains(column));
+            payload
         };
         for chain in &mut chains {
             if !membership {
@@ -569,37 +552,55 @@ impl<'p> Builder<'p> {
         } else {
             self.carried[result].clone()
         };
-        // Equality reconstructs the leading directory key from the parent;
-        // deeper directory keys are part of the enumerated provider payload.
-        if let Some(first) = order.first() {
-            payload.remove(first);
-        }
-        payload.extend(order.into_iter().skip(1));
+        // Directory levels beyond the lookup prefix are enumerated payload.
+        payload.extend(order);
         Ok(payload)
     }
 
-    fn map_columns(&self, result: &str, input: &str) -> syn::Result<Columns> {
-        let mut columns = Columns::new();
+    /// A map's net reads from its input row and the columns it binds. A read
+    /// of a column bound earlier in the same map is internal, not a use.
+    fn map_columns(&self, result: &str, input: &str) -> syn::Result<(Columns, Columns)> {
+        let mut definitions = Vec::new();
         let mut current = result.to_owned();
         while current != input {
             let definition = self
                 .physical
                 .get(&current)
                 .ok_or_else(|| error("BE-Resource: map has no checked Physical definition"))?;
-            columns.extend(operator_columns(&definition.operator, self.analysis));
+            definitions.push(definition);
             let Some(parent) = definition.operator.input() else {
                 break;
             };
             current = symbol_name(parent);
         }
-        Ok(columns)
+        let (mut uses, mut defines) = (Columns::new(), Columns::new());
+        for definition in definitions.into_iter().rev() {
+            let bound: Columns = match &definition.operator {
+                Operator::Bind(bind) => bind
+                    .binding_types()
+                    .iter()
+                    .map(|(name, _)| symbol_name(name))
+                    .collect(),
+                _ => Columns::new(),
+            };
+            uses.extend(
+                operator_columns(&definition.operator, self.analysis)
+                    .into_iter()
+                    .filter(|column| !bound.contains(column) && !defines.contains(column)),
+            );
+            defines.extend(bound);
+        }
+        Ok((uses, defines))
     }
 
     fn live(&self, operations: &[Operation], sink: &Columns) -> Columns {
         let mut live = sink.clone();
         for operation in operations.iter().rev() {
             match operation {
-                Operation::Map(columns) => live.extend(columns.iter().cloned()),
+                Operation::Map { uses, defines } => {
+                    live.retain(|column| !defines.contains(column));
+                    live.extend(uses.iter().cloned());
+                }
                 Operation::Lookup {
                     keys,
                     payload,
@@ -726,49 +727,6 @@ impl<'p> Builder<'p> {
             }
         }
         Ok(())
-    }
-
-    fn host_union(&self, term: &'p Term) -> Option<&'p [Term]> {
-        match term {
-            Term::Union(arms) => Some(arms),
-            Term::Store { inner, .. } | Term::Canon(inner) => self.host_union(inner),
-            Term::Ref(name) => self.host_union(self.definitions.get(&symbol_name(name))?),
-            _ => None,
-        }
-    }
-
-    fn host_consumed_results(&self) -> Columns {
-        let mut consumed = Columns::new();
-        for definition in &self.program.sequence.definitions {
-            let name = symbol_name(&definition.name);
-            if matches!(definition.term, Term::Store { .. })
-                && self
-                    .analysis
-                    .levels
-                    .get(&name)
-                    .is_some_and(|level| level.len() == 1)
-                && !self
-                    .analysis
-                    .dispatches
-                    .iter()
-                    .any(|dispatch| dispatch.inner_stores.contains(&name))
-                && let Some(result) = self.analysis.results.get(&name)
-            {
-                self.dependencies(result, &mut consumed);
-            }
-        }
-        consumed
-    }
-
-    fn dependencies(&self, name: &str, consumed: &mut Columns) {
-        if !consumed.insert(name.to_owned()) {
-            return;
-        }
-        if let Some(definition) = self.physical.get(name) {
-            for operand in definition.operator.operands() {
-                self.dependencies(&symbol_name(operand), consumed);
-            }
-        }
     }
 
     fn output_fold(&self, term: &Term) -> bool {

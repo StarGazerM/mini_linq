@@ -122,7 +122,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
                 let Structure::Host { reader, keyed, .. } = &entry.structure else {
                     return false;
                 };
-                if entry.name != probe.right || *reader != definition.name {
+                if entry.name != probe.right || reader.result() != Some(&definition.name) {
                     return false;
                 }
                 let resident = matches!(&keyed.ty, syn::Type::Path(path)

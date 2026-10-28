@@ -19,6 +19,18 @@ pass paths, each with argument tokens read only by that pass.
  \mathsf{checkGrading}(q,host)\quad e=\mathsf{translatePull}(q)\quad\pi=[]}
  {\mathsf{sequence};\mathsf{sequential};\mathsf{translatePull}(s)
   \longrightarrow\mathsf{quote}_{Rust}(e)}
+
+\Rule{ST-Endpoint}{e=\mathsf{declaredPrintInput}(configuration,defaults)\\
+ e=\mathsf{Structures}\Rightarrow\neg\mathsf{authoredSequence}(configuration)}
+ {\mathsf{resolve}(configuration,defaults)\text{ includes Sequence phases iff }e=\mathsf{Sequence}}
+
+\Rule{ST-Observe}{\pi_b=\mathsf{prefix}_b(\mathsf{resolve}(c,d))\quad
+ \mathsf{checkedRun}(\pi_b,s)=t}
+ {\mathsf{observe}(b,r,c,s)\longrightarrow r!\{\mathsf{quote}(t)\}}
+
+\Rule{DR-Explain}{b\le h\quad
+ \mathsf{observe}(b,\code{core::stringify},\varnothing,s)=a_b}
+ {\mathsf{explain}(s,\mathsf{through}=h)[b]=a_b}
 \end{mathpar}
 \code{cq_stage::pass} checks source and target contracts; \code{cq_stage::rewrite}
 also runs the language's \code{check_rewrite}. Correspondence checks belong to the
@@ -38,18 +50,96 @@ pipeline {
 The order is surface, plan, ix, lower, Physical rewrites, select, Structures
 rewrites, represent, stage, sequence, decompose, grade, print. The shipped defaults
 are \code{plan}, \code{index_demands}, \code{lower}, \code{select},
-\code{represent}, \code{stage}, \code{sequence}, \code{sequential}, and
-\code{translate_pull}. Thus ST-Sequence is the default CPU path.
-Decompose is an optional list of Sequence rewrites.
-An explicit Structures terminal such as \code{own_push::push}, with no
-authored sequence, grade, or decompose phases, bypasses the default Sequence
-phases. Custom Sequence terminal paths require explicit sequence and grade
-phases; terminal compatibility is checked by the pass protocol.
+\code{represent}, \code{stage}, \code{sequence}, \code{plan_sequential},
+\code{sequential}, and \code{translate_pull}. The default decomposition
+\code{plan_sequential} is selected during configuration resolution, only when
+sequence, grade and decomposition are implicit and no plan, Physical rewrite,
+selection, Structures rewrite, representation or staging advice is authored.
+An authored decomposition replaces that default. ST-Entry executes the resolved
+queue unchanged: no pass-name matching or insertion occurs after resolution.
+ST-Sequence is the terminal CPU path; decomposition is a list of Sequence rewrites.
+The typed \code{print_input = structures} terminal declaration bypasses
+default Sequence phases and rejects authored sequence, grade, or decompose
+phases. Otherwise the configured/default Sequence phases are retained.
+The invariant is that aliasing a terminal cannot alter its input language:
+no macro path spelling participates in resolution. Each pass declares its
+actual source and target through \code{pass<L,M>}; those checked boundaries
+reject a terminal whose actual language disagrees with its declaration.
 \code{translate_pull} emits both ordinary and profile-counter variants.
 The workload corpus and fuzz configuration use this target by default.
 An authored fact-free program may enter at any compatible macro with
 \code{arguments \{..\}; pipeline \{..\}; <program>}. Passes receive no
 configuration beyond their arguments: every choice is in the program text.
+
+\paragraph{Diagnostic stage observation.}
+The facade accepts \code{observe \{ boundary = grade; stage = ::core::stringify; \}}
+before the ordinary \code{pipeline \{..\}} configuration. The selected boundary
+is an output of the same resolved queue, with all preceding arguments and
+rewrites unchanged: \code{cq}, \code{relational_plan},
+\code{index_requirements}, \code{physical}, \code{structures},
+\code{represent}, \code{stage}, \code{sequence}, \code{decompose},
+\code{grade}, or \code{final_rust}. Physical and Structures observation includes
+their configured same-language rewrites. A boundary absent from a selected
+terminal route is rejected. CQ observation checks the source after surface
+expansion. Complete Sequence input admits Sequence, decomposition/planning,
+grading and terminal observation only.
+
+The additional \code{vo} boundary exposes the default planner's shared checked
+valuation prefix: $\mathsf{plan}=\mathsf{elaborate}\circ\mathsf{prefixValuation}$.
+It requires an omitted CQ planning phase, rather than guessing the internal
+language of an authored planner from its path. Custom planners must expose their
+own internal boundaries.
+The continuation carries \code{pipeline \{..\} observe \{receiver\}} until the
+prefix ends. Source, target, correspondence and context checks still precede
+observation. The receiver gets the payload alone, not the continuation envelope.
+Even terminal Rust is captured after translation, before rustc type-checks or
+executes that expression; diagnostic output is not Rust execution evidence.
+The workload \code{explain} command generates these facade invocations for
+each boundary through the requested stopping point, preserving earlier artifacts
+and reporting the first failing boundary. It owns no second planning composition.
+
+
+\paragraph{Programmatic GPU driver inputs.}
+The TPC-H catalog resolves workload labels to serializable pipeline facts before
+compilation. The compiler receives no workload/profile label. Its input records
+\code{target = device | host}, \code{publication = host | device}, and a
+\code{recipe} containing retention selectors, membership choices, expansion
+selectors, partition/segment sizes and items. Missing target means device;
+missing publication means explicit host publication. The automatic recipe
+selects the shared rule-based planner; an absent schedule selects decomposition.
+Completed replay pipelines contain expanded invocations and Sequence advice,
+with the recipe cleared; the report retains the original recipe separately.
+\begin{mathpar}
+\Rule{DR-Target}{d=\mathsf{inputTarget}(p)\quad
+ \mathsf{compile}(s,p,d)=r}
+ {\mathsf{driver}(s,p)=r}
+
+\Rule{DR-Publication}{v=\mathsf{validity}(s,\mathsf{inputPublications})\quad
+ \ell=\mathsf{inputPublication}(p)\\
+ \ell=device\Rightarrow(\mathsf{inputTarget}(p)=device\land\neg\mathsf{nullable}(v))}
+ {\mathsf{publication}(s,p)=(\ell,v)}
+
+\Rule{DR-Recipe}{r=\mathsf{inputRecipe}(p)\quad
+ \rho=\mathsf{expandRecipe}(s,r)\quad\mathsf{checkedReplay}(s,\rho)=t}
+ {\mathsf{recipeCompile}(s,p)=(t,\rho)}
+
+\Rule{DR-Registry}{i=\mathsf{parseInvocation}(T)\quad
+ (L,f)=\mathsf{registry}(i.path)\quad s:L\quad f(s,i.args)=t}
+ {\mathsf{invoke}(s,T)=t}
+\end{mathpar}
+DR-Target propagates rejection unchanged: it never retries another machine or
+deletes authored advice. DR-Publication derives extrema validity from aggregate
+kinds and propagates recorded nullable columns through publication inputs, not
+from Rust type spelling. Nullable outputs use the host transfer protocol;
+device publication without validity support is rejected. Generated carriers
+and downstream input bindings consume the same recorded placement.
+DR-Recipe uses only explicit selectors and geometry, applying the existing
+checked rewrites. Workload labels occur only in catalog registration.
+DR-Registry shares one Physical/Structures registry between proc-macro adapters
+and programmatic execution. It accepts registered bare names and
+\code{cq_rewrites::name} paths; unknown paths are errors rather than suffix
+aliases. Argument packets use \code{cq_stage::Invocation}; planning arguments
+use \code{cq_planning::PlanOptions} and the shared Plan-Prefix composition.
 
 \paragraph{Context envelopes at invocation boundaries.}
 The rules above retain the fact-free protocol. When a source already records

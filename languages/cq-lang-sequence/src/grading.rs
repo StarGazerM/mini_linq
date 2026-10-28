@@ -32,7 +32,7 @@ struct Checker<'a> {
     roots: Vec<usize>,
     nodes: Vec<Node<'a>>,
     collectives: Vec<(String, Monoid, Vec<String>)>,
-    lengths: &'a BTreeMap<String, Len>,
+    stores: &'a BTreeMap<String, Len>,
     partial_groups: &'a BTreeMap<String, Vec<bool>>,
     group_cursors: Vec<usize>,
     results: &'a BTreeMap<String, String>,
@@ -168,7 +168,7 @@ pub(crate) fn check_grading_in(
         roots: Vec::with_capacity(program.sequence.definitions.len()),
         nodes: Vec::new(),
         collectives: Vec::new(),
-        lengths: &analysis.lengths,
+        stores: &analysis.stores,
         partial_groups: &analysis.partial_groups,
         group_cursors: vec![0; program.sequence.definitions.len()],
         results: &analysis.results,
@@ -219,7 +219,13 @@ pub(crate) fn check_grading_in(
             channel: unit.failure_channel.clone(),
         });
     }
-    // Formal rule BE-Resource: each dispatch's target layout fits its level's resource capacity.
+    if let Some(gpu) = &machine.gpu {
+        let executions = crate::gpu::derive(program, &analysis, gpu)?;
+        for (dispatch, execution) in analysis.dispatches.iter_mut().zip(executions) {
+            dispatch.gpu = Some(execution);
+        }
+    }
+    // Check the target layout of the recorded resource demands against capacity.
     for dispatch in &analysis.dispatches {
         let Some(level) = checker
             .levels
@@ -272,6 +278,7 @@ pub(crate) fn check_grading_in(
             },
         );
     }
+    analysis.task_execution = crate::task_execution::analyze(program, &analysis);
     Ok(analysis)
 }
 
@@ -411,11 +418,7 @@ impl<'a> Checker<'a> {
         }
         if separated_store
             && transfer_producer != Some(0)
-            && let Term::Store {
-                capacity: None,
-                inner,
-            } = term
-            && self.unknown_length(inner)
+            && matches!(self.stores.get(&self.name(owner)), Some(Len::Unknown(None)))
         {
             return Err(self.error(
                 owner,
@@ -720,41 +723,6 @@ impl<'a> Checker<'a> {
             Term::Store { .. } | Term::Rows(_) => {}
         }
     }
-    fn unknown_length(&self, term: &Term) -> bool {
-        fn fixed_key_cover(term: &Term) -> bool {
-            match term {
-                Term::PartitionK { .. } => true,
-                Term::Choose(arms) => {
-                    !arms.is_empty() && arms.iter().all(|(_, arm)| fixed_key_cover(arm))
-                }
-                _ => false,
-            }
-        }
-        match term {
-            Term::Ref(name) => matches!(
-                self.lengths.get(&symbol_name(name)),
-                Some(Len::Unknown(None))
-            ),
-            Term::Lookup { .. } => true,
-            Term::Tile { inner, .. }
-            | Term::Store {
-                capacity: None,
-                inner,
-            } => self.unknown_length(inner),
-            Term::Union(arms) => arms.iter().any(|arm| self.unknown_length(arm)),
-            Term::Choose(arms) => {
-                // Nested choices still select one fixed cover of previously
-                // published rows, so no arm needs an unknown-sized allocation.
-                if fixed_key_cover(term) {
-                    return false;
-                }
-                // The contract records joins of unequal branch lengths.
-                arms.iter().any(|(_, arm)| self.unknown_length(arm))
-                    || arms.windows(2).any(|pair| pair[0].1 != pair[1].1)
-            }
-            _ => false,
-        }
-    }
     fn collective(
         &mut self,
         owner: usize,
@@ -1006,6 +974,7 @@ impl<'a> Checker<'a> {
                 .iter()
                 .find_map(|&owner| self.parts.get(&self.name(owner)).copied().flatten());
             result.push(Dispatch {
+                gpu: None,
                 outer_store: domains.into_iter().next().expect("one domain was checked"),
                 members: owners.into_iter().map(|owner| self.name(owner)).collect(),
                 inner_stores: stores.into_iter().map(|owner| self.name(owner)).collect(),

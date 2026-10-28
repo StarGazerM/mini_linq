@@ -267,6 +267,11 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
         let ident = &definition.name;
+        if let Operator::Group(group) = &definition.operator
+            && !group.keys.is_empty()
+        {
+            entries.extend(group_accumulator(ident, group));
+        }
         if definition.canon.is_some() {
             entries.extend(quote!(#ident canon = ::cq_storage::HashSet<_>;));
         }
@@ -312,7 +317,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                     }
                 };
                 let columns = columns.iter().map(|c| &analysis.rows[&name].bindings[c]);
-                entries.extend(quote!(#ident host #rd = #ty [#(#columns),*];));
+                entries.extend(quote!(#ident host result(#rd) = #ty [#(#columns),*];));
             }
         }
     }
@@ -329,15 +334,17 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                 .expect("host result")
                 .name;
             for (reader, cols) in [
-                ("candidates", prefix),
-                ("membership", analysis.headings[&name].clone()),
+                (structures::ReaderRef::Candidates, prefix),
+                (
+                    structures::ReaderRef::Membership,
+                    analysis.headings[&name].clone(),
+                ),
             ] {
-                if !extra.insert((name.clone(), reader, cols.clone())) {
+                if !extra.insert((name.clone(), reader.key(), cols.clone())) {
                     continue;
                 }
                 let columns = cols.iter().map(|c| &analysis.rows[&name].bindings[c]);
-                let rd = syn::Ident::new(reader, proc_macro2::Span::call_site());
-                let payload = reader == "candidates"
+                let payload = matches!(reader, structures::ReaderRef::Candidates)
                     || analysis
                         .key_reads
                         .get(&name)
@@ -349,7 +356,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                 } else {
                     syn::parse_quote!(::cq_storage::dispatch::KeySet<_>)
                 };
-                entries.extend(quote!(#ident host #rd = #ty [#(#columns),*];));
+                entries.extend(quote!(#ident host #reader = #ty [#(#columns),*];));
             }
         }
     }
@@ -501,6 +508,12 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     };
     check(source, &target)?;
     Ok(target)
+}
+
+/// Formal rule SEL-Group: Record the keyed aggregate table and accumulator tuple types.
+fn group_accumulator(name: &syn::Ident, group: &physical::syntax::algebra::Group) -> TokenStream {
+    let types = group.aggregates.iter().map(|aggregate| &aggregate.ty);
+    quote!(#name group = ::std::collections::HashMap<_, (#(#types,)*)>;)
 }
 
 mod correspondence;

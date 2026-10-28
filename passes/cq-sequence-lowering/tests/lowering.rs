@@ -9,6 +9,7 @@ fn accept(source: &cq_lang_structures::Program) -> Program {
     cq_lang_sequence::check_grading(
         &target,
         &Machine {
+            gpu: None,
             layout: None,
             name: syn::parse_quote!(sequential),
             items: 1,

@@ -5,8 +5,9 @@
 \begin{lstlisting}
 Structures ::= Physical structures { Entry* }
 Entry ::= r = Type [K]... [membership] [payload[P] constants{c = term, ...}];
-        | r host reader = Type [K]...;
+        | r host ReaderRef = Type [K]...;
         | r rows = Type; | r canon = Type; | r head = Type;
+        | r group = Type;
         | r selection = Type base H lineage{a -> c, ...}
               summary (none | per_block);
         | r keyset = Type [K] (owned | borrowed)
@@ -20,12 +21,18 @@ Entry ::= r = Type [K]... [membership] [payload[P] constants{c = term, ...}];
                          owned [O]) [witness {b [K] at s as Type}];
         | r stage = batch N [expand];
 Predicate ::= physical | membership s [K] summary (exact | row)
+ReaderRef ::= scan | candidates | membership | result(Ident)
 \end{lstlisting}
 
 \paragraph{Contract.} $\mathsf{Entries}(t,A)$ checks the embedded Physical and:
 (1)~built columns belong to the heading and never repeat across levels; a built
 key answers a union of a prefix of its levels;
-(2)~host entries record fallback types per reader, not native trait claims;
+(2)~host entries record fallback types per typed reader reference, not native
+trait claims. Scan, candidate and membership roles are disjoint from
+\code{result(Ident)} even when that identifier has a role's spelling.
+Keyed Sequence capability obligations exclude Scan and named point/range
+scan adapters even when their key is empty; they consume candidate, membership,
+or named keyed-reader providers;
 (3)~retained scans, multiple unfiltered builds and exists state record row
 storage; unfiltered host renames record scan and keyed-reader fallbacks;
 (4)~every definition canon has a dedup entry; \code{return canon} has a head
@@ -48,8 +55,10 @@ the build phase, not filtered inside the query stream kernel;
 (6)~selection, keyset and read entries independently rederive a single declared
 host occurrence and a total, injective logical-to-host mapping over the reader's
 heading. Rename, declarative selection, occurrence-preserving projection and
-the left of eager semi propagate lineage. Computed columns, bind, opaque guard,
-join expansion, canon, union/fallback/anti and fused branch scopes do not;
+the left of eager semi propagate lineage. The semi's support need not have
+lineage: filtering preserves left-row positions even when support is a join
+or computed relation. Computed columns, bind, opaque guard, join expansion,
+canon, union/fallback/anti and fused branch scopes do not propagate lineage;
 (7)~a selection replaces a retained tuple collection, never a key-only,
 ordered or candidate provider. Every filtering step down to a prior immutable
 snapshot has an explicit read; an unrecorded retained result cannot be bypassed;
@@ -63,8 +72,31 @@ Known codecs must match that layout. Payload indexes may coexist with keysets.
 The default \code{ColumnAt<N>} marker must match declaration-order column $N$.
 Rust additionally checks positional host, marker, key, lifetime and provider
 obligations; a trait implementation must obey the storage abstraction laws.
+Every keyed Group has exactly one \code{group} entry; global groups have none.
+The provider is a finite map from key tuples to declared accumulator tuples.
+Its \code{Default} creates the empty map, \code{entry(k).or\_insert\_with(f)}
+returns the unique state for $k$ and calls $f$ only for a new key, and owned
+\code{IntoIterator} enumerates each present key/state once. Rust checks these
+operations and type bounds; their finite-map laws remain semantic premises.
+Authored providers may use a different map or hasher; realization never
+replaces their recorded type. Retyping \code{group} selects these entries.
 \begin{mathpar}
-\Rule{STR-Lineage}{\mathsf{singleOccurrenceSpine}(r,H)\quad
+\Rule{STR-Reader}{\rho\in\{\mathsf{Scan},\mathsf{Candidates},\mathsf{Membership},
+ \mathsf{Result}(r)\}\quad\mathsf{matchesRead}(\rho,K)}
+ {\mathsf{hostFallback}(b,\rho,K,T)\text{ uses the tagged identity }\rho}
+
+\Rule{STR-Group}{r=\mathsf{group}_{G;A}(s)\quad G\ne\varnothing\quad
+ \mathsf{concrete}(T)\quad\mathsf{entries}_{group}(r)=[T]}
+ {\mathsf{accumulator}(r)=T}
+
+\Rule{SEL-Group}{r=\mathsf{group}_{G;A}(s)\quad G\ne\varnothing}
+ {\mathsf{select}(r)\text{ records }\code{group = std::collections::HashMap<\_, AccTuple>}}
+
+\Rule{P-GroupState}{\mathsf{accumulator}(r)=T\quad
+ T:\mathsf{FiniteMap}(G,\mathsf{AccTuple})}
+ {\mathsf{realize}(r)\text{ folds into }T\text{ and enumerates its present entries}}
+
+\Rule{STR-Lineage}{\mathsf{singleOccurrenceSpine}_{\mathsf{semiLeft}}(r,H)\quad
  \lambda:\mathsf{heading}(r)\hookrightarrow\mathsf{columns}(H)}
  {\mathsf{lineage}(r)=(H,\lambda)}
 
@@ -151,7 +183,7 @@ enumerate exactly the matching items, membership is exact. Rust checks the trait
 bounds at generated uses; the laws are tested, not derived.
 
 \paragraph{Recorded decisions.} Every concrete type: built indexes and levels,
-per-reader host fallbacks, retained rows, dedup state, filtered payloads and
+per-reader host fallbacks, keyed group accumulator tables, retained rows, dedup state, filtered payloads and
 constants, positional bases and column lineage, mask-summary policy, column
 markers, keyset ownership/codec/budget and exact versus row-only read summaries.
 Positions identify base occurrences without becoming logical columns. A selection

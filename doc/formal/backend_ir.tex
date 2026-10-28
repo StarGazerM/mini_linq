@@ -295,11 +295,19 @@ GPU instance of the grade.
 \Rule{BE-Separate}{\ell_1,\ell_2\text{ separated siblings}}
  {\text{they exchange only through a store at a common ancestor; nothing else is observable across them}}
 
-\Rule{BE-Length}{\mathsf{store}\,t\text{ at a separated level (host stores need no bound)}}
- {|t|\text{ is in its type before the write (a scan), or a capacity with an overflow flag}}
+\Rule{BE-Length}{d=\mathsf{store}\,t\text{ at a separated level}\quad
+ \mathsf{checkedLen}(d)\ne\mathsf{Unknown}(\varnothing)\ \lor\
+ t\text{ names a completed host producer}}
+ {|t|\text{ is available before the write, or bounded with an overflow flag}}
 
 \Rule{BE-Publication}{d=\mathsf{store}\,t\quad t\text{ has checked provenance and consumers}}
  {\mathsf{publication}(d)\in\{\mathsf{BorrowHost},\mathsf{Alias},\mathsf{OwnRows},\mathsf{DeferredRows},\mathsf{Parts}\}}
+
+\Rule{BE-TaskProducer}{t\text{ checked}\quad i=(\text{definition},\text{constructor preorder})}
+ {\mathsf{producers}(t)=\text{distributing Tile identities reachable through row inputs and Ref}}
+
+\Rule{BE-CarrierPublication}{t\text{ checked}\quad i=\mathsf{id}(t)}
+ {\mathsf{carrier}(i)=\mathsf{TileInput}\text{ if no host borrow exists, or }\mathsf{Choice}\text{ for runtime choice}}
 
 \Rule{BE-Boundary}{\text{a maximal segment of total terms between stores at a separated level}}
  {\text{is one unit of dispatch (a kernel, a task); its domain is the outer stored space; derived, not written}}
@@ -311,12 +319,21 @@ GPU instance of the grade.
  {\text{a once-set flag on the failure channel, mapped to }\bot\text{ at the next host boundary; no truncated success}}
 
 \Rule{BE-Resource}{d\text{ a checked dispatch at }\ell\quad
+ \mathsf{shape}(d)\text{ consumes recorded publication refinement}\quad
  \mathsf{layout}_M(\mathsf{shape}(d))\le\mathsf{capacity}_M(\ell)}
  {\text{the dispatch fits the bounded resource of its machine level}}
 \end{mathpar}
 The resource shape records every branch, payload lookup, live parent column
 with its checked type and codec facts, fold, tile and item count. Byte layout
 and alignment belong to the target-supplied machine, not to the language.
+BE-Publication's ordinary owned-row publication stores expanded rows.
+A terminal lookup does not by itself denote a deferred range: that
+representation requires the explicit GPU-Launch refinement and a supported
+contiguous-range provider. Without that record (including machines with no
+GPU refinement), BE-Resource charges the lookup's live-parent payload scratch.
+A later read of any completed publication does not charge its producer's
+scratch again. This keeps the generic machine's expansion costs distinct
+from the GPU's recorded deferred-range execution.
 An unbounded level imposes no capacity premise. A bounded level without a
 layout model, arithmetic overflow, or an oversized layout is rejected before
 translation, including for explicitly advised programs. Resource recovery
@@ -456,19 +473,28 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
  {\mathsf{plan}(t,M,K)\text{ has one result (or one rejection)}}
 
 \Rule{PL-Select}{s'=\mathsf{retainUnsupportedHostReads}(s,K)\quad
- e\in\mathsf{Structures}(s')\quad
- k=\mathsf{first}\{k\in K\mid \mathsf{needs}(e)\subseteq\mathsf{caps}(k),
+ e\in\mathsf{Structures}(s')\quad K_e=\mathsf{stablePartition}(K,\mathsf{matchesRecordedType}(e))\quad
+ k=\mathsf{first}\{k\in K_e\mid \mathsf{needs}(e)\subseteq\mathsf{caps}(k),
  \ \mathsf{levels}(k)\ne\varnothing,\
  \mathsf{elements}(e)\subseteq\mathsf{acceptedElements}(k)\}}
  {\mathsf{select}(s,K):\
  e.\mathsf{type}\gets k.\mathsf{type}\quad\text{by checked retention, index construction and retype}}
 
 \Rule{PL-Cost}{C=(c_1,\ldots,c_k)\text{ admissible, preserving }A(t)\quad
-  \kappa(c)=(W(c),I(c),S(c),B(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
+ \mathsf{groupMode}(c)=\mathsf{Analysis}(c).\mathsf{partialGroups}\quad
+ \kappa(c)=(W(c),I(c),S(c),B(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
  {c^*=\mathsf{foldl}\bigl(
    (a,b)\mapsto\text{if }\kappa(b)\prec\kappa(a)\text{ then }b\text{ else }a,
    c_1,(c_2,\ldots,c_k)\bigr)}
 \end{mathpar}
+BE-Length consumes the structural checker's recorded store length, never a
+second syntactic size analysis. A reference to a completed store with an
+unknown construction length has the runtime length of that publication.
+Maps preserve their input length; choices join the checked lengths of their
+arms. Host stores may grow, and a completed host producer supplies its length
+before downward publication.
+Group work and host merge costs consume the constructor-preorder mode in
+\code{Analysis.partial\_groups}; layer geometry does not choose execution mode.
 Catalog levels describe where a provider may be read, not where its owner is
 constructed. Building an index from host rows does not certify a host read.
 Placement must select a supported read level; authored unsupported grades are
@@ -601,8 +627,12 @@ not require rendering those trees to token strings.
 
 PL-Select is an explicit Structures selection operation before decomposition,
 not an implicit override by PL-Precedence. It visits built indexes, sets,
-row buffers and canon providers in recorded entry order, selecting the first
-catalog token satisfying all reads of that entry; host scan adapters are unchanged.
+row buffers and canon providers in recorded entry order. Provider catalog
+order is explicitly stable-partitioned per entry: tokens matching its recorded
+representation precede all other tokens, retaining catalog order within both
+classes. The first eligible token wins. This preserves admitted native keyed
+ABIs instead of replacing them with generic row providers; canon tokens retain
+their original order. Host scan adapters are unchanged.
 Unsupported integral keyed host stream reads first use the checked Physical
 \code{build\_host\_reads} retention rewrite, then receive a built index
 checked by Structures. Obsolete keyed host fallback entries are removed;
@@ -710,10 +740,22 @@ grading, lengths and views.
   \mathsf{map}/\mathsf{compact}\mapsto\text{the Physical row function},\
   \mathsf{lookup}\mapsto\text{the recorded capability},\
   \mathsf{flatten}\mapsto\text{iterator concatenation},\
-  \mathsf{tile}/\mathsf{choose}\mapsto\text{identity (one part, else arm)},\
+  \mathsf{tile}\mapsto\text{contiguous groups},\
+  \mathsf{choose}\mapsto\text{else arm unless a worker guard requires first-match evaluation},\
   \mathsf{fold}\mapsto\oplus,\ \mathsf{canon}\mapsto\text{the recorded provider},\
   \mathsf{store}\mapsto\text{intermediate }\code{Vec}\text{ or final count iterator}}
 \end{mathpar}
+BE-TaskProducer records stable producer identities; an active producer is
+consumed exactly once by its join. Ref and lifted adapters preserve those
+identities irrespective of generated Rust names. BE-CarrierPublication extends
+BE-Publication to translation carrier storage: a non-borrowable task driver
+retains its input once, and a runtime choice retains only its selected arm,
+recursively preserving dimensions. These records are printable analysis.
+Their row volumes are independent symbolic retained-traffic terms in the cost;
+summing conditional publications gives a conservative bound, not a claim that
+unselected arms execute. Ordinary pull erases choices without worker guards
+to Else, permitted by BE-Choose's equal-support premise; worker-guarded pull
+and target hooks evaluate first-match guards (pull has one worker).
 The host-only translation leaves the final store with \code{output count}
 as a lazy pull iterator (BK-Dual); it does not collect the output into a
 \code{Vec}. Intermediate stores materialize, and rows escaping block-local
@@ -762,7 +804,7 @@ construction-based support equality:
 
 \Rule{EXT-SeqChoose}{a,b\text{ have checked equal support}\quad\text{guards exhaustive}}{d:=\mathsf{choose}[g\Rightarrow a,\ \mathsf{else}\Rightarrow b]\quad\text{(BE-Choose)}}
 
-\Rule{EXT-SeqOutput}{p\in\{\mathsf{count},\mathsf{reserve},\mathsf{bounded}\}\quad p=\mathsf{bounded}\Rightarrow\text{capacity declared}}{\mathsf{output}:=p}
+\Rule{EXT-SeqOutput}{p\in\{\mathsf{count},\mathsf{reserve},\mathsf{reserve\_previous},\mathsf{bounded}\}\quad p=\mathsf{bounded}\Rightarrow\text{capacity declared}}{\mathsf{output}:=p}
 
 \Rule{EXT-SeqGrade}{\text{machine }M\text{ named}\quad\text{placements }d_i\ \mathsf{at}\ \ell_i}{\mathsf{graded}\ M\{\ldots\}\text{ extended; the construction is unchanged}}
 \end{mathpar}
@@ -840,12 +882,21 @@ layout, without requiring an interpreter to choose among layouts.
 In particular, a predicate-bearing leaf is authored by putting its
 predicate after that atom, not by a planner asserting the predicate total.
 
+Optional filtering lookups carry printable \code{optional\_filter} provenance
+in Sequence. Discovery consumes that identity regardless of generated spelling
+or unrelated scheduling advice; replay separately checks covering joins and
+equal-support alternatives. Applying the decision consumes its provenance.
+
 \begin{mathpar}
 \Rule{EXT-SeqLookup}{t,t'\text{ checked}\quad
  \text{join/semijoin constructions have equal support}\quad
  \text{Rust Before domains preserved}}
  {t\rightsquigarrow_{\mathsf{lookup\_first}}t'
   \quad\text{(Motion, BE-Offsets, BE-Scope)}}
+
+\Rule{PL-OptionalFilter}{f\text{ is a checked positive pipelined semijoin introduced by lookup planning}}
+ {f\in t.\mathsf{optionalFilters}\quad
+ \mathsf{adaptiveEligible}(f)\Rightarrow\text{checked published provider and covering joins}}
 
 \Rule{EXT-SeqAdaptive}{s\text{ is a published filtered store}\quad
  \mathrm{supp}(\alpha(a))=\mathrm{supp}(\alpha(b))\quad k\text{ is advice}}
@@ -955,7 +1006,7 @@ boundaries.
 \begin{mathpar}
 \Rule{T-Gpu}{t\text{ checked against }\mathsf{host}>\mathsf{device}(\text{separated, dynamic})>\mathsf{block}(\text{collaborative})>\mathsf{lane}}
  {\mathsf{run}_{\rm gpu}(t)=
-  \text{one query kernel per BE-Boundary dispatch};\
+  \text{one query kernel plus recorded completion steps per BE-Boundary dispatch};\
   \mathsf{tile}\mapsto\text{recorded distribution or strip-mining};\
   \mathsf{flatten}\mapsto\text{block scan and owner search};\
   \mathsf{store}\mapsto\text{shared storage or device publication};\
@@ -967,6 +1018,52 @@ recorded ranges. The output protocol and sticky failure flags discharge
 BE-Length and BE-Abort; bounded output retries rather than publishing a
 truncated result. No target-side join order, uniqueness or tile choice is
 inferred by the translation.
+
+\paragraph{Checked GPU launch refinement.}
+The GPU machine records its collective block width and the kernel-occupancy
+policy. Grading records every dispatch's partition, publication, offset scan,
+fold completion and required host synchronization points; these records are
+part of printable analysis. One-part is explicit, not a fallback triggered by
+a deferred range or a whole-input fold. The native contiguous-range predicate
+is supplied by catalog identity, not by generated names or type suffixes.
+GPU launch refinement precedes BE-Resource: shared-memory accounting and CUDA
+emission consume the same recorded publication kind, never independent
+deferred-range recognizers. Host references stop at completed publication
+boundaries; a host consumer of a later expanded store is not a host consumer
+of that store's deferred-range input.
+\begin{mathpar}
+\Rule{GPU-Launch}{d\text{ is a checked dispatch}\quad M.\mathsf{gpu}\text{ supplied}}
+ {\mathsf{execution}(d)=
+  (\mathsf{partition},\mathsf{kernelOccupancy},\mathsf{publication},
+   \mathsf{offsetScan},\mathsf{foldCompletion},\mathsf{synchronizations})}
+\Rule{GPU-LAUNCH-OCCUPANCY}{P=\text{domain tile count}\quad
+ S=\text{device SM count}\quad R=\mathsf{residentBlocks}(K,\mathsf{threads},\mathsf{shared})>0}
+ {\mathsf{grid}(K,P)=\min(\max(1,P),S R)}
+\Rule{GPU-OffsetScan}{d.\mathsf{publication}=\mathsf{DeferredRange}(p)\quad
+ \ell_0,\ldots,\ell_{n-1}\text{ initialized}\quad \ell_n=0}
+ {d.\mathsf{offsetScan}=\mathsf{DeviceExclusive}\quad
+  o=\mathsf{exclusiveScan}_{+,0}(\ell_0,\ldots,\ell_n)\quad |d|=o_n}
+\Rule{GPU-FoldCompletion}{d.\mathsf{foldCompletion}=\mathsf{BlockPartials}(\oplus,e)\quad
+ B=\biguplus_b B_b}
+ {\mathsf{fold}(B)=\bigoplus_b\mathsf{fold}(B_b)\quad
+  \mathsf{publish}\text{ occurs only after the combine step}}
+\end{mathpar}
+The deferred-range publication refinement applies only to a nonterminal,
+noncanonical, non-provider-building publication with one chain whose last
+contiguous lookup is followed only by stores and at least one flatten.
+Host row consumers exclude this representation. The producer writes parent
+rows, range beginnings and lengths on all scheduled blocks; a separate
+device-wide scan completes offsets before consumers run. Wrapping offsets
+are detected by adjacent-prefix decreases and abort publication.
+Whole folds retain one scalar per block and combine on the producing stream;
+the empty domain still produces the monoid identity. Checked arithmetic and
+the existing monoid-law premises remain in force.
+Count/failure readback for capacity replay is an explicit synchronization
+record. Deferred offsets additionally record their total/failure readback.
+There is no unrecorded per-dispatch fence.
+Scan modules and workspaces may be retained per pool identity across invocations;
+their context, stream and allocator owner outlive every borrowed resource.
+Reuse changes neither the recorded scan step nor its failure/readback contract.
 
 \paragraph{Arbitrary-width canonical provider.}
 Let an injective recorded codec pack a row into $N=\max(1,\lceil b/64\rceil)$
@@ -1067,9 +1164,41 @@ deterministic and total, so one evaluation equals the per-row evaluations it
 replaces.
 \begin{mathpar}
 \Rule{GPU-Capture}{e\text{ closed}\quad e\text{ deterministic and total}\quad
- \mathrm{enc}\text{ injective}}
- {\sem{\phi[\mathrm{enc}(e)/e]}_{\mathrm{device}}=\sem{\phi}_{\mathrm{host}}\text{ on every row}}
+ \mathrm{enc}\text{ injective}\quad C(e)=\text{recorded consuming definitions}\quad
+ D(e)=\{(d,b)\mid C(e)\cap\mathrm{definitions}(d,b)\ne\varnothing\}}
+ {\sem{\phi[\mathrm{enc}(e)/e]}_{\mathrm{device}}=\sem{\phi}_{\mathrm{host}}
+ \quad\mathrm{evaluate}(e)\iff\bigvee_{(d,b)\in D(e)}(|d|>0\land b)}
 \end{mathpar}
+The capture record retains parameter indices and definition dependencies before
+emission. Launch construction supplies the recorded domain length and branch
+enable expression; generated names and kernel argument offsets carry no meaning.
+The invocation-local cache is shared across capacity retries.
+
+\paragraph{GPU realization records.}
+Native ABI constructors are complete catalog identities, with generic arguments
+carrying their declared schemas. An unrelated type with the same last identifier
+does not acquire native residency or an encoding ABI.
+\begin{mathpar}
+\Rule{GPU-NativeAbi}{\mathrm{constructor}(T)=\mathrm{identity}(a)\quad a\in\mathrm{nativeCatalog}}
+ {\mathrm{abi}(T)=a\quad\mathrm{residency}(T)=\mathrm{residency}(a)}
+\Rule{GPU-CodecIdentity}{\forall (T,c),(T,c')\in\mathrm{declaredSymbols}.\ c=c'}
+ {\mathrm{codecs}(T)=c\quad\mathrm{captureCodec}(x:T)=\mathrm{codecs}(T)}
+\Rule{GPU-ProviderLayout}{K=\mathrm{concat}(\mathrm{levels})\quad
+ P=\mathrm{scanPayload}\ \text{if scanned, else }(\mathrm{builtPayload}\setminus K_0)\cup K_{>0}\quad
+ d=\text{empty: }0\text{; otherwise }\max(K_0)+1\quad 0\le K_i\le 2^{32}-1}
+ {\mathrm{layout}=(K,P,\mathrm{DenseU32},d,\mathrm{entries}=d+1)}
+\end{mathpar}
+Codec identities are checked structurally for every declared native layout
+before translating expressions; a conflict is rejected, never overwritten.
+Thus a compared column and its closed capture use the same declared encoding.
+The provider record is derived once for resident and computed paths: the first
+key is reconstructed from the probe, later keys remain payload, and scans retain
+their complete payload. Keyless providers record zero directory entries.
+The dense domain is symbolic until column bounds are available (computed run
+columns measure those bounds); its overflow-checked allocation size is recorded
+in the runtime descriptor. The runtime checks the terminal-entry invariant and
+consumes that size rather than selecting an allocation policy.
+
 A literal atom argument such as \code{method\_modifier(sym("abstract"), m)}
 reaches the translator as a constant inside a rename. The checked Physical
 rewrite \code{capture\_constants} turns each such argument into a fresh column,

@@ -94,7 +94,7 @@ fn emit(
     } else {
         (
             format!(
-                "mini_linq::compile! {{ pipeline {{ {advice} print = own_push::push; }} {cq_text} }}"
+                "mini_linq::compile! {{ pipeline {{ {advice} print_input = structures; print = own_push::push; }} {cq_text} }}"
             ),
             format!("mini_linq::compile! {{ pipeline {{ {advice} }} {cq_text} }}"),
         )

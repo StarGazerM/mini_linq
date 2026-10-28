@@ -22,6 +22,7 @@ macro_rules! le_configuration {
         dedup: [];
         payload: [];
         membership: [];
+        print_input: structures;
         printer: own_push::push; }
     };
     (le_probe_keep_first_hashmap_hash_dedup_default_eager_pull_unadvised, $case:ident) => {
@@ -58,6 +59,7 @@ macro_rules! le_configuration {
         dedup: [cq_workload_passes::ordered_dedup,];
         payload: [cq_workload_passes::sorted_payload,];
         membership: [cq_rewrites::lazy_semijoins,];
+        print_input: structures;
         printer: own_push::push; }
     };
     (le_probe_canon_smallest_btreemap_hash_dedup_sorted_eager_push_unadvised, $case:ident) => {
@@ -70,6 +72,7 @@ macro_rules! le_configuration {
         dedup: [];
         payload: [cq_workload_passes::sorted_payload,];
         membership: [];
+        print_input: structures;
         printer: own_push::push; }
     };
     (le_merge_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised, $case:ident) => {
@@ -130,6 +133,7 @@ macro_rules! le_configuration {
         dedup: [];
         payload: [];
         membership: [];
+        print_input: structures;
         printer: own_push::push; }
     };
     (le_runs_probe_keep_first_hashmap_hash_dedup_default_eager_pull_unadvised, $case:ident) => {
@@ -166,6 +170,7 @@ macro_rules! le_configuration {
         dedup: [cq_workload_passes::ordered_dedup,];
         payload: [cq_workload_passes::sorted_payload,];
         membership: [cq_rewrites::lazy_semijoins,];
+        print_input: structures;
         printer: own_push::push; }
     };
     (le_runs_probe_canon_smallest_btreemap_hash_dedup_sorted_eager_push_unadvised, $case:ident) => {
@@ -178,6 +183,7 @@ macro_rules! le_configuration {
         dedup: [];
         payload: [cq_workload_passes::sorted_payload,];
         membership: [];
+        print_input: structures;
         printer: own_push::push; }
     };
     (le_runs_merge_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised, $case:ident) => {

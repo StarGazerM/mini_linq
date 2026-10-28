@@ -7,7 +7,7 @@ use syn::{GenericArgument, PathArguments, Type};
 pub(crate) fn layout_types(ty: &Type) -> syn::Result<Option<(Vec<Type>, usize)>> {
     let Type::Path(path) = ty else { return Ok(None) };
     let Some(segment) = path.path.segments.last() else { return Ok(None) };
-    if segment.ident != "DeviceLayout" { return Ok(None) }
+    if crate::native_abi(ty) != Some(crate::NativeAbi::Runs) { return Ok(None) }
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return Err(syn::Error::new_spanned(ty, "GPU-Runs: DeviceLayout requires key and value tuple types"));
     };
@@ -29,12 +29,52 @@ pub(crate) fn layout_types(ty: &Type) -> syn::Result<Option<(Vec<Type>, usize)>>
 pub(crate) fn symbol(ty: &Type) -> Option<(&Type, &Type)> {
     let Type::Path(path) = ty else { return None };
     let segment = path.path.segments.last()?;
-    if segment.ident != "Symbol" { return None }
+    if crate::native_abi(ty) != Some(crate::NativeAbi::Symbol) { return None }
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else { return None };
     let mut args = arguments.args.iter();
     match (args.next()?, args.next()?, args.next()) {
         (GenericArgument::Type(logical), GenericArgument::Type(codec), None) => Some((logical, codec)),
         _ => None,
+    }
+}
+
+/// Compared columns share one checked encoding for each logical Rust type.
+#[derive(Default)]
+pub(crate) struct Codecs(Vec<(Type, Type)>);
+
+impl Codecs {
+    pub fn get(&self, logical: &Type) -> Option<&Type> {
+        self.0.iter().find(|(ty, _)| ty == logical).map(|(_, codec)| codec)
+    }
+
+    /// Formal rule GPU-CodecIdentity: conflicting encodings of a logical symbol type are rejected before capture lowering.
+    pub fn record(&mut self, logical: &Type, codec: &Type) -> syn::Result<()> {
+        if let Some(previous) = self.get(logical) {
+            if previous != codec {
+                return Err(syn::Error::new_spanned(codec, "conflicting codecs for a logical symbol type"));
+            }
+        } else {
+            self.0.push((logical.clone(), codec.clone()));
+        }
+        Ok(())
+    }
+
+    pub fn check(program: &Program) -> syn::Result<Self> {
+        let mut codecs = Self::default();
+        for entry in &program.structures.entries {
+            let keyed = match &entry.structure {
+                Structure::Host { keyed, .. } | Structure::Built { keyed, .. } => keyed,
+                _ => continue,
+            };
+            if let Some((columns, _)) = layout_types(&keyed.ty)? {
+                for column in columns {
+                    if let Some((logical, codec)) = symbol(&column) {
+                        codecs.record(logical, codec)?;
+                    }
+                }
+            }
+        }
+        Ok(codecs)
     }
 }
 
@@ -63,7 +103,7 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
     let mut hosts = BTreeMap::new();
     for entry in &source.structures.entries {
         let Structure::Host { reader, keyed, .. } = &entry.structure else { continue };
-        if reader != "scan" { continue }
+        if !matches!(reader, cq_lang_structures::ReaderRef::Scan) { continue }
         let Some((types, key_count)) = layout_types(&keyed.ty)? else { continue };
         let host = &analysis.physical.hosts[&symbol_name(&entry.name)];
         let layout = &analysis.host_layouts[host];
@@ -86,7 +126,8 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
         let name = symbol_name(&entry.name);
         let Some(origin) = crate::rows::origin(&name, &definitions)? else { continue };
         let Some((ty, key_count)) = hosts.get(&origin.host) else { continue };
-        if origin.selection.is_some() { return Err(syn::Error::new_spanned(&entry.name, "GPU-Runs: a supplied run index cannot incorporate a computed selection")); }
+        // A selected source is not the raw run: keep the computed Built index.
+        if origin.selection.is_some() || origin.predicate { continue; }
         let keys = keyed.level_names().concat();
         let layout = &analysis.host_layouts[&origin.host];
         if keys.len() > *key_count || keys.iter().enumerate().any(|(i,key)| origin.columns.get(key) != layout.get(i)) {

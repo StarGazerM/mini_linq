@@ -233,14 +233,7 @@ pub(crate) fn body(
                     prefix.push(quote!(if #row.#column != (#argument) { continue; }));
                 }
             }
-            let next = body(
-                rest,
-                heads,
-                candidates,
-                inputs,
-                scope,
-                fresh,
-            )?;
+            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!(for #row in #state.#field.iter() { #(#prefix)* #next }))
         }
         BodyItem::Negation(negative) => {
@@ -273,40 +266,19 @@ pub(crate) fn body(
                     )
                 })
                 .collect::<Vec<_>>();
-            let next = body(
-                rest,
-                heads,
-                candidates,
-                inputs,
-                scope,
-                fresh,
-            )?;
+            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!(if !#state.#field.iter().any(|#row| true #(&& (#conditions))*) { #next }))
         }
         BodyItem::Filter(filter) => {
             let condition = &filter.condition;
-            let next = body(
-                rest,
-                heads,
-                candidates,
-                inputs,
-                scope,
-                fresh,
-            )?;
+            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!(if #condition { #next }))
         }
         BodyItem::Let(binding) => {
             for name in rust::bindings(&binding.pattern) {
                 scope.insert(symbol_name(&name), false);
             }
-            let next = body(
-                rest,
-                heads,
-                candidates,
-                inputs,
-                scope,
-                fresh,
-            )?;
+            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!({ #binding; #next }))
         }
         BodyItem::For(generator) => {
@@ -316,14 +288,7 @@ pub(crate) fn body(
             let value = fresh.id("reference_generated");
             let expression = &generator.expression;
             let pattern = &generator.pattern;
-            let next = body(
-                rest,
-                heads,
-                candidates,
-                inputs,
-                scope,
-                fresh,
-            )?;
+            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!(for #value in #expression {
                 let #pattern = &#value;
                 #next
@@ -331,26 +296,12 @@ pub(crate) fn body(
         }
         BodyItem::Equality(equality) => {
             let condition = constraint(&cq_syntax::Constraint::from_equality(equality), &scope);
-            let next = body(
-                rest,
-                heads,
-                candidates,
-                inputs,
-                scope,
-                fresh,
-            )?;
+            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!(if #condition { #next }))
         }
         BodyItem::Constraint(constraint) => {
             let condition = self::constraint(constraint, &scope);
-            let next = body(
-                rest,
-                heads,
-                candidates,
-                inputs,
-                scope,
-                fresh,
-            )?;
+            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!(if #condition { #next }))
         }
         _ => Err(syn::Error::new_spanned(
@@ -367,7 +318,8 @@ fn constraint(value: &cq_syntax::Constraint, scope: &BTreeMap<String, bool>) -> 
     use cq_syntax::constraint::{Comparison, Constraint, Term};
     let term = |value: &Term| match value {
         Term::Variable(name) if scope.get(&symbol_name(name)) == Some(&true) => quote!(#name),
-        Term::Variable(name) | Term::Parameter(name) => quote!(&#name),
+        Term::Variable(name) => quote!(&#name),
+        Term::Parameter(parameter) => quote!(&#parameter),
         Term::Literal(value) => quote!(&(#value)),
     };
     match value {

@@ -168,7 +168,7 @@ fn membership_bridge_source() -> ir::Program {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         m host scan = ::core::iter::Map<_,_> [];
-        m host selected = ::core::iter::Map<_,_> [tag];
+        m host result(selected) = ::core::iter::Map<_,_> [tag];
         s host scan = ::core::iter::Map<_,_> [];
         t host scan = ::core::iter::Map<_,_> [];
         out canon = ::std::collections::HashSet<_>;
@@ -455,8 +455,8 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
         structures {
             l host scan = ::core::iter::Map<_, _> [];
             r host scan = ::core::iter::Map<_, _> [];
-            r host s = Shared<'_, _, _> [x];
-            r host p = Shared<'_, _, _> [x];
+            r host result(s) = Shared<'_, _, _> [x];
+            r host result(p) = Shared<'_, _, _> [x];
             p canon = ::cq_storage::HashSet<_>;
         }
     };

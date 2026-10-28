@@ -9,8 +9,9 @@ Step ::= R@path(x, _, ...); | !R(Arg, ...); | x = y; | Constraint;
        | if Expr; | let Pat [: Type] = Expr;
        | for Pat in Expr;
        | reduce R@path with S@path(...);
-       | block @path(columns) { Step* } (| { Step* })+;
-       | block @path(columns) { Step* } (else { Step* })+;
+       | block @path(columns) Placement { Step* } (| { Step* })+;
+       | block @path(columns) Placement { Step* } (else { Step* })+;
+Placement ::= hoisted | correlated
 \end{lstlisting}
 Number all NF body clauses $0,\ldots,m-1$; a path \code{R@c.j.k} names the fixed
 occurrence of clause $c$, extended by branch/clause pairs per nesting level.
@@ -22,16 +23,21 @@ Equalities and constraints are internal relational syntax.
 columns are unbound; every atom's full correlated row is eventually checked;
 (2)~each identity, constraint and negation appears exactly once, after its
 variables bind, and binds nothing; negation preserves its source atom;
-(3)~Rust lets, generators and guards form the written chain (a tree under blocks, union
-siblings unordered, fallback siblings ordered); each is preceded by its
-free-variable binders and every source Before fact;
-(4)~a reduction names a different atom or Rust-free derived block and lists
+(3)~partial Rust lets, generators and guards form the written chain (a tree
+under blocks, union siblings unordered, fallback siblings ordered); each is
+preceded by its free-variable binders and every source Before fact.
+Bindings and guards recognized by the typed CQ-Arith grammar are total and
+excluded from that chain, but retain their dependencies, exactly-once coverage,
+and Before obligations at later partial Rust steps, including Rustful blocks;
+(4)~a reduction names a different atom or Rust-free hoisted block and lists
 exactly the shared equality classes at its support's column positions; it
 precedes the target's first subatom, except that a target already read to
 supply a finite block domain restricts the retained prefix instead;
 no Rust guard, scalar bind, generator or negation is a reduction target or support;
 the reduction graph need not be acyclic;
-(5)~blocks recursively check kind, paths, interface coverage and arm schedules;
+(5)~blocks recursively check kind, paths, interface coverage, arm schedules and
+the required placement field. Hoisted blocks contain no Rust steps; correlated
+blocks require every free prefix variable. Repeated reads retain placement;
 (6)~independent join branches are disjoint connected groups of at least two
 full atom occurrences in a flat, Rust-free scope. Each records exactly its
 external interface and head columns; local predicates execute inside the
@@ -46,6 +52,19 @@ only other members, so a branch cannot depend on its future fact-side probe.
  \forall b\in B.\ I_b=\mathsf{Interface}(q,b)\quad
  \mathsf{EarlierBranchLocalReductions}(b)}
  {\mathsf{JoinBranches}(q,B)\Downarrow\ok}
+
+\Rule{WF-VO-Arithmetic}{T=\{i\mid\Gamma\vdash c_i:\mathsf{CQArith}\}\\
+ \mathsf{PartialChain}=[i\mid c_i\text{ is Rust},\ i\notin T]\\
+ \forall i\in T.\ \mathsf{Deps}(i)\subseteq B_i\ \land\ \mathsf{PlacedOnce}(i)\\
+ \forall p\text{ partial step or block}.\ T\cap[0,p)\subseteq\mathsf{CompleteBefore}(p)}
+ {\mathsf{ArithmeticSchedule}(t)\Downarrow\ok}
+
+\Rule{WF-BlockPlacement}{b.placement\in\{\mathsf{hoisted},\mathsf{correlated}\}\\
+ b.placement=\mathsf{hoisted}\Longrightarrow\neg\mathsf{Rust}(b)\\
+ b.placement=\mathsf{correlated}\Longrightarrow F_b\subseteq B\\
+ \mathsf{RepeatedReadsAgree}(b.placement)\quad
+ \mathsf{ReductionOperands}(t)\cap\mathsf{CorrelatedBlocks}(t)=\emptyset}
+ {\mathsf{BlockPlacement}(b,B,t)\Downarrow\ok}
 
 \Rule{WF-VO}{\mathsf{WF}_{NF}(t.cq)\quad\mathsf{Schedule}(t,A)\quad
  \mathsf{JoinBranches}(t.cq,t.branches)\Downarrow\ok}

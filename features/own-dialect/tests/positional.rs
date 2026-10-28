@@ -80,9 +80,9 @@ fn positional_predicate_does_not_shadow_an_opaque_guard_capture() {
     let __push_position_r1 = 2_i64;
     let rows = [(1_i64,), (2,), (3,)];
     macro_rules! run {
-        ($($printer:ident)::+) => {
+        ($endpoint:ident, $($printer:ident)::+) => {
             mini_linq::compile! {
-                pipeline { print = $($printer)::+; select = mini_linq::passes::select(positional(r)); }
+                pipeline { print_input = $endpoint; print = $($printer)::+; select = mini_linq::passes::select(positional(r)); }
                 struct GuardHygiene;
                 relation r(x:i64) = (rows);
                 answer(x) :- r(x), if *x >= 1, if keep(x, __cq_r1_predicate), if keep(x, __push_position_r1);
@@ -91,8 +91,8 @@ fn positional_predicate_does_not_shadow_an_opaque_guard_capture() {
             .collect()
         };
     }
-    let values: Vec<_> = run!(mini_linq::passes::translate_pull);
-    let pushed: Vec<_> = run!(own_push::push);
+    let values: Vec<_> = run!(sequence, mini_linq::passes::translate_pull);
+    let pushed: Vec<_> = run!(structures, own_push::push);
     assert_eq!(values, pushed);
     assert_eq!(values, vec![1]);
 }
@@ -149,10 +149,11 @@ fn borrowed_scalar_point_and_range_parameters_agree() {
     let rows = [(1_i64,), (2,), (3,)];
     let cutoff = &&2_i64;
     macro_rules! run {
-        ($printer:path, $comparison:tt) => {
+        ($endpoint:ident, $printer:path, $comparison:tt) => {
             mini_linq::compile! {
                 pipeline {
                     select = mini_linq::passes::select(positional(R));
+                    print_input = $endpoint;
                     print = $printer;
                 }
                 struct BorrowedParameter;
@@ -163,10 +164,13 @@ fn borrowed_scalar_point_and_range_parameters_agree() {
             .collect::<Vec<_>>()
         };
     }
-    assert_eq!(run!(mini_linq::passes::translate_pull, ==), [2]);
-    assert_eq!(run!(own_push::push, ==), [2]);
-    assert_eq!(run!(mini_linq::passes::translate_pull, >=), [2, 3]);
-    assert_eq!(run!(own_push::push, >=), [2, 3]);
+    assert_eq!(run!(sequence, mini_linq::passes::translate_pull, ==), [2]);
+    assert_eq!(run!(structures, own_push::push, ==), [2]);
+    assert_eq!(
+        run!(sequence, mini_linq::passes::translate_pull, >=),
+        [2, 3]
+    );
+    assert_eq!(run!(structures, own_push::push, >=), [2, 3]);
 }
 
 #[test]
@@ -245,4 +249,4 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
     compare!(empty, 0usize, 0usize, BTreeSet::<(i64, i64)>::new());
 }
 
-cq_testkit::positional_cases!(own_push::push);
+cq_testkit::positional_cases!(structures; own_push::push);

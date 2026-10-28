@@ -19,6 +19,7 @@ refinement statement). Build `build/compiler.pdf` with the command below.
 | Datalog and parallel rounds | [datalog.tex](datalog.tex) |
 | Validation | [validation.tex](validation.tex) |
 | Rule classification and implementing source markers | [rules.tsv](rules.tsv) |
+| Rule-by-rule conformance (premises vs code, invariants, missing rules) | [CONFORMANCE.md](CONFORMANCE.md), [conformance/](conformance/) |
 
 ```sh
 make -C doc/formal pdf
@@ -26,11 +27,15 @@ make -C doc/formal check
 make -C doc/formal example
 ```
 
-`check.py` checks rule inventory and unique marker presence only. It does not
+`check.py` checks rule inventory and unique marker presence, and that every
+conformance row names an existing rule, file and status. It does not
 check semantic correspondence between a rule and code, prove conformance, or
 run the examples. Implementation rules summarize structural code checks; trusted semantic
 premises such as Eq/Ord admissibility are not proved by them; abstract rules state mathematical laws or
-metalinguistic judgments. Marker presence alone is not evidence of that match.
+metalinguistic judgments. Marker presence alone is not evidence of that match;
+the conformance tables record, per rule, whether the code checks exactly the
+written premises (`exact`), less (`weaker`), more (`stronger`), nothing
+(`unimplemented`), or makes a decision no rule governs (`no-rule`).
 
 [TERMINOLOGY.md](TERMINOLOGY.md) maps the specification's terms to the
 textbook and course notes; [PLANNING-COVERAGE.md](PLANNING-COVERAGE.md) maps
@@ -69,6 +74,7 @@ trait guards and expansion fixtures are covered by the crate tests listed in
 correspondence `check`.
 
 The manuscript describes source revision `3b21e5d`. Its exact written reference
-is desugared CQ-NF with Written/Coarse and `cq_elaborate::compile_written`;
+is desugared CQ-NF passed through `cq_order::compile_written` (Written/Coarse
+with recorded correlated blocks) and `cq_elaborate::compile_written`;
 the default `plan` uses optimizing elaboration. Core blocks and
 multi-rule union sugar require no surface union extension.

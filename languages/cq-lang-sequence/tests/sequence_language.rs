@@ -618,6 +618,7 @@ fn node(name: &str, collaborative: bool, dynamic: bool, children: Vec<LevelNode>
 
 fn sequential() -> Machine {
     Machine {
+        gpu: None,
         layout: None,
         name: syn::parse_quote!(target),
         items: 1,
@@ -629,6 +630,7 @@ fn sequential() -> Machine {
 
 fn gpu() -> Machine {
     Machine {
+        gpu: None,
         layout: None,
         name: syn::parse_quote!(target),
         items: 4,
@@ -905,7 +907,9 @@ fn reserve_previous_round_trips_without_claiming_capacity() {
     let p = program(quote!(a = store rows r; output reserve_previous;));
     assert_eq!(p.sequence.output, Some(OutputProtocol::ReservePrevious));
     assert_eq!(
-        OutputProtocol::ReservePrevious.to_token_stream().to_string(),
+        OutputProtocol::ReservePrevious
+            .to_token_stream()
+            .to_string(),
         "reserve_previous"
     );
     assert_eq!(syn::parse2::<Program>(p.to_token_stream()).unwrap(), p);
@@ -985,6 +989,21 @@ fn choose_unknown_lengths_need_capacity_only_when_stored() {
     grade(&mut stored, quote!(a at device;));
     reject_grade(&stored, &gpu(), "BE-Length");
     contract::check(&program(quote!(a = store capacity 42 #body;))).unwrap();
+}
+
+#[test]
+fn separated_store_uses_checked_lengths_through_maps_and_choices() {
+    let mut unknown = program(quote! {
+        a = store map r choose [len r < 3 => rows r, else => canon rows r];
+    });
+    grade(&mut unknown, quote!(a at device;));
+    reject_grade(&unknown, &gpu(), "BE-Length");
+
+    let mut equal = program(quote! {
+        a = store choose [len r < 3 => rows r, else => map r rows r];
+    });
+    grade(&mut equal, quote!(a at device;));
+    check_grading(&equal, &gpu()).unwrap();
 }
 
 #[test]
@@ -1158,7 +1177,7 @@ fn bind_rejects_membership_as_range_cursor() {
         } structures {
             l host scan = Reader [];
             r host scan = Reader [];
-            r host selected = Reader [tag];
+            r host result(selected) = Reader [tag];
             selected = Provider [a] membership payload [a] constants {tag = 7};
             j canon = Canon;
         } sequence {
@@ -1226,6 +1245,7 @@ fn ungraded_programs_default_to_host_only() {
 #[test]
 fn leaf_flatten_is_sequential_but_parent_fold_needs_collaboration() {
     let tasks = Machine {
+        gpu: None,
         layout: None,
         name: syn::parse_quote!(target),
         items: 1,
@@ -1364,6 +1384,36 @@ fn membership_compact_records_polarity_and_never_enumerates() {
         let mut changed = p.clone();
         changed.sequence.definitions[0].term = syn::parse_quote!(compact j lookup r [] rows l);
         reject(&changed, "BE-Alpha");
+    }
+}
+
+#[test]
+fn empty_key_membership_uses_named_reader_not_scan_adapter() {
+    for operation in ["semi", "anti"] {
+        let program: Program = syn::parse_str(&format!(
+            "physical {{
+                relation L(a:i32); relation R(b:i32);
+                l = pipe rename L@0 {{a -> a}};
+                r = pipe rename R@1 {{b -> b}};
+                scan = pipe canon {operation} eager [] l,r;
+                return scan as answer(a);
+            }} structures {{
+                l host scan = ScanAdapter [];
+                r host scan = ScanAdapter [];
+                r host result(scan) = MembershipProvider [];
+                scan canon = Canon;
+            }} sequence {{
+                answer = compact scan lookup r [] rows l;
+            }}"
+        ))
+        .unwrap();
+        let analysis = contract::check(&program).unwrap();
+        assert!(analysis.obligations.iter().any(|obligation| matches!(
+            obligation,
+            Obligation::Provider { provider, keys, capability: Capability::Membership, ty }
+                if provider == "r" && keys.is_empty()
+                    && ty.to_token_stream().to_string() == "MembershipProvider"
+        )));
     }
 }
 
@@ -1610,6 +1660,11 @@ fn grouped_program(keys: proc_macro2::TokenStream, body: proc_macro2::TokenStrea
     } else {
         quote!(#keys,)
     };
+    let accumulator = if keys.is_empty() {
+        quote!()
+    } else {
+        quote!(grouped group = ::std::collections::HashMap<_, (usize, i64, Option<i64>, Option<i64>,)>;)
+    };
     syn::parse2(quote! {
         physical {
             relation R(k:i32, witness:i32, value:i64);
@@ -1625,6 +1680,7 @@ fn grouped_program(keys: proc_macro2::TokenStream, body: proc_macro2::TokenStrea
         structures {
             r host scan = Reader [];
             r canon = Canon;
+            #accumulator
         }
         sequence { #body }
     })
@@ -1875,6 +1931,7 @@ fn key_pool() -> Machine {
     );
     pool.width = Some(4);
     Machine {
+        gpu: None,
         key_partition_threshold: 65536,
         root: node("host", false, false, vec![pool]),
         ..sequential()
@@ -2177,7 +2234,10 @@ fn partial_group_metadata_uses_constructor_preorder_and_definition_ownership() {
             all_rows = pipe group by_key by [] { grand_total:i64 = sum(subtotal); };
             return all_rows as answer(grand_total);
         }
-        structures { r host scan = Reader []; r canon = Canon; by_key canon = Canon; }
+        structures {
+            r host scan = Reader []; r canon = Canon; by_key canon = Canon;
+            by_key group = ::std::collections::HashMap<_, (i64,)>;
+        }
         sequence {
             input = store rows r;
             output_rows = store group all_rows group by_key tile 4 input;

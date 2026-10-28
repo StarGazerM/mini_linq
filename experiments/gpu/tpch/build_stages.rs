@@ -5,6 +5,7 @@ use quote::{ToTokens, format_ident, quote};
 use serde_json::json;
 use std::collections::BTreeMap;
 
+/// Formal rule DR-Target: Compile the selected input target once; rejection never changes it.
 pub fn compile(
     program: &stages::Program,
     query: &str,
@@ -23,7 +24,7 @@ pub fn compile(
     let mut sequential = Vec::new();
     let mut artifacts = Vec::new();
     let mut output_types: Vec<Vec<syn::Type>> = Vec::new();
-    let mut resident = Vec::new();
+    let mut publication_facts: Vec<crate::Publication> = Vec::new();
     for (index, stage) in program.stages.iter().enumerate() {
         let mut types = BTreeMap::new();
         let mut publications = BTreeMap::new();
@@ -45,13 +46,16 @@ pub fn compile(
                     .map(|(column, ty)| (column.name.clone(), ty.clone()))
                     .collect();
                 types.insert(name.clone(), columns);
-                publications.insert(name, resident[producer]);
+                publications.insert(name, publication_facts[producer].clone());
                 dependencies.push(format_ident!("result_{producer}"));
             } else if let Some(preprocess) =
                 program.preprocessing.iter().find(|p| p.name == input.name)
             {
                 types.insert(name.clone(), preprocess.columns.clone());
-                publications.insert(name, false);
+                publications.insert(name, crate::Publication {
+                    placement: advice::Placement::Host,
+                    nullable: vec![false; preprocess.columns.len()],
+                });
                 dependencies.push(preprocess.name.clone());
             }
         }
@@ -59,47 +63,16 @@ pub fn compile(
         let pipeline = if let Some(pipeline) = override_pipeline {
             pipeline.clone()
         } else if mode == "automatic" {
-            advice::Pipeline::baseline()
+            advice::Pipeline::automatic()
         } else {
             advice::Pipeline::staged(query, index)
         };
-        let profile = if mode == "advised" && override_pipeline.is_none() {
-            format!("{query}.{index}")
-        } else {
-            mode.to_owned()
-        };
-        let (code, mut artifact) = match compile_stage(
+        let (code, mut artifact) = compile_stage(
             &kernel,
             manifest,
             &pipeline,
-            &profile,
             Some(&publications),
-            false,
-        ) {
-            Ok(compiled) => compiled,
-            Err(device_rejection) => {
-                if override_pipeline.is_some() {
-                    return Err(device_rejection);
-                }
-                // A stage that cannot be device-graded is independently planned
-                // on the sequential machine. The rejection remains in its trace;
-                // this is a host publication, never a fake device success.
-                let mut host_pipeline = pipeline.clone();
-                host_pipeline.structures.clear();
-                host_pipeline.sequence.clear();
-                host_pipeline.complete = false;
-                let (code, mut artifact) = compile_stage(
-                    &kernel,
-                    manifest,
-                    &host_pipeline,
-                    mode,
-                    Some(&publications),
-                    true,
-                )?;
-                artifact["device_rejection"] = json!({"phase": device_rejection.phase, "error": device_rejection.error, "term": device_rejection.term});
-                (code, artifact)
-            }
-        };
+        )?;
         artifact["stage"] = json!(index);
         artifact["cpu_query"] = json!(kernel.cpu_query().to_string());
         artifact["dependencies"] = json!(
@@ -118,7 +91,8 @@ pub fn compile(
                 .collect::<syn::Result<_>>()
                 .map_err(|error| reject(Box::new(error)))?,
         );
-        resident.push(artifact["publication"] == "device");
+        publication_facts.push(serde_json::from_value(artifact["publication_facts"].clone())
+            .map_err(|error| reject(Box::new(error)))?);
         artifacts.push(artifact);
         let module = format_ident!("stage_{index}");
         let data = format_ident!("data_{index}");
@@ -144,7 +118,7 @@ pub fn compile(
         let module = format_ident!("stage_{index}");
         let data = format_ident!("data_{index}");
         let result = format_ident!("result_{index}");
-        let download = if resident[index] {
+        let download = if publication_facts[index].resident() {
             quote!(#result.to_host()?)
         } else {
             quote!(#result)

@@ -182,7 +182,7 @@ fn projected_selection_recovers_its_original_scan_and_predicate() {
     );
     assert!(target.structures.structures.entries.iter().any(|entry| {
         entry.name == "raw"
-            && matches!(&entry.structure, structures::Structure::Host { reader, .. } if reader == "scan")
+            && matches!(&entry.structure, structures::Structure::Host { reader, .. } if matches!(reader, structures::ReaderRef::Scan))
     }));
     check_rewrite(&source, &target).unwrap();
 }
@@ -262,7 +262,7 @@ fn retained_leaves_replace_only_obsolete_host_keyed_fallbacks() {
         structures {
             l host scan = Reader []; r host scan = Reader [];
             t host scan = Reader []; filtered = Index [b];
-            r host filtered = Reader [b]; r host lr = Reader [a]; joined canon = Canon;
+            r host result(filtered) = Reader [b]; r host result(lr) = Reader [a]; joined canon = Canon;
         }
     };
     let source = cq_sequence_lowering::compile(&structures).unwrap();
@@ -285,7 +285,7 @@ fn retained_leaves_replace_only_obsolete_host_keyed_fallbacks() {
             .iter()
             .any(|entry| entry.name == "r"
                 && matches!(&entry.structure,
-            structures::Structure::Host { reader, .. } if reader != "scan"))
+            structures::Structure::Host { reader, .. } if !matches!(reader, structures::ReaderRef::Scan)))
     );
 }
 
@@ -305,7 +305,7 @@ fn authored_lazy_host_reads_are_not_replaced_by_retention() {
         structures {
             l host scan = Reader []; r host scan = Reader [];
             t host scan = Reader []; t = Index [a];
-            r host filtered = Reader [a]; r host joined = Reader [a,b];
+            r host result(filtered) = Reader [a]; r host result(joined) = Reader [a,b];
             joined canon = Canon;
         }
     };
@@ -724,7 +724,7 @@ fn heterogeneous_catalog_selects_each_new_layout_and_preserves_authored_types() 
             r host scan = Reader []; s host scan = Reader [];
             t host scan = Reader []; u host scan = Reader [];
             s = AuthoredInteger [a]; t = AuthoredString [b];
-            u host answer = Reader [c]; answer canon = Canon;
+            u host result(answer) = Reader [c]; answer canon = Canon;
         }
     };
     let source = cq_sequence_lowering::compile(&structures).unwrap();
@@ -842,7 +842,7 @@ fn catalog_advice_rejects_unavailable_generated_row_types() {
         }
         structures {
             r host scan = Reader []; s host scan = Reader [];
-            s host answer = Reader [a]; answer canon = Canon;
+            s host result(answer) = Reader [a]; answer canon = Canon;
         }
     };
     let source = cq_sequence_lowering::compile(&structures).unwrap();
@@ -1071,7 +1071,10 @@ fn live_smallest_prefix_keeps_candidate_and_membership_fallbacks() {
     let after = cq_lang_sequence::contract::check(&target).unwrap();
     let mut preserved = 0;
     for (key, ty) in &before.structures.fallbacks {
-        if key.1 == "candidates" || key.1 == "membership" {
+        if matches!(
+            key.1,
+            structures::ReaderRef::Candidates | structures::ReaderRef::Membership
+        ) {
             assert_eq!(after.structures.fallbacks.get(key), Some(ty));
             preserved += 1;
         }
@@ -1137,7 +1140,10 @@ fn removed_smallest_region_drops_only_its_obsolete_fallbacks() {
             .structures
             .fallbacks
             .keys()
-            .all(|(_, reader, _)| reader != "candidates" && reader != "membership")
+            .all(|(_, reader, _)| !matches!(
+                reader,
+                structures::ReaderRef::Candidates | structures::ReaderRef::Membership
+            ))
     );
     check_rewrite(&source, &target).unwrap();
 }
@@ -1194,8 +1200,8 @@ fn native_intersection_merge_retains_displaced_left_reader() {
             return r3 as intersection(x);
         }
         structures {
-            r0 host scan = Reader []; r0 host r2 = OrderedReader [x];
-            r1 host scan = Reader []; r1 host r2 = OrderedReader [x];
+            r0 host scan = Reader []; r0 host result(r2) = OrderedReader [x];
+            r1 host scan = Reader []; r1 host result(r2) = OrderedReader [x];
             r3 canon = Canon;
         }
     };
@@ -1210,7 +1216,7 @@ fn native_intersection_merge_retains_displaced_left_reader() {
     assert!(facts.structures.retained.contains_key("r0"));
     assert!(!target.structures.structures.entries.iter().any(|entry| {
         entry.name == "r0"
-            && matches!(&entry.structure, structures::Structure::Host { reader, .. } if reader == "r2")
+            && matches!(&entry.structure, structures::Structure::Host { reader, .. } if reader.result().is_some_and(|name| name == "r2"))
     }));
     check_rewrite(&source, &target).unwrap();
 }

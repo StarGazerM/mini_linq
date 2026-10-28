@@ -207,7 +207,6 @@ pub unsafe fn fold(
     let mut offsets = temporary::<u32>(stream, rows.max(1))?;
     let flags = temporary::<u32>(stream, rows)?;
     let mut count = temporary::<u64>(stream, 1)?;
-    let config = crate::config(rows.max(1));
     if rows != 0 {
         let mut scratch = if keys == 0 {
             None
@@ -218,18 +217,33 @@ pub unsafe fn fold(
             >(&launch, rows)?)
         };
         if live.is_none() {
+            let shape =
+                module.prepare_identity(cuda_core::LaunchConfig1D::new(1, 256, 0))?;
+            let blocks = cq_gpu_runtime::launch_grid_for_kernel(
+                shape.function(), rows.div_ceil(256), 256, 0,
+            )?;
             module.identity(
                 stream,
-                &module.prepare_identity(config)?,
+                &module.prepare_identity(cuda_core::LaunchConfig1D::new(blocks, 256, 0))?,
                 pointer(&order),
                 rows as u32,
             )?;
         }
+        let gather_prepared = if keys != 0 {
+            let shape =
+                module.prepare_gather_key(cuda_core::LaunchConfig1D::new(1, 256, 0))?;
+            let blocks = cq_gpu_runtime::launch_grid_for_kernel(
+                shape.function(), rows.div_ceil(256), 256, 0,
+            )?;
+            Some(module.prepare_gather_key(cuda_core::LaunchConfig1D::new(blocks, 256, 0))?)
+        } else {
+            None
+        };
         // Stable least-significant-field passes produce lexicographic group order.
         for key in (0..keys).rev() {
             module.gather_key(
                 stream,
-                &module.prepare_gather_key(config)?,
+                gather_prepared.as_ref().expect("nonempty group key domain"),
                 input.ptr(),
                 pointer(&order),
                 pointer(&sort_keys),
@@ -255,9 +269,13 @@ pub unsafe fn fold(
                 std::mem::swap(&mut sort_keys, &mut alternate_keys);
             }
         }
+        let shape = module.prepare_boundaries(cuda_core::LaunchConfig1D::new(1, 256, 0))?;
+        let blocks = cq_gpu_runtime::launch_grid_for_kernel(
+            shape.function(), rows.div_ceil(256), 256, 0,
+        )?;
         module.boundaries(
             stream,
-            &module.prepare_boundaries(config)?,
+            &module.prepare_boundaries(cuda_core::LaunchConfig1D::new(blocks, 256, 0))?,
             input.ptr(),
             pointer(&order),
             pointer(&flags),

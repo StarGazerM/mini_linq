@@ -188,11 +188,7 @@ pub(crate) fn partial(
             "Tasks partial map lacks Group provenance",
         ));
     };
-    let types = group
-        .aggregates
-        .iter()
-        .map(|aggregate| aggregate.ty.clone())
-        .collect::<Vec<_>>();
+    let provider = emitter.analysis.structures.groups[&result].clone();
     let identities = group
         .aggregates
         .iter()
@@ -251,6 +247,7 @@ pub(crate) fn partial(
     let mut local = input.clone();
     local.depth = 0;
     let (binding, prepare, parts) = if let Some(super::TaskTile {
+        producer: _,
         binding,
         prepare,
         parts,
@@ -289,7 +286,7 @@ pub(crate) fn partial(
         let __cq_partials = ::cq_storage::parallel::map_index(
             __cq_tiles.len().div_ceil(__cq_tiles_per_task),
             &|__cq_task| {
-                let mut #table = ::std::collections::HashMap::<_, (#(#types,)*)>::new();
+                let mut #table: #provider = ::core::default::Default::default();
                 let __cq_start = __cq_task * __cq_tiles_per_task;
                 let __cq_end = (__cq_start + __cq_tiles_per_task).min(__cq_tiles.len());
                 for __cq_index in __cq_start..__cq_end {
@@ -299,7 +296,7 @@ pub(crate) fn partial(
                 #table
             },
         );
-        let mut #table = ::std::collections::HashMap::<_, (#(#types,)*)>::new();
+        let mut #table: #provider = ::core::default::Default::default();
         for __cq_map in __cq_partials {
             for (__cq_keys, __cq_partial) in __cq_map {
                 let __cq_state = #table.entry(__cq_keys).or_insert_with(|| (#(#identities,)*));
@@ -383,6 +380,7 @@ pub(crate) fn global(
     let mut local = input.clone();
     local.depth = 0;
     let (parts, binding, prepare) = if let Some(super::TaskTile {
+        producer: _,
         binding,
         prepare,
         parts,

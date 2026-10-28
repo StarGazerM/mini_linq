@@ -8,6 +8,7 @@ symbolic host fields, never values baked in from a particular corpus.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import ast
 import hashlib
 import importlib.util
@@ -25,7 +26,7 @@ def tuple_type(arity: int) -> str:
     return "(" + "i32, " * arity + ")"
 
 
-def generate(repo: Path, field_flow: bool, output: Path) -> None:
+def generate(repo: Path, field_flow: bool, output: Path, plans: bool = False) -> None:
     source = repo / "examples/doop.py"
     text = source.read_text()
     tree = ast.parse(text)
@@ -116,7 +117,73 @@ def generate(repo: Path, field_flow: bool, output: Path) -> None:
     for r in outputs:
         values = ", ".join(f"row.{i}" for i in range(r.arity))
         lines.append(f'        crate::export_rows(&dir.join("{r.name}.csv"), self.{ident(r.name)}.iter().map(|row| [{values}]))?;')
-    lines += ["        Ok(())", "    }", "}", "#[macro_export]", "macro_rules! srd_doop_engine {", "    ($name:ident, pipeline { $($pipeline:tt)* }) => {", "        #[allow(non_snake_case, unused_variables)]", "        pub fn $name(facts: $crate::SrdFacts) -> $crate::SrdResults {", "            let constants = facts.constants;", "            let (" + ", ".join(ident(r.name) for r in outputs) + ",) = cq_datalog::datalog! {", "                pipeline { $($pipeline)* }", "                struct SrdDoop;"]
+    def label(rule, head_index):
+        if not re.fullmatch(r"[A-Za-z_]\w*", rule.name or ""):
+            raise ValueError(f"rule needs an identifier name for its label: {rule.name!r}")
+        return rule.name if len(rule.heads) == 1 else f"{rule.name}_{head_index}"
+
+    def positive(rule, index):
+        if not 0 <= index < len(rule.body) or not isinstance(rule.body[index], Atom):
+            raise ValueError(f"rule {rule.name}: plan clause {index} is not a positive atom")
+        return f"{ident(rule.body[index].rel)}@{index}"
+
+    def plan_order(rule, plan):
+        """SRDatalog clause indices, as an atom-at-a-time order.
+
+        An explicit clause_order is kept. A var_order is a generic-join level
+        order; it becomes a greedy atom order: the delta atom of a delta version
+        leads, then each step takes an atom sharing a bound variable when one
+        exists, preferring the atom whose variables all bind earliest in
+        var_order. Filters and negations keep their written positions.
+        """
+        if plan.clause_order:
+            return [i for i in plan.clause_order if isinstance(rule.body[i], Atom)]
+        level = {v: i for i, v in enumerate(plan.var_order)}
+        variables = {}
+        for i, c in enumerate(rule.body):
+            if isinstance(c, Atom):
+                names = {a.var_name for a in c.args if a.kind == ArgKind.LVAR and a.var_name != "_"}
+                missing = sorted(names - level.keys())
+                if missing:
+                    raise ValueError(f"rule {rule.name}: var_order omits {missing}")
+                variables[i] = names
+        order, bound = [], set()
+        while len(order) < len(variables):
+            def key(i):
+                levels = [level[n] for n in variables[i]] or [-1]
+                return (i != plan.delta, bool(bound) and not variables[i] & bound, max(levels), min(levels), i)
+            best = min((i for i in variables if i not in order), key=key)
+            order.append(best)
+            bound |= variables[best]
+        return order
+
+    # SRDatalog's `with_plan` orders are variable orders for its generic join
+    # and its load-balancing pragmas. Translated into atom-at-a-time orders
+    # they measured slower for the delta versions; the planner's connected
+    # default is the reference. `--plans` emits them as advice for comparison.
+    lowered = ("delta", "var_order", "clause_order")
+    source_plans = sum(len(rule.plans) for rule in program.rules)
+    emitted, unlowered = [], {}
+    for rule in program.rules:
+        for plan in rule.plans if plans else ():
+            flags = sorted(f.name for f in dataclasses.fields(plan)
+                           if f.name not in lowered and getattr(plan, f.name) != f.default)
+            order = ", ".join(positive(rule, i) for i in plan_order(rule, plan))
+            delta = f"delta({positive(rule, plan.delta)}), " if plan.delta >= 0 else ""
+            for h in range(len(rule.heads)):
+                emitted.append(f"plan({label(rule, h)}, {delta}order({order}));")
+                if flags:
+                    unlowered[f"{label(rule, h)}@{plan.delta}"] = flags
+    lines += ["        Ok(())", "    }", "}",
+              "/// `incremental(ADVICE)` runs SRDatalog's authored per-version join orders",
+              "/// after ADVICE (for example `driver(delta_first);`); `pipeline` alone does not.",
+              "#[macro_export]", "macro_rules! srd_doop_engine {",
+              "    ($name:ident, incremental($($advice:tt)*), pipeline { $($pipeline:tt)* }) => {",
+              "        $crate::srd_doop_engine!($name, pipeline {",
+              "            incremental = ::cq_datalog::passes::incremental($($advice)*"]
+    lines += [f"                {p}" for p in emitted]
+    lines += ["            );", "            $($pipeline)*", "        });", "    };",
+              "    ($name:ident, pipeline { $($pipeline:tt)* }) => {", "        #[allow(non_snake_case, unused_variables)]", "        pub fn $name(facts: $crate::SrdFacts) -> $crate::SrdResults {", "            let constants = facts.constants;", "            let (" + ", ".join(ident(r.name) for r in outputs) + ",) = cq_datalog::datalog! {", "                pipeline { $($pipeline)* }", "                struct SrdDoop;"]
     for r in relations:
         columns = ", ".join(f"c{i}: i32" for i in range(r.arity))
         initializer = f" = (facts.{ident(r.name)})" if r.input_file else ""
@@ -124,9 +191,12 @@ def generate(repo: Path, field_flow: bool, output: Path) -> None:
     lines.append("                output " + ", ".join(ident(r.name) for r in outputs) + ";")
     for rule in program.rules:
         try:
-            body = ", ".join(clause(c) for c in rule.body)
+            body = [clause(c) for c in rule.body]
+            if len(body) != len(rule.body):
+                raise ValueError("body clauses must translate one-to-one for plan clause indices")
             lines.append(f"                // {rule.name}")
-            lines.extend(f"                {atom(h, True)} :- {body};" for h in rule.heads)
+            lines.extend(f"                {label(rule, i)}: {atom(h, True)} :- {', '.join(body)};"
+                         for i, h in enumerate(rule.heads))
         except ValueError as error:
             raise ValueError(f"{source}: rule {rule.name}: {error}") from error
     lines += ["            };", "            $crate::SrdResults {"]
@@ -137,7 +207,8 @@ def generate(repo: Path, field_flow: bool, output: Path) -> None:
     schema = {"source_sha256": hashlib.sha256(text.encode()).hexdigest(), "field_flow": field_flow,
               "source_rules": len(program.rules), "expanded_rules": sum(len(r.heads) for r in program.rules),
               "inputs": {r.name: {"arity": r.arity, "file": r.input_file} for r in inputs},
-              "outputs": {r.name: r.arity for r in outputs}, "metadata_keys": keys}
+              "outputs": {r.name: r.arity for r in outputs}, "metadata_keys": keys,
+              "source_plans": source_plans, "plans": len(emitted), "unlowered_plan_flags": unlowered}
     output.with_suffix(".schema.json").write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n")
 
 
@@ -146,5 +217,6 @@ if __name__ == "__main__":
     parser.add_argument("--srd-repo", type=Path, required=True)
     parser.add_argument("--field-flow", action="store_true")
     parser.add_argument("--output", type=Path, default=Path(__file__).parent / "src/generated.rs")
+    parser.add_argument("--plans", action="store_true", help="emit SRDatalog with_plan orders as plan(..) advice")
     args = parser.parse_args()
-    generate(args.srd_repo.resolve(), args.field_flow, args.output)
+    generate(args.srd_repo.resolve(), args.field_flow, args.output, args.plans)

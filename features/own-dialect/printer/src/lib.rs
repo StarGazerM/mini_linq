@@ -1,4 +1,4 @@
-//! Structures → Rust push printer, composed with `pipeline { print = own_push::push; }`.
+//! Structures → Rust push printer, composed with `pipeline { print_input = structures; print = own_push::push; }`.
 //!
 //! This explicit terminal keeps its Structures boundary. The default pull route
 //! instead lowers through `sequence`, checks `sequential` grading, and ends at
@@ -77,7 +77,7 @@ impl syn::parse::Parse for Consumer {
 
 /// Structures → unit, invoking an `FnMut(Row)` consumer once per answer.
 ///
-/// Select `print = own_push::push_into(consumer { callback };)`
+/// Select `print_input = structures; print = own_push::push_into(consumer { callback };)`
 /// or use `arguments { consumer { callback }; };` at a direct pass entry.
 /// Consumer evaluation happens once; no result Vec or iterator is constructed.
 #[proc_macro]

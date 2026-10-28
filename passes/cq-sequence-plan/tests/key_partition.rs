@@ -9,6 +9,7 @@ use quote::{ToTokens, quote};
 
 fn machine(parts: Option<usize>) -> Machine {
     Machine {
+        gpu: None,
         name: syn::parse_quote!(tasks),
         layout: None,
         items: 1,
@@ -86,6 +87,11 @@ fn grouped(global: bool) -> Program {
     } else {
         quote!(returnflag, linestatus,)
     };
+    let accumulator = if global {
+        quote!()
+    } else {
+        quote!(totals group = ::std::collections::HashMap<_, (i64, i64, usize,)>;)
+    };
     syn::parse_quote! {
         physical {
             relation Lineitem(orderkey:i64, linenumber:i32, returnflag:i32, linestatus:i32, quantity:i64, extendedprice:i64);
@@ -101,7 +107,11 @@ fn grouped(global: bool) -> Program {
             };
             return totals as answer(#head sum_qty, sum_base_price, count_order);
         }
-        structures { lineitem host scan = Reader []; lineitem canon = Canonical; }
+        structures {
+            lineitem host scan = Reader [];
+            lineitem canon = Canonical;
+            #accumulator
+        }
         sequence {
             input = store rows lineitem;
             result = store group totals canon input;
@@ -1801,7 +1811,7 @@ fn expanding_provider_join_requires_exact_count_without_a_host_shortcut() {
         .structures
         .structures
         .entries
-        .push(syn::parse_quote!(l host joined = Ordered [a];));
+        .push(syn::parse_quote!(l host result(joined) = Ordered [a];));
     for source in [source, mapped, merged] {
         let routed = key_partition(
             &source,

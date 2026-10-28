@@ -37,7 +37,11 @@ impl Context<'_> {
             return Some(filtered);
         }
         let host = &access.value;
-        let fallback_ty = self.fallback_type(&input_name, name, &access.key);
+        let fallback_ty = self.fallback_type(
+            &input_name,
+            cq_lang_structures::ReaderRef::Result(name.into()),
+            &access.key,
+        );
         let types = access.key.iter().map(|c| &self.infos[&input_name].types[c]);
         let values = access.key.iter().map(|c| &keys[c]);
         let fields = access.key.iter().chain(&access.payload).map(|c| {

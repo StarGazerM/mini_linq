@@ -335,7 +335,12 @@ fn evaluate(
                         format_ident!("__cq_admit_next_{head}", span = Span::mixed_site());
                     let body = admissions.get(head).cloned().unwrap_or_default();
                     let body = if early.contains(head) {
-                        let publish = publication::member(context, *head, certificate);
+                        let record = program.context.strata[stratum_index]
+                            .publication
+                            .iter()
+                            .find(|publication| publication.relation == *head)
+                            .expect("checked member publication");
+                        let publish = publication::member(context, record, certificate);
                         quote!(#body let #next = ::core::mem::take(#next_ref); #publish)
                     } else {
                         body.clone()
@@ -678,11 +683,20 @@ mod tests {
     #[test]
     fn host_printer_rejects_batch_holes() {
         let mut program = program();
-        program.round.terminals.0.push(syn::parse_quote!(custom::batch => batch));
+        program
+            .round
+            .terminals
+            .0
+            .push(syn::parse_quote!(custom::batch => batch));
         let hole = &mut program.round.holes[0];
         hole.interface = round::HoleInterface::Batch;
         hole.pipeline.passes.last_mut().unwrap().path = syn::parse_quote!(custom::batch);
-        assert!(compile(&program).unwrap_err().to_string().contains("do not support batch holes"));
+        assert!(
+            compile(&program)
+                .unwrap_err()
+                .to_string()
+                .contains("do not support batch holes")
+        );
     }
 
     /// Canonical admission and certified host inputs belong to Round, not to

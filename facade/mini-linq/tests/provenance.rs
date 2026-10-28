@@ -19,7 +19,12 @@ fn elaborate_expression(
     written: bool,
 ) -> TokenStream {
     let source = cq_lang_cq::normal::normalize(&syn::parse_str(source).unwrap()).unwrap();
-    let vo = cq_order::compile(&source, &options).unwrap();
+    let vo = if written {
+        cq_order::compile_written(&source)
+    } else {
+        cq_order::compile(&source, &options)
+    }
+    .unwrap();
     cq_order::check(&source, &vo, &options).unwrap();
     let ra = if written {
         cq_elaborate::compile_written(&vo).unwrap()
@@ -209,8 +214,9 @@ fn hypergraph_programs(
     };
     let written_vo = cq_order::compile(normal, &ordering).unwrap();
     cq_order::check(normal, &written_vo, &ordering).unwrap();
-    let reference = cq_elaborate::compile_written(&written_vo).unwrap();
-    cq_elaborate::check(&written_vo, &reference).unwrap();
+    let reference_vo = cq_order::compile_written(normal).unwrap();
+    let reference = cq_elaborate::compile_written(&reference_vo).unwrap();
+    cq_elaborate::check(&reference_vo, &reference).unwrap();
     let reductions = cq_reduce::Options {
         semijoins: cq_reduce::Reductions::Tree,
     };

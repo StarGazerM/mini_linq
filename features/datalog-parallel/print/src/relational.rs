@@ -238,6 +238,7 @@ mod tests {
             name: syn::parse_quote!(layout),
             host: syn::parse_quote!(full),
             provider,
+            protocol: round::storage::LayoutProtocol::Bulk,
             maintenance: syn::parse_quote!(insert),
         };
         let mut delta_layout = layout.clone();

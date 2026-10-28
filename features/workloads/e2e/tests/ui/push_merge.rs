@@ -5,6 +5,7 @@ fn main() {
     let _ = mini_linq::compile! {
         pipeline {
             physical = [cq_rewrites::merge_joins];
+            print_input = structures;
             print = own_push::push;
         }
         struct Intersection;

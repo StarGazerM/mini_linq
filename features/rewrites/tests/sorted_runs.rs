@@ -17,11 +17,13 @@ macro_rules! triangle {
 #[test]
 fn public_pipeline_records_sorted_runs_and_executes_default_answers() {
     let baseline: ir::Program = syn::parse_str(triangle!(r, s, t;
+        print_input = structures;
         print = cq_rewrite_test_driver::capture_structures;
     ))
     .unwrap();
     let rewritten: ir::Program = syn::parse_str(triangle!(r, s, t;
         structures = [cq_rewrites::sorted_runs];
+        print_input = structures;
         print = cq_rewrite_test_driver::capture_structures;
     ))
     .unwrap();

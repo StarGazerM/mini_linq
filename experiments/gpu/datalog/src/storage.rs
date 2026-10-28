@@ -34,6 +34,38 @@ impl syn::parse::Parse for Symbols {
         Ok(symbols)
     }
 }
+struct Advice {
+    symbols: Symbols,
+    ratio: usize,
+}
+impl syn::parse::Parse for Advice {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let mut advice = Self { symbols: Symbols::default(), ratio: 4 };
+        let mut seen_symbols = false;
+        let mut seen_ratio = false;
+        while !input.is_empty() {
+            let name: syn::Ident = input.parse()?;
+            let content;
+            syn::parenthesized!(content in input);
+            match name.to_string().as_str() {
+                "symbols" if !seen_symbols => {
+                    let tokens: TokenStream = content.parse()?;
+                    advice.symbols = syn::parse2(quote!(symbols(#tokens)))?;
+                    seen_symbols = true;
+                }
+                "ratio" if !seen_ratio => {
+                    advice.ratio = content.parse::<syn::LitInt>()?.base10_parse()?;
+                    if !content.is_empty() { return Err(content.error("unexpected ratio contents")); }
+                    if advice.ratio < 2 { return Err(syn::Error::new_spanned(name, "device maintenance ratio must be at least two")); }
+                    seen_ratio = true;
+                }
+                _ => return Err(syn::Error::new_spanned(name, "expected unique symbols(...) or ratio(...) advice")),
+            }
+            if !input.is_empty() { input.parse::<syn::Token![,]>()?; }
+        }
+        Ok(advice)
+    }
+}
 
 impl Symbols {
     pub fn codec(&self, ty: &Type) -> Option<&Type> {
@@ -58,27 +90,15 @@ impl Symbols {
         Ok(())
     }
 
-    /// Recover codecs from checked provider schema metadata, including relations
-    /// which never need a keyed layout.
+    /// Formal rule DL-DeviceSymbols: codecs are the declared logical-type map,
+    /// independent of opaque provider spelling and generic arguments.
     pub fn from_program(program: &Program) -> syn::Result<Self> {
-        let mut symbols = Self::default();
-        for provider in &program.providers {
-            for ty in [&provider.canonical_set, &provider.all] {
-                let Type::Path(path) = ty else { continue };
-                let Some(segment) = path.path.segments.last() else { continue };
-                if segment.ident != "DeviceRuns" { continue; }
-                let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else { continue };
-                let Some(syn::GenericArgument::Type(Type::Tuple(schema))) = arguments.args.iter().nth(1) else { continue };
-                for field in &schema.elems {
-                    let Some((logical, codec)) = symbol_parts(field) else { continue };
-                    if let Some(previous) = symbols.codec(logical) {
-                        if previous != codec {
-                            return Err(syn::Error::new_spanned(field, "conflicting codecs for a logical symbol type"));
-                        }
-                    } else {
-                        symbols.0.push((logical.clone(), codec.clone()));
-                    }
-                }
+        let advice = program.device.as_ref().ok_or_else(||
+            syn::Error::new_spanned(program, "missing device storage advice"))?;
+        let symbols = Self(advice.symbols.clone());
+        for (index, (ty, _)) in symbols.0.iter().enumerate() {
+            if scalar(ty).is_ok() || symbols.0[..index].iter().any(|(previous, _)| previous == ty) {
+                return Err(syn::Error::new_spanned(ty, "symbol declarations require unique nonnative logical types"));
             }
         }
         symbols.validate(program)?;
@@ -178,14 +198,10 @@ fn default_provider(types: &[&Type], edb: bool) -> Providers {
     }
 }
 
-fn device_provider(types: &[&Type], edb: bool, symbols: &Symbols) -> syn::Result<Providers> {
+fn device_provider(types: &[&Type], edb: bool, symbols: &Symbols, ratio: usize) -> syn::Result<Providers> {
     let device_types = types.iter().map(|ty| symbols.device_type(ty)).collect::<Vec<_>>();
     let word = word_type(&device_types)?;
-    let runs: Type = if types.iter().any(|ty| symbols.codec(ty).is_some()) {
-        syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word, (#(#device_types,)*)>)
-    } else {
-        syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>)
-    };
+    let runs: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>);
     let mut provider = default_provider(types, edb);
     if edb {
         provider.canonical_set = runs;
@@ -194,7 +210,7 @@ fn device_provider(types: &[&Type], edb: bool, symbols: &Symbols) -> syn::Result
         provider.seen = runs.clone();
         provider.delta = runs.clone();
         provider.next = runs.clone();
-        let init: Expr = syn::parse_quote!(<#runs>::new(__cq_gpu_pool.clone())?);
+        let init: Expr = syn::parse_quote!(<#runs>::new(__cq_gpu_pool.clone(), #ratio)?);
         provider.all_init = init.clone();
         provider.delta_init = init.clone();
         provider.next_init = init;
@@ -218,14 +234,15 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
 }
 
 pub fn compile_with(source: &Program, args: TokenStream) -> syn::Result<Program> {
-    let symbols: Symbols = syn::parse2(args)?;
+    let Advice { symbols, ratio } = syn::parse2(args)?;
     symbols.validate(source)?;
     let analysis = storage::contract::check(source)?;
     let declarations = &source.incremental.strata.source.declarations;
     let mut target = source.clone();
+    target.device = Some(storage::DeviceStorage { symbols: symbols.0.clone(), ratio });
     for (provider, declaration) in target.providers.iter_mut().zip(declarations) {
         let types: Vec<_> = declaration.columns.iter().map(|column| &column.ty).collect();
-        *provider = device_provider(&types, declaration.value.is_some(), &symbols)?;
+        *provider = device_provider(&types, declaration.value.is_some(), &symbols, ratio)?;
     }
     for layout in target.layouts.iter_mut().chain(&mut target.delta_layouts) {
         let declaration = &declarations[analysis.positions[&cq_syntax::symbol_name(&layout.relation)]];
@@ -238,7 +255,7 @@ pub fn compile_with(source: &Program, args: TokenStream) -> syn::Result<Program>
 }
 
 /// Formal rule CK-DL-DeviceStorage:
-/// Only default provider realizations change; every logical and provenance record stays exact.
+/// Only provider realizations and explicit device advice change; logical records stay exact.
 pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
     let analysis = storage::contract::check(source)?;
     let symbols = Symbols::from_program(target)?;
@@ -246,6 +263,7 @@ pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
     if source.incremental != target.incremental
         || source.reads != target.reads
         || source.negations != target.negations
+        || source.device.is_some()
         || source.certificates != target.certificates
         || source.policy != target.policy
         || source.layouts.len() != target.layouts.len()
@@ -263,7 +281,7 @@ pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
         if before != &default_provider(&types, edb) {
             return Err(syn::Error::new_spanned(before, "device storage requires default relation providers"));
         }
-        if after != &device_provider(&types, edb, &symbols)? {
+        if after != &device_provider(&types, edb, &symbols, target.device.as_ref().expect("checked advice").ratio)? {
             return Err(syn::Error::new_spanned(after, "device storage relation provider differs from its packed realization"));
         }
     }
@@ -274,6 +292,7 @@ pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
             || before.columns != after.columns
             || before.key != after.key
             || before.maintenance != after.maintenance
+            || before.protocol != after.protocol
         {
             return Err(syn::Error::new_spanned(after, "device storage changed a layout record or permutation"));
         }
@@ -298,7 +317,7 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
     let declarations = &program.incremental.strata.source.declarations;
     for (provider, declaration) in program.providers.iter().zip(declarations) {
         let types = declaration.columns.iter().map(|column| &column.ty).collect::<Vec<_>>();
-        if provider != &device_provider(&types, declaration.value.is_some(), &symbols)? {
+        if provider != &device_provider(&types, declaration.value.is_some(), &symbols, program.device.as_ref().expect("checked advice").ratio)? {
             return Err(syn::Error::new_spanned(provider, "GPU printer requires checked device_storage providers"));
         }
     }
@@ -341,7 +360,7 @@ mod tests {
         let target = compile_with(&source, quote!(symbols(String => TextCodec))).unwrap();
         assert_eq!(source.incremental, target.incremental);
         assert_eq!(target.providers[0].canonical_set, syn::parse_quote!(
-            ::gpu_datalog_runtime::DeviceRuns<u64, (::gpu_datalog_runtime::Symbol<String, TextCodec>, ::gpu_datalog_runtime::Symbol<String, TextCodec>,)>
+            ::gpu_datalog_runtime::DeviceRuns<u64>
         ));
         assert_eq!(Symbols::from_program(&target).unwrap().codec(&syn::parse_quote!(String)), Some(&syn::parse_quote!(TextCodec)));
         check(&source, &target).unwrap();
@@ -351,9 +370,7 @@ mod tests {
         assert!(compile(&source).is_err());
         assert!(compile_with(&source, quote!(symbols(other::String => TextCodec))).is_err());
         let mut changed = target.clone();
-        changed.providers[0].canonical_set = syn::parse_quote!(
-            ::gpu_datalog_runtime::DeviceRuns<u64, (::gpu_datalog_runtime::Symbol<String, WrongCodec>, ::gpu_datalog_runtime::Symbol<String, WrongCodec>,)>
-        );
+        changed.device.as_mut().unwrap().symbols[0].1 = syn::parse_quote!(WrongCodec);
         assert!(check(&source, &changed).is_err());
         assert!(check_device(&changed).is_err());
         let mut changed = target.clone();
@@ -471,6 +488,23 @@ mod tests {
             assert_eq!(&restored, before);
         }
         assert!(compile(&target).is_err());
+    }
+
+    #[test]
+    fn stored_advice_roundtrips_and_rejects_invalid_ratios() {
+        let source = source();
+        let default = compile(&source).unwrap();
+        assert_eq!(default.device.as_ref().unwrap().ratio, 4);
+        let target = compile_with(&source, quote!(ratio(8))).unwrap();
+        let roundtrip: Program = syn::parse2(quote!(#target)).unwrap();
+        assert_eq!(roundtrip, target);
+        check_device(&roundtrip).unwrap();
+        assert!(compile_with(&source, quote!(ratio(1))).is_err());
+        assert!(compile_with(&source, quote!(ratio(0))).is_err());
+        assert!(compile_with(&source, quote!(ratio(2), ratio(8))).is_err());
+        let mut forged = target.clone();
+        forged.device.as_mut().unwrap().ratio = 4;
+        assert!(check_device(&forged).is_err(), "initializers must consume the recorded ratio");
     }
 
     #[test]

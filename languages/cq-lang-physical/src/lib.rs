@@ -892,7 +892,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 }
                 for c in &s.condition.constraints {
                     for p in c.parameters() {
-                        if row.types.contains_key(&symbol_name(p)) {
+                        if row.types.contains_key(&symbol_name(&p.root)) {
                             return error(p, "relational parameter names an input column");
                         }
                     }

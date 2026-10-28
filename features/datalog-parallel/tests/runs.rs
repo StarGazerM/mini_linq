@@ -28,11 +28,13 @@ fn assert_exact<T: Ord + std::fmt::Debug>(
 ) {
     let rows: Vec<_> = actual.into_iter().collect();
     assert_eq!(
-        rows.len(), expected.len(),
+        rows.len(),
+        expected.len(),
         "duplicate or missing rows: {configuration}/{threads}",
     );
     assert_eq!(
-        &rows.into_iter().collect::<BTreeSet<_>>(), expected,
+        &rows.into_iter().collect::<BTreeSet<_>>(),
+        expected,
         "{configuration}/{threads}",
     );
 }
@@ -70,7 +72,9 @@ fn recursive_keyed_joins_match_round_on_2000_node_sparse_graph() {
     let edges = sparse_graph();
     let expected: BTreeSet<_> = closure!(&edges;
         print = cq_datalog_test_passes::eval_round;
-    ).into_iter().collect();
+    )
+    .into_iter()
+    .collect();
     for threads in [1, 4, 8] {
         rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
             macro_rules! check {

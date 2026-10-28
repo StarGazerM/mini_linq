@@ -14,6 +14,7 @@ enum Kind {
     Selection,
     KeySet,
     JoinFilter,
+    Group,
 }
 
 impl Kind {
@@ -28,6 +29,7 @@ impl Kind {
             "selection" => Some(Self::Selection),
             "keyset" => Some(Self::KeySet),
             "join_filter" => Some(Self::JoinFilter),
+            "group" => Some(Self::Group),
             _ => None,
         }
     }
@@ -118,66 +120,70 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
     let mut changed = false;
     for (index, entry) in target.structures.entries.iter_mut().enumerate() {
         let name = symbol_name(&entry.name);
-        let matches = match request.selector {
-            Selector::Entry(selected) => {
-                index == selected
-                    && !matches!(
-                        entry.structure,
-                        Structure::Read { .. }
-                            | Structure::Repr { .. }
-                            | Structure::Stage { .. }
-                            | Structure::Share { .. }
-                    )
-            }
-            Selector::Result(ref result) => {
-                name == symbol_name(result) && keyed_read(&entry.structure, source)
-            }
-            Selector::JoinFilter(ref result) => {
-                name == symbol_name(result)
-                    && matches!(entry.structure, Structure::JoinFilter { .. })
-            }
-            Selector::Kind(kind) => match &entry.structure {
-                Structure::Dedup { .. } | Structure::HeadDedup { .. } => {
-                    matches!(kind, Kind::Dedup)
+        let matches =
+            match request.selector {
+                Selector::Entry(selected) => {
+                    index == selected
+                        && !matches!(
+                            entry.structure,
+                            Structure::Read { .. }
+                                | Structure::Repr { .. }
+                                | Structure::Stage { .. }
+                                | Structure::Share { .. }
+                        )
                 }
-                Structure::Rows { .. } => matches!(kind, Kind::Rows),
-                Structure::Selection { .. } => matches!(kind, Kind::Selection),
-                Structure::KeySet { .. } => matches!(kind, Kind::KeySet | Kind::Membership),
-                Structure::Read { .. }
-                | Structure::Repr { .. }
-                | Structure::Stage { .. }
-                | Structure::Share { .. } => false,
-                Structure::JoinFilter { .. } => matches!(kind, Kind::JoinFilter),
-                Structure::Host { reader, .. } => {
-                    matches!(kind, Kind::Membership) && reader == "membership"
-                        || source.physical.program.definitions.iter().any(|d| {
-                            symbol_name(&d.name) == symbol_name(reader) && kind.reads(&d.operator)
-                        })
+                Selector::Result(ref result) => {
+                    name == symbol_name(result) && keyed_read(&entry.structure, source)
                 }
-                Structure::Built { keyed, .. } => {
-                    matches!(kind, Kind::Trie) && keyed.levels.len() > 1
-                        || analysis
-                            .physical
-                            .keyed_reads
-                            .get(&name)
-                            .into_iter()
-                            .flatten()
-                            .any(|(reader, columns, _)| {
-                                if matches!(kind, Kind::Membership)
-                                    && analysis
-                                        .keysets
-                                        .contains_key(&(name.clone(), columns.clone()))
-                                {
-                                    return false;
-                                }
-                                ir::prefix_depth(&keyed.level_names(), columns).is_some()
-                                    && source.physical.program.definitions.iter().any(|d| {
-                                        symbol_name(&d.name) == *reader && kind.reads(&d.operator)
-                                    })
+                Selector::JoinFilter(ref result) => {
+                    name == symbol_name(result)
+                        && matches!(entry.structure, Structure::JoinFilter { .. })
+                }
+                Selector::Kind(kind) => match &entry.structure {
+                    Structure::Dedup { .. } | Structure::HeadDedup { .. } => {
+                        matches!(kind, Kind::Dedup)
+                    }
+                    Structure::Rows { .. } => matches!(kind, Kind::Rows),
+                    Structure::Group { .. } => matches!(kind, Kind::Group),
+                    Structure::Selection { .. } => matches!(kind, Kind::Selection),
+                    Structure::KeySet { .. } => matches!(kind, Kind::KeySet | Kind::Membership),
+                    Structure::Read { .. }
+                    | Structure::Repr { .. }
+                    | Structure::Stage { .. }
+                    | Structure::Share { .. } => false,
+                    Structure::JoinFilter { .. } => matches!(kind, Kind::JoinFilter),
+                    Structure::Host { reader, .. } => {
+                        matches!(kind, Kind::Membership)
+                            && matches!(reader, cq_lang_structures::ReaderRef::Membership)
+                            || source.physical.program.definitions.iter().any(|d| {
+                                reader.result() == Some(&d.name) && kind.reads(&d.operator)
                             })
-                }
-            },
-        };
+                    }
+                    Structure::Built { keyed, .. } => {
+                        matches!(kind, Kind::Trie) && keyed.levels.len() > 1
+                            || analysis
+                                .physical
+                                .keyed_reads
+                                .get(&name)
+                                .into_iter()
+                                .flatten()
+                                .any(|(reader, columns, _)| {
+                                    if matches!(kind, Kind::Membership)
+                                        && analysis
+                                            .keysets
+                                            .contains_key(&(name.clone(), columns.clone()))
+                                    {
+                                        return false;
+                                    }
+                                    ir::prefix_depth(&keyed.level_names(), columns).is_some()
+                                        && source.physical.program.definitions.iter().any(|d| {
+                                            symbol_name(&d.name) == *reader
+                                                && kind.reads(&d.operator)
+                                        })
+                                })
+                    }
+                },
+            };
         if matches {
             match &mut entry.structure {
                 Structure::Built { keyed, .. } | Structure::Host { keyed, .. } => {
@@ -186,6 +192,7 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 Structure::Dedup { ty, .. }
                 | Structure::HeadDedup { ty, .. }
                 | Structure::Rows { ty, .. }
+                | Structure::Group { ty, .. }
                 | Structure::Selection { ty, .. }
                 | Structure::KeySet { ty, .. } => *ty = request.ty.clone(),
                 Structure::JoinFilter { filter, .. } => filter.ty = request.ty.clone(),
@@ -213,10 +220,10 @@ fn keyed_read(structure: &Structure, source: &ir::Program) -> bool {
     match structure {
         Structure::Built { .. } | Structure::KeySet { .. } => true,
         Structure::Host { reader, .. } => {
-            reader == "membership"
-                || reader == "candidates"
+            matches!(reader, cq_lang_structures::ReaderRef::Membership)
+                || matches!(reader, cq_lang_structures::ReaderRef::Candidates)
                 || source.physical.program.definitions.iter().any(|d| {
-                    symbol_name(&d.name) == symbol_name(reader)
+                    reader.result() == Some(&d.name)
                         && matches!(
                             d.operator,
                             Operator::Probe(..) | Operator::Semi(..) | Operator::Merge(..)

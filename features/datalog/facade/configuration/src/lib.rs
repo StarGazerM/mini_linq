@@ -110,9 +110,11 @@ impl DatalogConfiguration {
         // CQ resolution orders surface passes, plan, ix, then lower. Retain the
         // named role so aliases receive the same context packet as default lower.
         let lower = syn::Index::from(cq_configuration.surface.len() + 2);
+        let plan = syn::Index::from(cq_configuration.surface.len());
         let cq = cq_datalog_fork::resolve_cq(cq_configuration)?;
         let mut fork = self.fork.or(defaults.fork).ok_or_else(missing)?;
-        fork.arguments.extend(quote!(cq = #cq; lower = #lower;));
+        fork.arguments
+            .extend(quote!(cq = #cq; lower = #lower; plan = #plan;));
         let terminals = self.terminals.or(defaults.terminals).unwrap_or_default();
         terminals.check()?;
         fork.arguments.extend(quote!(terminals = #terminals;));
@@ -132,7 +134,10 @@ impl DatalogConfiguration {
         passes.push(fork);
         passes.extend(self.round.or(defaults.round).unwrap_or_default());
         passes.push(self.print.or(defaults.print).ok_or_else(missing)?);
-        Ok(Pipeline { passes })
+        Ok(Pipeline {
+            passes,
+            observer: None,
+        })
     }
 }
 

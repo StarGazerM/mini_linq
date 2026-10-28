@@ -106,6 +106,7 @@ fn expected_expansion(row: [usize; 10]) -> String {
     let payload = ["", "cq_workload_passes::sorted_payload,"][row[6]];
     let membership = ["", "cq_rewrites::lazy_semijoins,"][row[7]];
     let printer = ["mini_linq::passes::translate_pull", "own_push::push"][row[8]];
+    let print_input = ["", "print_input: structures;"][row[8]];
     let advice = ["", "positional"][row[9]];
     format!(
         "pub const CONFIG: [usize; 10] = {row:?};
@@ -118,6 +119,7 @@ fn expected_expansion(row: [usize; 10]) -> String {
              dedup: [{dedup}];
              payload: [{payload}];
              membership: [{membership}];
+             {print_input}
              printer: {printer};
          }}"
     )

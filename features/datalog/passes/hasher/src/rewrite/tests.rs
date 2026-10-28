@@ -554,13 +554,24 @@ fn run_seen_selects_hashers_and_run_layout_stays_opaque() {
         let bad = syn::parse_quote!(::cq_datalog_parallel_runtime::RunLayout<(i32,), (i32,)>);
         assert!(check_provider(&source, &bad, choice).is_err());
         let mut program = fixture();
-        program.providers[2].seen = syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32), CustomHasher>);
-        let layout = program.layouts.iter().position(|layout| layout.relation == "Reach" && layout.key > 0).unwrap();
+        program.providers[2].seen =
+            syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32), CustomHasher>);
+        let layout = program
+            .layouts
+            .iter()
+            .position(|layout| layout.relation == "Reach" && layout.key > 0)
+            .unwrap();
         program.layouts[layout].provider = source.clone();
         let selected = storage(&program, choice).unwrap();
         check_storage(&program, &selected, choice).unwrap();
         assert_eq!(selected.layouts[layout].provider, source);
-        assert!(selected.providers[2].seen.to_token_stream().to_string().contains("RunSeen"));
+        assert!(
+            selected.providers[2]
+                .seen
+                .to_token_stream()
+                .to_string()
+                .contains("RunSeen")
+        );
     }
 }
 
@@ -568,7 +579,7 @@ fn run_seen_selects_hashers_and_run_layout_stays_opaque() {
 fn malformed_run_seen_is_rejected() {
     for mut ty in [
         syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen),
-        syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<>),
+        syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen),
         syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<T, S, Extra>),
         syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<'a>),
         syn::parse_quote!(::cq_datalog_parallel_runtime<S>::RunSeen<T>),

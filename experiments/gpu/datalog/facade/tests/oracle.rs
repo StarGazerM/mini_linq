@@ -19,6 +19,7 @@ oracle_shared::oracle_programs!(
             print = ::cq_gpu_sequence::translate_arena;
         };
         terminals = [::cq_gpu_sequence::translate_arena => batch];
+        round = [::cq_gpu_datalog::bind_round(binding = 5)];
         print = ::cq_gpu_datalog::print_rounds;
     }
 );

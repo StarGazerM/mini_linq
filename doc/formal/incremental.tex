@@ -198,6 +198,17 @@ cut $t+1$; stream ordering retains its buffers until all enqueued readers
 finish. No historical cut is promised after retirement. A leveled capacity
 ratio is explicit maintenance advice (default four), not a semantic premise;
 it cannot change admission, the multiset, or snapshot publication.
+The device Storage constructor resolves \code{ratio(n)} (omission means four)
+to a printable integer $\rho\ge2$. Every accepted/layout run state receives
+that integer; temporary sort states use the same advice. The runtime checks
+the bound and uses $\rho$, never a hidden constant, in the merge threshold.
+\begin{mathpar}
+\Rule{DL-DeviceRatio}{\rho=\mathrm{Storage.device.ratio}\ge2\quad
+ \rho\text{ passed to every device run constructor}}
+ {\mathrm{mergeTrailing}(A,N)\text{ merges while }
+  |A_{\mathrm{last}}|\le\mathrm{saturatingMul}(|N|,\rho)\quad
+  \textsc{STR-RunCompact}\text{ preserves the represented rows}}
+\end{mathpar}
 
 \subsection{Datalog and the fixpoint boundary}
 The external \texttt{features/datalog} workspace implements this boundary above

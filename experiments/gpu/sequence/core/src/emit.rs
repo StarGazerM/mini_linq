@@ -659,6 +659,7 @@ struct Kernel<'c, 'p> {
     publication_columns: BTreeSet<usize>,
     sink: Option<TokenStream>,
     scalar_output: bool,
+    combine: Option<TokenStream>,
 }
 
 struct StripeInput {
@@ -690,11 +691,17 @@ impl Kernel<'_, '_> {
         };
         for operation in operations.iter().rev() {
             match operation {
-                Operation::Map(name, input) => live.extend(DeviceRow::uses(
-                    self.compiler
+                Operation::Map(name, input) => {
+                    // Backward liveness: a slot the map writes is not live
+                    // before it; only the map's other reads are.
+                    let map = self
+                        .compiler
                         .rows
-                        .map(name, input, quote!(__row), quote!(__live))?,
-                )?),
+                        .map(name, input, quote!(__row), quote!(__live))?;
+                    let writes = DeviceRow::writes(map.clone())?;
+                    live.retain(|slot| !writes.contains(slot));
+                    live.extend(DeviceRow::uses(map)?.difference(&writes));
+                }
                 Operation::Lookup {
                     provider,
                     keys,
@@ -895,6 +902,12 @@ impl Kernel<'_, '_> {
                         "range lookup must be flattened or published as offsets",
                     ));
                 }
+                // BE-Resource: a key still live after the lookup is carried as
+                // a parent, even where the provider row also stores it.
+                let key_slots = keys
+                    .iter()
+                    .map(|column| self.compiler.slot(column))
+                    .collect::<syn::Result<BTreeSet<_>>>()?;
                 let payload_columns = self
                     .compiler
                     .rows
@@ -902,7 +915,10 @@ impl Kernel<'_, '_> {
                     .1
                     .iter()
                     .map(|column| self.compiler.slot(column))
-                    .collect::<syn::Result<BTreeSet<_>>>()?;
+                    .collect::<syn::Result<BTreeSet<_>>>()?
+                    .difference(&key_slots)
+                    .copied()
+                    .collect::<BTreeSet<_>>();
                 let (begin_offset, offsets_offset) = self.shared.payload()?;
                 let begins = format_ident!("__begins_{begin_offset}");
                 let offsets = format_ident!("__offsets_{offsets_offset}");
@@ -984,6 +1000,8 @@ impl Kernel<'_, '_> {
         }
     }
 
+    /// Formal rule GPU-FoldCompletion: whole-input folds emit block partials;
+    /// the recorded combine step alone publishes the logical fold result.
     fn partition_rows(
         &mut self,
         operations: &[Operation],
@@ -1067,7 +1085,7 @@ impl Kernel<'_, '_> {
         let suffix = self.scalar_operations(&operations[at + 1..], &output_row)?;
         self.scalar_output = previous_scalar;
         let finish = output_row.rewrite(reduction.finish)?;
-        let finish = quote! {
+        let publish = quote! {
             let mut __fold_result = 0i64;
             let mut __live = false;
             #finish
@@ -1080,16 +1098,39 @@ impl Kernel<'_, '_> {
                 .count()
         });
         if target.is_none() {
-            Ok((
-                reduction.declare,
-                nested_partitions(tiles, body),
-                finish,
-                true,
-            ))
+            let declare = &reduction.declare;
+            let combine_value = if matches!(monoid, Monoid::Or) {
+                quote!(#accumulator |= *__partials.add(__partial_base + __part);)
+            } else {
+                quote! {
+                    match #accumulator.checked_add(*__partials.add(__partial_base + __part)) {
+                        Some(value) => #accumulator = value,
+                        None => ::cq_gpu_sequence_runtime::device::flag_overflow(__meta.add(2)),
+                    }
+                }
+            };
+            self.combine = Some(quote! {
+                #declare
+                let mut __part = __tid;
+                while __part < __blocks as usize {
+                    #combine_value
+                    __part += 256;
+                }
+                #publish
+            });
+            let partial = quote! {
+                let mut __fold_result = 0i64;
+                let mut __live = false;
+                #finish
+                if __live {
+                    *__partials.add(__partial_base + ::cuda_device::thread::blockIdx_x() as usize) = __fold_result;
+                }
+            };
+            Ok((reduction.declare, nested_partitions(tiles, body), partial, true))
         } else {
             Ok((
                 TokenStream::new(),
-                partition_body(tiles, scope, reduction.declare, body, finish),
+                partition_body(tiles, scope, reduction.declare, body, publish),
                 TokenStream::new(),
                 false,
             ))
@@ -1285,6 +1326,15 @@ pub(crate) fn translate_impl(
             ));
         }
     }
+    if let Some(directory) = std::env::var_os("CQ_GPU_SEQUENCE_DUMP") {
+        // Dump before row translation so an unrealizable program is still visible.
+        let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&quote!(#program).to_string(), &mut fingerprint);
+        let path = std::path::PathBuf::from(directory)
+            .join(format!("{:016x}.input.sequence", std::hash::Hasher::finish(&fingerprint)));
+        std::fs::write(&path, quote!(#program).to_string())
+            .map_err(|err| error(format!("cannot dump Sequence program to {}: {err}", path.display())))?;
+    }
     let rows = Rows::new(program, analysis)?;
     let arena_packing = arena.map(|_| rows.output_types().and_then(crate::arena::Packing::new)).transpose()?;
     let mut compiler = Compiler {
@@ -1303,23 +1353,6 @@ pub(crate) fn translate_impl(
     let mut launches = Vec::new();
     let mut output = None;
     let mut host_downloads = BTreeMap::<usize, syn::Ident>::new();
-    let mut host_consumed_results = BTreeSet::new();
-    for definition in &program.sequence.definitions {
-        let name = symbol_name(&definition.name);
-        if matches!(definition.term, Term::Store { .. })
-            && analysis
-                .levels
-                .get(&name)
-                .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
-            && !analysis
-                .dispatches
-                .iter()
-                .any(|dispatch| dispatch.inner_stores.contains(&name))
-            && let Some(result) = analysis.results.get(&name)
-        {
-            host_consumed_results.extend(compiler.rows.host_dependencies(result));
-        }
-    }
     let final_name = analysis
         .output
         .as_ref()
@@ -1536,12 +1569,15 @@ pub(crate) fn translate_impl(
                     .iter()
                     .map(|(name, ty, _)| quote!(#name: #ty))
                     .collect();
-                let mut arguments: Vec<_> = compiler
-                    .rows
-                    .parameters
-                    .iter()
-                    .map(|(_, _, value)| value.clone())
-                    .collect();
+                let mut capture_definitions = Vec::new();
+                for operation in &chain.operations {
+                    if let Operation::Map(name, input) = operation {
+                        capture_definitions.extend(compiler.rows.capture_definitions(name, input)?);
+                    }
+                }
+                let mut arguments = compiler.rows.capture_arguments(&[
+                    (capture_definitions, quote!((#length) != 0))
+                ]);
                 if let Some(index) = chain.stored {
                     let rows = format_ident!("__cq_store_rows_{index}");
                     parameters.push(quote!(#rows: *const i64));
@@ -1733,7 +1769,7 @@ pub(crate) fn translate_impl(
                         let shift = format_ident!("shift_{field}");
                         let slot = compiler.slot(column)?;
                         fields.push(quote! {
-                            let (#base, bits) = match #bounds {
+                            let (#base, bits) = match (#bounds) {
                                 ::cq_gpu_runtime::Bounds::Empty => (0i64,0u32),
                                 ::cq_gpu_runtime::Bounds::Inclusive {min,max} => (min,64-((max as i128-min as i128) as u64).leading_zeros()),
                             };
@@ -2040,56 +2076,15 @@ pub(crate) fn translate_impl(
                 }
             }
         }
-        let provider_store = analysis.structures.built.contains_key(&chains[0].result);
-        // A host union copies published rows, not the deferred lookup-range
-        // representation used by a subsequent device consumer.
-        let host_union_operand = program.sequence.definitions.iter().any(|definition| {
-            analysis
-                .levels
-                .get(&symbol_name(&definition.name))
-                .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
-                && host_union(&definition.term, &compiler.definitions).is_some_and(|(arms, _)| {
-                    arms.iter().any(
-                        |arm| matches!(arm, Term::Ref(name) if symbol_name(name) == publication),
-                    )
-                })
-        });
-        let virtual_range = if !final_output
-            && !canonical
-            && !provider_store
-            && !host_union_operand
-            && !host_consumed_results.contains(&chains[0].result)
-            && chains.len() == 1
-        {
-            let ops = &chains[0].operations;
-            let last = ops.iter().rposition(|op| {
-                matches!(
-                    op,
-                    Operation::Lookup {
-                        membership: false,
-                        ..
-                    }
-                )
-            });
-            last.and_then(|at| {
-                if ops[at + 1..]
-                    .iter()
-                    .all(|op| matches!(op, Operation::Flatten | Operation::Store))
-                    && ops[at + 1..]
-                        .iter()
-                        .any(|op| matches!(op, Operation::Flatten))
-                {
-                    if let Operation::Lookup { provider, .. } = &ops[at] {
-                        (!compiler.rows.run_provider(provider)).then(|| provider.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
+        let execution = dispatch.gpu.as_ref()
+            .ok_or_else(|| error("GPU dispatch lacks checked launch refinement"))?;
+        if execution.block_threads != 256 {
+            return Err(error("GPU-Launch: this collective template requires 256 lanes"));
+        }
+        let virtual_range = match &execution.publication {
+            cq_lang_sequence::gpu::Publication::Rows => None,
+            cq_lang_sequence::gpu::Publication::DeferredRange { provider, keys } =>
+                Some(compiler.rows.provider_name(provider, keys)?),
         };
         let publication_fold = output_fold(inner, &compiler.definitions);
         let packed_columns = if final_output {
@@ -2154,10 +2149,21 @@ pub(crate) fn translate_impl(
         let kernel_name = format_ident!("__cq_sequence_dispatch_{index}_{module_name}");
         let prepare_name = format_ident!("prepare_{kernel_name}");
         let mut parameters = Vec::new();
-        let mut arguments = Vec::new();
-        for (name, ty, value) in &compiler.rows.parameters {
+        let mut capture_domains = Vec::new();
+        for (chain_index, chain) in chains.iter().enumerate() {
+            let mut definitions = Vec::new();
+            for operation in &chain.operations {
+                if let Operation::Map(name, input) = operation {
+                    definitions.extend(compiler.rows.capture_definitions(name, input)?);
+                }
+            }
+            let domain = format_ident!("__cq_domain_{chain_index}");
+            let enabled = format_ident!("__cq_enabled_{chain_index}");
+            capture_domains.push((definitions, quote!(#enabled && #domain != 0)));
+        }
+        let mut arguments = compiler.rows.capture_arguments(&capture_domains);
+        for (name, ty, _) in &compiler.rows.parameters {
             parameters.push(quote!(#name:#ty));
-            arguments.push(value.clone());
         }
         for prior in 0..compiler.stored.len() {
             let rows = format_ident!("__cq_store_rows_{prior}");
@@ -2227,10 +2233,11 @@ pub(crate) fn translate_impl(
                 .collect::<syn::Result<_>>()?,
             sink: None,
             scalar_output: false,
+            combine: None,
         };
         let mut bodies = Vec::new();
         let mut host_domains = Vec::new();
-        let mut whole_reduction = false;
+        let mut combine_bodies = Vec::new();
         let width = compiler.rows.width;
         for (chain_index, chain) in chains.iter().enumerate() {
             let domain = format_ident!("__cq_domain_{chain_index}");
@@ -2314,15 +2321,9 @@ pub(crate) fn translate_impl(
                     .source(&chain.source, quote!(__position), quote!(__row))?
             };
             let tiles = local_tiles(&chain.operations);
-            let tile = if let Some(width) = dispatch.parts {
-                if width == 0 {
-                    return Err(error("zero-width dispatch tile"));
-                }
-                quote!(#width)
-            } else {
-                // No distributing tile denotes one whole input part, not an
-                // emitter-selected width or an implicit multi-block schedule.
-                quote!((#domain as u64).max(1))
+            let tile = match execution.partition {
+                cq_lang_sequence::gpu::Partition::Tiles { rows } => quote!(#rows),
+                cq_lang_sequence::gpu::Partition::One => quote!((#domain as u64).max(1)),
             };
             let items = tiles.last().map_or(1, |tile| tile.1);
             let (outside_declare, partition, outside_finish, whole) = generator.partition_rows(
@@ -2336,12 +2337,21 @@ pub(crate) fn translate_impl(
                     load: source,
                 },
             )?;
-            whole_reduction |= whole;
+            if whole {
+                let combine = generator.combine.take().expect("whole-fold combine");
+                combine_bodies.push(quote! {
+                    if #enabled {
+                        let __partial_base = #chain_index * __blocks as usize;
+                        #combine
+                    }
+                });
+            }
             // Every block finishes one branch before entering the next. Distinct
             // cursor words avoid cross-branch reset races in multi-block launches.
             let cursor = 4 + chain_index;
             bodies.push(quote! {
                 if #enabled {
+                    let __partial_base = #chain_index * __blocks as usize;
                     #outside_declare
                     loop {
                         if __tid==0 {
@@ -2359,29 +2369,6 @@ pub(crate) fn translate_impl(
                 }
             });
         }
-        let finalize = if virtual_range.is_some() {
-            quote! {
-                ::cuda_device::thread::sync_threads();
-                if __tid==0 {
-                    let __count=(*__meta).min(__capacity);
-                    let mut __sum=0u32;
-                    let mut __index=0u32;
-                    while __index<__count {
-                        let __length=*__output_offsets.add(__index as usize);
-                        *__output_offsets.add(__index as usize)=__sum;
-                        match __sum.checked_add(__length) {
-                            Some(next)=>__sum=next,
-                            None=>::cq_gpu_sequence_runtime::device::flag_overflow(__meta.add(2)),
-                        }
-                        __index+=1;
-                    }
-                    *__output_offsets.add(__count as usize)=__sum;
-                    *__meta.add(3)=__sum;
-                }
-            }
-        } else {
-            TokenStream::new()
-        };
         let shared = generator.shared.bytes()?;
         if let Some(resource) = analysis.resources.get(&publication)
             && shared != resource.required_bytes
@@ -2398,7 +2385,8 @@ pub(crate) fn translate_impl(
             #[launch_bounds(256)]
             #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_u32,#shared_u32))]
             pub fn #kernel_name(#(#parameters,)* __output_rows:*mut i64,__output_begin:*mut u32,
-                __output_offsets:*mut u32,__output_keys:*mut u64,__capacity:u32,__meta:*mut u32)
+                __output_offsets:*mut u32,__output_keys:*mut u64,__capacity:u32,__meta:*mut u32,
+                __partials:*mut i64,__blocks:u32)
             {
                 unsafe {
                     let __tid=::cuda_device::thread::threadIdx_x() as usize;
@@ -2408,10 +2396,32 @@ pub(crate) fn translate_impl(
                     let __tile_slot=__shared.add(36).cast::<u32>();
                     let __abort_slot=__shared.add(40).cast::<u32>();
                     #(#bodies)*
-                    #finalize
                 }
             }
         });
+        let combine_kernel = format_ident!("__cq_sequence_combine_{index}_{module_name}");
+        let prepare_combine = format_ident!("prepare_{combine_kernel}");
+        let whole_reduction = matches!(execution.fold, cq_lang_sequence::gpu::FoldCompletion::BlockPartials { .. });
+        if whole_reduction {
+            kernels.push(quote! {
+                #[kernel]
+                #[launch_bounds(256)]
+                #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_u32,#shared_u32))]
+                pub fn #combine_kernel(#(#parameters,)* __output_rows:*mut i64,__output_begin:*mut u32,
+                    __output_offsets:*mut u32,__output_keys:*mut u64,__capacity:u32,__meta:*mut u32,
+                    __partials:*mut i64,__blocks:u32)
+                {
+                    unsafe {
+                        let __tid=::cuda_device::thread::threadIdx_x() as usize;
+                        let __shared=::cuda_device::DynamicSharedArray::<u8,16>::get_raw();
+                        let __scratch=__shared.cast::<u32>();
+                        let __reservation=__shared.add(32).cast::<u32>();
+                        let __abort_slot=__shared.add(40).cast::<u32>();
+                        #(#combine_bodies)*
+                    }
+                }
+            });
+        }
         let store_rows = format_ident!("__cq_store_rows_{index}");
         let store_begin = format_ident!("__cq_store_begin_{index}");
         let store_offsets = format_ident!("__cq_store_offsets_{index}");
@@ -2419,10 +2429,15 @@ pub(crate) fn translate_impl(
         let store_length = format_ident!("__cq_store_length_{index}");
         let output_keys = format_ident!("__cq_store_keys_{index}");
         let meta_words = 4 + chains.len();
-        let grid = if dispatch.parts.is_none() || virtual_range.is_some() || whole_reduction {
-            1u32
-        } else {
-            2272u32
+        let parts = match execution.partition {
+            cq_lang_sequence::gpu::Partition::One => quote!(1usize),
+            cq_lang_sequence::gpu::Partition::Tiles { rows } => {
+                let domains = (0..chains.len()).map(|i| {
+                    let domain = format_ident!("__cq_domain_{i}");
+                    quote!((#domain as usize).div_ceil(#rows))
+                });
+                quote!(0usize #(.max(#domains))*)
+            }
         };
         let initial = match (dispatch.concatenation.clone(), capacity) {
             (OutputProtocol::Count, _) => quote!(0usize),
@@ -2443,10 +2458,11 @@ pub(crate) fn translate_impl(
         let row_width = if packed_columns.is_some() { 0 } else { width };
         let range_width = usize::from(virtual_range.is_some());
         let key_width = usize::from(packed_columns.is_some());
-        let logical = if virtual_range.is_some() {
-            3usize
-        } else {
-            0usize
+        let complete_offsets = match execution.offsets {
+            cq_lang_sequence::gpu::OffsetScan::None => quote!(__cq_required),
+            cq_lang_sequence::gpu::OffsetScan::DeviceExclusive => quote!(
+                ::cq_gpu_sequence_runtime::offsets::scan(&__cq_pool, &#store_offsets, __cq_required, &#store_meta)?
+            ),
         };
         let key_allocation = if arena.is_some() && final_output {
             quote!(let #output_keys = __cq_arena.reserve(__cq_arena_packing.clone(), __cq_capacity)?;)
@@ -2508,10 +2524,28 @@ pub(crate) fn translate_impl(
                 quote!(#store_rows.ptr(),#store_begin.ptr(),#store_offsets.ptr(),),
             )
         };
+        let partial_count = if whole_reduction { chains.len() } else { 0 };
+        let combine_launch = whole_reduction.then(|| quote! {
+            let prepared=__cq_module.#prepare_combine(::cuda_core::LaunchConfig1D::new(1,256,#shared_u32))?;
+            __cq_module.#combine_kernel(__cq_pool.stream(), &prepared, #(#arguments,)*
+                #pointers #key_pointer, __cq_capacity as u32, #store_meta.ptr(),
+                __cq_partials.ptr(), __cq_grid)?;
+        });
+        let cq_lang_sequence::gpu::Grid::KernelOccupancy = execution.grid;
+        let count_readback = execution.synchronization.iter().find_map(|point| match point {
+            cq_lang_sequence::gpu::Synchronization::CountAndFailure =>
+                Some(quote!(let __cq_counts=#store_meta.to_host()?;)),
+            cq_lang_sequence::gpu::Synchronization::RangeOffsets => None,
+        }).ok_or_else(|| error("GPU-Launch: output protocol lacks a count/failure synchronization"))?;
         launches.push(quote! {
             #packing_setup
             #(#host_domains)*
-            let __cq_prepared=__cq_module.#prepare_name(::cuda_core::LaunchConfig1D::new(#grid,256,#shared_u32))?;
+            let __cq_probe=__cq_module.#prepare_name(::cuda_core::LaunchConfig1D::new(1,256,#shared_u32))?;
+            let __cq_grid=::cq_gpu_runtime::launch_grid_for_kernel(
+                __cq_probe.function(), #parts, 256, #shared_u32)?;
+            let __cq_prepared=__cq_module.#prepare_name(::cuda_core::LaunchConfig1D::new(__cq_grid,256,#shared_u32))?;
+            let __cq_partials=::cq_gpu_runtime::Buffer::<i64>::zeroed(
+                __cq_pool.clone(), __cq_grid as usize * #partial_count)?;
             let mut __cq_capacity=#initial;
             let (#stores #output_keys,#store_meta,#store_length)=loop {
                 if __cq_capacity>u32::MAX as usize {return Err("Sequence output exceeds u32 positions".into());}
@@ -2520,8 +2554,9 @@ pub(crate) fn translate_impl(
                 let #store_meta=::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),#meta_words)?;
                 __cq_module.#kernel_name(__cq_pool.stream(),&__cq_prepared,#(#arguments,)*
                     #pointers #key_pointer,
-                    __cq_capacity as u32,#store_meta.ptr())?;
-                let __cq_counts=#store_meta.to_host()?;
+                    __cq_capacity as u32,#store_meta.ptr(),__cq_partials.ptr(),__cq_grid)?;
+                #combine_launch
+                #count_readback
                 #record_readback
                 if __cq_counts[2]!=0 {return Err("Sequence device count or fold overflow".into());}
                 let __cq_required=__cq_counts[0] as usize;
@@ -2530,7 +2565,8 @@ pub(crate) fn translate_impl(
                     __cq_capacity=__cq_required;
                     continue;
                 }
-                break (#stores #output_keys,#store_meta,__cq_counts[#logical] as usize);
+                let __cq_logical = #complete_offsets;
+                break (#stores #output_keys,#store_meta,__cq_logical);
             };
             #remember_count
         });
@@ -2644,10 +2680,9 @@ pub(crate) fn translate_impl(
             }
             let load = row.rewrite(load)?;
             let mut parameters = Vec::new();
-            let mut arguments = Vec::new();
-            for (name, ty, value) in &compiler.rows.parameters {
+            let mut arguments = compiler.rows.capture_arguments(&[]);
+            for (name, ty, _) in &compiler.rows.parameters {
                 parameters.push(quote!(#name:#ty));
-                arguments.push(value.clone());
             }
             for i in 0..compiler.rows.output_columns.len() {
                 let base = format_ident!("__cq_pack_base_{i}");
@@ -2664,6 +2699,7 @@ pub(crate) fn translate_impl(
                 publication_columns: BTreeSet::new(),
                 sink: None,
                 scalar_output: false,
+                combine: None,
             };
             let write = row.rewrite(generator.output_write()?)?;
             let kernel = format_ident!("__cq_host_output_{module_name}");
@@ -2724,7 +2760,6 @@ pub(crate) fn translate_impl(
     launches.push(
         output.ok_or_else(|| error("checked GPU output has no recorded publication adapter"))?,
     );
-    crate::capture::launches(&kernels, &mut launches)?;
     prune_kernel_parameters(&mut kernels, &mut launches)?;
     let output = launches.pop().expect("output launch");
     let setup = &compiler.rows.setup;
@@ -2971,6 +3006,9 @@ mod tests {
         for keyed in [false, true] {
             let keys = keyed.then(|| quote!(key));
             let output_key = keyed.then(|| quote!(key,));
+            let accumulator = keyed.then(|| quote!(
+                grouped group = ::std::collections::HashMap<_, (i64, usize)>;
+            ));
             let program: Program = syn::parse2(quote! {
                 physical {
                     relation R(id:i64,key:i32,value:i64) = (&data.r);
@@ -2984,6 +3022,7 @@ mod tests {
                 structures {
                     r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
                     valuation canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                    #accumulator
                 }
                 sequence {
                     input = store rows r;
@@ -3303,6 +3342,7 @@ mod tests {
                         publication_columns: BTreeSet::new(),
                         sink: None,
                         scalar_output: false,
+                        combine: None,
                     };
                     let (declare, body, finish, whole) = kernel
                         .partition_rows(

@@ -484,6 +484,7 @@ fn plain(source: &Program) -> syn::Result<bool> {
     }
     let mut lowered = cq_sequence_lowering::compile(&source.structures)?;
     lowered.sequence.output = source.sequence.output.clone();
+    lowered.sequence.optional_filters = source.sequence.optional_filters.clone();
     Ok(lowered.sequence == source.sequence)
 }
 
@@ -545,25 +546,42 @@ pub fn lookup_first_advice_in(
         |name, keys, target, analysis| {
             let result = symbol_name(name);
             let levels = [keys.to_vec()];
+            // Retaining an existing keyed host read does not require rebuilding
+            // its index. Keep its concrete catalog-admitted representation.
+            let native = source
+                .structures
+                .structures
+                .entries
+                .iter()
+                .find_map(|entry| {
+                    if entry.name != *name {
+                        return None;
+                    }
+                    let structures::Structure::Host { reader, keyed, .. } = &entry.structure else {
+                        return None;
+                    };
+                    (!matches!(reader, structures::ReaderRef::Scan)
+                        && keyed.level_names().concat().starts_with(keys))
+                    .then_some(&keyed.ty)
+                });
             let needed = needed
                 .get_or_init(|| structures::required_columns(&target.physical, &analysis.physical));
-            let provider = catalog.providers.iter().filter(capable).find(|provider| {
+            let provider = catalog.providers.iter().filter(capable).filter(|provider| {
             provider.elements.as_ref().is_none_or(|accepted| {
                 analysis.layouts[&result].iter().all(|column| {
                     let actual = &analysis.physical.rows[&result].types[column];
                     accepted.iter().any(|ty| matches!(ty, syn::Type::Infer(_)) || ty == actual)
                 })
             }) && crate::rewrites::catalog::accepts_read_levels(provider, target, analysis, &result, &levels, needed)
-        }).ok_or_else(|| syn::Error::new_spanned(
+        }).min_by_key(|provider| !native.is_some_and(|ty| crate::catalog::matches_type(&provider.ty, ty))).ok_or_else(|| syn::Error::new_spanned(
             name,
             "lookup_first generated layout requires a catalog provider with Exact and Membership for its row types at a legal read level",
         ))?;
-            providers.push((
-                name.clone(),
-                columns(keys, name.span()),
-                provider.ty.clone(),
-            ));
-            Ok(provider.ty.clone())
+            let ty = native
+                .filter(|ty| crate::catalog::matches_type(&provider.ty, ty))
+                .unwrap_or(&provider.ty);
+            providers.push((name.clone(), columns(keys, name.span()), ty.clone()));
+            Ok(ty.clone())
         },
     )?;
     if applicable.is_none() {
@@ -902,6 +920,7 @@ fn lookup_first_with(
         )
         .collect();
     let mut generated: Vec<physical::Definition> = Vec::new();
+    let mut optional_filters = source.sequence.optional_filters.clone();
     let mut builds = BTreeMap::<(String, Vec<String>), Ident>::new();
     let mut retained: Vec<_> = decisions.order.clone();
     let mut active: Vec<_> = decisions
@@ -1016,6 +1035,7 @@ fn lookup_first_with(
                 generated.push(
                     syn::parse_quote!(#name = pipe semi eager [#(#columns),*] #current, #right;),
                 );
+                optional_filters.push(name.clone());
                 current = name;
             }
         }
@@ -1094,7 +1114,7 @@ fn lookup_first_with(
         || source.structures.structures.entries.iter().any(|entry| {
             entry.name == decisions.order[0]
                 && matches!(&entry.structure, structures::Structure::Host { reader, .. }
-                    if reader != "scan" && *reader == graph.root)
+                    if reader.result() == Some(&graph.root))
         });
     let mut definitions = Vec::new();
     for (i, mut definition) in target.physical.program.definitions.into_iter().enumerate() {
@@ -1130,8 +1150,8 @@ fn lookup_first_with(
         .flat_map(|(name, prefix)| {
             let full = physical.headings[&name].clone();
             [
-                (name.clone(), "candidates", prefix),
-                (name, "membership", full),
+                (name.clone(), structures::ReaderRef::Candidates, prefix),
+                (name, structures::ReaderRef::Membership, full),
             ]
         })
         .collect();
@@ -1153,12 +1173,14 @@ fn lookup_first_with(
             structures::Structure::Host { reader, keyed, .. } => {
                 let mut keys = keyed.level_names().concat();
                 keys.sort();
-                let reader_name = symbol_name(reader);
-                reader == "scan"
+                let reader_key = reader.key();
+                matches!(reader, structures::ReaderRef::Scan)
                     || (physical.modes[&name] == physical::ModeKind::Pipe
                         && (physical.keyed_reads.get(&name).into_iter().flatten().any(
-                            |(consumer, columns, _)| *consumer == reader_name && *columns == keys,
-                        ) || intersection_reads.contains(&(name, reader_name.as_str(), keys))))
+                            |(consumer, columns, _)| {
+                                reader_key.result() == Some(consumer) && *columns == keys
+                            },
+                        ) || intersection_reads.contains(&(name, reader_key, keys))))
             }
             _ => true,
         }
@@ -1298,6 +1320,7 @@ fn lookup_first_with(
     let mut result = cq_sequence_lowering::compile(&target)?;
     result.evidence = source.evidence.clone();
     result.sequence.output = source.sequence.output.clone();
+    result.sequence.optional_filters = optional_filters;
     checker.check_rewrite_in(source, &result)?;
     Ok(Some(result))
 }

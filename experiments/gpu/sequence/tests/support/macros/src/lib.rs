@@ -118,7 +118,7 @@ fn arena_hole(
         let before = cq_lang_structures::physical::contract::check(&structures.physical)?;
         let inputs: std::collections::BTreeMap<_, _> = structures.structures.entries.iter()
             .filter_map(|entry| match &entry.structure {
-                cq_lang_structures::Structure::Host { reader, keyed, .. } if reader == "scan" =>
+                cq_lang_structures::Structure::Host { reader, keyed, .. } if matches!(reader, cq_lang_structures::ReaderRef::Scan) =>
                     Some((before.hosts[&entry.name.to_string()].clone(), keyed.ty.clone())),
                 _ => None,
             }).collect();
@@ -126,7 +126,7 @@ fn arena_hole(
         let after = cq_lang_structures::contract::check(&structures)?;
         for entry in &mut structures.structures.entries {
             if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &mut entry.structure {
-                if reader == "scan" {
+                if matches!(reader, cq_lang_structures::ReaderRef::Scan) {
                     if let Some(ty) = inputs.get(&after.physical.hosts[&entry.name.to_string()]) {
                         keyed.ty = ty.clone();
                     }

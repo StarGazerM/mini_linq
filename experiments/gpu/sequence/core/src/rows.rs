@@ -23,7 +23,11 @@ pub(crate) struct Interval {
 pub(crate) struct Origin {
     pub(crate) host: String,
     pub(crate) columns: BTreeMap<String, String>,
+    /// A contiguous key interval folded into the source read.
     pub(crate) selection: Option<Interval>,
+    /// A relational selection on the chain that is not a contiguous interval;
+    /// it executes as a row predicate, so the source is not the raw host.
+    pub(crate) predicate: bool,
 }
 struct Source {
     reads: Vec<(usize, TokenStream)>,
@@ -39,6 +43,68 @@ struct Provider {
     view: Ident,
     payload: Vec<String>,
     keys: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+enum DirectoryPolicy {
+    /// Zero-based nonnegative u32 codes; one terminal lower-bound entry.
+    DenseU32 { terminal_entries: usize },
+}
+
+impl DirectoryPolicy {
+    fn domain(&self, bounds: TokenStream) -> TokenStream {
+        match self {
+            Self::DenseU32 { .. } => quote! {
+                match #bounds {
+                    ::cq_gpu_runtime::Bounds::Empty => 0usize,
+                    ::cq_gpu_runtime::Bounds::Inclusive { min, max } => {
+                        if min < 0 || max > u32::MAX as i64 {
+                            return Err("T-Gpu: range keys require dense nonnegative u32 codes".into());
+                        }
+                        usize::try_from(max)?.checked_add(1).ok_or("T-Gpu: key domain overflow")?
+                    }
+                }
+            },
+        }
+    }
+
+    fn allocation(&self) -> TokenStream {
+        let Self::DenseU32 { terminal_entries } = self;
+        quote!(__cq_provider_keys.first().map_or(Ok(0usize), |key|
+            key.domain_size.checked_add(#terminal_entries).ok_or("T-Gpu: directory allocation overflow"))?)
+    }
+}
+
+/// Printable checked realization shared by resident and computed providers.
+#[derive(Clone, Debug)]
+struct ProviderLayout {
+    keys: Vec<String>,
+    payload: Vec<String>,
+    directory: DirectoryPolicy,
+}
+
+impl ProviderLayout {
+    /// Formal rule GPU-ProviderLayout: derive key reconstruction, payload and dense directory allocation once before translating either provider path.
+    fn check(program: &Program, analysis: &Analysis, scanned: &BTreeSet<String>) -> BTreeMap<String, Vec<Self>> {
+        let context = cq_print::Context::new(&program.structures, &analysis.structures);
+        analysis.structures.built.iter().map(|(name, layouts)| {
+            let layouts = layouts.iter().map(|(levels, _)| {
+                let keys: Vec<_> = levels.iter().flatten().cloned().collect();
+                let payload = if scanned.contains(name) {
+                    analysis.structures.layouts[name].clone()
+                } else {
+                    let mut payload = context.built_payload(name, levels);
+                    payload.retain(|column| keys.first() != Some(column));
+                    payload.extend(keys.iter().skip(1).cloned());
+                    payload.sort();
+                    payload.dedup();
+                    payload
+                };
+                Self { keys, payload, directory: DirectoryPolicy::DenseU32 { terminal_entries: 1 } }
+            }).collect();
+            (name.clone(), layouts)
+        }).collect()
+    }
 }
 
 /// Device bindings are scalar codes or direct reads through a parent's owner
@@ -149,18 +215,36 @@ pub struct Rows {
     sources: BTreeMap<String, Source>,
     providers: BTreeMap<String, Provider>,
     bounds: BTreeMap<String, TokenStream>,
+    /// Run layouts have scalar type ranges, not observed column bounds.
+    unmeasured_bounds: BTreeSet<String>,
     definitions: BTreeMap<String, Definition>,
     physical_rows: BTreeMap<String, Row>,
     resident_hosts: BTreeSet<String>,
     run_sources: BTreeMap<String, RunSource>,
     run_providers: BTreeSet<String>,
     expressions: BTreeMap<String, syn::Expr>,
+    capture_count: usize,
+    capture_uses: BTreeMap<String, BTreeSet<usize>>,
+    provider_layouts: BTreeMap<String, Vec<ProviderLayout>>,
 }
 
 impl Rows {
+    /// Consume recorded expression dependencies and explicit launch domains.
+    /// Parameter indices refer to this argument vector, never a launch ABI.
+    pub fn capture_arguments(&self, domains: &[(Vec<String>, TokenStream)]) -> Vec<TokenStream> {
+        self.parameters.iter().enumerate().map(|(index, (_, _, value))| {
+            if index >= self.capture_count { return value.clone(); }
+            let conditions = domains.iter().filter_map(|(definitions, condition)| {
+                definitions.iter().any(|name|
+                    self.capture_uses.get(name).is_some_and(|uses| uses.contains(&index)))
+                    .then_some(condition)
+            });
+            quote!(if false #(|| (#conditions))* { #value } else { ::core::default::Default::default() })
+        }).collect()
+    }
+
     pub fn new(program: &Program, analysis: &Analysis) -> syn::Result<Self> {
         let physical = &program.structures.physical;
-        let context = cq_print::Context::new(&program.structures, &analysis.structures);
         let scanned: BTreeSet<_> = analysis
             .dispatches
             .iter()
@@ -172,6 +256,7 @@ impl Rows {
                     .unwrap_or_else(|| dispatch.outer_store.clone())
             })
             .collect();
+        let provider_layouts = ProviderLayout::check(program, analysis, &scanned);
         let device_results: BTreeSet<_> = analysis
             .dispatches
             .iter()
@@ -211,19 +296,10 @@ impl Rows {
                     })
             })
             .collect::<syn::Result<Vec<_>>>()?;
-        let mut codecs = BTreeMap::new();
-        for entry in &program.structures.structures.entries {
-            let cq_lang_structures::Structure::Host { keyed, .. } = &entry.structure else { continue };
-            if let Some((types, _)) = crate::runs::layout_types(&keyed.ty)? {
-                for ty in types {
-                    if let Some((logical, codec)) = crate::runs::symbol(&ty) {
-                        codecs.insert(quote!(#logical).to_string(), codec.clone());
-                    }
-                }
-            }
-        }
+        let codecs = crate::runs::Codecs::check(&program.structures)?;
         let mut captures = crate::capture::Captures::default();
         let mut expressions = BTreeMap::new();
+        let mut capture_uses = BTreeMap::new();
         for (name, definition) in &definitions {
             let selected;
             let (expression, input, expected) = match &definition.operator {
@@ -239,12 +315,13 @@ impl Rows {
                 _ => continue,
             };
             let types = &analysis.structures.physical.rows[&input].types;
+            captures.used.clear();
             let expression = captures.expression(expression, types, expected.as_ref(), &codecs)?;
             let device_types = captures.types(types, &codecs);
             let lowered = match &definition.operator {
                 Operator::Guard(_) | Operator::Select(_) | Operator::Point(_, _) | Operator::Range(_, _) => crate::capture::predicate(&expression, &device_types),
                 Operator::Bind(_) => {
-                    let expected = expected.map(|ty| if codecs.contains_key(&quote!(#ty).to_string()) { syn::parse_quote!(u32) } else { ty });
+                    let expected = expected.map(|ty| if codecs.get(&ty).is_some() { syn::parse_quote!(u32) } else { ty });
                     cq_syntax::arithmetic::expression(&expression, &device_types, expected.as_ref())
                 }
                 _ => unreachable!(),
@@ -252,16 +329,18 @@ impl Rows {
             if let Some(mut expression) = lowered {
                 DeviceComparisons.visit_expr_mut(&mut expression);
                 crate::capture::simplify_references(&mut expression);
-                crate::capture::unborrow(&mut expression);
+                crate::capture::unborrow(&mut expression, &captures);
+                capture_uses.insert(name.clone(), captures.used.clone());
                 expressions.insert(name.clone(), expression);
             }
         }
         let mut physical_rows = analysis.structures.physical.rows.clone();
         for row in physical_rows.values_mut() {
             for ty in row.types.values_mut() {
-                if codecs.contains_key(&quote!(#ty).to_string()) { *ty = syn::parse_quote!(u32); }
+                if codecs.get(ty).is_some() { *ty = syn::parse_quote!(u32); }
             }
         }
+        let capture_count = captures.parameters.len();
         let mut setup = captures.setup;
         let mut build = TokenStream::new();
         let mut parameters = captures.parameters;
@@ -281,12 +360,11 @@ impl Rows {
                     continue;
                 }
                 if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &entry.structure {
-                    if reader != "scan" { continue; }
+                    if !matches!(reader, cq_lang_structures::ReaderRef::Scan) { continue; }
                     if let Some((types, keys)) = crate::runs::layout_types(&keyed.ty)? {
                         run_binding = Some((types, keys));
                         resident = true;
-                    } else if matches!(&keyed.ty, Type::Path(path)
-                        if path.path.segments.last().is_some_and(|segment| segment.ident == "DeviceColumns")) {
+                    } else if crate::native_abi(&keyed.ty) == Some(crate::NativeAbi::Columns) {
                         resident = true;
                     }
                 }
@@ -519,11 +597,17 @@ impl Rows {
                         .map(|column| (column.clone(), column.clone()))
                         .collect(),
                     selection: None,
+                    predicate: false,
                 }
             } else {
                 let Some(origin) = origin(name, &definitions)? else {
                     continue;
                 };
+                // A predicate-filtered result is computed from its run, not
+                // read as one: its provider is built from the compacted rows.
+                if origin.predicate {
+                    continue;
+                }
                 origin
             };
             let (host, host_length) = &hosts[&origin.host];
@@ -550,12 +634,15 @@ impl Rows {
                     }
                     let (levels, ty) = &layouts[0];
                     if crate::runs::layout_types(ty)?.is_none() {
-                        return Err(syn::Error::new_spanned(ty, format!("GPU-Runs: provider `{name}` requires the checked run binding, found {}", quote!(#ty))));
+                        // The run supplies rows; the recorded nonnative index
+                        // is built only after its device store publishes them.
+                        continue;
                     }
                     let keys: Vec<_> = levels.iter().flatten().cloned().collect();
-                    if keys.len() > *key_count || keys.iter().zip(&payload).any(|(key,column)| key != column) {
+                    if keys.len() > *key_count || payload[..keys.len()].iter().any(|key| !keys.contains(key)) {
                         return Err(error("GPU-Runs: provider key is not a packed leading prefix"));
                     }
+                    let keys = payload[..keys.len()].to_vec();
                     providers.insert(name.clone(), Provider { view: view.clone(), payload, keys });
                     run_providers.insert(name.clone());
                 } else {
@@ -563,7 +650,7 @@ impl Rows {
                     // fallbacks. These do not need a computed Built index.
                     let mut width = None;
                     for ((result, reader, keys), ty) in &analysis.structures.fallbacks {
-                        if result != name || reader == "scan" { continue; }
+                        if result != name || matches!(reader, cq_lang_structures::ReaderRef::Scan) { continue; }
                         if crate::runs::layout_types(ty)?.is_none() {
                             return Err(error("GPU-Runs: native lookup requires a declared run layout"));
                         }
@@ -606,14 +693,15 @@ impl Rows {
                 .then(|| analysis.structures.built.get(name))
                 .flatten()
                 .and_then(|layouts| layouts.first());
-            if let Some((levels, _)) = built {
+            if built.is_some() {
                 if analysis.structures.built[name].len() != 1 {
                     return Err(syn::Error::new_spanned(
                         definition,
                         "T-Gpu: source has multiple recorded provider layouts; name each provider store separately",
                     ));
                 }
-                let keys: Vec<_> = levels.iter().flatten().cloned().collect();
+                let layout = &provider_layouts[name][0];
+                let keys = layout.keys.clone();
                 let mut key_descriptors = Vec::new();
                 for key in &keys {
                     let source = origin.columns.get(key).ok_or_else(|| {
@@ -623,34 +711,16 @@ impl Rows {
                         )
                     })?;
                     let index = fields[source].0;
+                    let domain_size = layout.directory.domain(quote!(#host.storage().bounds[#index]));
                     key_descriptors.push(quote! {
                         ::cq_gpu_sequence_runtime::KeyDescriptor {
                             column: unsafe { ::cq_gpu_sequence_runtime::ColumnDescriptor::new(
                                 #host.storage().columns[#index].clone(), #host_length)? },
-                            domain_size: match #host.storage().bounds[#index] {
-                                ::cq_gpu_runtime::Bounds::Empty => 0usize,
-                                ::cq_gpu_runtime::Bounds::Inclusive { min, max } => {
-                                    if min < 0 || max > u32::MAX as i64 {
-                                        return Err("T-Gpu: range keys require dense nonnegative u32 codes".into());
-                                    }
-                                    usize::try_from(max)?.checked_add(1).ok_or("T-Gpu: key domain overflow")?
-                                }
-                            },
+                            domain_size: #domain_size,
                         }
                     });
                 }
-                let payload = if scanned.contains(name) {
-                    analysis.structures.layouts[name].clone()
-                } else {
-                    let mut payload = context.built_payload(name, levels);
-                    // Code equality reconstructs the leading key from the left
-                    // row; unlike borrowed host tuples, no identity is lost.
-                    payload.retain(|column| keys.first() != Some(column));
-                    payload.extend(keys.iter().skip(1).cloned());
-                    payload.sort();
-                    payload.dedup();
-                    payload
-                };
+                let payload = layout.payload.clone();
                 let mut payload_descriptors = Vec::new();
                 for column in &payload {
                     let source = &origin.columns[column];
@@ -670,9 +740,12 @@ impl Rows {
                 let workspace = format_ident!("__cq_sequence_workspace_{}", name);
                 let cache = format_ident!("__CQ_SEQUENCE_WORKSPACE_{}", name.to_uppercase());
                 let preparation = if needs_host { &mut build } else { &mut setup };
+                let directory_entries = layout.directory.allocation();
                 preparation.extend(quote! {
+                    let __cq_provider_keys: Vec<::cq_gpu_sequence_runtime::KeyDescriptor> = vec![#(#key_descriptors),*];
                     let #descriptor = ::cq_gpu_sequence_runtime::RangeDescriptor {
-                        key: vec![#(#key_descriptors),*], selection: #selection,
+                        directory_entries: #directory_entries,
+                        key: __cq_provider_keys, selection: #selection,
                         payload: vec![#(#payload_descriptors),*],
                     };
                     ::std::thread_local! {
@@ -764,16 +837,19 @@ impl Rows {
             }
         }
         let mut bounds = BTreeMap::new();
+        let mut unmeasured_bounds = BTreeSet::new();
         for (name, source) in &run_sources {
             for &(slot, _) in &source.reads {
                 let column = columns.iter().find(|(_, index)| **index == slot).unwrap().0;
                 let ty = &physical_rows[name].types[column];
+                unmeasured_bounds.insert(column.clone());
                 bounds.insert(column.clone(), quote!(::cq_gpu_runtime::Bounds::Inclusive {
                     min: <#ty>::MIN as i64, max: <#ty>::MAX as i64,
                 }));
             }
         }
         for (column, origins) in bound_sources {
+            unmeasured_bounds.remove(&column);
             let values = origins.iter().map(|(host, index)| {
                 let host = &hosts[host].0;
                 quote!(#host.storage().bounds[#index])
@@ -884,12 +960,16 @@ impl Rows {
             sources,
             providers,
             bounds,
+            unmeasured_bounds,
             definitions,
             physical_rows,
             resident_hosts,
             run_sources,
             run_providers,
             expressions,
+            capture_count,
+            capture_uses,
+            provider_layouts,
         })
     }
 
@@ -899,10 +979,6 @@ impl Rows {
 
     pub fn has_runs(&self) -> bool {
         !self.run_sources.is_empty()
-    }
-
-    pub fn host_dependencies(&self, name: &str) -> BTreeSet<String> {
-        host_dependencies(name, &self.definitions)
     }
 
     pub fn bound_host_dependencies(
@@ -1066,7 +1142,7 @@ impl Rows {
     pub fn publish_provider(
         &mut self,
         analysis: &Analysis,
-        program: &Program,
+        _program: &Program,
         result: &str,
         publication: &str,
         index: usize,
@@ -1080,14 +1156,9 @@ impl Rows {
         if packed.is_none() {
             output.extend(quote! { let #rows = ::std::sync::Arc::new(#rows); });
         }
-        for (levels, _) in layouts {
-            let keys: Vec<_> = levels.iter().flatten().cloned().collect();
-            let mut payload = cq_print::Context::new(&program.structures, &analysis.structures)
-                .built_payload(result, levels);
-            payload.retain(|column| keys.first() != Some(column));
-            payload.extend(keys.iter().skip(1).cloned());
-            payload.sort();
-            payload.dedup();
+        for layout in self.provider_layouts[result].clone() {
+            let keys = layout.keys;
+            let payload = layout.payload;
             let length = format_ident!("__cq_store_length_{index}");
             let rows = format_ident!("__cq_store_rows_{index}");
             let canonical = format_ident!("__cq_canonical_{index}");
@@ -1127,21 +1198,17 @@ impl Rows {
             let mut key_descriptors = Vec::new();
             for key in &keys {
                 let source = column(key)?;
-                let bounds = self.bounds(key)?;
-                key_descriptors.push(quote! {
-                ::cq_gpu_sequence_runtime::KeyDescriptor {
-                    column: #source,
-                    domain_size: match #bounds {
-                        ::cq_gpu_runtime::Bounds::Empty => 0usize,
-                        ::cq_gpu_runtime::Bounds::Inclusive { min, max } => {
-                            if min < 0 || max > u32::MAX as i64 {
-                                return Err("T-Gpu: range keys require dense nonnegative u32 codes".into());
-                            }
-                            usize::try_from(max)?.checked_add(1).ok_or("T-Gpu: key domain overflow")?
-                        }
-                    },
-                }
-            });
+                let measure = self.unmeasured_bounds.contains(key).then(|| quote! {
+                    column.measure_bounds()?;
+                    if column.rows() != 0 { ::gpu_datalog_runtime::record_readback(); }
+                });
+                let domain_size = layout.directory.domain(quote!(column.bounds()));
+                key_descriptors.push(quote! {{
+                    let mut column = #source;
+                    #measure
+                    let domain_size = #domain_size;
+                    ::cq_gpu_sequence_runtime::KeyDescriptor { column, domain_size }
+                }});
             }
             let mut payload_descriptors = Vec::new();
             for name in &payload {
@@ -1171,9 +1238,12 @@ impl Rows {
                     },
                 );
             }
+            let directory_entries = layout.directory.allocation();
             output.extend(quote! {
+                let __cq_provider_keys: Vec<::cq_gpu_sequence_runtime::KeyDescriptor> = vec![#(#key_descriptors),*];
                 let #descriptor = ::cq_gpu_sequence_runtime::RangeDescriptor {
-                    key: vec![#(#key_descriptors),*],
+                    directory_entries: #directory_entries,
+                    key: __cq_provider_keys,
                     selection: None,
                     payload: vec![#(#payload_descriptors),*],
                 };
@@ -1188,13 +1258,7 @@ impl Rows {
             .cloned()
             .ok_or_else(|| error(format!("T-Gpu: {column} has no recorded codec bounds")))
     }
-    pub fn map(
-        &self,
-        name: &str,
-        input_result: &str,
-        row: TokenStream,
-        live: TokenStream,
-    ) -> syn::Result<TokenStream> {
+    fn map_definitions(&self, name: &str, input_result: &str) -> syn::Result<Vec<&Definition>> {
         let mut chain = Vec::new();
         let mut current = name;
         while current != input_result {
@@ -1213,8 +1277,23 @@ impl Rows {
                 .map(String::as_str)
                 .ok_or_else(|| error("T-Gpu: map does not extend its checked input"))?;
         }
+        Ok(chain)
+    }
+
+    pub fn capture_definitions(&self, name: &str, input_result: &str) -> syn::Result<Vec<String>> {
+        Ok(self.map_definitions(name, input_result)?.into_iter()
+            .map(|definition| symbol_name(&definition.name)).collect())
+    }
+
+    pub fn map(
+        &self,
+        name: &str,
+        input_result: &str,
+        row: TokenStream,
+        live: TokenStream,
+    ) -> syn::Result<TokenStream> {
         let mut output = TokenStream::new();
-        for definition in chain.into_iter().rev() {
+        for definition in self.map_definitions(name, input_result)?.into_iter().rev() {
             match &definition.operator {
                 Operator::Rename(_) | Operator::Project(_) | Operator::Unit(_) => {}
                 Operator::Select(select)
@@ -1343,8 +1422,7 @@ fn host_rows(
             let provider = symbol_name(&keyed.right);
             let keys = keyed.columns.iter().map(symbol_name).collect::<Vec<_>>();
             if analysis.structures.built_on(&provider, &keys).is_some_and(|(ty, _)| {
-                matches!(ty, Type::Path(path)
-                    if path.path.segments.last().is_some_and(|segment| segment.ident == "RangeProvider"))
+                crate::native_abi(ty) == Some(crate::NativeAbi::Range)
             }) {
                 return Err(error(format!(
                     "T-Gpu: host publication {name} reads device-only provider {provider}; record a device grade or a host-capable provider"
@@ -1361,7 +1439,7 @@ fn host_rows(
             .get(&symbol_name(&entry.name))
             .is_some_and(|host| resident_hosts.contains(host))
             && let cq_lang_structures::Structure::Host { reader, keyed, .. } = &mut entry.structure
-            && reader == "scan"
+            && matches!(reader, cq_lang_structures::ReaderRef::Scan)
         {
             // Downloaded rows use the same scan adapter as default Structures;
             // the resident annotation describes only the original GPU view.
@@ -1518,6 +1596,7 @@ pub(crate) fn origin(name: &str, definitions: &BTreeMap<String, Definition>) -> 
                     .map(|m| (symbol_name(&m.target), symbol_name(&m.source)))
                     .collect(),
                 selection: None,
+                predicate: false,
             };
             if let Some(constants) = &rename.constants {
                 for equality in &constants.equalities {
@@ -1540,12 +1619,32 @@ pub(crate) fn origin(name: &str, definitions: &BTreeMap<String, Definition>) -> 
             let Some(mut result) = origin(&symbol_name(&select.input), definitions)? else {
                 return Ok(None);
             };
-            intervals(&select.condition, &result.columns, &mut result.selection)?;
+            // A noncontiguous selection stays a row predicate on the scan.
+            if !contiguous(&select.condition) {
+                result.predicate = true;
+            } else {
+                intervals(&select.condition, &result.columns, &mut result.selection)?;
+            }
             Ok(Some(result))
         }
         Operator::Project(project) => origin(&symbol_name(&project.input), definitions),
         _ => Ok(None),
     }
+}
+
+/// Every constraint is an ordered comparison or equality against a host value
+/// on one column, so the selection is one half-open interval.
+fn contiguous(theta: &Theta) -> bool {
+    let variable = |term: &Term| matches!(term, Term::Variable(_));
+    theta.constraints.iter().all(|constraint| match constraint {
+        Constraint::Compare { left, comparison, right } => {
+            !matches!(comparison, Comparison::Ne(_)) && variable(left) && !variable(right)
+        }
+        Constraint::Between { term, low, high } => {
+            variable(term) && !variable(low) && !variable(high)
+        }
+        _ => false,
+    })
 }
 
 fn interval(
@@ -1730,6 +1829,37 @@ fn payload_kind(ty: &Type) -> syn::Result<TokenStream> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn translation_rejects_conflicting_logical_symbol_codecs() {
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation R(a:i32,b:i32) = (&data.r);
+                relation answer(x:i32,y:i32);
+                r = pipe rename R@0 {a -> x,b -> y};
+                result = pipe canon r;
+                return result as answer(x,y);
+            }
+            structures {
+                r host scan = ::gpu_datalog_runtime::DeviceLayout<
+                    (::gpu_datalog_runtime::Symbol<i32, FirstCodec>,),
+                    (::gpu_datalog_runtime::Symbol<i32, SecondCodec>,)> [];
+                result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            }
+            sequence {
+                input = store rows r;
+                result_rows = store canon map result flatten tile 256 input;
+                output count;
+            }
+            graded gpu {
+                input at host;
+                result_rows at host.device;
+            }
+        };
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let error = crate::translate(&program, &analysis).unwrap_err();
+        assert_eq!(error.to_string(), "conflicting codecs for a logical symbol type");
+    }
 
     #[test]
     fn arithmetic_conditionals_use_native_comparisons_at_every_depth() {

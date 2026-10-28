@@ -24,10 +24,8 @@ fn retains_integral_host_without_changing_graph_or_keys() {
     let facts = cq_testkit::structures::contract::check(&selected).unwrap();
     assert!(facts.built.contains_key("r"));
     assert!(
-        !facts
-            .fallbacks
-            .keys()
-            .any(|(host, reader, _)| host == "r" && reader != "scan")
+        !facts.fallbacks.keys().any(|(host, reader, _)| host == "r"
+            && !matches!(reader, cq_lang_structures::ReaderRef::Scan))
     );
 }
 

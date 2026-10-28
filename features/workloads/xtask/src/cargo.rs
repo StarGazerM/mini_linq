@@ -54,7 +54,6 @@ fn remove_package_identity(
 
 /// Resolve generated consumers against the same public packages as this workspace.
 /// Local core dependencies keep version + path; packaged core remains registry-only.
-#[cfg(feature = "oracle")]
 pub(super) fn dependencies(names: &[&str]) -> crate::Result<String> {
     static PACKAGES: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
     if PACKAGES.get().is_none() {

@@ -330,8 +330,9 @@ fn nested_and_sibling_scopes_keep_their_own_relational_predicates() {
                 target.to_token_stream()
             );
         }
-        let reference = cq_elaborate::compile_written(&vo).unwrap();
-        check(&vo, &reference).unwrap();
+        let written = cq_order::compile_written(&vo.cq).unwrap();
+        let reference = cq_elaborate::compile_written(&written).unwrap();
+        check(&written, &reference).unwrap();
         for seed in 0..8 {
             let database = cq_testkit::databases::binary_database(&vo.cq, seed);
             assert_eq!(
@@ -495,4 +496,126 @@ fn negation_in_hoisted_arms_has_its_free_prefix_domain_before_early_checks() {
             }
         }
     }
+}
+
+#[test]
+fn block_placement_round_trips_and_controls_both_elaboration_entry_points() {
+    use cq_lang_vo::{Placement, Step};
+    fn placements(steps: &[Step], expected: Placement) {
+        for step in steps {
+            if let Step::Block(block, _) = step {
+                assert_eq!(block.placement, expected);
+                for branch in &block.branches {
+                    placements(&branch.steps, expected);
+                }
+            }
+        }
+    }
+    let (hoisted, target) = plan(
+        "struct Q; relation R(x:i32); relation S(x:i32,y:i32); relation T(x:i32,y:i32);
+         answer(x,y) :- R(x), { S(x,y), { R(x) } | { R(x) } } else { T(x,y) };",
+    );
+    placements(&hoisted.valuation.steps, Placement::Hoisted);
+    let written = cq_order::compile_written(&hoisted.cq).unwrap();
+    placements(&written.valuation.steps, Placement::Correlated);
+    for vo in [&hoisted, &written] {
+        let reparsed: cq_lang_vo::Program = syn::parse2(vo.to_token_stream()).unwrap();
+        assert_eq!(*vo, reparsed);
+        cq_lang_vo::contract::check(&reparsed).unwrap();
+    }
+    let reference = cq_elaborate::compile_written(&written).unwrap();
+    check(&written, &reference).unwrap();
+    let correlated = compile(&written).unwrap();
+    check(&written, &correlated).unwrap();
+    assert!(cq_elaborate::compile_written(&hoisted).is_err());
+    assert!(check(&hoisted, &correlated).is_err());
+    assert!(check(&written, &target).is_err());
+    for (ra, correlated) in [(&target, false), (&reference, true), (&correlated, true)] {
+        for definition in &ra.plan.definitions {
+            if let cq_lang_ra::Operator::Union(union) = &definition.operator {
+                assert_eq!(union.origin.as_ref().unwrap().over.is_some(), correlated);
+            }
+        }
+    }
+    for seed in 0..16 {
+        let database = cq_testkit::databases::binary_database(&hoisted.cq, seed);
+        let expected = cq_testkit::cq_semantics::evaluate_cq(&hoisted.cq, &database);
+        for ra in [&target, &reference, &correlated] {
+            assert_eq!(
+                cq_testkit::semantics::evaluate_ra(ra, &database).output,
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn block_placement_is_required_and_checked_before_elaboration() {
+    use cq_lang_vo::{Placement, Step};
+    assert!(syn::parse_str::<Step>("block @0(x) {R@0.0.0(x);} | {R@0.1.0(x);};").is_err());
+    let (mut rust, _) = plan(
+        "struct Q; relation R(x:i32); answer(x) :- R(x),
+         { if accept(x) } | { if other(x) };",
+    );
+    let Step::Block(block, _) = &mut rust.valuation.steps[1] else {
+        panic!("expected block");
+    };
+    assert_eq!(block.placement, Placement::Correlated);
+    block.placement = Placement::Hoisted;
+    assert!(cq_lang_vo::contract::check(&rust).is_err());
+
+    let (pure, _) = plan(
+        "struct Q; relation R(x:i32); relation S(x:i32,y:i32);
+         answer(x,y) :- R(x), {S(x,y)} | {S(x,y)};",
+    );
+    let mut missing_prefix = cq_order::compile_written(&pure.cq).unwrap();
+    missing_prefix.valuation.steps.swap(0, 1);
+    assert!(cq_lang_vo::contract::check(&missing_prefix).is_err());
+
+    let mut split = cq_order::compile(
+        &pure.cq,
+        &cq_order::Options {
+            heuristic: cq_order::Heuristic::Written,
+            split: cq_order::Split::Fine,
+        },
+    )
+    .unwrap();
+    let Step::Block(block, semi) = split.valuation.steps.last().unwrap() else {
+        panic!("expected block");
+    };
+    let mut repeated = block.clone();
+    let semi = *semi;
+    repeated.placement = Placement::Correlated;
+    split.valuation.steps.push(Step::Block(repeated, semi));
+    assert!(cq_lang_vo::contract::check(&split).is_err());
+}
+
+#[test]
+fn typed_arithmetic_is_movable_but_remains_before_partial_blocks() {
+    let source: cq::Program = syn::parse_str(
+        "struct Q; relation R(x:i32); answer(y) :-
+         R(x), if accept(x), let y:i32 = x + 1;",
+    )
+    .unwrap();
+    let normal = cq::normal::normalize(&source).unwrap();
+    let mut moved = cq_order::compile(&normal, &Default::default()).unwrap();
+    moved.valuation.steps.swap(1, 2);
+    cq_lang_vo::contract::check(&moved).unwrap();
+    let target = compile(&moved).unwrap();
+    check(&moved, &target).unwrap();
+
+    let source: cq::Program = syn::parse_str(
+        "struct Q; relation R(x:i32); answer(y) :-
+         R(x), let y:i32 = x + 1, { if accept(x) } | { if other(x) };",
+    )
+    .unwrap();
+    let normal = cq::normal::normalize(&source).unwrap();
+    let mut late = cq_order::compile(&normal, &Default::default()).unwrap();
+    late.valuation.steps.swap(1, 2);
+    assert!(
+        cq_lang_vo::contract::check(&late)
+            .unwrap_err()
+            .to_string()
+            .contains("Before")
+    );
 }

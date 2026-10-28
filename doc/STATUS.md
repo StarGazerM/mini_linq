@@ -16,8 +16,11 @@
 - Reduction (Masks): each indexed clause is reduced by its filtered subtrees of
   the stream-rooted reduction tree (GYO join tree, or GYO ears plus a spanning
   tree of the cyclic core), children first, before the stream starts: the
-  bottom-up Yannakakis pass, no top-down pass. Exact atom-to-block cuts on any
-  scope. Each block branch is its own scope.
+  bottom-up Yannakakis pass restricted to filter-carrying subtrees, no
+  top-down pass. Unfiltered (key/foreign-key) edges are not reduced, so it is a
+  full reducer only when those edges remove nothing; `Tree` is the
+  unconditional full reducer. Exact atom-to-block cuts on any scope. Each block
+  branch is its own scope.
 - Predicates: relational disjunctions derive implied per-occurrence domains
   (H07 `n_name ∈ {FRANCE, GERMANY}`) while keeping the exact predicate.
   Comparisons and `&& || !` over query variables are relational and move like

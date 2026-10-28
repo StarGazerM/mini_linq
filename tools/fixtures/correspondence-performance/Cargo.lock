@@ -151,9 +151,23 @@ dependencies = [
  "cq-lang-ra",
  "cq-lang-vo",
  "cq-order",
+ "cq-planning",
  "cq-reduce",
  "proc-macro2",
  "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-planning"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-lang-cq",
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "cq-order",
+ "cq-reduce",
  "syn 2.0.119",
 ]
 

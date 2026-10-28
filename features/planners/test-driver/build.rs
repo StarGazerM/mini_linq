@@ -52,7 +52,7 @@ fn main() {
         // written elaboration disables alias solving and relational hoisting.
         let source: cq::Program = syn::parse_str(&case.written_cq()).unwrap();
         let normal = cq::normal::normalize(&source).unwrap();
-        let written = cq_order::compile(&normal, &cq_order::Options::default()).unwrap();
+        let written = cq_order::compile_written(&normal).unwrap();
         let reference = cq_elaborate::compile_written(&written).unwrap();
         let invocation = format!(
             "mini_linq::passes::index_demands! {{ pipeline {{ mini_linq::passes::lower, mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull }}; {} }}",

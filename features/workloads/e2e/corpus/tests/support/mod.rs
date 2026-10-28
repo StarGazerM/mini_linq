@@ -20,14 +20,14 @@ macro_rules! pipeline_configuration {
      intersection: $intersection:tt;
      host: [$load:ident] $view:ident [$($positional:ident)?];
      dedup: $dedup:tt; payload: [$($payload:tt)*];
-     membership: $membership:tt; printer: $printer:path;) => {
+     membership: $membership:tt; $(print_input: $print_input:ident;)? printer: $printer:path;) => {
         pipeline_configuration! { $case, $name;
             planner: [le];
             merge: $merge; canon: $canon;
             intersection: $intersection;
             host: [$load] $view [$($positional)?];
             dedup: $dedup; payload: [cq_rewrites::sorted_runs, $($payload)*];
-            membership: $membership; printer: $printer;
+            membership: $membership; $(print_input: $print_input;)? printer: $printer;
         }
     };
     ($case:ident, $name:ident;
@@ -36,7 +36,7 @@ macro_rules! pipeline_configuration {
      intersection: [$($intersection:tt)*];
      host: [$load:ident] $view:ident [$($positional:ident)?];
      dedup: [$($dedup:tt)*]; payload: [$($payload:tt)*];
-     membership: [$($membership:tt)*]; printer: $printer:path;) => {
+     membership: [$($membership:tt)*]; $(print_input: $print_input:ident;)? printer: $printer:path;) => {
         $case! {
             configuration: $name;
             host: [$load] $view [$($positional)?];
@@ -44,6 +44,7 @@ macro_rules! pipeline_configuration {
                 plan = cq_planners::order($($plan)*);
                 physical = [$($canon)* $($intersection)* $($membership)* $($merge)*];
                 structures = [$($dedup)* $($payload)*];
+                $(print_input = $print_input;)?
                 print = $printer;
             }
         }

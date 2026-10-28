@@ -32,7 +32,11 @@ impl Context<'_> {
         }
         let ty = &self.infos[&input].types[&column];
         let host = &access.value;
-        let fallback_ty = self.fallback_type(&input, name, &access.key);
+        let fallback_ty = self.fallback_type(
+            &input,
+            cq_lang_structures::ReaderRef::Result(name.into()),
+            &access.key,
+        );
         let bound = |lower: bool| {
             let mut result = quote!(::core::ops::Bound::Unbounded);
             for b in bounds.iter().filter(|b| b.lower == lower) {

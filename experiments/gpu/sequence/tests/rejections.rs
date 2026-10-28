@@ -84,3 +84,50 @@ fn scalar_fold_host_code_parses() {
         assert!(!generated.contains("__row"));
     }
 }
+
+#[test]
+fn host_choice_of_expanded_rows_preserves_upstream_range_translation() {
+    let program: Program = syn::parse_quote! {
+        physical {
+            relation R(a:u32) = (&data.r);
+            relation P(a:u32,b:u32) = (&data.p);
+            relation Q(b:u32,c:u32) = (&data.q);
+            r = pipe rename R@0 {a -> a};
+            p = let rename P@1 {a -> a,b -> b};
+            q = let rename Q@2 {b -> b,c -> c};
+            joined = pipe probe first [a] r,p;
+            expanded = pipe probe first [b] joined,q;
+            answer = pipe canon project expanded keep {a,b,c};
+            return answer as output(a,b,c);
+        }
+        structures {
+            r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
+            p host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            q host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            p = ::cq_gpu_sequence_runtime::RangeProvider [a];
+            q = ::cq_gpu_sequence_runtime::RangeProvider [b];
+            answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        }
+        sequence {
+            input = store rows r;
+            first = store flatten lookup p [a] flatten tile 256 input;
+            second_feed = flatten lookup q [b] flatten tile 256 first;
+            second = store second_feed;
+            chosen = store choose [len second < 100 => second, else => second];
+            feed = canon map answer flatten tile 256 chosen;
+            result = store feed;
+            output count;
+        }
+        graded gpu {
+            input at host;
+            first at device.block;
+            second_feed at device.block;
+            second at host;
+            chosen at host;
+            feed at device.block;
+            result at device;
+        }
+    };
+    let analysis = check_grading(&program, &machine()).unwrap();
+    cq_gpu_sequence::translate(&program, &analysis).unwrap();
+}

@@ -4,6 +4,7 @@ pub mod canon;
 pub mod device;
 pub mod group;
 mod kernels;
+pub mod offsets;
 pub mod selected;
 pub use selected::{select, SelectedRows};
 
@@ -154,26 +155,11 @@ fn upload_numeric_lanes<Row: cq_gpu_runtime::OwnedRowCodec>(
         .iter()
         .map(|values| {
             let input = Buffer::from_host(pool.clone(), values)?;
-            let bounds = if rows == 0 {
-                Bounds::Empty
-            } else {
-                let blocks = rows.div_ceil(256).min(568);
-                let partial = unsafe { Buffer::<i64>::uninitialized(pool.clone(), blocks * 16)? };
-                let module = build_module(&pool)?;
-                module.numeric_bounds(
-                    pool.stream(),
-                    &module.prepare_numeric_bounds(LaunchConfig1D::new(blocks as u32, 256, 0))?,
-                    input.ptr(),
-                    rows as u32,
-                    partial.ptr(),
-                )?;
-                let partial = partial.to_host()?;
-                let (min, max) = partial.chunks_exact(2).fold(
-                    (i64::MAX, i64::MIN),
-                    |(min, max), pair| (min.min(pair[0]), max.max(pair[1])),
-                );
-                Bounds::Inclusive { min, max }
-            };
+            let bounds = source_bounds(
+                &pool,
+                ColumnDescriptor::native_source(input.ptr().cast(), rows),
+                rows,
+            )?;
             // This upload initialized the complete prefix. The immutable
             // metadata retains its exact count; no compact-extent readback
             // is needed in a timed provider build.
@@ -360,12 +346,47 @@ impl ColumnDescriptor {
     pub fn bounds(&self) -> Bounds {
         self.bounds
     }
+    /// Measure a computed publication when its declared scalar range is not
+    /// a usable provider domain. Only reduction metadata crosses to the host.
+    pub fn measure_bounds(&mut self) -> Result<()> {
+        self.bounds = source_bounds(self.pool(), self.source, self.rows)?;
+        Ok(())
+    }
     pub fn rows(&self) -> usize {
         self.rows
     }
     fn view(&self) -> gpu_device_columns::SourceView {
         self.source
     }
+}
+
+fn source_bounds(
+    pool: &Arc<Pool>,
+    source: gpu_device_columns::SourceView,
+    rows: usize,
+) -> Result<Bounds> {
+    if rows == 0 {
+        return Ok(Bounds::Empty);
+    }
+    let rows_u32 = u32::try_from(rows).map_err(|_| "numeric bounds exceed the u32 row domain")?;
+    let module = build_module(pool)?;
+    let shape = module.prepare_numeric_bounds(LaunchConfig1D::new(1, 256, 0))?;
+    let blocks =
+        cq_gpu_runtime::launch_grid_for_kernel(shape.function(), rows.div_ceil(256), 256, 0)?;
+    let partial = unsafe { Buffer::<i64>::uninitialized(pool.clone(), blocks as usize * 16)? };
+    module.numeric_bounds(
+        pool.stream(),
+        &module.prepare_numeric_bounds(LaunchConfig1D::new(blocks, 256, 0))?,
+        source,
+        rows_u32,
+        partial.ptr(),
+    )?;
+    let partial = partial.to_host()?;
+    let (min, max) = partial.chunks_exact(2).fold(
+        (i64::MAX, i64::MIN),
+        |(min, max), pair| (min.min(pair[0]), max.max(pair[1])),
+    );
+    Ok(Bounds::Inclusive { min, max })
 }
 
 /// One dense u32 key level, in lexicographic order. The first level owns the
@@ -395,6 +416,8 @@ pub struct PayloadDescriptor {
 #[derive(Clone)]
 pub struct RangeDescriptor {
     pub key: Vec<KeyDescriptor>,
+    /// Checked allocation size, including the terminal lower-bound entry.
+    pub directory_entries: usize,
     /// A half-open predicate applied before sorting, not a post-build filter.
     pub selection: Option<RangeSelection>,
     pub payload: Vec<PayloadDescriptor>,
@@ -412,9 +435,11 @@ impl RangeDescriptor {
     }
 
     fn directory_entries(&self) -> Option<usize> {
-        self.key
-            .first()
-            .map_or(Some(0), |key| key.domain_size.checked_add(1))
+        let valid = match self.key.first() {
+            None => self.directory_entries == 0,
+            Some(key) => self.directory_entries.checked_sub(1) == Some(key.domain_size),
+        };
+        valid.then_some(self.directory_entries)
     }
 }
 
@@ -431,6 +456,7 @@ pub struct CatalogRangeSelection {
 pub struct CatalogRangeDescriptor {
     pub table: String,
     pub key: Vec<CatalogKeyDescriptor>,
+    pub directory_entries: usize,
     pub selection: Option<CatalogRangeSelection>,
     pub payload: Vec<String>,
 }
@@ -479,6 +505,7 @@ impl RangeDescriptor {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
+            directory_entries: descriptor.directory_entries,
             key,
             selection,
             payload,
@@ -774,9 +801,13 @@ impl<'pool> RangeBuilder<'pool> {
         let (rows, selected) = match &descriptor.selection {
             Some(selection) if base_rows > 0 => {
                 let flags = temporary::<u32>(stream, base_rows)?;
+                let shape = module.prepare_range_flags(LaunchConfig1D::new(1, 256, 0))?;
+                let blocks = cq_gpu_runtime::launch_grid_for_kernel(
+                    shape.function(), base_rows.div_ceil(256), 256, 0,
+                )?;
                 module.range_flags(
                     stream,
-                    &module.prepare_range_flags(config(base_rows))?,
+                    &module.prepare_range_flags(LaunchConfig1D::new(blocks, 256, 0))?,
                     selection.column.view(),
                     base_rows as u32,
                     selection.start,
@@ -872,7 +903,16 @@ impl<'pool> RangeBuilder<'pool> {
         let source = selected
             .as_ref()
             .map_or(std::ptr::null(), |selected| pointer(selected) as *const u32);
+        let shape = module.prepare_keys_and_rows(LaunchConfig1D::new(1, 256, 0))?;
+        let blocks =
+            cq_gpu_runtime::launch_grid_for_kernel(shape.function(), rows.div_ceil(256), 256, 0)?;
+        let keys_prepared = module.prepare_keys_and_rows(LaunchConfig1D::new(blocks, 256, 0))?;
         if descriptor.key.len() > 1 {
+            let shape = module.prepare_sequence_decode_column(LaunchConfig1D::new(1, 256, 0))?;
+            let blocks =
+                cq_gpu_runtime::launch_grid_for_kernel(shape.function(), rows.div_ceil(256), 256, 0)?;
+            let decode_prepared =
+                module.prepare_sequence_decode_column(LaunchConfig1D::new(blocks, 256, 0))?;
             let plain = descriptor
                 .key
                 .iter()
@@ -880,7 +920,7 @@ impl<'pool> RangeBuilder<'pool> {
                     let out = temporary::<u32>(stream, rows)?;
                     module.sequence_decode_column(
                         stream,
-                        &module.prepare_sequence_decode_column(config(rows))?,
+                        &decode_prepared,
                         key.column.view(),
                         source,
                         rows as u32,
@@ -918,7 +958,7 @@ impl<'pool> RangeBuilder<'pool> {
             };
             module.keys_and_rows(
                 stream,
-                &module.prepare_keys_and_rows(config(rows))?,
+                &keys_prepared,
                 first.column.view(),
                 pointer(&base_order),
                 rows as u32,
@@ -931,7 +971,7 @@ impl<'pool> RangeBuilder<'pool> {
         } else {
             module.keys_and_rows(
                 stream,
-                &module.prepare_keys_and_rows(config(rows))?,
+                &keys_prepared,
                 first.column.view(),
                 source,
                 rows as u32,
@@ -1071,9 +1111,6 @@ unsafe fn pack_payload(
             )
         },
     }
-}
-fn config(rows: usize) -> LaunchConfig1D {
-    LaunchConfig1D::new(rows.div_ceil(256).clamp(1, 568 * 4) as u32, 256, 0)
 }
 fn key_bits(domain: usize) -> u32 {
     if domain <= 1 {

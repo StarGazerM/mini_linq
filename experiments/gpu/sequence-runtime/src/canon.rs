@@ -454,8 +454,9 @@ impl<'pool> WideCanon<'pool> {
             let mut buffers = DoubleBuffer::paired((first, indices), (second, alternate))
                 .ok_or("wide canon radix buffer extents differ")?;
             let module = module(pool)?;
-            let config = LaunchConfig1D::new(rows.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
-            let prepared = module.prepare_gather_lane(config)?;
+            let shape = module.prepare_gather_lane(LaunchConfig1D::new(1, 256, 0))?;
+            let grid = cq_gpu_runtime::launch_grid_for_kernel(shape.function(), rows.div_ceil(256), 256, 0)?;
+            let prepared = module.prepare_gather_lane(LaunchConfig1D::new(grid, 256, 0))?;
             for lane in 0..lanes {
                 let (values, order) = buffers.current_mut();
                 module.gather_lane(
@@ -700,14 +701,20 @@ impl PackedColumnsAdapter {
             return Err("packed field exceeds the stored key width".into());
         }
         let mut columns = Vec::with_capacity(fields.len());
+        let prepared = if capacity != 0 && !fields.is_empty() {
+            let shape = self.module.prepare_unpack_field(LaunchConfig1D::new(1, 256, 0))?;
+            let grid =
+                cq_gpu_runtime::launch_grid_for_kernel(shape.function(), capacity.div_ceil(256), 256, 0)?;
+            Some(self.module.prepare_unpack_field(LaunchConfig1D::new(grid, 256, 0))?)
+        } else {
+            None
+        };
         for (field, &bound) in fields.iter().zip(&bounds) {
             let column = unsafe { Buffer::<i64>::uninitialized(self.pool.clone(), capacity)? };
-            if capacity != 0 {
-                let launch =
-                    LaunchConfig1D::new(capacity.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
+            if let Some(prepared) = &prepared {
                 self.module.unpack_field(
                     self.pool.stream(),
-                    &self.module.prepare_unpack_field(launch)?,
+                    prepared,
                     keys.ptr(),
                     lanes as u32,
                     metadata.ptr().cast(),

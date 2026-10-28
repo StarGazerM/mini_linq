@@ -77,7 +77,7 @@ impl Cost {
                         syn::Error::new(definition.name.span(), "PL-Cost: unknown execution level")
                     })?;
             }
-            let mut tile = 0;
+            let mut tile = ConstructorCursor::default();
             let mut fact = evaluator.term(&definition.term, &name, level, &mut tile)?;
             let copies_rows = match analysis.publications.get(&name) {
                 Some(
@@ -123,6 +123,22 @@ impl Cost {
             }
             evaluator.facts.insert(name, fact);
         }
+        // Carrier publications have symbolic row volumes independently of the
+        // surrounding result (a later compact/fold may shrink that result).
+        // Summing conditional publications is a conservative traffic bound.
+        let pull = machine.root.children.is_empty();
+        let tasks = machine.root.children.len() == 1
+            && !machine.root.children[0].collaborative
+            && machine.root.children[0].children.len() == 1
+            && machine.root.children[0].children[0].children.is_empty();
+        if pull || tasks {
+            for (node, _) in analysis.task_execution.staging(pull) {
+                copies.add(&Sum::positions(&Size::Unknown(format!(
+                    "carrier({}:{})",
+                    node.id.owner, node.id.ordinal
+                )))?)?;
+            }
+        }
         // Count interpretation evaluates the final producer again after counting;
         // references to already materialized definitions are dependencies, not
         // duplicated row computations.
@@ -163,7 +179,7 @@ impl Cost {
 }
 
 impl PartialOrd for Cost {
-    // Formal rule PL-Cost: Compare work, Lookup-before-Expand, dependency span, retained-row traffic, stores, then dispatches; unresolved comparisons retain enumeration order.
+    /// Formal rule PL-Cost: Compare checked execution costs; Group mode comes from Analysis.partial_groups, and ties retain enumeration order.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.work.compare(&other.work)? {
             Ordering::Equal => match self.lookup_after_expand.cmp(&other.lookup_after_expand) {
@@ -511,6 +527,12 @@ impl Fact {
     }
 }
 
+#[derive(Default)]
+struct ConstructorCursor {
+    tile: usize,
+    group: usize,
+}
+
 struct Evaluator<'a> {
     program: &'a Program,
     analysis: &'a Analysis,
@@ -551,7 +573,7 @@ impl Evaluator<'_> {
         term: &Term,
         owner: &str,
         level: &LevelNode,
-        tile: &mut usize,
+        tile: &mut ConstructorCursor,
     ) -> syn::Result<Fact> {
         match term {
             Term::Rows(name) => {
@@ -629,9 +651,9 @@ impl Evaluator<'_> {
                     .analysis
                     .tilings
                     .get(owner)
-                    .and_then(|kinds| kinds.get(*tile))
+                    .and_then(|kinds| kinds.get(tile.tile))
                     == Some(&Tiling::Distribute);
-                *tile += 1;
+                tile.tile += 1;
                 let mut fact = self.term(inner, owner, level, tile)?;
                 if distribute {
                     fact.partition = Some(Partition {
@@ -792,6 +814,8 @@ impl Evaluator<'_> {
                 Ok(fact)
             }
             Term::Group(name, inner) => {
+                let partial = self.analysis.partial_groups[owner][tile.group];
+                tile.group += 1;
                 let mut fact = self.term(inner, owner, level, tile)?;
                 // A scalar collective consumes the joined stream, not each
                 // previously flattened tile independently. Only an explicit
@@ -816,10 +840,9 @@ impl Evaluator<'_> {
                         .layers
                         .iter()
                         .all(|layer| !matches!(layer, Layer::KeyPart { .. }));
-                let partial = !fact.layers.is_empty() && (global || contiguous);
                 let size = fact.size.clone();
                 let amortized_merge = partial && global && !matches!(size, Size::Constant(_));
-                if contiguous || amortized_merge {
+                if partial && (contiguous || amortized_merge) {
                     // One accumulator per scheduler task owns all its logical
                     // tiles; tile grain does not create additional processors.
                     // With unknown input size, a scalar host merge follows
@@ -1058,6 +1081,7 @@ mod tests {
 
     fn sequential() -> Machine {
         Machine {
+            gpu: None,
             layout: None,
             name: syn::parse_quote!(target),
             items: 1,
@@ -1103,21 +1127,26 @@ mod tests {
         let partition: Term = syn::parse_quote!(flatten lookup r [a] flatten tile 8 rows r);
         assert_eq!(
             evaluator
-                .term(&delayed, "test", &level, &mut 0)
+                .term(&delayed, "test", &level, &mut ConstructorCursor::default())
                 .unwrap()
                 .lookup_after_expand,
             1
         );
         assert_eq!(
             evaluator
-                .term(&early, "test", &level, &mut 0)
+                .term(&early, "test", &level, &mut ConstructorCursor::default())
                 .unwrap()
                 .lookup_after_expand,
             0
         );
         assert_eq!(
             evaluator
-                .term(&partition, "test", &level, &mut 0)
+                .term(
+                    &partition,
+                    "test",
+                    &level,
+                    &mut ConstructorCursor::default()
+                )
                 .unwrap()
                 .lookup_after_expand,
             0

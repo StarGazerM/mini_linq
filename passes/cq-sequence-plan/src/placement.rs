@@ -320,6 +320,12 @@ pub(crate) fn advise(
         if levels[i].is_none() {
             let preferred = if stored {
                 if i + 1 == definitions.len()
+                    || facts
+                        .results
+                        .get(&symbol_name(&d.name))
+                        .is_some_and(|result| {
+                            rebuilds_native_provider(program, facts, catalog, result)
+                        })
                     || has_row_work(
                         &d.term,
                         definitions,
@@ -499,6 +505,61 @@ fn has_row_work(
         Term::Choose(arms) => arms
             .iter()
             .any(|(_, t)| has_row_work(t, definitions, indices, row_predicates, seen)),
+    }
+}
+
+// A new index over a native descendant provider is row work, not a host
+// descriptor alias. Keep an already matching native representation at host.
+fn rebuilds_native_provider(
+    program: &Program,
+    facts: &cq_lang_sequence::Analysis,
+    catalog: &cq_lang_sequence::Catalog,
+    result: &str,
+) -> bool {
+    let Some(builds) = facts.structures.built.get(result) else {
+        return false;
+    };
+    let mut source = result.to_owned();
+    loop {
+        let Some(definition) = program
+            .structures
+            .physical
+            .program
+            .definitions
+            .iter()
+            .find(|definition| symbol_name(&definition.name) == source)
+        else {
+            return false;
+        };
+        match &definition.operator {
+            Operator::Rename(rename) => {
+                let host = symbol_name(&rename.relation);
+                return program.structures.structures.entries.iter().any(|entry| {
+                    let cq_lang_sequence::structures::Structure::Host { reader, keyed, .. } =
+                        &entry.structure
+                    else {
+                        return false;
+                    };
+                    matches!(reader, cq_lang_sequence::structures::ReaderRef::Scan)
+                        && facts
+                            .structures
+                            .physical
+                            .hosts
+                            .get(&symbol_name(&entry.name))
+                            == Some(&host)
+                        && catalog.providers.iter().any(|token| {
+                            crate::catalog::matches_type(&token.ty, &keyed.ty)
+                                && !token.levels.iter().any(|level| level.len() == 1)
+                        })
+                        && builds.iter().any(|(_, ty)| *ty != keyed.ty)
+                });
+            }
+            Operator::Project(project) => source = symbol_name(&project.input),
+            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+                source = symbol_name(&select.input)
+            }
+            _ => return false,
+        }
     }
 }
 
@@ -710,16 +771,23 @@ fn driver_domains(
     }
 }
 
-// Row-to-row comparisons and disjoint literal domains require actual rows,
-// not a host descriptor with one contiguous interval.
+// Row-to-row comparisons and noncontiguous domains (including inequality
+// against a captured constant) require actual rows, not one host interval.
 fn row_predicate(operator: &Operator) -> bool {
     use cq_syntax::EqualityValue;
-    use cq_syntax::constraint::{Constraint, Term as Scalar};
+    use cq_syntax::constraint::{Comparison, Constraint, Term as Scalar};
 
     fn constraint(predicate: &Constraint) -> bool {
         match predicate {
-            Constraint::Compare { left, right, .. } => {
-                matches!(left, Scalar::Variable(_)) && matches!(right, Scalar::Variable(_))
+            Constraint::Compare {
+                left,
+                comparison,
+                right,
+            } => {
+                (matches!(left, Scalar::Variable(_)) && matches!(right, Scalar::Variable(_)))
+                    || (matches!(comparison, Comparison::Ne(_))
+                        && (matches!(left, Scalar::Variable(_))
+                            || matches!(right, Scalar::Variable(_))))
             }
             Constraint::Between { term, low, high } => {
                 matches!(term, Scalar::Variable(_))
@@ -833,6 +901,7 @@ mod tests {
             }
         }
         Machine {
+            gpu: None,
             name: syn::parse_quote!(gpu),
             items: 1,
             key_partition_threshold: 65536,
@@ -982,10 +1051,12 @@ mod tests {
     }
 
     #[test]
-    fn stored_integer_disjunctions_publish_device_filtered_rows() {
+    fn stored_noncontiguous_integer_predicates_publish_device_filtered_rows() {
         for condition in [
             quote::quote!((s = 1i32) or (s = 2i32)),
             quote::quote!(s in {1i32, 2i32}),
+            quote::quote!(s != 1i32),
+            quote::quote!(s != @constants.c_object_array, s != @constants.c_string_array),
         ] {
             let source = filtered_codes(quote::quote!(i32), condition);
             let source = Advice::Store(syn::parse_quote!(selected))
@@ -1079,5 +1150,58 @@ mod tests {
             &[syn::parse_quote!(host)],
             &[syn::parse_quote!(host)],
         ));
+    }
+
+    #[test]
+    fn rebuilding_a_native_descendant_provider_publishes_device_rows() {
+        for native in [false, true] {
+            let ty = if native {
+                quote::quote!(Native)
+            } else {
+                quote::quote!(Index)
+            };
+            let source: Program = syn::parse_quote! {
+                physical {
+                    relation R(a:i32); relation L(a:i32);
+                    consumer canonical;
+                    l = pipe rename L@1 {a -> a};
+                    r = let rename R@0 {a -> a};
+                    answer = pipe probe first [a] l,r;
+                    return answer as answer(a);
+                }
+                structures { l host scan = Reader []; r host scan = Native []; r = #ty [a]; }
+                sequence {
+                    input = store rows l;
+                    r = store rows r;
+                    answer = flatten lookup r [a] input;
+                    result = store answer;
+                }
+            };
+            let facts = cq_lang_sequence::contract::check(&source).unwrap();
+            let levels = vec![
+                vec!["host".into(), "device".into()],
+                vec!["host".into(), "device".into(), "block".into()],
+            ];
+            let mut available = catalog(levels.clone());
+            available.providers.push(ProviderToken {
+                ty: syn::parse_quote!(Native),
+                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
+                levels,
+                elements: None,
+            });
+            assert_eq!(
+                rebuilds_native_provider(&source, &facts, &available, "r"),
+                !native
+            );
+            let advice = advise(&source, &machine(), true, &facts, &source, &available);
+            let expected = if native {
+                vec!["host"]
+            } else {
+                vec!["host", "device"]
+            };
+            assert!(advice.iter().any(|advice| matches!(advice,
+                Advice::Grade { name, level, .. }
+                    if name == "r" && level.iter().map(symbol_name).collect::<Vec<_>>() == expected)));
+        }
     }
 }

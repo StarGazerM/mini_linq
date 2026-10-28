@@ -121,21 +121,23 @@ impl Timing {
 /// accepted state is nonempty, the fresh count. There are no row readbacks.
 /// Empty batches need neither download. `to_host` and opt-in `last_timings` are
 /// explicit diagnostic synchronization paths, never used by admission.
-pub struct DeviceRuns<W: Word, S = ()> {
+pub struct DeviceRuns<W: Word> {
     pool: Arc<Pool>,
     accepted: Vec<Run<W>>,
     rows: usize,
     module: run_kernels::LoadedModule,
     timing_enabled: bool,
     timing: Option<Timing>,
-    schema: std::marker::PhantomData<fn() -> S>,
+    ratio: usize,
 }
-impl<W: Word, S> DeviceRuns<W, S> {
-    pub fn new(pool: Arc<Pool>) -> Result<Self> {
+impl<W: Word> DeviceRuns<W> {
+    /// Formal rule DL-DeviceRatio: consume the recorded positive geometric
+    /// maintenance ratio; the caller resolves the default advice to four.
+    pub fn new(pool: Arc<Pool>, ratio: usize) -> Result<Self> {
+        if ratio < 2 { return Err("device maintenance ratio must be at least two".into()); }
         // SAFETY: module is loaded in, and retained with, the pool's context.
         let module = unsafe { run_kernels::load(pool.context())? };
-        Ok(Self { pool, accepted: Vec::new(), rows: 0, module, timing_enabled: false, timing: None,
-            schema: std::marker::PhantomData })
+        Ok(Self { pool, accepted: Vec::new(), rows: 0, module, timing_enabled: false, timing: None, ratio })
     }
     pub fn len(&self) -> usize { self.rows }
     pub fn is_empty(&self) -> bool { self.rows == 0 }
@@ -242,7 +244,9 @@ impl<W: Word, S> DeviceRuns<W, S> {
                 (first.get_mut(), indices.get_mut()),
                 (alternate.get_mut(), alternate_indices.get_mut()),
             ).ok_or("unequal lane radix buffers")?;
-            let config = LaunchConfig1D::new(rows.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
+            let initial = self.module.prepare_gather_lane::<W>(LaunchConfig1D::new(1, 256, 0))?;
+            let grid = cq_gpu_runtime::launch_grid_for_kernel(initial.function(), rows.div_ceil(256), 256, 0)?;
+            let config = LaunchConfig1D::new(grid, 256, 0);
             let prepared = self.module.prepare_gather_lane::<W>(config)?;
             // Stable least-significant-lane passes retain full-row order.
             for lane in 0..W::BITS / 64 {
@@ -285,7 +289,9 @@ impl<W: Word, S> DeviceRuns<W, S> {
         // SAFETY: the flag kernel and stable select initialize these outputs.
         let flags = unsafe { Buffer::<u32>::uninitialized(self.pool.clone(), rows)? };
         let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
-        let config = LaunchConfig1D::new(rows.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
+        let initial = self.module.prepare_absent::<W>(LaunchConfig1D::new(1, 256, 0))?;
+        let grid = cq_gpu_runtime::launch_grid_for_kernel(initial.function(), rows.div_ceil(256), 256, 0)?;
+        let config = LaunchConfig1D::new(grid, 256, 0);
         self.module.absent::<W>(
             self.pool.stream(), &self.module.prepare_absent::<W>(config)?, unique.buffer.ptr(),
             rows as u64, descriptors.ptr(), self.accepted.len() as u32, flags.ptr(),
@@ -302,7 +308,7 @@ impl<W: Word, S> DeviceRuns<W, S> {
         // SAFETY: stable selection preserves sorted uniqueness of the input.
         unsafe { Run::from_sorted(output, fresh) }
     }
-    /// Append a pre-canonicalized layout delta and apply ratio-four merging.
+    /// Append a pre-canonicalized layout delta and apply the recorded ratio.
     /// Wide rows use tiled merge-path partitioning, without native RCCL's
     /// 16-byte key-layout limit or a full-size auxiliary row allocation.
     /// # Safety
@@ -315,7 +321,7 @@ impl<W: Word, S> DeviceRuns<W, S> {
         // Prepare the complete merge before mutating state: failures leave it unchanged.
         let mut merged = run;
         let mut keep = self.accepted.len();
-        while keep > 0 && self.accepted[keep - 1].len() <= merged.len().saturating_mul(4) {
+        while keep > 0 && self.accepted[keep - 1].len() <= merged.len().saturating_mul(self.ratio) {
             merged = self.merge(&self.accepted[keep - 1], &merged)?;
             keep -= 1;
         }
@@ -330,7 +336,9 @@ impl<W: Word, S> DeviceRuns<W, S> {
         let mut output = Output(unsafe { Buffer::uninitialized(self.pool.clone(), rows)? });
         if W::BITS > 128 {
             let tiles = rows.div_ceil(run_kernels::MERGE_TILE_ROWS);
-            let config = LaunchConfig1D::new(tiles.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
+            let initial = self.module.prepare_merge_wide::<W>(LaunchConfig1D::new(1, 256, 0))?;
+            let grid = cq_gpu_runtime::launch_grid_for_kernel(initial.function(), tiles.div_ceil(256), 256, 0)?;
+            let config = LaunchConfig1D::new(grid, 256, 0);
             self.module.merge_wide::<W>(
                 self.pool.stream(), &self.module.prepare_merge_wide::<W>(config)?,
                 first.view(), second.view(), output.0.ptr(),

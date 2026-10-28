@@ -35,7 +35,7 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
             structures {
                 d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
                 e host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
-                e host joined = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [y];
+                e host result(joined) = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [y];
             }
         },
         "nonlinear" => syn::parse_quote! {
@@ -107,7 +107,7 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
             structures {
                 d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
                 b host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
-                b host allowed = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [x];
+                b host result(allowed) = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [x];
             }
         },
         "scan" => syn::parse_quote! {

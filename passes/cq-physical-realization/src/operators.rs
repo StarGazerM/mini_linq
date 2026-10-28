@@ -9,6 +9,7 @@ impl<'a> Printer<'a> {
         self.group_with_accumulator(name, group, None)
     }
 
+    /// Formal rule P-GroupState: Realize keyed folds with the recorded accumulator provider, without substituting a concrete map.
     pub(super) fn group_with_accumulator(
         &mut self,
         name: &str,
@@ -146,12 +147,12 @@ impl<'a> Printer<'a> {
                 }
             });
         }
+        let provider = &self.analysis.groups[name];
         Ok(quote!({
-            let mut #table: ::std::collections::HashMap<_, (#(#types,)*)> =
-                ::std::collections::HashMap::new();
+            let mut #table: #provider = ::core::default::Default::default();
             for #pattern in #input {
                 #(#arguments)*
-                let #state = #table.entry((#(#key_values,)*))
+                let #state: &mut (#(#types,)*) = #table.entry((#(#key_values,)*))
                     .or_insert_with(|| (#(#identities,)*));
                 #(#updates)*
             }

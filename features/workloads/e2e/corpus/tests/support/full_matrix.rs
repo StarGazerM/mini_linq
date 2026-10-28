@@ -61,7 +61,7 @@ macro_rules! full_matrix {
         mod probe_push {
             kernel_hosts!(all; $plan, [], {
                 first => [intersection: [];],
-            }, { push => [printer: own_push::push;] });
+            }, { push => [print_input: structures; printer: own_push::push;] });
         }
     };
 }

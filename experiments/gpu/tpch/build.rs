@@ -26,6 +26,55 @@ struct Rejected {
 
 type CompileResult<T> = std::result::Result<T, Rejected>;
 
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+struct Publication {
+    placement: advice::Placement,
+    nullable: Vec<bool>,
+}
+
+impl Publication {
+    fn resident(&self) -> bool {
+        self.placement == advice::Placement::Device
+    }
+}
+
+/// Formal rule DR-Publication: Check explicit placement against recorded semantic validity before generation.
+fn publication(
+    program: &cq_lang_cq::Program,
+    pipeline: &advice::Pipeline,
+    inputs: Option<&std::collections::BTreeMap<String, Publication>>,
+) -> syn::Result<Publication> {
+    let mut nullable = std::collections::BTreeSet::new();
+    for item in &program.query.body {
+        let cq_lang_cq::BodyItem::Positive { atom } = item else { continue; };
+        if let Some(input) = inputs.and_then(|inputs| inputs.get(&atom.relation.to_string())) {
+            for (argument, valid) in atom.args.iter().zip(&input.nullable) {
+                if *valid && let syn::Expr::Path(path) = argument {
+                    nullable.insert(path.path.to_token_stream().to_string());
+                }
+            }
+        }
+    }
+    if let Some(group) = &program.query.group {
+        for aggregate in &group.aggregates {
+            if matches!(aggregate.kind, cq_syntax::algebra::AggregateKind::Min | cq_syntax::algebra::AggregateKind::Max) {
+                nullable.insert(aggregate.name.to_string());
+            }
+        }
+    }
+    let nullable: Vec<_> = program.query.head.args.iter()
+        .map(|argument| matches!(argument, syn::Expr::Path(path)
+            if nullable.contains(&path.path.to_token_stream().to_string())))
+        .collect();
+    if pipeline.publication == advice::Placement::Device
+        && (matches!(pipeline.target, advice::Target::Host) || nullable.iter().any(|value| *value))
+    {
+        return Err(syn::Error::new_spanned(program,
+            "device publication requires a device target and nonnullable columns; select host publication"));
+    }
+    Ok(Publication { placement: pipeline.publication, nullable })
+}
+
 fn checked<T>(
     phase: &'static str,
     term: &impl ToTokens,
@@ -46,22 +95,18 @@ fn compile(
     kernel: &source::Kernel,
     manifest: &Manifest,
     pipeline: &advice::Pipeline,
-    profile: &str,
 ) -> CompileResult<(TokenStream, serde_json::Value)> {
-    compile_stage(kernel, manifest, pipeline, profile, None, false)
+    compile_stage(kernel, manifest, pipeline, None)
 }
 
 fn compile_stage(
     kernel: &source::Kernel,
     manifest: &Manifest,
     pipeline: &advice::Pipeline,
-    profile: &str,
-    publications: Option<&std::collections::BTreeMap<String, bool>>,
-    host: bool,
+    publications: Option<&std::collections::BTreeMap<String, Publication>>,
 ) -> CompileResult<(TokenStream, serde_json::Value)> {
     let cpu_source = kernel.cpu_query();
-    // Registration passes a query name only for an authored hand profile.
-    let hand_profile = !matches!(profile, "automatic" | "advised" | "h05");
+    let host = matches!(pipeline.target, advice::Target::Host);
     let storage_schema = match pipeline.storage.as_str() {
         "" | "tpch_dictionary" => None,
         "tpch_domains" => Some(gpu_compress_host::tpch::schema()),
@@ -148,6 +193,7 @@ fn compile_stage(
         })?;
     let cq: cq_lang_cq::Program = checked("CQ parse", &encoded, syn::parse2(encoded.clone()))?;
     let normal = checked("CQ normalize", &cq, cq_lang_cq::normal::normalize(&cq))?;
+    let publication = checked("publication contract", &normal, publication(&normal, pipeline, publications))?;
     let reduced = checked(
         "CQ plan advice",
         &normal,
@@ -162,18 +208,8 @@ fn compile_stage(
     let ix = checked("index demands", &ra, cq_index_policy::compile(&ra))?;
     let mut pipeline = pipeline.clone();
     let physical = checked("Physical lowering", &ix, cq_physical_lowering::compile(&ix))?;
-    if profile == "h05" {
-        let prefix = checked(
-            "H05 retained prefix",
-            &physical,
-            advice::joined_prefix(&physical, "Customer"),
-        )?;
-        pipeline
-            .physical
-            .insert(0, quote!(retain_streams(#prefix)).to_string());
-        pipeline.physical.push(advice::hoist_inputs(&physical));
-    }
-    if profile == "h09" {
+    let recipe = pipeline.recipe.clone();
+    for relation in &recipe.filtered_leaves {
         let selected = checked(
             "filtered Part layout",
             &physical,
@@ -182,20 +218,18 @@ fn compile_stage(
         if let Some(leaf) = checked(
             "filtered Part retention",
             &selected,
-            advice::filtered_leaf(&selected, "Part"),
+            advice::filtered_leaf(&selected, relation),
         )? {
             pipeline
                 .physical
                 .insert(0, quote!(retain_streams(#leaf)).to_string());
         }
     }
-    if hand_profile {
-        checked(
-            "hand Physical choices",
-            &physical,
-            advice::hand_physical(&physical, profile, &mut pipeline),
-        )?;
-    }
+    checked(
+        "Physical recipe",
+        &physical,
+        advice::hand_physical(&physical, &recipe, &mut pipeline),
+    )?;
     let physical = checked(
         "Physical advice",
         &physical,
@@ -206,17 +240,17 @@ fn compile_stage(
         &physical,
         cq_structure_selection::compile(&physical),
     )?;
-    if profile == "h05" {
+    for relation in &recipe.membership_relations {
         pipeline.structures.insert(
             0,
             checked(
-                "H05 provider layout",
+                "provider layout",
                 &physical,
-                advice::provider_layout(&physical, "Supplier"),
+                advice::provider_layout(&physical, relation),
             )?,
         );
     }
-    if hand_profile && profile != "h04" {
+    if recipe.membership {
         pipeline.structures.extend(checked(
             "hand membership layout",
             &default_structures,
@@ -261,7 +295,8 @@ fn compile_stage(
                 .find(|r| r.name == host.as_str())
                 .unwrap();
             if publications
-                .is_some_and(|inputs| inputs.get(&relation.name.to_string()) == Some(&false))
+                .and_then(|inputs| inputs.get(&relation.name.to_string()))
+                .is_some_and(|input| !input.resident())
             {
                 continue;
             }
@@ -384,11 +419,9 @@ fn compile_stage(
             })
         } else if host {
             cq_sequence_plan::decompose(&authored.program, &machine, &catalog)
-        } else if profile == "h05" {
-            advice::h05_schedule(&authored.program)
-        } else if hand_profile {
-            advice::hand_schedule(&authored.program, profile)
-        } else if profile == "automatic" {
+        } else if let Some(schedule) = &recipe.schedule {
+            advice::hand_schedule(&authored.program, schedule)
+        } else if recipe.automatic {
             cq_sequence_plan::plan(
                 &authored.program,
                 &cq_gpu_sequence::machine(),
@@ -410,8 +443,11 @@ fn compile_stage(
         .map(|step| step.to_token_stream().to_string())
         .collect();
     pipeline.complete = true;
+    pipeline.recipe = advice::Recipe::default();
     let artifact = json!({
         "pipeline": pipeline,
+        "recipe_input": recipe,
+        "publication_facts": publication,
         "sequence_input": sequence.to_token_stream().to_string(),
         "sequence_trace": trace,
         "sequence_planned": planned.program.to_token_stream().to_string(),
@@ -550,7 +586,7 @@ fn compile_stage(
         })?;
         let host_inputs = dependencies.iter().map(|relation| {
             let input = &relation.name;
-            if relation
+            if host || relation
                 .columns
                 .iter()
                 .any(|(_, ty)| ty.to_token_stream().to_string() == "String")
@@ -601,7 +637,7 @@ fn compile_stage(
             );
             borrowed_outputs.push(quote!(#decoder[*row.#output as usize].clone()));
             owned_outputs.push(quote!(#decoder[row.#output as usize].clone()));
-        } else if ty.to_token_stream().to_string().starts_with("Option") {
+        } else if publication.nullable[index] {
             borrowed_outputs.push(quote!(format!("{:?}", row.#output)));
             owned_outputs.push(quote!(format!("{:?}", row.#output)));
         } else {
@@ -639,7 +675,7 @@ fn compile_stage(
             .iter()
             .zip(&rows)
             .map(|(name, row)| {
-                if publications[&name.to_string()] {
+                if publications[&name.to_string()].resident() {
                     quote!(cq_gpu_runtime::DeviceColumns<'static, #row>)
                 } else {
                     quote!(Vec<#row>)
@@ -657,13 +693,10 @@ fn compile_stage(
         };
         let host_inputs: Vec<_> = names
             .iter()
-            .filter(|name| publications[&name.to_string()])
+            .filter(|name| publications[&name.to_string()].resident())
             .map(|name| quote!(let #name = #name.to_host()?;))
             .collect();
-        let nullable = answer_types
-            .iter()
-            .any(|ty| ty.to_token_stream().to_string().starts_with("Option"));
-        let resident = !host && !nullable;
+        let resident = publication.resident();
         let output_type = if resident {
             quote!(cq_gpu_runtime::DeviceColumns<'static, Answer>)
         } else {
@@ -682,7 +715,7 @@ fn compile_stage(
                 Ok(result)
             }
         } else {
-            let publish = if nullable {
+            let publish = if !resident {
                 quote!({
                     let started = ::std::time::Instant::now();
                     let result = output.to_host()?;
@@ -728,7 +761,7 @@ fn compile_stage(
                             let input = cq.inputs().find(|input| input.name == *name).unwrap();
                             let published = publications.get(&name.to_string());
                             let value = if published.is_some() { quote!(#name) } else { quote!(&data.#name) };
-                            let resident = published.copied().unwrap_or_else(|| !input.columns.iter()
+                            let resident = published.map(Publication::resident).unwrap_or_else(|| !input.columns.iter()
                                 .any(|column| column.ty.to_token_stream().to_string() == "String"));
                             if resident {
                                 return quote!((#value).storage().bounds[#field]);
@@ -772,6 +805,7 @@ fn compile_stage(
         };
         let mut artifact = artifact;
         artifact["publication"] = json!(if resident { "device" } else { "host" });
+        artifact["publication_facts"] = json!(publication);
         artifact["answer_types"] = json!(
             answer_types
                 .iter()
@@ -803,6 +837,28 @@ fn compile_stage(
             artifact,
         ));
     }
+    let execute = if host {
+        let slots: Vec<_> = (0..answer_types.len()).map(syn::Index::from).collect();
+        let owned = answer_types.iter().zip(slots).map(|(ty, slot)| quote!(
+            <#ty as ::core::clone::Clone>::clone(::core::borrow::Borrow::<#ty>::borrow(&row.#slot))
+        ));
+        quote! {
+            let started = ::std::time::Instant::now();
+            #(#sequential_bindings)*
+            let rows = (#gpu).map(|row| (#(#owned,)*)).collect();
+            let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+            cq_gpu_runtime::publish_timings(cq_gpu_runtime::Timings {
+                build_ms: elapsed, total_ms: elapsed, wall_ms: elapsed, ..Default::default()
+            });
+            Ok(rows)
+        }
+    } else {
+        quote! {
+            #(let #fields = &data.#fields;)*
+            let output = #gpu;
+            Ok(output.to_host()?)
+        }
+    };
     Ok((
         quote! {
             type Answer = (#(#answer_types,)*);
@@ -814,9 +870,7 @@ fn compile_stage(
                 Ok(Inputs { #(#fields,)* #catalog_init })
             }
             fn gpu(data: &Inputs) -> crate::manifest::Result<Vec<Answer>> {
-                #(let #fields = &data.#fields;)*
-                let output = #gpu;
-                Ok(output.to_host()?)
+                #execute
             }
             fn sequential(data: &Inputs, manifest: &crate::manifest::Manifest) -> crate::manifest::Result<Vec<Vec<String>>> {
                 #(#decode_bindings)*
@@ -879,7 +933,7 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
         }
         answer(key: i32) :- Keys(key), Part(key, name), if name == \"green part\";",
     )?;
-    let (code, _) = compile(&kernel, &manifest, &advice::Pipeline::baseline(), "advised")
+    let (code, _) = compile(&kernel, &manifest, &advice::Pipeline::baseline())
         .map_err(|error| format!("String guard regression {}: {}", error.phase, error.error))?;
     let directory = directory.to_string_lossy();
     Ok(quote! {
@@ -988,9 +1042,8 @@ fn main() -> Result<()> {
                 } else {
                     None
                 };
-                let hand_profile = hand.is_some();
                 let mut pipeline = if mode == "automatic" {
-                    advice::Pipeline::baseline()
+                    advice::Pipeline::automatic()
                 } else if let Some(pipeline) = overrides.get(name) {
                     pipeline.clone()
                 } else if default_h05 {
@@ -1009,13 +1062,6 @@ fn main() -> Result<()> {
                     pipeline.storage = "tpch_domains".into();
                 }
                 let mut report = json!({"query": name, "sf": sf, "mode": mode, "cpu_query": kernel.as_ref().map(|k| k.cpu_query().to_string()), "cpu_plan_advice": kernel.as_ref().map(|k| k.plan_advice.to_string()), "pipeline": pipeline});
-                let profile = if default_h05 {
-                    "h05"
-                } else if hand_profile {
-                    name
-                } else {
-                    mode
-                };
                 let generation_started = std::time::Instant::now();
                 let compiled = if let Some(staged) = &staged {
                     build_stages::compile(
@@ -1030,7 +1076,7 @@ fn main() -> Result<()> {
                         },
                     )
                 } else {
-                    compile(kernel.as_ref().unwrap(), &manifest, &pipeline, profile)
+                    compile(kernel.as_ref().unwrap(), &manifest, &pipeline)
                 };
                 match compiled {
                     Ok((code, artifact)) => {

@@ -457,7 +457,7 @@ fn check_in<'a>(
                 select.condition.check()?;
                 for c in &select.condition.constraints {
                     for p in c.parameters() {
-                        if input.heading.contains(&symbol_name(p)) {
+                        if input.heading.contains(&symbol_name(&p.root)) {
                             return Err(syn::Error::new_spanned(
                                 p,
                                 "relational parameter names an input column",

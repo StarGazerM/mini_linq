@@ -34,9 +34,9 @@ fn push_holes_match_pull_for_owned_heads_and_constant_filtered_keys() {
         ("other".to_owned(), "alice".to_owned()),
     ];
     macro_rules! run {
-        ($printer:path) => {
+        ($printer:path, $input:ident) => {
             cq_datalog::datalog! {
-                pipeline { cq = pipeline { print = $printer; }; }
+                pipeline { cq = pipeline { print = $printer; print_input = $input; }; }
                 struct Names;
                 relation Name(name:String) = (&names);
                 relation Modifier(kind:String,name:String) = (&modifiers);
@@ -48,8 +48,8 @@ fn push_holes_match_pull_for_owned_heads_and_constant_filtered_keys() {
             .collect::<BTreeSet<_>>()
         };
     }
-    let pull = run!(::mini_linq::passes::translate_pull);
-    let push = run!(::cq_datalog::passes::print_push);
+    let pull = run!(::mini_linq::passes::translate_pull, sequence);
+    let push = run!(::cq_datalog::passes::print_push, structures);
     assert_eq!(push, pull);
     assert_eq!(
         push,
@@ -65,9 +65,9 @@ fn push_holes_match_pull_for_owned_heads_and_constant_filtered_keys() {
 fn push_key_holes_preserve_empty_tuple_and_empty_input_semantics() {
     let domain = [(1_i32,), (2,), (2,)];
     macro_rules! run {
-        ($printer:path, $blocked:expr) => {
+        ($printer:path, $input:ident, $blocked:expr) => {
             cq_datalog::datalog! {
-                pipeline { cq = pipeline { print = $printer; }; }
+                pipeline { cq = pipeline { print = $printer; print_input = $input; }; }
                 struct Exists;
                 relation Domain(x:i32) = (domain);
                 relation Blocked(x:i32) = ($blocked);
@@ -81,12 +81,12 @@ fn push_key_holes_preserve_empty_tuple_and_empty_input_semantics() {
     let absent: [(i32,); 0] = [];
     for blocked in [absent.as_slice(), &[(9_i32,)]] {
         assert_eq!(
-            run!(::cq_datalog::passes::print_push, blocked),
-            run!(::mini_linq::passes::translate_pull, blocked),
+            run!(::cq_datalog::passes::print_push, structures, blocked),
+            run!(::mini_linq::passes::translate_pull, sequence, blocked),
         );
     }
     assert_eq!(
-        run!(::cq_datalog::passes::print_push, absent),
+        run!(::cq_datalog::passes::print_push, structures, absent),
         BTreeSet::from(domain)
     );
 }

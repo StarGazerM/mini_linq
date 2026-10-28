@@ -19,14 +19,15 @@ serde_json.workspace = true
 csv = "1"
 
 [build-dependencies]
+cq-stage = { path = "../../../facade/cq-stage" }
+cq-syntax = { path = "../../../languages/cq-syntax" }
+cq-planning = { version = "0.1.0", path = "../../../facade/cq-planning" }
 cq-lang-cq = { path = "../../../languages/cq-lang-cq" }
 gpu-compress-host = { path = "../compress-host" }
 cq-lang-vo = { path = "../../../languages/cq-lang-vo" }
 cq-lang-physical = { path = "../../../languages/cq-lang-physical" }
 cq-lang-structures = { path = "../../../languages/cq-lang-structures" }
 cq-lang-sequence = { path = "../../../languages/cq-lang-sequence" }
-cq-order = { path = "../../../passes/cq-order" }
-cq-reduce = { path = "../../../passes/cq-reduce" }
 cq-elaborate = { path = "../../../passes/cq-elaborate" }
 cq-index-policy = { path = "../../../passes/cq-index-policy" }
 cq-physical-lowering = { path = "../../../passes/cq-physical-lowering" }

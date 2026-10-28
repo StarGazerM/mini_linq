@@ -44,7 +44,7 @@ fn constant_occurrences_use_ordinary_storage() {
         syn::parse_quote!(
             r = ::cq_storage::HashIndex<'_,_,_> [x] payload [x,y] constants {};
         ),
-        syn::parse_quote!(r host j = ::cq_storage::HashIndex<'_,_,_> [x];),
+        syn::parse_quote!(r host result(j) = ::cq_storage::HashIndex<'_,_,_> [x];),
     ] {
         let mut invalid = indexed.clone();
         invalid.structures.entries[2] = entry;
@@ -84,7 +84,7 @@ fn resident_expand_program() -> structures::Program {
     } structures {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
-        r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x,y];
+        r host result(p) = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x,y];
         p canon = ::std::collections::HashSet<_>;
         p stage = batch 256 expand;
     }}
@@ -93,8 +93,8 @@ fn resident_expand_program() -> structures::Program {
 #[test]
 fn expansion_accepts_exact_resident_sorted_host_ranges() {
     for provider in [
-        syn::parse_quote!(r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x,y];),
-        syn::parse_quote!(r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x][y];),
+        syn::parse_quote!(r host result(p) = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x,y];),
+        syn::parse_quote!(r host result(p) = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x][y];),
     ] {
         let mut program = resident_expand_program();
         program.structures.entries[2] = provider;
@@ -142,8 +142,8 @@ fn composite_prefix_ranges_support_expansion_and_shared_witnesses() {
 #[test]
 fn expansion_rejects_unproven_hosts_and_hashed_bucket_ranges() {
     for provider in [
-        syn::parse_quote!(r host p = ::cq_gpu_runtime::HashedRun<_,_> [x,y];),
-        syn::parse_quote!(r host p = ::other::FrozenDeviceIndex<_> [x,y];),
+        syn::parse_quote!(r host result(p) = ::cq_gpu_runtime::HashedRun<_,_> [x,y];),
+        syn::parse_quote!(r host result(p) = ::other::FrozenDeviceIndex<_> [x,y];),
     ] {
         let mut program = resident_expand_program();
         program.structures.entries[2] = provider;
@@ -178,7 +178,7 @@ fn expansion_rejects_unproven_hosts_and_hashed_bucket_ranges() {
 
     let mut mismatch = resident_expand_program();
     mismatch.structures.entries[2] =
-        syn::parse_quote!(r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x];);
+        syn::parse_quote!(r host result(p) = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x];);
     assert!(structures::contract::check(&mismatch).is_err());
 }
 
@@ -207,7 +207,7 @@ fn membership_bridge_program() -> structures::Program {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         m host scan = ::core::iter::Map<_,_> [];
-        m host selected = ::core::iter::Map<_,_> [tag];
+        m host result(selected) = ::core::iter::Map<_,_> [tag];
         s host scan = ::core::iter::Map<_,_> [];
         t host scan = ::core::iter::Map<_,_> [];
         out canon = ::std::collections::HashSet<_>;
@@ -463,7 +463,7 @@ fn only_built_lets_have_entries_and_host_reads_make_no_claims() {
     q.structures = syn::parse_quote!(structures {
         l host scan = ::core::iter::Map<_, _> [];
         r host scan = ::core::iter::Map<_, _> [];
-        r host j = UserIndex [x]; j canon = ::std::collections::HashSet<_>;
+        r host result(j) = UserIndex [x]; j canon = ::std::collections::HashSet<_>;
     });
     structures::contract::check(&q).unwrap();
 }
@@ -496,7 +496,7 @@ fn ordered_premises_require_storage_or_a_same_key_merge_stream() {
     } structures {
         j = Ordered [b]; j rows = ::std::vec::Vec<_>; k canon = ::std::collections::HashSet<_>;
         l host scan = ::core::iter::Map<_, _> []; r host scan = ::core::iter::Map<_, _> []; s host scan = ::core::iter::Map<_, _> [];
-        l host j = Ordered [a]; r host j = Ordered [a]; s host k = Ordered [b];
+        l host result(j) = Ordered [a]; r host result(j) = Ordered [a]; s host result(k) = Ordered [b];
     } };
     structures::contract::check(&p).unwrap();
     let mut q = p.clone();
@@ -872,8 +872,8 @@ fn leveled_snapshot_witness_requires_identical_host_layout_and_key() {
     } structures {
         l host scan = ::core::iter::Map<_,_> [];
         b host scan = ::core::iter::Map<_,_> [];
-        b host s = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
-        b host p = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
+        b host result(s) = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
+        b host result(p) = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
         p canon = ::std::collections::HashSet<_>;
         s share = lookup b [x] first s force p;
         s repr = tuples witness { b [x] at s as ::cq_storage::RunCursor<'_,_> };
@@ -883,7 +883,7 @@ fn leveled_snapshot_witness_requires_identical_host_layout_and_key() {
     assert!(facts.witnesses.contains_key("s"));
     assert!(facts.expands.contains("p"));
     program.structures.entries[3] = syn::parse_quote! {
-        b host p = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<1>,),)> [x];
+        b host result(p) = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<1>,),)> [x];
     };
     assert!(structures::contract::check(&program).is_err());
 }

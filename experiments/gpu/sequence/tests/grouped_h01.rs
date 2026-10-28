@@ -117,6 +117,7 @@ fn h01_gpu_matches_duckdb(scale: u32) -> Result<()> {
                 l host scan=::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32,u32,i64,i64,i32)> [];
                 filtered canon=::cq_gpu_sequence_runtime::canon::PackedCanon;
                 grouped rows=::cq_gpu_sequence_runtime::group::GroupedRows<_>;
+                grouped group=::std::collections::HashMap<_, (i64, i64, usize)>;
             }
             sequence {
                 source=store rows l;

@@ -34,7 +34,8 @@ pub fn compile(source: &storage::Program) -> syn::Result<Program> {
         default_pipeline(),
         TerminalRegistry::default(),
         syn::parse_quote!(none),
-        None,
+        Some(2),
+        Some(0),
     )
 }
 struct Arguments {
@@ -42,6 +43,7 @@ struct Arguments {
     terminals: TerminalRegistry,
     timing: Ident,
     lower: Option<usize>,
+    plan: Option<usize>,
 }
 impl syn::parse::Parse for Arguments {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
@@ -49,6 +51,7 @@ impl syn::parse::Parse for Arguments {
         let mut terminals = None;
         let mut timing = None;
         let mut lower = None;
+        let mut plan = None;
         while !input.is_empty() {
             let name: Ident = input.parse()?;
             input.parse::<syn::Token![=]>()?;
@@ -60,6 +63,8 @@ impl syn::parse::Parse for Arguments {
                 terminals = Some(input.parse()?);
             } else if name == "lower" && lower.is_none() {
                 lower = Some(input.parse::<syn::LitInt>()?.base10_parse()?);
+            } else if name == "plan" && plan.is_none() {
+                plan = Some(input.parse::<syn::LitInt>()?.base10_parse()?);
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
@@ -69,10 +74,11 @@ impl syn::parse::Parse for Arguments {
             input.parse::<syn::Token![;]>()?;
         }
         Ok(Self {
+            plan: plan.or_else(|| pipeline.is_none().then_some(0)),
+            lower: lower.or_else(|| pipeline.is_none().then_some(2)),
             pipeline: pipeline.unwrap_or_else(default_pipeline),
             terminals: terminals.unwrap_or_default(),
             timing: timing.unwrap_or_else(|| syn::parse_quote!(none)),
-            lower,
         })
     }
 }
@@ -82,8 +88,9 @@ pub fn compile_with(source: &storage::Program, args: TokenStream) -> syn::Result
         terminals,
         timing,
         lower,
+        plan,
     } = syn::parse2(args)?;
-    construct(source, pipeline, terminals, timing, lower)
+    construct(source, pipeline, terminals, timing, lower, plan)
 }
 /// Formal rule CK-DL-Fork: independently check storage embedding and every hole.
 pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
@@ -209,37 +216,19 @@ fn construct(
     terminals: TerminalRegistry,
     timing: Ident,
     lower: Option<usize>,
+    plan: Option<usize>,
 ) -> syn::Result<Program> {
     let analysis = storage::contract::check(source)?;
     terminals.check()?;
     let interface = terminals.interface(&pipeline)?;
-    let lower = if let Some(lower) = lower {
-        ensure(
-            lower < pipeline.passes.len(),
-            source,
-            "lower invocation ordinal is out of range",
-        )?;
-        lower
-    } else {
-        let candidates: Vec<_> = pipeline
-            .passes
-            .iter()
-            .enumerate()
-            .filter(|(_, pass)| {
-                pass.path
-                    .segments
-                    .last()
-                    .is_some_and(|segment| segment.ident == "lower")
-            })
-            .map(|(index, _)| index)
-            .collect();
-        ensure(
-            candidates.len() == 1,
-            source,
-            "fork requires exactly one named lower invocation; supply lower = <ordinal> for a custom alias",
-        )?;
-        candidates[0]
-    };
+    let lower = lower.ok_or_else(|| {
+        syn::Error::new_spanned(source, "custom fork queues require lower = <ordinal>")
+    })?;
+    ensure(
+        lower < pipeline.passes.len(),
+        source,
+        "lower invocation ordinal is out of range",
+    )?;
     // Only checked, per-hole facts may enter this invocation.
     let authored: cq_stage::Context = syn::parse2(pipeline.passes[lower].arguments.clone())?;
     ensure(
@@ -285,6 +274,7 @@ fn construct(
                 host: fresh.id("host"),
                 provider: layout.provider.clone(),
                 maintenance: layout.maintenance.clone(),
+                protocol: layout.protocol,
             })
             .collect(),
         delta_layouts: source
@@ -298,6 +288,7 @@ fn construct(
                 host: fresh.id("delta_host"),
                 provider: layout.provider.clone(),
                 maintenance: layout.maintenance.clone(),
+                protocol: layout.protocol,
             })
             .collect(),
         strata: Vec::new(),
@@ -327,6 +318,10 @@ fn construct(
         round_name: fresh.id("round"),
     };
     let mut holes: Vec<round::cq::Program> = Vec::new();
+    // An authored variant order (incremental `plan(..)` advice) reaches the
+    // hole's default CQ plan as explicit `order(..)` advice, so the storage
+    // layouts (which follow the variant order) and the hole plan agree.
+    let mut authored_orders: Vec<Option<TokenStream>> = Vec::new();
     for members in &analysis.components {
         let mut stratum = Stratum {
             members: members.clone(),
@@ -499,6 +494,7 @@ fn construct(
                     }
                     let declarations = hole_inputs(&context, &[], std::iter::once(source_name));
                     holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#arguments),*) #(, #selections)*;))?);
+                    authored_orders.push(None);
                     stratum.keys.push(key);
                     stratum.keys.len() - 1
                 };
@@ -528,6 +524,25 @@ fn construct(
             holes.push(syn::parse2(
                 quote!(struct #name; #(#declarations)* #scan_declaration #output #query),
             )?);
+            authored_orders.push(if variant.authored {
+                let normal = round::cq::normal::normalize(&holes[hole])?;
+                let atoms = normal
+                    .query
+                    .body
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, item)| {
+                        let BodyItem::Positive { atom } = item else {
+                            return None;
+                        };
+                        let relation = &atom.relation;
+                        let index = syn::Index::from(index);
+                        Some(quote!(#relation @ #index))
+                    });
+                Some(quote!(order(#(#atoms),*)))
+            } else {
+                None
+            });
             context.relations[head].admit.push(hole);
             let rule = RuleHole {
                 variant: variant_index,
@@ -572,9 +587,46 @@ fn construct(
             }
         }
     }
+    /// Formal rule DL-PlanningOwner: authored order targets only its recorded planning invocation.
+    fn check_planning_owner(
+        pipeline: &cq_stage::Pipeline,
+        plan: Option<usize>,
+        lower: usize,
+        authored: bool,
+    ) -> syn::Result<()> {
+        if let Some(plan) = plan {
+            ensure(
+                plan < lower && plan < pipeline.passes.len(),
+                pipeline,
+                "planning invocation must precede lowering",
+            )?;
+            if authored {
+                ensure(
+                    pipeline.passes[plan].arguments.is_empty(),
+                    pipeline,
+                    "authored Datalog order conflicts with planning invocation arguments",
+                )?;
+            }
+        } else {
+            ensure(
+                !authored,
+                pipeline,
+                "authored Datalog order requires a recorded planning invocation: plan = <ordinal>",
+            )?;
+        }
+        Ok(())
+    }
+    check_planning_owner(
+        &pipeline,
+        plan,
+        lower,
+        authored_orders.iter().any(Option::is_some),
+    )?;
+    debug_assert_eq!(holes.len(), authored_orders.len());
     let holes = holes
         .into_iter()
-        .map(|cq| {
+        .zip(authored_orders)
+        .map(|(cq, authored_order)| {
             let facts = cq_stage::Context {
                 consumer_canonical: true,
                 discharged_host_sets: cq
@@ -593,12 +645,17 @@ fn construct(
             };
             let mut pipeline = pipeline.clone();
             pipeline.passes[lower].arguments = facts.to_token_stream();
+            if let (Some(plan), Some(order)) = (plan, authored_order) {
+                pipeline.passes[plan].arguments = order;
+            }
             Hole {
                 cq,
                 pipeline,
                 interface,
                 facts,
                 lower,
+                plan,
+                binding: None,
             }
         })
         .collect();

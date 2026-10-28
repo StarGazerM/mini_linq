@@ -7,6 +7,117 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Recorded-facts cutover (doc/formal/CONFORMANCE.md). Decisions that lowerings,
+  printers and drivers previously made from names, syntax or literals are now
+  recorded, checked and printable IR facts; each has a formal rule, a unique
+  `rules.tsv` marker and an `exact` conformance row (308 rules, 363 rows;
+  `check.py` now validates the conformance tables).
+  - GPU launch: `Dispatch::gpu` records partition, occupancy policy, deferred
+    lookup ranges, device-wide offset scan, fold completion and sync points
+    (GPU-Launch, GPU-LAUNCH-OCCUPANCY, GPU-OffsetScan, GPU-FoldCompletion).
+    Grids come from kernel residency × SM count; no literal `2272` remains;
+    deferred ranges run multi-block followed by a CUB exclusive scan; whole
+    folds use block partials plus a combine kernel; BE-Resource reads the same
+    recorded fact as the emitter. H05 automatic SF10 1859 → 115 ms (exact);
+    advised 8.53 ms (unchanged).
+  - GPU realization: capture domains recorded per definition (no kernel-name
+    reparsing), one checked codec per logical symbol type (conflicts rejected),
+    native ABI by catalog constructor identity, one provider layout with
+    explicit directory allocation (GPU-Capture, GPU-CodecIdentity,
+    GPU-NativeAbi, GPU-ProviderLayout).
+  - Sequence planning: optional-filter provenance recorded and consumed by
+    `adaptive` (PL-OptionalFilter; no generated-name prefixes); BE-Length uses
+    checked `Len` facts; PL-Select builds an explicit representation-preserving
+    catalog order; PL-Cost reads checked group modes.
+  - Front/middle: typed Structures `ReaderRef` (STR-Reader), recorded group
+    accumulator (STR-Group/SEL-Group/P-GroupState), VO block `Placement`
+    (WF-BlockPlacement/E-BlockPlacement), independent CK-Masks/CK-Order checks,
+    CQ-Atom and WF-VO rules corrected to the intended semantics.
+  - Drivers: one core default plan composition (`facade/cq-planning`,
+    `mini_linq::planning`) used by the facade, GPU TPC-H advice and explain;
+    printers declare `print_input = structures|sequence` (ST-Endpoint) instead
+    of path-name classification; TPC-H device→host fallback, publication
+    residency and recipes are explicit records (DR-Target/Publication/Recipe);
+    explain observes the real pipeline at all 12 boundaries (DR-Explain).
+  - Datalog: recorded `LayoutProtocol` (no provider-suffix dispatch),
+    parallel publication executes the recorded operation order, holes record
+    their planning and binding invocations, GPU codecs from declared symbols,
+    explicit run-ratio advice (DL-LayoutProtocol, P-DL-PublicationOrder,
+    DL-PlanningOwner, DL-DeviceBindings, DL-DeviceSymbols, DL-DeviceRatio).
+  - Rayon/pull: producer identities replace token scanning; Tile/Choose staging
+    buffers are recorded carrier publications (BE-TaskProducer,
+    BE-CarrierPublication).
+  - Verified: root, datalog, datalog-parallel and workloads workspaces; GPU
+    suites; regression inventory 119/119; TPC-H SF1 default 29/29 exact, worst
+    ratio vs `performance_cpu_sf1.tsv` 1.08 (h22, 24 ms); DOOP GPU xalan 2.2 s,
+    batik 6.4 s fixpoint, all 40 counts equal to SRDatalog.
+  - Still open (CONFORMANCE.md): placement first-child machine spine and
+    string host policy in shared Sequence placement; typed provider
+    capabilities and arithmetic IR across stages; `lookup_first` demotion.
+- Planning redesign, phase 1 (doc/PLANNING-REDESIGN.md). Driving case: SRDatalog
+  DOOP `HeapAllocHelper`, an acyclic rule with a captured-constant guard written
+  last that compiled to a written-order cross product (xalan: 2.0e9 pairs for
+  3.27e6 answers) with zero reductions.
+  - CQ guard recognition: a field path rooted at a captured name
+    (`constants.c_x`) is a host parameter like a bare name; `Term::Parameter`
+    now carries `constraint::Parameter { root, members }` (`@name.field` in IR
+    text). Comparisons against such values become relational selections,
+    placed where their variables are bound and used as Masks supports.
+  - `mini_linq::passes::plan` default order is `Prefix(Connected)/Coarse`:
+    written root, then a ready atom sharing a bound variable before a
+    disconnected one. `Heuristic::Written` stays the exact reference and
+    `plan(order(..))` the authored override. All 119 regression targets and the
+    root workspace pass; TPC-H SF1 default rerun recorded in
+    experiments/gpu/compare (see that entry).
+  - GPU Datalog route realizes filtered reduction supports: `!=` selections are
+    row work placed on device (`cq-sequence-plan` placement), run-derived
+    computed providers publish after device materialization and measure their
+    key bounds (`rows.rs`, `sequence-runtime` SourceView bounds), catalog
+    matching recognizes wildcard native tokens and keeps concrete native keyed
+    layouts (`catalog.rs`, `lookup_first.rs`), and the new
+    `::cq_gpu_sequence::select_catalog` adapter retypes computed structures;
+    `srd-doop-gpu`, `doop-gpu` and the GPU tests use it.
+  - Regression fixtures on every route: `facade/mini-linq/tests/doop_heapalloc.rs`
+    (RA shape through library passes and `compile!`, execution work ≤ 8×(input+output)
+    with `cq_storage` counters), `features/datalog/tests/counters.rs`
+    (`datalog!` hole), `experiments/gpu/datalog/facade/tests/heapalloc.rs`
+    (GPU exactness vs CPU).
+  - Authored Datalog orders reach the hole planner: a `plan(Label, ..)` variant
+    is marked `authored` in the Incremental IR and Fork passes its order to the
+    hole's default CQ `plan` as `order(..)`, so storage layouts and the hole's
+    atom order agree (`doc/formal/datalog.tex`, fork and counters tests).
+  - Masks docs match the code: it is the bottom-up Yannakakis pass restricted
+    to filter-carrying subtrees, not a full reducer (`passes.tex`, `STATUS.md`).
+  - BE-Resource and the GPU emitter agree on shared-memory parents: backward
+    liveness removes a map's written columns, and a lookup key still live after
+    its flatten is carried from the parent on both sides.
+  - Not adopted: treating head copies as transparent to `lookup_first`. It let
+    the Sequence rewrite every recursive DOOP hole (xalan fixpoint 2.20 → 9.35 s,
+    batik OOM); the cause was not attributed to plan nodes.
+  - Docs: `SEQUENCE-PLAN.md` [6] records the GPU emitter decisions that violate
+    T-Gpu ("deciding nothing"): grid 1 vs literal 2272, deferred lookup ranges,
+    one-block serial offset scan, whole-fold finalize, per-dispatch host sync.
+    §11 now states what L&E and RPT actually specify (Bloom SIP, iterator
+    Expand, two-phase only for α-acyclic) versus our exact-semijoin `transfer`
+    and re-probing Expands, and that GPU automatic entries are opt-in. H05
+    automatic SF10 1859 ms vs advised 8.55 ms; one-block launches are 98% of
+    its kernel time.
+  - Result, SRDatalog default DOOP query on GPU, fixpoint: xalan 6.72 → 2.19 s,
+    batik 9.10 → 6.21 s (SRDatalog 1.01 / 1.82 s); all 40 relation counts equal.
+    TPC-H SF1 default: no regression vs `performance_cpu_sf1.tsv`; h09 completes.
+- Datalog per-rule join-order advice, consistent with CQ `plan(order(...))`.
+  Rules take optional labels (`Label: head :- body;`); `incremental(..)` accepts
+  `plan(Label, [delta(R@k),] order(R, S@i, ...));` using `cq_order::OrderAtom`
+  selectors (`OrderAtom::resolve_in`). Advice targets one version (base or one
+  changing occurrence) and yields the incremental pass's checked occurrence
+  permutation; other versions keep `driver(..)`. `translate.py` emits
+  SRDatalog's rule names, and its 18 DOOP `with_plan` orders only with `--plans`
+  (measured slower: batik 9.1 → 21.3 s); `block_group` is recorded as unlowered
+  in the schema JSON. `srd_doop_engine!(run, incremental(..), pipeline {..})`
+  applies advice; `srd-doop-gpu` uses `driver(delta_first)`. The `default-query` feature selects SRDatalog's
+  default (non-field-flow) DOOP program. SRD `HeapAllocHelper` no longer probes
+  `HeapAllocation_Type` with an empty key (1.5e10 xalan pairs); the only
+  remaining empty-key probe is the inherent `Precompute0_String` product.
 - cuda-oxide `299eda41b` / RCCL `1d33079a`: device modules with at least 16
   kernels split into kernel groups whose `opt` and `llc` run in parallel
   (`CUDA_OXIDE_PTX_PARTITIONS`, default available parallelism up to 16); the

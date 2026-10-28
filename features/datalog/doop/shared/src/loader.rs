@@ -112,14 +112,8 @@ mod tests {
     fn descriptors_join_projections_and_deduplicate() {
         let method = sym("method");
         let unused = sym("");
-        let row = |params, returns| {
-            (method, unused, sym(params), unused, sym(returns), unused, 0)
-        };
-        let methods = [
-            row("int", "void"),
-            row("int", "void"),
-            row("long", "int"),
-        ];
+        let row = |params, returns| (method, unused, sym(params), unused, sym(returns), unused, 0);
+        let methods = [row("int", "void"), row("int", "void"), row("long", "int")];
         let mut expected = ["void(int)", "void(long)", "int(int)", "int(long)"]
             .map(|descriptor| (method, sym(descriptor)))
             .to_vec();

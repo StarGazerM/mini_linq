@@ -15,6 +15,7 @@ fn machine() -> Machine {
         }
     }
     Machine {
+        gpu: None,
         name: syn::parse_quote!(target),
         items: 3,
         key_partition_threshold: 65536,
@@ -151,7 +152,7 @@ fn a_fold_inside_a_child_tile_follows_the_parent_payload() {
 }
 
 #[test]
-fn terminal_ranges_and_published_stores_do_not_allocate_payload_scratch() {
+fn ordinary_range_publications_allocate_payload_but_published_reads_do_not() {
     let program = lookup_program(
         quote! {
             view = flatten lookup r [a] rows l;
@@ -161,7 +162,12 @@ fn terminal_ranges_and_published_stores_do_not_allocate_payload_scratch() {
         quote!(view at engine.team; first at engine; result at engine;),
     );
     let analysis = check_grading(&program, &machine()).unwrap();
-    assert!(shape(&analysis, "first").chains[0].is_empty());
+    // This machine has no deferred-range execution refinement. Its terminal
+    // lookup therefore expands rows; only the later read of the completed
+    // publication avoids allocating the lookup's payload scratch again.
+    let first = &shape(&analysis, "first").chains[0];
+    assert_eq!(first.len(), 1);
+    assert_eq!(parents(&first[0]), ["a"]);
     assert!(shape(&analysis, "result").chains[0].is_empty());
 }
 

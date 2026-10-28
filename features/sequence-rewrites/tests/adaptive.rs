@@ -23,7 +23,7 @@ fn program() -> Program {
         structures {
             l host scan = Reader [];
             r host scan = Reader [];
-            r host selected = Reader [tag];
+            r host result(selected) = Reader [tag];
             selected = Provider [a];
             filtered_join canon = Canon;
             raw_join canon = Canon;
@@ -381,12 +381,39 @@ fn automatic_source() -> Program {
         structures {
             l host scan = Reader [];
             r host scan = Reader [];
-            r host selected = Reader [tag];
+            r host result(selected) = Reader [tag];
             selected = Provider [a];
             result canon = Canon;
         }
     };
-    cq_sequence_lowering::compile(&structures).unwrap()
+    let mut program = cq_sequence_lowering::compile(&structures).unwrap();
+    program.sequence.optional_filters = vec![syn::parse_quote!(__lookup_lookup)];
+    program
+}
+
+#[test]
+fn optional_lookup_discovery_survives_alpha_renaming_and_output_advice() {
+    fn rename(tokens: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        tokens
+            .into_iter()
+            .map(|token| match token {
+                proc_macro2::TokenTree::Ident(name) if name == "__lookup_lookup" => {
+                    proc_macro2::TokenTree::Ident(syn::Ident::new("filter_step", name.span()))
+                }
+                proc_macro2::TokenTree::Group(group) => proc_macro2::TokenTree::Group(
+                    proc_macro2::Group::new(group.delimiter(), rename(group.stream())),
+                ),
+                token => token,
+            })
+            .collect()
+    }
+    let mut source: Program = syn::parse2(rename(automatic_source().to_token_stream())).unwrap();
+    source.sequence.output = Some(cq_lang_sequence::OutputProtocol::Reserve);
+    let candidates = adaptive_candidates(&source).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].filter, "filter_step");
+    let target = apply_adaptive(&source, &candidates[0]).unwrap();
+    check_rewrite(&source, &target).unwrap();
 }
 
 #[test]
@@ -494,14 +521,19 @@ fn two_filter_source() -> Program {
             l host scan = Reader [];
             r host scan = Reader [];
             s host scan = Reader [];
-            r host rf = Reader [rtag];
-            s host sf = Reader [stag];
+            r host result(rf) = Reader [rtag];
+            s host result(sf) = Reader [stag];
             rf = Provider [a];
             sf = Provider [a];
             result canon = Canon;
         }
     };
-    cq_sequence_lowering::compile(&structures).unwrap()
+    let mut program = cq_sequence_lowering::compile(&structures).unwrap();
+    program.sequence.optional_filters = vec![
+        syn::parse_quote!(__lookup_lookup_r),
+        syn::parse_quote!(__lookup_lookup_s),
+    ];
+    program
 }
 
 #[test]

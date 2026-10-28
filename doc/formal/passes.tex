@@ -102,6 +102,14 @@ equality-class map and $s_i=|\kappa(O_i)\cap\kappa(B)|$:
  (a,G_1,B_1,J)=\mathsf{introduce}(v,B_0)}
  {\mathsf{fineStep}(v,B)=G_0\concat a\concat G_1
    \concat[\mathsf{subatom}(j,B_1)]_{j\in J}}
+
+\Rule{O-BlockPlacement}{b\text{ a block in ordinary ordering}}
+ {b.placement=\begin{cases}\mathsf{correlated}&\mathsf{Rust}(b)\\
+ \mathsf{hoisted}&\text{otherwise}\end{cases}}
+
+\Rule{O-WrittenBlocks}{t=\mathsf{WrittenCoarse}(s)}
+ {\mathsf{compileWritten}_{order}(s)=
+ t[\forall b\text{ recursively}.\ b.placement:=\mathsf{correlated}]}
 \end{mathpar}
 Ready constraints rank $(0,0,0,i)$, other nonatoms $(0,0,1,i)$; Auto is
 GreedyWidth; Elimination uses reverse maximum-cardinality search on the primal
@@ -111,8 +119,13 @@ it is bound; $\mathsf{introduce}$ emits a subatom of its first holding atom and
 then the others' checks. Incomplete atoms count toward Before until their full
 row is checked. Literal-only occurrences have an empty variable heading and
 are placed as complete zero-column reads before the fine variable loop.
-The production facade uses Written/Coarse; Filtered/Coarse serves external
-planners and R-Masks' sibling order. Under H-FilterRank, $f_i$ is
+The production facade uses Prefix(Connected)/Coarse: the written root, then
+at each step a ready atom sharing a bound equality class before a disconnected
+one (earliest clause first), with ready relational predicates placed where
+their variables are bound. Written/Coarse with O-WrittenBlocks is the exact
+executable reference; ordinary Written/Coarse retains O-BlockPlacement and is
+the `plan(order(..))` fallback. Filtered/Coarse serves external planners
+and R-Masks' sibling order. Under H-FilterRank, $f_i$ is
 $0$ for an occurrence containing a literal or a local constant equality, $1$ for a local constant range,
 $2$ for a derived domain, total predicate or finite relational block, and
 $3$ otherwise. Equality classes determine locality; opaque Rust guards
@@ -131,8 +144,9 @@ estimate. Written remains available to explicit planner clients.
 $\mathsf{OrderObligations}$: unchanged CQ; no reductions; every atom has a
 subatom; Coarse has one full subatom per atom; Fine introduces at most one
 variable per subatom; Written keeps NF order. Filtered/Coarse independently
-checks that no ready occurrence outranks the recorded choice. Other rankings
-remain construction choices. \emph{Refinement:} by the VO contract (relational
+checks that no ready occurrence outranks the recorded choice and discharges
+CK-OrderBranches for the recorded groups. Other rankings remain construction
+choices. \emph{Refinement:} by the VO contract (relational
 steps earlier, Rust order and Before kept, full rows checked).
 
 \subsection{Hypergraph analysis and GYO}
@@ -244,23 +258,49 @@ child subtrees that carry a relational filter or a block cut, children first and
 strongest siblings first, before the stream starts; exact atom-to-block cuts
 reduce inner atoms. The outer is never a target or a support: its probes filter
 it in written order, so no reduced stream is stored. This is the bottom-up pass
-of the Yannakakis reducer rooted at the stream; on acyclic scopes it fully
-reduces the stream, so every surviving stream row matches in every probe and
-no top-down pass is needed. CK-Masks recomputes that schedule from the source
-steps on scope-local clauses and requires the target's reductions to equal it.
+of the Yannakakis reducer rooted at the stream, restricted to filter-carrying
+subtrees: an unfiltered child subtree has no syntactic evidence that it removes
+rows (a key/foreign-key join), so its semijoin is omitted as likely pure
+overhead. Consequently Masks is a full reducer only when every edge it omits is
+in fact non-reducing on the instance; otherwise a stream row may match an inner
+clause and then fail a later unfiltered probe, costing that probe but never
+correctness. \code{Tree} remains the unconditional full reducer on acyclic
+scopes. CK-Masks checks scope-local edge membership and completeness, not
+equality to a reconstructed schedule. Let $C$ be every atom-to-block cut
+whose target and support both differ from the outer, and $M$ every
+R-Masks edge with an atom target. A subtree is filtered when it contains a
+local filter or a target of a cut in $C$. Each edge of $C\cup M$ occurs once
+and no other edge occurs. Cuts precede tree edges; every reduction of a
+support precedes its use; tree siblings run by subtree filter rank then
+written clause. Independent subtrees may interleave. Reductions precede the
+first stream step, or, for finite domains requiring Rust-produced columns,
+the first source boundary with all those columns available (VO checks
+readiness). The outer exclusion includes a block used as the outer.
 \begin{mathpar}
 \Rule{H-SpanningCore}{T_0=\mathsf{GYOEars}(q)\quad
  T_1=\mathsf{spanningTree}(\mathsf{core}(q),\ \text{most shared, earliest})}
  {\mathsf{reductionTree}(q)=T_0\cup T_1}
 
-\Rule{R-Masks}{r=\mathsf{outer}(s)\quad c\ne r\quad
+\Rule{R-Placement}{E=\mathsf{occurrences}(q)\quad
+ C=\{i\mid s_i=\mathsf{block}_{\mathsf{correlated}}(\ldots)\}}
+ {\mathsf{reducerGraph}(q,s)=\mathsf{hypergraph}(q,E\setminus C)}
+
+\Rule{R-Masks}{r=\mathsf{outer}(s)\quad c\ne r\quad d\ne r\quad
  d\in\mathsf{children}_{\mathsf{reductionTree}\ \text{rooted at}\ r}(c)\quad
  \mathsf{filteredSubtree}(d)}
- {\mathsf{red}(c,d)\ \text{before}\ r,\ \text{children first}}
+ {\mathsf{red}(c,d)\ \text{before the ready stream boundary, children first}}
 
-\Rule{CK-Masks}{\mathsf{reductions}(t)=\mathsf{masks}(s)\ \text{on scope-local clauses}}
+\Rule{CK-Masks}{\mathsf{edges}(t)=C\cup M\quad
+ \mathsf{Once}(t)\quad\mathsf{OuterExcluded}(t)\\
+ \mathsf{ReadyBoundary}(s,t)\quad\mathsf{CutsFirst}(t)\quad
+ \mathsf{ChildrenFirst}(t)\quad\mathsf{StrongestSiblings}(t)}
  {\mathsf{check}_{reduce}^{Masks}(s,t)\Downarrow\ok}
 \end{mathpar}
+Correlated blocks denote a prefix-dependent computation, not an independently
+available reduction operand. R-Placement excludes their occurrences before
+incidence, GYO and tree analysis; their written binders still scope later
+clauses. Both reduction construction and checking consume this scope analysis.
+
 
 \begin{theorem}[Full reducer]
 On a join tree, upward reverse-BFS then downward BFS semijoins preserve
@@ -340,6 +380,18 @@ fixed occurrence paths.
 \Rule{RA-Constraint}{\vars(\theta)\subseteq V\quad
  \theta\text{ central and Eq/Ord-admissible}}
  {\sigma_\theta:\operatorname{Set}(V)\longrightarrow\operatorname{Set}(V)}
+
+\Rule{E-BlockPlacement}{b.placement=\mathsf{hoisted}\quad H=F_b\cup I_b
+ \quad\text{or}\quad b.placement=\mathsf{correlated}\quad H=B\cup F_b\cup I_b}
+ {\mathsf{elaborateBlock}(b,p)=
+ \mathsf{arms}(b,H,\mathsf{over}=
+   [p\mid b.placement=\mathsf{correlated}])}
+
+\Rule{CK-BlockPlacement}{\forall b\in\mathsf{Blocks}(s).\ \exists u\in\mathsf{Unions}(t).\
+ u.origin.path=b.path\\
+ \forall b,u\text{ with }u.origin.path=b.path.\
+ (u.origin.over\ne\bot)\Longleftrightarrow(b.placement=\mathsf{correlated})}
+ {\mathsf{BlockPlacements}(s,t)\Downarrow\ok}
 \end{mathpar}
 A full subatom always joins; a partial check uses the whole clause relation.
 $\mathsf{unitize}$ emits Unit when no prefix exists; binds copy pattern,
@@ -348,10 +400,13 @@ support column with the target's class; when protected Rust or head names block
 renaming it is realized as join/select/project. Optimizing elaboration pushes
 literal equalities and constraints onto the occurrence supplying all their
 columns (E-Constraint), in queries with and without blocks; alias solving is
-applied only to block-free queries. Rust-free blocks hoist to a derived relation
-over $F\cup I$, using a named finite prefix domain for missing generators;
-blocks with Rust run per row over the prefix. The written reference
-(\code{compile_written}) disables all hoisting.
+applied only to block-free queries. Recorded hoisted blocks form a derived
+relation over $F\cup I$, using a named finite prefix domain for missing
+generators; recorded correlated blocks run per row over the prefix.
+Elaboration never chooses this alternative. The written-reference ordering
+entry \code{cq_order::compile_written} records correlated placement recursively;
+\code{cq_elaborate::compile_written} requires those choices and disables
+predicate pushdown and alias solving, rather than overriding block placement.
 The E-Domain closure is recomputed independently while checking both schedules;
 unjustified added selections and removal of the original disjunction are
 rejected. Recognized relational predicates are selections with exact expression and
@@ -362,7 +417,8 @@ database statistics or foreign-key assumptions.
 \[
 \Rule{CK-Elaborate}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{RA}(t)\\
  t.declarations=s.cq.declarations\quad t.head=s.cq.head\\
- \mathsf{FixedFacts}(s,t)\quad\mathsf{RustTree}(s,t)\\
+ \mathsf{FixedFacts}(s,t)\quad\mathsf{RustTree}(s,t)\quad
+ \mathsf{BlockPlacements}(s,t)\Downarrow\ok\\
  \forall i.\ \operatorname{Before}_s(i)\subseteq\operatorname{Before}_t(i)\\
  \mathsf{OutputBindings}(s)=\mathsf{OutputBindings}(t)}
  {\mathsf{check}_{elaborate}(s,t,())\Downarrow\ok}
@@ -403,6 +459,17 @@ compile-time structural heuristics, not estimates of relation cardinalities.
 \textsc{WF-JoinBranch} checks the recorded disjoint full-atom groups, their
 connectivity and exact external/head interfaces. Opaque Rust, lets and union
 blocks conservatively retain the ordinary checked schedule.
+\textsc{CK-OrderBranches} checks the widest-spine and pinned-probe premises
+independently. Recorded groups must admit connected-ear contractions from
+singletons, confined to each recorded group, until each group is one component;
+the final partition admits no further ear contraction. Unlisted atoms are
+singletons. Every contraction checks shared connectivity, fact-key containment
+and containment of all non-pinned external connections in the parent heading.
+The checker discharges within-group witnesses by least projected interface
+width, earliest parent member, then earliest leaf member. Group record order is
+irrelevant. The constructor uses the same priority globally to choose one
+deterministic admissible partition, but the checker never invokes that selector
+or compares against its output. Other ordering modes forbid recorded groups.
 \textsc{E-JoinBranch} elaborates each group to a separate exact natural-join
 DAG rooted at its first scheduled atom, with connected child subtrees built
 before their parent probes them. It applies local relational predicates,
@@ -422,6 +489,12 @@ The subsequent RA simplifier retains its existing relational rewrite proof.
 \Rule{S-JoinBranch}{f=\mathsf{WidestSharedKeyAtom}(q)\quad
  B=\mathsf{ConnectedDimensionEars}(q,f)}
  {\mathsf{branches}_{Filtered,Coarse}(q)=B}
+
+\Rule{CK-OrderBranches}{\mathsf{FlatRelational}(q)\quad
+ f=\mathsf{WidestSharedKeyAtom}_{\ge3}(q)\quad
+ \mathsf{PinnedExcluded}(B,f)\\
+ \mathsf{EarProofs}(q,B,f)\quad\mathsf{Saturated}(B)}
+ {\mathsf{checkBranches}_{Filtered,Coarse}(q,B)\Downarrow\ok}
 
 \Rule{E-JoinBranch}{b=\{a_1,\ldots,a_k\}\quad I=\mathsf{Interface}(q,b)}
  {\mathsf{elaborateBranch}(b)=
@@ -692,14 +765,22 @@ total kernel merely because its RHS is closed. Rust checks the iterator/item
 and lifetime obligations; the checker preserves the tag, dependencies and
 Before facts, while finite purity remains the host premise.
 
-\subsection{Facade compositions}
+\subsection{Shared planning compositions}
 With $N$ normalization, $O_{h,s}$ ordering, $R_{g,r}$ reduction, $E$ elaboration,
-and $S$ checked redundant-support absorption:
+and $S$ checked redundant-support absorption, Plan-Prefix is the reusable
+\code{cq_planning::compile_prefix} core composition, re-exported by
+\code{mini_linq::planning} and \code{cq_planners_plan}, not a macro-local policy.
+Its \code{PlanOptions} parser is shared by macro and programmatic callers:
+\code{order(...)} and \code{no_reduce} occur at most once, reduction and skip
+packets may repeat, and a trailing options comma is rejected. The checked
+\code{prefix_valuation} API exposes $w$ before elaboration.
 \begin{mathpar}
-\Rule{Plan-Prefix}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
- r=\text{None if \code{no_reduce}, otherwise Masks}\\
- w=\mathsf{advise}(R_{None,r}(v))\quad a=E(w)}
- {\code{mini_linq::passes::plan}(q)=a}
+\Rule{Plan-Prefix}{p=\mathsf{parsePlanOptions}(args)\quad n=N(q)\\
+ v=\begin{cases}O_{explicit(p.order),Coarse}(n)&p.order\text{ present}\\
+ O_{Prefix(Connected),Coarse}(n)&\text{otherwise}\end{cases}\\
+ r=\text{None if }p.no\_reduce,\text{ otherwise Masks}\\
+ w=\mathsf{advise}(R_{None,r}(v),p)\quad a=E(w)}
+ {\code{compile_prefix}(q,p)=\code{mini_linq::passes::plan}(q,args)=a}
 
 \Rule{R-Advice}{\mathsf{skip}(T,S)\Rightarrow\mathsf{red}(T,S)\in w\quad
  \mathsf{reduce}(T,S)\ \text{or}\ \mathsf{skip}(T,S)\Rightarrow
@@ -827,7 +908,8 @@ negative originals and block ancestry are therefore unchanged. The general
 schedule contract is not weakened.
 Set
 \code{pipeline \{ plan = mini_linq::passes::plan(no_reduce); \}}
-to disable optional semijoins while retaining written order. Configuration
+to disable optional semijoins while keeping the default Prefix(Connected)
+order. Configuration
 passes this argument through its existing named planning invocation.
 \code{plan} uses the optimizing elaborator, so even the opt-out is not
 the exact reference. Generic and the external Graph spelling belong to the

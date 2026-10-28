@@ -18,7 +18,7 @@ fn canonical_type(schemas: &[Vec<Type>], index: usize) -> Type {
     let types = schemas[index].iter().collect::<Vec<_>>();
     crate::storage::layout_type(&types, types.len())
 }
-fn input_types(program: &Program, schemas: &[Vec<Type>]) -> syn::Result<std::collections::BTreeMap<String, Type>> {
+pub(crate) fn input_types(program: &Program, schemas: &[Vec<Type>]) -> syn::Result<std::collections::BTreeMap<String, Type>> {
     let context = &program.context;
     let mut inputs = std::collections::BTreeMap::new();
     for (index, relation) in context.relations.iter().enumerate() {
@@ -154,6 +154,7 @@ fn reads_environment(cq: &round::cq::Program) -> bool {
 pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     crate::storage::check_device(&program.storage)?;
     round::contract::check(program)?;
+    crate::bindings::check(program)?;
     ensure(program.context.observer.is_none(), program, "GPU Datalog does not support observer callbacks")?;
     ensure(program.policy.timing == "none", program, "GPU Datalog does not support recorded phase timing")?;
     ensure(program.execution.is_empty(), program, "GPU Datalog does not support host execution certificates")?;
@@ -162,6 +163,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     }
     let context = &program.context;
     let symbols = crate::storage::Symbols::from_program(&program.storage)?;
+    let ratio = program.storage.device.as_ref().expect("checked device advice").ratio;
     let schemas = (0..context.relations.len()).map(|index|
         types(context, index).into_iter().map(|ty| symbols.device_type(ty)).collect::<Vec<_>>()
     ).collect::<Vec<_>>();
@@ -207,26 +209,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 }
             }
         }
-        let inputs = cq.declarations.iter().map(|declaration| declaration.name.to_string())
-            .collect::<std::collections::BTreeSet<_>>();
-        let bindings = input_types.iter().filter(|(name, _)| inputs.contains(*name)).map(|(name, ty)| {
-            let name = Ident::new(name, proc_macro2::Span::call_site());
-            quote!(#name => #ty;)
-        }).collect::<TokenStream>();
-        let mut pipeline = hole.pipeline.clone();
-        let mut bound = false;
-        for pass in &mut pipeline.passes {
-            if pass.path.segments.last().is_some_and(|segment| segment.ident == "bind_inputs") {
-                ensure(pass.arguments.is_empty(), hole, "device input bindings belong to the Round printer")?;
-                pass.arguments = bindings.clone();
-                bound = true;
-            }
-        }
-        ensure(bound, hole, "GPU Datalog CQ pipeline requires cq_gpu_datalog::bind_inputs before bind_runs")?;
-        let terminal = pipeline.passes.last_mut().expect("checked terminal");
-        ensure(terminal.arguments.is_empty(), hole, "GPU Datalog owns the batch arena argument")?;
-        terminal.arguments = quote!(&mut *__cq_gpu_arena);
-        let invocation = pipeline.start(cq.to_token_stream())?;
+        let invocation = hole.pipeline.clone().start(cq.to_token_stream())?;
         if !standalone {
             return Ok(invocation);
         }
@@ -297,7 +280,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             let (#packed, mut #state, mut #all, #delta_binding) =
                 #runner(#[inline] || -> ::gpu_datalog_runtime::Result<_> {
                     let #packed = #schema;
-                    let mut #state = ::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone())?;
+                    let mut #state = ::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone(), #ratio)?;
                     #upload
                     let #all: #ty = <#ty>::from_runs(__cq_gpu_pool.clone(), #packed.clone(), #state.owned_runs())?;
                     #delta_value
@@ -318,7 +301,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         initialize.push(quote!(
             let (#schema, mut #state, mut #host) = #runner(#[inline] || -> ::gpu_datalog_runtime::Result<_> {
                 let #schema = #packed.permute(&[#(#order),*])?;
-                let mut #state = ::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone())?;
+                let mut #state = ::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone(), #ratio)?;
                 for run in #relation_state.owned_runs() {
                     let permuted = #packed.permute_device(run.buffer(), run.len(), &[#(#order),*])?;
                     // SAFETY: a column permutation preserves uniqueness of the run.
@@ -360,7 +343,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 let batch = #invocation;
                 let packing = #schema;
                 let buffer = ::gpu_datalog_runtime::concatenate_batches::<#word>(__cq_gpu_pool.clone(), &packing, &[batch])?;
-                let state = ::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone())?;
+                let state = ::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone(), #ratio)?;
                 let run = state.sort_unique(&buffer, buffer.len())?;
                 <#ty>::from_runs(__cq_gpu_pool.clone(), packing, vec![run])?
             };));

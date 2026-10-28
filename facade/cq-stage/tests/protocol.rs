@@ -195,11 +195,10 @@ fn sequence_phases_are_ordered_and_require_a_complete_target() {
     for invalid in [
         quote!(sequence = sequence;),
         quote!(grade = sequential;),
-        quote!(print = translate_pull;),
         quote!(sequence = sequence; grade = sequential;),
         quote!(sequence = sequence; print = translate_pull;),
         quote!(grade = sequential; print = translate_pull;),
-        quote!(sequence = sequence; grade = sequential; print = own_push::push;),
+        quote!(sequence = sequence; grade = sequential; print_input = structures; print = own_push::push;),
         quote!(decompose = [tile(32)];),
     ] {
         let config: cq_stage::Configuration = syn::parse2(quote!(pipeline { #invalid })).unwrap();
@@ -219,6 +218,7 @@ fn sequence_phases_are_ordered_and_require_a_complete_target() {
             .is_ok()
     );
     let push: cq_stage::Configuration = syn::parse_quote!(pipeline {
+        print_input = structures;
         print = own_push::push;
     });
     assert_eq!(
@@ -248,6 +248,19 @@ fn sequence_phases_are_ordered_and_require_a_complete_target() {
             translate_pull
         })
         .to_string()
+    );
+    // A terminal's name is opaque: this Sequence endpoint can be called `push`.
+    let renamed: cq_stage::Configuration = syn::parse_quote!(pipeline {
+        sequence = lower_custom; grade = target_custom;
+        print_input = sequence; print = custom::push;
+    });
+    assert!(
+        renamed
+            .resolve(syn::parse_quote!(pipeline {
+                plan = p; ix = i; lower = l; select = s;
+                represent = r; stage = b; print = custom::out;
+            }))
+            .is_ok()
     );
 }
 
@@ -492,4 +505,88 @@ fn continuation_context_normalizes_raw_host_names() {
         syn::parse2::<cq_stage::Context>(quote!(host_set R discharged, host_set r#R discharged))
             .is_err()
     );
+}
+
+#[test]
+fn observation_captures_checked_nonterminal_and_terminal_payloads() {
+    let observed = rewrite::<Number>(
+        quote!(pipeline {} observe { ::core::stringify }; 1),
+        |source, _| Ok(source.clone()),
+    );
+    assert_eq!(
+        observed.to_string(),
+        quote!(::core::stringify! { 1 }).to_string()
+    );
+    let rejected = rewrite::<Number>(
+        quote!(pipeline {} observe { ::core::stringify }; 1),
+        |_, _| Ok(Number(syn::parse_quote!(0))),
+    );
+    assert!(rejected.to_string().contains("zero is inadmissible"));
+    let rust = pass::<Number, syn::Expr>(
+        quote!(pipeline {} observe { ::core::stringify }; 1),
+        |_, _| Ok(syn::parse_quote!(unbound_input.into_iter())),
+    );
+    assert_eq!(
+        rust.to_string(),
+        quote!(::core::stringify! { unbound_input.into_iter() }).to_string()
+    );
+}
+
+#[test]
+fn observation_survives_continuations_without_changing_arguments() {
+    let tokens = rewrite::<Number>(
+        quote!(pipeline { next(opaque) } observe { receiver }; 1),
+        |source, _| Ok(source.clone()),
+    );
+    assert_eq!(
+        tokens.to_string(),
+        quote!(next! { arguments { opaque }; pipeline {} observe { receiver }; 1 }).to_string()
+    );
+}
+
+#[test]
+fn observed_boundaries_are_prefixes_of_the_resolved_queue() {
+    use cq_stage::Boundary;
+    let defaults: cq_stage::Configuration = syn::parse_quote!(pipeline {
+        plan = p; ix = i; lower = l; select = s; represent = r; stage = t;
+        sequence = q; decompose = [d]; grade = g; print = end;
+    });
+    for (boundary, count) in [
+        (Boundary::Cq, 0),
+        (Boundary::RelationalPlan, 1),
+        (Boundary::IndexRequirements, 2),
+        (Boundary::Physical, 3),
+        (Boundary::Structures, 4),
+        (Boundary::Represent, 5),
+        (Boundary::Stage, 6),
+        (Boundary::Sequence, 7),
+        (Boundary::Decompose, 8),
+        (Boundary::Grade, 9),
+        (Boundary::Rust, 10),
+    ] {
+        let ordinary = cq_stage::Configuration::default()
+            .resolve(defaults.clone())
+            .unwrap();
+        let observed = cq_stage::Configuration::default()
+            .resolve_observed(defaults.clone(), boundary, syn::parse_quote!(receiver))
+            .unwrap();
+        assert_eq!(observed.passes.len(), count);
+        assert_eq!(
+            observed
+                .passes
+                .iter()
+                .map(ToTokens::to_token_stream)
+                .collect::<Vec<_>>()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ordinary.passes[..count]
+                .iter()
+                .map(ToTokens::to_token_stream)
+                .collect::<Vec<_>>()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        );
+    }
 }

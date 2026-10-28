@@ -1,0 +1,16 @@
+[package]
+name = "cq-planning"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared checked MiniLinq production planning composition"
+
+[dependencies]
+cq-lang-cq.workspace = true
+cq-lang-vo.workspace = true
+cq-lang-ra.workspace = true
+cq-order.workspace = true
+cq-reduce.workspace = true
+cq-elaborate.workspace = true
+syn.workspace = true

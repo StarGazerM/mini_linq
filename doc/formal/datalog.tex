@@ -315,8 +315,9 @@ hole index, optional scan binding and membership \code{insertion} operation.
 Each runtime \code{Relation} records \code{admit}, a vector of owned rule-hole
 indices. Each \code{Hole} records \code{facts: cq\_stage::Context}, with a
 consumer-canonical flag and a set of discharged host names.
-Its \code{lower} field records the exact lowering invocation ordinal in the
-CQ queue, rather than identifying that boundary only by a path spelling.
+Its \code{lower} and optional \code{plan} fields record exact invocation ordinals
+in the CQ queue. Named configuration resolves those roles before flattening;
+custom flat queues declare them explicitly. No path spelling identifies an owner.
 An \code{Output} records a relation reference and conversion operation.
 The program also records a typed \code{terminals} registry mapping exact macro
 paths to \code{pull} or \code{push}; duplicate paths are rejected.
@@ -356,7 +357,9 @@ This check examines terminal invocations, not Rust tokens that do not yet exist.
 With $\Gamma$ the recorded registry and $\mathrm{last}(Q)$ the terminal:
 \begin{mathpar}
 \Rule{WF-DL-Hole}{\mathrm{WF}_{\mathrm{CQ}}(h)\quad
- \mathrm{last}(Q)=(p,a)\quad \Gamma(p)=\iota}
+ \mathrm{last}(Q)=(p,a)\quad \Gamma(p)=\iota\quad
+ h.\mathrm{lower}<|Q|\quad \mathrm{args}(Q_{h.\mathrm{lower}})=h.\mathrm{facts}\quad
+ h.\mathrm{plan}\ne\varnothing\Rightarrow h.\mathrm{plan}<h.\mathrm{lower}}
  {\Gamma\vdash(h,Q,\iota)\ \mathrm{hole}}
 \end{mathpar}
 \begin{mathpar}
@@ -823,6 +826,25 @@ position.  It records the resulting complete permutation.  Seeds and variants
 whose changing occurrence is outside that prefix retain identity order.
 This heuristic is not part of the validity rule and is not chosen by a printer.
 
+\paragraph{Authored rule orders.}
+A labelled rule's \code{plan(Label, [delta(R@k),] order(..))} advice resolves
+to the same permutation form and marks the variant \code{authored}.  The mark
+is denoted advice, not a validity premise: DL-OccurrenceOrder checks the
+permutation alone. Fork passes an authored variant's order to its hole's
+recorded planning invocation as explicit \code{order(..)} advice over the
+hole's normalized clause positions. Named configuration resolution records
+that invocation's ordinal; a custom flat queue declares it explicitly.
+An absent owner or nonempty conflicting planner arguments is rejected.
+Unauthored variants leave the hole's CQ planner free to choose its own order.
+\begin{mathpar}
+\Rule{DL-PlanningOwner}
+ {p=h.\mathrm{plan}<h.\mathrm{lower}\quad p<|h.Q|\quad
+  \mathrm{authored}(v)\Rightarrow \mathrm{args}(h.Q_p)=\varnothing}
+ {\mathrm{fork}(v,h).Q_p.\mathrm{args}=\mathrm{order}(\mathrm{normalize}(v))}
+\end{mathpar}
+The conclusion applies to authored variants; unauthored arguments remain
+unchanged. No pass path or relative queue-position heuristic identifies the owner.
+
 \subsection{Storage: Incremental to Storage}
 Record the existing deterministic concrete providers, initializers, layouts,
 bindings and maintenance. Independently check exact base preservation and the
@@ -1109,7 +1131,9 @@ membership. With the argument \code{layouts(sharded)} it additionally replaces
 every IDB full or delta layout whose key is nonempty, from
 \code{HashMap<K, Vec<V>, S>} to \code{ShardedLayout<K, V, S>}, preserving the
 key, payload and hasher types and the layout's relation, columns, key length
-and maintenance. With \code{layouts(runs)} it instead replaces them with
+and maintenance operation. The provider substitution also changes the recorded
+protocol from \code{grouped\_map} to \code{bulk}; its correspondence checker
+checks and reverses both fields. With \code{layouts(runs)} it instead replaces them with
 \code{RunLayout<K, V>}, and with \code{seen(runs)} canonical membership becomes
 \code{RunSeen<T, S>}, keeping $S$ for task-local deduplication only.
 Unit-key scan layouts, EDB layouts, other Storage records and
@@ -1121,7 +1145,7 @@ these parallel choices belongs to the base language or default expansion.
 \Rule{CK-DL-ShardStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad
  t\text{ changes only canonical IDB membership providers and, optionally,}\\
- \text{nonempty-key IDB layout maps to sharded or run layouts with equal }K,V(,S)}
+ \text{nonempty-key IDB grouped-map layouts to bulk sharded or run layouts with equal }K,V(,S)}
  {\mathrm{check}_{\mathrm{shardStorage}}(s,t)}
 \end{mathpar}
 A sharded layout holds $S$ disjoint grouped maps; key $k$ lives only in shard
@@ -1204,13 +1228,35 @@ exact. A symbol type is named with its codec by the rewrite's
 \code{symbols(T => C, ...)} argument, where \code{C: SymbolCodec<T>} is an
 injective map to \code{u32} codes with its inverse, fixed for the process, so
 equal symbols have equal codes in every relation and round. The device sees only codes; strings never leave the host.
-Relations, columns, keys and maintenance are unchanged.
+Relations, columns, keys and layout maintenance are unchanged. Storage records
+the declared codec map and resolved geometric maintenance ratio in
+\code{device}; \code{DeviceRuns<W>} carries no logical schema metadata.
+No consumer infers codecs from provider names or generic arguments.
+\begin{mathpar}
+\Rule{DL-DeviceSymbols}{D=\mathrm{Storage.device.symbols}\quad
+ \mathrm{dom}(D)\text{ consists of distinct, declared nonnative logical types}\quad
+ \forall(T,C)\in D.\ C\text{ satisfies the symbol-codec laws}}
+ {\mathrm{codec}(T)=D(T)\quad
+  \mathrm{deviceType}(T)=\code{Symbol<T,D(T)>}\text{ for }T\in\mathrm{dom}(D)}
+\end{mathpar}
 \begin{mathpar}
 \Rule{CK-DL-DeviceStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad
- \text{substituting back the default providers in }t\text{ gives }s\quad
+ \text{restoring default providers and erasing device advice in }t\text{ gives }s\quad
  \textsc{DL-DevicePacking}\text{ premises hold for every relation}}
  {\mathrm{check}_{\mathrm{deviceStorage}}(s,t)}
+\end{mathpar}
+A GPU Round construction rewrite takes an explicit zero-based binding
+invocation ordinal. It records that owner in each hole, fills exactly that
+invocation's complete input-layout packet, and records the terminal arena
+argument before translation. Renaming the macro cannot change ownership.
+The printer checks these packets and invokes them without filling arguments.
+\begin{mathpar}
+\Rule{DL-DeviceBindings}{\forall h.\ h.\mathrm{lower}<h.\mathrm{binding}<|h.Q|-1\quad
+ h.Q[h.\mathrm{binding}].\mathrm{args}=
+   \mathrm{deviceInputs}(h,\mathrm{Storage})\quad
+ \mathrm{last}(h.Q).\mathrm{args}=\code{\&mut *\_\_cq\_gpu\_arena}}
+ {\mathrm{print}_{\mathrm{gpu}}\text{ consumes the complete recorded invocation }h.Q}
 \end{mathpar}
 The device round printer consumes the same Round and Schedule records as the
 host printers. Inputs are uploaded once into their layouts. Each round issues
@@ -1227,7 +1273,7 @@ wave would change only cost.
 \begin{mathpar}
 \Rule{P-DL-Gpu}{\mathrm{WF}_{\mathrm{Round}}(r)\quad
  \text{every hole has the batch interface}\quad
- \textsc{CK-DL-DeviceStorage}\quad\textsc{GPU-Arena}}
+ \textsc{CK-DL-DeviceStorage}\quad\textsc{DL-DeviceBindings}\quad\textsc{GPU-Arena}}
  {\mathrm{unpack}(\mathrm{print}_{\mathrm{gpu}}(r))=\mathrm{print}_{\mathrm{rounds}}(r)\text{ as relations}}
 \end{mathpar}
 Let $S$ be a power of two at least the worker count and let
@@ -1248,13 +1294,22 @@ output order is unspecified. The termination condition is any admitted row.
  \quad 0\leq i<S}
  {\mathrm{set}(\mathrm{concat}_{i=0}^{S-1}N_i)=C\setminus A}
 \end{mathpar}
-Each native layout has exactly one owner task during publication. Full layouts
-extend their previous state; after all full-layout tasks join, relation
-containers extend and deltas swap. A second scope replaces each delta map with
-its recorded default provider and rebuilds it, including empty deltas, then joins before evaluation.
+Each native layout has exactly one owner task during publication. The printer
+interprets each member's recorded operation vector without regrouping or sorting
+by owner. Each \code{full\_layouts} or \code{delta\_rebuild} operation may
+dispatch its distinct layout owners concurrently, but that scope joins before
+the next recorded operation starts. Its inline arm follows the recorded layout
+list order. Accumulated extension and delta replacement occur exactly at their
+recorded positions; delta rebuilding uses the recorded maintenance protocol,
+including for empty deltas. Early member publication uses the same interpreter.
 The original \code{IndexRead}/\code{Rows} implementations serve CQ holes
 without fallback index construction or a shard-routing hash on every probe.
 \begin{mathpar}
+\Rule{P-DL-PublicationOrder}{\mathrm{WF}_{\mathrm{Round}}(t)\quad
+ p.\mathrm{operations}=[o_1,\ldots,o_n]\quad
+ \mathrm{owner}\text{ is injective on each layout domain}\quad
+ \mathrm{run}(o_i)\text{ joins all its layout tasks}}
+ {\mathrm{publish}(p)=\mathrm{run}(o_1);\cdots;\mathrm{run}(o_n)}
 \Rule{DL-LayoutPublication}{\mathrm{owner}\text{ is a bijection on layouts}\quad
  L'_\ell=L_\ell\cup\mathrm{layout}_\ell(N)\quad
  \text{all full owners join before delta replacement}}
@@ -1288,9 +1343,18 @@ remain required. Neither ownership checking nor the counters regression is a
 general Rust equivalence proof.
 The base printing library exports generic \code{full\_insert},
 \code{all\_extend}, \code{delta\_swap} and \code{delta\_rebuild} generators.
-Both terminals reuse those operations; the extension changes only their
-grouping into checked phases. Delta rebuilds use default replacement in both
-terminals, preserving the base expansion rather than silently using \code{clear}.
+Both terminals reuse those operations and execute their checked recorded order.
+Each layout records a maintenance protocol independent of its opaque Rust type:
+\code{grouped\_map} uses entry insertion and default replacement on reset;
+\code{bulk} uses bulk \code{extend\_from}, single-row \code{push}, and \code{clear}.
+The provider owes the declared operations' collection laws. Round copies and
+checks that protocol exactly against Storage; printers consume it.
+\begin{mathpar}
+\Rule{DL-LayoutProtocol}
+ {\ell.\mathrm{protocol}\in\{\mathrm{grouped\_map},\mathrm{bulk}\}\quad
+  \mathrm{lawful}(\ell.\mathrm{provider},\ell.\mathrm{protocol})}
+ {\mathrm{maintain}(\ell)=\mathrm{operations}(\ell.\mathrm{protocol})}
+\end{mathpar}
 The extension printer's default-off \code{hole-timing} feature emits per-hole
 and per-chunk evaluation times, input/candidate counts, partition status and
 the erased CQ rule text. No timers, atomics or logging are emitted without

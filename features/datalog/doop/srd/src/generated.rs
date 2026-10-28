@@ -273,8 +273,17 @@ impl SrdResults {
         Ok(())
     }
 }
+/// `incremental(ADVICE)` runs SRDatalog's authored per-version join orders
+/// after ADVICE (for example `driver(delta_first);`); `pipeline` alone does not.
 #[macro_export]
 macro_rules! srd_doop_engine {
+    ($name:ident, incremental($($advice:tt)*), pipeline { $($pipeline:tt)* }) => {
+        $crate::srd_doop_engine!($name, pipeline {
+            incremental = ::cq_datalog::passes::incremental($($advice)*
+            );
+            $($pipeline)*
+        });
+    };
     ($name:ident, pipeline { $($pipeline:tt)* }) => {
         #[allow(non_snake_case, unused_variables)]
         pub fn $name(facts: $crate::SrdFacts) -> $crate::SrdResults {
@@ -364,181 +373,181 @@ macro_rules! srd_doop_engine {
                 relation r_instancefieldpointsto(c0: i32, c1: i32, c2: i32);
                 output r_istype, r_isreferencetype, r_isclasstype_idb, r_isarraytype_idb, r_isinterfacetype_idb, r_directsubclass, r_superinterface, r_methodimplemented, r_mainmethoddeclaration, r_methodinvocation_base, r_subclass, r_superclass, r_subtypeof, r_supertypeof, r_subtypeofdifferent, r_methodlookup, r_classinitializer, r_castto, r_iscastabletostring, r_isstringheap, r_heaphelper, r_heaphelpernothis, r_virtualmethodinvocation, r_nonstringheapallocsupertype, r_isstringarrayheap, r_eligiblestringarrayheap, r_isobjectarrayheap, r_eligibleobjectarrayheap, r_arraytypecompat, r_initializedclass, r_reachable, r_callgraphedge, r_assign, r_varpointsto, r_reachableloadinstancefield, r_staticfieldpointsto, r_arrayindexpointsto, r_reachableinstruction, r_reachablesortedindex, r_reachablestoreinstancefield, r_storeobjfrom, r_fieldflow, r_instancefieldpointsto;
                 // isType_Class
-                r_istype(*v_class) :- r_classtype(v_class);
+                isType_Class: r_istype(*v_class) :- r_classtype(v_class);
                 // isRefType_Class
-                r_isreferencetype(*v_class) :- r_classtype(v_class);
+                isRefType_Class: r_isreferencetype(*v_class) :- r_classtype(v_class);
                 // isClassType
-                r_isclasstype_idb(*v_class) :- r_classtype(v_class);
+                isClassType: r_isclasstype_idb(*v_class) :- r_classtype(v_class);
                 // isType_Array
-                r_istype(*v_arr) :- r_arraytype(v_arr);
+                isType_Array: r_istype(*v_arr) :- r_arraytype(v_arr);
                 // isRefType_Array
-                r_isreferencetype(*v_arr) :- r_arraytype(v_arr);
+                isRefType_Array: r_isreferencetype(*v_arr) :- r_arraytype(v_arr);
                 // isArrayType
-                r_isarraytype_idb(*v_arr) :- r_arraytype(v_arr);
+                isArrayType: r_isarraytype_idb(*v_arr) :- r_arraytype(v_arr);
                 // isType_Interface
-                r_istype(*v_iface) :- r_interfacetype(v_iface);
+                isType_Interface: r_istype(*v_iface) :- r_interfacetype(v_iface);
                 // isRefType_Interface
-                r_isreferencetype(*v_iface) :- r_interfacetype(v_iface);
+                isRefType_Interface: r_isreferencetype(*v_iface) :- r_interfacetype(v_iface);
                 // isInterfaceType
-                r_isinterfacetype_idb(*v_iface) :- r_interfacetype(v_iface);
+                isInterfaceType: r_isinterfacetype_idb(*v_iface) :- r_interfacetype(v_iface);
                 // isType_AppClass
-                r_istype(*v_t) :- r_applicationclass(v_t);
+                isType_AppClass: r_istype(*v_t) :- r_applicationclass(v_t);
                 // isRefType_AppClass
-                r_isreferencetype(*v_t) :- r_applicationclass(v_t);
+                isRefType_AppClass: r_isreferencetype(*v_t) :- r_applicationclass(v_t);
                 // DirectSubclass
-                r_directsubclass(*v_a, *v_c) :- r_directsuperclass(v_a, v_c);
+                DirectSubclass: r_directsubclass(*v_a, *v_c) :- r_directsuperclass(v_a, v_c);
                 // Superinterface_Base
-                r_superinterface(*v_k, *v_c) :- r_directsuperinterface(v_c, v_k);
+                Superinterface_Base: r_superinterface(*v_k, *v_c) :- r_directsuperinterface(v_c, v_k);
                 // Superinterface_Trans
-                r_superinterface(*v_k, *v_c) :- r_superinterface(v_k, v_b), r_directsuperinterface(v_c, v_b);
+                Superinterface_Trans: r_superinterface(*v_k, *v_c) :- r_superinterface(v_k, v_b), r_directsuperinterface(v_c, v_b);
                 // Superinterface_Inherit
-                r_superinterface(*v_k, *v_c) :- r_superinterface(v_k, v_b), r_directsuperclass(v_c, v_b);
+                Superinterface_Inherit: r_superinterface(*v_k, *v_c) :- r_superinterface(v_k, v_b), r_directsuperclass(v_c, v_b);
                 // MethodImplemented
-                r_methodimplemented(*v_simplename, *v_descriptor, *v_mtype, *v_meth) :- r_method_simplename(v_meth, v_simplename), r_method_descriptor(v_meth, v_descriptor), r_method_declaringtype(v_meth, v_mtype), !r_method_modifier(constants.c_abstract, v_meth);
+                MethodImplemented: r_methodimplemented(*v_simplename, *v_descriptor, *v_mtype, *v_meth) :- r_method_simplename(v_meth, v_simplename), r_method_descriptor(v_meth, v_descriptor), r_method_declaringtype(v_meth, v_mtype), !r_method_modifier(constants.c_abstract, v_meth);
                 // MainMethodDecl_Base
-                r_mainmethoddeclaration(*v_meth) :- r_mainclass(v_mtype), r_method_declaringtype(v_meth, v_mtype), r_method_simplename(v_meth, constants.c_main), r_method_descriptor(v_meth, constants.c_main_descriptor), r_method_modifier(constants.c_public, v_meth), r_method_modifier(constants.c_static, v_meth), if *v_meth != constants.c_class_init_method && *v_meth != constants.c_register_natives_method && *v_meth != constants.c_desiredassertionstatus_method;
+                MainMethodDecl_Base: r_mainmethoddeclaration(*v_meth) :- r_mainclass(v_mtype), r_method_declaringtype(v_meth, v_mtype), r_method_simplename(v_meth, constants.c_main), r_method_descriptor(v_meth, constants.c_main_descriptor), r_method_modifier(constants.c_public, v_meth), r_method_modifier(constants.c_static, v_meth), if *v_meth != constants.c_class_init_method && *v_meth != constants.c_register_natives_method && *v_meth != constants.c_desiredassertionstatus_method;
                 // MIBase_Virtual
-                r_methodinvocation_base(*v_inv, *v_base) :- r_virtualmethodinvocation_base(v_inv, v_base);
+                MIBase_Virtual: r_methodinvocation_base(*v_inv, *v_base) :- r_virtualmethodinvocation_base(v_inv, v_base);
                 // MIBase_Special
-                r_methodinvocation_base(*v_inv, *v_base) :- r_specialmethodinvocation_base(v_inv, v_base);
+                MIBase_Special: r_methodinvocation_base(*v_inv, *v_base) :- r_specialmethodinvocation_base(v_inv, v_base);
                 // Subclass_Base
-                r_subclass(*v_c, *v_a) :- r_directsubclass(v_a, v_c);
+                Subclass_Base: r_subclass(*v_c, *v_a) :- r_directsubclass(v_a, v_c);
                 // Subclass_Trans
-                r_subclass(*v_c, *v_a) :- r_subclass(v_b, v_a), r_directsubclass(v_b, v_c);
+                Subclass_Trans: r_subclass(*v_c, *v_a) :- r_subclass(v_b, v_a), r_directsubclass(v_b, v_c);
                 // Superclass
-                r_superclass(*v_c, *v_a) :- r_subclass(v_a, v_c);
+                Superclass: r_superclass(*v_c, *v_a) :- r_subclass(v_a, v_c);
                 // SubtypeOf_Refl_Class
-                r_subtypeof(*v_s, *v_s) :- r_isclasstype_idb(v_s);
+                SubtypeOf_Refl_Class: r_subtypeof(*v_s, *v_s) :- r_isclasstype_idb(v_s);
                 // SubtypeOf_Refl_Type
-                r_subtypeof(*v_t, *v_t) :- r_istype(v_t);
+                SubtypeOf_Refl_Type: r_subtypeof(*v_t, *v_t) :- r_istype(v_t);
                 // SubtypeOf_Refl_Interface
-                r_subtypeof(*v_s, *v_s) :- r_isinterfacetype_idb(v_s);
+                SubtypeOf_Refl_Interface: r_subtypeof(*v_s, *v_s) :- r_isinterfacetype_idb(v_s);
                 // SubtypeOf_Subclass
-                r_subtypeof(*v_s, *v_t) :- r_subclass(v_t, v_s);
+                SubtypeOf_Subclass: r_subtypeof(*v_s, *v_t) :- r_subclass(v_t, v_s);
                 // SubtypeOf_Class_Iface
-                r_subtypeof(*v_s, *v_t) :- r_isclasstype_idb(v_s), r_superinterface(v_t, v_s);
+                SubtypeOf_Class_Iface: r_subtypeof(*v_s, *v_t) :- r_isclasstype_idb(v_s), r_superinterface(v_t, v_s);
                 // SubtypeOf_Iface_Iface
-                r_subtypeof(*v_s, *v_t) :- r_isinterfacetype_idb(v_s), r_superinterface(v_t, v_s);
+                SubtypeOf_Iface_Iface: r_subtypeof(*v_s, *v_t) :- r_isinterfacetype_idb(v_s), r_superinterface(v_t, v_s);
                 // SubtypeOf_Iface_Object
-                r_subtypeof(*v_s, constants.c_java_lang_object) :- r_isinterfacetype_idb(v_s);
+                SubtypeOf_Iface_Object: r_subtypeof(*v_s, constants.c_java_lang_object) :- r_isinterfacetype_idb(v_s);
                 // SubtypeOf_Array_Object
-                r_subtypeof(*v_s, constants.c_java_lang_object) :- r_isarraytype_idb(v_s);
+                SubtypeOf_Array_Object: r_subtypeof(*v_s, constants.c_java_lang_object) :- r_isarraytype_idb(v_s);
                 // SubtypeOf_Array
-                r_subtypeof(*v_s, *v_t) :- r_subtypeof(v_sc, v_tc), r_componenttype(v_s, v_sc), r_componenttype(v_t, v_tc), r_isreferencetype(v_sc), r_isreferencetype(v_tc);
+                SubtypeOf_Array: r_subtypeof(*v_s, *v_t) :- r_subtypeof(v_sc, v_tc), r_componenttype(v_s, v_sc), r_componenttype(v_t, v_tc), r_isreferencetype(v_sc), r_isreferencetype(v_tc);
                 // SubtypeOf_Array_Cloneable
-                r_subtypeof(*v_s, constants.c_java_lang_cloneable) :- r_isarraytype_idb(v_s);
+                SubtypeOf_Array_Cloneable: r_subtypeof(*v_s, constants.c_java_lang_cloneable) :- r_isarraytype_idb(v_s);
                 // SubtypeOf_Array_Serializable
-                r_subtypeof(*v_s, constants.c_java_io_serializable) :- r_isarraytype_idb(v_s);
+                SubtypeOf_Array_Serializable: r_subtypeof(*v_s, constants.c_java_io_serializable) :- r_isarraytype_idb(v_s);
                 // SupertypeOf
-                r_supertypeof(*v_s, *v_t) :- r_subtypeof(v_t, v_s);
+                SupertypeOf: r_supertypeof(*v_s, *v_t) :- r_subtypeof(v_t, v_s);
                 // SubtypeOfDiff_Base
-                r_subtypeofdifferent(*v_s, *v_t) :- r_subtypeof(v_s, v_t), if *v_s != *v_t;
+                SubtypeOfDiff_Base: r_subtypeofdifferent(*v_s, *v_t) :- r_subtypeof(v_s, v_t), if *v_s != *v_t;
                 // MethodLookup_Base
-                r_methodlookup(*v_simplename, *v_descriptor, *v_mtype, *v_meth) :- r_methodimplemented(v_simplename, v_descriptor, v_mtype, v_meth);
+                MethodLookup_Base: r_methodlookup(*v_simplename, *v_descriptor, *v_mtype, *v_meth) :- r_methodimplemented(v_simplename, v_descriptor, v_mtype, v_meth);
                 // MethodLookup_Super
-                r_methodlookup(*v_simplename, *v_descriptor, *v_mtype, *v_meth) :- r_directsuperclass(v_mtype, v_supertype), r_methodlookup(v_simplename, v_descriptor, v_supertype, v_meth), !r_methodimplemented(v_simplename, v_descriptor, v_mtype, _);
+                MethodLookup_Super: r_methodlookup(*v_simplename, *v_descriptor, *v_mtype, *v_meth) :- r_directsuperclass(v_mtype, v_supertype), r_methodlookup(v_simplename, v_descriptor, v_supertype, v_meth), !r_methodimplemented(v_simplename, v_descriptor, v_mtype, _);
                 // MethodLookup_Iface
-                r_methodlookup(*v_simplename, *v_descriptor, *v_mtype, *v_meth) :- r_directsuperinterface(v_mtype, v_supertype), r_methodlookup(v_simplename, v_descriptor, v_supertype, v_meth), !r_methodimplemented(v_simplename, v_descriptor, v_mtype, _);
+                MethodLookup_Iface: r_methodlookup(*v_simplename, *v_descriptor, *v_mtype, *v_meth) :- r_directsuperinterface(v_mtype, v_supertype), r_methodlookup(v_simplename, v_descriptor, v_supertype, v_meth), !r_methodimplemented(v_simplename, v_descriptor, v_mtype, _);
                 // ClassInitializer
-                r_classinitializer(*v_mtype, *v_meth) :- r_methodimplemented(constants.c_clinit, constants.c_clinit_descriptor, v_mtype, v_meth);
+                ClassInitializer: r_classinitializer(*v_mtype, *v_meth) :- r_methodimplemented(constants.c_clinit, constants.c_clinit_descriptor, v_mtype, v_meth);
                 // Precompute0
-                r_castto(*v_frm, *v_to, *v_inmeth, *v_heap) :- r_assigncast(v_casttype, v_frm, v_to, v_inmeth), r_supertypeof(v_casttype, v_heaptype), r_heapallocation_type(v_heap, v_heaptype), if *v_heaptype != constants.c_java_lang_string_type;
+                Precompute0: r_castto(*v_frm, *v_to, *v_inmeth, *v_heap) :- r_assigncast(v_casttype, v_frm, v_to, v_inmeth), r_supertypeof(v_casttype, v_heaptype), r_heapallocation_type(v_heap, v_heaptype), if *v_heaptype != constants.c_java_lang_string_type;
                 // Precompute0_String
-                r_castto(*v_frm, *v_to, *v_inmeth, *v_heap) :- r_assigncast(v_casttype, v_frm, v_to, v_inmeth), r_iscastabletostring(v_casttype), r_isstringheap(v_heap);
+                Precompute0_String: r_castto(*v_frm, *v_to, *v_inmeth, *v_heap) :- r_assigncast(v_casttype, v_frm, v_to, v_inmeth), r_iscastabletostring(v_casttype), r_isstringheap(v_heap);
                 // Precompute1
-                r_heaphelper(*v_simplename, *v_descriptor, *v_toMeth, *v_thisP, *v_heap) :- r_methodlookup(v_simplename, v_descriptor, v_heaptype, v_toMeth), r_heapallocation_type(v_heap, v_heaptype), r_thisvar(v_toMeth, v_thisP);
+                Precompute1: r_heaphelper(*v_simplename, *v_descriptor, *v_toMeth, *v_thisP, *v_heap) :- r_methodlookup(v_simplename, v_descriptor, v_heaptype, v_toMeth), r_heapallocation_type(v_heap, v_heaptype), r_thisvar(v_toMeth, v_thisP);
                 // Precompute1b
-                r_heaphelpernothis(*v_simplename, *v_descriptor, *v_toMeth, *v_heap) :- r_methodlookup(v_simplename, v_descriptor, v_heaptype, v_toMeth), r_heapallocation_type(v_heap, v_heaptype);
+                Precompute1b: r_heaphelpernothis(*v_simplename, *v_descriptor, *v_toMeth, *v_heap) :- r_methodlookup(v_simplename, v_descriptor, v_heaptype, v_toMeth), r_heapallocation_type(v_heap, v_heaptype);
                 // Precompute2
-                r_virtualmethodinvocation(*v_invocation, *v_base, *v_simplename, *v_descriptor) :- r_virtualmethodinvocation_base(v_invocation, v_base), r_virtualmethodinvocation_simplename(v_invocation, v_simplename), r_virtualmethodinvocation_descriptor(v_invocation, v_descriptor);
+                Precompute2: r_virtualmethodinvocation(*v_invocation, *v_base, *v_simplename, *v_descriptor) :- r_virtualmethodinvocation_base(v_invocation, v_base), r_virtualmethodinvocation_simplename(v_invocation, v_simplename), r_virtualmethodinvocation_descriptor(v_invocation, v_descriptor);
                 // HeapAllocHelper
-                r_nonstringheapallocsupertype(*v_heap, *v_baseheap) :- r_heapallocation_type(v_heap, v_heaptype), r_heapallocation_type(v_baseheap, v_baseheaptype), r_componenttype(v_baseheaptype, v_comptype), r_supertypeof(v_comptype, v_heaptype), if *v_baseheaptype != constants.c_java_lang_object_array && *v_baseheaptype != constants.c_java_lang_string_array;
+                HeapAllocHelper: r_nonstringheapallocsupertype(*v_heap, *v_baseheap) :- r_heapallocation_type(v_heap, v_heaptype), r_heapallocation_type(v_baseheap, v_baseheaptype), r_componenttype(v_baseheaptype, v_comptype), r_supertypeof(v_comptype, v_heaptype), if *v_baseheaptype != constants.c_java_lang_object_array && *v_baseheaptype != constants.c_java_lang_string_array;
                 // IsStringArrayHeap_rule
-                r_isstringarrayheap(*v_baseheap) :- r_heapallocation_type(v_baseheap, constants.c_java_lang_string_array);
+                IsStringArrayHeap_rule: r_isstringarrayheap(*v_baseheap) :- r_heapallocation_type(v_baseheap, constants.c_java_lang_string_array);
                 // EligibleStringArrayHeap_rule
-                r_eligiblestringarrayheap(*v_heap) :- r_heapallocation_type(v_heap, v_heaptype), r_componenttype(constants.c_java_lang_string_array, v_comptype), r_supertypeof(v_comptype, v_heaptype);
+                EligibleStringArrayHeap_rule: r_eligiblestringarrayheap(*v_heap) :- r_heapallocation_type(v_heap, v_heaptype), r_componenttype(constants.c_java_lang_string_array, v_comptype), r_supertypeof(v_comptype, v_heaptype);
                 // IsObjectArrayHeap_rule
-                r_isobjectarrayheap(*v_baseheap) :- r_heapallocation_type(v_baseheap, constants.c_java_lang_object_array);
+                IsObjectArrayHeap_rule: r_isobjectarrayheap(*v_baseheap) :- r_heapallocation_type(v_baseheap, constants.c_java_lang_object_array);
                 // EligibleObjectArrayHeap_rule
-                r_eligibleobjectarrayheap(*v_heap) :- r_heapallocation_type(v_heap, v_heaptype), r_componenttype(constants.c_java_lang_object_array, v_comptype), r_supertypeof(v_comptype, v_heaptype);
+                EligibleObjectArrayHeap_rule: r_eligibleobjectarrayheap(*v_heap) :- r_heapallocation_type(v_heap, v_heaptype), r_componenttype(constants.c_java_lang_object_array, v_comptype), r_supertypeof(v_comptype, v_heaptype);
                 // IsStringHeap_rule
-                r_isstringheap(*v_heap) :- r_heapallocation_type(v_heap, constants.c_java_lang_string_type);
+                IsStringHeap_rule: r_isstringheap(*v_heap) :- r_heapallocation_type(v_heap, constants.c_java_lang_string_type);
                 // IsCastableToString_rule
-                r_iscastabletostring(*v_casttype) :- r_supertypeof(v_casttype, constants.c_java_lang_string_type);
+                IsCastableToString_rule: r_iscastabletostring(*v_casttype) :- r_supertypeof(v_casttype, constants.c_java_lang_string_type);
                 // ArrayTypeCompatPrecompute
-                r_arraytypecompat(*v_baseheap, *v_vtype) :- r_heapallocation_type(v_baseheap, v_baseheaptype), r_componenttype(v_baseheaptype, v_basecomptype), r_supertypeof(v_vtype, v_basecomptype);
+                ArrayTypeCompatPrecompute: r_arraytypecompat(*v_baseheap, *v_vtype) :- r_heapallocation_type(v_baseheap, v_baseheaptype), r_componenttype(v_baseheaptype, v_basecomptype), r_supertypeof(v_vtype, v_basecomptype);
                 // InitClass_Super
-                r_initializedclass(*v_superclass) :- r_initializedclass(v_classD), r_directsuperclass(v_classD, v_superclass);
+                InitClass_Super: r_initializedclass(*v_superclass) :- r_initializedclass(v_classD), r_directsuperclass(v_classD, v_superclass);
                 // InitClass_Iface
-                r_initializedclass(*v_superiface) :- r_initializedclass(v_classOrIface), r_directsuperinterface(v_classOrIface, v_superiface);
+                InitClass_Iface: r_initializedclass(*v_superiface) :- r_initializedclass(v_classOrIface), r_directsuperinterface(v_classOrIface, v_superiface);
                 // InitClass_Main
-                r_initializedclass(*v_classD) :- r_mainmethoddeclaration(v_meth), r_method_declaringtype(v_meth, v_classD);
+                InitClass_Main: r_initializedclass(*v_classD) :- r_mainmethoddeclaration(v_meth), r_method_declaringtype(v_meth, v_classD);
                 // InitClass_Heap
-                r_initializedclass(*v_classD) :- r_reachable(v_inmeth), r_assignheapallocation(v_heap, _, v_inmeth), r_heapallocation_type(v_heap, v_classD);
+                InitClass_Heap: r_initializedclass(*v_classD) :- r_reachable(v_inmeth), r_assignheapallocation(v_heap, _, v_inmeth), r_heapallocation_type(v_heap, v_classD);
                 // InitClass_StaticInvoke
-                r_initializedclass(*v_classD) :- r_reachable(v_inmeth), r_instruction_method(v_invocation, v_inmeth), r_methodinvocation_method(v_invocation, v_sig), r_method_declaringtype(v_sig, v_classD), r_isstaticmethodinvocation_insn(v_invocation);
+                InitClass_StaticInvoke: r_initializedclass(*v_classD) :- r_reachable(v_inmeth), r_instruction_method(v_invocation, v_inmeth), r_methodinvocation_method(v_invocation, v_sig), r_method_declaringtype(v_sig, v_classD), r_isstaticmethodinvocation_insn(v_invocation);
                 // InitClass_StoreStatic
-                r_initializedclass(*v_classOrIface) :- r_reachable(v_inmeth), r_storestaticfield(_, v_sig, v_inmeth), r_field_declaringtype(v_sig, v_classOrIface);
+                InitClass_StoreStatic: r_initializedclass(*v_classOrIface) :- r_reachable(v_inmeth), r_storestaticfield(_, v_sig, v_inmeth), r_field_declaringtype(v_sig, v_classOrIface);
                 // InitClass_LoadStatic
-                r_initializedclass(*v_classOrIface) :- r_reachable(v_inmeth), r_loadstaticfield(v_sig, _, v_inmeth), r_field_declaringtype(v_sig, v_classOrIface);
+                InitClass_LoadStatic: r_initializedclass(*v_classOrIface) :- r_reachable(v_inmeth), r_loadstaticfield(v_sig, _, v_inmeth), r_field_declaringtype(v_sig, v_classOrIface);
                 // Reachable_Clinit
-                r_reachable(*v_clinit) :- r_initializedclass(v_classD), r_classinitializer(v_classD, v_clinit);
+                Reachable_Clinit: r_reachable(*v_clinit) :- r_initializedclass(v_classD), r_classinitializer(v_classD, v_clinit);
                 // Reachable_Main
-                r_reachable(*v_meth) :- r_mainmethoddeclaration(v_meth);
+                Reachable_Main: r_reachable(*v_meth) :- r_mainmethoddeclaration(v_meth);
                 // Static_MultiHead
-                r_reachable(*v_tometh) :- r_reachable(v_inmeth), r_staticmethodinvocation(v_invocation, v_tometh, v_inmeth);
-                r_callgraphedge(*v_invocation, *v_tometh) :- r_reachable(v_inmeth), r_staticmethodinvocation(v_invocation, v_tometh, v_inmeth);
+                Static_MultiHead_0: r_reachable(*v_tometh) :- r_reachable(v_inmeth), r_staticmethodinvocation(v_invocation, v_tometh, v_inmeth);
+                Static_MultiHead_1: r_callgraphedge(*v_invocation, *v_tometh) :- r_reachable(v_inmeth), r_staticmethodinvocation(v_invocation, v_tometh, v_inmeth);
                 // Assign_Param
-                r_assign(*v_actual, *v_formal) :- r_callgraphedge(v_invocation, v_meth), r_formalparam(v_idx, v_meth, v_formal), r_actualparam(v_idx, v_invocation, v_actual);
+                Assign_Param: r_assign(*v_actual, *v_formal) :- r_callgraphedge(v_invocation, v_meth), r_formalparam(v_idx, v_meth, v_formal), r_actualparam(v_idx, v_invocation, v_actual);
                 // Assign_Return
-                r_assign(*v_ret, *v_local) :- r_callgraphedge(v_invocation, v_meth), r_returnvar(v_ret, v_meth), r_assignreturnvalue(v_invocation, v_local);
+                Assign_Return: r_assign(*v_ret, *v_local) :- r_callgraphedge(v_invocation, v_meth), r_returnvar(v_ret, v_meth), r_assignreturnvalue(v_invocation, v_local);
                 // VPT_HeapAlloc
-                r_varpointsto(*v_heap, *v_vr) :- r_assignheapallocation(v_heap, v_vr, v_inMeth), r_reachable(v_inMeth);
+                VPT_HeapAlloc: r_varpointsto(*v_heap, *v_vr) :- r_assignheapallocation(v_heap, v_vr, v_inMeth), r_reachable(v_inMeth);
                 // VPT_Assign
-                r_varpointsto(*v_heap, *v_to) :- r_assign(v_frm, v_to), r_varpointsto(v_heap, v_frm);
+                VPT_Assign: r_varpointsto(*v_heap, *v_to) :- r_assign(v_frm, v_to), r_varpointsto(v_heap, v_frm);
                 // VPT_Local
-                r_varpointsto(*v_heap, *v_to) :- r_reachable(v_inmeth), r_assignlocal(v_frm, v_to, v_inmeth), r_varpointsto(v_heap, v_frm);
+                VPT_Local: r_varpointsto(*v_heap, *v_to) :- r_reachable(v_inmeth), r_assignlocal(v_frm, v_to, v_inmeth), r_varpointsto(v_heap, v_frm);
                 // VPT_Cast
-                r_varpointsto(*v_heap, *v_to) :- r_reachable(v_inmeth), r_castto(v_frm, v_to, v_inmeth, v_heap), r_varpointsto(v_heap, v_frm);
+                VPT_Cast: r_varpointsto(*v_heap, *v_to) :- r_reachable(v_inmeth), r_castto(v_frm, v_to, v_inmeth, v_heap), r_varpointsto(v_heap, v_frm);
                 // ReachableLoadInstanceField_rule
-                r_reachableloadinstancefield(*v_base, *v_sig, *v_to) :- r_reachable(v_inmeth), r_loadinstancefield(v_base, v_sig, v_to, v_inmeth);
+                ReachableLoadInstanceField_rule: r_reachableloadinstancefield(*v_base, *v_sig, *v_to) :- r_reachable(v_inmeth), r_loadinstancefield(v_base, v_sig, v_to, v_inmeth);
                 // VPT_LoadStatic
-                r_varpointsto(*v_heap, *v_to) :- r_reachable(v_inmeth), r_loadstaticfield(v_fld, v_to, v_inmeth), r_staticfieldpointsto(v_heap, v_fld);
+                VPT_LoadStatic: r_varpointsto(*v_heap, *v_to) :- r_reachable(v_inmeth), r_loadstaticfield(v_fld, v_to, v_inmeth), r_staticfieldpointsto(v_heap, v_fld);
                 // VPT_LoadArray
-                r_varpointsto(*v_heap, *v_to) :- r_reachable(v_inmeth), r_loadarrayindex(v_base, v_to, v_inmeth), r_varpointsto(v_baseheap, v_base), r_arrayindexpointsto(v_baseheap, v_heap), r_var_type(v_to, v_vtype), r_arraytypecompat(v_baseheap, v_vtype);
+                VPT_LoadArray: r_varpointsto(*v_heap, *v_to) :- r_reachable(v_inmeth), r_loadarrayindex(v_base, v_to, v_inmeth), r_varpointsto(v_baseheap, v_base), r_arrayindexpointsto(v_baseheap, v_heap), r_var_type(v_to, v_vtype), r_arraytypecompat(v_baseheap, v_vtype);
                 // ReachableInstructionHelper
-                r_reachableinstruction(*v_invocation) :- r_reachable(v_inmeth), r_instruction_method(v_invocation, v_inmeth);
+                ReachableInstructionHelper: r_reachableinstruction(*v_invocation) :- r_reachable(v_inmeth), r_instruction_method(v_invocation, v_inmeth);
                 // VirtualDispatch_MultiHead
-                r_varpointsto(*v_heap, *v_thisP) :- r_reachableinstruction(v_invocation), r_virtualmethodinvocation(v_invocation, v_base, v_simplename, v_descriptor), r_varpointsto(v_heap, v_base), r_heaphelper(v_simplename, v_descriptor, v_toMeth, v_thisP, v_heap);
-                r_callgraphedge(*v_invocation, *v_toMeth) :- r_reachableinstruction(v_invocation), r_virtualmethodinvocation(v_invocation, v_base, v_simplename, v_descriptor), r_varpointsto(v_heap, v_base), r_heaphelper(v_simplename, v_descriptor, v_toMeth, v_thisP, v_heap);
-                r_reachable(*v_toMeth) :- r_reachableinstruction(v_invocation), r_virtualmethodinvocation(v_invocation, v_base, v_simplename, v_descriptor), r_varpointsto(v_heap, v_base), r_heaphelper(v_simplename, v_descriptor, v_toMeth, v_thisP, v_heap);
+                VirtualDispatch_MultiHead_0: r_varpointsto(*v_heap, *v_thisP) :- r_reachableinstruction(v_invocation), r_virtualmethodinvocation(v_invocation, v_base, v_simplename, v_descriptor), r_varpointsto(v_heap, v_base), r_heaphelper(v_simplename, v_descriptor, v_toMeth, v_thisP, v_heap);
+                VirtualDispatch_MultiHead_1: r_callgraphedge(*v_invocation, *v_toMeth) :- r_reachableinstruction(v_invocation), r_virtualmethodinvocation(v_invocation, v_base, v_simplename, v_descriptor), r_varpointsto(v_heap, v_base), r_heaphelper(v_simplename, v_descriptor, v_toMeth, v_thisP, v_heap);
+                VirtualDispatch_MultiHead_2: r_reachable(*v_toMeth) :- r_reachableinstruction(v_invocation), r_virtualmethodinvocation(v_invocation, v_base, v_simplename, v_descriptor), r_varpointsto(v_heap, v_base), r_heaphelper(v_simplename, v_descriptor, v_toMeth, v_thisP, v_heap);
                 // Reachable_CGE_Virtual
-                r_reachable(*v_toMeth) :- r_reachableinstruction(v_invocation), r_virtualmethodinvocation(v_invocation, v_base, v_simplename, v_descriptor), r_varpointsto(v_heap, v_base), r_heaphelpernothis(v_simplename, v_descriptor, v_toMeth, v_heap);
-                r_callgraphedge(*v_invocation, *v_toMeth) :- r_reachableinstruction(v_invocation), r_virtualmethodinvocation(v_invocation, v_base, v_simplename, v_descriptor), r_varpointsto(v_heap, v_base), r_heaphelpernothis(v_simplename, v_descriptor, v_toMeth, v_heap);
+                Reachable_CGE_Virtual_0: r_reachable(*v_toMeth) :- r_reachableinstruction(v_invocation), r_virtualmethodinvocation(v_invocation, v_base, v_simplename, v_descriptor), r_varpointsto(v_heap, v_base), r_heaphelpernothis(v_simplename, v_descriptor, v_toMeth, v_heap);
+                Reachable_CGE_Virtual_1: r_callgraphedge(*v_invocation, *v_toMeth) :- r_reachableinstruction(v_invocation), r_virtualmethodinvocation(v_invocation, v_base, v_simplename, v_descriptor), r_varpointsto(v_heap, v_base), r_heaphelpernothis(v_simplename, v_descriptor, v_toMeth, v_heap);
                 // SpecialDispatch_MultiHead
-                r_varpointsto(*v_heap, *v_thisP) :- r_reachableinstruction(v_invocation), r_specialmethodinvocation_base(v_invocation, v_base), r_varpointsto(v_heap, v_base), r_methodinvocation_method(v_invocation, v_tometh), r_thisvar(v_tometh, v_thisP);
-                r_callgraphedge(*v_invocation, *v_tometh) :- r_reachableinstruction(v_invocation), r_specialmethodinvocation_base(v_invocation, v_base), r_varpointsto(v_heap, v_base), r_methodinvocation_method(v_invocation, v_tometh), r_thisvar(v_tometh, v_thisP);
-                r_reachable(*v_tometh) :- r_reachableinstruction(v_invocation), r_specialmethodinvocation_base(v_invocation, v_base), r_varpointsto(v_heap, v_base), r_methodinvocation_method(v_invocation, v_tometh), r_thisvar(v_tometh, v_thisP);
+                SpecialDispatch_MultiHead_0: r_varpointsto(*v_heap, *v_thisP) :- r_reachableinstruction(v_invocation), r_specialmethodinvocation_base(v_invocation, v_base), r_varpointsto(v_heap, v_base), r_methodinvocation_method(v_invocation, v_tometh), r_thisvar(v_tometh, v_thisP);
+                SpecialDispatch_MultiHead_1: r_callgraphedge(*v_invocation, *v_tometh) :- r_reachableinstruction(v_invocation), r_specialmethodinvocation_base(v_invocation, v_base), r_varpointsto(v_heap, v_base), r_methodinvocation_method(v_invocation, v_tometh), r_thisvar(v_tometh, v_thisP);
+                SpecialDispatch_MultiHead_2: r_reachable(*v_tometh) :- r_reachableinstruction(v_invocation), r_specialmethodinvocation_base(v_invocation, v_base), r_varpointsto(v_heap, v_base), r_methodinvocation_method(v_invocation, v_tometh), r_thisvar(v_tometh, v_thisP);
                 // SFPT_Store
-                r_staticfieldpointsto(*v_heap, *v_fld) :- r_reachable(v_inmeth), r_storestaticfield(v_frm, v_fld, v_inmeth), r_varpointsto(v_heap, v_frm);
+                SFPT_Store: r_staticfieldpointsto(*v_heap, *v_fld) :- r_reachable(v_inmeth), r_storestaticfield(v_frm, v_fld, v_inmeth), r_varpointsto(v_heap, v_frm);
                 // ReachableSortedIndex_rule
-                r_reachablesortedindex(*v_frm, *v_base) :- r_reachable(v_inmeth), r_storearrayindex(v_frm, v_base, v_inmeth);
+                ReachableSortedIndex_rule: r_reachablesortedindex(*v_frm, *v_base) :- r_reachable(v_inmeth), r_storearrayindex(v_frm, v_base, v_inmeth);
                 // AIPT_Store_ObjectArray
-                r_arrayindexpointsto(*v_baseheap, *v_heap) :- r_reachablesortedindex(v_frm, v_base), r_varpointsto(v_baseheap, v_base), r_isobjectarrayheap(v_baseheap), r_varpointsto(v_heap, v_frm), r_eligibleobjectarrayheap(v_heap);
+                AIPT_Store_ObjectArray: r_arrayindexpointsto(*v_baseheap, *v_heap) :- r_reachablesortedindex(v_frm, v_base), r_varpointsto(v_baseheap, v_base), r_isobjectarrayheap(v_baseheap), r_varpointsto(v_heap, v_frm), r_eligibleobjectarrayheap(v_heap);
                 // AIPT_Store
-                r_arrayindexpointsto(*v_baseheap, *v_heap) :- r_reachablesortedindex(v_frm, v_base), r_varpointsto(v_baseheap, v_base), r_varpointsto(v_heap, v_frm), r_nonstringheapallocsupertype(v_heap, v_baseheap);
+                AIPT_Store: r_arrayindexpointsto(*v_baseheap, *v_heap) :- r_reachablesortedindex(v_frm, v_base), r_varpointsto(v_baseheap, v_base), r_varpointsto(v_heap, v_frm), r_nonstringheapallocsupertype(v_heap, v_baseheap);
                 // AIPT_Store_StringArray
-                r_arrayindexpointsto(*v_baseheap, *v_heap) :- r_reachablesortedindex(v_frm, v_base), r_varpointsto(v_baseheap, v_base), r_isstringarrayheap(v_baseheap), r_varpointsto(v_heap, v_frm), r_eligiblestringarrayheap(v_heap);
+                AIPT_Store_StringArray: r_arrayindexpointsto(*v_baseheap, *v_heap) :- r_reachablesortedindex(v_frm, v_base), r_varpointsto(v_baseheap, v_base), r_isstringarrayheap(v_baseheap), r_varpointsto(v_heap, v_frm), r_eligiblestringarrayheap(v_heap);
                 // ReachableStoreInstanceField_rule
-                r_reachablestoreinstancefield(*v_base, *v_fld, *v_frm) :- r_reachable(v_inmeth), r_storeinstancefield(v_frm, v_base, v_fld, v_inmeth);
+                ReachableStoreInstanceField_rule: r_reachablestoreinstancefield(*v_base, *v_fld, *v_frm) :- r_reachable(v_inmeth), r_storeinstancefield(v_frm, v_base, v_fld, v_inmeth);
                 // StoreObjFrom_rule
-                r_storeobjfrom(*v_baseheap, *v_fld, *v_frm) :- r_reachablestoreinstancefield(v_base, v_fld, v_frm), r_varpointsto(v_baseheap, v_base);
+                StoreObjFrom_rule: r_storeobjfrom(*v_baseheap, *v_fld, *v_frm) :- r_reachablestoreinstancefield(v_base, v_fld, v_frm), r_varpointsto(v_baseheap, v_base);
                 // FieldFlow_rule
-                r_fieldflow(*v_frm, *v_to) :- r_reachableloadinstancefield(v_base, v_fld, v_to), r_varpointsto(v_baseheap, v_base), r_storeobjfrom(v_baseheap, v_fld, v_frm);
+                FieldFlow_rule: r_fieldflow(*v_frm, *v_to) :- r_reachableloadinstancefield(v_base, v_fld, v_to), r_varpointsto(v_baseheap, v_base), r_storeobjfrom(v_baseheap, v_fld, v_frm);
                 // VPT_FieldFlow
-                r_varpointsto(*v_heap, *v_to) :- r_fieldflow(v_frm, v_to), r_varpointsto(v_heap, v_frm);
+                VPT_FieldFlow: r_varpointsto(*v_heap, *v_to) :- r_fieldflow(v_frm, v_to), r_varpointsto(v_heap, v_frm);
                 // IFPT_Output
-                r_instancefieldpointsto(*v_heap, *v_fld, *v_baseheap) :- r_storeobjfrom(v_baseheap, v_fld, v_frm), r_varpointsto(v_heap, v_frm);
+                IFPT_Output: r_instancefieldpointsto(*v_heap, *v_fld, *v_baseheap) :- r_storeobjfrom(v_baseheap, v_fld, v_frm), r_varpointsto(v_heap, v_frm);
             };
             $crate::SrdResults {
                 r_istype: r_istype.collect(),

@@ -126,6 +126,7 @@ pub fn conformance_targets(input: proc_macro::TokenStream) -> proc_macro::TokenS
                 pipeline {
                     #pipeline
                     select = ::mini_linq::passes::select(#advice);
+                    print_input = structures;
                     print = ::cq_workload_passes::sequence_targets(#loader);
                 }
                 #source

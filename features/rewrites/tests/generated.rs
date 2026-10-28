@@ -11,12 +11,14 @@ fn captured(rewritten: bool) -> structures::Program {
             r,s,t;
             plan = cq_planners::order(written, fine);
             physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections];
+            print_input = structures;
             print = cq_rewrite_test_driver::capture_structures;
         }
     } else {
         triangle! {
             r,s,t;
             plan = cq_planners::order(written, fine);
+            print_input = structures;
             print = cq_rewrite_test_driver::capture_structures;
         }
     };
@@ -131,12 +133,14 @@ fn captured_partial(rewritten: bool) -> structures::Program {
             inputs;
             plan = cq_planners::order(written, fine);
             physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections];
+            print_input = structures;
             print = cq_rewrite_test_driver::capture_structures;
         }
     } else {
         partial_triangle! {
             inputs;
             plan = cq_planners::order(written, fine);
+            print_input = structures;
             print = cq_rewrite_test_driver::capture_structures;
         }
     };
