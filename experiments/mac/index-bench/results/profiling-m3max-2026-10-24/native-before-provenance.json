@@ -1,0 +1,10 @@
+{
+  "binary_sha256": "10fa2b41be90172c04ffd3a2a080651b4b45b1f6c3968535b693e3f1ddd21bcb",
+  "command": [
+    "experiments/mac/index-bench/native/target/release/native-index-bench",
+    "1048576",
+    "262144",
+    "5"
+  ],
+  "note": "Existing pre-optimization native benchmark binary, measured before rebuilding it. Same generated workload and checksum checks as the native comparison."
+}

@@ -1,0 +1,21 @@
+{
+  "command": [
+    "experiments/mac/index-bench/native/target/release/native-index-bench",
+    "1048576",
+    "262144",
+    "5"
+  ],
+  "hardware": "Apple M3 Max",
+  "memory_bytes": 137438953472,
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "scope": "One-thread warm native Rust runtime providers; CPU build is one observation, query times median of five; checksum-sink enumeration, no GPU construction or full output materialization; 50% hits, variable two-to-six payload occurrences/key. Hashbrown is a group-rank directory over pre-existing payload/offset arrays; its build excludes grouping, so build times are not normalized across providers.",
+  "processing": "Sorted mode charges in-place sort separately; buffer copy excluded; provider_probe32 uses each provider actual IndexRead::probe implementation, not a promise of batching for every provider; segmented32 only for Copy exact-size range cursors",
+  "source_sha256": {
+    "experiments/mac/index-bench/native/Cargo.toml": "258ab1ab45b774a2b24fcf3dbc6fba87e195564c0901536abb60d3f567580266",
+    "experiments/mac/index-bench/native/Cargo.lock": "4c5ba5831a6ef353b21ab4f7939cf66704c5445f868ee0e769b9a0f6b7285536",
+    "experiments/mac/index-bench/native/src/main.rs": "22aa679392e5a1b92615cdb5587f12833ddd569bca2793ac2eb35a934dc1b3f4",
+    "runtime/cq-storage/src/radix_run.rs": "4f2929806300fd5a4fa191f2b6da5882cbfa838ab26b0a4944c8c6c2fb647f95",
+    "runtime/cq-storage/src/radix_spline.rs": "b30f989a37c712393cd3d0599d8c8a79667f9c260cd35a81c3ca53c1c31f69e0",
+    "runtime/cq-storage/src/sorted_run.rs": "c4504b8c2367098f490b0ce8df8522eb2643800909c562bac1fd462e2f2b1700"
+  }
+}

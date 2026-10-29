@@ -3,6 +3,11 @@
 // profit arithmetic, grouping, and ordering remain outside this inspired core.
 // Loading evaluates the string predicate once per distinct Part name and retains
 // the resulting code relation to filter Part before the remaining joins.
+// SF1: filtered Part has 10,664 rows; its Lineitem join has 319,404.
+// This connected order keeps the large Lineitem build keyed only by part_key.
+// The PartSupp-first candidate has smaller prefix work (777,440 vs 1,607,684)
+// but builds Lineitem on a composite key; both are recorded in the Mac comparison.
+// Orders before Lineitem would form 10,664 * 1,500,000 independent pairs.
 
 // String-valued input columns stay dictionary-coded throughout execution.
 
@@ -14,7 +19,7 @@ JOIN supplier s ON s.s_suppkey = l.l_suppkey
 JOIN orders o ON o.o_orderkey = l.l_orderkey
 JOIN nation n ON n.n_nationkey = s.s_nationkey
 WHERE p.p_name LIKE '%green%'"#;
-pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "transfer", "le", "le_runs", "generic_smallest", "advised"];
+pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", "generic_smallest", "advised"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("lineitem", "l_orderkey,l_partkey,l_suppkey"),
     ("partsupp", "ps_partkey,ps_suppkey"),
@@ -119,9 +124,8 @@ macro_rules! runner {
                     relation answer(order_key: i64, part_key: i64, supplier_key: i64);
                     answer(order_key, part_key, supplier_key) :-
                         Part(part_key, part_name), GreenNames(part_name),
-                        Orders(order_key),
                         Lineitem(order_key, part_key, supplier_key), PartSupp(part_key, supplier_key),
-                        Supplier(supplier_key, nation_key), Nation(nation_key);
+                        Orders(order_key), Supplier(supplier_key, nation_key), Nation(nation_key);
                 }
                 .map(|(order_key, part_key, supplier_key,)| (*order_key, *part_key, *supplier_key,))
                 .collect()
@@ -144,11 +148,15 @@ runner!($; tuned, {
     plan = ::cq_planners::order(written, fine);
     physical = [::cq_rewrites::canon_prefixes, ::cq_rewrites::smallest_intersections];
 }, []);
-runner!($; advised, { plan = ::mini_linq::passes::plan(no_reduce, order(Part, Lineitem, PartSupp, Orders, Supplier, Nation)); }, []);
+runner!($; advised, { plan = ::mini_linq::passes::plan(no_reduce, order(Part, GreenNames, Lineitem, PartSupp, Orders, Supplier, Nation)); }, []);
 
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {
         "default" => default::run(data),
+        "radix" => radix::run(data),
+        "radix_retained" => radix_retained::run(data),
+        "built_hash" => built_hash::run(data),
+        "built_radix" => built_radix::run(data),
         "par" => par::run(data),
         "no-reduce" => no_reduce::run(data),
         "transfer" => transfer::run(data),

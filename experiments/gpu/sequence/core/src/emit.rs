@@ -1442,6 +1442,8 @@ pub(crate) fn translate_impl(
             "GPU Sequence translation requires checked gpu grading",
         ));
     }
+    // The target-owned Structures stage and terminal enforce the same boundary.
+    crate::check_structures(&analysis.structures)?;
     if arena.is_none()
         && program.sequence.output == Some(OutputProtocol::ReservePrevious)
     {
@@ -3099,6 +3101,18 @@ mod tests {
             }
         };
         crate::runs::record_representation(&program).unwrap()
+    }
+
+    #[test]
+    fn structures_staging_cannot_be_silently_dropped_by_target_switch() {
+        let mut program = uploaded_host_program(false);
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        assert!(translate(&program, &analysis).is_ok());
+        program.structures.structures.entries.push(
+            syn::parse_quote!(host_input stage = batch 2;)
+        );
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        assert!(translate(&program, &analysis).is_err());
     }
 
     #[test]

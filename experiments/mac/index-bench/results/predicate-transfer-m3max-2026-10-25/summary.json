@@ -1,0 +1,86 @@
+{
+  "production_changes": [
+    "features/workloads/src/queries/retail/tpch/retail_h05.rs",
+    "features/workloads/src/queries/retail/tpch/retail_h07_block.rs",
+    "features/workloads/src/queries/retail/tpch/retail_d27.rs",
+    "features/workloads/src/queries/retail/tpch/retail_h08.rs"
+  ],
+  "production_scope": "Explicit named equality predicates replace literal bindings; SQL/head/date conditions unchanged, H05 order advisory retained. No compiler/storage/transfer implementation fix applied.",
+  "verification": {
+    "configurations": 50,
+    "plain_samples": 250,
+    "profile_samples": 250,
+    "sf0_1_and_sf1": "Exact against existing unchanged-SQL DuckDB witnesses; independent operator/build counts checked."
+  },
+  "method": "Current production compiler and storage. Fresh literal-form controls and production predicate forms; one warmup, five uninstrumented measurements, build/typed result collection included. Separate profiles; do not add overlapping profile spans or subtract them from plain timings. Diagnostic absorption uses existing checked cq_elaborate::simplify_reductions followed by cq_planners_plan::check; not a production change.",
+  "source_sha256": {
+    "features/planners/plan/src/lib.rs": "71d273364e57391083e8ecf0a797fcf744c31fe63c0a33eb16d4609ceaf485ab",
+    "passes/cq-print/src/positional.rs": "965b3bb5fc61027d09fc7d13662fb1df54f0c71ce0e99ce2c4931f067ec9bd6f",
+    "runtime/cq-storage/src/selection.rs": "b5bb64989f2e3a8ade1c010b8079a4a0fe5299b75e96c5ffbed0a96501431586",
+    "features/workloads/src/queries/retail/tpch/retail_h05.rs": "77c184f02ba33284271a2e5a6c977fa4281531dd369f81091c5aefc79670d050",
+    "features/workloads/src/queries/retail/tpch/retail_h07_block.rs": "5b35523582c198231377be7560fea40c791821f661f25a2c701b0537f4ae8779",
+    "features/workloads/src/queries/retail/tpch/retail_d27.rs": "4604c254cd59d47a738cdce4089cd2b30ab64334f2bd8c7229b0659118c1f42b",
+    "features/workloads/src/queries/retail/tpch/retail_h08.rs": "3d27abfb95049118b0e18b06265910cd3ffb283c8daf7477b0a37899a8e594e4"
+  },
+  "findings": [
+    {
+      "status": "measured",
+      "finding": "Predicate forms change physical representation, including projected membership and positional selections; they are not cosmetic."
+    },
+    {
+      "status": "measured checked ablation",
+      "finding": "CQ Transfer skips existing reduction absorption. Applying that checked pass in temporary workers removes the observed transfer regressions relative to predicate-form defaults on all four tested kernels. It prunes backward support versions, restores useful scan filters, and lets fact intermediates remain pipes."
+    },
+    {
+      "status": "code and profile evidence",
+      "finding": "Predicate D27 Transfer turns one fused fact stream into Selection::select followed by two narrow calls, including temporary snapshots for Physical pipe intermediates. Slice hosts expose one block of 6001215 rows. Each narrow walks the full block and initializes a full-sized mask despite sparse survivors."
+    },
+    {
+      "status": "measured isolated mechanism",
+      "finding": "For 9225->357 narrowing, current enumeration-only control takes 3.079ms versus 0.103ms for existing bitmap-word row enumeration. This is not an end-to-end runtime patch; both controls preserve occurrence-ID count/checksum."
+    },
+    {
+      "status": "observed remaining duplicate work",
+      "finding": "Absorbed plans can record duplicate filters for one scan/build/key with different covering semijoin/probe operators. H08 inserts 182358 order keys into filter construction for a 91179-key build. No deduplication fix applied."
+    }
+  ],
+  "paper_comparison": {
+    "rpt": "https://arxiv.org/html/2502.15181v1#S4.SS3",
+    "rpt_plus": "https://people.iiis.tsinghua.edu.cn/~huanchen/publications/rpt+-vldb26.pdf",
+    "scope": "The measured CQ Transfer uses exact semijoins, a static written-root schedule and ordinary lowering. It is not the paper vectorized Bloom pipeline or RPT+ adaptive execution. Default already uses Masks reductions. Paper RPT explicitly prunes unnecessary transfers/backward work; these regressions should not be attributed to unavoidable algorithmic overhead."
+  },
+  "limits": [
+    "Four derived join kernels, not full standard TPC-H or a proof of global non-regression.",
+    "H05 and H07-block are classified cyclic by current graph analysis; D27/H08 acyclic. Hypergraph is not uniformly full Yannakakis for every configuration.",
+    "The absorption experiment is temporary and still has duplicate-filter work; the production Transfer path remains unchanged."
+  ],
+  "predicate_form_hash_comparison": [
+    {
+      "query": "retail_h05",
+      "default_ms": 27.926042000000002,
+      "transfer_ms": 35.001166,
+      "absorbed_transfer_ms": 27.407792
+    },
+    {
+      "query": "retail_h07_block",
+      "default_ms": 26.564500000000002,
+      "transfer_ms": 45.070708,
+      "absorbed_transfer_ms": 25.407834
+    },
+    {
+      "query": "retail_d27",
+      "default_ms": 14.7405,
+      "transfer_ms": 24.218333,
+      "absorbed_transfer_ms": 14.691417
+    },
+    {
+      "query": "retail_h08",
+      "default_ms": 22.270542000000003,
+      "transfer_ms": 27.44625,
+      "absorbed_transfer_ms": 22.270084
+    }
+  ],
+  "diagnostic_source_archive_sha256": "75c776cf293c278abc6023d501cdbad23a8fef5e6ce0874ff64375954a50af55",
+  "diagnostic_only_source_archive": "diagnostic-sources.zip",
+  "checked_plan_archive": "checked-plans.zip"
+}

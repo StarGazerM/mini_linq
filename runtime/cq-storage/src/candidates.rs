@@ -14,6 +14,21 @@ pub trait Keys {
     fn distinct_keys(&self) -> Self::Iter<'_>;
 }
 
+impl<T: Keys + ?Sized> Keys for &T {
+    type Key = T::Key;
+    type Iter<'a>
+        = T::Iter<'a>
+    where
+        Self: 'a;
+
+    fn key_count(&self) -> usize {
+        T::key_count(*self)
+    }
+    fn distinct_keys(&self) -> Self::Iter<'_> {
+        T::distinct_keys(*self)
+    }
+}
+
 impl<K, V, S> Keys for HashMap<K, V, S> {
     type Key = K;
     type Iter<'a>

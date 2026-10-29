@@ -39,12 +39,14 @@ fn catalog() -> Catalog {
     Catalog {
         providers: vec![
             ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(RangeProvider),
                 elements: Some(vec![syn::parse_quote!(i32)]),
                 capabilities: capabilities.clone(),
                 levels: vec![device.clone(), block.clone()],
             },
             ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(HostIndex),
                 elements: None,
                 capabilities,
@@ -112,7 +114,7 @@ fn automatic_lookup_records_host_reader_token_without_overriding_authored_tokens
         advice
             .providers
             .iter()
-            .any(|(name, _, ty)| name == "r" && *ty == syn::parse_quote!(HostIndex))
+            .any(|(name, _, ty, _)| name == "r" && *ty == syn::parse_quote!(HostIndex))
     );
     let target = lookup_first(&source, advice.to_token_stream()).unwrap();
     check_rewrite(&source, &target).unwrap();
@@ -123,7 +125,7 @@ fn automatic_lookup_records_host_reader_token_without_overriding_authored_tokens
 
     let source = cq_sequence_lowering::compile(&string_reader(true)).unwrap();
     let advice = lookup_first_advice(&source, &catalog()).unwrap().unwrap();
-    assert!(!advice.providers.iter().any(|(name, _, _)| name == "r"));
+    assert!(!advice.providers.iter().any(|(name, _, _, _)| name == "r"));
     let target = lookup_first(&source, advice.to_token_stream()).unwrap();
     let facts = structures::contract::check(&target.structures).unwrap();
     assert_eq!(
@@ -367,6 +369,7 @@ fn membership_catalog(ty: syn::Type) -> Catalog {
     let mut available = catalog();
     available.providers = vec![ProviderToken {
         ty,
+        supports: Vec::new(),
         elements: None,
         capabilities: vec![Capability::Membership],
         levels: vec![vec!["host".into()]],

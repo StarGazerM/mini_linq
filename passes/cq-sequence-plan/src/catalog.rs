@@ -59,13 +59,16 @@ pub(crate) fn provider_available(
     ty: &Type,
 ) -> bool {
     let levels = provider_levels(analysis, provider);
-    // Storage-family capabilities do not make an unretained host adapter
-    // shareable. Retention must publish a Built provider before descendant reads.
-    if analysis.structures.host_read(provider) && levels.iter().any(|level| level.len() > 1) {
-        return false;
-    }
+    // Formal rule PL-Resident: Only an explicit resident token admits an
+    // unretained host handle below host; all read/type/level facts still apply.
+    let needs_resident =
+        analysis.structures.host_read(provider) && levels.iter().any(|level| level.len() > 1);
     catalog.providers.iter().any(|token| {
         matches_type(&token.ty, ty)
+            && (!needs_resident
+                || token
+                    .capabilities
+                    .contains(&cq_lang_sequence::Capability::Resident))
             && token.elements.as_ref().is_none_or(|accepted| {
                 analysis.structures.layouts[provider].iter().all(|column| {
                     accepted.iter().any(|ty| {
@@ -182,5 +185,104 @@ fn matches_arguments(pattern: &PathArguments, actual: &PathArguments) -> bool {
                 })
         }
         _ => pattern == actual,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cq_lang_sequence::{Capability, ProviderToken};
+
+    #[test]
+    fn resident_host_reads_require_explicit_complete_catalog_facts() {
+        let structures = syn::parse_quote! {
+            physical {
+                relation L(a:i32); relation R(a:i32,b:i32);
+                l = pipe rename L@0 {a -> a};
+                r = pipe rename R@1 {a -> a,b -> b};
+                answer = pipe canon probe first [a] l,r;
+                return answer as answer(a,b);
+            }
+            structures {
+                l host scan = Reader [];
+                r host scan = OpaqueNative<i32> [];
+                r host result(answer) = OpaqueNative<i32> [a];
+                answer canon = Canon;
+            }
+        };
+        let program = cq_sequence_lowering::compile(&structures).unwrap();
+        let mut analysis = cq_lang_sequence::contract::check(&program).unwrap();
+        let level = vec!["host".into(), "device".into(), "block".into()];
+        for (reader, providers) in &analysis.provider_reads {
+            if providers.contains("r") {
+                analysis.levels.insert(reader.clone(), level.clone());
+            }
+        }
+        let ty = syn::parse_quote!(OpaqueNative<i32>);
+        let mut catalog = Catalog {
+            providers: vec![ProviderToken {
+                ty: syn::parse_quote!(OpaqueNative<_>),
+                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
+                supports: Vec::new(),
+                levels: vec![level],
+                elements: Some(vec![syn::parse_quote!(i32)]),
+            }],
+            ..Catalog::default()
+        };
+        for capability in [Capability::Exact, Capability::Range, Capability::Membership] {
+            assert!(!provider_available(
+                &analysis,
+                &catalog,
+                "r",
+                &capability,
+                &ty
+            ));
+        }
+        catalog.providers[0].capabilities.push(Capability::Resident);
+        for capability in [Capability::Exact, Capability::Range, Capability::Membership] {
+            assert!(provider_available(
+                &analysis,
+                &catalog,
+                "r",
+                &capability,
+                &ty
+            ));
+        }
+        let mut missing = catalog.clone();
+        missing.providers[0]
+            .capabilities
+            .retain(|c| *c != Capability::Membership);
+        assert!(!provider_available(
+            &analysis,
+            &missing,
+            "r",
+            &Capability::Membership,
+            &ty
+        ));
+        let mut wrong_level = catalog.clone();
+        wrong_level.providers[0].levels = vec![vec!["host".into()]];
+        assert!(!provider_available(
+            &analysis,
+            &wrong_level,
+            "r",
+            &Capability::Range,
+            &ty
+        ));
+        let mut wrong_elements = catalog.clone();
+        wrong_elements.providers[0].elements = Some(vec![syn::parse_quote!(String)]);
+        assert!(!provider_available(
+            &analysis,
+            &wrong_elements,
+            "r",
+            &Capability::Range,
+            &ty
+        ));
+        assert!(!provider_available(
+            &analysis,
+            &catalog,
+            "r",
+            &Capability::Range,
+            &syn::parse_quote!(Unrelated<i32>)
+        ));
     }
 }

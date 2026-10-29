@@ -14,6 +14,21 @@ mod rows;
 pub use emit::translate;
 pub use arena::translate_arena;
 
+/// Validate the Structures boundary without selecting CPU batching.
+/// GPU batching and storage scheduling are recorded later in Sequence.
+pub fn check_structures(analysis: &cq_lang_structures::Analysis) -> syn::Result<()> {
+    if !analysis.witnesses.is_empty()
+        || !analysis.stages.is_empty()
+        || !analysis.join_filters.is_empty()
+    {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "T-Gpu: Structures witnesses, staging and join filters are not realized by this target; use supported Sequence scheduling or a native terminal",
+        ));
+    }
+    Ok(())
+}
+
 
 /// Native constructor identities in the GPU catalog. Generic arguments carry
 /// the concrete schema; neither aliases nor unrelated suffixes imply an ABI.
@@ -119,6 +134,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     Catalog {
         providers: vec![
             ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(#range),
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
                 // Range providers consume the recorded scalar/code carrier,
@@ -128,14 +144,16 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                 levels: levels.clone(),
             },
             ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(#runs<_, _>),
-                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
+                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership, Capability::Resident],
                 // The declared layout checks primitives and Symbol<T, Codec>
                 // columns; logical symbol types do not appear in device rows.
                 elements: None,
                 levels: levels.clone(),
             },
             ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(::cq_storage::SortedRun<_, _>),
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
                 elements: None,

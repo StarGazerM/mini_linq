@@ -13,7 +13,7 @@ JOIN nation n ON n.n_nationkey = s.s_nationkey
 JOIN lineitem l2 ON l1.l_orderkey = l2.l_orderkey
 WHERE n.n_name = 'SAUDI ARABIA' AND o.o_orderstatus = 'F'
 AND l1.l_receiptdate > l1.l_commitdate AND l2.l_suppkey <> l1.l_suppkey"#;
-pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "transfer", "le", "le_runs", "generic_smallest", "advised"];
+pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", "generic_smallest", "advised"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("supplier", "s_suppkey,s_nationkey"),
     ("lineitem", "l_orderkey,l_suppkey,l_receiptdate,l_commitdate"),
@@ -125,6 +125,10 @@ runner!($; advised, { plan = ::mini_linq::passes::plan(no_reduce, order(Nation, 
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {
         "default" => default::run(data),
+        "radix" => radix::run(data),
+        "radix_retained" => radix_retained::run(data),
+        "built_hash" => built_hash::run(data),
+        "built_radix" => built_radix::run(data),
         "par" => par::run(data),
         "no-reduce" => no_reduce::run(data),
         "transfer" => transfer::run(data),

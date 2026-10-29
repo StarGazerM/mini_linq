@@ -1,0 +1,938 @@
+[
+  {
+    "op": "cpu_spawn",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 0,
+    "items": 12,
+    "reps": 7,
+    "median_ms": 0.18925,
+    "min_ms": 0.1505,
+    "gbps": 0.0,
+    "ns_per_item": 15770.833333333334,
+    "params": {}
+  },
+  {
+    "op": "cpu_spawn",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 0,
+    "items": 16,
+    "reps": 7,
+    "median_ms": 0.152666,
+    "min_ms": 0.144792,
+    "gbps": 0.0,
+    "ns_per_item": 9541.625,
+    "params": {}
+  },
+  {
+    "op": "cpu_spawn",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 0,
+    "items": 17,
+    "reps": 7,
+    "median_ms": 0.183667,
+    "min_ms": 0.17975,
+    "gbps": 0.0,
+    "ns_per_item": 10803.941176470587,
+    "params": {}
+  },
+  {
+    "op": "cpu_spawn",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 0,
+    "items": 18,
+    "reps": 7,
+    "median_ms": 0.17075,
+    "min_ms": 0.16275,
+    "gbps": 0.0,
+    "ns_per_item": 9486.111111111111,
+    "params": {}
+  },
+  {
+    "op": "cpu_pool_dispatch",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 0,
+    "items": 1,
+    "reps": 7,
+    "median_ms": 0.0015,
+    "min_ms": 0.001375,
+    "gbps": 0.0,
+    "ns_per_item": 1500.0,
+    "params": {}
+  },
+  {
+    "op": "cpu_pool_dispatch",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 0,
+    "items": 1,
+    "reps": 7,
+    "median_ms": 2.07525,
+    "min_ms": 2.074166,
+    "gbps": 0.0,
+    "ns_per_item": 2075250.0,
+    "params": {}
+  },
+  {
+    "op": "cpu_pool_dispatch",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 0,
+    "items": 1,
+    "reps": 7,
+    "median_ms": 2.078291,
+    "min_ms": 2.074167,
+    "gbps": 0.0,
+    "ns_per_item": 2078291.0,
+    "params": {}
+  },
+  {
+    "op": "cpu_pool_dispatch",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 0,
+    "items": 1,
+    "reps": 7,
+    "median_ms": 2.080083,
+    "min_ms": 2.074083,
+    "gbps": 0.0,
+    "ns_per_item": 2080083.0000000002,
+    "params": {}
+  },
+  {
+    "op": "seq_read",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 4194304,
+    "items": 524288,
+    "reps": 7,
+    "median_ms": 0.004458,
+    "min_ms": 0.004292,
+    "gbps": 940.8488111260655,
+    "ns_per_item": 0.008502960205078125,
+    "params": {
+      "elem_bytes": 8,
+      "footprint_bytes": 4194304,
+      "n_items": 524288,
+      "unroll": 8
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 4194304,
+    "items": 524288,
+    "reps": 7,
+    "median_ms": 2.082375,
+    "min_ms": 0.8326250000000001,
+    "gbps": 2.0141924485263223,
+    "ns_per_item": 3.9718151092529292,
+    "params": {
+      "elem_bytes": 8,
+      "footprint_bytes": 4194304,
+      "n_items": 524288,
+      "unroll": 8
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 4194304,
+    "items": 524288,
+    "reps": 7,
+    "median_ms": 2.085791,
+    "min_ms": 2.079208,
+    "gbps": 2.0108937089094736,
+    "ns_per_item": 3.978330612182617,
+    "params": {
+      "elem_bytes": 8,
+      "footprint_bytes": 4194304,
+      "n_items": 524288,
+      "unroll": 8
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 4194304,
+    "items": 524288,
+    "reps": 7,
+    "median_ms": 2.085792,
+    "min_ms": 2.080958,
+    "gbps": 2.010892744818275,
+    "ns_per_item": 3.97833251953125,
+    "params": {
+      "elem_bytes": 8,
+      "footprint_bytes": 4194304,
+      "n_items": 524288,
+      "unroll": 8
+    }
+  },
+  {
+    "op": "seq_write",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 4194304,
+    "items": 524288,
+    "reps": 7,
+    "median_ms": 0.020208,
+    "min_ms": 0.019917,
+    "gbps": 207.55661124307204,
+    "ns_per_item": 0.038543701171875,
+    "params": {
+      "elem_bytes": 8,
+      "footprint_bytes": 4194304,
+      "n_items": 524288
+    }
+  },
+  {
+    "op": "seq_write",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 4194304,
+    "items": 524288,
+    "reps": 7,
+    "median_ms": 2.08325,
+    "min_ms": 0.360333,
+    "gbps": 2.0133464538581545,
+    "ns_per_item": 3.9734840393066406,
+    "params": {
+      "elem_bytes": 8,
+      "footprint_bytes": 4194304,
+      "n_items": 524288
+    }
+  },
+  {
+    "op": "seq_write",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 4194304,
+    "items": 524288,
+    "reps": 7,
+    "median_ms": 2.092375,
+    "min_ms": 1.916625,
+    "gbps": 2.004566103112492,
+    "ns_per_item": 3.9908885955810547,
+    "params": {
+      "elem_bytes": 8,
+      "footprint_bytes": 4194304,
+      "n_items": 524288
+    }
+  },
+  {
+    "op": "seq_write",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 4194304,
+    "items": 524288,
+    "reps": 7,
+    "median_ms": 2.0925000000000002,
+    "min_ms": 2.090291,
+    "gbps": 2.0044463560334527,
+    "ns_per_item": 3.9911270141601567,
+    "params": {
+      "elem_bytes": 8,
+      "footprint_bytes": 4194304,
+      "n_items": 524288
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 8388608,
+    "items": 524288,
+    "reps": 7,
+    "median_ms": 0.021083,
+    "min_ms": 0.020958,
+    "gbps": 397.8849309870511,
+    "ns_per_item": 0.04021263122558594,
+    "params": {
+      "elem_bytes": 8,
+      "footprint_bytes": 4194304,
+      "n_items": 524288
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 8388608,
+    "items": 524288,
+    "reps": 7,
+    "median_ms": 2.101375,
+    "min_ms": 1.60125,
+    "gbps": 3.9919614538100054,
+    "ns_per_item": 4.008054733276367,
+    "params": {
+      "elem_bytes": 8,
+      "footprint_bytes": 4194304,
+      "n_items": 524288
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 8388608,
+    "items": 524288,
+    "reps": 7,
+    "median_ms": 2.0960829999999997,
+    "min_ms": 2.093709,
+    "gbps": 4.002039995553611,
+    "ns_per_item": 3.997961044311523,
+    "params": {
+      "elem_bytes": 8,
+      "footprint_bytes": 4194304,
+      "n_items": 524288
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 8388608,
+    "items": 524288,
+    "reps": 7,
+    "median_ms": 2.0956249999999996,
+    "min_ms": 2.093,
+    "gbps": 4.002914643602744,
+    "ns_per_item": 3.9970874786376944,
+    "params": {
+      "elem_bytes": 8,
+      "footprint_bytes": 4194304,
+      "n_items": 524288
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 4194304,
+    "items": 32768,
+    "reps": 7,
+    "median_ms": 0.0025830000000000002,
+    "min_ms": 0.002458,
+    "gbps": 1623.8110723964382,
+    "ns_per_item": 0.078826904296875,
+    "params": {
+      "bytes_per_item": 128,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 32768
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 4194304,
+    "items": 32768,
+    "reps": 7,
+    "median_ms": 2.080417,
+    "min_ms": 0.7553329999999999,
+    "gbps": 2.0160881207950134,
+    "ns_per_item": 63.48928833007813,
+    "params": {
+      "bytes_per_item": 128,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 32768
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 4194304,
+    "items": 32768,
+    "reps": 7,
+    "median_ms": 2.079958,
+    "min_ms": 2.076375,
+    "gbps": 2.0165330261476435,
+    "ns_per_item": 63.47528076171875,
+    "params": {
+      "bytes_per_item": 128,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 32768
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 4194304,
+    "items": 32768,
+    "reps": 7,
+    "median_ms": 2.079916,
+    "min_ms": 2.07625,
+    "gbps": 2.016573746247445,
+    "ns_per_item": 63.47399902343749,
+    "params": {
+      "bytes_per_item": 128,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 32768
+    }
+  },
+  {
+    "op": "scatter_line",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 4194304,
+    "items": 32768,
+    "reps": 7,
+    "median_ms": 0.008624999999999999,
+    "min_ms": 0.007584,
+    "gbps": 486.296115942029,
+    "ns_per_item": 0.26321411132812494,
+    "params": {
+      "bytes_per_item": 128,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 32768
+    }
+  },
+  {
+    "op": "scatter_line",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 4194304,
+    "items": 32768,
+    "reps": 7,
+    "median_ms": 2.077166,
+    "min_ms": 0.511042,
+    "gbps": 2.019243526997842,
+    "ns_per_item": 63.39007568359375,
+    "params": {
+      "bytes_per_item": 128,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 32768
+    }
+  },
+  {
+    "op": "scatter_line",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 4194304,
+    "items": 32768,
+    "reps": 7,
+    "median_ms": 2.0834590000000004,
+    "min_ms": 0.141834,
+    "gbps": 2.013144487124536,
+    "ns_per_item": 63.58212280273439,
+    "params": {
+      "bytes_per_item": 128,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 32768
+    }
+  },
+  {
+    "op": "scatter_line",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 4194304,
+    "items": 32768,
+    "reps": 7,
+    "median_ms": 2.085292,
+    "min_ms": 2.080667,
+    "gbps": 2.011374905768593,
+    "ns_per_item": 63.6380615234375,
+    "params": {
+      "bytes_per_item": 128,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 32768
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 8388608,
+    "items": 32768,
+    "reps": 7,
+    "median_ms": 0.179041,
+    "min_ms": 0.173666,
+    "gbps": 46.853000150803446,
+    "ns_per_item": 5.463897705078125,
+    "params": {
+      "bytes_per_item": 256,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 32768
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 8388608,
+    "items": 32768,
+    "reps": 7,
+    "median_ms": 2.276833,
+    "min_ms": 2.206167,
+    "gbps": 3.6843317010953376,
+    "ns_per_item": 69.48342895507812,
+    "params": {
+      "bytes_per_item": 256,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 32768
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 8388608,
+    "items": 32768,
+    "reps": 7,
+    "median_ms": 2.390584,
+    "min_ms": 2.2101249999999997,
+    "gbps": 3.5090203899967536,
+    "ns_per_item": 72.954833984375,
+    "params": {
+      "bytes_per_item": 256,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 32768
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 8388608,
+    "items": 32768,
+    "reps": 7,
+    "median_ms": 2.307292,
+    "min_ms": 2.2247920000000003,
+    "gbps": 3.6356941384098764,
+    "ns_per_item": 70.4129638671875,
+    "params": {
+      "bytes_per_item": 256,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 32768
+    }
+  },
+  {
+    "op": "gather_dep",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 536870912,
+    "items": 4194304,
+    "reps": 7,
+    "median_ms": 2.9115830000000003,
+    "min_ms": 2.8878749999999997,
+    "gbps": 184.3914159410877,
+    "ns_per_item": 0.6941754817962648,
+    "params": {
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 4194304,
+      "steps_per_thread": 349525
+    }
+  },
+  {
+    "op": "gather_dep",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 536870912,
+    "items": 4194304,
+    "reps": 7,
+    "median_ms": 5.6185,
+    "min_ms": 5.482375,
+    "gbps": 95.55413580137046,
+    "ns_per_item": 1.339554786682129,
+    "params": {
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 4194304,
+      "steps_per_thread": 262144
+    }
+  },
+  {
+    "op": "gather_dep",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 536870912,
+    "items": 4194304,
+    "reps": 7,
+    "median_ms": 5.55375,
+    "min_ms": 5.233459,
+    "gbps": 96.66818131892866,
+    "ns_per_item": 1.3241171836853027,
+    "params": {
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 4194304,
+      "steps_per_thread": 246723
+    }
+  },
+  {
+    "op": "gather_dep",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 536870912,
+    "items": 4194304,
+    "reps": 7,
+    "median_ms": 5.435625,
+    "min_ms": 5.406083,
+    "gbps": 98.7689386225135,
+    "ns_per_item": 1.2959539890289307,
+    "params": {
+      "footprint_bytes": 4194304,
+      "line_bytes": 128,
+      "n_items": 4194304,
+      "steps_per_thread": 233016
+    }
+  },
+  {
+    "op": "hashbrown_build",
+    "processor": "cpu",
+    "threads": 1,
+    "bytes": 4194304,
+    "items": 131072,
+    "reps": 7,
+    "median_ms": 0.370083,
+    "min_ms": 0.343708,
+    "gbps": 11.333414396230037,
+    "ns_per_item": 2.8235092163085938,
+    "params": {
+      "footprint_bytes": 4194304,
+      "key_bytes": 8,
+      "n_items": 131072,
+      "n_keys": 131072,
+      "prealloc": true,
+      "val_bytes": 4
+    }
+  },
+  {
+    "op": "hashbrown_probe",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 16777216,
+    "items": 131072,
+    "reps": 7,
+    "median_ms": 0.043833,
+    "min_ms": 0.042624999999999996,
+    "gbps": 382.7530855747953,
+    "ns_per_item": 0.33441925048828125,
+    "params": {
+      "footprint_bytes": 4194304,
+      "hit_rate": 0.5,
+      "key_bytes": 8,
+      "n_items": 131072,
+      "n_keys": 131072,
+      "val_bytes": 4
+    }
+  },
+  {
+    "op": "hashbrown_probe",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 16777216,
+    "items": 131072,
+    "reps": 7,
+    "median_ms": 2.171416,
+    "min_ms": 2.1542499999999998,
+    "gbps": 7.726394205440138,
+    "ns_per_item": 16.56658935546875,
+    "params": {
+      "footprint_bytes": 4194304,
+      "hit_rate": 0.5,
+      "key_bytes": 8,
+      "n_items": 131072,
+      "n_keys": 131072,
+      "val_bytes": 4
+    }
+  },
+  {
+    "op": "hashbrown_probe",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 16777216,
+    "items": 131072,
+    "reps": 7,
+    "median_ms": 2.158334,
+    "min_ms": 0.9601660000000001,
+    "gbps": 7.773225089351324,
+    "ns_per_item": 16.466781616210938,
+    "params": {
+      "footprint_bytes": 4194304,
+      "hit_rate": 0.5,
+      "key_bytes": 8,
+      "n_items": 131072,
+      "n_keys": 131072,
+      "val_bytes": 4
+    }
+  },
+  {
+    "op": "hashbrown_probe",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 16777216,
+    "items": 131072,
+    "reps": 7,
+    "median_ms": 2.157,
+    "min_ms": 2.151208,
+    "gbps": 7.778032452480296,
+    "ns_per_item": 16.45660400390625,
+    "params": {
+      "footprint_bytes": 4194304,
+      "hit_rate": 0.5,
+      "key_bytes": 8,
+      "n_items": 131072,
+      "n_keys": 131072,
+      "val_bytes": 4
+    }
+  },
+  {
+    "op": "sort_u32",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 8388608,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 1.35175,
+    "min_ms": 1.3378750000000001,
+    "gbps": 6.205739226928055,
+    "ns_per_item": 1.2891292572021484,
+    "params": {
+      "algo": "chunk sort_unstable + merge-path tree",
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "includes_input_copy": true,
+      "n_items": 1048576,
+      "parallel": true
+    }
+  },
+  {
+    "op": "sort_u32",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 8388608,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 12.388667000000002,
+    "min_ms": 10.363333,
+    "gbps": 0.6771194996200962,
+    "ns_per_item": 11.81475353240967,
+    "params": {
+      "algo": "chunk sort_unstable + merge-path tree",
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "includes_input_copy": true,
+      "n_items": 1048576,
+      "parallel": true
+    }
+  },
+  {
+    "op": "sort_u32",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 8388608,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 14.589333,
+    "min_ms": 14.516667,
+    "gbps": 0.5749822832887562,
+    "ns_per_item": 13.913472175598145,
+    "params": {
+      "algo": "chunk sort_unstable + merge-path tree",
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "includes_input_copy": true,
+      "n_items": 1048576,
+      "parallel": true
+    }
+  },
+  {
+    "op": "sort_u32",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 8388608,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 14.432792,
+    "min_ms": 13.552833,
+    "gbps": 0.5812186581778495,
+    "ns_per_item": 13.764183044433594,
+    "params": {
+      "algo": "chunk sort_unstable + merge-path tree",
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "includes_input_copy": true,
+      "n_items": 1048576,
+      "parallel": true
+    }
+  },
+  {
+    "op": "merge_u32",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 12582912,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 0.1565,
+    "min_ms": 0.15620799999999999,
+    "gbps": 80.40199361022363,
+    "ns_per_item": 0.14925003051757812,
+    "params": {
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "n_items": 1048576,
+      "split": "merge-path"
+    }
+  },
+  {
+    "op": "merge_u32",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 12582912,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 2.312041,
+    "min_ms": 1.6386669999999999,
+    "gbps": 5.442339474083721,
+    "ns_per_item": 2.2049341201782227,
+    "params": {
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "n_items": 1048576,
+      "split": "merge-path"
+    }
+  },
+  {
+    "op": "merge_u32",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 12582912,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 2.3170420000000003,
+    "min_ms": 2.292541,
+    "gbps": 5.430592971555974,
+    "ns_per_item": 2.2097034454345708,
+    "params": {
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "n_items": 1048576,
+      "split": "merge-path"
+    }
+  },
+  {
+    "op": "merge_u32",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 12582912,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 2.2985409999999997,
+    "min_ms": 2.2791669999999997,
+    "gbps": 5.474303917137002,
+    "ns_per_item": 2.192059516906738,
+    "params": {
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "n_items": 1048576,
+      "split": "merge-path"
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "cpu",
+    "threads": 12,
+    "bytes": 4194304,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 0.15083300000000002,
+    "min_ms": 0.14633300000000002,
+    "gbps": 27.807601784755317,
+    "ns_per_item": 0.14384555816650393,
+    "params": {
+      "bins": 65536,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "n_items": 1048576
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "cpu",
+    "threads": 16,
+    "bytes": 4194304,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 4.369292000000001,
+    "min_ms": 4.346583,
+    "gbps": 0.9599504908346707,
+    "ns_per_item": 4.166881561279298,
+    "params": {
+      "bins": 65536,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "n_items": 1048576
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "cpu",
+    "threads": 17,
+    "bytes": 4194304,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 4.360208,
+    "min_ms": 4.352416,
+    "gbps": 0.9619504390616227,
+    "ns_per_item": 4.1582183837890625,
+    "params": {
+      "bins": 65536,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "n_items": 1048576
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "cpu",
+    "threads": 18,
+    "bytes": 4194304,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 4.359541,
+    "min_ms": 4.347333999999999,
+    "gbps": 0.9620976153223469,
+    "ns_per_item": 4.1575822830200195,
+    "params": {
+      "bins": 65536,
+      "elem_bytes": 4,
+      "footprint_bytes": 4194304,
+      "n_items": 1048576
+    }
+  }
+]

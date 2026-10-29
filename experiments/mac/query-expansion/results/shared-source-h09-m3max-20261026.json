@@ -1,0 +1,288 @@
+{
+  "architecture": "aarch64",
+  "context_setup_ms_excluded": 39.539333000000006,
+  "cpu_constructor": "single-thread stable byte radix, constant bytes skipped + radix12 directory",
+  "data": "deterministic synthetic fixtures, not dbgen",
+  "first_query_totals": "measured ingestion plus each constructor's first query duration; sums, not contiguous end-to-end intervals; CPU runs first and neither is a physical cold-start claim",
+  "gpu_constructor": "MCCL stable 8-bit radix passes + radix12 directory",
+  "limits": "single-process warmed sweep; normal runtime hash randomization and OS contention remain; not a fastest-CPU claim or portable crossover threshold",
+  "order": "alternating paired CPU-first/GPU-first",
+  "query": "authored retail H09 positive join core",
+  "remaining_ms": "total minus constructor; includes CPU joins, residual indexes and temporary destruction, not pure probe latency",
+  "results": [
+    {
+      "answers": 16372,
+      "cpu": {
+        "build_ms": {
+          "max": 0.34900000000000003,
+          "median": 0.333625,
+          "min": 0.320042,
+          "p25": 0.32983300000000004,
+          "p75": 0.34212499999999996
+        },
+        "remaining_ms": {
+          "max": 2.980458,
+          "median": 2.9663749999999998,
+          "min": 2.947749,
+          "p25": 2.963334,
+          "p75": 2.971458
+        },
+        "total_ms": {
+          "max": 3.315375,
+          "median": 3.313583,
+          "min": 3.267791,
+          "p25": 3.293167,
+          "p75": 3.3140829999999997
+        }
+      },
+      "cpu_samples": [
+        {
+          "build_ms": 0.34900000000000003,
+          "first": true,
+          "pair": 0,
+          "remaining_ms": 2.9663749999999998,
+          "total_ms": 3.315375
+        },
+        {
+          "build_ms": 0.333625,
+          "first": false,
+          "pair": 1,
+          "remaining_ms": 2.980458,
+          "total_ms": 3.3140829999999997
+        },
+        {
+          "build_ms": 0.34212499999999996,
+          "first": true,
+          "pair": 2,
+          "remaining_ms": 2.971458,
+          "total_ms": 3.313583
+        },
+        {
+          "build_ms": 0.32983300000000004,
+          "first": false,
+          "pair": 3,
+          "remaining_ms": 2.963334,
+          "total_ms": 3.293167
+        },
+        {
+          "build_ms": 0.320042,
+          "first": true,
+          "pair": 4,
+          "remaining_ms": 2.947749,
+          "total_ms": 3.267791
+        }
+      ],
+      "first_cpu_query_ms": 4.210959,
+      "first_gpu_query_ms": 3.780042,
+      "gpu": {
+        "build_ms": {
+          "max": 1.106667,
+          "median": 1.052917,
+          "min": 0.959125,
+          "p25": 1.005833,
+          "p75": 1.0932920000000002
+        },
+        "remaining_ms": {
+          "max": 3.276417,
+          "median": 3.191291,
+          "min": 3.0144159999999998,
+          "p25": 3.138292,
+          "p75": 3.2594999999999996
+        },
+        "total_ms": {
+          "max": 4.329333999999999,
+          "median": 4.218625,
+          "min": 4.107708,
+          "p25": 4.144125,
+          "p75": 4.297958
+        }
+      },
+      "gpu_samples": [
+        {
+          "build_ms": 1.106667,
+          "first": false,
+          "pair": 0,
+          "remaining_ms": 3.191291,
+          "total_ms": 4.297958
+        },
+        {
+          "build_ms": 1.0932920000000002,
+          "first": true,
+          "pair": 1,
+          "remaining_ms": 3.0144159999999998,
+          "total_ms": 4.107708
+        },
+        {
+          "build_ms": 1.052917,
+          "first": false,
+          "pair": 2,
+          "remaining_ms": 3.276417,
+          "total_ms": 4.329333999999999
+        },
+        {
+          "build_ms": 0.959125,
+          "first": true,
+          "pair": 3,
+          "remaining_ms": 3.2594999999999996,
+          "total_ms": 4.218625
+        },
+        {
+          "build_ms": 1.005833,
+          "first": false,
+          "pair": 4,
+          "remaining_ms": 3.138292,
+          "total_ms": 4.144125
+        }
+      ],
+      "indexed_rows": 65539,
+      "ingestion_ms": 0.12341699999999999,
+      "ingestion_plus_first_cpu_query_ms": 4.334376,
+      "ingestion_plus_first_gpu_query_ms": 3.903459,
+      "lineitem_rows": 65539,
+      "payload_gathers": 21857,
+      "probes": 683,
+      "source_bytes": 1572936,
+      "witnesses": 16372
+    },
+    {
+      "answers": 261754,
+      "cpu": {
+        "build_ms": {
+          "max": 6.6497090000000005,
+          "median": 6.511584,
+          "min": 6.381666999999999,
+          "p25": 6.463125,
+          "p75": 6.537083
+        },
+        "remaining_ms": {
+          "max": 85.236541,
+          "median": 83.512042,
+          "min": 82.96175,
+          "p25": 83.205666,
+          "p75": 83.707583
+        },
+        "total_ms": {
+          "max": 91.748125,
+          "median": 89.975167,
+          "min": 89.498833,
+          "p25": 89.855375,
+          "p75": 90.08924999999999
+        }
+      },
+      "cpu_samples": [
+        {
+          "build_ms": 6.6497090000000005,
+          "first": true,
+          "pair": 0,
+          "remaining_ms": 83.205666,
+          "total_ms": 89.855375
+        },
+        {
+          "build_ms": 6.511584,
+          "first": false,
+          "pair": 1,
+          "remaining_ms": 85.236541,
+          "total_ms": 91.748125
+        },
+        {
+          "build_ms": 6.537083,
+          "first": true,
+          "pair": 2,
+          "remaining_ms": 82.96175,
+          "total_ms": 89.498833
+        },
+        {
+          "build_ms": 6.381666999999999,
+          "first": false,
+          "pair": 3,
+          "remaining_ms": 83.707583,
+          "total_ms": 90.08924999999999
+        },
+        {
+          "build_ms": 6.463125,
+          "first": true,
+          "pair": 4,
+          "remaining_ms": 83.512042,
+          "total_ms": 89.975167
+        }
+      ],
+      "first_cpu_query_ms": 95.4825,
+      "first_gpu_query_ms": 88.668833,
+      "gpu": {
+        "build_ms": {
+          "max": 2.682084,
+          "median": 2.115333,
+          "min": 1.830208,
+          "p25": 2.1037500000000002,
+          "p75": 2.163
+        },
+        "remaining_ms": {
+          "max": 83.123209,
+          "median": 82.9815,
+          "min": 82.661417,
+          "p25": 82.975624,
+          "p75": 83.056666
+        },
+        "total_ms": {
+          "max": 85.657708,
+          "median": 85.219666,
+          "min": 84.491625,
+          "p25": 85.08525,
+          "p75": 85.238542
+        }
+      },
+      "gpu_samples": [
+        {
+          "build_ms": 2.1037500000000002,
+          "first": false,
+          "pair": 0,
+          "remaining_ms": 82.9815,
+          "total_ms": 85.08525
+        },
+        {
+          "build_ms": 2.682084,
+          "first": true,
+          "pair": 1,
+          "remaining_ms": 82.975624,
+          "total_ms": 85.657708
+        },
+        {
+          "build_ms": 1.830208,
+          "first": false,
+          "pair": 2,
+          "remaining_ms": 82.661417,
+          "total_ms": 84.491625
+        },
+        {
+          "build_ms": 2.163,
+          "first": true,
+          "pair": 3,
+          "remaining_ms": 83.056666,
+          "total_ms": 85.219666
+        },
+        {
+          "build_ms": 2.115333,
+          "first": false,
+          "pair": 4,
+          "remaining_ms": 83.123209,
+          "total_ms": 85.238542
+        }
+      ],
+      "indexed_rows": 1048579,
+      "ingestion_ms": 1.678083,
+      "ingestion_plus_first_cpu_query_ms": 97.160583,
+      "ingestion_plus_first_gpu_query_ms": 90.34691600000001,
+      "lineitem_rows": 1048579,
+      "payload_gathers": 349537,
+      "probes": 10923,
+      "source_bytes": 25165896,
+      "witnesses": 261754
+    }
+  ],
+  "samples_per_mode": 5,
+  "schema": "mccl.query-construction.v2",
+  "shared_representation": "MacRun: immutable MLX-owned shared arrays, u32 key/source-rowID, identical CPU lookup",
+  "source_bytes": "retained numeric relation logical bytes, not measured traffic or physical residency",
+  "timing": "repeated whole query includes shared-source construction/allocation/wait, CPU residual indexes/joins/dedup and temporary destruction; one-time numeric relation ingestion reported separately; excludes fixture generation, context setup, validation and output destruction",
+  "warmups_per_mode": 2
+}

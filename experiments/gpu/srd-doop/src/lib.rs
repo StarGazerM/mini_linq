@@ -6,6 +6,7 @@ srd_doop_shared::srd_doop_engine!(run, incremental(driver(delta_first);), pipeli
     cq = pipeline {
         physical = [::cq_gpu_sequence::capture_constants];
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs, ::cq_gpu_sequence::select_catalog];
+        stage = ::cq_gpu_sequence::stage;
         sequence = ::mini_linq::passes::sequence;
         // Reuse only each arena hole's last validated count as a capacity hint.
         decompose = [

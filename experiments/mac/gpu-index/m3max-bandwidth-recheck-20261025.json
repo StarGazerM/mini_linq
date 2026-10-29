@@ -1,0 +1,2645 @@
+{
+  "arch": "aarch64",
+  "args": [
+    "experiments/mac/gpu-index/target/release/gpu-index",
+    "--sort-only",
+    "--sizes",
+    "1048576,16777216,67108864",
+    "--runs",
+    "5",
+    "--out",
+    "experiments/mac/gpu-index/m3max-bandwidth-recheck-20261025.json"
+  ],
+  "bandwidth": "decimal GB/s; modeled logical read+write bytes, NOT measured DRAM traffic",
+  "correctness": "passed",
+  "device": "Apple M3 Max",
+  "origin": "developed in an isolated GPU-index snapshot; integrated alongside native join improvements",
+  "os": "macos",
+  "results": [
+    {
+      "gpu_ms": 0.04045831155963242,
+      "logical_bytes": 16777216,
+      "logical_gbps": 414.67909443704,
+      "params": {
+        "grid": 16384
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.06812499486841261,
+          "wall_ms": 0.28475
+        },
+        {
+          "gpu_ms": 0.04874999285675585,
+          "wall_ms": 0.242625
+        },
+        {
+          "gpu_ms": 0.04037498729303479,
+          "wall_ms": 0.22666599999999998
+        },
+        {
+          "gpu_ms": 0.04045831155963242,
+          "wall_ms": 0.237041
+        },
+        {
+          "gpu_ms": 0.04037498729303479,
+          "wall_ms": 0.239375
+        }
+      ],
+      "stage": "copy",
+      "wall_ms": 0.239375
+    },
+    {
+      "gpu_ms": 0.6955416756682098,
+      "logical_bytes": 170919968,
+      "logical_gbps": 245.7364870851146,
+      "params": {
+        "bits": 4,
+        "distribution": "uniform_u32",
+        "items": 4
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.7022499921731651,
+          "wall_ms": 0.9281670000000001
+        },
+        {
+          "gpu_ms": 0.6955416756682098,
+          "wall_ms": 0.9005839999999999
+        },
+        {
+          "gpu_ms": 0.6942500185687095,
+          "wall_ms": 0.916667
+        },
+        {
+          "gpu_ms": 0.6956249999348074,
+          "wall_ms": 0.899334
+        },
+        {
+          "gpu_ms": 0.6886250048410147,
+          "wall_ms": 0.9297500000000001
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 0.916667
+    },
+    {
+      "gpu_ms": 1.053666666848585,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "uniform_u32",
+        "items": 4
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 1.8063750176224858,
+          "wall_ms": 2.110458
+        },
+        {
+          "gpu_ms": 1.1113333166576922,
+          "wall_ms": 1.374167
+        },
+        {
+          "gpu_ms": 1.0480833589099348,
+          "wall_ms": 1.30375
+        },
+        {
+          "gpu_ms": 1.053666666848585,
+          "wall_ms": 1.2968330000000001
+        },
+        {
+          "gpu_ms": 1.0109583381563425,
+          "wall_ms": 1.2150830000000001
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 1.30375
+    },
+    {
+      "gpu_ms": 0.9726249845698476,
+      "logical_bytes": 169346080,
+      "logical_gbps": 174.11240990780723,
+      "params": {
+        "bits": 4,
+        "distribution": "uniform_u32",
+        "items": 8
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.9974166750907898,
+          "wall_ms": 1.221333
+        },
+        {
+          "gpu_ms": 1.0034999868366867,
+          "wall_ms": 1.2730409999999999
+        },
+        {
+          "gpu_ms": 0.9726249845698476,
+          "wall_ms": 1.209459
+        },
+        {
+          "gpu_ms": 0.9465416660532355,
+          "wall_ms": 1.202042
+        },
+        {
+          "gpu_ms": 0.538249994860962,
+          "wall_ms": 0.7503749999999999
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 1.209459
+    },
+    {
+      "gpu_ms": 0.5629583320114762,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "uniform_u32",
+        "items": 8
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.5629583320114762,
+          "wall_ms": 0.7775
+        },
+        {
+          "gpu_ms": 0.5400833324529231,
+          "wall_ms": 0.7503329999999999
+        },
+        {
+          "gpu_ms": 0.5527500179596245,
+          "wall_ms": 0.763417
+        },
+        {
+          "gpu_ms": 0.5656666762661189,
+          "wall_ms": 0.7761250000000001
+        },
+        {
+          "gpu_ms": 0.5637916619889438,
+          "wall_ms": 0.77325
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 0.77325
+    },
+    {
+      "gpu_ms": 0.37900000461377203,
+      "logical_bytes": 109068304,
+      "logical_gbps": 287.7791627236215,
+      "params": {
+        "bits": 8,
+        "distribution": "uniform_u32",
+        "items": 4
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.37799999699927866,
+          "wall_ms": 0.570083
+        },
+        {
+          "gpu_ms": 0.39508333429694176,
+          "wall_ms": 0.574792
+        },
+        {
+          "gpu_ms": 0.37900000461377203,
+          "wall_ms": 0.5565420000000001
+        },
+        {
+          "gpu_ms": 0.37629168946295977,
+          "wall_ms": 0.546459
+        },
+        {
+          "gpu_ms": 0.3956250147894025,
+          "wall_ms": 0.579708
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 0.570083
+    },
+    {
+      "gpu_ms": 0.4015000013168901,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "uniform_u32",
+        "items": 4
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.3969999961555004,
+          "wall_ms": 0.597834
+        },
+        {
+          "gpu_ms": 0.4015000013168901,
+          "wall_ms": 0.596375
+        },
+        {
+          "gpu_ms": 0.4093750030733645,
+          "wall_ms": 0.606459
+        },
+        {
+          "gpu_ms": 0.3980416804552078,
+          "wall_ms": 0.61725
+        },
+        {
+          "gpu_ms": 0.4124166734982282,
+          "wall_ms": 0.627417
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 0.606459
+    },
+    {
+      "gpu_ms": 0.359791680239141,
+      "logical_bytes": 96477200,
+      "logical_gbps": 268.14739000044403,
+      "params": {
+        "bits": 8,
+        "distribution": "uniform_u32",
+        "items": 8
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.359791680239141,
+          "wall_ms": 0.566584
+        },
+        {
+          "gpu_ms": 0.36137501592747867,
+          "wall_ms": 0.557417
+        },
+        {
+          "gpu_ms": 0.3609583363868296,
+          "wall_ms": 0.542458
+        },
+        {
+          "gpu_ms": 0.3498750156722963,
+          "wall_ms": 0.5289999999999999
+        },
+        {
+          "gpu_ms": 0.3525000065565109,
+          "wall_ms": 0.550291
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 0.550291
+    },
+    {
+      "gpu_ms": 0.36445833393372595,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "uniform_u32",
+        "items": 8
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.35758333979174495,
+          "wall_ms": 0.574125
+        },
+        {
+          "gpu_ms": 0.36445833393372595,
+          "wall_ms": 0.572125
+        },
+        {
+          "gpu_ms": 0.36266667302697897,
+          "wall_ms": 0.5463749999999999
+        },
+        {
+          "gpu_ms": 0.36733332672156394,
+          "wall_ms": 0.56625
+        },
+        {
+          "gpu_ms": 0.3659999929368496,
+          "wall_ms": 0.534167
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 0.56625
+    },
+    {
+      "gpu_ms": 0.4807499935850501,
+      "logical_bytes": 170919968,
+      "logical_gbps": 355.52775929421273,
+      "params": {
+        "bits": 4,
+        "distribution": "97_keys",
+        "items": 4
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.47675002133473754,
+          "wall_ms": 0.702959
+        },
+        {
+          "gpu_ms": 0.4807499935850501,
+          "wall_ms": 0.694334
+        },
+        {
+          "gpu_ms": 0.7408333476632833,
+          "wall_ms": 0.940208
+        },
+        {
+          "gpu_ms": 0.5063333373982459,
+          "wall_ms": 0.724333
+        },
+        {
+          "gpu_ms": 0.45599997974932194,
+          "wall_ms": 0.651916
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 0.702959
+    },
+    {
+      "gpu_ms": 0.4859166801907122,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "97_keys",
+        "items": 4
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.4830416582990438,
+          "wall_ms": 0.701667
+        },
+        {
+          "gpu_ms": 0.48541667638346553,
+          "wall_ms": 0.68125
+        },
+        {
+          "gpu_ms": 0.4924166714772582,
+          "wall_ms": 0.767834
+        },
+        {
+          "gpu_ms": 0.4859166801907122,
+          "wall_ms": 0.727083
+        },
+        {
+          "gpu_ms": 0.49387497710995376,
+          "wall_ms": 0.738708
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 0.727083
+    },
+    {
+      "gpu_ms": 0.4501249932218343,
+      "logical_bytes": 169346080,
+      "logical_gbps": 376.2201222995442,
+      "params": {
+        "bits": 4,
+        "distribution": "97_keys",
+        "items": 8
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.4501249932218343,
+          "wall_ms": 0.62775
+        },
+        {
+          "gpu_ms": 0.4521249793469906,
+          "wall_ms": 0.6334580000000001
+        },
+        {
+          "gpu_ms": 0.44949998846277595,
+          "wall_ms": 0.629375
+        },
+        {
+          "gpu_ms": 0.44762500328943133,
+          "wall_ms": 0.622542
+        },
+        {
+          "gpu_ms": 0.45037499512545764,
+          "wall_ms": 0.627625
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 0.62775
+    },
+    {
+      "gpu_ms": 0.48749998677521944,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "97_keys",
+        "items": 8
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.46691665193066,
+          "wall_ms": 0.695834
+        },
+        {
+          "gpu_ms": 0.4859166801907122,
+          "wall_ms": 0.697625
+        },
+        {
+          "gpu_ms": 0.48749998677521944,
+          "wall_ms": 0.6975
+        },
+        {
+          "gpu_ms": 0.5077916721347719,
+          "wall_ms": 0.720375
+        },
+        {
+          "gpu_ms": 0.5063333082944155,
+          "wall_ms": 0.7142090000000001
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 0.697625
+    },
+    {
+      "gpu_ms": 0.3446249756962061,
+      "logical_bytes": 109068304,
+      "logical_gbps": 316.4840382786009,
+      "params": {
+        "bits": 8,
+        "distribution": "97_keys",
+        "items": 4
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.3598333278205246,
+          "wall_ms": 0.534375
+        },
+        {
+          "gpu_ms": 0.35533332265913486,
+          "wall_ms": 0.529292
+        },
+        {
+          "gpu_ms": 0.3446249756962061,
+          "wall_ms": 0.5111669999999999
+        },
+        {
+          "gpu_ms": 0.34275001962669194,
+          "wall_ms": 0.509292
+        },
+        {
+          "gpu_ms": 0.34033332485705614,
+          "wall_ms": 0.512667
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 0.512667
+    },
+    {
+      "gpu_ms": 0.35816666786558926,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "97_keys",
+        "items": 4
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.3446249756962061,
+          "wall_ms": 0.51525
+        },
+        {
+          "gpu_ms": 0.36475001252256334,
+          "wall_ms": 0.559166
+        },
+        {
+          "gpu_ms": 0.35816666786558926,
+          "wall_ms": 0.5331659999999999
+        },
+        {
+          "gpu_ms": 0.3442916495259851,
+          "wall_ms": 0.512209
+        },
+        {
+          "gpu_ms": 0.3764999855775386,
+          "wall_ms": 0.580833
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 0.5331659999999999
+    },
+    {
+      "gpu_ms": 0.33904166775755584,
+      "logical_bytes": 96477200,
+      "logical_gbps": 284.5585341710552,
+      "params": {
+        "bits": 8,
+        "distribution": "97_keys",
+        "items": 8
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.3252500027883798,
+          "wall_ms": 0.509666
+        },
+        {
+          "gpu_ms": 0.3371250058989972,
+          "wall_ms": 0.5151669999999999
+        },
+        {
+          "gpu_ms": 0.33904166775755584,
+          "wall_ms": 0.5467500000000001
+        },
+        {
+          "gpu_ms": 0.3428750205785036,
+          "wall_ms": 0.536333
+        },
+        {
+          "gpu_ms": 0.3796250093728304,
+          "wall_ms": 0.773166
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 0.536333
+    },
+    {
+      "gpu_ms": 0.39254166767932475,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "97_keys",
+        "items": 8
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.679374992614612,
+          "wall_ms": 0.959125
+        },
+        {
+          "gpu_ms": 0.4009583208244294,
+          "wall_ms": 0.617125
+        },
+        {
+          "gpu_ms": 0.38850001874379814,
+          "wall_ms": 0.5904579999999999
+        },
+        {
+          "gpu_ms": 0.3912083338946104,
+          "wall_ms": 0.6067079999999999
+        },
+        {
+          "gpu_ms": 0.39254166767932475,
+          "wall_ms": 0.602583
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 0.6067079999999999
+    },
+    {
+      "gpu_ms": 0.5103749863337725,
+      "logical_bytes": 170919968,
+      "logical_gbps": 334.89095777946807,
+      "params": {
+        "bits": 4,
+        "distribution": "all_equal",
+        "items": 4
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.517583335749805,
+          "wall_ms": 0.6948749999999999
+        },
+        {
+          "gpu_ms": 0.5170833319425583,
+          "wall_ms": 0.694958
+        },
+        {
+          "gpu_ms": 0.5103749863337725,
+          "wall_ms": 0.698958
+        },
+        {
+          "gpu_ms": 0.4733749956358224,
+          "wall_ms": 0.652666
+        },
+        {
+          "gpu_ms": 0.4752916865982115,
+          "wall_ms": 0.6564169999999999
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 0.6948749999999999
+    },
+    {
+      "gpu_ms": 0.6276250060182065,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "all_equal",
+        "items": 4
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.522624992299825,
+          "wall_ms": 0.754458
+        },
+        {
+          "gpu_ms": 0.5806249973829836,
+          "wall_ms": 0.8178340000000001
+        },
+        {
+          "gpu_ms": 0.697499985108152,
+          "wall_ms": 0.915458
+        },
+        {
+          "gpu_ms": 0.6276250060182065,
+          "wall_ms": 0.90825
+        },
+        {
+          "gpu_ms": 0.6293333135545254,
+          "wall_ms": 0.840083
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 0.840083
+    },
+    {
+      "gpu_ms": 0.6014166574459523,
+      "logical_bytes": 169346080,
+      "logical_gbps": 281.5786325559476,
+      "params": {
+        "bits": 4,
+        "distribution": "all_equal",
+        "items": 8
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.5940416594967246,
+          "wall_ms": 0.837125
+        },
+        {
+          "gpu_ms": 0.5892083281651139,
+          "wall_ms": 0.8049580000000001
+        },
+        {
+          "gpu_ms": 0.6014166574459523,
+          "wall_ms": 0.793375
+        },
+        {
+          "gpu_ms": 0.6069583469070494,
+          "wall_ms": 0.824584
+        },
+        {
+          "gpu_ms": 0.6042500026524067,
+          "wall_ms": 0.84675
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 0.824584
+    },
+    {
+      "gpu_ms": 0.5937500100117177,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "all_equal",
+        "items": 8
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.6156666786409914,
+          "wall_ms": 0.8564999999999999
+        },
+        {
+          "gpu_ms": 0.5937500100117177,
+          "wall_ms": 0.859375
+        },
+        {
+          "gpu_ms": 0.5817499768454581,
+          "wall_ms": 0.836417
+        },
+        {
+          "gpu_ms": 0.5738750041928142,
+          "wall_ms": 0.788875
+        },
+        {
+          "gpu_ms": 0.6129166577011347,
+          "wall_ms": 0.8195
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 0.836417
+    },
+    {
+      "gpu_ms": 0.5817500059492886,
+      "logical_bytes": 109068304,
+      "logical_gbps": 187.48311626060823,
+      "params": {
+        "bits": 8,
+        "distribution": "all_equal",
+        "items": 4
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.5645833443850279,
+          "wall_ms": 0.800458
+        },
+        {
+          "gpu_ms": 0.9603750077076256,
+          "wall_ms": 1.1725839999999998
+        },
+        {
+          "gpu_ms": 0.582000007852912,
+          "wall_ms": 0.8105
+        },
+        {
+          "gpu_ms": 0.5648749938700348,
+          "wall_ms": 0.766459
+        },
+        {
+          "gpu_ms": 0.5817500059492886,
+          "wall_ms": 0.786042
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 0.800458
+    },
+    {
+      "gpu_ms": 0.4938750062137842,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "all_equal",
+        "items": 4
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.4963749961461872,
+          "wall_ms": 0.736792
+        },
+        {
+          "gpu_ms": 0.5019583331886679,
+          "wall_ms": 0.7265
+        },
+        {
+          "gpu_ms": 0.4938750062137842,
+          "wall_ms": 0.69575
+        },
+        {
+          "gpu_ms": 0.4855833249166608,
+          "wall_ms": 0.66575
+        },
+        {
+          "gpu_ms": 0.48654168494977057,
+          "wall_ms": 0.677875
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 0.69575
+    },
+    {
+      "gpu_ms": 0.4758333379868418,
+      "logical_bytes": 96477200,
+      "logical_gbps": 202.7541836563538,
+      "params": {
+        "bits": 8,
+        "distribution": "all_equal",
+        "items": 8
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.4713333328254521,
+          "wall_ms": 0.7006249999999999
+        },
+        {
+          "gpu_ms": 0.4769999941345304,
+          "wall_ms": 0.7035830000000001
+        },
+        {
+          "gpu_ms": 0.45183332986198366,
+          "wall_ms": 0.663125
+        },
+        {
+          "gpu_ms": 0.4758333379868418,
+          "wall_ms": 0.71775
+        },
+        {
+          "gpu_ms": 0.47595833893865347,
+          "wall_ms": 0.700416
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 0.7006249999999999
+    },
+    {
+      "gpu_ms": 0.7077083282638341,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "all_equal",
+        "items": 8
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "gpu_ms": 0.7077083282638341,
+          "wall_ms": 0.9642919999999999
+        },
+        {
+          "gpu_ms": 0.7020416669547558,
+          "wall_ms": 0.9313750000000001
+        },
+        {
+          "gpu_ms": 0.7110000005923212,
+          "wall_ms": 0.965542
+        },
+        {
+          "gpu_ms": 0.7179583190008998,
+          "wall_ms": 0.961375
+        },
+        {
+          "gpu_ms": 0.7073749729897827,
+          "wall_ms": 0.938209
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 0.961375
+    },
+    {
+      "gpu_ms": 0.7637916714884341,
+      "logical_bytes": 268435456,
+      "logical_gbps": 351.4511430543464,
+      "params": {
+        "grid": 16384
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 1.6528750129509717,
+          "wall_ms": 1.925791
+        },
+        {
+          "gpu_ms": 0.7691250066272914,
+          "wall_ms": 1.3907500000000002
+        },
+        {
+          "gpu_ms": 0.7637916714884341,
+          "wall_ms": 1.3752499999999999
+        },
+        {
+          "gpu_ms": 0.7441249908879399,
+          "wall_ms": 0.994417
+        },
+        {
+          "gpu_ms": 0.74712501373142,
+          "wall_ms": 1.046791
+        }
+      ],
+      "stage": "copy",
+      "wall_ms": 1.3752499999999999
+    },
+    {
+      "gpu_ms": 8.863458351697773,
+      "logical_bytes": 2734719008,
+      "logical_gbps": 308.5385974060759,
+      "params": {
+        "bits": 4,
+        "distribution": "uniform_u32",
+        "items": 4
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 9.271499991882592,
+          "wall_ms": 10.056707999999999
+        },
+        {
+          "gpu_ms": 8.843708346830681,
+          "wall_ms": 9.650166
+        },
+        {
+          "gpu_ms": 8.822833333397284,
+          "wall_ms": 9.131459
+        },
+        {
+          "gpu_ms": 8.863458351697773,
+          "wall_ms": 9.692124999999999
+        },
+        {
+          "gpu_ms": 9.258875012164935,
+          "wall_ms": 9.58075
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 9.650166
+    },
+    {
+      "gpu_ms": 8.976125012850389,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "uniform_u32",
+        "items": 4
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 8.84841664810665,
+          "wall_ms": 9.192374999999998
+        },
+        {
+          "gpu_ms": 9.130416670814157,
+          "wall_ms": 9.434291
+        },
+        {
+          "gpu_ms": 8.863166673108935,
+          "wall_ms": 9.199
+        },
+        {
+          "gpu_ms": 8.976125012850389,
+          "wall_ms": 9.353583
+        },
+        {
+          "gpu_ms": 9.156999993138015,
+          "wall_ms": 9.462959
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 9.353583
+    },
+    {
+      "gpu_ms": 8.797249989584088,
+      "logical_bytes": 2709536800,
+      "logical_gbps": 307.99815888011386,
+      "params": {
+        "bits": 4,
+        "distribution": "uniform_u32",
+        "items": 8
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 9.048041683854535,
+          "wall_ms": 9.496208000000001
+        },
+        {
+          "gpu_ms": 8.768583327764645,
+          "wall_ms": 9.11425
+        },
+        {
+          "gpu_ms": 8.767624996835366,
+          "wall_ms": 9.09975
+        },
+        {
+          "gpu_ms": 9.1943749866914,
+          "wall_ms": 9.510833
+        },
+        {
+          "gpu_ms": 8.797249989584088,
+          "wall_ms": 9.115917
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 9.115917
+    },
+    {
+      "gpu_ms": 8.883875008905306,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "uniform_u32",
+        "items": 8
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 9.171000012429431,
+          "wall_ms": 9.408708
+        },
+        {
+          "gpu_ms": 8.784916688455269,
+          "wall_ms": 9.14975
+        },
+        {
+          "gpu_ms": 8.846250013448298,
+          "wall_ms": 9.143625
+        },
+        {
+          "gpu_ms": 8.883875008905306,
+          "wall_ms": 9.159417
+        },
+        {
+          "gpu_ms": 9.089625003980473,
+          "wall_ms": 9.360291
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 9.159417
+    },
+    {
+      "gpu_ms": 6.298916676314548,
+      "logical_bytes": 1745223952,
+      "logical_gbps": 277.0673183473699,
+      "params": {
+        "bits": 8,
+        "distribution": "uniform_u32",
+        "items": 4
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 6.298916676314548,
+          "wall_ms": 6.619917
+        },
+        {
+          "gpu_ms": 6.298333319136873,
+          "wall_ms": 6.61025
+        },
+        {
+          "gpu_ms": 6.298874999629334,
+          "wall_ms": 6.595084
+        },
+        {
+          "gpu_ms": 6.384000007528812,
+          "wall_ms": 6.677458
+        },
+        {
+          "gpu_ms": 6.58012498752214,
+          "wall_ms": 6.846833
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 6.619917
+    },
+    {
+      "gpu_ms": 6.318666652077809,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "uniform_u32",
+        "items": 4
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 6.302750000031665,
+          "wall_ms": 6.57425
+        },
+        {
+          "gpu_ms": 6.3400833460036665,
+          "wall_ms": 6.651792
+        },
+        {
+          "gpu_ms": 6.487833306891844,
+          "wall_ms": 6.789167
+        },
+        {
+          "gpu_ms": 6.297249987255782,
+          "wall_ms": 6.607708000000001
+        },
+        {
+          "gpu_ms": 6.318666652077809,
+          "wall_ms": 6.6855839999999995
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 6.651792
+    },
+    {
+      "gpu_ms": 5.403958319220692,
+      "logical_bytes": 1543700624,
+      "logical_gbps": 285.6610900401278,
+      "params": {
+        "bits": 8,
+        "distribution": "uniform_u32",
+        "items": 8
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 5.403958319220692,
+          "wall_ms": 5.696042
+        },
+        {
+          "gpu_ms": 5.461749999085441,
+          "wall_ms": 5.722167000000001
+        },
+        {
+          "gpu_ms": 5.401708331191912,
+          "wall_ms": 5.696083
+        },
+        {
+          "gpu_ms": 5.399791640229523,
+          "wall_ms": 5.6825
+        },
+        {
+          "gpu_ms": 5.4362083319574594,
+          "wall_ms": 5.722917
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 5.696083
+    },
+    {
+      "gpu_ms": 5.417708336608484,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "uniform_u32",
+        "items": 8
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 5.44104166328907,
+          "wall_ms": 5.726
+        },
+        {
+          "gpu_ms": 5.417708336608484,
+          "wall_ms": 5.7374160000000005
+        },
+        {
+          "gpu_ms": 5.393458326580003,
+          "wall_ms": 5.682125
+        },
+        {
+          "gpu_ms": 5.3964166436344385,
+          "wall_ms": 5.705084
+        },
+        {
+          "gpu_ms": 5.428624979685992,
+          "wall_ms": 5.7565
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 5.726
+    },
+    {
+      "gpu_ms": 8.877083339029923,
+      "logical_bytes": 2734719008,
+      "logical_gbps": 308.0650370799433,
+      "params": {
+        "bits": 4,
+        "distribution": "97_keys",
+        "items": 4
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 9.07758335233666,
+          "wall_ms": 9.860875
+        },
+        {
+          "gpu_ms": 8.757333329413086,
+          "wall_ms": 9.544209
+        },
+        {
+          "gpu_ms": 8.877083339029923,
+          "wall_ms": 9.157375
+        },
+        {
+          "gpu_ms": 9.145874995738268,
+          "wall_ms": 9.909792000000001
+        },
+        {
+          "gpu_ms": 8.754750015214086,
+          "wall_ms": 9.071875
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 9.544209
+    },
+    {
+      "gpu_ms": 8.825750002870336,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "97_keys",
+        "items": 4
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 9.160750021692365,
+          "wall_ms": 9.490291
+        },
+        {
+          "gpu_ms": 8.763124991673976,
+          "wall_ms": 9.092167
+        },
+        {
+          "gpu_ms": 8.783375000348315,
+          "wall_ms": 9.101208
+        },
+        {
+          "gpu_ms": 8.825750002870336,
+          "wall_ms": 9.144291
+        },
+        {
+          "gpu_ms": 9.230124996975064,
+          "wall_ms": 9.55225
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 9.144291
+    },
+    {
+      "gpu_ms": 8.87383334338665,
+      "logical_bytes": 2709536800,
+      "logical_gbps": 305.34005938023626,
+      "params": {
+        "bits": 4,
+        "distribution": "97_keys",
+        "items": 8
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 9.029499982716516,
+          "wall_ms": 9.318667
+        },
+        {
+          "gpu_ms": 8.74987497809343,
+          "wall_ms": 9.086958
+        },
+        {
+          "gpu_ms": 8.735208335565403,
+          "wall_ms": 9.042917
+        },
+        {
+          "gpu_ms": 9.066999977221712,
+          "wall_ms": 9.488999999999999
+        },
+        {
+          "gpu_ms": 8.87383334338665,
+          "wall_ms": 9.167042
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 9.167042
+    },
+    {
+      "gpu_ms": 8.873374987160787,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "97_keys",
+        "items": 8
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 8.78525001462549,
+          "wall_ms": 9.082666
+        },
+        {
+          "gpu_ms": 9.016875002998859,
+          "wall_ms": 9.354417
+        },
+        {
+          "gpu_ms": 8.781541662756354,
+          "wall_ms": 9.126959000000001
+        },
+        {
+          "gpu_ms": 8.873374987160787,
+          "wall_ms": 9.205833
+        },
+        {
+          "gpu_ms": 9.103458345634863,
+          "wall_ms": 9.397209
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 9.205833
+    },
+    {
+      "gpu_ms": 5.693083337973803,
+      "logical_bytes": 1745223952,
+      "logical_gbps": 306.5516256119191,
+      "params": {
+        "bits": 8,
+        "distribution": "97_keys",
+        "items": 4
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 5.691750004189089,
+          "wall_ms": 6.002999999999999
+        },
+        {
+          "gpu_ms": 6.038416671799496,
+          "wall_ms": 6.367667
+        },
+        {
+          "gpu_ms": 5.693083337973803,
+          "wall_ms": 6.005166999999999
+        },
+        {
+          "gpu_ms": 5.697624990716577,
+          "wall_ms": 5.980583
+        },
+        {
+          "gpu_ms": 5.689625017112121,
+          "wall_ms": 5.948167
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 6.002999999999999
+    },
+    {
+      "gpu_ms": 5.685125011950731,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "97_keys",
+        "items": 4
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 6.128291686763987,
+          "wall_ms": 6.446917
+        },
+        {
+          "gpu_ms": 5.6838333257474005,
+          "wall_ms": 5.99475
+        },
+        {
+          "gpu_ms": 5.68929166183807,
+          "wall_ms": 6.003583
+        },
+        {
+          "gpu_ms": 5.685125011950731,
+          "wall_ms": 5.999875
+        },
+        {
+          "gpu_ms": 5.67470834357664,
+          "wall_ms": 5.94525
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 5.999875
+    },
+    {
+      "gpu_ms": 5.0760416488628834,
+      "logical_bytes": 1543700624,
+      "logical_gbps": 304.1150429381946,
+      "params": {
+        "bits": 8,
+        "distribution": "97_keys",
+        "items": 8
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 5.0760416488628834,
+          "wall_ms": 5.406333
+        },
+        {
+          "gpu_ms": 5.060041672550142,
+          "wall_ms": 5.3905
+        },
+        {
+          "gpu_ms": 5.066625017207116,
+          "wall_ms": 5.443207999999999
+        },
+        {
+          "gpu_ms": 5.429416662082076,
+          "wall_ms": 5.739707999999999
+        },
+        {
+          "gpu_ms": 5.09337498806417,
+          "wall_ms": 5.394375
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 5.406333
+    },
+    {
+      "gpu_ms": 5.0818749878089875,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "97_keys",
+        "items": 8
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 5.106541677378118,
+          "wall_ms": 5.36375
+        },
+        {
+          "gpu_ms": 5.0818749878089875,
+          "wall_ms": 5.350125
+        },
+        {
+          "gpu_ms": 5.44233332038857,
+          "wall_ms": 5.7511660000000004
+        },
+        {
+          "gpu_ms": 5.066624988103285,
+          "wall_ms": 5.370208
+        },
+        {
+          "gpu_ms": 5.073333333712071,
+          "wall_ms": 5.35875
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 5.36375
+    },
+    {
+      "gpu_ms": 8.749791682930663,
+      "logical_bytes": 2734719008,
+      "logical_gbps": 312.5467562084896,
+      "params": {
+        "bits": 4,
+        "distribution": "all_equal",
+        "items": 4
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 8.745750004891306,
+          "wall_ms": 9.086167
+        },
+        {
+          "gpu_ms": 9.164374991087243,
+          "wall_ms": 9.946208
+        },
+        {
+          "gpu_ms": 8.749791682930663,
+          "wall_ms": 9.066042
+        },
+        {
+          "gpu_ms": 8.75104166334495,
+          "wall_ms": 9.057958
+        },
+        {
+          "gpu_ms": 8.730125002330169,
+          "wall_ms": 8.999333
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 9.066042
+    },
+    {
+      "gpu_ms": 8.760999975493178,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "all_equal",
+        "items": 4
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 8.760999975493178,
+          "wall_ms": 9.136999999999999
+        },
+        {
+          "gpu_ms": 8.740249992115423,
+          "wall_ms": 9.049750000000001
+        },
+        {
+          "gpu_ms": 9.182666661217809,
+          "wall_ms": 9.469042
+        },
+        {
+          "gpu_ms": 8.846999990055338,
+          "wall_ms": 9.136750000000001
+        },
+        {
+          "gpu_ms": 8.746666659135371,
+          "wall_ms": 9.046040999999999
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 9.136750000000001
+    },
+    {
+      "gpu_ms": 8.7467500125058,
+      "logical_bytes": 2709536800,
+      "logical_gbps": 309.776407937348,
+      "params": {
+        "bits": 4,
+        "distribution": "all_equal",
+        "items": 8
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 8.72637500287965,
+          "wall_ms": 9.069417
+        },
+        {
+          "gpu_ms": 8.903375011868775,
+          "wall_ms": 9.232707999999999
+        },
+        {
+          "gpu_ms": 9.117083332967013,
+          "wall_ms": 9.420583
+        },
+        {
+          "gpu_ms": 8.720666664885357,
+          "wall_ms": 9.033292
+        },
+        {
+          "gpu_ms": 8.7467500125058,
+          "wall_ms": 9.030125
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 9.069417
+    },
+    {
+      "gpu_ms": 8.728624990908429,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "all_equal",
+        "items": 8
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 8.728624990908429,
+          "wall_ms": 9.063542
+        },
+        {
+          "gpu_ms": 8.726291678613052,
+          "wall_ms": 9.145667
+        },
+        {
+          "gpu_ms": 8.852291677612811,
+          "wall_ms": 9.17125
+        },
+        {
+          "gpu_ms": 9.16433334350586,
+          "wall_ms": 9.464334
+        },
+        {
+          "gpu_ms": 8.727625012397766,
+          "wall_ms": 9.026833
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 9.145667
+    },
+    {
+      "gpu_ms": 5.616749986074865,
+      "logical_bytes": 1745223952,
+      "logical_gbps": 310.71775605586623,
+      "params": {
+        "bits": 8,
+        "distribution": "all_equal",
+        "items": 4
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 5.6070416467264295,
+          "wall_ms": 5.906833000000001
+        },
+        {
+          "gpu_ms": 5.608541687252,
+          "wall_ms": 5.940209
+        },
+        {
+          "gpu_ms": 5.616749986074865,
+          "wall_ms": 5.920166999999999
+        },
+        {
+          "gpu_ms": 5.632541666273028,
+          "wall_ms": 5.943124999999999
+        },
+        {
+          "gpu_ms": 5.8817916724365205,
+          "wall_ms": 6.173583
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 5.940209
+    },
+    {
+      "gpu_ms": 5.610083346255124,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "all_equal",
+        "items": 4
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 5.610083346255124,
+          "wall_ms": 5.92375
+        },
+        {
+          "gpu_ms": 5.601916665909812,
+          "wall_ms": 5.931
+        },
+        {
+          "gpu_ms": 5.628499988233671,
+          "wall_ms": 6.005875
+        },
+        {
+          "gpu_ms": 5.9759166615549475,
+          "wall_ms": 6.281167
+        },
+        {
+          "gpu_ms": 5.600000004051253,
+          "wall_ms": 5.856333
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 5.931
+    },
+    {
+      "gpu_ms": 5.025874997954816,
+      "logical_bytes": 1543700624,
+      "logical_gbps": 307.15062046473093,
+      "params": {
+        "bits": 8,
+        "distribution": "all_equal",
+        "items": 8
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 5.0702916632872075,
+          "wall_ms": 5.357125
+        },
+        {
+          "gpu_ms": 5.36104166531004,
+          "wall_ms": 5.719875
+        },
+        {
+          "gpu_ms": 5.018500000005588,
+          "wall_ms": 5.346959
+        },
+        {
+          "gpu_ms": 5.025874997954816,
+          "wall_ms": 5.315625
+        },
+        {
+          "gpu_ms": 5.016625014832243,
+          "wall_ms": 5.344665999999999
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 5.346959
+    },
+    {
+      "gpu_ms": 5.040624993853271,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "all_equal",
+        "items": 8
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "gpu_ms": 5.365041666664183,
+          "wall_ms": 5.656333
+        },
+        {
+          "gpu_ms": 5.0402500201016665,
+          "wall_ms": 5.354291
+        },
+        {
+          "gpu_ms": 5.040624993853271,
+          "wall_ms": 5.324083
+        },
+        {
+          "gpu_ms": 5.03374999971129,
+          "wall_ms": 5.344417
+        },
+        {
+          "gpu_ms": 5.043541663326323,
+          "wall_ms": 5.365292
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 5.354291
+    },
+    {
+      "gpu_ms": 3.023124998435378,
+      "logical_bytes": 1073741824,
+      "logical_gbps": 355.17612555078483,
+      "params": {
+        "grid": 16384
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 3.3045833406504244,
+          "wall_ms": 3.640208
+        },
+        {
+          "gpu_ms": 2.9931250028312206,
+          "wall_ms": 3.696208
+        },
+        {
+          "gpu_ms": 3.000333352247253,
+          "wall_ms": 3.6832499999999997
+        },
+        {
+          "gpu_ms": 3.023124998435378,
+          "wall_ms": 3.375666
+        },
+        {
+          "gpu_ms": 3.0235833255574107,
+          "wall_ms": 3.2763750000000003
+        }
+      ],
+      "stage": "copy",
+      "wall_ms": 3.640208
+    },
+    {
+      "gpu_ms": 35.92762499465607,
+      "logical_bytes": 10938875936,
+      "logical_gbps": 304.469776046345,
+      "params": {
+        "bits": 4,
+        "distribution": "uniform_u32",
+        "items": 4
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 36.346000008052215,
+          "wall_ms": 36.663958
+        },
+        {
+          "gpu_ms": 35.92762499465607,
+          "wall_ms": 36.288958
+        },
+        {
+          "gpu_ms": 35.93804166303016,
+          "wall_ms": 36.258458
+        },
+        {
+          "gpu_ms": 35.857000009855255,
+          "wall_ms": 36.189458
+        },
+        {
+          "gpu_ms": 35.7687083305791,
+          "wall_ms": 36.057458000000004
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 36.258458
+    },
+    {
+      "gpu_ms": 35.880250012269244,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "uniform_u32",
+        "items": 4
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 35.93225000076927,
+          "wall_ms": 36.262542
+        },
+        {
+          "gpu_ms": 35.68987498874776,
+          "wall_ms": 35.989958
+        },
+        {
+          "gpu_ms": 35.880250012269244,
+          "wall_ms": 36.226417
+        },
+        {
+          "gpu_ms": 35.70820830645971,
+          "wall_ms": 36.026208999999994
+        },
+        {
+          "gpu_ms": 35.97062500193715,
+          "wall_ms": 36.272583
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 36.226417
+    },
+    {
+      "gpu_ms": 35.73508333647624,
+      "logical_bytes": 10838147104,
+      "logical_gbps": 303.2915021339006,
+      "params": {
+        "bits": 4,
+        "distribution": "uniform_u32",
+        "items": 8
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 36.23366667306982,
+          "wall_ms": 36.544042
+        },
+        {
+          "gpu_ms": 35.73508333647624,
+          "wall_ms": 36.054541
+        },
+        {
+          "gpu_ms": 35.69674998288974,
+          "wall_ms": 36.005584
+        },
+        {
+          "gpu_ms": 35.59795834007673,
+          "wall_ms": 35.918875
+        },
+        {
+          "gpu_ms": 35.81537498394027,
+          "wall_ms": 36.1225
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 36.054541
+    },
+    {
+      "gpu_ms": 35.62049998436123,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "uniform_u32",
+        "items": 8
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 35.62049998436123,
+          "wall_ms": 35.93275
+        },
+        {
+          "gpu_ms": 35.72237500338815,
+          "wall_ms": 36.035584
+        },
+        {
+          "gpu_ms": 35.50287499092519,
+          "wall_ms": 35.837334
+        },
+        {
+          "gpu_ms": 35.660208348417655,
+          "wall_ms": 35.958792
+        },
+        {
+          "gpu_ms": 35.46812501735985,
+          "wall_ms": 35.774584
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 35.93275
+    },
+    {
+      "gpu_ms": 26.287583343219012,
+      "logical_bytes": 6980895760,
+      "logical_gbps": 265.55867341836694,
+      "params": {
+        "bits": 8,
+        "distribution": "uniform_u32",
+        "items": 4
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 26.201000000583008,
+          "wall_ms": 26.479833000000003
+        },
+        {
+          "gpu_ms": 26.47533331764862,
+          "wall_ms": 26.733416
+        },
+        {
+          "gpu_ms": 25.96670834464021,
+          "wall_ms": 26.279833
+        },
+        {
+          "gpu_ms": 26.287583343219012,
+          "wall_ms": 26.580333
+        },
+        {
+          "gpu_ms": 26.312625006539747,
+          "wall_ms": 26.616
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 26.580333
+    },
+    {
+      "gpu_ms": 26.224375003948808,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "uniform_u32",
+        "items": 4
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 26.080458337673917,
+          "wall_ms": 26.346916
+        },
+        {
+          "gpu_ms": 26.224375003948808,
+          "wall_ms": 26.52375
+        },
+        {
+          "gpu_ms": 26.315625000279397,
+          "wall_ms": 26.592208
+        },
+        {
+          "gpu_ms": 26.346916652983055,
+          "wall_ms": 26.628
+        },
+        {
+          "gpu_ms": 26.080083334818482,
+          "wall_ms": 26.389459000000002
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 26.52375
+    },
+    {
+      "gpu_ms": 22.280958335613832,
+      "logical_bytes": 6174802448,
+      "logical_gbps": 277.13361135504704,
+      "params": {
+        "bits": 8,
+        "distribution": "uniform_u32",
+        "items": 8
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 22.280958335613832,
+          "wall_ms": 22.565333
+        },
+        {
+          "gpu_ms": 22.033833316527307,
+          "wall_ms": 22.322208
+        },
+        {
+          "gpu_ms": 22.4632500030566,
+          "wall_ms": 22.753875
+        },
+        {
+          "gpu_ms": 22.291583329206333,
+          "wall_ms": 22.585
+        },
+        {
+          "gpu_ms": 22.08145832992159,
+          "wall_ms": 22.3555
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 22.565333
+    },
+    {
+      "gpu_ms": 22.300750017166138,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "uniform_u32",
+        "items": 8
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 22.09004168980755,
+          "wall_ms": 22.37275
+        },
+        {
+          "gpu_ms": 22.539625002536923,
+          "wall_ms": 22.822417
+        },
+        {
+          "gpu_ms": 22.300750017166138,
+          "wall_ms": 22.588125
+        },
+        {
+          "gpu_ms": 21.961749996989965,
+          "wall_ms": 22.225375
+        },
+        {
+          "gpu_ms": 22.439083346398547,
+          "wall_ms": 22.711708
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 22.588125
+    },
+    {
+      "gpu_ms": 35.65070833428763,
+      "logical_bytes": 10938875936,
+      "logical_gbps": 306.8347431817887,
+      "params": {
+        "bits": 4,
+        "distribution": "97_keys",
+        "items": 4
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 35.65070833428763,
+          "wall_ms": 36.449542
+        },
+        {
+          "gpu_ms": 35.48512500128709,
+          "wall_ms": 35.817958
+        },
+        {
+          "gpu_ms": 35.70241667330265,
+          "wall_ms": 36.014875
+        },
+        {
+          "gpu_ms": 35.51087499363348,
+          "wall_ms": 35.834792
+        },
+        {
+          "gpu_ms": 35.726916685234755,
+          "wall_ms": 36.032957999999994
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 36.014875
+    },
+    {
+      "gpu_ms": 35.792874987237155,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "97_keys",
+        "items": 4
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 35.564458346925676,
+          "wall_ms": 35.873166
+        },
+        {
+          "gpu_ms": 35.635333333630115,
+          "wall_ms": 35.937542
+        },
+        {
+          "gpu_ms": 35.792874987237155,
+          "wall_ms": 36.115042
+        },
+        {
+          "gpu_ms": 35.86283331969753,
+          "wall_ms": 36.16575
+        },
+        {
+          "gpu_ms": 35.84854168002494,
+          "wall_ms": 36.124417
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 36.115042
+    },
+    {
+      "gpu_ms": 35.554166650399566,
+      "logical_bytes": 10838147104,
+      "logical_gbps": 304.8347950486472,
+      "params": {
+        "bits": 4,
+        "distribution": "97_keys",
+        "items": 8
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 35.554166650399566,
+          "wall_ms": 35.984125
+        },
+        {
+          "gpu_ms": 35.59037501690909,
+          "wall_ms": 35.878625
+        },
+        {
+          "gpu_ms": 35.48837499693036,
+          "wall_ms": 35.774916
+        },
+        {
+          "gpu_ms": 35.61445832019672,
+          "wall_ms": 35.946667000000005
+        },
+        {
+          "gpu_ms": 35.41074998793192,
+          "wall_ms": 35.744791
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 35.878625
+    },
+    {
+      "gpu_ms": 35.556625021854416,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "97_keys",
+        "items": 8
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 35.4957916715648,
+          "wall_ms": 35.805584
+        },
+        {
+          "gpu_ms": 35.405749978963286,
+          "wall_ms": 35.722542000000004
+        },
+        {
+          "gpu_ms": 35.62070833868347,
+          "wall_ms": 35.953790999999995
+        },
+        {
+          "gpu_ms": 35.556625021854416,
+          "wall_ms": 35.87675
+        },
+        {
+          "gpu_ms": 35.925625008530915,
+          "wall_ms": 36.251458
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 35.87675
+    },
+    {
+      "gpu_ms": 23.948208341607824,
+      "logical_bytes": 6980895760,
+      "logical_gbps": 291.49970888934234,
+      "params": {
+        "bits": 8,
+        "distribution": "97_keys",
+        "items": 4
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 24.105208343826234,
+          "wall_ms": 24.386959
+        },
+        {
+          "gpu_ms": 23.64758332259953,
+          "wall_ms": 23.936709
+        },
+        {
+          "gpu_ms": 23.948208341607824,
+          "wall_ms": 24.261000000000003
+        },
+        {
+          "gpu_ms": 24.060166644630954,
+          "wall_ms": 24.350042
+        },
+        {
+          "gpu_ms": 23.801000003004447,
+          "wall_ms": 24.071041
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 24.261000000000003
+    },
+    {
+      "gpu_ms": 24.007416679523885,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "97_keys",
+        "items": 4
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 24.007416679523885,
+          "wall_ms": 24.298292
+        },
+        {
+          "gpu_ms": 23.67612498346716,
+          "wall_ms": 23.968583000000002
+        },
+        {
+          "gpu_ms": 24.085374985588714,
+          "wall_ms": 24.406042
+        },
+        {
+          "gpu_ms": 24.070041661616415,
+          "wall_ms": 24.390583
+        },
+        {
+          "gpu_ms": 23.779874987667426,
+          "wall_ms": 24.094833
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 24.298292
+    },
+    {
+      "gpu_ms": 20.977499982109293,
+      "logical_bytes": 6174802448,
+      "logical_gbps": 294.35359090769606,
+      "params": {
+        "bits": 8,
+        "distribution": "97_keys",
+        "items": 8
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 20.650458347517997,
+          "wall_ms": 21.48625
+        },
+        {
+          "gpu_ms": 20.977499982109293,
+          "wall_ms": 21.301167
+        },
+        {
+          "gpu_ms": 20.98175001447089,
+          "wall_ms": 21.26375
+        },
+        {
+          "gpu_ms": 20.734083314891905,
+          "wall_ms": 21.044
+        },
+        {
+          "gpu_ms": 20.987500000046566,
+          "wall_ms": 21.426709
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 21.301167
+    },
+    {
+      "gpu_ms": 20.817499986151233,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "97_keys",
+        "items": 8
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 20.913291664328426,
+          "wall_ms": 21.238667
+        },
+        {
+          "gpu_ms": 20.7176249823533,
+          "wall_ms": 21.145500000000002
+        },
+        {
+          "gpu_ms": 20.817499986151233,
+          "wall_ms": 21.171042
+        },
+        {
+          "gpu_ms": 20.92300000367686,
+          "wall_ms": 21.221833
+        },
+        {
+          "gpu_ms": 20.661500020651147,
+          "wall_ms": 20.967167
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 21.171042
+    },
+    {
+      "gpu_ms": 35.38262500660494,
+      "logical_bytes": 10938875936,
+      "logical_gbps": 309.1595361835935,
+      "params": {
+        "bits": 4,
+        "distribution": "all_equal",
+        "items": 4
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 35.24454165017232,
+          "wall_ms": 35.611540999999995
+        },
+        {
+          "gpu_ms": 35.38262500660494,
+          "wall_ms": 35.758832999999996
+        },
+        {
+          "gpu_ms": 35.46920832013711,
+          "wall_ms": 35.811333
+        },
+        {
+          "gpu_ms": 35.34199998830445,
+          "wall_ms": 35.702916
+        },
+        {
+          "gpu_ms": 35.4151249921415,
+          "wall_ms": 35.755874999999996
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 35.755874999999996
+    },
+    {
+      "gpu_ms": 35.35612500854768,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "all_equal",
+        "items": 4
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 35.42850000667386,
+          "wall_ms": 35.755375
+        },
+        {
+          "gpu_ms": 35.3531249857042,
+          "wall_ms": 35.613708
+        },
+        {
+          "gpu_ms": 35.44599999440834,
+          "wall_ms": 35.742459
+        },
+        {
+          "gpu_ms": 35.330125014297664,
+          "wall_ms": 35.709208
+        },
+        {
+          "gpu_ms": 35.35612500854768,
+          "wall_ms": 35.837333
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 35.742459
+    },
+    {
+      "gpu_ms": 35.149875009665266,
+      "logical_bytes": 10838147104,
+      "logical_gbps": 308.3409855943955,
+      "params": {
+        "bits": 4,
+        "distribution": "all_equal",
+        "items": 8
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 35.149875009665266,
+          "wall_ms": 35.486625000000004
+        },
+        {
+          "gpu_ms": 35.14191665453836,
+          "wall_ms": 35.482333
+        },
+        {
+          "gpu_ms": 35.47225001966581,
+          "wall_ms": 35.841584000000005
+        },
+        {
+          "gpu_ms": 35.30295833479613,
+          "wall_ms": 35.594916999999995
+        },
+        {
+          "gpu_ms": 35.10662500048056,
+          "wall_ms": 35.454625
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 35.486625000000004
+    },
+    {
+      "gpu_ms": 35.248750005848706,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 4,
+        "distribution": "all_equal",
+        "items": 8
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 35.18700000131503,
+          "wall_ms": 35.527499999999996
+        },
+        {
+          "gpu_ms": 35.374750004848465,
+          "wall_ms": 35.835583
+        },
+        {
+          "gpu_ms": 35.451000003376976,
+          "wall_ms": 35.863916
+        },
+        {
+          "gpu_ms": 35.10195831768215,
+          "wall_ms": 35.390125000000005
+        },
+        {
+          "gpu_ms": 35.248750005848706,
+          "wall_ms": 35.568459
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 35.568459
+    },
+    {
+      "gpu_ms": 23.642375017516315,
+      "logical_bytes": 6980895760,
+      "logical_gbps": 295.27049439102245,
+      "params": {
+        "bits": 8,
+        "distribution": "all_equal",
+        "items": 4
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 23.603333334904164,
+          "wall_ms": 23.954875
+        },
+        {
+          "gpu_ms": 23.410291643813252,
+          "wall_ms": 23.730958
+        },
+        {
+          "gpu_ms": 23.642375017516315,
+          "wall_ms": 23.949583
+        },
+        {
+          "gpu_ms": 23.651041672565043,
+          "wall_ms": 23.996375
+        },
+        {
+          "gpu_ms": 23.65100002498366,
+          "wall_ms": 23.947083
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 23.949583
+    },
+    {
+      "gpu_ms": 23.684124986175448,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "all_equal",
+        "items": 4
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 23.684124986175448,
+          "wall_ms": 23.984916
+        },
+        {
+          "gpu_ms": 23.36287501384504,
+          "wall_ms": 23.687208000000002
+        },
+        {
+          "gpu_ms": 23.702749982476234,
+          "wall_ms": 24.062583
+        },
+        {
+          "gpu_ms": 23.753500019665807,
+          "wall_ms": 24.101875
+        },
+        {
+          "gpu_ms": 23.37862501735799,
+          "wall_ms": 23.785708999999997
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 23.984916
+    },
+    {
+      "gpu_ms": 20.72749999933876,
+      "logical_bytes": 6174802448,
+      "logical_gbps": 297.903869168833,
+      "params": {
+        "bits": 8,
+        "distribution": "all_equal",
+        "items": 8
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 20.72749999933876,
+          "wall_ms": 21.097792000000002
+        },
+        {
+          "gpu_ms": 20.47675001085736,
+          "wall_ms": 20.823958
+        },
+        {
+          "gpu_ms": 20.793500007130206,
+          "wall_ms": 21.138166
+        },
+        {
+          "gpu_ms": 20.735458325361833,
+          "wall_ms": 21.180625000000003
+        },
+        {
+          "gpu_ms": 20.432874996913597,
+          "wall_ms": 20.771125
+        }
+      ],
+      "stage": "radix_tuning",
+      "wall_ms": 21.097792000000002
+    },
+    {
+      "gpu_ms": 20.817208336666226,
+      "logical_bytes": null,
+      "logical_gbps": null,
+      "params": {
+        "bits": 8,
+        "distribution": "all_equal",
+        "items": 8
+      },
+      "rows": 67108864,
+      "samples": [
+        {
+          "gpu_ms": 20.766916655702516,
+          "wall_ms": 21.19875
+        },
+        {
+          "gpu_ms": 20.909125014441088,
+          "wall_ms": 21.20525
+        },
+        {
+          "gpu_ms": 20.461166655877605,
+          "wall_ms": 20.812917
+        },
+        {
+          "gpu_ms": 20.817208336666226,
+          "wall_ms": 21.11775
+        },
+        {
+          "gpu_ms": 20.818833319935948,
+          "wall_ms": 21.079792
+        }
+      ],
+      "stage": "radix_tuned_build",
+      "wall_ms": 21.11775
+    }
+  ],
+  "runs": 5,
+  "scope": "append-only u32 key/u32 payload; stable duplicates; GPU radix12 exact directory is not RadixSpline; native spline builder remains CPU",
+  "seed": "83a6237c9fb1429d",
+  "source_directory": "/Users/stargazermiao/workspace/mini_linq-gpu-index-20261024/experiments/mac/gpu-index",
+  "storage": "shared; tracked hazards; allocations and input generation outside GPU timed regions",
+  "timing": "GPU command-buffer timestamp and host encode+commit+wait; warmup excluded; medians"
+}

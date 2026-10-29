@@ -96,6 +96,11 @@ pub trait Column<H: PositionalRows>: Copy {
     /// Valid only for a live host-issued ID. May borrow the host for its lifetime.
     fn key(self, host: H, id: RowId) -> Self::Key;
 }
+/// A column marker bound to declaration-order slot `N` of this host schema.
+/// Implementations must return that column's value for every live host-issued ID.
+/// This law is distinct from merely returning a key of a compatible Rust type.
+pub trait ColumnSlot<H: PositionalRows, const N: usize>: Column<H> {}
+
 pub trait ReadPredicate<K> {
     /// True proves every key passes and permits omitting all key extraction,
     /// bounds reads, and predicate evaluation. The fact must remain stable

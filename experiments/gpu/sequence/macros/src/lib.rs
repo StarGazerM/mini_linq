@@ -13,6 +13,18 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
     }
 }
 
+/// Keep GPU scheduling in Sequence rather than inheriting CPU batch decisions.
+#[proc_macro]
+pub fn stage(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, arguments| {
+        no_arguments(arguments)?;
+        let analysis = cq_lang_structures::contract::check(source)?;
+        cq_gpu_sequence_core::check_structures(&analysis)?;
+        Ok(source.clone())
+    })
+    .into()
+}
+
 /// Fill unauthored decomposition using the GPU's exported machine and catalog.
 #[proc_macro]
 pub fn plan(input: TokenStream) -> TokenStream {

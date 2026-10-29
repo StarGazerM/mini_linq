@@ -149,7 +149,7 @@ fn h02_minimum_preserves_ties_and_restricts_the_minimum_to_europe() {
             h02::SQL
         );
         let expected = evaluate_sql(&[raw(rows, 3)], &sql).unwrap();
-        for config in ["default", "transfer"] {
+        for &config in h02::CONFIGS {
             let actual = h02::run(&data, config)
                 .into_iter()
                 .map(
@@ -215,7 +215,7 @@ fn h11_threshold_is_strict_and_both_sums_preserve_supplier_identity() {
             h11::SQL
         );
         let expected = evaluate_sql(&[raw(rows, 4)], &sql).unwrap();
-        for config in ["default", "transfer"] {
+        for &config in h11::CONFIGS {
             let actual = h11::run(&data, config)
                 .into_iter()
                 .map(|(part, value)| vec![integer(part), integer(value)])
@@ -303,7 +303,7 @@ fn h13_counts_zero_and_obeys_ordered_comment_pattern() {
         qualified_comments: cq_storage::DenseMembership::from_dense_keys([]),
         dictionaries: cq_load::Dictionaries::default(),
     };
-    for config in ["default", "transfer"] {
+    for &config in h13::CONFIGS {
         assert!(h13::run(&empty, config).is_empty(), "{config}");
     }
 }
@@ -397,7 +397,7 @@ fn h20_preserves_line_identity_date_bounds_and_absent_group_null_semantics() {
             h20::SQL
         );
         let expected = evaluate_sql(&[raw(rows, 6)], &sql).unwrap();
-        for config in ["default", "transfer"] {
+        for &config in h20::CONFIGS {
             let actual = h20::run(&data, config)
                 .into_iter()
                 .map(|(name, address)| vec![code(&name), code(&address)])
@@ -500,7 +500,7 @@ fn h15_grouped_max_preserves_all_maximum_ties_and_quarter_boundaries() {
             h15::SQL
         );
         let expected = evaluate_sql(&[raw(rows, 6)], &sql).unwrap();
-        for config in ["default", "transfer"] {
+        for &config in h15::CONFIGS {
             let actual = h15::run(&data, config)
                 .into_iter()
                 .map(|(supplier, name, address, phone, revenue)| {

@@ -92,6 +92,7 @@ type PartitionedSource<'p> = (
 pub struct Context<'a> {
     pub profile: Option<profile::Profile>,
     pub analysis: &'a structures::Analysis,
+    providers: &'a structures::Structures,
     pub physical_analysis: &'a physical::Analysis,
     pub infos: BTreeMap<String, physical::Row>,
     pub physical: BTreeMap<String, &'a physical::Definition>,
@@ -275,6 +276,38 @@ impl<'a> Context<'a> {
             statements.push(syn::parse_quote!(let #id = { use ::cq_storage::PositionalRows as _; #host.positional_handle() };));
             statements.push(syn::parse_quote!(::cq_storage::require::positional(#id);));
         }
+        // Marker identity is a schema contract, not a spelling convention.
+        // Prove it even when an alias hides a builtin marker's const argument.
+        for read in analysis.reads.values() {
+            let base = symbol_name(&read.origin.base);
+            let host = Self::positional_host(&base);
+            let slot = syn::Index::from(
+                analysis.host_layouts[&base]
+                    .iter()
+                    .position(|column| column == &read.column)
+                    .expect("checked read column"),
+            );
+            let marker = &read.marker;
+            statements.push(
+                syn::parse_quote!(::cq_storage::require::column_slot::<#slot, _, #marker>(#host);),
+            );
+        }
+        for (scan, filters) in &analysis.join_filters {
+            let origin = &analysis.lineage[scan];
+            let host = Self::positional_host(&origin.base);
+            for filter in filters {
+                let key = symbol_name(filter.key.columns.first().expect("checked filter key"));
+                let column = &origin.columns[&key];
+                let slot = syn::Index::from(
+                    analysis.host_layouts[&origin.base]
+                        .iter()
+                        .position(|candidate| candidate == column)
+                        .expect("checked filter column"),
+                );
+                let marker = &filter.marker;
+                statements.push(syn::parse_quote!(::cq_storage::require::column_slot::<#slot, _, #marker>(#host);));
+            }
+        }
         // Formal rule IF-Parameter: Bind each captured relational value once outside all query loops.
         let mut parameters = BTreeMap::new();
         for definition in &module.physical.program.definitions {
@@ -331,6 +364,7 @@ impl<'a> Context<'a> {
             profile: None,
             physical_analysis: &analysis.physical,
             analysis,
+            providers: &module.structures,
             infos: analysis.physical.rows.clone(),
             physical: module
                 .physical
@@ -776,6 +810,7 @@ impl<'a> Context<'a> {
             };
             let build = self.profile_build(&build_name, build);
             statements.push(syn::parse_quote! { let #structure = &#build; });
+            statements.extend(self.provider_guards(name, levels, ty, None, quote!(#structure)));
             let join_filters = self.analysis.join_filters.clone();
             for (scan, index, filter) in join_filters.iter().flat_map(|(scan, filters)| {
                 filters
@@ -881,6 +916,9 @@ impl<'a> Context<'a> {
                     }
                     _ => quote!(::core::option::Option::None),
                 };
+                statements.push(
+                    syn::parse_quote!(::cq_storage::provider_contract::require_keys(#structure);),
+                );
                 let key_ty = &self.infos[name].types[&key];
                 statements.push(syn::parse_quote! {
                     let #id = {
@@ -998,6 +1036,62 @@ impl<'a> Context<'a> {
         self.statements.extend(statements);
     }
 
+    /// Prove each declaration against its actual representation, even when no
+    /// optimization consumes the capability.
+    pub fn provider_guards(
+        &self,
+        name: &str,
+        levels: &[Vec<String>],
+        ty: &syn::Type,
+        reader: Option<&structures::ReaderRef<String>>,
+        provider: TokenStream,
+    ) -> Vec<Stmt> {
+        let mut guards = Vec::new();
+        for entry in &self.providers.entries {
+            if symbol_name(&entry.name) != name {
+                continue;
+            }
+            let keyed = match (&entry.structure, reader) {
+                (structures::Structure::Built { keyed, .. }, None) => keyed,
+                (
+                    structures::Structure::Host {
+                        keyed,
+                        reader: selected,
+                        ..
+                    },
+                    Some(reader),
+                ) if selected.key() == *reader => keyed,
+                _ => continue,
+            };
+            if keyed.ty != *ty
+                || keyed
+                    .levels
+                    .iter()
+                    .map(|level| sorted(&level.columns))
+                    .collect::<Vec<_>>()
+                    != levels
+            {
+                continue;
+            }
+            use structures::ProviderCapability;
+            if keyed.supports(ProviderCapability::Expand) {
+                guards.push(
+                    syn::parse_quote!(::cq_storage::provider_contract::require_expand(#provider);),
+                );
+            } else if keyed.supports(ProviderCapability::Retain) {
+                guards.push(
+                    syn::parse_quote!(::cq_storage::provider_contract::require_retain(#provider);),
+                );
+            }
+            if keyed.supports(ProviderCapability::Keys) {
+                guards.push(
+                    syn::parse_quote!(::cq_storage::provider_contract::require_keys(#provider);),
+                );
+            }
+        }
+        guards
+    }
+
     /// Runtime trait checks required for reads through a particular key.
     pub fn guards(&self, result: &str, columns: &[String]) -> Vec<Ident> {
         let physical = &self.physical_analysis;
@@ -1010,6 +1104,11 @@ impl<'a> Context<'a> {
         for (reader, read) in physical.key_reads.get(result).into_iter().flatten() {
             if read == columns {
                 match &self.physical[reader].operator {
+                    Operator::Probe(_, keyed)
+                        if matches!(keyed.choice, Some(physical::Choice::Smallest(_))) =>
+                    {
+                        require("candidates");
+                    }
                     Operator::Probe(..) => {
                         require(
                             if self
@@ -1023,6 +1122,9 @@ impl<'a> Context<'a> {
                             },
                         );
                     }
+                    Operator::Semi(..) if self.analysis.witnesses.contains_key(reader) => {
+                        require("seek");
+                    }
                     Operator::Semi(..) | Operator::Anti(..) => {
                         if !self
                             .analysis
@@ -1035,6 +1137,13 @@ impl<'a> Context<'a> {
                     _ => unreachable!("key reads come from probes and semijoins"),
                 }
             }
+        }
+        if self
+            .candidate_reads
+            .get(result)
+            .is_some_and(|reads| reads.iter().any(|read| read == columns))
+        {
+            require("candidates");
         }
         for (_, read) in physical.merge_reads.get(result).into_iter().flatten() {
             if read == columns {

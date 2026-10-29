@@ -20,7 +20,7 @@ JOIN nation nc ON nc.n_nationkey = c.c_nationkey
 JOIN nation ns ON ns.n_nationkey = s.s_nationkey
 WHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'
 AND nc.n_name = 'UNITED STATES' AND ps.ps_availqty > 0"#;
-pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "transfer", "le", "le_runs", "generic_smallest", "advised", "hypergraph", "hypergraph_zone"];
+pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", "generic_smallest", "advised", "hypergraph", "hypergraph_zone"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("lineitem", "l_orderkey,l_partkey,l_suppkey"),
     ("partsupp", "ps_partkey,ps_suppkey,ps_availqty"),
@@ -240,6 +240,10 @@ crate::tpch_runtime::configuration!(hypergraph_zone, $, {
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {
         "default" => default::run(data),
+        "radix" => radix::run(data),
+        "radix_retained" => radix_retained::run(data),
+        "built_hash" => built_hash::run(data),
+        "built_radix" => built_radix::run(data),
         "par" => par::run(data),
         "no-reduce" => no_reduce::run(data),
         "transfer" => transfer::run(data),

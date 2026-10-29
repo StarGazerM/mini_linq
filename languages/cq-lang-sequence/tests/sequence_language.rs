@@ -545,7 +545,7 @@ fn deferred_rows_pin_sources_with_shadowed_join_filter_bindings() {
         structures {
             l host scan = Reader [];
             r host scan = Reader [];
-            b = ::cq_storage::HashIndex<'_, _, _> [a];
+            b = ::cq_storage::HashIndex<'_, _, _> [a] supports [keys];
             l join_filter = Filter build b [a] covering selected marker ::cq_load::ColumnAt<0>;
             selected = ::cq_storage::sharded::Sharded<Provider> [a];
             probe host scan = Reader [];

@@ -1,0 +1,23 @@
+retail_h03 / default SF 1
+uninstrumented median 28.673 ms; profile median 33.008 ms; overhead +15.12%
+Stream time: inclusive first-demand-to-exhaustion/drop span; nested times overlap. Build time: initialization wall clock, including deferred initialization. in/inserted count actual input occurrences; inserted includes duplicates. Rows come from a separate counters execution; timings come from the same operator graph with row counters disabled. Both executions are verified exactly against DuckDB.
+QUERY            query [retail_h03] inputs= rows=11620 in=0 inserted=0 t=33.008ms
+  ANSWER           r8.answer [] inputs=r8 rows=11620 in=11620 inserted=0 t=16.280ms
+    PROJECT          r8 [customer_key,order_key] inputs=r7 rows=30519 in=30519 inserted=0 t=15.557ms
+      PROBE            r7 [customer_key] inputs=r6,r2 rows=30519 in=30519 inserted=0 t=0.549ms
+        PROBE            r6 [order_key] inputs=r5,r3 rows=30519 in=30519 inserted=0 t=2.482ms
+          RANGE            r5 [ship_date] inputs=r4 rows=30519 in=6001215 inserted=0 t=15.557ms
+            RENAME           r4 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=15.557ms
+          SEMI             r3 [customer_key] inputs=r1,r2 rows=147126 in=727305 inserted=0 t=12.119ms
+            RANGE            r1 [order_date] inputs=r0 rows=727305 in=1500000 inserted=0 t=12.119ms
+              RENAME           r0 [Orders] inputs= rows=1500000 in=0 inserted=0 t=12.119ms
+            RENAME           r2 [Customer] inputs= rows=30142 in=0 inserted=0 t=0.231ms
+        RENAME           r2 [Customer] inputs= rows=30142 in=0 inserted=0 t=0.231ms (shared)
+  DEDUP            r8.dedup [] inputs=r8 rows=11620 in=30519 inserted=30519 t=16.280ms
+    PROJECT          r8 [customer_key,order_key] inputs=r7 rows=30519 in=30519 inserted=0 t=15.557ms (shared)
+  JOIN_FILTER_BUILD r3.filter.r4.order_key [order_key] inputs=r3.index.order_key rows=147126 in=147126 inserted=147126 t=1.131ms excl=0.506ms
+    INDEX_BUILD      r3.index.order_key [order_key] inputs=r3 rows=147126 in=147126 inserted=147126 t=15.504ms excl=3.385ms
+      SEMI             r3 [customer_key] inputs=r1,r2 rows=147126 in=727305 inserted=0 t=12.119ms (shared)
+  INDEX_BUILD      r2.index.customer_key [customer_key] inputs=r2 rows=30142 in=30142 inserted=30142 t=0.828ms excl=0.597ms
+    RENAME           r2 [Customer] inputs= rows=30142 in=0 inserted=0 t=0.231ms (shared)
+BUILD_EXCLUSIVE_TOTAL t=4.487ms

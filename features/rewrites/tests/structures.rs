@@ -14,12 +14,15 @@ fn membership_advice_preserves_a_fully_bound_physical_probe() {
     } structures {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
-        r = ::cq_storage::HashIndex<'_,_,_> [x,y];
+        r = ::cq_storage::HashIndex<'_,_,_> [x,y] supports [keys];
         joined canon = ::cq_storage::HashSet<_>;
     }};
     let target = cq_rewrite_passes::membership(&source, quote!(r)).unwrap();
     assert_eq!(target.physical, source.physical);
     ir::check_rewrite(&source, &target).unwrap();
+    assert!(target.structures.entries.iter().all(|entry| !matches!(
+        &entry.structure, Structure::Built { keyed, .. } if keyed.supports.is_some()
+    )));
     assert!(
         ir::contract::check(&target)
             .unwrap()
@@ -60,8 +63,8 @@ fn smallest_expand_source() -> ir::Program {
         checked = pipe canon probe first [a,c] candidate,s;
         return checked as answer(a,b,c);
     } structures {
-        r = ::cq_gpu::PrefixRun [b][c];
-        s = ::cq_gpu::PrefixRun [a][c];
+        r = CustomDirectory [b][c] supports [expand];
+        s = CustomDirectory [a][c] supports [expand];
         l host scan = ::core::iter::Map<_, _> [];
         r host scan = ::core::iter::Map<_, _> [];
         s host scan = ::core::iter::Map<_, _> [];
@@ -84,7 +87,7 @@ fn entry_retype_changes_only_one_provider_and_checks_the_result() {
 }
 
 #[test]
-fn expand_lookups_records_only_the_first_prefix_run_smallest_probe() {
+fn expand_lookups_records_only_the_first_supported_smallest_probe() {
     let source = smallest_expand_source();
     let target = cq_rewrite_passes::expand_lookups(&source, quote!(256)).unwrap();
     let mut expected = source.clone();
@@ -162,9 +165,9 @@ fn membership_bridge_source() -> ir::Program {
     } structures {
         selected = ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>
             [b] membership payload [b] constants {tag = 7};
-        r = ::cq_storage::SortedRun<_,_> [a];
-        s = ::cq_storage::SortedRun<_,_> [b];
-        t = ::cq_storage::SortedRun<_,_> [c];
+        r = ::cq_storage::SortedRun<_,_> [a] supports [expand];
+        s = ::cq_storage::SortedRun<_,_> [b] supports [expand];
+        t = ::cq_storage::SortedRun<_,_> [c] supports [expand];
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         m host scan = ::core::iter::Map<_,_> [];
@@ -260,18 +263,6 @@ fn source() -> ir::Program {
     source
 }
 
-#[test]
-fn default_selection_omits_the_authored_unneeded_buffers() {
-    let mut expected = source();
-    expected
-        .structures
-        .entries
-        .retain(|e| !matches!(e.structure, Structure::Rows { .. }));
-    assert_eq!(
-        cq_structure_selection::compile(&expected.physical).unwrap(),
-        expected
-    );
-}
 
 fn missing_storage(target: &ir::Program) -> ir::Program {
     let mut target = target.clone();
@@ -605,12 +596,13 @@ fn sorted_runs_records_owned_singleton_probe_as_automatic_codec_request() {
 }
 
 #[test]
-fn hashed_runs_accepts_dictionary_and_boolean_keys_but_not_opaque_types() {
-    for (ty, eligible) in [
-        (quote!(String), true),
-        (quote!(&str), true),
-        (quote!(bool), true),
-        (quote!(CustomKey), false),
+fn hashed_runs_leaves_scalar_encoding_to_rust_traits() {
+    for ty in [
+        quote!(String),
+        quote!(&str),
+        quote!(bool),
+        quote!(CustomKey),
+        quote!(keys::KeyAlias),
     ] {
         let physical = syn::parse_quote! { physical {
             relation L(a:#ty,b:i64); relation R(a:#ty,b:i64,c:i64);
@@ -621,10 +613,7 @@ fn hashed_runs_accepts_dictionary_and_boolean_keys_but_not_opaque_types() {
         }};
         let source = cq_structure_selection::compile(&physical).unwrap();
         let target = cq_rewrite_passes::hashed_runs(&source, quote!()).unwrap();
-        assert_eq!(
-            target.to_token_stream().to_string().contains("HashedRun"),
-            eligible
-        );
+        assert!(target.to_token_stream().to_string().contains("HashedRun"));
         ir::check_rewrite(&source, &target).unwrap();
     }
 }

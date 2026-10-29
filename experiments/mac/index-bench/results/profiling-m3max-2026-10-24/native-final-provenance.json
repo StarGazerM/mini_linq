@@ -1,0 +1,10 @@
+{
+  "binary_sha256": "c4b5648ead0d8798a4494e4e0c97f5d068a64d6c2074b5271e91026b0524d9e2",
+  "command": [
+    "experiments/mac/index-bench/native/target/release/native-index-bench",
+    "1048576",
+    "262144",
+    "5"
+  ],
+  "construction_note": "Full-index construction is one cold observation, not a repeated median; see alternating sorted-grouping control in ablations.json."
+}

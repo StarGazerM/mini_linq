@@ -100,6 +100,7 @@ fn catalog(machine: &Machine) -> Catalog {
     paths(&machine.root, Vec::new(), &mut levels);
     Catalog {
         providers: vec![ProviderToken {
+            supports: Vec::new(),
             ty: syn::parse_quote!(Index),
             elements: None,
             capabilities: vec![
@@ -220,7 +221,7 @@ fn lookup_rechecks_optional_join_filter_covering_certificates() {
         }
         structures {
             l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
-            r = ::cq_storage::HashIndex<'_, _, _> [a];
+            r = ::cq_storage::HashIndex<'_, _, _> [a] supports [keys];
             s = ::cq_storage::HashIndex<'_, _, _> [a];
             l join_filter = ::cq_storage::AdaptiveKeySet<i32, ::cq_storage::NoDense, 64>
                 build r [a] covering jr marker ::cq_load::ColumnAt<0>;

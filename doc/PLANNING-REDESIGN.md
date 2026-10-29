@@ -223,6 +223,77 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
 
 ## Progress
 
+- P2 remote inventory: reviewed the messages and `git show --stat` for all
+  nine remote-only commits (`9426e27b`, `33e1ffa6`, `eebf5498`, `2698fc8f`,
+  `c142c37d`, `477ef1ba`, `90ecf46d`, `42955248`, `fbd35f5a`). The four
+  historical merge commits carry earlier mainline integration; their inherited
+  changes are reconciled against merge-base `43d22720`, not reapplied over the
+  newer local contract-7 and input-interning changes.
+- P2 Mac/Metal and MCCL: retained the calibration/cost-model experiments,
+  indexing measurements, Metal providers, source-bound compiled H09 example,
+  and upstream MCCL collections. These remain in their isolated
+  `experiments/mac` workspaces rather than Linux workspace membership.
+  Historical Mac measurements are retained as historical evidence, not claimed
+  as measurements of the merged tree. Storage §11 remains authoritative:
+  shared provider laws do not imply identical CUDA/Metal placement or costs.
+- P2 storage/runtime: retained RadixRun/RadixSpline grouped providers and the
+  indexed-column/retained-read dispatch used by source-bound GPU RadixRun H09.
+  Combined their explicit provider support with local `DenseOrdinal`/`KeyCodec`
+  trait dispatch and membership inference; no provider-name recognition is
+  needed to select retained/expand operations. These are the plain grouped
+  index-run capabilities described by storage §8, not a change to scan layout.
+- P2 compiler/contracts: combined explicit `supports [retain, expand, keys]`
+  obligations with typed host reader references, recorded membership/layout
+  facts, and native catalog identity preservation. Catalog selection retains
+  local representation-preserving order while checking live support; packed
+  canon bounds remain runtime codec facts rather than Rust scalar-type
+  inspection. Formal rules and fixtures retain contract 7's opaque Rust premise
+  and remote provider support requirements.
+- P2 workloads/publication: reconcile remote radix configurations and grouped
+  query paths with input-time `StringCode` kernels and interned test fixtures,
+  retaining the remote connected/cycle query orders. Relational operators keep
+  codes; opaque Rust reads and publication retain the registered DECODE boundary.
+  The local decode registry, design anchors, storage rules and expanded-code
+  identity gate remain acceptance obligations for the integrated tree.
+- P2 GPU boundary reconciliation: native input handles require the explicit
+  `Resident` catalog capability before descendant reads; ordinary pipe-host
+  adapters still require retention, and all type/element/read/level checks
+  remain mandatory (`PL-Resident`). The GPU Structures stage validates target
+  support instead of inheriting CPU batching; GPU scheduling stays in Sequence,
+  and unsupported authored stages/witnesses/filters remain rejected. GPU answer
+  origins now follow positive relational AST atoms, never negation or opaque
+  Rust token occurrences; compact-shell and closed-dictionary tests reflect
+  contract-7 normalization and one-time opaque literal evaluation.
+- P2 validation complete: root tests passed 1,173;
+  workload tests passed 3,732; all 119 regression inventory entries passed;
+  seeded oracle fuzz passed 200/200. The 28 public API snapshots pass after
+  reviewing updates to `cq-lang-sequence`, `cq-lang-structures`, `cq-load`,
+  `cq-print`, `cq-sequence-plan` and `cq-storage`; dependency, formal and root
+  formatting gates pass. The expanded gate passes all 46 targets with imported
+  fresh exactness/counter evidence: 729 emitted hunk occurrences have 684 exact
+  reviewed `merge-remote` rules and zero unexplained hunks. CPU timing used five
+  paired observations per target. Seven numerical CIs remain wholly above 1.0:
+  H14/H16/H20 and `aggregate_two_keys`, `correlated_scalar`,
+  `surface_disconnected`, `surface_let_sum`. The accepted static classification
+  is binary code-size/layout effects, not changed default-query work: remote
+  configurations add modules; default expansions add only empty trait witnesses
+  and binding/return wrappers around the same providers. Hot hash/runtime
+  implementations are unchanged, counters agree, and the four library entry
+  instruction sequences agree after relocation normalization. Numerical CIs and
+  the rejected empty-wrapper trial remain recorded without relabeling them as
+  timing passes; no further CPU timing is required for these unchanged defaults.
+  Evidence: `target/p2-gate/cpu/static-classification.json` and `final-report.json`.
+  GPU acceptance passed 192 tests (two optional tests ignored), 52/52 SF1
+  query/mode combinations and all four H05 scale/mode combinations. H05 SF10
+  automatic/advised totals are 68.567/8.603 ms versus 112.1/8.64 ms references.
+  Xalan and Batik each match all 40 SRDatalog relation counts; outer evaluation
+  totals (6.888/11.856 s) include setup/output and are not fixpoint-only clocks.
+  The final core/workload/regression/fuzz/API/dependency/formal/format gate pass
+  succeeded. New provider configurations passed 92 SF1 DuckDB exactness checks
+  across all 29 CPU targets (29 radix, 29 radix-retained, 17 built-hash and
+  17 built-radix), in addition to 29 default checks. Formal inventory is
+  314 rules, 368 conformance records, 22 anchors and 519 decode-site markers.
+
 - Contract 7 documentation cutover: finite-set pure-total denotation, explicit
   `where`, free-variable Rust placement and recorded device representations.
   New rules are `CQ-Where`, `CQ-Closed`, `WF-VO-Rust` and

@@ -55,6 +55,7 @@ struct Retype {
     selector: Selector,
     at: Ident,
     ty: Type,
+    supports: Option<ir::ProviderSupport>,
 }
 
 impl Parse for Retype {
@@ -102,7 +103,17 @@ impl Parse for Retype {
         };
         input.parse::<Token![=>]>()?;
         let ty = input.parse()?;
-        Ok(Self { selector, at, ty })
+        let supports = if input.is_empty() {
+            None
+        } else {
+            Some(input.parse()?)
+        };
+        Ok(Self {
+            selector,
+            at,
+            ty,
+            supports,
+        })
     }
 }
 
@@ -112,6 +123,8 @@ impl Parse for Retype {
 /// Dedup includes both canon and computed-head state; rows selects buffers.
 /// `entry(N)` selects exactly one provider-bearing entry by its zero-based
 /// Structures order, including host adapters, without touching sibling entries.
+/// Retyping replaces support metadata: append `supports [...]` to declare the
+/// replacement's contracts; omitting it clears the previous provider's support.
 pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let analysis = ir::contract::check(source)?;
     let request: Retype = syn::parse2(arguments)?;
@@ -185,9 +198,21 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 },
             };
         if matches {
+            if request.supports.is_some()
+                && !matches!(
+                    entry.structure,
+                    Structure::Built { .. } | Structure::Host { .. }
+                )
+            {
+                return Err(syn::Error::new_spanned(
+                    &request.at,
+                    "provider support requires a keyed representation",
+                ));
+            }
             match &mut entry.structure {
                 Structure::Built { keyed, .. } | Structure::Host { keyed, .. } => {
                     keyed.ty = request.ty.clone();
+                    keyed.supports = request.supports.clone();
                 }
                 Structure::Dedup { ty, .. }
                 | Structure::HeadDedup { ty, .. }

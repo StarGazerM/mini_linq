@@ -1,0 +1,3014 @@
+{
+  "allocation": "bounded process-wide MLX inactive-buffer cache; cache boundary separately timed before construction; no implicit wired-budget changes; pooled is not guaranteed residency and cleared does not guarantee physically cold pages",
+  "cache_limit_restored": true,
+  "completed_configurations": 1,
+  "configuration": {
+    "cache_limit_bytes": 2147483648,
+    "cache_policies": [
+      "pooled"
+    ],
+    "distributions": [
+      "uniform"
+    ],
+    "layout": "balanced",
+    "modes": [
+      "gpu_mccl"
+    ],
+    "relations": [
+      1
+    ],
+    "runs": 9,
+    "sizes_total_rows": [
+      67108864
+    ],
+    "warmups": 3
+  },
+  "configuration_count": 1,
+  "context_setup_ms_excluded": 23.782792,
+  "current_configuration": {
+    "stage": "between configurations"
+  },
+  "faults": "getrusage(RUSAGE_SELF) process-wide cumulative minor/major faults and interval deltas; unavailable reported explicitly",
+  "first_cpu_scan": "first harness full-row read after all constructions; rotate-left-7 and wrapping-add packed key:u32/payload:u32 checksum, includes iteration/checksum, excludes validation; not guaranteed cold CPU caches",
+  "initial_cache_clear_excluded": {
+    "fault_delta": {
+      "available": true,
+      "major": 0,
+      "minor": 1
+    },
+    "faults_after": {
+      "available": true,
+      "major": 4,
+      "minor": 1589
+    },
+    "faults_before": {
+      "available": true,
+      "major": 4,
+      "minor": 1588
+    },
+    "memory_after": {
+      "active_bytes": 0,
+      "cached_bytes": 0,
+      "peak_bytes": 0
+    },
+    "memory_before": {
+      "active_bytes": 0,
+      "cached_bytes": 0,
+      "peak_bytes": 0
+    },
+    "wall_ms": 0.00175
+  },
+  "liveness": "build every relation, scan every relation, validate every relation, then release each output; no output released early",
+  "memory": "MLX process-wide active/cached/peak byte snapshots, peak is cumulative (never reset), not physical residency or DRAM traffic counters",
+  "order": "rotate mode slots by configuration index plus round; first observation per configuration separate, process first invocation marked; warmups recorded but excluded from summaries; predecessors/idle gaps not balanced",
+  "previous_cache_limit_bytes": 130567005798,
+  "results": [
+    {
+      "actual_relation_rows": [
+        67108864
+      ],
+      "cache": "pooled",
+      "configuration_index": 0,
+      "distribution": "uniform",
+      "layout": "balanced",
+      "modes": [
+        {
+          "first_invocation": [
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 4,
+                  "minor": 83522
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 4,
+                  "minor": 83522
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 0,
+                  "peak_bytes": 0
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 0,
+                  "peak_bytes": 0
+                },
+                "wall_ms": 0.000083
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 98.007417,
+                "fault_delta": {
+                  "available": true,
+                  "major": 3,
+                  "minor": 32908
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 116431
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 4,
+                  "minor": 83523
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 0,
+                  "peak_bytes": 0
+                },
+                "wall_ms": 97.978875
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 32770
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 149201
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 116431
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 84.37262500000001
+              },
+              "first_cpu_scan_ms": 84.37262500000001,
+              "order": 0,
+              "phase": "first_invocation",
+              "process_first_invocation_of_mode": true,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 3,
+                      "minor": 32907
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 116430
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 4,
+                      "minor": 83523
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 0,
+                      "peak_bytes": 0
+                    },
+                    "wall_ms": 97.978875
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 32770
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 149201
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 116431
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 84.37262500000001
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 149203
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 149203
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.0037500000000000003
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 1
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 149204
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 149203
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.0037500000000000003
+              },
+              "release_ms": 0.0037500000000000003,
+              "round_including_first_and_warmups": 0,
+              "validation": "passed",
+              "validation_ms_excluded": 36.237958,
+              "wall_ms": 97.978875
+            }
+          ],
+          "mode": "gpu_mccl",
+          "relation_summaries": [
+            {
+              "first_cpu_scan_ms": {
+                "count": 9,
+                "max": 68.712917,
+                "median": 66.67316600000001,
+                "min": 66.561875
+              },
+              "relation": 0,
+              "release_ms": {
+                "count": 9,
+                "max": 0.028166,
+                "median": 0.001916,
+                "min": 0.001167
+              },
+              "wall_ms": {
+                "count": 9,
+                "max": 46.923709,
+                "median": 38.694791,
+                "min": 32.959292
+              }
+            }
+          ],
+          "samples": [
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214759
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214759
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.000042
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 33.773042000000004,
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 1
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214760
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214759
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 33.757541
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214760
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214760
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 66.746042
+              },
+              "first_cpu_scan_ms": 66.746042,
+              "order": 0,
+              "phase": "samples",
+              "process_first_invocation_of_mode": false,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 1
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214760
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214759
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 33.757541
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214760
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214760
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 66.746042
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214760
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214760
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.001917
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214760
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214760
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.001917
+              },
+              "release_ms": 0.001917,
+              "round": 0,
+              "round_including_first_and_warmups": 4,
+              "validation": "passed",
+              "validation_ms_excluded": 36.215167,
+              "wall_ms": 33.757541
+            },
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214762
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214762
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.000042
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 40.874708000000005,
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214762
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214762
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 40.859708000000005
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214762
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214762
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 66.83666600000001
+              },
+              "first_cpu_scan_ms": 66.83666600000001,
+              "order": 0,
+              "phase": "samples",
+              "process_first_invocation_of_mode": false,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214762
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214762
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 40.859708000000005
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214762
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214762
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 66.83666600000001
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214762
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214762
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.001916
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214762
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214762
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.001916
+              },
+              "release_ms": 0.001916,
+              "round": 1,
+              "round_including_first_and_warmups": 5,
+              "validation": "passed",
+              "validation_ms_excluded": 36.097416,
+              "wall_ms": 40.859708000000005
+            },
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214765
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214765
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.0
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 39.405042,
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214765
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214765
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 39.390084
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214765
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214765
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 66.586166
+              },
+              "first_cpu_scan_ms": 66.586166,
+              "order": 0,
+              "phase": "samples",
+              "process_first_invocation_of_mode": false,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214765
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214765
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 39.390084
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214765
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214765
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 66.586166
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214765
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214765
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.001209
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 1
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214766
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214765
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.001209
+              },
+              "release_ms": 0.001209,
+              "round": 2,
+              "round_including_first_and_warmups": 6,
+              "validation": "passed",
+              "validation_ms_excluded": 36.142334,
+              "wall_ms": 39.390084
+            },
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214767
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214767
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.0
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 46.938959000000004,
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214767
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214767
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 46.923709
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214767
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214767
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 66.616625
+              },
+              "first_cpu_scan_ms": 66.616625,
+              "order": 0,
+              "phase": "samples",
+              "process_first_invocation_of_mode": false,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214767
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214767
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 46.923709
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214767
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214767
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 66.616625
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214767
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214767
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.0013340000000000001
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214767
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214767
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.0013340000000000001
+              },
+              "release_ms": 0.0013340000000000001,
+              "round": 3,
+              "round_including_first_and_warmups": 7,
+              "validation": "passed",
+              "validation_ms_excluded": 36.178042,
+              "wall_ms": 46.923709
+            },
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214769
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214769
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.0
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 39.511958,
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214769
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214769
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 39.496
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214769
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214769
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 66.7545
+              },
+              "first_cpu_scan_ms": 66.7545,
+              "order": 0,
+              "phase": "samples",
+              "process_first_invocation_of_mode": false,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214769
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214769
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 39.496
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214769
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214769
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 66.7545
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 2
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214771
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214769
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.028166
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 2
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214771
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214769
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.028166
+              },
+              "release_ms": 0.028166,
+              "round": 4,
+              "round_including_first_and_warmups": 8,
+              "validation": "passed",
+              "validation_ms_excluded": 39.455834,
+              "wall_ms": 39.496
+            },
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214775
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214775
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.0
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 38.713083000000005,
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 1
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214776
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214775
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 38.694791
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214776
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214776
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 66.65520799999999
+              },
+              "first_cpu_scan_ms": 66.65520799999999,
+              "order": 0,
+              "phase": "samples",
+              "process_first_invocation_of_mode": false,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 1
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214776
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214775
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 38.694791
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214776
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214776
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 66.65520799999999
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214776
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214776
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.002209
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214776
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214776
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.002209
+              },
+              "release_ms": 0.002209,
+              "round": 5,
+              "round_including_first_and_warmups": 9,
+              "validation": "passed",
+              "validation_ms_excluded": 36.138375,
+              "wall_ms": 38.694791
+            },
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214778
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214778
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.0
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 35.202459,
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214778
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214778
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 35.187833000000005
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214778
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214778
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 66.67316600000001
+              },
+              "first_cpu_scan_ms": 66.67316600000001,
+              "order": 0,
+              "phase": "samples",
+              "process_first_invocation_of_mode": false,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214778
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214778
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 35.187833000000005
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214778
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214778
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 66.67316600000001
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214778
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214778
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.001458
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214778
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214778
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.001458
+              },
+              "release_ms": 0.001458,
+              "round": 6,
+              "round_including_first_and_warmups": 10,
+              "validation": "passed",
+              "validation_ms_excluded": 36.151333,
+              "wall_ms": 35.187833000000005
+            },
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214779
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214779
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.0
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 32.973875,
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214779
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214779
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 32.959292
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214779
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214779
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 66.561875
+              },
+              "first_cpu_scan_ms": 66.561875,
+              "order": 0,
+              "phase": "samples",
+              "process_first_invocation_of_mode": false,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214779
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214779
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 32.959292
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214779
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214779
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 66.561875
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214779
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214779
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.001167
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 1
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214780
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214779
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.001167
+              },
+              "release_ms": 0.001167,
+              "round": 7,
+              "round_including_first_and_warmups": 11,
+              "validation": "passed",
+              "validation_ms_excluded": 36.115208,
+              "wall_ms": 32.959292
+            },
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214781
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214781
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.000041
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 33.588833,
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214781
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214781
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 33.580625000000005
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214781
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214781
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 68.712917
+              },
+              "first_cpu_scan_ms": 68.712917,
+              "order": 0,
+              "phase": "samples",
+              "process_first_invocation_of_mode": false,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214781
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214781
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 33.580625000000005
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214781
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214781
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 68.712917
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214781
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214781
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.003625
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214781
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214781
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.003625
+              },
+              "release_ms": 0.003625,
+              "round": 8,
+              "round_including_first_and_warmups": 12,
+              "validation": "passed",
+              "validation_ms_excluded": 36.128875,
+              "wall_ms": 33.580625000000005
+            }
+          ],
+          "summary": {
+            "first_cpu_scan_ms": {
+              "count": 9,
+              "max": 68.712917,
+              "median": 66.67316600000001,
+              "min": 66.561875
+            },
+            "release_ms": {
+              "count": 9,
+              "max": 0.028166,
+              "median": 0.001916,
+              "min": 0.001167
+            },
+            "wall_ms": {
+              "count": 9,
+              "max": 46.923709,
+              "median": 38.694791,
+              "min": 32.959292
+            }
+          },
+          "warmup_samples": [
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 149206
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 149206
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.0
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 53.786916,
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 32778
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 181985
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 149207
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 53.769375000000004
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 181985
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 181985
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 66.590875
+              },
+              "first_cpu_scan_ms": 66.590875,
+              "order": 0,
+              "phase": "warmup_samples",
+              "process_first_invocation_of_mode": false,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 32778
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 181985
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 149207
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 53.769375000000004
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 181985
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 181985
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 66.590875
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 181985
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 181985
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.001791
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 1
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 181986
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 181985
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.001791
+              },
+              "release_ms": 0.001791,
+              "round_including_first_and_warmups": 1,
+              "validation": "passed",
+              "validation_ms_excluded": 36.217625000000005,
+              "wall_ms": 53.769375000000004
+            },
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 181987
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 181987
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.0
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 59.031082999999995,
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 32768
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214755
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 181987
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 59.015416
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214755
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214755
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 66.695958
+              },
+              "first_cpu_scan_ms": 66.695958,
+              "order": 0,
+              "phase": "warmup_samples",
+              "process_first_invocation_of_mode": false,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 32768
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214755
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 181987
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 59.015416
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214755
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214755
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 66.695958
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214755
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214755
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.002041
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214755
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214755
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.002041
+              },
+              "release_ms": 0.002041,
+              "round_including_first_and_warmups": 2,
+              "validation": "passed",
+              "validation_ms_excluded": 36.053708,
+              "wall_ms": 59.015416
+            },
+            {
+              "cache_boundary": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214757
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214757
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.000042
+              },
+              "cache_boundary_operation": "retain inactive MLX cache (no operation)",
+              "construction": {
+                "batch_wall_ms_including_diagnostics": 33.29025,
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214757
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214757
+                },
+                "memory_after": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 33.275875000000006
+              },
+              "first_cpu_scan": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214757
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214757
+                },
+                "memory_after": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 1644232740,
+                  "cached_bytes": 0,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 66.62049999999999
+              },
+              "first_cpu_scan_ms": 66.62049999999999,
+              "order": 0,
+              "phase": "warmup_samples",
+              "process_first_invocation_of_mode": false,
+              "relations": [
+                {
+                  "construction": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214757
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214757
+                    },
+                    "memory_after": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 33.275875000000006
+                  },
+                  "first_cpu_scan": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214757
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214757
+                    },
+                    "memory_after": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 1644232740,
+                      "cached_bytes": 0,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 66.62049999999999
+                  },
+                  "first_cpu_scan_checksum": 964162448441545621,
+                  "profile": "uniform",
+                  "relation": 0,
+                  "release": {
+                    "fault_delta": {
+                      "available": true,
+                      "major": 0,
+                      "minor": 0
+                    },
+                    "faults_after": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214757
+                    },
+                    "faults_before": {
+                      "available": true,
+                      "major": 7,
+                      "minor": 214757
+                    },
+                    "memory_after": {
+                      "active_bytes": 0,
+                      "cached_bytes": 1644232740,
+                      "peak_bytes": 1644232740
+                    },
+                    "memory_before": {
+                      "active_bytes": 536903680,
+                      "cached_bytes": 1107329060,
+                      "peak_bytes": 1644232740
+                    },
+                    "wall_ms": 0.001708
+                  },
+                  "rows": 67108864,
+                  "validation": "passed full stable rows and representative directory-backed lookup/contains"
+                }
+              ],
+              "release": {
+                "fault_delta": {
+                  "available": true,
+                  "major": 0,
+                  "minor": 0
+                },
+                "faults_after": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214757
+                },
+                "faults_before": {
+                  "available": true,
+                  "major": 7,
+                  "minor": 214757
+                },
+                "memory_after": {
+                  "active_bytes": 0,
+                  "cached_bytes": 1644232740,
+                  "peak_bytes": 1644232740
+                },
+                "memory_before": {
+                  "active_bytes": 536903680,
+                  "cached_bytes": 1107329060,
+                  "peak_bytes": 1644232740
+                },
+                "wall_ms": 0.001708
+              },
+              "release_ms": 0.001708,
+              "round_including_first_and_warmups": 3,
+              "validation": "passed",
+              "validation_ms_excluded": 36.104541,
+              "wall_ms": 33.275875000000006
+            }
+          ]
+        }
+      ],
+      "relation_count": 1,
+      "relations": [
+        {
+          "expected_checksum": 964162448441545621,
+          "key_cardinality": 67108864,
+          "key_max": 4294967291,
+          "key_min": 137,
+          "lookup_probe_count": 8216,
+          "payload": "source row-ID local to this relation",
+          "profile": "uniform",
+          "provenance": {
+            "fixture": "generic deterministic synthetic",
+            "formula": "xorshift32 full-width state"
+          },
+          "relation": 0,
+          "relation_shaped": false,
+          "rows": 67108864,
+          "seed": 568171829,
+          "source_bytes": 536870912,
+          "source_rotation_rows": 0,
+          "synthetic_not_dbgen": true,
+          "varying_key_bit_mask": 4294967295,
+          "varying_key_byte_count": 4,
+          "varying_key_bytes_lsb_zero_based": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      ],
+      "source_bytes": 536870912,
+      "status": "complete",
+      "total_rows": 67108864
+    }
+  ],
+  "row_semantics": "--sizes is TOTAL rows across independent indexed relations, not rows per relation; balanced quotient/remainder or floor(80% total) in relation zero and balanced remainder",
+  "schema": "mccl.index-lifecycle.v2",
+  "source_bytes": "total_rows*8, modeled source size only, not measured memory traffic",
+  "source_semantics": "deterministic relation-specific seeds; local source row-ID payloads; synthetic formula projections, not dbgen or TPC-H measurements; all modes receive identical source rows",
+  "status": "complete",
+  "timing": "CPU wall times around real public completed constructors only; aggregate wall_ms sums per-relation constructor timers; construction batch wall includes diagnostic/loop overhead; scan/release aggregates sum individual timers; fault spans can include diagnostic overhead; no GPU timestamps",
+  "validation": "linear full stable sorted row equality; exact cardinality and varying bytes derived once from reference; binary-search oracle for representative present/missing probes and all radix-12 bucket boundaries via public lookup/contains; CQ does not expose a raw directory slice"
+}

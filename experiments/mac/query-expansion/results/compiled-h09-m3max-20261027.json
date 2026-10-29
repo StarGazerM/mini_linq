@@ -1,0 +1,984 @@
+{
+  "architecture": "aarch64",
+  "args": [
+    "experiments/mac/query-expansion/target/release/compiled_h09",
+    "--sizes",
+    "65539,1048579,4194307",
+    "--runs",
+    "7",
+    "--out",
+    "experiments/mac/query-expansion/results/compiled-h09-m3max-20261027.json"
+  ],
+  "context_setup_ms_excluded": 45.698207999999994,
+  "cpu": "native RadixRun<u32,u32> row-ID index over the same retained i64 source; explicit domain validation included",
+  "gpu": "GPU grouping/parallel spline RadixRun, source-bound original row IDs; same concrete host and compiled query function",
+  "limits": "synthetic data, not dbgen; warmed device/allocator and randomized CPU hash state; fresh source does not imply cold device; no automatic placement or CPU/GPU overlap",
+  "order": "alternating CPU-first/GPU-first pairs; first_in_pair records actual order; first contains each provider's first observation",
+  "query": "unchanged authored H09 CQ compiled through normal positional selection, Sequence and pull; source-bound Lineitem host at declaration slot1; all remaining operators identical",
+  "results": [
+    {
+      "answers": 16372,
+      "boundary": "build_query",
+      "cpu": {
+        "build_ms": 1.256667,
+        "ingestion_ms": 0.0,
+        "query_ms": 3.1685,
+        "total_ms": 4.422042
+      },
+      "cpu_samples": [
+        {
+          "build_ms": 1.31,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.264875,
+          "round": 2,
+          "total_ms": 4.574875
+        },
+        {
+          "build_ms": 1.256667,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.1567079999999996,
+          "round": 3,
+          "total_ms": 4.413459
+        },
+        {
+          "build_ms": 1.245959,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.104875,
+          "round": 4,
+          "total_ms": 4.350874999999999
+        },
+        {
+          "build_ms": 1.268542,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.302417,
+          "round": 5,
+          "total_ms": 4.571000000000001
+        },
+        {
+          "build_ms": 1.263875,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.1685,
+          "round": 6,
+          "total_ms": 4.4325
+        },
+        {
+          "build_ms": 1.241334,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.105333,
+          "round": 7,
+          "total_ms": 4.3467080000000005
+        },
+        {
+          "build_ms": 1.236,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.185959,
+          "round": 8,
+          "total_ms": 4.422042
+        }
+      ],
+      "first": [
+        {
+          "provider": "cpu",
+          "sample": {
+            "build_ms": 1.535209,
+            "first_in_pair": true,
+            "ingestion_ms": 0.0,
+            "query_ms": 3.725542,
+            "round": 0,
+            "total_ms": 5.260792
+          }
+        },
+        {
+          "provider": "gpu",
+          "sample": {
+            "build_ms": 1.844375,
+            "first_in_pair": false,
+            "ingestion_ms": 0.0,
+            "query_ms": 3.83225,
+            "round": 0,
+            "total_ms": 5.67675
+          }
+        }
+      ],
+      "gpu": {
+        "build_ms": 1.2972920000000001,
+        "ingestion_ms": 0.0,
+        "query_ms": 3.4125,
+        "total_ms": 4.7187920000000005
+      },
+      "gpu_samples": [
+        {
+          "build_ms": 1.271625,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.396375,
+          "round": 2,
+          "total_ms": 4.668125000000001
+        },
+        {
+          "build_ms": 1.2972920000000001,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.4645420000000002,
+          "round": 3,
+          "total_ms": 4.761959
+        },
+        {
+          "build_ms": 1.392709,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.444375,
+          "round": 4,
+          "total_ms": 4.837167
+        },
+        {
+          "build_ms": 1.289042,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.429667,
+          "round": 5,
+          "total_ms": 4.7187920000000005
+        },
+        {
+          "build_ms": 1.056875,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.3945,
+          "round": 6,
+          "total_ms": 4.451499999999999
+        },
+        {
+          "build_ms": 1.306834,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.4125,
+          "round": 7,
+          "total_ms": 4.719416
+        },
+        {
+          "build_ms": 1.349958,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 3.363791,
+          "round": 8,
+          "total_ms": 4.713833
+        }
+      ],
+      "rows": 65539,
+      "shared_preparation_ms": 0.15100000000000002,
+      "source_bytes": 1572936,
+      "source_ingestion_ms": 0.15087499999999998
+    },
+    {
+      "answers": 16372,
+      "boundary": "ingest_build_query",
+      "cpu": {
+        "build_ms": 1.242875,
+        "ingestion_ms": 0.029666,
+        "query_ms": 3.147208,
+        "total_ms": 4.407833
+      },
+      "cpu_samples": [
+        {
+          "build_ms": 1.228208,
+          "first_in_pair": true,
+          "ingestion_ms": 0.030125,
+          "query_ms": 3.1324579999999997,
+          "round": 2,
+          "total_ms": 4.390916
+        },
+        {
+          "build_ms": 1.226041,
+          "first_in_pair": false,
+          "ingestion_ms": 0.029542,
+          "query_ms": 3.1332920000000004,
+          "round": 3,
+          "total_ms": 4.388917
+        },
+        {
+          "build_ms": 1.263791,
+          "first_in_pair": true,
+          "ingestion_ms": 0.029334,
+          "query_ms": 3.160625,
+          "round": 4,
+          "total_ms": 4.4538329999999995
+        },
+        {
+          "build_ms": 1.293125,
+          "first_in_pair": false,
+          "ingestion_ms": 0.029917,
+          "query_ms": 3.1793329999999997,
+          "round": 5,
+          "total_ms": 4.502542
+        },
+        {
+          "build_ms": 1.242875,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0295,
+          "query_ms": 3.120416,
+          "round": 6,
+          "total_ms": 4.3928329999999995
+        },
+        {
+          "build_ms": 1.312208,
+          "first_in_pair": false,
+          "ingestion_ms": 0.029666,
+          "query_ms": 3.2793750000000004,
+          "round": 7,
+          "total_ms": 4.621333
+        },
+        {
+          "build_ms": 1.23025,
+          "first_in_pair": true,
+          "ingestion_ms": 0.030292,
+          "query_ms": 3.147208,
+          "round": 8,
+          "total_ms": 4.407833
+        }
+      ],
+      "first": [
+        {
+          "provider": "cpu",
+          "sample": {
+            "build_ms": 1.252209,
+            "first_in_pair": true,
+            "ingestion_ms": 0.149334,
+            "query_ms": 3.2499170000000004,
+            "round": 0,
+            "total_ms": 4.651625
+          }
+        },
+        {
+          "provider": "gpu",
+          "sample": {
+            "build_ms": 1.33625,
+            "first_in_pair": false,
+            "ingestion_ms": 0.030416000000000002,
+            "query_ms": 3.3093749999999997,
+            "round": 0,
+            "total_ms": 4.676166
+          }
+        }
+      ],
+      "gpu": {
+        "build_ms": 1.278875,
+        "ingestion_ms": 0.029667,
+        "query_ms": 3.3585,
+        "total_ms": 4.670750000000001
+      },
+      "gpu_samples": [
+        {
+          "build_ms": 1.317375,
+          "first_in_pair": false,
+          "ingestion_ms": 0.030291,
+          "query_ms": 3.3899999999999997,
+          "round": 2,
+          "total_ms": 4.7377080000000005
+        },
+        {
+          "build_ms": 1.273542,
+          "first_in_pair": true,
+          "ingestion_ms": 0.029542,
+          "query_ms": 3.404667,
+          "round": 3,
+          "total_ms": 4.707959000000001
+        },
+        {
+          "build_ms": 1.267708,
+          "first_in_pair": false,
+          "ingestion_ms": 0.029583,
+          "query_ms": 3.3291660000000003,
+          "round": 4,
+          "total_ms": 4.626583
+        },
+        {
+          "build_ms": 1.278875,
+          "first_in_pair": true,
+          "ingestion_ms": 0.029708000000000002,
+          "query_ms": 3.3531250000000004,
+          "round": 5,
+          "total_ms": 4.661791999999999
+        },
+        {
+          "build_ms": 1.3162079999999998,
+          "first_in_pair": false,
+          "ingestion_ms": 0.030875,
+          "query_ms": 3.387,
+          "round": 6,
+          "total_ms": 4.734249999999999
+        },
+        {
+          "build_ms": 1.25725,
+          "first_in_pair": true,
+          "ingestion_ms": 0.029292,
+          "query_ms": 3.3585,
+          "round": 7,
+          "total_ms": 4.645125
+        },
+        {
+          "build_ms": 1.2875409999999998,
+          "first_in_pair": false,
+          "ingestion_ms": 0.029667,
+          "query_ms": 3.353375,
+          "round": 8,
+          "total_ms": 4.670750000000001
+        }
+      ],
+      "rows": 65539,
+      "shared_preparation_ms": 0.15100000000000002,
+      "source_bytes": 1572936,
+      "source_ingestion_ms": 0.15087499999999998
+    },
+    {
+      "answers": 261754,
+      "boundary": "build_query",
+      "cpu": {
+        "build_ms": 24.372874999999997,
+        "ingestion_ms": 0.0,
+        "query_ms": 108.1355,
+        "total_ms": 132.50841699999998
+      },
+      "cpu_samples": [
+        {
+          "build_ms": 24.372874999999997,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 108.1355,
+          "round": 2,
+          "total_ms": 132.50841699999998
+        },
+        {
+          "build_ms": 24.664749999999998,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 107.385541,
+          "round": 3,
+          "total_ms": 132.05045800000002
+        },
+        {
+          "build_ms": 24.110833000000003,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 108.441417,
+          "round": 4,
+          "total_ms": 132.552292
+        },
+        {
+          "build_ms": 24.504583,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 108.52445900000001,
+          "round": 5,
+          "total_ms": 133.02904199999998
+        },
+        {
+          "build_ms": 24.301792,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 107.517958,
+          "round": 6,
+          "total_ms": 131.819834
+        },
+        {
+          "build_ms": 24.388707999999998,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 107.942458,
+          "round": 7,
+          "total_ms": 132.331166
+        },
+        {
+          "build_ms": 24.284958,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 108.487083,
+          "round": 8,
+          "total_ms": 132.772125
+        }
+      ],
+      "first": [
+        {
+          "provider": "cpu",
+          "sample": {
+            "build_ms": 24.733458,
+            "first_in_pair": true,
+            "ingestion_ms": 0.0,
+            "query_ms": 109.577167,
+            "round": 0,
+            "total_ms": 134.310709
+          }
+        },
+        {
+          "provider": "gpu",
+          "sample": {
+            "build_ms": 3.62375,
+            "first_in_pair": false,
+            "ingestion_ms": 0.0,
+            "query_ms": 107.138041,
+            "round": 0,
+            "total_ms": 110.76187499999999
+          }
+        }
+      ],
+      "gpu": {
+        "build_ms": 2.5887919999999998,
+        "ingestion_ms": 0.0,
+        "query_ms": 107.12816699999999,
+        "total_ms": 109.687542
+      },
+      "gpu_samples": [
+        {
+          "build_ms": 2.607042,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 109.120708,
+          "round": 2,
+          "total_ms": 111.727833
+        },
+        {
+          "build_ms": 1.633708,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 105.970084,
+          "round": 3,
+          "total_ms": 107.604
+        },
+        {
+          "build_ms": 2.569667,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 107.662875,
+          "round": 4,
+          "total_ms": 110.23266600000001
+        },
+        {
+          "build_ms": 2.641625,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 106.38275,
+          "round": 5,
+          "total_ms": 109.0245
+        },
+        {
+          "build_ms": 2.559208,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 107.12816699999999,
+          "round": 6,
+          "total_ms": 109.687542
+        },
+        {
+          "build_ms": 2.6345,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 106.04070899999999,
+          "round": 7,
+          "total_ms": 108.67525
+        },
+        {
+          "build_ms": 2.5887919999999998,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 107.583292,
+          "round": 8,
+          "total_ms": 110.172167
+        }
+      ],
+      "rows": 1048579,
+      "shared_preparation_ms": 1.653917,
+      "source_bytes": 25165896,
+      "source_ingestion_ms": 1.653458
+    },
+    {
+      "answers": 261754,
+      "boundary": "ingest_build_query",
+      "cpu": {
+        "build_ms": 24.475209,
+        "ingestion_ms": 0.5990840000000001,
+        "query_ms": 108.086792,
+        "total_ms": 133.078792
+      },
+      "cpu_samples": [
+        {
+          "build_ms": 24.393083999999998,
+          "first_in_pair": true,
+          "ingestion_ms": 0.6082909999999999,
+          "query_ms": 107.582916,
+          "round": 2,
+          "total_ms": 132.584333
+        },
+        {
+          "build_ms": 24.392833999999997,
+          "first_in_pair": false,
+          "ingestion_ms": 0.5990840000000001,
+          "query_ms": 108.086792,
+          "round": 3,
+          "total_ms": 133.078792
+        },
+        {
+          "build_ms": 24.519959,
+          "first_in_pair": true,
+          "ingestion_ms": 0.590916,
+          "query_ms": 108.642541,
+          "round": 4,
+          "total_ms": 133.753458
+        },
+        {
+          "build_ms": 25.583083,
+          "first_in_pair": false,
+          "ingestion_ms": 0.6186670000000001,
+          "query_ms": 115.23520900000001,
+          "round": 5,
+          "total_ms": 141.436959
+        },
+        {
+          "build_ms": 24.475209,
+          "first_in_pair": true,
+          "ingestion_ms": 0.5945,
+          "query_ms": 107.9815,
+          "round": 6,
+          "total_ms": 133.051291
+        },
+        {
+          "build_ms": 24.487541,
+          "first_in_pair": false,
+          "ingestion_ms": 0.600417,
+          "query_ms": 109.173959,
+          "round": 7,
+          "total_ms": 134.261959
+        },
+        {
+          "build_ms": 24.415542,
+          "first_in_pair": true,
+          "ingestion_ms": 0.5966250000000001,
+          "query_ms": 106.619791,
+          "round": 8,
+          "total_ms": 131.63208300000002
+        }
+      ],
+      "first": [
+        {
+          "provider": "cpu",
+          "sample": {
+            "build_ms": 24.393291,
+            "first_in_pair": true,
+            "ingestion_ms": 1.6122079999999999,
+            "query_ms": 108.576375,
+            "round": 0,
+            "total_ms": 134.58208299999998
+          }
+        },
+        {
+          "provider": "gpu",
+          "sample": {
+            "build_ms": 2.718125,
+            "first_in_pair": false,
+            "ingestion_ms": 0.604958,
+            "query_ms": 106.892958,
+            "round": 0,
+            "total_ms": 110.216125
+          }
+        }
+      ],
+      "gpu": {
+        "build_ms": 2.6067500000000003,
+        "ingestion_ms": 0.5995,
+        "query_ms": 106.338583,
+        "total_ms": 109.54495899999999
+      },
+      "gpu_samples": [
+        {
+          "build_ms": 2.5525830000000003,
+          "first_in_pair": false,
+          "ingestion_ms": 0.585541,
+          "query_ms": 105.876083,
+          "round": 2,
+          "total_ms": 109.014291
+        },
+        {
+          "build_ms": 2.626833,
+          "first_in_pair": true,
+          "ingestion_ms": 0.584125,
+          "query_ms": 105.69175,
+          "round": 3,
+          "total_ms": 108.902834
+        },
+        {
+          "build_ms": 2.6067500000000003,
+          "first_in_pair": false,
+          "ingestion_ms": 0.5995,
+          "query_ms": 106.338583,
+          "round": 4,
+          "total_ms": 109.54495899999999
+        },
+        {
+          "build_ms": 2.531333,
+          "first_in_pair": true,
+          "ingestion_ms": 0.602209,
+          "query_ms": 108.639375,
+          "round": 5,
+          "total_ms": 111.773042
+        },
+        {
+          "build_ms": 2.5886669999999996,
+          "first_in_pair": false,
+          "ingestion_ms": 0.6045,
+          "query_ms": 105.811875,
+          "round": 6,
+          "total_ms": 109.005167
+        },
+        {
+          "build_ms": 2.63225,
+          "first_in_pair": true,
+          "ingestion_ms": 0.596959,
+          "query_ms": 106.966792,
+          "round": 7,
+          "total_ms": 110.196084
+        },
+        {
+          "build_ms": 2.6375420000000003,
+          "first_in_pair": false,
+          "ingestion_ms": 0.602375,
+          "query_ms": 107.290292,
+          "round": 8,
+          "total_ms": 110.530416
+        }
+      ],
+      "rows": 1048579,
+      "shared_preparation_ms": 1.653917,
+      "source_bytes": 25165896,
+      "source_ingestion_ms": 1.653458
+    },
+    {
+      "answers": 1046995,
+      "boundary": "build_query",
+      "cpu": {
+        "build_ms": 117.909125,
+        "ingestion_ms": 0.0,
+        "query_ms": 601.716416,
+        "total_ms": 719.633208
+      },
+      "cpu_samples": [
+        {
+          "build_ms": 118.144917,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 618.8145000000001,
+          "round": 2,
+          "total_ms": 736.9594999999999
+        },
+        {
+          "build_ms": 117.909125,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 599.704334,
+          "round": 3,
+          "total_ms": 717.6135
+        },
+        {
+          "build_ms": 117.862792,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 597.445833,
+          "round": 4,
+          "total_ms": 715.3086669999999
+        },
+        {
+          "build_ms": 117.916792,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 601.716416,
+          "round": 5,
+          "total_ms": 719.633208
+        },
+        {
+          "build_ms": 119.21841699999999,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 604.030291,
+          "round": 6,
+          "total_ms": 723.24875
+        },
+        {
+          "build_ms": 117.553417,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 604.716542,
+          "round": 7,
+          "total_ms": 722.27
+        },
+        {
+          "build_ms": 117.543833,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 599.653209,
+          "round": 8,
+          "total_ms": 717.197084
+        }
+      ],
+      "first": [
+        {
+          "provider": "cpu",
+          "sample": {
+            "build_ms": 118.317958,
+            "first_in_pair": true,
+            "ingestion_ms": 0.0,
+            "query_ms": 617.380333,
+            "round": 0,
+            "total_ms": 735.6984170000001
+          }
+        },
+        {
+          "provider": "gpu",
+          "sample": {
+            "build_ms": 11.937334000000002,
+            "first_in_pair": false,
+            "ingestion_ms": 0.0,
+            "query_ms": 594.7581250000001,
+            "round": 0,
+            "total_ms": 606.695584
+          }
+        }
+      ],
+      "gpu": {
+        "build_ms": 9.936375,
+        "ingestion_ms": 0.0,
+        "query_ms": 594.153667,
+        "total_ms": 601.6525419999999
+      },
+      "gpu_samples": [
+        {
+          "build_ms": 9.936375,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 595.9075,
+          "round": 2,
+          "total_ms": 605.843959
+        },
+        {
+          "build_ms": 4.629416,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 598.073583,
+          "round": 3,
+          "total_ms": 602.703125
+        },
+        {
+          "build_ms": 10.227459,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 602.0359589999999,
+          "round": 4,
+          "total_ms": 612.263459
+        },
+        {
+          "build_ms": 6.329000000000001,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 593.65675,
+          "round": 5,
+          "total_ms": 599.9857910000001
+        },
+        {
+          "build_ms": 9.96575,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 589.9628329999999,
+          "round": 6,
+          "total_ms": 599.928708
+        },
+        {
+          "build_ms": 6.104375,
+          "first_in_pair": true,
+          "ingestion_ms": 0.0,
+          "query_ms": 594.153667,
+          "round": 7,
+          "total_ms": 600.258125
+        },
+        {
+          "build_ms": 10.473292,
+          "first_in_pair": false,
+          "ingestion_ms": 0.0,
+          "query_ms": 591.179167,
+          "round": 8,
+          "total_ms": 601.6525419999999
+        }
+      ],
+      "rows": 4194307,
+      "shared_preparation_ms": 6.115166,
+      "source_bytes": 100663368,
+      "source_ingestion_ms": 6.114666000000001
+    },
+    {
+      "answers": 1046995,
+      "boundary": "ingest_build_query",
+      "cpu": {
+        "build_ms": 117.485917,
+        "ingestion_ms": 2.5080839999999998,
+        "query_ms": 601.6689170000001,
+        "total_ms": 722.3515
+      },
+      "cpu_samples": [
+        {
+          "build_ms": 117.733916,
+          "first_in_pair": true,
+          "ingestion_ms": 2.6203749999999997,
+          "query_ms": 607.716459,
+          "round": 2,
+          "total_ms": 728.070833
+        },
+        {
+          "build_ms": 117.485917,
+          "first_in_pair": false,
+          "ingestion_ms": 2.4750829999999997,
+          "query_ms": 602.390416,
+          "round": 3,
+          "total_ms": 722.3515
+        },
+        {
+          "build_ms": 117.38425,
+          "first_in_pair": true,
+          "ingestion_ms": 2.494208,
+          "query_ms": 591.861416,
+          "round": 4,
+          "total_ms": 711.739958
+        },
+        {
+          "build_ms": 120.274041,
+          "first_in_pair": false,
+          "ingestion_ms": 2.5080839999999998,
+          "query_ms": 605.417375,
+          "round": 5,
+          "total_ms": 728.199625
+        },
+        {
+          "build_ms": 116.99374999999999,
+          "first_in_pair": true,
+          "ingestion_ms": 2.616334,
+          "query_ms": 598.213667,
+          "round": 6,
+          "total_ms": 717.823875
+        },
+        {
+          "build_ms": 117.230709,
+          "first_in_pair": false,
+          "ingestion_ms": 2.5609159999999997,
+          "query_ms": 597.4568340000001,
+          "round": 7,
+          "total_ms": 717.2484999999999
+        },
+        {
+          "build_ms": 120.27695800000001,
+          "first_in_pair": true,
+          "ingestion_ms": 2.482208,
+          "query_ms": 601.6689170000001,
+          "round": 8,
+          "total_ms": 724.428125
+        }
+      ],
+      "first": [
+        {
+          "provider": "cpu",
+          "sample": {
+            "build_ms": 117.727,
+            "first_in_pair": true,
+            "ingestion_ms": 6.124625,
+            "query_ms": 610.9396660000001,
+            "round": 0,
+            "total_ms": 734.791458
+          }
+        },
+        {
+          "provider": "gpu",
+          "sample": {
+            "build_ms": 9.718667,
+            "first_in_pair": false,
+            "ingestion_ms": 2.5418749999999997,
+            "query_ms": 604.664459,
+            "round": 0,
+            "total_ms": 616.925166
+          }
+        }
+      ],
+      "gpu": {
+        "build_ms": 8.23175,
+        "ingestion_ms": 2.5037499999999997,
+        "query_ms": 597.208167,
+        "total_ms": 610.2685
+      },
+      "gpu_samples": [
+        {
+          "build_ms": 8.23175,
+          "first_in_pair": false,
+          "ingestion_ms": 2.499958,
+          "query_ms": 599.748292,
+          "round": 2,
+          "total_ms": 610.4800419999999
+        },
+        {
+          "build_ms": 4.299167,
+          "first_in_pair": true,
+          "ingestion_ms": 2.530459,
+          "query_ms": 595.0483340000001,
+          "round": 3,
+          "total_ms": 601.878084
+        },
+        {
+          "build_ms": 10.317416,
+          "first_in_pair": false,
+          "ingestion_ms": 2.482542,
+          "query_ms": 591.689959,
+          "round": 4,
+          "total_ms": 604.490042
+        },
+        {
+          "build_ms": 6.412333,
+          "first_in_pair": true,
+          "ingestion_ms": 2.5037499999999997,
+          "query_ms": 601.698667,
+          "round": 5,
+          "total_ms": 610.614958
+        },
+        {
+          "build_ms": 10.501834,
+          "first_in_pair": false,
+          "ingestion_ms": 2.5583329999999997,
+          "query_ms": 597.208167,
+          "round": 6,
+          "total_ms": 610.2685
+        },
+        {
+          "build_ms": 6.53575,
+          "first_in_pair": true,
+          "ingestion_ms": 2.5010000000000003,
+          "query_ms": 594.97675,
+          "round": 7,
+          "total_ms": 604.013666
+        },
+        {
+          "build_ms": 10.453541,
+          "first_in_pair": false,
+          "ingestion_ms": 2.58975,
+          "query_ms": 612.5464579999999,
+          "round": 8,
+          "total_ms": 625.589917
+        }
+      ],
+      "rows": 4194307,
+      "shared_preparation_ms": 6.115166,
+      "source_bytes": 100663368,
+      "source_ingestion_ms": 6.114666000000001
+    }
+  ],
+  "runs": 7,
+  "schema": "mccl.compiled-h09.v1",
+  "timing": "contiguous completed wall intervals; build_query reuses one ingested source; ingest_build_query includes fresh preparation/ingestion; query includes remaining CPU index construction, joins, canon and answer collection; source/index/output drop, fixtures, context and validation excluded",
+  "warmups": 2
+}

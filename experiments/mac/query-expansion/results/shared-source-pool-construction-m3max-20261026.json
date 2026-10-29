@@ -1,0 +1,311 @@
+{
+  "cache_limit_bytes": 536936464,
+  "context_setup_ms_excluded": 23.6495,
+  "first_execution_total": "measured ingestion plus first cleared GPU execution duration, a sum excluding oracle validation and cache-boundary work, not a contiguous cold-start interval",
+  "limits": "bounded process-wide MLX cache, not a per-context workspace; no guarantee of cold physical pages; other allocator users may interfere; single-process synthetic fixtures",
+  "mode": "constructor",
+  "order": "first cleared/pooled observations separate, then alternating paired order",
+  "policy": "same MCCL constructor; clear inactive MLX cache before cleared samples, retain it before pooled samples; cache boundary excluded",
+  "previous_cache_limit_bytes": 130567005798,
+  "restored": true,
+  "results": [
+    {
+      "cleared_medians_ms": {
+        "constructor_ms": 1.9751249999999998
+      },
+      "cleared_samples": [
+        {
+          "after_validation_and_release": {
+            "active_bytes": 4194304,
+            "cached_bytes": 25723404,
+            "peak_bytes": 29917708
+          },
+          "before": {
+            "active_bytes": 4194304,
+            "cached_bytes": 0,
+            "peak_bytes": 29917708
+          },
+          "cache_boundary_ms_excluded": 0.025292000000000002,
+          "constructor_ms": 3.4619999999999997,
+          "order": 0,
+          "pair": 0
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 4194304,
+            "cached_bytes": 25723404,
+            "peak_bytes": 29917708
+          },
+          "before": {
+            "active_bytes": 4194304,
+            "cached_bytes": 0,
+            "peak_bytes": 29917708
+          },
+          "cache_boundary_ms_excluded": 0.017833,
+          "constructor_ms": 1.9751249999999998,
+          "order": 1,
+          "pair": 1
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 4194304,
+            "cached_bytes": 25723404,
+            "peak_bytes": 29917708
+          },
+          "before": {
+            "active_bytes": 4194304,
+            "cached_bytes": 0,
+            "peak_bytes": 29917708
+          },
+          "cache_boundary_ms_excluded": 0.016333,
+          "constructor_ms": 1.52575,
+          "order": 0,
+          "pair": 2
+        }
+      ],
+      "first_observations": {
+        "cleared": {
+          "after_validation_and_release": {
+            "active_bytes": 4194304,
+            "cached_bytes": 25723404,
+            "peak_bytes": 29917708
+          },
+          "before": {
+            "active_bytes": 4194304,
+            "cached_bytes": 0,
+            "peak_bytes": 4194304
+          },
+          "cache_boundary_ms_excluded": 0.003875,
+          "constructor_ms": 6.424208
+        },
+        "pooled": {
+          "after_validation_and_release": {
+            "active_bytes": 4194304,
+            "cached_bytes": 25723404,
+            "peak_bytes": 29917708
+          },
+          "before": {
+            "active_bytes": 4194304,
+            "cached_bytes": 25723404,
+            "peak_bytes": 29917708
+          },
+          "cache_boundary_ms_excluded": 0.000083,
+          "constructor_ms": 2.012125
+        }
+      },
+      "ingestion_plus_first_gpu_ms": 6.925417,
+      "pooled_medians_ms": {
+        "constructor_ms": 1.9231669999999998
+      },
+      "pooled_samples": [
+        {
+          "after_validation_and_release": {
+            "active_bytes": 4194304,
+            "cached_bytes": 25723404,
+            "peak_bytes": 29917708
+          },
+          "before": {
+            "active_bytes": 4194304,
+            "cached_bytes": 25723404,
+            "peak_bytes": 29917708
+          },
+          "cache_boundary_ms_excluded": 0.000042,
+          "constructor_ms": 1.946,
+          "order": 1,
+          "pair": 0
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 4194304,
+            "cached_bytes": 25723404,
+            "peak_bytes": 29917708
+          },
+          "before": {
+            "active_bytes": 4194304,
+            "cached_bytes": 25723404,
+            "peak_bytes": 29917708
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 1.9231669999999998,
+          "order": 0,
+          "pair": 1
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 4194304,
+            "cached_bytes": 25723404,
+            "peak_bytes": 29917708
+          },
+          "before": {
+            "active_bytes": 4194304,
+            "cached_bytes": 25723404,
+            "peak_bytes": 29917708
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 1.4425830000000002,
+          "order": 1,
+          "pair": 2
+        }
+      ],
+      "rows": 1048576,
+      "staging": {
+        "ingestion_ms": 0.501209,
+        "source_bytes": 4194304,
+        "source_columns": 1,
+        "source_dtype": "u32"
+      }
+    },
+    {
+      "cleared_medians_ms": {
+        "constructor_ms": 17.849833999999998
+      },
+      "cleared_samples": [
+        {
+          "after_validation_and_release": {
+            "active_bytes": 67108864,
+            "cached_bytes": 411082772,
+            "peak_bytes": 478191636
+          },
+          "before": {
+            "active_bytes": 67108864,
+            "cached_bytes": 0,
+            "peak_bytes": 478191636
+          },
+          "cache_boundary_ms_excluded": 0.034999999999999996,
+          "constructor_ms": 16.785709,
+          "order": 0,
+          "pair": 0
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 67108864,
+            "cached_bytes": 411082772,
+            "peak_bytes": 478191636
+          },
+          "before": {
+            "active_bytes": 67108864,
+            "cached_bytes": 0,
+            "peak_bytes": 478191636
+          },
+          "cache_boundary_ms_excluded": 0.035750000000000004,
+          "constructor_ms": 17.849833999999998,
+          "order": 1,
+          "pair": 1
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 67108864,
+            "cached_bytes": 411082772,
+            "peak_bytes": 478191636
+          },
+          "before": {
+            "active_bytes": 67108864,
+            "cached_bytes": 0,
+            "peak_bytes": 478191636
+          },
+          "cache_boundary_ms_excluded": 0.039,
+          "constructor_ms": 18.8605,
+          "order": 0,
+          "pair": 2
+        }
+      ],
+      "first_observations": {
+        "cleared": {
+          "after_validation_and_release": {
+            "active_bytes": 67108864,
+            "cached_bytes": 411082772,
+            "peak_bytes": 478191636
+          },
+          "before": {
+            "active_bytes": 67108864,
+            "cached_bytes": 0,
+            "peak_bytes": 67108864
+          },
+          "cache_boundary_ms_excluded": 0.034749999999999996,
+          "constructor_ms": 20.399
+        },
+        "pooled": {
+          "after_validation_and_release": {
+            "active_bytes": 67108864,
+            "cached_bytes": 411082772,
+            "peak_bytes": 478191636
+          },
+          "before": {
+            "active_bytes": 67108864,
+            "cached_bytes": 411082772,
+            "peak_bytes": 478191636
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 8.051167
+        }
+      },
+      "ingestion_plus_first_gpu_ms": 28.230292000000002,
+      "pooled_medians_ms": {
+        "constructor_ms": 8.634708
+      },
+      "pooled_samples": [
+        {
+          "after_validation_and_release": {
+            "active_bytes": 67108864,
+            "cached_bytes": 411082772,
+            "peak_bytes": 478191636
+          },
+          "before": {
+            "active_bytes": 67108864,
+            "cached_bytes": 411082772,
+            "peak_bytes": 478191636
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 8.634708,
+          "order": 1,
+          "pair": 0
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 67108864,
+            "cached_bytes": 411082772,
+            "peak_bytes": 478191636
+          },
+          "before": {
+            "active_bytes": 67108864,
+            "cached_bytes": 411082772,
+            "peak_bytes": 478191636
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 10.102083,
+          "order": 0,
+          "pair": 1
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 67108864,
+            "cached_bytes": 411082772,
+            "peak_bytes": 478191636
+          },
+          "before": {
+            "active_bytes": 67108864,
+            "cached_bytes": 411082772,
+            "peak_bytes": 478191636
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 7.507542,
+          "order": 1,
+          "pair": 2
+        }
+      ],
+      "rows": 16777216,
+      "staging": {
+        "ingestion_ms": 7.831292,
+        "source_bytes": 67108864,
+        "source_columns": 1,
+        "source_dtype": "u32"
+      }
+    }
+  ],
+  "samples_per_mode": 3,
+  "schema": "mccl.query-pool.v2",
+  "source_bytes": "retained numeric relation logical bytes, not physical residency or measured traffic",
+  "timing": "CPU wall time through completed publication from one retained shared numeric source; H09 additionally includes CPU joins/dedup and temporary destruction; ingestion reported separately and reused across cache clears; no GPU timestamps or DRAM counters",
+  "validation": "complete stable rows and per-key lookup, or authored H09 answers plus exact enumeration and work counters; outside timing; outputs released before next sample",
+  "wired_policy": "unchanged; no implicit residency request"
+}

@@ -95,9 +95,11 @@ printed pages.
 - **Lookup witness** is an R carrier beside a row, not a heading column or
   lineage base. Its abstraction is the cursor returned by that lookup.
   All paths must consume it before materialization, return or branch escape.
-- **Expanded stage** (`expand`) is an E decision over length-known SortedRun
-  ranges. Exclusive scan of range lengths supplies a segmented virtual array
-  (Blelloch's prefix-sum construction); HashIndex cursors do not qualify.
+- **Expanded stage** (`expand`) is an E decision requiring the selected provider's
+  declared exact finite cursor support. Native realization proves Copy and
+  `ExactSizeIterator`; exclusive scan supplies a segmented virtual array.
+  Provider names do not establish that contract, and it is distinct from
+  Sequence's single-contiguous-array Range capability.
 
 These correspondences establish which definitions and adaptations are being
 used. They do not discharge the implementation and host-language proof

@@ -277,6 +277,11 @@ pub fn column<const N: usize>() -> ColumnAt<N> {
     ColumnAt
 }
 
+impl<H: PositionalRows, const N: usize> cq_storage::ColumnSlot<H, N> for ColumnAt<N> where
+    Self: Column<H>
+{
+}
+
 impl ZoneMetadata for () {
     fn heap_bytes(&self) -> usize {
         0

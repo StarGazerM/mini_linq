@@ -13,27 +13,43 @@
 //! used as smallest-intersection candidates are unchanged. The replacement
 //! requires Ord + Copy keys and Copy items (Leibniz admissibility is a premise);
 //! rustc checks Build, IndexRead and ExactMembership at the existing guards.
-//! A single stored i32/i64 column is eligible. Borrowed keys record
-//! BorrowedI64TupleCodec for the rank directory; computed/owned keys record
-//! NoDense for exact binary search. Multi-column and non-integral keys remain HashIndex.
+//! A single stored column is eligible. AutoDense selects the codec through
+//! trait dispatch at the concrete Rust callsite; unsupported dense codecs use
+//! exact binary search. Multi-column keys remain HashIndex.
 //! Eligible rank spans exceeding 1,048,576 bits still fall back to binary
 //! search at runtime. No default selection changes.
 //! Use `pipeline { structures = [cq_rewrites::sorted_runs]; }`.
 //!
+//! `radix_runs` instead selects `::cq_storage::RadixRun<_,_>` for explicit
+//! singleton payload builds, including owned/computed keys. Rust checks the
+//! provider's RadixKey obligations. Its radix12/error32 spline narrows exact
+//! payload search, without a hash or whole-array binary fallback. Dense-domain
+//! membership can use a lazy exact presence bitmap (at most 128 KiB and one
+//! byte per distinct key); payload-only reads do not allocate it. Unsupported
+//! provider layouts stay unchanged.
+//! Compose with `retain_lookups` to reuse exact ranges, and optionally
+//! `expand_lookups(N)` for checked segmented execution. Neither sorted storage
+//! nor range capability alone selects a merge join or GPU execution.
+//! Use `pipeline { structures = [cq_rewrites::radix_runs, cq_rewrites::retain_lookups]; }`.
+//!
 //! `retain_lookups` takes no arguments and records a `share` decision and a
 //! `repr` witness for each eligible eager semijoin followed by a probe of the
-//! same SortedRun build and preserved keys, or either recorded
-//! PrefixRun directory prefix of a binary Smallest intersection. Column type
-//! spellings do not establish integral-key capabilities; rustc checks the
-//! selected provider's key obligations.
-//! Both prefix witnesses force at the introducing probe. The cursor is
-//! `::cq_storage::RunCursor<'_, _>`; an existing positions representation is
-//! preserved. The Structures contract rejects witness escape across retained
-//! rows, canonicalization, opaque steps or other unsupported boundaries.
-//! HashIndex builds and probes preceding the semijoin are unchanged. Compose
-//! explicitly with
+//! same provider with declared `supports [retain]` and preserved keys. `expand`
+//! support implies `retain`; provider names and column type spellings do not
+//! establish these contracts. Rust checks the selected provider's key traits.
+//! Prefix witnesses force at the introducing probe. Generated cursor types are
+//! inferred with `as _`; an existing positions representation is preserved.
+//! The Structures contract rejects witness escape across retained rows,
+//! canonicalization, opaque steps or other unsupported boundaries. Providers
+//! without declared support and probes preceding the semijoin are unchanged.
+//! Compose explicitly with
 //! `pipeline { structures = [cq_rewrites::sorted_runs, cq_rewrites::retain_lookups]; }`.
 //! Neither rewrite is enabled by default.
+//! Sorted/radix selection records `supports [retain, expand, keys]`. Native
+//! payload selection records `supports [keys]` where distinct-key enumeration is
+//! implemented. `retype(r => MyProvider<_, _> supports [expand, keys])` replaces
+//! a provider and its declarations together; bare `retype` clears declarations.
+//! Retyping a live retained/staged plan must preserve its required support.
 //!
 //! ```rust
 //! let rows = [(1, 10), (1, 11), (2, 20)];
@@ -63,7 +79,7 @@
 //! | `host_sets(E, ...)` | Records `host_set E;` and removes canon implied by full-heading keys | Names used host relations. Every printer checks exact input distinctness before execution and fails on duplicates; this is not an unchecked promise. Dropping a key still needs canon. |
 //! | `smallest_intersections` | Hoists independent relational definitions and records `probe smallest` | The public Physical `binary_intersection` predicate accepts the probe/check pair, and every interposed definition can move before the probe without moving Rust or breaking dependencies. |
 //! | `lazy_semijoins` | `semi eager` becomes `semi lazy` | The right input is a reusable host and all readers sharing its key are lazy membership reads after the rewrite. Named selections must include every eager peer. |
-//! | `build_host_reads` | Reusable host rename becomes retained `let` | Has integral (`i32`/`i64`) keyed stream reads, including an empty Cartesian key, and no lazy membership reader. Keys and predicates are unchanged; selection records providers afterwards. Const-only point/range scans remain host scans. |
+//! | `build_host_reads` | Reusable host rename becomes retained `let` | Has keyed stream reads, including an empty Cartesian key, and no lazy membership reader. Keys and predicates are unchanged; selection records providers afterwards and rustc checks key capabilities. Const-only point/range scans remain host scans. |
 //! | `hoist(r, ...)` | Moves selected relational producers and their dependency closure before other definitions | Explicit names only; stable dependency order; opaque Rust dependencies reject; Physical correspondence checks branch scope and Before obligations. |
 //!
 //! Except for `build_host_reads` and `retain_streams`' explicit retention decisions, these passes
@@ -102,8 +118,10 @@
 //! assert_eq!(answer, vec![(1,10,100)]);
 //! ```
 //!
-//! `retype(selector => RustType)` replaces only recorded types. It preserves
-//! Physical, entry order, reader identities, and index levels. A bare result name
+//! `retype(selector => RustType)` replaces recorded types and clears their
+//! support declarations. Optional `supports [...]` replaces the declaration
+//! explicitly on keyed providers. It preserves Physical, entry order, reader
+//! identities, and index levels. A bare result name
 //! selects that result's built indexes, keysets and keyed host fallbacks, including
 //! supplemental candidate/membership reads. Scan, point, and range adapters keep
 //! their recorded types. `result(name)` disambiguates a result named like a kind.
@@ -125,9 +143,10 @@
 //! The type must implement `Build` and `ConservativeMembership`; the printer
 //! emits a rustc capability guard. Exact membership types qualify automatically.
 //! `join_filter(rN)` adds an exact filter when the scan has an admissible covering
-//! probe, even without default positional selection. This explicitly requires
-//! a positional host. Apply `retype` afterwards to choose another type. The
-//! Structures contract rejects missing covers, anti joins and opaque Rust in
+//! probe whose selected complete provider declares `keys`, even without default
+//! positional selection. This explicitly requires a positional host. Apply
+//! `retype` afterwards to choose another type.
+//! The Structures contract rejects missing covers, anti joins and opaque Rust in
 //! the intervening spine. Neither advice changes the exact covering probe.
 //! Exact build eligibility follows the recorded single-level key layout, not
 //! provider type names (including routed providers and aliases). Key enumeration

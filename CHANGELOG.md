@@ -194,6 +194,94 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   default (non-field-flow) DOOP program. SRD `HeapAllocHelper` no longer probes
   `HeapAllocation_Type` with an empty key (1.5e10 xalan pairs); the only
   remaining empty-key probe is the inherent `Precompute0_String` product.
+- Reconcile the canonical MCCL tree with its standalone upstream, preserving
+  ordered GPU hashmap, blocked Bloom filter and multiset-difference APIs alongside
+  shared-relation indexes and GPU RadixRun. Publish identical source trees from
+  the primary checkout; keep build instructions valid in both repository layouts.
+- Apply the workspace formatting reported by CI and preserve explicit autoref
+  dispatch tests with scoped receiver bindings, satisfying strict Clippy without
+  suppressing diagnostics or weakening fallback/lifetime checks.
+- Add opt-in compiled H09 execution over a source-bound GPU or native CPU
+  RadixRun. Retain full i64 Lineitem payloads with original row IDs, explicit
+  fallible construction and immutable source ownership. Both choices execute
+  the same compiled query and preserve the authored schema and join order.
+- Extend native host dispatch with an explicit `IndexedColumn<N>` contract for
+  single nonleading borrowed-key reads, preserving payload order and ordinary
+  fallback for unsupported slots/capabilities. Verify no hidden Lineitem rebuild,
+  wrong-slot safety, duplicate chronology and retained source lifetimes.
+- Record paired compiled H09 build/query and fresh-ingestion end-to-end timings,
+  including the small-input GPU loss rather than choosing an automatic threshold.
+- Consolidate active Mac work into this Git checkout under `experiments/mac/`,
+  including MCCL and the CQ Mac provider; remove active sibling-checkout paths.
+  Merge current mainline while preserving generic provider support, RadixRun
+  comparisons and native/GPU implementations. Adapt routed providers to the
+  declared `Keys` contract and retain the closed portable-core boundary.
+- Add explicit GPU-built grouped RadixRun and stable grouped merge through MCCL:
+  GPU grouping, exact parallel error32 spline construction, collinear endpoint
+  compaction and adaptive radix directory. Share the native CPU reader and lazy
+  membership policy through borrowed storage views. Preserve u32 occurrence
+  order, selected original row IDs and pinned old cursors. Record completed
+  build/merge and prepared-read comparisons without a CPU spline finishing pass.
+- Add the matched prepared-reader diagnostic over shared-source GPU/CPU MacRun,
+  native RadixRun and runtime HashIndex, validating exact occurrence sequences
+  and recording dense, sparse, skewed and duplicate-heavy samples.
+- Add completed immutable GPU-built CPU-readable indexes and online flat or
+  binary-carry snapshots, with failure-atomic publication and retained readers.
+  Expand H03/H09 into matched manual executions with typed source-row-ID gathers.
+  Compare explicit CPU and GPU constructors through one query body.
+- Tune CPU byte-radix construction with varying-byte histograms and buffered
+  scatter; separate GPU kernel throughput from fresh-constructor wall time.
+  Audit storage/cache roles and isolate first-touch, driver scheduling and
+  workload-history effects. Preserve historical raw-Metal workspace results
+  while moving active ownership, caching and completion to MCCL/MLX.
+- Replace per-index host tuple packing with reusable immutable shared relations,
+  GPU column projection, selected-value validation, original row-ID generation
+  and stable mask compaction. Charge ingestion separately and retain current
+  constructor/read/maintenance measurements under their explicit boundaries.
+- Express H05, H07-block, D27, and H08 string restrictions as explicit equality
+  predicates instead of literal-bound relation occurrences. Keep branch-local
+  names, SQL answers, date conditions, and H05's checked order advisory intact.
+  This enables predicate-read planning without changing literal-binding semantics
+  or any compiler/storage implementation.
+- Add H05's checked `advised` order: close the Supplier/customer-nation cycle
+  before Nation/Region expansion while preserving the written date-guard
+  prerequisites. Keep the authored query, SQL, and default configuration
+  unchanged; no compiler or storage changes are required.
+- Replace provider-name cases in general Structures checks with recorded,
+  trait-checked `supports [retain, expand, keys]` contracts. Infer retained
+  cursor types, use the existing `Keys` enumeration ABI, and distinguish
+  candidate directories from complete payload layouts. Retyping, target
+  catalogs and replay preserve live obligations without stale capabilities.
+  Preserve native host dispatch without imposing unused fallback bounds;
+  unsupported target decisions fail explicitly instead of disappearing.
+  Column markers now prove declaration-order binding through `ColumnSlot`,
+  including aliases; codec/layout checks no longer inspect provider spellings.
+  Add custom-provider/alias execution and false-contract compilation coverage.
+
+- Broaden the Mac CPU index comparison to all 29 catalog kernels and include
+  authored materialization-matched hash/RadixRun pairs automatically: 121
+  configurations, checked against DuckDB before and during measurement.
+  Preserve the remote H19 string-interning implementation across all three
+  local provider configurations.
+- Integrate the isolated Mac Metal sorted-index experiments alongside the native
+  join optimizations, preserving their source files and historical measurements.
+  Add a Mac implementation plan with flat/LSM-like snapshot maintenance, exact
+  publication/cursor contracts, and runtime versus compiler-change boundaries.
+  This does not add a production Metal provider or revive the removed GPU
+  maintained-index backend.
+
+- Optimize RadixRun construction with stable cached numeric sort keys for
+  disordered inputs, avoiding repeated borrowed-key dereferences. Add a bounded
+  lazy exact membership bitmap without changing payload lookup or default hash
+  selection. Verify concurrent membership reads and stable retained cursors.
+  Allow `profile --tpch --output DIR` for local macOS profiling artifacts.
+- Add controlled TPC-H default/RadixRun/retained configurations and the
+  `--index-comparison` benchmark mode, including every stage of grouped kernels.
+  Provide matched `built_hash`/`built_radix` configurations where explicit host
+  materialization is needed to make the provider change real. Remove H09's
+  disconnected Part/Orders prefix: measure local SF1 cardinalities, rank connected
+  orders, and retain the faster measured single-key-Lineitem order without
+  changing its SQL or Part predicate domain.
 - cuda-oxide `299eda41b` / RCCL `1d33079a`: device modules with at least 16
   kernels split into kernel groups whose `opt` and `llc` run in parallel
   (`CUDA_OXIDE_PTX_PARTITIONS`, default available parallelism up to 16); the
@@ -462,6 +550,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   Public API: add `Selection::from_positions` for host-issued IDs; filter emitter
   identities now take a scan-local canonical index rather than a covering operator.
 - Legacy GPU Datalog workspace removed.
+- Add native `RadixRun` payload indexes with radix12/error32 spline routing,
+  full-width integral key encodings, exact bounded search, and stable duplicate
+  groups. Opt in with checked `cq_rewrites::radix_runs`; default hash selection
+  is unchanged. Wire retained lookup cursors, segmented expansion, join filters,
+  and Sequential Exact/Range/Membership capabilities without granting Ordered
+  or GPU capabilities. Add an executable backend comparison and native runtime
+  benchmarks against binary runs, the backend HashIndex, and hashbrown.
 - Retire Datalog-side hooks kept only for the (already broken) legacy GPU
   Datalog bridge: `KeyRepresentation`, `LayoutRealization`, device-owned
   negation keys, frozen/leveled layout selection, `compile_with_ratio`, the
@@ -497,6 +592,17 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   device grading is unavailable.
   Sum stage timings and chain independently selected Sequential interpretations
   of the same Physical graphs for conformance.
+- Add a native Mac index/join benchmark against pinned PGM/PGM++, RadixSpline,
+  compact Hist-Tree, and dense-hash artifacts, plus labeled local SIMD-block and
+  Bloom baselines. Compare random, retained-range, sorted-probe, and merge
+  processing with explicit preprocessing costs and exact result checks. Record
+  a sanitizer-discovered PGM projection-overflow fix as a separate applied patch;
+  preserve unsupported artifact domains and machine provenance in the results.
+- Mac cost-model experiment: price bulk and independent join-chain probes against
+  the built index, including its footprint and live runs. Add explicit per-round
+  build-first dependencies and trace reset semantics; do not overlap dependent
+  CPU probes with GPU builds. Preserve semi-naive probe-before-absorb behavior.
+  Refresh the affected structure rankings and document run-publication constraints.
 - Cleanup after the Sequence cutover and guard redesign: remove the
   test-only `cq_physical_realization::sources`, the uncalled
   `cq_print::Context::row` (and make `borrowed_pattern` private), unread

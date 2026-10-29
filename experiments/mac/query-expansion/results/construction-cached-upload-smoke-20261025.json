@@ -1,0 +1,138 @@
+{
+  "architecture": "aarch64",
+  "context_setup_ms_excluded": 15.743707999999998,
+  "cpu_constructor": "single-thread stable byte radix, constant bytes skipped + radix12 directory",
+  "data": "deterministic synthetic fixtures, not dbgen",
+  "gpu_constructor": "four stable 8-bit radix passes + radix12 directory",
+  "gpu_memory": "CachedUpload",
+  "limits": "single-process warmed sweep; normal runtime hash randomization and OS contention remain; not a fastest-CPU claim or portable crossover threshold",
+  "order": "alternating paired CPU-first/GPU-first",
+  "query": "authored retail H09 positive join core",
+  "remaining_ms": "total minus packing and constructor; includes CPU joins, residual indexes and temporary destruction, not pure probe latency",
+  "results": [
+    {
+      "answers": 16372,
+      "cpu": {
+        "build_ms": {
+          "max": 0.398208,
+          "median": 0.383625,
+          "min": 0.37175,
+          "p25": 0.37175,
+          "p75": 0.398208
+        },
+        "packing_ms": {
+          "max": 0.077833,
+          "median": 0.075,
+          "min": 0.071708,
+          "p25": 0.071708,
+          "p75": 0.077833
+        },
+        "remaining_ms": {
+          "max": 3.0105,
+          "median": 2.936626,
+          "min": 2.8679170000000003,
+          "p25": 2.8679170000000003,
+          "p75": 3.0105
+        },
+        "total_ms": {
+          "max": 3.4658330000000004,
+          "median": 3.412667,
+          "min": 3.314667,
+          "p25": 3.314667,
+          "p75": 3.4658330000000004
+        }
+      },
+      "cpu_samples": [
+        {
+          "build_ms": 0.37175,
+          "first": true,
+          "packing_ms": 0.075,
+          "pair": 0,
+          "remaining_ms": 2.8679170000000003,
+          "total_ms": 3.314667
+        },
+        {
+          "build_ms": 0.398208,
+          "first": false,
+          "packing_ms": 0.077833,
+          "pair": 1,
+          "remaining_ms": 2.936626,
+          "total_ms": 3.412667
+        },
+        {
+          "build_ms": 0.383625,
+          "first": true,
+          "packing_ms": 0.071708,
+          "pair": 2,
+          "remaining_ms": 3.0105,
+          "total_ms": 3.4658330000000004
+        }
+      ],
+      "gpu": {
+        "build_ms": {
+          "max": 1.067291,
+          "median": 1.047875,
+          "min": 1.012958,
+          "p25": 1.012958,
+          "p75": 1.067291
+        },
+        "packing_ms": {
+          "max": 0.076375,
+          "median": 0.074959,
+          "min": 0.069917,
+          "p25": 0.069917,
+          "p75": 0.076375
+        },
+        "remaining_ms": {
+          "max": 3.111459,
+          "median": 2.850959,
+          "min": 2.7718320000000003,
+          "p25": 2.7718320000000003,
+          "p75": 3.111459
+        },
+        "total_ms": {
+          "max": 4.200792,
+          "median": 3.988167,
+          "min": 3.8946660000000004,
+          "p25": 3.8946660000000004,
+          "p75": 4.200792
+        }
+      },
+      "gpu_samples": [
+        {
+          "build_ms": 1.047875,
+          "first": false,
+          "packing_ms": 0.074959,
+          "pair": 0,
+          "remaining_ms": 2.7718320000000003,
+          "total_ms": 3.8946660000000004
+        },
+        {
+          "build_ms": 1.067291,
+          "first": true,
+          "packing_ms": 0.069917,
+          "pair": 1,
+          "remaining_ms": 2.850959,
+          "total_ms": 3.988167
+        },
+        {
+          "build_ms": 1.012958,
+          "first": false,
+          "packing_ms": 0.076375,
+          "pair": 2,
+          "remaining_ms": 3.111459,
+          "total_ms": 4.200792
+        }
+      ],
+      "indexed_rows": 65539,
+      "lineitem_rows": 65539,
+      "payload_gathers": 21857,
+      "probes": 683,
+      "witnesses": 16372
+    }
+  ],
+  "samples_per_mode": 3,
+  "shared_representation": "MacRun: tracked shared Metal buffers, u32 key/source-rowID, identical CPU lookup",
+  "timing": "whole query includes packing, construction/allocation/wait, CPU residual indexes/joins/dedup and temporary destruction; excludes input generation, context setup, validation and output destruction",
+  "warmups_per_mode": 2
+}

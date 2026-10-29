@@ -1,0 +1,195 @@
+{
+  "hardware": "Apple M3 Max, 128 GiB, macOS arm64",
+  "sf": 1,
+  "runs": 11,
+  "method": "Same authored queries and advice, warm sequential CPU execution, median of 11 uninstrumented executions; build and typed result collection included, data load and output serialization excluded. Separate primitive-counting and operator-profile workers verified exactly against DuckDB. Profile spans overlap and are not added for speedup estimates.",
+  "rows": [
+    {
+      "query": "retail_h03",
+      "configuration": "default",
+      "before_ms": 27.79575,
+      "final_ms": 28.635166,
+      "speedup": 0.9706858343339095,
+      "before_samples_ms": [
+        27.627417,
+        27.719208,
+        27.750125,
+        27.750417,
+        27.786167,
+        27.79575,
+        27.803209,
+        28.029833,
+        28.193167000000003,
+        28.271791,
+        28.4815
+      ],
+      "final_samples_ms": [
+        28.455917,
+        28.540708,
+        28.601833,
+        28.601875,
+        28.62325,
+        28.635166,
+        28.688,
+        28.76925,
+        28.785833,
+        29.09425,
+        29.602
+      ],
+      "profile_overhead_percent": 14.86386703677567,
+      "exact_verified": true,
+      "timing_worker_sha256": "d465794e8507a2a2d00eb2e792feecd905ffbab54bb3299a3377628379e72a4a"
+    },
+    {
+      "query": "retail_h03",
+      "configuration": "radix",
+      "before_ms": 47.84225,
+      "final_ms": 28.677625000000003,
+      "speedup": 1.6682779693227732,
+      "before_samples_ms": [
+        47.296084,
+        47.301209,
+        47.372333000000005,
+        47.480583,
+        47.737625,
+        47.84225,
+        47.854833,
+        47.889375,
+        48.229583,
+        48.247667,
+        48.275375
+      ],
+      "final_samples_ms": [
+        28.445625,
+        28.450208,
+        28.543458,
+        28.566583,
+        28.666375,
+        28.677625000000003,
+        28.86225,
+        29.00475,
+        29.100834,
+        29.339417,
+        30.105
+      ],
+      "profile_overhead_percent": 17.910304636454377,
+      "exact_verified": true,
+      "timing_worker_sha256": "d465794e8507a2a2d00eb2e792feecd905ffbab54bb3299a3377628379e72a4a"
+    },
+    {
+      "query": "retail_h09",
+      "configuration": "built_hash",
+      "before_ms": 458.770417,
+      "final_ms": 474.2870840000001,
+      "speedup": 0.9672842303249395,
+      "before_samples_ms": [
+        453.445084,
+        454.069709,
+        454.554625,
+        456.536541,
+        458.247291,
+        458.770417,
+        458.806792,
+        460.308958,
+        474.546958,
+        475.197,
+        480.044208
+      ],
+      "final_samples_ms": [
+        469.252417,
+        469.516333,
+        470.991458,
+        473.258334,
+        473.366292,
+        474.2870840000001,
+        475.397708,
+        476.35425,
+        484.519459,
+        487.076,
+        522.297916
+      ],
+      "profile_overhead_percent": 21.620423254030662,
+      "exact_verified": true,
+      "timing_worker_sha256": "ab961a04756bbca66f031f5550da8f9b6f01f7baf9059ba8bb26617c60d2a3bd"
+    },
+    {
+      "query": "retail_h09",
+      "configuration": "built_radix",
+      "before_ms": 865.676625,
+      "final_ms": 493.161334,
+      "speedup": 1.7553619177289352,
+      "before_samples_ms": [
+        858.3194589999999,
+        858.57775,
+        859.2597920000001,
+        859.6982079999999,
+        859.7012080000001,
+        865.676625,
+        874.072958,
+        875.538208,
+        886.7006250000001,
+        927.4045,
+        938.294417
+      ],
+      "final_samples_ms": [
+        488.864084,
+        491.340875,
+        491.519833,
+        491.566292,
+        492.224542,
+        493.161334,
+        493.646334,
+        493.693083,
+        502.245083,
+        502.27875,
+        506.713542
+      ],
+      "profile_overhead_percent": 16.573413275745597,
+      "exact_verified": true,
+      "timing_worker_sha256": "ab961a04756bbca66f031f5550da8f9b6f01f7baf9059ba8bb26617c60d2a3bd"
+    }
+  ],
+  "before_source_sha256": {
+    "runtime/cq-storage/src/radix_run.rs": "4f2929806300fd5a4fa191f2b6da5882cbfa838ab26b0a4944c8c6c2fb647f95",
+    "runtime/cq-storage/src/radix_spline.rs": "b30f989a37c712393cd3d0599d8c8a79667f9c260cd35a81c3ca53c1c31f69e0",
+    "runtime/cq-storage/src/sorted_run.rs": "c4504b8c2367098f490b0ce8df8522eb2643800909c562bac1fd462e2f2b1700",
+    "passes/cq-sequence-pull/src/lib.rs": "82681a68c631230d6b53efa1f6cd7a57877543df5df2790f80f9146298fcfd4c",
+    "features/workloads/src/tpch_runtime.rs": "c11179a1f2ff904b08dd8115e5acb862a1891de4096421676f7152db8b558f60",
+    "features/workloads/src/queries/retail/tpch/retail_h03.rs": "7db873c31208d462e7b89cc50313b5f582477210261adf0b9b6ba51df61d1f50",
+    "features/workloads/src/queries/retail/tpch/retail_h09.rs": "503785d9d45adb19eb45c97ba413606afb0ca14c6070cc2b717c5496aff4b42a",
+    "features/workloads/xtask/src/tpch/worker.rs": "855177a0488555db7e6b63affdf6e470d4d2de2f2579ad135a5bfce6b199bfac"
+  },
+  "final_source_sha256": {
+    "runtime/cq-storage/src/radix_run.rs": "6194af1db0d9eb285d4864393b65f3167fb976d23d4e005bcf7f501fe8c50693",
+    "runtime/cq-storage/src/radix_spline.rs": "b30f989a37c712393cd3d0599d8c8a79667f9c260cd35a81c3ca53c1c31f69e0",
+    "runtime/cq-storage/src/sorted_run.rs": "df1cb4116a99be566e7397cd6928fc4465acc47969c583db79768670a77e2d10",
+    "passes/cq-sequence-pull/src/lib.rs": "82681a68c631230d6b53efa1f6cd7a57877543df5df2790f80f9146298fcfd4c",
+    "features/workloads/src/tpch_runtime.rs": "c11179a1f2ff904b08dd8115e5acb862a1891de4096421676f7152db8b558f60",
+    "features/workloads/src/queries/retail/tpch/retail_h03.rs": "7db873c31208d462e7b89cc50313b5f582477210261adf0b9b6ba51df61d1f50",
+    "features/workloads/src/queries/retail/tpch/retail_h09.rs": "503785d9d45adb19eb45c97ba413606afb0ca14c6070cc2b717c5496aff4b42a",
+    "features/workloads/xtask/src/tpch/worker.rs": "855177a0488555db7e6b63affdf6e470d4d2de2f2579ad135a5bfce6b199bfac"
+  },
+  "stages": {
+    "before": "baseline",
+    "after": "intermediate candidate, including the subsequently rejected checked i64 conversion",
+    "final": "retained cached numeric sorting and lazy exact membership; original i128 conversion restored"
+  },
+  "native_control": "Sparse random full-width keys do not use the bitmap. All modes preserve answer counts/checksums. Raw native query medians vary, including unchanged controls; no general sparse-probing speedup established. CPU build in these CSVs is a single cold observation, not a median. See ablations.json for paired ordered-grouping measurements.",
+  "scope": "Two targeted SF1 kernels and native controls, not a rerun of the full 29-kernel comparison. No GPU timing or concurrency speedup claim.",
+  "verification": {
+    "storage_all_features_tests": 82,
+    "radix_sorted_retained_integration_tests": 27,
+    "grouped_workload_tests": 9,
+    "public_api_snapshots_checked": 27,
+    "executable_routes": {
+      "default_hash": 150,
+      "radix_immediate": 150,
+      "radix_retained": 150,
+      "radix_staged32": 150,
+      "radix_retained_staged32": 150
+    },
+    "native_modes_verified": 23,
+    "tpch_final_configurations_exact_against_duckdb": 4,
+    "api_note": "Reviewed expected compiler-internal Freeze auto-trait change from OnceLock; public methods and Send/Sync bounds unchanged."
+  }
+}

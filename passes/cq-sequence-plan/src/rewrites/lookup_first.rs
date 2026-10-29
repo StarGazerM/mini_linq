@@ -372,7 +372,13 @@ pub fn lookup_plan(source: &Program) -> syn::Result<Option<LookupPlan>> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LookupFirst {
     pub ty: syn::Type,
-    pub providers: Vec<(Ident, Vec<Ident>, syn::Type)>,
+    pub supports: Option<structures::ProviderSupport>,
+    pub providers: Vec<(
+        Ident,
+        Vec<Ident>,
+        syn::Type,
+        Option<structures::ProviderSupport>,
+    )>,
     pub order: Option<Vec<Ident>>,
     pub transfer: Option<Vec<Ident>>,
     pub early: Option<Vec<Ident>>,
@@ -393,6 +399,11 @@ impl Parse for LookupFirst {
         let ty = input.parse()?;
         let mut advice = Self {
             ty,
+            supports: if input.peek(structures::kw::supports) {
+                Some(input.parse()?)
+            } else {
+                None
+            },
             providers: Vec::new(),
             order: None,
             transfer: None,
@@ -414,7 +425,12 @@ impl Parse for LookupFirst {
                     let keys = identifiers(&content)?;
                     content.parse::<Token![=]>()?;
                     let ty = content.parse()?;
-                    advice.providers.push((name, keys, ty));
+                    let supports = if content.peek(structures::kw::supports) {
+                        Some(content.parse()?)
+                    } else {
+                        None
+                    };
+                    advice.providers.push((name, keys, ty, supports));
                     if !content.is_empty() {
                         content.parse::<Token![,]>()?;
                     }
@@ -443,12 +459,13 @@ impl Parse for LookupFirst {
 impl ToTokens for LookupFirst {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let ty = &self.ty;
-        tokens.extend(quote!(using #ty));
+        let supports = &self.supports;
+        tokens.extend(quote!(using #ty #supports));
         if !self.providers.is_empty() {
             let providers = self
                 .providers
                 .iter()
-                .map(|(name, keys, ty)| quote!(#name [#(#keys),*] = #ty));
+                .map(|(name, keys, ty, supports)| quote!(#name [#(#keys),*] = #ty #supports));
             tokens.extend(quote!(, providers [#(#providers),*]));
         }
         if let Some(order) = &self.order {
@@ -513,6 +530,7 @@ pub fn lookup_first_advice_in(
     } = plan(source, &graph);
     let mut advice = LookupFirst {
         ty: provider.ty.clone(),
+        supports: crate::rewrites::catalog::provider_support(provider, false),
         providers: Vec::new(),
         order: Some(order),
         transfer: Some(transfer),
@@ -565,8 +583,14 @@ pub fn lookup_first_advice_in(
             let ty = native
                 .filter(|ty| crate::catalog::matches_type(&provider.ty, ty))
                 .unwrap_or(&provider.ty);
-            providers.push((name.clone(), columns(keys, name.span()), ty.clone()));
-            Ok(ty.clone())
+            let supports = crate::rewrites::catalog::provider_support(provider, false);
+            providers.push((
+                name.clone(),
+                columns(keys, name.span()),
+                ty.clone(),
+                supports.clone(),
+            ));
+            Ok((ty.clone(), supports))
         },
     )?;
     if applicable.is_none() {
@@ -780,12 +804,12 @@ pub fn lookup_first_in(
 ) -> syn::Result<Program> {
     let advice: LookupFirst = syn::parse2(arguments)?;
     let mut providers = BTreeMap::new();
-    for (name, keys, ty) in &advice.providers {
+    for (name, keys, ty, supports) in &advice.providers {
         let key = (
             symbol_name(name),
             keys.iter().map(symbol_name).collect::<Vec<_>>(),
         );
-        if providers.insert(key, ty).is_some() {
+        if providers.insert(key, (ty, supports)).is_some() {
             return Err(syn::Error::new_spanned(
                 name,
                 "duplicate lookup_first provider layout",
@@ -793,10 +817,10 @@ pub fn lookup_first_in(
         }
     }
     let result = lookup_first_with(checker, source, &advice, |name, keys, _, _| {
-        Ok(providers
+        let (ty, supports) = providers
             .remove(&(symbol_name(name), keys.to_vec()))
-            .unwrap_or(&advice.ty)
-            .clone())
+            .unwrap_or((&advice.ty, &advice.supports));
+        Ok((ty.clone(), supports.clone()))
     })?.ok_or_else(|| syn::Error::new_spanned(
         source,
         "lookup_first would require row scans or additional retention of an authored filtered index",
@@ -819,7 +843,8 @@ fn lookup_first_with(
         &[String],
         &structures::Program,
         &structures::Analysis,
-    ) -> syn::Result<syn::Type>,
+    )
+        -> syn::Result<(syn::Type, Option<structures::ProviderSupport>)>,
 ) -> syn::Result<Option<Program>> {
     let Some(graph) = graph(checker, source)? else {
         return Err(syn::Error::new_spanned(
@@ -1311,7 +1336,7 @@ fn lookup_first_with(
     // its consumers are present, before provider aliases rename those entries.
     let layouts = structures::contract::check(&target)?;
     for (index, keys) in generated_providers {
-        let ty = choose_provider(
+        let (ty, supports) = choose_provider(
             &target.structures.entries[index].name,
             &keys,
             &target,
@@ -1322,6 +1347,7 @@ fn lookup_first_with(
             unreachable!("generated index entry")
         };
         keyed.ty = ty;
+        keyed.supports = supports;
     }
     separate_provider_layouts(&mut target, &physical, &mut used);
     if source

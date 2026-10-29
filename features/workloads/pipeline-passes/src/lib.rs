@@ -148,6 +148,7 @@ pub fn sequence_targets(input: proc_macro::TokenStream) -> proc_macro::TokenStre
         // This provider belongs to the workload, not to either target crate.
         let catalog = cq_lang_sequence::Catalog {
             providers: vec![cq_lang_sequence::ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(::cq_workloads::SortedIndex<_, _>),
                 elements: None,
                 capabilities: vec![

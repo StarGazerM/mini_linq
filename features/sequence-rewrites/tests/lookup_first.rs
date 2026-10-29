@@ -48,6 +48,7 @@ fn triangle() -> Program {
 fn catalog() -> Catalog {
     Catalog {
         providers: vec![ProviderToken {
+            supports: Vec::new(),
             ty: syn::parse_quote!(Index),
             capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
             levels: vec![vec!["host".into()]],
@@ -732,18 +733,21 @@ fn heterogeneous_catalog_selects_each_new_layout_and_preserves_authored_types() 
     let available = Catalog {
         providers: vec![
             ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(Unreadable),
                 capabilities: capabilities.clone(),
                 levels: Vec::new(),
                 elements: None,
             },
             ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(IntegerIndex),
                 capabilities: capabilities.clone(),
                 levels: vec![vec!["host".into(), "device".into()]],
                 elements: Some(vec![syn::parse_quote!(i32)]),
             },
             ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(HostIndex),
                 capabilities,
                 levels: vec![vec!["host".into()]],
@@ -760,20 +764,20 @@ fn heterogeneous_catalog_selects_each_new_layout_and_preserves_authored_types() 
     );
     let replay: LookupFirst = syn::parse2(advice.to_token_stream()).unwrap();
     assert_eq!(advice, replay);
-    assert!(advice.providers.iter().any(|(name, _, ty)| {
+    assert!(advice.providers.iter().any(|(name, _, ty, _)| {
         name.to_string().starts_with("__lookup_forward") && *ty == syn::parse_quote!(IntegerIndex)
     }));
     assert!(
         advice
             .providers
             .iter()
-            .any(|(name, _, ty)| name == "u" && *ty == syn::parse_quote!(HostIndex))
+            .any(|(name, _, ty, _)| name == "u" && *ty == syn::parse_quote!(HostIndex))
     );
     assert!(
         advice
             .providers
             .iter()
-            .all(|(_, _, ty)| *ty != syn::parse_quote!(Unreadable))
+            .all(|(_, _, ty, _)| *ty != syn::parse_quote!(Unreadable))
     );
     let target = lookup_first(&source, replay.to_token_stream()).unwrap();
     assert_eq!(
@@ -881,7 +885,7 @@ fn generated_provider_uses_live_guard_output_not_full_physical_heading() {
         advice
             .providers
             .iter()
-            .any(|(name, _, _)| name == "guarded")
+            .any(|(name, _, _, _)| name == "guarded")
     );
     let target = lookup_first(&source, advice.to_token_stream()).unwrap();
     let facts = cq_lang_sequence::contract::check(&target).unwrap();

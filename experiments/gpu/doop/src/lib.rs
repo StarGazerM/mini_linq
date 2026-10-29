@@ -28,6 +28,7 @@ doop_shared::doop_engine!(run, pipeline {
             ::cq_gpu_sequence::plan,
             ::cq_sequence_rewrites::output(reserve_previous),
         ];
+        stage = ::cq_gpu_sequence::stage;
         grade = ::cq_gpu_sequence::machine_grade;
         print = ::cq_gpu_sequence::translate_arena;
     };

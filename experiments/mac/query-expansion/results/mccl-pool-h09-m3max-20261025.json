@@ -1,0 +1,671 @@
+{
+  "cache_limit_bytes": 33620080,
+  "context_setup_ms_excluded": 24.23075,
+  "limits": "bounded process-wide MLX cache, not a per-context workspace; no guarantee of cold physical pages; other allocator users may interfere; single-process synthetic fixtures",
+  "mode": "h09",
+  "order": "first cleared/pooled observations separate, then alternating paired order",
+  "policy": "same MCCL constructor; clear inactive MLX cache before cleared samples, retain it before pooled samples; cache boundary excluded",
+  "previous_cache_limit_bytes": 130567005798,
+  "restored": true,
+  "results": [
+    {
+      "cleared_medians_ms": {
+        "constructor_ms": 0.871375,
+        "full_query_ms": 3.708958,
+        "packing_ms": 0.06966699999999999
+      },
+      "cleared_samples": [
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "peak_bytes": 1703976
+          },
+          "cache_boundary_ms_excluded": 0.023708,
+          "constructor_ms": 0.871375,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 3.678209,
+          "order": 0,
+          "packing_ms": 0.07083300000000001,
+          "pair": 0
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "peak_bytes": 1703976
+          },
+          "cache_boundary_ms_excluded": 0.012834,
+          "constructor_ms": 0.829042,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 3.593917,
+          "order": 1,
+          "packing_ms": 0.06979099999999999,
+          "pair": 1
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "peak_bytes": 1703976
+          },
+          "cache_boundary_ms_excluded": 0.008208,
+          "constructor_ms": 0.913625,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 3.7458750000000003,
+          "order": 0,
+          "packing_ms": 0.06966699999999999,
+          "pair": 2
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "peak_bytes": 1703976
+          },
+          "cache_boundary_ms_excluded": 0.008916,
+          "constructor_ms": 0.82825,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 3.708958,
+          "order": 1,
+          "packing_ms": 0.06949999999999999,
+          "pair": 3
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "peak_bytes": 1703976
+          },
+          "cache_boundary_ms_excluded": 0.009167,
+          "constructor_ms": 0.921,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 3.8285,
+          "order": 0,
+          "packing_ms": 0.06949999999999999,
+          "pair": 4
+        }
+      ],
+      "first_observations": {
+        "cleared": {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "peak_bytes": 573440
+          },
+          "cache_boundary_ms_excluded": 0.034041,
+          "constructor_ms": 4.498291,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 7.479,
+          "packing_ms": 0.07012499999999999
+        },
+        "pooled": {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "cache_boundary_ms_excluded": 0.000042,
+          "constructor_ms": 0.8877079999999999,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 3.773583,
+          "packing_ms": 0.069541
+        }
+      },
+      "pooled_medians_ms": {
+        "constructor_ms": 0.806291,
+        "full_query_ms": 3.631333,
+        "packing_ms": 0.06962499999999999
+      },
+      "pooled_samples": [
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 0.877333,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 3.727542,
+          "order": 1,
+          "packing_ms": 0.06975,
+          "pair": 0
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 0.862583,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 3.773042,
+          "order": 0,
+          "packing_ms": 0.069542,
+          "pair": 1
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 0.7606660000000001,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 3.6150409999999997,
+          "order": 1,
+          "packing_ms": 0.06958400000000001,
+          "pair": 2
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 0.806291,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 3.585125,
+          "order": 0,
+          "packing_ms": 0.06975,
+          "pair": 3
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 1703976,
+            "peak_bytes": 1703976
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 0.7365419999999999,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 3.631333,
+          "order": 1,
+          "packing_ms": 0.06962499999999999,
+          "pair": 4
+        }
+      ],
+      "rows": 65539
+    },
+    {
+      "cleared_medians_ms": {
+        "constructor_ms": 2.935209,
+        "full_query_ms": 86.008708,
+        "packing_ms": 1.116084
+      },
+      "cleared_samples": [
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "peak_bytes": 25788936
+          },
+          "cache_boundary_ms_excluded": 0.038833,
+          "constructor_ms": 2.61225,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 86.223834,
+          "order": 0,
+          "packing_ms": 1.113834,
+          "pair": 0
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "peak_bytes": 25788936
+          },
+          "cache_boundary_ms_excluded": 0.033042,
+          "constructor_ms": 2.94,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 86.008708,
+          "order": 1,
+          "packing_ms": 1.117667,
+          "pair": 1
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "peak_bytes": 25788936
+          },
+          "cache_boundary_ms_excluded": 0.031708,
+          "constructor_ms": 2.9839160000000002,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 85.712625,
+          "order": 0,
+          "packing_ms": 1.113792,
+          "pair": 2
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "peak_bytes": 25788936
+          },
+          "cache_boundary_ms_excluded": 0.030957999999999996,
+          "constructor_ms": 2.5687919999999997,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 86.189333,
+          "order": 1,
+          "packing_ms": 1.116416,
+          "pair": 3
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "peak_bytes": 25788936
+          },
+          "cache_boundary_ms_excluded": 0.029625,
+          "constructor_ms": 2.935209,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 85.686208,
+          "order": 0,
+          "packing_ms": 1.116084,
+          "pair": 4
+        }
+      ],
+      "first_observations": {
+        "cleared": {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 0,
+            "peak_bytes": 8437760
+          },
+          "cache_boundary_ms_excluded": 0.088542,
+          "constructor_ms": 2.884583,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 88.364583,
+          "packing_ms": 1.126167
+        },
+        "pooled": {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "cache_boundary_ms_excluded": 0.000042,
+          "constructor_ms": 2.1319160000000004,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 85.58675000000001,
+          "packing_ms": 1.114833
+        }
+      },
+      "pooled_medians_ms": {
+        "constructor_ms": 2.078875,
+        "full_query_ms": 84.767959,
+        "packing_ms": 1.1173330000000001
+      },
+      "pooled_samples": [
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "cache_boundary_ms_excluded": 0.000041,
+          "constructor_ms": 2.078875,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 86.67066700000001,
+          "order": 1,
+          "packing_ms": 1.1720000000000002,
+          "pair": 0
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 2.038917,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 84.443541,
+          "order": 0,
+          "packing_ms": 1.11225,
+          "pair": 1
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 2.3879159999999997,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 84.799292,
+          "order": 1,
+          "packing_ms": 1.1588749999999999,
+          "pair": 2
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 2.122458,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 83.88033300000001,
+          "order": 0,
+          "packing_ms": 1.102417,
+          "pair": 3
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "before": {
+            "active_bytes": 0,
+            "cached_bytes": 25788936,
+            "peak_bytes": 25788936
+          },
+          "cache_boundary_ms_excluded": 0.000042,
+          "constructor_ms": 2.037667,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 84.767959,
+          "order": 1,
+          "packing_ms": 1.1173330000000001,
+          "pair": 4
+        }
+      ],
+      "rows": 1048579
+    }
+  ],
+  "samples_per_mode": 5,
+  "schema": "mccl.query-pool.v1",
+  "timing": "CPU wall time through completed publication; H09 additionally includes packing, CPU joins/dedup and temporary destruction; no GPU timestamps or DRAM counters",
+  "validation": "complete stable rows and per-key lookup, or authored H09 answers plus exact enumeration and work counters; outside timing; outputs released before next sample",
+  "wired_policy": "unchanged; no implicit residency request"
+}

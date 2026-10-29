@@ -42,6 +42,7 @@ engine!(gpu, {
         physical = [::cq_gpu_sequence::capture_constants];
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs, ::cq_gpu_sequence::select_catalog];
         sequence = ::mini_linq::passes::sequence;
+        stage = ::cq_gpu_sequence::stage;
         decompose = [::cq_gpu_sequence::plan];
         grade = ::cq_gpu_sequence::machine_grade;
         print = ::cq_gpu_sequence::translate_arena;

@@ -7,6 +7,18 @@ use cq_testkit::duckdb::{RelationData, evaluate_sql};
 mod tpch_runtime;
 
 #[allow(dead_code)]
+#[path = "../src/queries/retail/tpch/retail_h03.rs"]
+mod h03;
+#[allow(dead_code)]
+#[path = "../src/queries/retail/tpch/retail_h09.rs"]
+mod h09;
+#[allow(dead_code)]
+#[path = "../src/queries/tpch/tpch_q06.rs"]
+mod q06;
+#[allow(dead_code)]
+#[path = "../src/queries/tpch/tpch_q19.rs"]
+mod q19;
+#[allow(dead_code)]
 #[path = "../src/queries/retail/tpch/retail_h06.rs"]
 mod h06;
 #[allow(dead_code)]
@@ -76,7 +88,7 @@ fn h06_exact_revenue_preserves_lines_and_empty_identity() {
             h06::SQL
         );
         let expected = evaluate_sql(&[raw(rows, 6)], &sql).unwrap();
-        for config in ["default", "transfer"] {
+        for &config in h06::CONFIGS {
             let actual = h06::run(&data, config)
                 .into_iter()
                 .map(|(v,)| vec![integer(v)])
@@ -165,7 +177,7 @@ fn h10_customer_revenue_matches_duckdb_without_limit() {
             h10::SQL
         );
         let expected = evaluate_sql(&[raw(rows, 6)], &sql).unwrap();
-        for config in ["default", "transfer"] {
+        for &config in h10::CONFIGS {
             let actual = h10::run(&data, config)
                 .into_iter()
                 .map(
@@ -262,7 +274,7 @@ fn h12_priority_counts_match_duckdb_and_date_guards() {
             h12::SQL
         );
         let expected = evaluate_sql(&[raw(rows, 7)], &sql).unwrap();
-        for config in ["default", "transfer"] {
+        for &config in h12::CONFIGS {
             let actual = h12::run(&data, config)
                 .into_iter()
                 .map(|(mode, high, low)| {
@@ -333,4 +345,61 @@ fn h06_integer_coefficient_query_is_exact() {
     }
     .collect();
     assert_eq!(actual, vec![(3477,)]);
+}
+
+#[test]
+fn h03_radix_variants_preserve_duplicate_and_empty_answers() {
+    let mut dictionaries = cq_load::Dictionaries::default();
+    dictionaries.insert("c_mktsegment", ["BUILDING", "AUTOMOBILE"].into_iter());
+    let mut data = h03::Data {
+        customer: vec![
+            (1, dictionaries.literal("c_mktsegment", "BUILDING")),
+            (2, dictionaries.literal("c_mktsegment", "AUTOMOBILE")),
+        ],
+        orders: vec![(10, 1, date("1995-03-14")), (10, 1, date("1995-03-14")),
+            (20, 2, date("1995-03-14")), (30, 1, date("1995-03-15"))],
+        lineitem: vec![(10, date("1995-03-16")), (10, date("1995-03-16")),
+            (20, date("1995-03-16")), (30, date("1995-03-16")), (99, date("1995-03-16"))],
+        dictionaries,
+    };
+    assert_eq!(tpch_runtime::same_plan_answers(
+        |config| h03::run(&data, config), h03::canonical), [(10, 1)]);
+    data.orders.reverse();
+    data.lineitem.reverse();
+    assert_eq!(tpch_runtime::same_plan_answers(
+        |config| h03::run(&data, config), h03::canonical), [(10, 1)]);
+    data.lineitem.clear();
+    assert!(tpch_runtime::same_plan_answers(
+        |config| h03::run(&data, config), h03::canonical).is_empty());
+}
+
+#[test]
+fn h09_configurations_preserve_filtered_join_answers() {
+    let mut dictionaries = cq_load::Dictionaries::default();
+    dictionaries.insert("p_name", ["green part", "blue part"].into_iter());
+    let mut data = h09::Data {
+        part: vec![
+            (1, dictionaries.literal("p_name", "green part")),
+            (2, dictionaries.literal("p_name", "blue part")),
+            (3, dictionaries.literal("p_name", "green part")),
+        ],
+        partsupp: vec![(1, 100), (2, 100), (3, 101)],
+        supplier: vec![(100, 7), (101, 8)],
+        nation: vec![(7,)],
+        orders: vec![(10,), (20,), (30,)],
+        lineitem: vec![(10, 1, 100), (10, 1, 100), (20, 2, 100), (30, 3, 101), (99, 1, 100)],
+        green_names: cq_load::dictionary_where(&dictionaries, "p_name", |value| value.contains("green")),
+        dictionaries,
+    };
+    for config in h09::CONFIGS {
+        assert_eq!(h09::run(&data, config), [(10, 1, 100)], "{config}");
+    }
+    assert_eq!(tpch_runtime::same_plan_answers(
+        |config| h09::run(&data, config), h09::canonical), [(10, 1, 100)]);
+    data.lineitem.reverse();
+    assert_eq!(tpch_runtime::same_plan_answers(
+        |config| h09::run(&data, config), h09::canonical), [(10, 1, 100)]);
+    data.nation.clear();
+    assert!(tpch_runtime::same_plan_answers(
+        |config| h09::run(&data, config), h09::canonical).is_empty());
 }

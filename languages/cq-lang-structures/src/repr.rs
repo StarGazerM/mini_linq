@@ -34,6 +34,7 @@ pub(crate) fn check_witnesses(
     facts: &Analysis,
 ) -> syn::Result<BTreeMap<String, Witness>> {
     let mut result = BTreeMap::new();
+    let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
     // STR-Witness: The extra cursor abstracts to lookup_b(k), and every path
     // consumes it at the force probe before any materialization or scope escape.
     // Distinct prefixes may share a Smallest force; each cursor keeps its own
@@ -60,6 +61,40 @@ pub(crate) fn check_witnesses(
             return error(
                 entry,
                 "witness must match share build, keys and first demand",
+            );
+        }
+        let retained = if facts.host_read(&share.build) {
+            facts.provider_support(
+                &share.build,
+                &share.keys,
+                Some(&share.first),
+                ProviderCapability::Retain,
+            ) && facts.provider_support(
+                &share.build,
+                &share.keys,
+                Some(&share.force),
+                ProviderCapability::Retain,
+            )
+        } else if let Some(candidate) = candidates.iter().find(|candidate| {
+            symbol_name(candidate.reader) == share.force
+                && candidate
+                    .sides
+                    .iter()
+                    .any(|(build, prefix)| build == &share.build && prefix == &share.keys)
+        }) {
+            facts.candidate_support(
+                &share.build,
+                &share.keys,
+                &candidate.column,
+                ProviderCapability::Retain,
+            )
+        } else {
+            facts.provider_support(&share.build, &share.keys, None, ProviderCapability::Retain)
+        };
+        if !retained {
+            return error(
+                entry,
+                "witness requires declared retain support on its selected provider",
             );
         }
         let mut pending = vec![name.clone()];

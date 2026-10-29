@@ -15,7 +15,7 @@ JOIN supplier s ON l.l_suppkey = s.s_suppkey
 JOIN nation n ON s.s_nationkey = n.n_nationkey
 WHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'
 AND p.p_brand = 'Brand#12' AND n.n_name = 'UNITED STATES'"#;
-pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "transfer", "le", "le_runs", "hypergraph", "advised"];
+pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", "hypergraph", "advised"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("lineitem", "l_orderkey,l_partkey,l_suppkey"),
     ("orders", "o_orderkey,o_orderdate"),
@@ -135,6 +135,10 @@ runner!($; advised, { plan = ::mini_linq::passes::plan(no_reduce, order(Nation, 
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {
         "default" => default::run(data),
+        "radix" => radix::run(data),
+        "radix_retained" => radix_retained::run(data),
+        "built_hash" => built_hash::run(data),
+        "built_radix" => built_radix::run(data),
         "par" => par::run(data),
         "no-reduce" => no_reduce::run(data),
         "transfer" => transfer::run(data),

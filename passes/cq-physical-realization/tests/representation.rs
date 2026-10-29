@@ -174,9 +174,9 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
         structures {
             l host scan = ::core::iter::Map<_,_> [];
             r host scan = ::core::iter::Map<_,_> [];
-            r = ::cq_storage::SortedRun<_,_> [k];
+            r = ForeignIndex<_,_> [k] supports [expand, keys];
             s share = lookup r [k] first s force p;
-            s repr = tuples witness { r [k] at s as ::cq_storage::RunCursor<'_, _> };
+            s repr = tuples witness { r [k] at s as AuthoredBookmark<'_, _> };
             p stage = batch 4 expand;
             out canon = ::std::collections::HashSet<_>;
         }
@@ -193,13 +193,22 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
         .to_token_stream()
         .to_string();
     assert_eq!(
-        printed.matches("IndexRead :: lookup").count(),
+        printed.matches("provider_contract :: retain (").count(),
         1,
         "{printed}"
     );
     assert!(!printed.contains("IndexRead :: probe"), "{printed}");
     assert!(printed.contains("stage :: segmented :: < 4"), "{printed}");
     assert!(printed.contains("__cq_witness_s"), "{printed}");
+    assert!(printed.contains("AuthoredBookmark < '_ , _ >"), "{printed}");
+    assert!(
+        printed.contains("provider_contract :: require_expand"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("provider_contract :: require_keys"),
+        "{printed}"
+    );
     let mut scalar = program.clone();
     scalar
         .structures
@@ -210,15 +219,24 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
         .to_token_stream()
         .to_string();
     assert_eq!(
-        printed.matches("IndexRead :: lookup").count(),
+        printed.matches("provider_contract :: retain (").count(),
         1,
         "{printed}"
     );
     assert!(!printed.contains("stage :: segmented"), "{printed}");
+    let witness = scalar
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| matches!(entry.structure, cq_lang_structures::Structure::Repr { .. }))
+        .unwrap();
+    *witness = syn::parse_quote!(s repr = tuples witness { r [k] at s as _ };);
+    let inferred = source_tokens(&scalar).unwrap().to_string();
+    assert!(inferred.contains("let __cq_witness_s : _"), "{inferred}");
 }
 
 #[test]
-fn smallest_witness_selection_is_exact_and_host_prefix_retention_is_rejected() {
+fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected() {
     let program: cq_lang_structures::Program = syn::parse_quote! {
         physical {
             relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
@@ -234,8 +252,8 @@ fn smallest_witness_selection_is_exact_and_host_prefix_retention_is_rejected() {
             l host scan = ::core::iter::Map<_, _> [];
             r host scan = ::core::iter::Map<_, _> [];
             s host scan = ::core::iter::Map<_, _> [];
-            r = ::cq_gpu::PrefixRun [b][c];
-            s = ::cq_gpu::PrefixRun [a][c];
+            r = ForeignDirectory [b][c] supports [retain, expand];
+            s = ForeignDirectory [a][c] supports [retain, expand];
             r rows = ::std::vec::Vec<_>;
             s rows = ::std::vec::Vec<_>;
             checked canon = ::std::collections::HashSet<_>;
@@ -271,7 +289,59 @@ fn smallest_witness_selection_is_exact_and_host_prefix_retention_is_rejected() {
     );
     let error = source_tokens(&program).unwrap_err().to_string();
     assert!(
-        error.contains("PrefixRun directory witnesses require the GPU printer"),
+        error.contains("candidate-prefix witnesses are unsupported"),
         "{error}"
     );
+    let mut staged = program;
+    staged.structures.entries.retain(|entry| {
+        !matches!(
+            entry.structure,
+            cq_lang_structures::Structure::Repr { .. }
+                | cq_lang_structures::Structure::Share { .. }
+        )
+    });
+    staged
+        .structures
+        .entries
+        .push(syn::parse_quote!(candidate stage = batch 4 expand;));
+    let error = source_tokens(&staged).unwrap_err().to_string();
+    assert!(
+        error.contains("native smallest candidate selection"),
+        "{error}"
+    );
+}
+
+#[test]
+fn retained_host_uses_borrowed_dispatch_and_consumes_the_same_cursor() {
+    let program: cq_lang_structures::Program = syn::parse_quote! {
+        physical {
+            relation L(a:i64); relation R(a:i64,b:i64);
+            l = pipe rename L@0 {a -> x};
+            r = pipe rename R@1 {a -> x,b -> y};
+            s = pipe semi eager [x] l,r;
+            p = pipe canon probe first [x] s,r;
+            return p as answer(x,y);
+        } structures {
+            l host scan = ::core::iter::Map<_,_> [];
+            r host scan = ::core::iter::Map<_,_> [];
+            r host result(s) = SnapshotAlias<_,_> [x] supports [expand, keys];
+            r host result(p) = SnapshotAlias<_,_> [x] supports [expand, keys];
+            s share = lookup r [x] first s force p;
+            s repr = tuples witness { r [x] at s as _ };
+            p stage = batch 4 expand;
+            p canon = ::std::collections::HashSet<_>;
+        }
+    };
+    let printed = source_tokens(&program).unwrap().to_string();
+    assert!(printed.contains("BorrowedHost"), "{printed}");
+    assert!(printed.contains("expanded_read"), "{printed}");
+    assert!(printed.contains("let __cq_witness_s : _"), "{printed}");
+    assert_eq!(
+        printed.matches("provider_contract :: retain (").count(),
+        1,
+        "{printed}"
+    );
+    assert!(printed.contains("require_expand"), "{printed}");
+    assert!(printed.contains("require_keys"), "{printed}");
+    assert!(printed.contains("stage :: segmented"), "{printed}");
 }

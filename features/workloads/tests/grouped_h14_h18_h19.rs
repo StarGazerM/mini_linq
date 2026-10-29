@@ -109,7 +109,7 @@ fn h14_components_preserve_identity_dates_and_empty_global_group() {
             &sql,
         )
         .expect("DuckDB H14 oracle");
-        for config in ["default", "transfer"] {
+        for &config in h14::CONFIGS {
             let actual = h14::run(&data, config)
                 .into_iter()
                 .map(|(promo, total)| vec![integer(promo), integer(total)])
@@ -197,7 +197,7 @@ fn h18_threshold_is_strict_and_joins_follow_identity_preserving_sum() {
             &sql,
         )
         .expect("DuckDB H18 oracle");
-        for config in ["default", "transfer"] {
+        for &config in h18::CONFIGS {
             let actual = h18::run(&data, config)
                 .into_iter()
                 .map(|(name, customer, order, date, price, quantity)| {
@@ -303,7 +303,7 @@ fn h19_three_branches_boundaries_shipping_and_duplicate_identity() {
             &sql,
         )
         .expect("DuckDB H19 oracle");
-        for config in ["default", "transfer"] {
+        for &config in h19::CONFIGS {
             let actual = h19::run(&data, config)
                 .into_iter()
                 .map(|(revenue,)| vec![integer(revenue)])

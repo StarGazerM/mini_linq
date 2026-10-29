@@ -52,12 +52,14 @@ fn catalog() -> Catalog {
     Catalog {
         providers: vec![
             ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(Index),
                 elements: None,
                 capabilities: vec![Capability::Exact],
                 levels: levels.clone(),
             },
             ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(::cq_storage::sharded::Sharded<Index>),
                 elements: None,
                 capabilities: vec![Capability::Exact],

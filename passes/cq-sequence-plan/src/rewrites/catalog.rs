@@ -3,8 +3,148 @@ use cq_syntax::symbol_name;
 use quote::quote;
 use structures::{Structure, physical::Operator};
 
-/// Select the first eligible provider in the stable representation-preserving
-/// catalog order: recorded-type matches first, then the remaining tokens.
+/// Freeze target-owned support in the recorded provider, not in a type-name rule.
+pub(crate) fn provider_support(
+    token: &cq_lang_sequence::ProviderToken,
+    membership_only: bool,
+) -> Option<structures::ProviderSupport> {
+    use structures::ProviderCapability::{Expand, Keys, Retain};
+    let capabilities: Vec<_> = token
+        .supports
+        .iter()
+        .filter(|capability| !membership_only || **capability == Keys)
+        .map(|capability| match capability {
+            Retain => quote!(retain),
+            Expand => quote!(expand),
+            Keys => quote!(keys),
+        })
+        .collect();
+    (!capabilities.is_empty()).then(|| syn::parse_quote!(supports [#(#capabilities),*]))
+}
+
+fn supplies_support(
+    token: &cq_lang_sequence::ProviderToken,
+    required: &[structures::ProviderCapability],
+) -> bool {
+    required.iter().all(|capability| {
+        token.supports.contains(capability)
+            || *capability == structures::ProviderCapability::Retain
+                && token
+                    .supports
+                    .contains(&structures::ProviderCapability::Expand)
+    })
+}
+
+/// Only live decisions constrain replacement. Unused support may change with
+/// the selected implementation; a retained witness or filter may not go stale.
+fn required_support(
+    source: &structures::Program,
+    analysis: &structures::Analysis,
+    name: &str,
+    keyed: &structures::Keyed,
+    host: bool,
+) -> Vec<structures::ProviderCapability> {
+    use structures::ProviderCapability::{Expand, Keys, Retain};
+    let levels = keyed.level_names();
+    let selected = |keys: &[String]| {
+        if host {
+            let mut columns = levels.concat();
+            columns.sort();
+            return columns == keys;
+        }
+        analysis
+            .built
+            .get(name)
+            .into_iter()
+            .flatten()
+            .filter_map(|built| {
+                structures::prefix_depth(&built.0, keys).map(|depth| (built, depth))
+            })
+            .min_by_key(|((layout, _), depth)| (layout.len() != *depth, layout.len()))
+            .is_some_and(|((layout, ty), _)| *layout == levels && *ty == keyed.ty)
+    };
+    let selected_candidate = |prefix: &[String], column: &str| {
+        !host
+            && levels.len() == 2
+            && levels[0] == prefix
+            && levels[1] == [column]
+            && analysis
+                .candidate_on(name, prefix, column)
+                .is_some_and(|ty| *ty == keyed.ty)
+    };
+    let candidates = structures::physical::candidate_prefixes(&source.physical, &analysis.physical);
+    let mut required = Vec::new();
+    if analysis.witnesses.keys().any(|first| {
+        let share = &analysis.shares[first];
+        share.build == name
+            && candidates
+                .iter()
+                .find(|candidate| {
+                    symbol_name(candidate.reader) == share.force
+                        && candidate
+                            .sides
+                            .iter()
+                            .any(|(build, prefix)| *build == name && *prefix == share.keys)
+                })
+                .map_or_else(
+                    || selected(&share.keys),
+                    |candidate| selected_candidate(&share.keys, &candidate.column),
+                )
+    }) {
+        required.push(Retain);
+    }
+    for definition in &source.physical.program.definitions {
+        if !analysis.expands.contains(&symbol_name(&definition.name)) {
+            continue;
+        }
+        let Operator::Probe(_, read) = &definition.operator else {
+            continue;
+        };
+        let mut keys: Vec<_> = read.columns.iter().map(symbol_name).collect();
+        keys.sort();
+        let needed = if matches!(read.choice, Some(structures::physical::Choice::Smallest(_))) {
+            candidates
+                .iter()
+                .filter(|candidate| candidate.reader == &definition.name)
+                .any(|candidate| {
+                    candidate.sides.iter().any(|(build, prefix)| {
+                        *build == name && selected_candidate(prefix, &candidate.column)
+                    })
+                })
+        } else {
+            symbol_name(&read.right) == name && selected(&keys)
+        };
+        if needed {
+            required.push(Expand);
+            break;
+        }
+    }
+    if analysis.join_filters.values().flatten().any(|filter| {
+        if symbol_name(&filter.build) != name {
+            return false;
+        }
+        source
+            .physical
+            .program
+            .definitions
+            .iter()
+            .find(|definition| definition.name == filter.covering)
+            .is_some_and(|definition| match &definition.operator {
+                Operator::Probe(_, read) | Operator::Semi(_, read) => {
+                    let mut keys: Vec<_> = read.columns.iter().map(symbol_name).collect();
+                    keys.sort();
+                    selected(&keys)
+                }
+                _ => false,
+            })
+    }) {
+        required.push(Keys);
+    }
+    required
+}
+
+/// Replace built provider types with a catalog token satisfying all of their
+/// read obligations, preferring the authored type and then catalog order.
 ///
 /// Catalog levels constrain reads, not construction. Structures has no machine
 /// grading; Sequence planning checks each selected type at its actual read levels.
@@ -154,13 +294,19 @@ fn select(
             | Structure::Stage { .. }
             | Structure::Share { .. } => continue,
         };
-        let ty = if kind == "canon" {
+        let support_required = match &entry.structure {
+            Structure::Built { keyed, .. } => {
+                required_support(source, &analysis, &name, keyed, false)
+            }
+            _ => Vec::new(),
+        };
+        let selected = if kind == "canon" {
             // Packed bounds are runtime codec facts, never inferred from Rust types.
             catalog
                 .canons
                 .iter()
                 .find(|token| !token.levels.is_empty() && token.max_packed_bits.is_none())
-                .map(|token| &token.ty)
+                .map(|token| (&token.ty, None))
         } else {
             let recorded = |token: &&cq_lang_sequence::ProviderToken| match &entry.structure {
                 Structure::Built { keyed, .. } => {
@@ -177,6 +323,7 @@ fn select(
                 .chain(catalog.providers.iter().filter(|token| !recorded(token)))
                 .find(|token| {
                     !token.levels.is_empty()
+                        && supplies_support(token, &support_required)
                         && accepts_elements(token, &analysis, &name)
                         && match &entry.structure {
                             Structure::Built { keyed, .. } => accepts_read_levels(
@@ -193,30 +340,39 @@ fn select(
                             .iter()
                             .all(|capability| token.capabilities.contains(capability))
                 })
-                .map(|token| match &entry.structure {
+                .map(|token| {
                     // Catalog patterns admit concrete native providers; they
                     // are not replacement Rust types with inferred arguments.
-                    Structure::Built { keyed, .. }
-                        if crate::catalog::matches_type(&token.ty, &keyed.ty) =>
-                    {
-                        &keyed.ty
-                    }
-                    _ => &token.ty,
+                    let ty = match &entry.structure {
+                        Structure::Built { keyed, .. }
+                            if crate::catalog::matches_type(&token.ty, &keyed.ty) =>
+                        {
+                            &keyed.ty
+                        }
+                        _ => &token.ty,
+                    };
+                    let supports = match &entry.structure {
+                        Structure::Built { keyed, .. } => {
+                            provider_support(token, keyed.membership.is_some())
+                        }
+                        _ => None,
+                    };
+                    (ty, supports)
                 })
         };
-        let Some(ty) = ty else {
+        let Some((ty, supports)) = selected else {
             if admitted.is_some_and(|names| names.contains(&name)) {
                 continue;
             }
             return Err(syn::Error::new(
                 entry.name.span(),
                 format!(
-                    "PL-Select: structure `{name}` entry {index} ({kind}) has unmet catalog read obligation {required:?}"
+                    "PL-Select: structure `{name}` entry {index} ({kind}) has unmet catalog read/support obligation {required:?}/{support_required:?}"
                 ),
             ));
         };
         let index = syn::LitInt::new(&index.to_string(), entry.name.span());
-        match cq_structure_selection::retype(&target, quote!(entry(#index) => #ty)) {
+        match cq_structure_selection::retype(&target, quote!(entry(#index) => #ty #supports)) {
             Ok(selected) => target = selected,
             Err(_) if admitted.is_some_and(|names| names.contains(&name)) => {}
             Err(error) => {
@@ -304,6 +460,7 @@ fn retain_host_index(
                                 }))
                 })
             });
+        let support_required = required_support(source, &analysis, &name, keyed, true);
         if !stream || analysis.built_on(&name, &keys).is_some() {
             continue;
         }
@@ -353,6 +510,7 @@ fn retain_host_index(
             })).then(|| needed[&name].iter().cloned().collect::<Vec<_>>());
         let native = catalog.providers.iter().find(|token| {
             crate::catalog::matches_type(&token.ty, &keyed.ty)
+                && supplies_support(token, &support_required)
                 && !token.levels.is_empty()
                 && accepts_elements(token, &analysis, &name)
                 && accepts_read_levels(
@@ -372,6 +530,7 @@ fn retain_host_index(
         }
         let token = native.or_else(|| catalog.providers.iter().find(|token| {
             !token.levels.is_empty()
+                && supplies_support(token, &support_required)
                 && accepts_columns(token, &analysis, &name, projected.as_deref().unwrap_or(&analysis.layouts[&name]))
                 && accepts_read_levels(token, source, &analysis, &name, &keyed.level_names(), &needed)
                 && required.iter().all(|capability| token.capabilities.contains(capability))
@@ -395,6 +554,7 @@ fn retain_host_index(
             } else {
                 &token.ty
             };
+            let supports = provider_support(token, membership);
             let columns: Vec<_> = keys
                 .iter()
                 .map(|key| syn::Ident::new(key, entry.name.span()))
@@ -409,7 +569,7 @@ fn retain_host_index(
             // Retention changes the provider's ownership, not its read protocol.
             let membership = membership.then(|| quote!(membership));
             target.structures.entries.push(syn::parse_quote!(
-                #build = #ty [#(#columns),*] #membership #projection;
+                #build = #ty [#(#columns),*] #membership #supports #projection;
             ));
         }
     }
@@ -534,6 +694,7 @@ mod tests {
             let token = |ty| cq_lang_sequence::ProviderToken {
                 ty,
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
+                supports: vec![],
                 levels: vec![vec!["host".into(), "device".into()]],
                 elements: None,
             };

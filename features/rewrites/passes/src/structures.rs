@@ -33,6 +33,7 @@ pub fn membership(source: &ir::Program, arguments: TokenStream) -> syn::Result<i
             keyed.filtered = Some(syn::parse_quote!(payload [#columns] constants {}));
         }
         keyed.membership = Some(Default::default());
+        keyed.supports = None;
         matched += 1;
     }
     if matched != 1 {
@@ -111,7 +112,7 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
             .map(|d| &d.name)
             .expect("checked build");
         target.structures.entries.push(syn::parse_quote! {
-            #scan join_filter = ::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>
+            #scan join_filter = ::cq_storage::AdaptiveMembership<_, 67108864>
                 build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
         });
     }
@@ -123,11 +124,33 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
 /// Retype one-level HashIndex payload builds with one generic ordered key.
 /// Host fallbacks and smallest-intersection candidates retain their providers.
 pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    select_runs(source, arguments, RunKind::Sorted)
+}
+
+/// Formal rule EXT-RadixRuns:
+/// Retype eligible singleton payload builds to RadixSpline runs.
+/// Rust checks RadixKey; this selects storage, not an ordered-input algorithm.
+pub fn radix_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    select_runs(source, arguments, RunKind::Radix)
+}
+
+#[derive(Clone, Copy)]
+enum RunKind {
+    Sorted,
+    Radix,
+}
+
+fn select_runs(
+    source: &ir::Program,
+    arguments: TokenStream,
+    kind: RunKind,
+) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
-        return Err(syn::Error::new_spanned(
-            arguments,
-            "sorted_runs takes no arguments",
-        ));
+        let message = match kind {
+            RunKind::Sorted => "sorted_runs takes no arguments",
+            RunKind::Radix => "radix_runs takes no arguments",
+        };
+        return Err(syn::Error::new_spanned(arguments, message));
     }
     let analysis = ir::contract::check(source)?;
     let candidates = ir::physical::candidate_prefixes(&source.physical, &analysis.physical);
@@ -164,10 +187,20 @@ pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
                 })
             })
             .collect();
+        if matches!(kind, RunKind::Radix) {
+            // Constants removed from the stored key do not make a composite
+            // read eligible. Rust checks the selected provider's key traits.
+            if columns.len() == 1 && stored.len() == 1 {
+                keyed.ty = syn::parse_quote!(::cq_storage::RadixRun<_, _>);
+                keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
+            }
+            continue;
+        }
         // Request codec selection at the concrete Rust build callsite without
         // inspecting column types. Unsupported keys retain NoDense storage.
         if stored.len() == 1 {
             keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense>);
+            keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
         }
     }
     ir::check_rewrite(source, &target)?;
@@ -207,14 +240,10 @@ pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
         }) {
             continue;
         }
-        if columns.iter().all(|column| {
-            let ty = ir::ungroup_type(&analysis.physical.rows[&name].types[column]);
-            matches!(ty,
-                Type::Path(p) if ["i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "bool", "String"]
-                    .iter().any(|name| p.path.is_ident(name)))
-                || matches!(ty, Type::Reference(r) if matches!(&*r.elem, Type::Path(p) if p.path.is_ident("str")))
-        }) && keyed.filtered.is_none() {
+        // Scalar-key encoding is a Rust trait obligation, not a type-name test.
+        if keyed.filtered.is_none() {
             keyed.ty = syn::parse_quote!(::cq_gpu_runtime::HashedRun<_, _>);
+            keyed.supports = None;
         }
     }
     ir::check_rewrite(source, &target)?;

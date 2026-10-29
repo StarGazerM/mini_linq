@@ -14,7 +14,7 @@ JOIN nation n ON n.n_nationkey = s.s_nationkey
 JOIN region r ON r.r_regionkey = n.n_regionkey
 WHERE r.r_name = 'ASIA' AND o.o_orderdate >= DATE '1994-01-01'
 AND o.o_orderdate < DATE '1995-01-01'"#;
-pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "transfer", "le", "le_runs", "generic_smallest", "advised"];
+pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", "generic_smallest", "advised"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("customer", "c_custkey,c_nationkey"),
     ("orders", "o_orderkey,o_custkey,o_orderdate"),
@@ -142,11 +142,17 @@ runner!($; tuned, {
     plan = ::cq_planners::order(written, fine);
     physical = [::cq_rewrites::canon_prefixes, ::cq_rewrites::smallest_intersections];
 }, []);
-runner!($; advised, { plan = ::mini_linq::passes::plan(no_reduce, order(Region, Nation, Customer, Orders, Lineitem, Supplier)); }, []);
+// Close the Supplier/customer-nation cycle before expanding Nation/Region.
+// Checked order advice keeps the written date-guard prerequisites intact.
+runner!($; advised, { plan = ::mini_linq::passes::plan(order(Lineitem, Orders, Customer, Supplier, Nation, Region)); }, []);
 
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {
         "default" => default::run(data),
+        "radix" => radix::run(data),
+        "radix_retained" => radix_retained::run(data),
+        "built_hash" => built_hash::run(data),
+        "built_radix" => built_radix::run(data),
         "par" => par::run(data),
         "no-reduce" => no_reduce::run(data),
         "transfer" => transfer::run(data),

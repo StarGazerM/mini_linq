@@ -780,9 +780,14 @@ pub fn key_partition_in(
                 ));
             }
             let entry_index = LitInt::new(&entry_index.to_string(), advice.name.span());
+            // Hash routing preserves distinct-key enumeration, but does not
+            // promise the inner provider's retained or expandable lookup ABI.
+            let supports = keyed
+                .supports(cq_lang_sequence::structures::ProviderCapability::Keys)
+                .then(|| quote!(supports[keys]));
             target.structures = cq_structure_selection::retype(
                 &target.structures,
-                quote!(entry(#entry_index) => ::cq_storage::sharded::Sharded<#ty>),
+                quote!(entry(#entry_index) => ::cq_storage::sharded::Sharded<#ty> #supports),
             )?;
             found = true;
         }

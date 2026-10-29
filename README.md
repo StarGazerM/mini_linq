@@ -36,11 +36,18 @@ stopping, retention, and the Rust ancestry tree. Rust `||` keeps its guard rules
 | `tests/` | Optional homework acceptance tests for the root course package (`hw4` feature) |
 | `features/` | Standalone external consumers of the packaged public API |
 | `tools/` | Dependency, external-consumer, public-API, and regression gates |
+| `experiments/mac/` | Git-managed MCCL/Metal runtime, GPU-built RadixRun provider, and matched CPU/GPU experiments |
 | `doc/` | Short design notes and the formal specification |
 
 Grammars and extension APIs live in crate `//!` documentation. See
 [the design](doc/DESIGN.md) and [the formal specification](doc/formal/README.md).
 `passes/cq-reduce/tests/ya_schedule.rs` supplies the reduction pass's teaching acceptance tests.
+
+The primary checkout contains all active Mac work. Its standalone workspaces are
+`experiments/mac/mccl`, `experiments/mac/cq-mac`, `experiments/mac/gpu-index`, and
+`experiments/mac/query-expansion`; none requires a sibling development checkout.
+See [Mac implementation and build commands](doc/MAC-IMPLEMENTATION.md).
+Metal remains outside the portable core workspace.
 
 ## Compose a pipeline
 

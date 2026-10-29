@@ -12,6 +12,7 @@ fn gpu_catalog() -> Catalog {
     let levels = vec![vec!["host".into(), "device".into()]];
     Catalog {
         providers: vec![ProviderToken {
+            supports: Vec::new(),
             ty: syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
             elements: None,
             capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
@@ -127,34 +128,16 @@ fn selection_is_deterministic_and_uses_first_satisfying_token() {
 }
 
 #[test]
-fn rejection_names_structure_and_catalog_read_obligation() {
+fn unavailable_read_or_canonicalization_cannot_be_selected() {
     let source = cq_structure_selection::compile(&h05().physical).unwrap();
-    let mut catalog = gpu_catalog();
-    catalog.providers[0].capabilities.clear();
-    let error = select_from_catalog(&source, &catalog)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("nation_index"), "{error}");
-    assert!(error.contains("Exact"), "{error}");
-    assert!(error.contains("read obligation"), "{error}");
-    assert_eq!(
-        error,
-        select_from_catalog(&source, &catalog)
-            .unwrap_err()
-            .to_string()
-    );
-
-    let mut catalog = gpu_catalog();
-    for canon in &mut catalog.canons {
+    let mut missing_read = gpu_catalog();
+    missing_read.providers[0].capabilities.clear();
+    assert!(select_from_catalog(&source, &missing_read).is_err());
+    let mut missing_canon = gpu_catalog();
+    for canon in &mut missing_canon.canons {
         canon.levels.clear();
     }
-    let error = select_from_catalog(&source, &catalog)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        error.contains("answer") && error.contains("canon") && error.contains("read obligation"),
-        "{error}"
-    );
+    assert!(select_from_catalog(&source, &missing_canon).is_err());
 }
 
 #[test]

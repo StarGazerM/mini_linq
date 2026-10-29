@@ -16,7 +16,7 @@ use std::sync::Mutex;
 
 use crate::parallel::{for_each_index, map_index};
 
-use crate::{Build, ExactMembership, IndexRead};
+use crate::{Build, ExactMembership, IndexRead, Keys};
 
 /// Routing policy recorded with a provider; must match its input partition.
 pub trait Router<K: ?Sized> {
@@ -362,6 +362,7 @@ macro_rules! routed_read {
 }
 routed_read!([K, V] Index<K, V>);
 routed_read!([K, V, C] crate::SortedRun<K, V, C>);
+routed_read!([K, V] crate::RadixRun<K, V>);
 routed_read!([K, V] std::collections::BTreeMap<K, Vec<V>>);
 
 /// Shared routing function used by the Sequence key partition and its provider.
@@ -429,7 +430,10 @@ impl<'a, K, V> Iterator for IndexKeys<'a, K, V> {
     }
 }
 
-impl<K, V> crate::Keys for Index<K, V> {
+impl<K, V> ExactSizeIterator for IndexKeys<'_, K, V> {}
+impl<K, V> std::iter::FusedIterator for IndexKeys<'_, K, V> {}
+
+impl<K, V> Keys for Index<K, V> {
     type Key = K;
     type Iter<'a>
         = IndexKeys<'a, K, V>
@@ -568,6 +572,31 @@ mod tests {
                 assert_distinct_keys(&sorted, expected);
                 assert_distinct_keys(&trees, expected);
             }
+        }
+    }
+
+    #[test]
+    fn declared_keys_preserve_disjoint_support_and_duplicate_payloads() {
+        fn check<I: Keys<Key = u32>>(index: &I) {
+            let mut keys = index.distinct_keys().copied().collect::<Vec<_>>();
+            keys.sort_unstable();
+            assert_eq!(keys, [0, 2, 5, u32::MAX]);
+            assert_eq!(index.key_count(), keys.len());
+        }
+        let rows = [(5u32, 9u32), (0, 4), (5, 9), (u32::MAX, 7), (2, 3)];
+        check(&Index::build(rows.into_iter()));
+        for count in [1, 3, 16] {
+            let mut parts = vec![Vec::new(); count];
+            for row in rows {
+                parts[route_index(&row.0, count)].push(row);
+            }
+            let hash = Sharded::<Index<u32, u32>>::build_parts(parts.clone());
+            let radix = Sharded::<crate::RadixRun<u32, u32>>::build_parts(parts);
+            check(&hash);
+            check(&radix);
+            assert_eq!((&radix).lookup(&5).collect::<Vec<_>>(), [9, 9]);
+            assert_eq!((&radix).lookup(&u32::MAX).collect::<Vec<_>>(), [7]);
+            assert_eq!((&radix).lookup(&1).collect::<Vec<_>>(), []);
         }
     }
 

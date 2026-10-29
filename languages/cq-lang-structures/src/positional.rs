@@ -251,29 +251,6 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
             if !origin.columns.iter().any(|c| c.column == *column) {
                 return error(column, "read column is absent from lineage");
             }
-            if let syn::Type::Path(path) = marker {
-                if path
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|s| s.ident == "ColumnAt")
-                {
-                    let base = symbol_name(&origin.base);
-                    let n = syn::Index::from(
-                        facts.host_layouts[&base]
-                            .iter()
-                            .position(|c| *c == symbol_name(column))
-                            .expect("checked base column"),
-                    );
-                    let expected: syn::Type = syn::parse_quote!(::cq_load::ColumnAt<#n>);
-                    if marker != &expected {
-                        return error(
-                            marker,
-                            "marker must match the recorded declaration-order column",
-                        );
-                    }
-                }
-            }
             if facts
                 .reads
                 .insert(
@@ -389,6 +366,8 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
                 "keyset requires a membership demand and recorded reusable source rows",
             );
         }
+        // Codec/key-layout and interval requirements are Rust trait obligations
+        // of the recorded provider, identical for aliases and builtin spellings.
     }
     // Formal rule STR-Read: A summary names only the existing right build of this reader, earlier in Physical.
     for (name, read) in &facts.reads {

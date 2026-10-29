@@ -1,0 +1,6093 @@
+{
+  "device": "Apple M3 Max",
+  "limits": "CPU process getrusage minor/major fault deltas, not GPU page faults and not a zero-fill-only counter. No GPU commands. Source/cache warming and first-touch costs coexist; fresh allocations do not guarantee cold physical pages.",
+  "method": "fresh virtual allocation each sample; resident source initialized outside timing; same byte count/pattern in first and second writes; full reads between writes validate initialization",
+  "page_bytes": 16384,
+  "results": [
+    {
+      "allocation": "anonymous_mmap",
+      "bytes": 8388608,
+      "operation": "memset",
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.002
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.293167
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.40299999999999997
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.045125
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.273125
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.072375
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.001
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.331083
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.410541
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.043542
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.3135
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.0745
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.0012920000000000002
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.316083
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.42733400000000005
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.040416
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.316167
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.081875
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.001583
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.367042
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.404792
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.046625
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.3198339999999997
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.07437500000000001
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.001542
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.297708
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.455
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.03825
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.289209
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.072875
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.0012079999999999999
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2638749999999996
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.374959
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.035958
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.27
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.07308300000000001
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.0011250000000000001
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.29725
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.400292
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.037750000000000006
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.288875
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.079791
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.001083
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2966670000000002
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.386667
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.039625
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.276792
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.073375
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.000833
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.269959
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.389708
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.042624999999999996
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.311333
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.07275000000000001
+          }
+        }
+      ],
+      "summary": {
+        "allocation": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.002,
+            "median": 0.0012079999999999999,
+            "min": 0.000833
+          }
+        },
+        "first_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 2.367042,
+            "median": 2.29725,
+            "min": 2.2638749999999996
+          }
+        },
+        "first_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 512.0,
+            "median": 512.0,
+            "min": 512.0
+          },
+          "wall_ms": {
+            "max": 0.455,
+            "median": 0.40299999999999997,
+            "min": 0.374959
+          }
+        },
+        "release": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.046625,
+            "median": 0.040416,
+            "min": 0.035958
+          }
+        },
+        "second_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 2.3198339999999997,
+            "median": 2.289209,
+            "min": 2.27
+          }
+        },
+        "second_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.081875,
+            "median": 0.073375,
+            "min": 0.072375
+          }
+        }
+      }
+    },
+    {
+      "allocation": "anonymous_mmap",
+      "bytes": 8388608,
+      "operation": "memcpy",
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.001084
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.270334
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.44620800000000005
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.042792
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.300375
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.115916
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.0012920000000000002
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2685
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.44787499999999997
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.045875
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.263667
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.11649999999999999
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.000709
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.322625
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.491
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.044208000000000004
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.316125
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.121625
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.001083
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.328416
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.42583299999999996
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.037417
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.3195
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.122541
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.00045900000000000004
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.269209
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.453917
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.036875000000000005
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2695
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.134208
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.001542
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2676250000000002
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.45637500000000003
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.040083
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.263583
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.12079200000000001
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.000792
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.270334
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.453291
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.036875000000000005
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.267083
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.11975
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.000541
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2702500000000003
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.442667
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.036417
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2735
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.119417
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.00075
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.284959
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.43262500000000004
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.038916
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.273875
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.12495900000000001
+          }
+        }
+      ],
+      "summary": {
+        "allocation": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.001542,
+            "median": 0.000792,
+            "min": 0.00045900000000000004
+          }
+        },
+        "first_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 2.328416,
+            "median": 2.270334,
+            "min": 2.2676250000000002
+          }
+        },
+        "first_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 512.0,
+            "median": 512.0,
+            "min": 512.0
+          },
+          "wall_ms": {
+            "max": 0.491,
+            "median": 0.44787499999999997,
+            "min": 0.42583299999999996
+          }
+        },
+        "release": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.045875,
+            "median": 0.038916,
+            "min": 0.036417
+          }
+        },
+        "second_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 2.3195,
+            "median": 2.2735,
+            "min": 2.263583
+          }
+        },
+        "second_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.134208,
+            "median": 0.12079200000000001,
+            "min": 0.115916
+          }
+        }
+      }
+    },
+    {
+      "allocation": "metal_shared",
+      "bytes": 8388608,
+      "operation": "memset",
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.061
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2795419999999997
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.38975000000000004
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.063167
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2639169999999997
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.07358400000000001
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.021375
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.290125
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.38466599999999995
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.055541
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.285792
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.075208
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.019833
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.321542
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.401292
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.058541
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.345584
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.075084
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.020208999999999998
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2854170000000003
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.448
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.048208
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.275541
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.07579100000000001
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 1
+            },
+            "wall_ms": 0.020291
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.263667
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.399041
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.04775
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.293958
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.07295900000000001
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.013958
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.298708
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.38766700000000004
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.042833
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2894579999999998
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.07295900000000001
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.0125
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.26675
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.388875
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.041458
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.269375
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.072667
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.015166
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2734579999999998
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.386042
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.044291
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.271917
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.073041
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.016458
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2720000000000002
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.389917
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.049583
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.274459
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.072875
+          }
+        }
+      ],
+      "summary": {
+        "allocation": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 1.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.061,
+            "median": 0.019833,
+            "min": 0.0125
+          }
+        },
+        "first_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 2.321542,
+            "median": 2.2795419999999997,
+            "min": 2.263667
+          }
+        },
+        "first_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 512.0,
+            "median": 512.0,
+            "min": 512.0
+          },
+          "wall_ms": {
+            "max": 0.448,
+            "median": 0.38975000000000004,
+            "min": 0.38466599999999995
+          }
+        },
+        "release": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.063167,
+            "median": 0.048208,
+            "min": 0.041458
+          }
+        },
+        "second_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 2.345584,
+            "median": 2.275541,
+            "min": 2.2639169999999997
+          }
+        },
+        "second_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.07579100000000001,
+            "median": 0.073041,
+            "min": 0.072667
+          }
+        }
+      }
+    },
+    {
+      "allocation": "metal_shared",
+      "bytes": 8388608,
+      "operation": "memcpy",
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.016416999999999998
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.310542
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.429542
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.053375000000000006
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2869159999999997
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.12208299999999998
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 1
+            },
+            "wall_ms": 0.015167
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.299291
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.431916
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.052666
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.336208
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.1185
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.01575
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.328625
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.461167
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.062917
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.3620419999999998
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.1275
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.032792
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.353375
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.457667
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.051916000000000004
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.3244580000000004
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.125958
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.011916999999999999
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.276875
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.419916
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.047166
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.280583
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.121958
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.010084000000000001
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.273167
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.436083
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.045833
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2661249999999997
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.137333
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.013708
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.277417
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.414875
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.044917
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.292792
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.120417
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.019208
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2668340000000002
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.432917
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.04475
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.265791
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.120083
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.016208
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.288208
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 512
+            },
+            "wall_ms": 0.47058300000000003
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.043250000000000004
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.3016669999999997
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.134625
+          }
+        }
+      ],
+      "summary": {
+        "allocation": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 1.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.032792,
+            "median": 0.01575,
+            "min": 0.010084000000000001
+          }
+        },
+        "first_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 2.353375,
+            "median": 2.288208,
+            "min": 2.2668340000000002
+          }
+        },
+        "first_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 512.0,
+            "median": 512.0,
+            "min": 512.0
+          },
+          "wall_ms": {
+            "max": 0.47058300000000003,
+            "median": 0.432917,
+            "min": 0.414875
+          }
+        },
+        "release": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.062917,
+            "median": 0.047166,
+            "min": 0.043250000000000004
+          }
+        },
+        "second_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 2.3620419999999998,
+            "median": 2.292792,
+            "min": 2.265791
+          }
+        },
+        "second_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.137333,
+            "median": 0.12208299999999998,
+            "min": 0.1185
+          }
+        }
+      }
+    },
+    {
+      "allocation": "anonymous_mmap",
+      "bytes": 134217728,
+      "operation": "memset",
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.0013340000000000001
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.5655
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.382874999999999
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.789458
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.48225
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.170875
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.002
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.450875
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.747917
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.754291
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.391209
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.150583
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.001917
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.391583
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.23575
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.741583
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.4055
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.169958
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.002042
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.390708000000004
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.119667
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.74175
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.368541
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.170042
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.002
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.355625
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.226833
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.740333
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.566458000000004
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.1658330000000001
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.00175
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.343541
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.266
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.717083
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.376375
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.165334
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.002
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.304625
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.406708
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.745459
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.382
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.171875
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.0043749999999999995
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.346417
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.77625
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.798667
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.4615
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.164708
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.00325
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.373292
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.872792
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.741792
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.408583
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.16675
+          }
+        }
+      ],
+      "summary": {
+        "allocation": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.0043749999999999995,
+            "median": 0.002,
+            "min": 0.0013340000000000001
+          }
+        },
+        "first_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 36.5655,
+            "median": 36.373292,
+            "min": 36.304625
+          }
+        },
+        "first_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 8192.0,
+            "median": 8192.0,
+            "min": 8192.0
+          },
+          "wall_ms": {
+            "max": 6.872792,
+            "median": 6.382874999999999,
+            "min": 6.119667
+          }
+        },
+        "release": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.798667,
+            "median": 0.741792,
+            "min": 0.717083
+          }
+        },
+        "second_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 36.566458000000004,
+            "median": 36.4055,
+            "min": 36.368541
+          }
+        },
+        "second_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 1.171875,
+            "median": 1.16675,
+            "min": 1.150583
+          }
+        }
+      }
+    },
+    {
+      "allocation": "anonymous_mmap",
+      "bytes": 134217728,
+      "operation": "memcpy",
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.001833
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.433209
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 7.00125
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.717958
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.429583
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.198208
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.002125
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.518916999999995
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.791292
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.755792
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.405375
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.14125
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.001958
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.3695
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.8335
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.7004999999999999
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.776625
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.1662500000000002
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.001584
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.378916999999994
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.796167
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.7345
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.322166
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.124917
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.00125
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.354749999999996
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 7.221291
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.7609589999999999
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.386041
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.145
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.002208
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.356708000000005
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.899959
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.726916
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.367208999999995
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.116541
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.001833
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.327333
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.942958
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.729542
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.346542
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.133959
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.003375
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.4315
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 7.594959
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.7707919999999999
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.477125
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.1197500000000002
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.002375
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.384750000000004
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 7.499167
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.700333
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.423458
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.128291
+          }
+        }
+      ],
+      "summary": {
+        "allocation": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.003375,
+            "median": 0.001958,
+            "min": 0.00125
+          }
+        },
+        "first_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 36.518916999999995,
+            "median": 36.378916999999994,
+            "min": 36.327333
+          }
+        },
+        "first_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 8192.0,
+            "median": 8192.0,
+            "min": 8192.0
+          },
+          "wall_ms": {
+            "max": 7.594959,
+            "median": 6.942958,
+            "min": 6.791292
+          }
+        },
+        "release": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.7707919999999999,
+            "median": 0.729542,
+            "min": 0.700333
+          }
+        },
+        "second_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 36.776625,
+            "median": 36.405375,
+            "min": 36.322166
+          }
+        },
+        "second_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 2.198208,
+            "median": 2.133959,
+            "min": 2.116541
+          }
+        }
+      }
+    },
+    {
+      "allocation": "metal_shared",
+      "bytes": 134217728,
+      "operation": "memset",
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.044583000000000005
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.399750000000004
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.767417
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.79
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.417417
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.157958
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.040125
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.380292000000004
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.16025
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.798542
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.547916
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.177167
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.028333
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.355
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.397334
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.780125
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.416542
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.169333
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.037709
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.329208
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.271125
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.73025
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.349042
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.1694579999999999
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.02875
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.361333
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.384667
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.7589170000000001
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.306666
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.1696659999999999
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.036209
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.376833999999995
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.187875
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.7545
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.331084
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.16625
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.026125000000000002
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.397458
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.208208
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.773292
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.326209
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.1695
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.073667
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.451375
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.802167
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.7995
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.421333
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.155459
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.044333
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.409208
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.8971670000000005
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.76225
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.426292
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 1.176083
+          }
+        }
+      ],
+      "summary": {
+        "allocation": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.073667,
+            "median": 0.037709,
+            "min": 0.026125000000000002
+          }
+        },
+        "first_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 36.451375,
+            "median": 36.380292000000004,
+            "min": 36.329208
+          }
+        },
+        "first_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 8192.0,
+            "median": 8192.0,
+            "min": 8192.0
+          },
+          "wall_ms": {
+            "max": 6.8971670000000005,
+            "median": 6.384667,
+            "min": 6.16025
+          }
+        },
+        "release": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.7995,
+            "median": 0.773292,
+            "min": 0.73025
+          }
+        },
+        "second_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 36.547916,
+            "median": 36.416542,
+            "min": 36.306666
+          }
+        },
+        "second_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 1.177167,
+            "median": 1.1694579999999999,
+            "min": 1.155459
+          }
+        }
+      }
+    },
+    {
+      "allocation": "metal_shared",
+      "bytes": 134217728,
+      "operation": "memcpy",
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.028333
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.383709
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 7.180834
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.7748339999999999
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.380250000000004
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.2208750000000004
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.030208
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.426542
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 7.240667
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.729084
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.387791
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.157416
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.026958
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.441624999999995
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 7.103084
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.778125
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.384541
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.189667
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.022333000000000002
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.681459
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.984833
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.754833
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.343083
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.148542
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.024042
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.352875
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.894875
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.742209
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.30775
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.116209
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.030458
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.337125
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.820209
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.809167
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.308459
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.159833
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.023375
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.385374999999996
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 6.879459
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.767958
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.335083999999995
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.188042
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.031916
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.415333000000004
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 7.547625
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.9178329999999999
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.540917
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.090667
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.039667
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.433042
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 8192
+            },
+            "wall_ms": 7.599749999999999
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.757459
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 36.445833
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.1862909999999998
+          }
+        }
+      ],
+      "summary": {
+        "allocation": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.039667,
+            "median": 0.028333,
+            "min": 0.022333000000000002
+          }
+        },
+        "first_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 36.681459,
+            "median": 36.415333000000004,
+            "min": 36.337125
+          }
+        },
+        "first_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 8192.0,
+            "median": 8192.0,
+            "min": 8192.0
+          },
+          "wall_ms": {
+            "max": 7.599749999999999,
+            "median": 7.103084,
+            "min": 6.820209
+          }
+        },
+        "release": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.9178329999999999,
+            "median": 0.767958,
+            "min": 0.729084
+          }
+        },
+        "second_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 36.540917,
+            "median": 36.380250000000004,
+            "min": 36.30775
+          }
+        },
+        "second_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 2.2208750000000004,
+            "median": 2.159833,
+            "min": 2.090667
+          }
+        }
+      }
+    },
+    {
+      "allocation": "anonymous_mmap",
+      "bytes": 536870912,
+      "operation": "memset",
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.008334
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.985625
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 26.102917
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.89525
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.72062499999998
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.646292
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.007875
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.702958
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.221166
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.8075840000000003
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.809333
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.619125
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.006792
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.656125
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.125208
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 3.010542
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 146.036792
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.703958999999999
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.0025
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.670792
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 24.77
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.901542
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.672167
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.7294160000000005
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.003291
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.809417
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.364624999999997
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.872625
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.62866599999998
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.719042
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.004416
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.616833
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.263208
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.8492499999999996
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.673042
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.7001669999999995
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.003334
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.704541
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.515458000000002
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.816083
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.613042
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.636042
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.006292
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.74462499999998
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.285958
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.895959
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.602541
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.675583
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.003292
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.46404199999998
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.510791
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 3.023875
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.515333
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.666667
+          }
+        }
+      ],
+      "summary": {
+        "allocation": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.008334,
+            "median": 0.004416,
+            "min": 0.0025
+          }
+        },
+        "first_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 145.985625,
+            "median": 145.702958,
+            "min": 145.46404199999998
+          }
+        },
+        "first_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 32768.0,
+            "median": 32768.0,
+            "min": 32768.0
+          },
+          "wall_ms": {
+            "max": 26.102917,
+            "median": 25.285958,
+            "min": 24.77
+          }
+        },
+        "release": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 3.023875,
+            "median": 2.89525,
+            "min": 2.8075840000000003
+          }
+        },
+        "second_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 146.036792,
+            "median": 145.672167,
+            "min": 145.515333
+          }
+        },
+        "second_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 4.7294160000000005,
+            "median": 4.675583,
+            "min": 4.619125
+          }
+        }
+      }
+    },
+    {
+      "allocation": "anonymous_mmap",
+      "bytes": 536870912,
+      "operation": "memcpy",
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.00275
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.62770799999998
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 27.8895
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.732041
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.772292
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.635833
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.00325
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.792667
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 27.660959
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.751375
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.64612499999998
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.639542
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.003083
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.691125
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 27.731834
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.735917
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.93300000000002
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.741375
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.002875
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.541666
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 27.965958
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.9329159999999996
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.811833
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.618209
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.002208
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 146.232458
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 27.856208
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.936125
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 147.434834
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.9105
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.003875
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.643667
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 27.791041
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.870292
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.663459
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.701625
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.007500000000000001
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.79945899999998
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 27.989333000000002
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.899208
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 146.027125
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.623125
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.002667
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.367875
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 27.7605
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.690334
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 146.273
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.626125
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.007625
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.42866700000002
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 28.100916
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.79975
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.376
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.633625
+          }
+        }
+      ],
+      "summary": {
+        "allocation": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.007625,
+            "median": 0.003083,
+            "min": 0.002208
+          }
+        },
+        "first_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 146.232458,
+            "median": 145.643667,
+            "min": 145.367875
+          }
+        },
+        "first_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 32768.0,
+            "median": 32768.0,
+            "min": 32768.0
+          },
+          "wall_ms": {
+            "max": 28.100916,
+            "median": 27.856208,
+            "min": 27.660959
+          }
+        },
+        "release": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 2.936125,
+            "median": 2.79975,
+            "min": 2.690334
+          }
+        },
+        "second_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 147.434834,
+            "median": 145.811833,
+            "min": 145.376
+          }
+        },
+        "second_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 8.9105,
+            "median": 8.635833,
+            "min": 8.618209
+          }
+        }
+      }
+    },
+    {
+      "allocation": "metal_shared",
+      "bytes": 536870912,
+      "operation": "memset",
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.066542
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.800333
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.118667000000002
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 3.044708
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.591833
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.718833
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.053458000000000006
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.66049999999998
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.260082999999998
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 3.045292
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.626375
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.678917
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.094083
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.451083
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.74925
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.867167
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.86791599999998
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.684375
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.06875
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.658875
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.447958
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 3.078
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.99579100000003
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.710417
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.095667
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 146.107125
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.58675
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.772709
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.471542
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.783917000000001
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.098084
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 146.59295799999998
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.537792
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 3.064958
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.84008300000002
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.637125
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.057584
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.95683400000001
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.510084
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 3.004458
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 146.584292
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.81525
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.083917
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.66424999999998
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.573167
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.909917
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.3985
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.652041
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.062333
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.428292
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 25.9545
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.72225
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.324791
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 4.688292000000001
+          }
+        }
+      ],
+      "summary": {
+        "allocation": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.098084,
+            "median": 0.06875,
+            "min": 0.053458000000000006
+          }
+        },
+        "first_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 146.59295799999998,
+            "median": 145.66424999999998,
+            "min": 145.428292
+          }
+        },
+        "first_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 32768.0,
+            "median": 32768.0,
+            "min": 32768.0
+          },
+          "wall_ms": {
+            "max": 25.9545,
+            "median": 25.537792,
+            "min": 25.118667000000002
+          }
+        },
+        "release": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 3.078,
+            "median": 3.004458,
+            "min": 2.72225
+          }
+        },
+        "second_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 146.584292,
+            "median": 145.626375,
+            "min": 145.324791
+          }
+        },
+        "second_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 4.81525,
+            "median": 4.688292000000001,
+            "min": 4.637125
+          }
+        }
+      }
+    },
+    {
+      "allocation": "metal_shared",
+      "bytes": 536870912,
+      "operation": "memcpy",
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.055834
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.78354199999998
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 28.166625
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.9748330000000003
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.88795800000003
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.678708
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.04425
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 146.756125
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 28.07025
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.826209
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 1
+            },
+            "wall_ms": 145.629459
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.808416
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.057791999999999996
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.822667
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 27.75025
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 3.047667
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.691209
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.685333
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.072834
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 146.781125
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 27.9465
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.9350829999999997
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.751334
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.722833
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.061208
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.93995800000002
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 28.37825
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 3.057042
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 146.13620799999998
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.901292
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.055166
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.648583
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 28.771250000000002
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.898458
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.67649999999998
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.761875
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.039958
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.668459
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 28.348584
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.898792
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.665583
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.74125
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.108875
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.69454100000002
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 28.279167
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.9176670000000002
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 145.71349999999998
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.620292
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 0.044625
+          },
+          "first_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 146.09050000000002
+          },
+          "first_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 32768
+            },
+            "wall_ms": 28.440208000000002
+          },
+          "release": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 2.949042
+          },
+          "second_read": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 146.37662500000002
+          },
+          "second_write": {
+            "cpu_process_faults": {
+              "major": 0,
+              "minor": 0
+            },
+            "wall_ms": 8.709625
+          }
+        }
+      ],
+      "summary": {
+        "allocation": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 0.108875,
+            "median": 0.055834,
+            "min": 0.039958
+          }
+        },
+        "first_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 146.781125,
+            "median": 145.822667,
+            "min": 145.648583
+          }
+        },
+        "first_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 32768.0,
+            "median": 32768.0,
+            "min": 32768.0
+          },
+          "wall_ms": {
+            "max": 28.771250000000002,
+            "median": 28.279167,
+            "min": 27.75025
+          }
+        },
+        "release": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 3.057042,
+            "median": 2.9350829999999997,
+            "min": 2.826209
+          }
+        },
+        "second_read": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 1.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 146.37662500000002,
+            "median": 145.71349999999998,
+            "min": 145.629459
+          }
+        },
+        "second_write": {
+          "major": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "minor": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0
+          },
+          "wall_ms": {
+            "max": 8.901292,
+            "median": 8.722833,
+            "min": 8.620292
+          }
+        }
+      }
+    }
+  ],
+  "runs": 9
+}

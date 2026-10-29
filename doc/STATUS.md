@@ -54,6 +54,16 @@
   `represent(positions)` and `stage(batch(N))` opt in. Printers bind only
   the columns an operator reads (`cq-print` column environment). Positions
   stop at probes: carrying a `RowId` through an index payload is deferred.
+- General provider optimization contracts are recorded as
+  `supports [retain, expand, keys]`, not inferred from implementation names.
+  Native emission checks cursor/key traits; selection and replay replace support
+  with the provider and preserve live obligations. Target switches reject
+  decisions a terminal cannot realize rather than silently discarding them.
+- Mac: standalone Metal build/merge experiments are integrated with the optimized
+  native RadixRun tree. The [Mac implementation plan](MAC-IMPLEMENTATION.md)
+  includes flat and LSM-like maintenance, snapshot/publication obligations and
+  compiler boundaries. Production Metal providers, online maintained runs and
+  a Metal Sequence backend remain planned, not implemented.
 
 ## Gap to DuckDB (SF 1, single thread)
 
@@ -167,6 +177,22 @@ codec eligible for the rank directory. Multi-column, non-integral and
 computed/owned keys stay hashed; the rewrite never selects NoDense
 binary-search runs. An integral key with an over-budget span can still fall
 back to binary search at runtime.
+
+The Mac experiment also exposes checked `cq_rewrites::radix_runs`, selecting
+native `cq_storage::RadixRun<_,_>` for eligible singleton i32/i64/u32/u64 payload
+builds, including owned/computed keys. This is radix12/error32 spline lookup,
+not `SortedRun` binary/rank lookup. It composes with retained cursors and
+explicit segmented expansion; Sequential capability is Exact/Range/Membership,
+not Ordered or GPU. Default selection and the existing `le_runs` preset are
+unchanged. See [native execution and measurements](../experiments/mac/README.md#native-backend-radixspline-provider-and-processing-advice).
+
+The CPU TPC-H harness offers `--index-comparison` for all 29 current kernels.
+Ordinary radix advice can leave host fallbacks unchanged; matched
+`built_hash`/`built_radix` configurations make explicit materialization common
+to both arms on supported kernels. H09's authored order now avoids its independent
+Part/Orders prefix, using local SF1 cardinalities and an index-width comparison.
+The Part substring guard remains first. Earlier H09 timings below and in the
+GPU report are historical, not timings for this revised CPU order.
 
 Cursor retention uses `share` / `repr … witness` / `stage … expand`
 (ST-Share, STR-Witness, ST-Expand; `cq_rewrites::retain_lookups`), the R/E

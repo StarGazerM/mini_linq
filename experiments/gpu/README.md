@@ -171,6 +171,7 @@ pipeline {
     cq = pipeline {
         physical = [::cq_gpu_sequence::capture_constants];
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
+        stage = ::cq_gpu_sequence::stage;
         sequence = ::mini_linq::passes::sequence;
         decompose = [::cq_gpu_sequence::plan];
         grade = ::cq_gpu_sequence::machine_grade;
@@ -181,6 +182,11 @@ pipeline {
     print = ::cq_gpu_datalog::print_rounds;
 }
 ```
+
+The GPU Structures stage validates target support without inheriting the CPU
+batching policy. GPU batches are selected by Sequence decomposition; explicit
+unsupported Structures witnesses, stages and join filters are rejected rather
+than silently discarded.
 
 `bind_round` records complete input-layout and arena argument packets before
 printing. Its zero-based invocation ordinal names the binding rewrite after

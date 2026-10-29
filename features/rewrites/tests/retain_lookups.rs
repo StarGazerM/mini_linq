@@ -14,8 +14,8 @@ fn triangle_source() -> ir::Program {
         checked = pipe canon semi eager [a,c] candidate,s;
         return checked as answer(a,b,c);
     } structures {
-        r = ::cq_gpu::PrefixRun [b][c];
-        s = ::cq_gpu::PrefixRun [a][c];
+        r = CustomDirectory [b][c] supports [retain, expand];
+        s = CustomDirectory [a][c] supports [retain, expand];
         l host scan = ::core::iter::Map<_, _> [];
         r host scan = ::core::iter::Map<_, _> [];
         s host scan = ::core::iter::Map<_, _> [];
@@ -37,10 +37,7 @@ fn triangle_records_both_prefix_witnesses_at_first_probe() {
         assert_eq!(share.build, build);
         assert_eq!(share.keys, [key]);
         assert_eq!(share.force, "candidate");
-        assert_eq!(
-            facts.witnesses[first].ty,
-            syn::parse_quote!(::cq_storage::RunCursor<'_, _>)
-        );
+        assert!(facts.witnesses.contains_key(first));
     }
     assert_eq!(source.physical, target.physical);
     assert_eq!(retain_lookups(&target, quote!()).unwrap(), target);
@@ -51,7 +48,32 @@ fn triangle_records_both_prefix_witnesses_at_first_probe() {
 }
 
 #[test]
-fn leveled_host_lookup_retains_exact_snapshot_ranges() {
+fn candidate_retention_uses_directory_support_not_complete_payload_support() {
+    let mut source = triangle_source();
+    source.structures.entries.push(syn::parse_quote!(
+        r = CustomPayload [b];
+    ));
+    let target = retain_lookups(&source, quote!()).unwrap();
+    let facts = ir::contract::check(&target).unwrap();
+    assert!(facts.witnesses.contains_key("pre_r"));
+    assert_eq!(facts.shares["pre_r"].force, "candidate");
+    assert_eq!(source.physical, target.physical);
+
+    source.structures.entries[0] = syn::parse_quote!(
+        r = CustomDirectory [b][c];
+    );
+    *source.structures.entries.last_mut().unwrap() = syn::parse_quote!(
+        r = CustomPayload [b] supports [expand];
+    );
+    let target = retain_lookups(&source, quote!()).unwrap();
+    let facts = ir::contract::check(&target).unwrap();
+    assert!(!facts.witnesses.contains_key("pre_r"));
+    assert!(facts.witnesses.contains_key("pre_s"));
+    assert_eq!(source.physical, target.physical);
+}
+
+#[test]
+fn declared_host_lookup_retains_exact_snapshot_ranges() {
     let mut source: ir::Program = syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
         l = pipe rename L@0 {a -> x};
@@ -62,8 +84,8 @@ fn leveled_host_lookup_retains_exact_snapshot_ranges() {
     } structures {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
-        r host result(s) = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
-        r host result(p) = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
+        r host result(s) = Snapshot<0> [x] supports [retain];
+        r host result(p) = Snapshot<0> [x] supports [retain];
         p canon = ::std::collections::HashSet<_>;
     } };
     let target = retain_lookups(&source, quote!()).unwrap();
@@ -73,7 +95,7 @@ fn leveled_host_lookup_retains_exact_snapshot_ranges() {
     assert_eq!(target.physical, source.physical);
     assert_eq!(retain_lookups(&target, quote!()).unwrap(), target);
     source.structures.entries[3] = syn::parse_quote! {
-        r host result(p) = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<1>,),)> [x];
+        r host result(p) = Snapshot<1> [x] supports [retain];
     };
     assert!(retain_lookups(&source, quote!()).is_err());
 }
@@ -168,10 +190,7 @@ fn records_one_checked_cursor_and_roundtrips_idempotently() {
     assert_eq!(facts.shares["s"].first, "s");
     assert_eq!(facts.shares["s"].force, "p");
     assert_eq!(facts.witnesses.len(), 1);
-    assert_eq!(
-        facts.witnesses["s"].ty,
-        syn::parse_quote!(::cq_storage::RunCursor<'_, _>)
-    );
+    assert!(facts.witnesses.contains_key("s"));
     assert_eq!(source.physical, target.physical);
     assert_eq!(retain_lookups(&target, quote!()).unwrap(), target);
     assert_eq!(
@@ -200,11 +219,11 @@ fn preserves_positions_and_completes_an_existing_share() {
 }
 
 #[test]
-fn a_named_sorted_run_type_is_also_eligible() {
+fn a_custom_provider_with_declared_support_is_eligible() {
     let mut source = source();
     for entry in &mut source.structures.entries {
         if let Structure::Built { keyed, .. } = &mut entry.structure {
-            keyed.ty = syn::parse_quote!(SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>);
+            keyed.ty = syn::parse_quote!(CustomPayload<_, _>);
         }
     }
     let target = retain_lookups(&source, quote!()).unwrap();
@@ -295,7 +314,7 @@ fn structural_check_rejects_tampered_share_and_witness() {
         .find(|entry| entry.name == "s" && matches!(entry.structure, Structure::Repr { .. }))
         .unwrap();
     *entry = syn::parse_quote! {
-        s repr = tuples witness {r [y] at s as ::cq_storage::RunCursor<'_, _>};
+        s repr = tuples witness {r [y] at s as _};
     };
     assert!(ir::check_rewrite(&source, &bad_witness).is_err());
 }

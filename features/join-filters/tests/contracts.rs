@@ -143,8 +143,10 @@ fn routed_exact_provider_retyping_preserves_join_filter_obligations() {
     for ty in [
         quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>),
         quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>>),
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>, _>),
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::RadixRun<_, _>>),
     ] {
-        let changed = retype(&before, quote!(b => #ty)).unwrap();
+        let changed = retype(&before, quote!(b => #ty supports [keys])).unwrap();
         assert_eq!(changed.physical, before.physical);
         let facts = ir::contract::check(&changed).unwrap();
         assert_eq!(facts.join_filters, expected);
@@ -154,7 +156,7 @@ fn routed_exact_provider_retyping_preserves_join_filter_obligations() {
 }
 
 #[test]
-fn routed_filter_eligibility_uses_recorded_layout_not_type_names() {
+fn routed_filter_eligibility_uses_declared_support_not_type_names() {
     let before = join_filter(&source(), quote!(l)).unwrap();
     let expected = ir::contract::check(&before).unwrap().join_filters;
     for ty in [
@@ -168,9 +170,10 @@ fn routed_filter_eligibility_uses_recorded_layout_not_type_names() {
             >
         ),
     ] {
-        // These are opaque Rust types. The recorded exact single-level layout
-        // proves eligibility here; rustc checks Keys and the other capabilities.
-        let changed = retype(&before, quote!(b => #ty)).unwrap();
+        // Opaque Rust types do not establish capabilities. Recorded layout
+        // and support establish eligibility; rustc checks the declared traits.
+        assert!(retype(&before, quote!(b => #ty)).is_err());
+        let changed = retype(&before, quote!(b => #ty supports [keys])).unwrap();
         let facts = ir::contract::check(&changed).unwrap();
         assert_eq!(changed.physical, before.physical);
         assert_eq!(facts.join_filters, expected);

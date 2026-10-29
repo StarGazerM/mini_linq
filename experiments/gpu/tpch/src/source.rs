@@ -8,13 +8,12 @@
 //! load time. Decimal/Date Rust reads retain their scalar ABI.
 //! Staged sources retain every rule, dependency and final iterator composition.
 use crate::manifest::{Manifest, Result};
-use proc_macro2::{Group, TokenStream, TokenTree};
+use proc_macro2::{TokenStream, TokenTree};
 use quote::{ToTokens, quote};
 use std::collections::BTreeMap;
 use syn::{
     Ident, Token,
     parse::{Parse, ParseStream},
-    punctuated::Punctuated,
 };
 
 /// Unwrap the shared CPU configuration shell without expanding its variants.
@@ -760,8 +759,9 @@ impl Kernel {
 
     pub fn variable_origins(&self) -> Result<BTreeMap<String, (String, String)>> {
         let mut variables = BTreeMap::new();
-        collect_variables(self.body.clone(), &self.relations, &mut variables)?;
-        collect_variables(self.body.clone(), &self.dictionary_relations()?, &mut variables)?;
+        let body = self.cpu_program()?.query.body;
+        collect_variables(&body, &self.relations, &mut variables)?;
+        collect_variables(&body, &self.dictionary_relations()?, &mut variables)?;
         fn published(
             body: &cq_lang_cq::CommaList<cq_lang_cq::BodyItem>,
             inputs: &BTreeMap<String, Vec<Option<(String, String)>>>,
@@ -790,7 +790,7 @@ impl Kernel {
                 }
             }
         }
-        published(&self.cpu_program()?.query.body, &self.published_origins, &mut variables);
+        published(&body, &self.published_origins, &mut variables);
         Ok(variables)
     }
 
@@ -1177,34 +1177,36 @@ fn setup_constants(
     Ok(constants)
 }
 
-fn arguments(group: &Group) -> syn::Result<Punctuated<syn::Expr, Token![,]>> {
-    use syn::parse::Parser;
-    Punctuated::parse_terminated.parse2(group.stream())
-}
 
 fn collect_variables(
-    tokens: TokenStream,
+    body: &cq_lang_cq::CommaList<cq_lang_cq::BodyItem>,
     relations: &[Relation],
     variables: &mut BTreeMap<String, (String, String)>,
 ) -> Result<()> {
-    let tokens: Vec<_> = tokens.into_iter().collect();
-    for (index, token) in tokens.iter().enumerate() {
-        if let TokenTree::Group(group) = token {
-            if let Some(TokenTree::Ident(name)) = index.checked_sub(1).and_then(|i| tokens.get(i))
-                && let Some(relation) = relations.iter().find(|r| r.name == *name)
-            {
-                for (argument, (column, _)) in arguments(group)?.iter().zip(&relation.columns) {
-                    if let syn::Expr::Path(path) = argument
-                        && let Some(name) = path.path.get_ident()
-                    {
-                        variables.insert(
-                            name.to_string(),
-                            (relation.table.to_string(), column.to_string()),
-                        );
+    for item in body {
+        match item {
+            cq_lang_cq::BodyItem::Positive { atom } => {
+                if let Some(relation) = relations.iter().find(|r| r.name == atom.relation) {
+                    for (argument, (column, _)) in atom.args.iter().zip(&relation.columns) {
+                        if let syn::Expr::Path(path) = argument
+                            && let Some(name) = path.path.get_ident()
+                        {
+                            variables.insert(
+                                name.to_string(),
+                                (relation.table.to_string(), column.to_string()),
+                            );
+                        }
                     }
                 }
             }
-            collect_variables(group.stream(), relations, variables)?;
+            cq_lang_cq::BodyItem::Block(block) => {
+                for branch in &block.branches {
+                    collect_variables(&branch.body, relations, variables)?;
+                }
+            }
+            // Negation tests existence; it supplies neither an output value nor
+            // a dictionary origin. Opaque Rust is not a relational declaration.
+            _ => {}
         }
     }
     Ok(())
@@ -1384,12 +1386,18 @@ mod tests {
         let source = SOURCES.iter().find(|(name, _)| *name == "d72_inner").unwrap().1;
         let file = authored_file(source).unwrap();
         assert_eq!(file.items.iter().filter(|item| matches!(item,
-            syn::Item::Fn(function) if function.sig.ident == "run")).count(), 1);
+            syn::Item::Macro(item) if item.mac.path.segments.last()
+                .is_some_and(|segment| segment.ident == "retail_kernel"))).count(), 1);
         let kernel = Kernel::import(source).unwrap();
-        // CPU provider/configuration choices are not a second GPU plan.
-        assert!(kernel.plan_advice.is_empty());
-        assert_eq!(kernel.cpu_program().unwrap().query.body.to_token_stream().to_string(),
-            kernel.body.to_string());
+        // Keep the authored shared-planner advice, not CPU storage configurations.
+        assert_eq!(kernel.plan_advice.to_string(),
+            quote!(no_reduce, order(Nation, Supplier, Lineitem, Orders, Customer, PartSupp, Part)).to_string());
+        let program = kernel.cpu_program().unwrap();
+        let head = &program.query.head;
+        let body = &kernel.body;
+        // Compare after the shared parser splits relational conjunctions.
+        let authored: cq_lang_cq::Query = syn::parse2(quote!(#head :- #body)).unwrap();
+        assert_eq!(program.query.body, authored.body);
     }
     #[test]
     fn query_body_shell_imports_the_authored_runner_not_its_dispatcher() {
@@ -1745,7 +1753,10 @@ mod encoding_tests {
                         "u32" | "i32"
                     ))
             );
-            assert!(!program.to_token_stream().to_string().contains("\"ASIA\""));
+            // The closed authored text remains opaque Rust evaluated once
+            // against the published dictionary; relational rows contain codes.
+            assert!(program.to_token_stream().to_string()
+                .contains("DictionaryLiteral :: dictionary_code"));
         }
     }
     #[test]

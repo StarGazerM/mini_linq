@@ -904,6 +904,7 @@ mod tests {
     fn catalog(levels: Vec<Vec<String>>) -> Catalog {
         Catalog {
             providers: vec![ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(Index),
                 capabilities: vec![Capability::Exact, Capability::Membership],
                 levels,
@@ -1163,6 +1164,7 @@ mod tests {
             available.providers.push(ProviderToken {
                 ty: syn::parse_quote!(Native),
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
+                supports: vec![],
                 levels,
                 elements: None,
             });

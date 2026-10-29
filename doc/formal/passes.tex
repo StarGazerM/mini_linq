@@ -600,7 +600,8 @@ source RA, and modes only change evaluation.
 
 \subsection{Structure selection: Physical $\to$ Structures}
 The default constructor copies Physical and records default types for every
-built level, host reader fallback, retained collection and dedup boundary;
+built level, host reader fallback, retained collection and dedup boundary,
+including support for the selected keyed layouts;
 compatible membership prefixes may share a curried structure; a smallest
 intersection records two candidate levels per retained side; const/range
 supplies never justify a build. This restriction concerns predicate reads,
@@ -611,7 +612,8 @@ the occurrence's row source; GPU materializes that source in the build phase.
 The optional \code{positional(H,...)} arguments assert host capabilities at this
 boundary; Physical contains only relational schemas, so unspecified hosts keep
 the previous representation. The initial selector handles recorded point/range
-reads and single-column \code{i64} eager membership. It chooses retained masks
+reads and single-column eager membership; Rust capability dispatch chooses the
+key codec without compiler inspection of Rust types. It chooses retained masks
 for eligible rescans or shared reads and leaves single filtered index-only
 builds streaming. Supplemental exact keysets beside payload indexes are explicit
 entries. Multi-key reductions, lazy semi and unsupported spines keep their old
@@ -663,13 +665,25 @@ expansion fixtures. Interfaces at the Rust boundary:
  \Gamma_H\vdash_{Rust}e}
  {d\longmapsto\code{let b = \&(e);}\quad R\mapsto b}
 
-\Rule{IF-Dispatch}{C=\{d_1,\ldots,d_k\}\quad
- H:\mathsf{ReadAt}(\tau_1,\ldots,\tau_k)}
+\Rule{IF-Dispatch}{\mathsf{nativeEligible}(H,C)\quad H:\mathsf{ReadAt}(C)}
  {\mathsf{read}(H,C)\longmapsto\mathsf{nativeRead}(H,C)}
 
-\Rule{IF-Fallback}{C\text{ is nonleading}\ \lor\ H\not:\mathsf{ReadAt}(C)}
+\Rule{IF-Fallback}{\neg\mathsf{nativeEligible}(H,C)\ \lor\ H\not:\mathsf{ReadAt}(C)}
  {\mathsf{read}(H,C)\longmapsto\mathsf{lazyOnce}(\mathsf{build}(\alpha(H),C))}
 \end{mathpar}
+For keyed host reads, $\mathsf{nativeEligible}(H,C)$ holds at a leading
+declaration prefix, or at a single nonleading borrowed-key column
+$C=\{d_{j+1}\}$ when $H:\code{IndexedColumn<j>}$. The zero-based slot is derived
+from the checked declaration and rename, not inferred from matching Rust types.
+The explicit read's key is the one-field tuple of that column's declared owned
+type; its payload supplies every other column in declaration order, with exact
+source occurrences and chronology. Its cursor borrows or pins that same
+immutable source, not a temporary dispatch wrapper. Exact membership requires
+its separate Rust trait; retention and expansion still require Copy and
+Copy plus ExactSizeIterator respectively. An unsupported slot or capability
+uses the ordinary fallback. Computed keys, multicolumn nonleading keys,
+candidate enumeration and PointLookup retain their existing paths.
+
 \begin{mathpar}
 \Rule{IF-Positional}{r\text{ has a checked positional read }(H,C,P)}
  {r\longmapsto\code{BlockRead::read}(H,C,P)\text{ then survivor row fetch}}
@@ -955,9 +969,11 @@ Sharing requires the same scan occurrence, build version, scalar key, source-ind
 layout, filter type and column marker; covering-operator identity alone does not
 require another filter. First-witness order supplies scan-local identities, also
 used to distinguish profile labels.
-\textsc{IF-JoinFilter} constructs each distinct checked provider from the existing
-index's \code{Keys::distinct_keys}, projected to the filtered key column, through
-\code{cq_storage::build!} on $(k,())$ pairs, emits \code{require::conservative::<K,T>}, then
+\textsc{IF-JoinFilter} requires recorded \code{keys} support on the selected index
+layout and constructs each distinct checked provider from that index's
+\code{Keys::distinct_keys}, projected to the filtered key column, through
+\code{cq_storage::build!} on $(k,())$ pairs. Rust proves the marker's
+\code{ColumnSlot} and \code{require::conservative::<K,T>} obligations, then realization
 filters positions before fetching payloads: the first filter through the
 block-skipping read, the others on its surviving positions, in decision order.
 Host block bounds use the provider's conservative \code{any_in}; an absent bound

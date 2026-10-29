@@ -47,7 +47,7 @@ fn decisions_roundtrip_and_physical_is_identical() {
 }
 #[test]
 fn lineage_and_summary_forgery_are_rejected_independently() {
-    for alteration in 0..5 {
+    for alteration in 0..4 {
         let mut target = selected();
         for e in &mut target.structures.entries {
             match (&mut e.structure, alteration) {
@@ -73,10 +73,6 @@ fn lineage_and_summary_forgery_are_rejected_independently() {
                     *build = syn::parse_quote!(j);
                     break;
                 }
-                (Structure::Read { marker, .. }, 4) => {
-                    *marker = syn::parse_quote!(::cq_load::ColumnAt<99>);
-                    break;
-                }
                 _ => {}
             }
         }
@@ -85,6 +81,22 @@ fn lineage_and_summary_forgery_are_rejected_independently() {
             "forgery {alteration}"
         );
     }
+}
+
+#[test]
+fn positional_marker_capabilities_are_rustc_obligations() {
+    let mut target = selected();
+    let entry = target
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| matches!(entry.structure, Structure::Read { .. }))
+        .unwrap();
+    let Structure::Read { marker, .. } = &mut entry.structure else {
+        unreachable!()
+    };
+    *marker = syn::parse_quote!(CustomColumnMarker);
+    ir::contract::check(&target).unwrap();
 }
 
 #[test]
@@ -204,7 +216,7 @@ fn join_filter_plan(branch: bool) -> ir::Program {
 }
 
 #[test]
-fn join_filters_record_exact_type_and_covering_probe() {
+fn join_filters_preserve_coverage_and_lineage() {
     for branch in [false, true] {
         let selected = join_filter_plan(branch);
         let facts = ir::contract::check(&selected).unwrap();
@@ -219,15 +231,14 @@ fn join_filters_record_exact_type_and_covering_probe() {
             syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(),
             selected
         );
-        for forgery in 0..4 {
+        for forgery in 0..3 {
             let mut bad = selected.clone();
             for entry in &mut bad.structures.entries {
                 if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
                     match forgery {
                         0 => filter.covering = syn::parse_quote!(out),
                         1 => filter.build = syn::parse_quote!(s),
-                        2 => filter.key = syn::parse_quote!([z]),
-                        _ => filter.marker = syn::parse_quote!(::cq_load::ColumnAt<1>),
+                        _ => filter.key = syn::parse_quote!([z]),
                     }
                 }
             }
@@ -403,21 +414,17 @@ fn equivalent_filter_witnesses_share_checked_runtime_work() {
     );
 
     // A witness that would otherwise be coalesced is still checked.
-    for mutation in 0..2 {
-        let mut invalid = selected.clone();
-        for entry in &mut invalid.structures.entries {
-            if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
-                if filter.covering == "j" {
-                    if mutation == 0 {
-                        filter.marker = syn::parse_quote!(::cq_load::ColumnAt<1>);
-                    } else {
-                        filter.covering = syn::parse_quote!(out);
-                    }
-                }
+    // Column marker identity is a Rust ColumnSlot obligation, exercised by
+    // provider-contract compile-fail tests rather than provider-name inspection.
+    let mut invalid = selected.clone();
+    for entry in &mut invalid.structures.entries {
+        if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
+            if filter.covering == "j" {
+                filter.covering = syn::parse_quote!(out);
             }
         }
-        assert!(ir::contract::check(&invalid).is_err());
     }
+    assert!(ir::contract::check(&invalid).is_err());
 
     let mut different_type = selected;
     for entry in &mut different_type.structures.entries {

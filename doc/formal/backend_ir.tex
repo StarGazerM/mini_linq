@@ -510,6 +510,13 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
  {\mathsf{select}(s,K):\
  e.\mathsf{type}\gets k.\mathsf{type}\quad\text{by checked retention, index construction and retype}}
 
+\Rule{PL-Resident}{\mathsf{hostRead}(p)\quad \exists\ell\in\mathsf{reads}(p).\ |\ell|>1}
+ {\mathsf{admit}(p,k)\Longrightarrow
+  \mathsf{Resident}\in\mathsf{caps}(k)\ \land\
+  \mathsf{matches}(p,k)\ \land\
+  \mathsf{needs}(p)\subseteq\mathsf{caps}(k)\ \land\
+  \mathsf{reads}(p)\subseteq\mathsf{levels}(k)}
+
 \Rule{PL-Cost}{C=(c_1,\ldots,c_k)\text{ admissible, preserving }A(t)\quad
  \mathsf{groupMode}(c)=\mathsf{Analysis}(c).\mathsf{partialGroups}\quad
  \kappa(c)=(W(c),I(c),S(c),B(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
@@ -529,6 +536,12 @@ Catalog levels describe where a provider may be read, not where its owner is
 constructed. Building an index from host rows does not certify a host read.
 Placement must select a supported read level; authored unsupported grades are
 rejected rather than silently reinterpreted.
+The explicit \(\mathsf{Resident}\) catalog capability certifies that a native
+input handle already denotes immutable target-resident storage. It permits
+that handle's recorded descendant reads without constructing a host fallback
+index. It is not inferred from a Rust type name, a range capability, or the
+presence of device levels. Ordinary pipe-host adapters still require retention;
+resident tokens must also satisfy every type, element, read and level obligation.
 
 PL-Closure inherits its value laws from BE-* and the Sequence extension
 rewrites; it adds no new equality of values. PL-Precedence preserves

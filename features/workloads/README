@@ -1,14 +1,23 @@
 TPC-H-shaped retail CPU configurations
 ======================================
 
-Every retail source exposes default, no-reduce, transfer, le, le_runs, and advised.
+Every retail source exposes default, par, radix, radix_retained, no-reduce,
+transfer, le, le_runs, and advised. Kernel and full-query shells also retain
+the matched built_hash/built_radix materialization comparison.
 Standalone/staged runners use standalone_configs! and compile the entire authored
 runner for each configuration; the same CQ is not copied between configurations.
 Only advised applies stage-local query! advice. Transfer applies
 cq_planners::order(transfer) independently to each authored CQ stage, retaining
 the same preprocessing, materialization, aggregate heads, and answer contracts.
-Kernel advice and standalone stage advice follow experiments/gpu/tpch/src/advice.rs.
+Most advice follows experiments/gpu/tpch/src/advice.rs; H05 retains its CPU
+cycle-closing order and H09 its connected Part-first written order.
 See tpch-methodology.txt for pipeline, timing, and correctness semantics.
+
+The provider comparisons retain load-time StringCode interning in every coded
+kernel, including the explicitly authored runners. Dictionary literals and
+load-time predicate memberships remain coded during execution; text is published
+only at the existing DECODE answer sites. H09 keeps its GreenNames membership
+before the connected Lineitem/PartSupp prefix in both written and advised order.
 
 All 29 entries in src/tpch.rs CASES expose default and transfer: 27 retail-derived
 cases plus full tpch_q06 and tpch_q19, which retain their own configuration shells.

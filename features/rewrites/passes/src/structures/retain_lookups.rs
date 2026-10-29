@@ -3,9 +3,9 @@ use proc_macro2::TokenStream;
 
 /// Record Copy range witnesses for eager semijoins with a later matching probe.
 ///
-/// Candidate generation selects SortedRun payloads, PrefixRun directories, and
-/// identical leveled snapshot host layouts at both demands; the language
-/// independently proves provider identity, key preservation and non-escape.
+/// Candidate generation uses declared retained-read support on built providers
+/// and identical host layouts at both demands; the language independently proves
+/// provider identity, key preservation and non-escape.
 /// Existing representation choices are preserved, including positions carriers.
 pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
@@ -32,42 +32,39 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
         let build = symbol_name(&read.right);
         let mut keys: Vec<_> = read.columns.iter().map(symbol_name).collect();
         keys.sort();
-        let eligible_build = source.structures.entries.iter().any(|entry| {
-            symbol_name(&entry.name) == build
-                && matches!(&entry.structure, Structure::Built { keyed, .. }
-                    if keyed.membership.is_none()
-                        && matches!(&keyed.ty, syn::Type::Path(path)
-                            if path.qself.is_none()
-                                && path.path.segments.last().is_some_and(|segment| {
-                                    (segment.ident == "SortedRun"
-                                        && keyed.level_names().as_slice() == std::slice::from_ref(&keys))
-                                        || (segment.ident == "PrefixRun"
-                                            && ir::prefix_depth(&keyed.level_names(), &keys).is_some())
-                                })))
-        });
-        let leveled = ir::leveled_host_read(source, &build, &name, &keys);
-        if !eligible_build && leveled.is_none() {
-            continue;
-        }
+        let eligible_build =
+            facts.provider_support(&build, &keys, None, ir::ProviderCapability::Retain);
+        let retained_host = ir::retained_host_read(source, &build, &name, &keys);
         for force in &definitions[index + 1..] {
             let Operator::Probe(_, probe) = &force.operator else {
                 continue;
             };
-            if let Some(provider) = leveled {
-                if ir::leveled_host_read(source, &build, &symbol_name(&force.name), &keys)
-                    != Some(provider)
-                {
-                    continue;
-                }
-            }
-            let candidate = candidates.iter().any(|candidate| {
+            let candidate = candidates.iter().find(|candidate| {
                 symbol_name(candidate.reader) == symbol_name(&force.name)
                     && candidate
                         .sides
                         .iter()
                         .any(|(side, prefix)| side == &build && prefix == &keys)
             });
-            if (!candidate
+            if let Some(candidate) = candidate {
+                if !facts.candidate_support(
+                    &build, &keys, &candidate.column, ir::ProviderCapability::Retain,
+                ) {
+                    continue;
+                }
+            } else {
+                if !eligible_build && retained_host.is_none() {
+                    continue;
+                }
+                if let Some(provider) = retained_host {
+                    if ir::retained_host_read(source, &build, &symbol_name(&force.name), &keys)
+                        != Some(provider)
+                    {
+                        continue;
+                    }
+                }
+            }
+            if (candidate.is_none()
                 && (symbol_name(&probe.right) != build
                     || probe.columns.len() != keys.len()
                     || !probe
@@ -86,7 +83,7 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             let build_name = &read.right;
             let columns = &read.columns;
             let witness = syn::parse_quote! {
-                witness { #build_name [#columns] at #first_name as ::cq_storage::RunCursor<'_, _> }
+                witness { #build_name [#columns] at #first_name as _ }
             };
             let original_len = target.structures.entries.len();
             if !facts.shares.contains_key(&name) {

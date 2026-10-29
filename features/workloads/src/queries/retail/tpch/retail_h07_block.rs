@@ -1,5 +1,5 @@
-//! H07's country alternatives as a core union. The Rust-free two-row derived
-//! relation can reduce Supplier and Customer before Lineitem is streamed.
+//! H07's country alternatives as a core union with explicit predicate filters.
+//! The country-pair relation can reduce Supplier and Customer before Lineitem.
 use crate::tpch_runtime::date;
 use cq_load::Date;
 
@@ -15,7 +15,7 @@ JOIN nation nc ON c.c_nationkey = nc.n_nationkey
 WHERE ((ns.n_name = 'FRANCE' AND nc.n_name = 'GERMANY')
 OR (ns.n_name = 'GERMANY' AND nc.n_name = 'FRANCE'))
 AND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'"#;
-pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "transfer", "le", "le_runs", "hypergraph", "advised"];
+pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", "hypergraph", "advised"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("supplier", "s_suppkey,s_nationkey"),
     ("lineitem", "l_orderkey,l_suppkey,l_shipdate"),
@@ -136,6 +136,10 @@ runner!($; advised, { plan = ::mini_linq::passes::plan(no_reduce, order(block@5,
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {
         "default" => default::run(data),
+        "radix" => radix::run(data),
+        "radix_retained" => radix_retained::run(data),
+        "built_hash" => built_hash::run(data),
+        "built_radix" => built_radix::run(data),
         "par" => par::run(data),
         "no-reduce" => no_reduce::run(data),
         "transfer" => transfer::run(data),

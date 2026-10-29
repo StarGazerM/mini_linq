@@ -1,0 +1,5 @@
+query	configuration	before_ms	final_ms	speedup
+retail_h03	default	27.795750	28.635166	0.970686
+retail_h03	radix	47.842250	28.677625	1.668278
+retail_h09	built_hash	458.770417	474.287084	0.967284
+retail_h09	built_radix	865.676625	493.161334	1.755362

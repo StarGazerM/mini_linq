@@ -8,6 +8,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     let mut sf = None;
     let mut query = None;
     let mut config = None;
+    let mut output = None;
     let mut tpch = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -18,6 +19,9 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
             }
             "--config" if config.is_none() => {
                 config = Some(args.next().ok_or("--config needs a value")?)
+            }
+            "--output" if output.is_none() => {
+                output = Some(args.next().ok_or("--output needs a directory")?)
             }
             _ => return Err(format!("unknown or duplicate profile argument {arg}").into()),
         }
@@ -34,7 +38,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     }
     let config = config.unwrap_or_else(|| "default".into());
     let root = crate::repository_root();
-    let evidence = Path::new(EVIDENCE);
+    let evidence = Path::new(output.as_deref().unwrap_or(EVIDENCE));
     std::fs::create_dir_all(evidence)?;
     let database = data::dbgen(&root, &sf)?;
     database.connection.execute_batch("SET threads=1")?;

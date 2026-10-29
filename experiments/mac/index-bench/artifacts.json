@@ -1,0 +1,27 @@
+{
+  "bench_search": {
+    "url": "https://github.com/qyliu-hkust/bench_search.git",
+    "revision": "a028f9dc8d14156d12e94f75f972a7d34588b195",
+    "role": "PGM and PGM++ author artifact"
+  },
+  "RadixSpline": {
+    "url": "https://github.com/learnedsystems/RadixSpline.git",
+    "revision": "ab96aa59d429e7423beba2350bdcdf88952df282",
+    "role": "RadixSpline author implementation"
+  },
+  "CHT": {
+    "url": "https://github.com/stoianmihail/CHT.git",
+    "revision": "8b6f7b3641c375a34506e808db9753384c44ca26",
+    "role": "Compact Hist-Tree implementation by Mihail Stoian, not the original paper artifact"
+  },
+  "unordered_dense": {
+    "url": "https://github.com/martinus/unordered_dense.git",
+    "revision": "7c58a8b7a48e790fe72f6508eb3b46317cbba9d5",
+    "role": "Modern SIMD-group dense hash-map baseline"
+  },
+  "Libox": {
+    "url": "https://github.com/strivesnail/Libox.git",
+    "revision": "1fb5463432c1324859d831181bda5a3e719783fb",
+    "role": "LiBox author artifact, inspected but not benchmarked: unconditional x86 AVX-512 intrinsics and OpenMP"
+  }
+}

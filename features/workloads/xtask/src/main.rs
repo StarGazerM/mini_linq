@@ -551,8 +551,8 @@ MiniLinq workload tasks
   cargo xtask differential [--cases N] [--seed S]
   cargo xtask explain CASE [--through STAGE]
   cargo xtask bench [--scale N] [--seed N]
-  cargo xtask bench --tpch --sf 0.1|1|10 [--runs N] [--cap-seconds N] [--query NAME] [--config NAME | --reduction-comparison]
-  cargo xtask profile --tpch --sf 0.1|1|10 [--query NAME] [--config NAME]
+  cargo xtask bench --tpch --sf 0.1|1|10 [--runs N] [--cap-seconds N] [--query NAME] [--config NAME[,NAME...] | --reduction-comparison | --index-comparison]
+  cargo xtask profile --tpch --sf 0.1|1|10 [--query NAME] [--config NAME] [--output DIR]
 
 SCENARIO is coverage, empty-input, no-match, or all.
 It defaults to all for golden, coverage for generate.

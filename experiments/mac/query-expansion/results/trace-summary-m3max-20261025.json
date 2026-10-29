@@ -1,0 +1,16 @@
+{
+  "template": "Metal System Trace",
+  "trace_artifact": "../target/bandwidth-metal-20261025.trace",
+  "query": "bandwidth --sizes 16777216 --distributions uniform --modes gpu_fresh_profiled --runs 5",
+  "recorded_builds_including_warmup": 7,
+  "target_process_exit_status": 0,
+  "driver_events": {
+    "Wire 128 MiB System Memory (Success)": { "count": 14, "total_ms": 14.741458, "max_ms": 1.765166 },
+    "Wire 8 MiB System Memory (Success)": { "count": 27, "total_ms": 2.072210, "max_ms": 0.092959 }
+  },
+  "gpu_counter_set": null,
+  "exported_counter_names": ["RT Unit Active"],
+  "gpu_consistent_state_available": true,
+  "gpu_consistent_state_enabled": false,
+  "limits": "Trace timings are instrumented diagnostics, not benchmark samples. Driver-event totals include the target process setup. The 128 MiB events correspond in size/count to two row buffers per build. No physical DRAM bandwidth counter was captured; no GPU frequency or page-fault attribution is inferred from numeric state codes. Full trace remains under ignored target storage."
+}

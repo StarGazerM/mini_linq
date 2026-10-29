@@ -1,6 +1,7 @@
 //! Stable autoref dispatch. Membership first tries the borrowed query key
 //! through a triple-reference receiver; double-reference receivers try native
-//! reads at the declared leading key type. Single-reference receivers build once.
+//! reads at a declared prefix or explicitly indexed column. Single-reference
+//! receivers build once.
 use crate::rows::{Columns, Concat, OwnKey};
 use crate::{Candidates, ExactMembership, IndexRead, OrderedCursor, OrderedRead};
 use std::cell::{OnceCell, RefCell};
@@ -102,6 +103,58 @@ where
     #[inline]
     fn build_provider(self, source: I) -> Self::Output {
         <Self::Output as crate::Build<I>>::build(source)
+    }
+}
+
+/// An immutable native index on one explicit, zero-based declaration slot.
+///
+/// `Read::Key` must be a one-field tuple of the column's declared owned type.
+/// Its payload must implement [`Columns`] and yield every other column in
+/// original declaration order. A lookup yields every matching occurrence
+/// exactly once, in source chronology, from the same immutable relation as
+/// the host's row enumeration. The cursor must borrow or pin that relation,
+/// not this temporary handle or the dispatch wrapper.
+pub trait IndexedColumn<const COLUMN: usize>: Clone {
+    type Read: IndexRead;
+    fn indexed_column(&self) -> Self::Read;
+}
+
+impl<H: IndexedColumn<COLUMN>, const COLUMN: usize> IndexedColumn<COLUMN> for &H {
+    type Read = H::Read;
+
+    fn indexed_column(&self) -> Self::Read {
+        H::indexed_column(*self)
+    }
+}
+
+/// Select an explicitly indexed declaration slot without inferring it from
+/// a key type. Unsupported slots remain eligible for ordinary host fallback.
+#[derive(Clone)]
+pub struct ColumnHost<H, const COLUMN: usize>(H);
+
+impl<H, const COLUMN: usize> ColumnHost<H, COLUMN> {
+    pub fn new(host: H) -> Self {
+        Self(host)
+    }
+}
+
+impl<H: IndexedColumn<COLUMN>, const COLUMN: usize> IndexRead for ColumnHost<H, COLUMN> {
+    type Key = <H::Read as IndexRead>::Key;
+    type Item = <H::Read as IndexRead>::Item;
+    type Cursor = <H::Read as IndexRead>::Cursor;
+
+    fn lookup(&self, key: &Self::Key) -> Self::Cursor {
+        self.0.indexed_column().lookup(key)
+    }
+}
+
+impl<H, K: ?Sized, const COLUMN: usize> ExactMembership<K> for ColumnHost<H, COLUMN>
+where
+    H: IndexedColumn<COLUMN>,
+    H::Read: ExactMembership<K>,
+{
+    fn contains(&self, key: &K) -> bool {
+        self.0.indexed_column().contains(key)
     }
 }
 
@@ -212,6 +265,124 @@ where
         self.0.lookup(&key.own_key()).map(Columns::columns)
     }
 }
+
+/// Host dispatch whose fallback borrow survives the temporary dispatch wrapper.
+/// Unlike `Host`, constructing this wrapper does not clone a shared handle.
+pub struct BorrowedHost<'a, H, K, T, F>(H, &'a Lazy<T, F>, std::marker::PhantomData<fn() -> K>);
+
+impl<'a, H, K, T, F> BorrowedHost<'a, H, K, T, F> {
+    pub fn new(host: H, fallback: &'a Lazy<T, F>) -> Self {
+        Self(host, fallback, std::marker::PhantomData)
+    }
+}
+
+/// Select the actual read handle before proving its retained cursor obligations.
+pub trait BorrowedRead<Q> {
+    type Read: IndexRead<Key = Q>;
+    fn borrowed_read(self) -> Self::Read;
+}
+
+impl<'a, H, Q, K, T, F: FnOnce() -> T> BorrowedRead<Q> for &BorrowedHost<'a, H, K, T, F>
+where
+    &'a T: IndexRead<Key = Q>,
+{
+    type Read = &'a T;
+
+    fn borrowed_read(self) -> Self::Read {
+        self.1.get()
+    }
+}
+
+impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> BorrowedRead<Q> for &&BorrowedHost<'_, H, K, T, F>
+where
+    H: IndexRead<Key = K>,
+    H::Item: Columns,
+    H::Cursor: Copy,
+{
+    type Read = ColumnRead<H, Q>;
+
+    fn borrowed_read(self) -> Self::Read {
+        ColumnRead(self.0.clone(), std::marker::PhantomData)
+    }
+}
+
+/// Expansion dispatch skips a native read that cannot supply exact cursor lengths.
+pub trait ExpandedRead<Q> {
+    type Read: IndexRead<Key = Q>;
+    fn expanded_read(self) -> Self::Read;
+}
+
+impl<'a, H, Q, K, T, F: FnOnce() -> T> ExpandedRead<Q> for &BorrowedHost<'a, H, K, T, F>
+where
+    &'a T: IndexRead<Key = Q>,
+{
+    type Read = &'a T;
+
+    fn expanded_read(self) -> Self::Read {
+        self.1.get()
+    }
+}
+
+impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> ExpandedRead<Q> for &&BorrowedHost<'_, H, K, T, F>
+where
+    H: IndexRead<Key = K>,
+    H::Item: Columns,
+    H::Cursor: Copy + ExactSizeIterator,
+{
+    type Read = ColumnRead<H, Q>;
+
+    fn expanded_read(self) -> Self::Read {
+        ColumnRead(self.0.clone(), std::marker::PhantomData)
+    }
+}
+
+/// Normalize native host columns without changing a cursor's Copy capability.
+pub struct ColumnRead<H, Q>(H, std::marker::PhantomData<fn() -> Q>);
+
+impl<H: Clone, Q> Clone for ColumnRead<H, Q> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), std::marker::PhantomData)
+    }
+}
+
+impl<H, Q: OwnKey> IndexRead for ColumnRead<H, Q>
+where
+    H: IndexRead<Key = Q::Owned>,
+    H::Item: Columns,
+{
+    type Key = Q;
+    type Item = <H::Item as Columns>::Row;
+    type Cursor = ColumnCursor<H::Cursor>;
+
+    fn lookup(&self, key: &Q) -> Self::Cursor {
+        ColumnCursor(self.0.lookup(&key.own_key()))
+    }
+}
+
+/// A stateless column projection; copies only when the underlying cursor does.
+#[derive(Clone, Copy)]
+pub struct ColumnCursor<I>(I);
+
+impl<I: Iterator> Iterator for ColumnCursor<I>
+where
+    I::Item: Columns,
+{
+    type Item = <I::Item as Columns>::Row;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(Columns::columns)
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.0.nth(n).map(Columns::columns)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<I: ExactSizeIterator> ExactSizeIterator for ColumnCursor<I> where I::Item: Columns {}
 
 pub trait Contains<Q> {
     fn contains(self, key: &Q) -> bool;

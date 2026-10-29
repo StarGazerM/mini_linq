@@ -1,0 +1,1982 @@
+[
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 262144,
+    "items": 65536,
+    "reps": 7,
+    "median_ms": 0.564375,
+    "min_ms": 0.169959,
+    "gbps": 0.46448549280177187,
+    "ns_per_item": 8.611679077148438,
+    "params": {
+      "footprint_bytes": 262144,
+      "gpu_ms": 0.009166775271296501
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 524288,
+    "items": 65536,
+    "reps": 7,
+    "median_ms": 0.149292,
+    "min_ms": 0.130667,
+    "gbps": 3.5118291670015807,
+    "ns_per_item": 2.27801513671875,
+    "params": {
+      "footprint_bytes": 262144,
+      "gpu_ms": 0.010041752830147743
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 1.575375,
+    "min_ms": 1.216917,
+    "gbps": 2726.314240101563,
+    "ns_per_item": 0.0469498336315155,
+    "params": {
+      "footprint_bytes": 262144,
+      "gpu_ms": 1.4182082377374172,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 5.335875000000001,
+    "min_ms": 5.059125,
+    "gbps": 804.9227719914728,
+    "ns_per_item": 0.15902146697044375,
+    "params": {
+      "footprint_bytes": 262144,
+      "gpu_ms": 5.196291720494628,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 1.8670419999999999,
+    "min_ms": 1.848291,
+    "gbps": 4600.825579713793,
+    "ns_per_item": 0.055642187595367425,
+    "params": {
+      "footprint_bytes": 262144,
+      "gpu_ms": 1.7253332771360874,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 266240,
+    "items": 65536,
+    "reps": 7,
+    "median_ms": 0.14529199999999998,
+    "min_ms": 0.132708,
+    "gbps": 1.832447760372216,
+    "ns_per_item": 2.2169799804687496,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 262144,
+      "gpu_ms": 0.018625054508447647,
+      "keys_per_tg": 16384
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 1310720,
+    "items": 65536,
+    "reps": 7,
+    "median_ms": 0.158084,
+    "min_ms": 0.144667,
+    "gbps": 8.29128817590648,
+    "ns_per_item": 2.41217041015625,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 262144,
+      "gpu_ms": 0.04229159094393253,
+      "keys_per_tg": 16384
+    }
+  },
+  {
+    "op": "partition_pass",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 1212416,
+    "items": 65536,
+    "reps": 7,
+    "median_ms": 0.145625,
+    "min_ms": 0.127167,
+    "gbps": 8.325603433476395,
+    "ns_per_item": 2.2220611572265625,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 262144,
+      "gpu_ms": 0.018166610971093178,
+      "radix_bits": 8,
+      "stable": false,
+      "tiles": 32
+    }
+  },
+  {
+    "op": "merge_path",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 786432,
+    "items": 65536,
+    "reps": 7,
+    "median_ms": 0.134416,
+    "min_ms": 0.122958,
+    "gbps": 5.850732055707653,
+    "ns_per_item": 2.051025390625,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 262144,
+      "gpu_ms": 0.010458286851644516
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 1048576,
+    "items": 262144,
+    "reps": 7,
+    "median_ms": 0.136417,
+    "min_ms": 0.128208,
+    "gbps": 7.686549330362051,
+    "ns_per_item": 0.5203895568847656,
+    "params": {
+      "footprint_bytes": 1048576,
+      "gpu_ms": 0.00583333894610405
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 2097152,
+    "items": 262144,
+    "reps": 7,
+    "median_ms": 0.147459,
+    "min_ms": 0.12604200000000002,
+    "gbps": 14.221932876257128,
+    "ns_per_item": 0.5625114440917969,
+    "params": {
+      "footprint_bytes": 1048576,
+      "gpu_ms": 0.006208429113030434
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 2.7504999999999997,
+    "min_ms": 2.330209,
+    "gbps": 1561.522376295219,
+    "ns_per_item": 0.08197128772735594,
+    "params": {
+      "footprint_bytes": 1048576,
+      "gpu_ms": 3.2607498578727245,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 5.075208,
+    "min_ms": 5.0415,
+    "gbps": 846.2642902517492,
+    "ns_per_item": 0.15125298500061035,
+    "params": {
+      "footprint_bytes": 1048576,
+      "gpu_ms": 4.914833232760429,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 2.413083,
+    "min_ms": 2.2165000000000004,
+    "gbps": 3559.73441112469,
+    "ns_per_item": 0.07191547751426697,
+    "params": {
+      "footprint_bytes": 1048576,
+      "gpu_ms": 2.0719999447464943,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 1052672,
+    "items": 262144,
+    "reps": 7,
+    "median_ms": 0.130792,
+    "min_ms": 0.120667,
+    "gbps": 8.04844332986727,
+    "ns_per_item": 0.49893188476562494,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 1048576,
+      "gpu_ms": 0.01920829527080059,
+      "keys_per_tg": 16384
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 2097152,
+    "items": 262144,
+    "reps": 7,
+    "median_ms": 0.16120800000000002,
+    "min_ms": 0.15437499999999998,
+    "gbps": 13.00898218450697,
+    "ns_per_item": 0.6149597167968751,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 1048576,
+      "gpu_ms": 0.04183338023722172,
+      "keys_per_tg": 16384
+    }
+  },
+  {
+    "op": "partition_pass",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4849664,
+    "items": 262144,
+    "reps": 7,
+    "median_ms": 0.163209,
+    "min_ms": 0.13891599999999998,
+    "gbps": 29.71443976741479,
+    "ns_per_item": 0.6225929260253906,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 1048576,
+      "gpu_ms": 0.026166671887040138,
+      "radix_bits": 8,
+      "stable": false,
+      "tiles": 128
+    }
+  },
+  {
+    "op": "merge_path",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 3145728,
+    "items": 262144,
+    "reps": 7,
+    "median_ms": 0.11875,
+    "min_ms": 0.108625,
+    "gbps": 26.49034105263158,
+    "ns_per_item": 0.45299530029296875,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 1048576,
+      "gpu_ms": 0.017249956727027893
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4194304,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 0.12845900000000002,
+    "min_ms": 0.119125,
+    "gbps": 32.650915856421115,
+    "ns_per_item": 0.12250804901123048,
+    "params": {
+      "footprint_bytes": 4194304,
+      "gpu_ms": 0.01020822674036026
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8388608,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 0.1315,
+    "min_ms": 0.12704200000000002,
+    "gbps": 63.79169581749049,
+    "ns_per_item": 0.12540817260742188,
+    "params": {
+      "footprint_bytes": 4194304,
+      "gpu_ms": 0.013999873772263527
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 1.933375,
+    "min_ms": 1.919875,
+    "gbps": 2221.4869314023404,
+    "ns_per_item": 0.057619065046310425,
+    "params": {
+      "footprint_bytes": 4194304,
+      "gpu_ms": 1.800416735932231,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 5.093125000000001,
+    "min_ms": 5.053834,
+    "gbps": 843.2872344582157,
+    "ns_per_item": 0.15178695321083072,
+    "params": {
+      "footprint_bytes": 4194304,
+      "gpu_ms": 4.967416636645794,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 2.355667,
+    "min_ms": 2.345042,
+    "gbps": 3646.4978250321456,
+    "ns_per_item": 0.07020434737205505,
+    "params": {
+      "footprint_bytes": 4194304,
+      "gpu_ms": 2.207166515290737,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4198400,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 0.15479099999999998,
+    "min_ms": 0.138083,
+    "gbps": 27.123023948420776,
+    "ns_per_item": 0.14762020111083982,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 4194304,
+      "gpu_ms": 0.03183330409228802,
+      "keys_per_tg": 16384
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 5242880,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 0.21404099999999998,
+    "min_ms": 0.209125,
+    "gbps": 24.494746333646358,
+    "ns_per_item": 0.20412540435791013,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 4194304,
+      "gpu_ms": 0.09529176168143749,
+      "keys_per_tg": 16384
+    }
+  },
+  {
+    "op": "partition_pass",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 19398656,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 0.19733399999999998,
+    "min_ms": 0.190042,
+    "gbps": 98.30366789301388,
+    "ns_per_item": 0.1881923675537109,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 4194304,
+      "gpu_ms": 0.07399986498057842,
+      "radix_bits": 8,
+      "stable": false,
+      "tiles": 512
+    }
+  },
+  {
+    "op": "merge_path",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 12582912,
+    "items": 1048576,
+    "reps": 7,
+    "median_ms": 0.161416,
+    "min_ms": 0.128167,
+    "gbps": 77.95331317837142,
+    "ns_per_item": 0.15393829345703125,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 4194304,
+      "gpu_ms": 0.02520834095776081
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8388608,
+    "items": 2097152,
+    "reps": 7,
+    "median_ms": 0.142208,
+    "min_ms": 0.128166,
+    "gbps": 58.988298829882986,
+    "ns_per_item": 0.06781005859375,
+    "params": {
+      "footprint_bytes": 8388608,
+      "gpu_ms": 0.017791753634810448
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 16777216,
+    "items": 2097152,
+    "reps": 7,
+    "median_ms": 0.15325000000000003,
+    "min_ms": 0.14425000000000002,
+    "gbps": 109.47612398042412,
+    "ns_per_item": 0.07307529449462892,
+    "params": {
+      "footprint_bytes": 8388608,
+      "gpu_ms": 0.02987496554851532
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 2.753917,
+    "min_ms": 2.7411250000000003,
+    "gbps": 1559.584873472948,
+    "ns_per_item": 0.08207312226295471,
+    "params": {
+      "footprint_bytes": 8388608,
+      "gpu_ms": 2.624124987050891,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 6.219125,
+    "min_ms": 5.319583,
+    "gbps": 690.6063627921935,
+    "ns_per_item": 0.1853443682193756,
+    "params": {
+      "footprint_bytes": 8388608,
+      "gpu_ms": 6.096875062212348,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 5.330708,
+    "min_ms": 5.136792000000001,
+    "gbps": 1611.4059505791727,
+    "ns_per_item": 0.1588674783706665,
+    "params": {
+      "footprint_bytes": 8388608,
+      "gpu_ms": 5.174749996513128,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8392704,
+    "items": 2097152,
+    "reps": 7,
+    "median_ms": 0.16370800000000002,
+    "min_ms": 0.154584,
+    "gbps": 51.266303418281325,
+    "ns_per_item": 0.0780620574951172,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 8388608,
+      "gpu_ms": 0.05550007335841656,
+      "keys_per_tg": 16384
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 9437184,
+    "items": 2097152,
+    "reps": 7,
+    "median_ms": 0.288541,
+    "min_ms": 0.28412499999999996,
+    "gbps": 32.70656163248897,
+    "ns_per_item": 0.1375870704650879,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 8388608,
+      "gpu_ms": 0.17008348368108273,
+      "keys_per_tg": 16384
+    }
+  },
+  {
+    "op": "partition_pass",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 38797312,
+    "items": 2097152,
+    "reps": 7,
+    "median_ms": 0.341583,
+    "min_ms": 0.326708,
+    "gbps": 113.58092176718397,
+    "ns_per_item": 0.16287946701049805,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 8388608,
+      "gpu_ms": 0.21487497724592686,
+      "radix_bits": 8,
+      "stable": false,
+      "tiles": 1024
+    }
+  },
+  {
+    "op": "merge_path",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 25165824,
+    "items": 2097152,
+    "reps": 7,
+    "median_ms": 0.172625,
+    "min_ms": 0.165875,
+    "gbps": 145.78319478638664,
+    "ns_per_item": 0.08231401443481445,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 8388608,
+      "gpu_ms": 0.055999960750341415
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 16777216,
+    "items": 4194304,
+    "reps": 7,
+    "median_ms": 0.17108299999999999,
+    "min_ms": 0.151625,
+    "gbps": 98.06477557676685,
+    "ns_per_item": 0.04078936576843261,
+    "params": {
+      "footprint_bytes": 16777216,
+      "gpu_ms": 0.03329175524413586
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 33554432,
+    "items": 4194304,
+    "reps": 7,
+    "median_ms": 0.256334,
+    "min_ms": 0.24441699999999997,
+    "gbps": 130.90121482128785,
+    "ns_per_item": 0.06111478805541992,
+    "params": {
+      "footprint_bytes": 16777216,
+      "gpu_ms": 0.08362485095858574
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 3.6124579999999997,
+    "min_ms": 3.572125,
+    "gbps": 1188.9321055082164,
+    "ns_per_item": 0.10765963792800902,
+    "params": {
+      "footprint_bytes": 16777216,
+      "gpu_ms": 3.422541543841362,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 6.882708,
+    "min_ms": 6.79575,
+    "gbps": 624.0228840160006,
+    "ns_per_item": 0.20512068271636963,
+    "params": {
+      "footprint_bytes": 16777216,
+      "gpu_ms": 6.625541718676686,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 7.195542,
+    "min_ms": 6.876875,
+    "gbps": 1193.7856233762516,
+    "ns_per_item": 0.2144438624382019,
+    "params": {
+      "footprint_bytes": 16777216,
+      "gpu_ms": 7.061833515763283,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 16781312,
+    "items": 4194304,
+    "reps": 7,
+    "median_ms": 0.215584,
+    "min_ms": 0.204625,
+    "gbps": 77.84117559744693,
+    "ns_per_item": 0.05139923095703125,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 16777216,
+      "gpu_ms": 0.09312503971159458,
+      "keys_per_tg": 16384
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 17825792,
+    "items": 4194304,
+    "reps": 7,
+    "median_ms": 0.501791,
+    "min_ms": 0.44499999999999995,
+    "gbps": 35.524335829060306,
+    "ns_per_item": 0.11963629722595215,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 16777216,
+      "gpu_ms": 0.3299582749605179,
+      "keys_per_tg": 16384
+    }
+  },
+  {
+    "op": "partition_pass",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 77594624,
+    "items": 4194304,
+    "reps": 7,
+    "median_ms": 0.655125,
+    "min_ms": 0.58375,
+    "gbps": 118.44247128410608,
+    "ns_per_item": 0.15619397163391113,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 16777216,
+      "gpu_ms": 0.4687500186264515,
+      "radix_bits": 8,
+      "stable": false,
+      "tiles": 2048
+    }
+  },
+  {
+    "op": "merge_path",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 50331648,
+    "items": 4194304,
+    "reps": 7,
+    "median_ms": 0.304375,
+    "min_ms": 0.20191699999999999,
+    "gbps": 165.36065051334703,
+    "ns_per_item": 0.07256865501403809,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 16777216,
+      "gpu_ms": 0.18500001169741154
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 33554432,
+    "items": 8388608,
+    "reps": 7,
+    "median_ms": 0.256542,
+    "min_ms": 0.236708,
+    "gbps": 130.79508228672108,
+    "ns_per_item": 0.030582189559936523,
+    "params": {
+      "footprint_bytes": 33554432,
+      "gpu_ms": 0.11462485417723656
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 67108864,
+    "items": 8388608,
+    "reps": 7,
+    "median_ms": 0.401583,
+    "min_ms": 0.387375,
+    "gbps": 167.11081893406842,
+    "ns_per_item": 0.04787242412567139,
+    "params": {
+      "footprint_bytes": 33554432,
+      "gpu_ms": 0.2471250481903553
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 5.788541,
+    "min_ms": 5.736416,
+    "gbps": 741.9775200693922,
+    "ns_per_item": 0.1725119650363922,
+    "params": {
+      "footprint_bytes": 33554432,
+      "gpu_ms": 5.641249939799309,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 8.591959,
+    "min_ms": 7.732167,
+    "gbps": 499.88219170971377,
+    "ns_per_item": 0.25606033205986023,
+    "params": {
+      "footprint_bytes": 33554432,
+      "gpu_ms": 8.429625071585178,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 13.346791,
+    "min_ms": 12.491917,
+    "gbps": 643.5954973746123,
+    "ns_per_item": 0.3977653682231903,
+    "params": {
+      "footprint_bytes": 33554432,
+      "gpu_ms": 12.955083278939128,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 33558528,
+    "items": 8388608,
+    "reps": 7,
+    "median_ms": 0.400958,
+    "min_ms": 0.339083,
+    "gbps": 83.69586839519351,
+    "ns_per_item": 0.04779791831970215,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 33554432,
+      "gpu_ms": 0.24837488308548927,
+      "keys_per_tg": 16384
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 34603008,
+    "items": 8388608,
+    "reps": 7,
+    "median_ms": 0.87175,
+    "min_ms": 0.833042,
+    "gbps": 39.693728706624604,
+    "ns_per_item": 0.10392069816589355,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 33554432,
+      "gpu_ms": 0.6845002062618732,
+      "keys_per_tg": 16384
+    }
+  },
+  {
+    "op": "partition_pass",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 155189248,
+    "items": 8388608,
+    "reps": 7,
+    "median_ms": 1.060709,
+    "min_ms": 1.016042,
+    "gbps": 146.30709082321354,
+    "ns_per_item": 0.12644636631011963,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 33554432,
+      "gpu_ms": 0.8749582339078188,
+      "radix_bits": 8,
+      "stable": false,
+      "tiles": 4096
+    }
+  },
+  {
+    "op": "merge_path",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 100663296,
+    "items": 8388608,
+    "reps": 7,
+    "median_ms": 0.47841700000000004,
+    "min_ms": 0.459083,
+    "gbps": 210.40911171634787,
+    "ns_per_item": 0.05703175067901612,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 33554432,
+      "gpu_ms": 0.3029999788850546
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 67108864,
+    "items": 16777216,
+    "reps": 7,
+    "median_ms": 0.380583,
+    "min_ms": 0.35570799999999997,
+    "gbps": 176.33174366695306,
+    "ns_per_item": 0.02268451452255249,
+    "params": {
+      "footprint_bytes": 67108864,
+      "gpu_ms": 0.2251251135021448
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 134217728,
+    "items": 16777216,
+    "reps": 7,
+    "median_ms": 0.682708,
+    "min_ms": 0.639416,
+    "gbps": 196.59609672070636,
+    "ns_per_item": 0.04069256782531738,
+    "params": {
+      "footprint_bytes": 67108864,
+      "gpu_ms": 0.4920000210404396
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 9.198209,
+    "min_ms": 8.245291,
+    "gbps": 466.9351714013021,
+    "ns_per_item": 0.2741279900074005,
+    "params": {
+      "footprint_bytes": 67108864,
+      "gpu_ms": 8.990541798993945,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 12.371709,
+    "min_ms": 11.660583,
+    "gbps": 347.1603879464026,
+    "ns_per_item": 0.3687056601047516,
+    "params": {
+      "footprint_bytes": 67108864,
+      "gpu_ms": 12.216666713356972,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 19.642792,
+    "min_ms": 18.656042000000003,
+    "gbps": 437.3072113170063,
+    "ns_per_item": 0.5854008197784424,
+    "params": {
+      "footprint_bytes": 67108864,
+      "gpu_ms": 19.458166789263487,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 67112960,
+    "items": 16777216,
+    "reps": 7,
+    "median_ms": 0.553917,
+    "min_ms": 0.534875,
+    "gbps": 121.16067930754969,
+    "ns_per_item": 0.03301602602005005,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 67108864,
+      "gpu_ms": 0.42429170571267605,
+      "keys_per_tg": 32768
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 68157440,
+    "items": 16777216,
+    "reps": 7,
+    "median_ms": 1.577333,
+    "min_ms": 1.5603749999999998,
+    "gbps": 43.21055858211297,
+    "ns_per_item": 0.09401637315750122,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 67108864,
+      "gpu_ms": 1.4276248402893543,
+      "keys_per_tg": 32768
+    }
+  },
+  {
+    "op": "partition_pass",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 310378496,
+    "items": 16777216,
+    "reps": 7,
+    "median_ms": 1.9594170000000002,
+    "min_ms": 1.937416,
+    "gbps": 158.4034924674023,
+    "ns_per_item": 0.11679035425186159,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 67108864,
+      "gpu_ms": 1.8171248957514763,
+      "radix_bits": 8,
+      "stable": false,
+      "tiles": 8192
+    }
+  },
+  {
+    "op": "merge_path",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 201326592,
+    "items": 16777216,
+    "reps": 7,
+    "median_ms": 0.794709,
+    "min_ms": 0.777792,
+    "gbps": 253.33372592986868,
+    "ns_per_item": 0.04736834764480591,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 67108864,
+      "gpu_ms": 0.627041794359684
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 134217728,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 0.695708,
+    "min_ms": 0.6102920000000001,
+    "gbps": 192.92250196921697,
+    "ns_per_item": 0.02073371410369873,
+    "params": {
+      "footprint_bytes": 134217728,
+      "gpu_ms": 0.46862498857080936
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 268435456,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 1.20575,
+    "min_ms": 1.167,
+    "gbps": 222.6294472320132,
+    "ns_per_item": 0.03593415021896362,
+    "params": {
+      "footprint_bytes": 134217728,
+      "gpu_ms": 1.0228748433291912
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 10.523625,
+    "min_ms": 9.4465,
+    "gbps": 408.12622038508596,
+    "ns_per_item": 0.3136284649372101,
+    "params": {
+      "footprint_bytes": 134217728,
+      "gpu_ms": 10.286250151693821,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 14.492375000000001,
+    "min_ms": 13.826125,
+    "gbps": 296.3604858416926,
+    "ns_per_item": 0.43190643191337585,
+    "params": {
+      "footprint_bytes": 134217728,
+      "gpu_ms": 14.34962498024106,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 22.378334,
+    "min_ms": 21.357667,
+    "gbps": 383.85049539433993,
+    "ns_per_item": 0.6669263243675232,
+    "params": {
+      "footprint_bytes": 134217728,
+      "gpu_ms": 22.17537513934076,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 134221824,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 1.0017500000000001,
+    "min_ms": 0.960792,
+    "gbps": 133.98734614424754,
+    "ns_per_item": 0.029854476451873783,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 134217728,
+      "gpu_ms": 0.8181249722838402,
+      "keys_per_tg": 65536
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 135266304,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 3.007584,
+    "min_ms": 2.91725,
+    "gbps": 44.97507102046028,
+    "ns_per_item": 0.08963298797607422,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 134217728,
+      "gpu_ms": 2.8115001041442156,
+      "keys_per_tg": 65280
+    }
+  },
+  {
+    "op": "partition_pass",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 620756992,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 3.801333,
+    "min_ms": 3.6624589999999997,
+    "gbps": 163.29981930022967,
+    "ns_per_item": 0.11328855156898499,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 134217728,
+      "gpu_ms": 3.543416503816843,
+      "radix_bits": 8,
+      "stable": false,
+      "tiles": 16384
+    }
+  },
+  {
+    "op": "merge_path",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 402653184,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 1.464167,
+    "min_ms": 1.418958,
+    "gbps": 275.00495776779564,
+    "ns_per_item": 0.04363557696342468,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 134217728,
+      "gpu_ms": 1.2631251011043787
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 268435456,
+    "items": 67108864,
+    "reps": 7,
+    "median_ms": 1.088625,
+    "min_ms": 1.0680830000000001,
+    "gbps": 246.582115971983,
+    "ns_per_item": 0.016221776604652405,
+    "params": {
+      "footprint_bytes": 268435456,
+      "gpu_ms": 0.9155001025646925
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 536870912,
+    "items": 67108864,
+    "reps": 7,
+    "median_ms": 2.1715,
+    "min_ms": 2.15375,
+    "gbps": 247.23505042597284,
+    "ns_per_item": 0.032357871532440186,
+    "params": {
+      "footprint_bytes": 268435456,
+      "gpu_ms": 1.9770415965467691
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 13.377583,
+    "min_ms": 12.786957999999998,
+    "gbps": 321.05704715119316,
+    "ns_per_item": 0.3986830413341522,
+    "params": {
+      "footprint_bytes": 268435456,
+      "gpu_ms": 13.375249924138188,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 15.586834000000001,
+    "min_ms": 15.370917,
+    "gbps": 275.5509743672127,
+    "ns_per_item": 0.46452385187149053,
+    "params": {
+      "footprint_bytes": 268435456,
+      "gpu_ms": 15.357499942183495,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 26.13825,
+    "min_ms": 25.420959,
+    "gbps": 328.63464814974225,
+    "ns_per_item": 0.778980553150177,
+    "params": {
+      "footprint_bytes": 268435456,
+      "gpu_ms": 25.959791615605354,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 268439552,
+    "items": 67108864,
+    "reps": 7,
+    "median_ms": 1.8055,
+    "min_ms": 1.75775,
+    "gbps": 148.67878814732757,
+    "ns_per_item": 0.026904046535491943,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 268435456,
+      "gpu_ms": 1.7299167811870575,
+      "keys_per_tg": 131072
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 269484032,
+    "items": 67108864,
+    "reps": 7,
+    "median_ms": 5.777958,
+    "min_ms": 5.550917,
+    "gbps": 46.640012267309665,
+    "ns_per_item": 0.08609828352928162,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 268435456,
+      "gpu_ms": 5.641666706651449,
+      "keys_per_tg": 65280
+    }
+  },
+  {
+    "op": "partition_pass",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 1241513984,
+    "items": 67108864,
+    "reps": 7,
+    "median_ms": 8.040500000000002,
+    "min_ms": 7.721457999999999,
+    "gbps": 154.40755972887254,
+    "ns_per_item": 0.11981278657913211,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 268435456,
+      "gpu_ms": 8.118500001728535,
+      "radix_bits": 8,
+      "stable": false,
+      "tiles": 32768
+    }
+  },
+  {
+    "op": "merge_path",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 805306368,
+    "items": 67108864,
+    "reps": 7,
+    "median_ms": 2.9013329999999997,
+    "min_ms": 2.7617499999999997,
+    "gbps": 277.56426718339463,
+    "ns_per_item": 0.043233230710029595,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 268435456,
+      "gpu_ms": 2.7431249618530273
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 536870912,
+    "items": 134217728,
+    "reps": 7,
+    "median_ms": 2.068375,
+    "min_ms": 2.033333,
+    "gbps": 259.56169069922043,
+    "ns_per_item": 0.015410594642162323,
+    "params": {
+      "footprint_bytes": 536870912,
+      "gpu_ms": 1.8649583216756582
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 1073741824,
+    "items": 134217728,
+    "reps": 7,
+    "median_ms": 4.389792,
+    "min_ms": 4.173125,
+    "gbps": 244.59970404064703,
+    "ns_per_item": 0.032706499099731445,
+    "params": {
+      "footprint_bytes": 536870912,
+      "gpu_ms": 4.229541635140777
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 20.398959,
+    "min_ms": 19.7845,
+    "gbps": 210.54835670781043,
+    "ns_per_item": 0.6079363524913788,
+    "params": {
+      "footprint_bytes": 536870912,
+      "gpu_ms": 20.76674997806549,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 20.8645,
+    "min_ms": 19.828125,
+    "gbps": 205.85047789307197,
+    "ns_per_item": 0.6218105554580688,
+    "params": {
+      "footprint_bytes": 536870912,
+      "gpu_ms": 20.654041785746813,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 39.29875,
+    "min_ms": 38.283167,
+    "gbps": 218.580351588791,
+    "ns_per_item": 1.1711940169334412,
+    "params": {
+      "footprint_bytes": 536870912,
+      "gpu_ms": 38.74500002712011,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 536875008,
+    "items": 134217728,
+    "reps": 7,
+    "median_ms": 3.540542,
+    "min_ms": 3.345125,
+    "gbps": 151.63639013461784,
+    "ns_per_item": 0.026379093527793884,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 536870912,
+      "gpu_ms": 3.4983749501407146,
+      "keys_per_tg": 262144
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 537919488,
+    "items": 134217728,
+    "reps": 7,
+    "median_ms": 11.530791,
+    "min_ms": 11.060042000000001,
+    "gbps": 46.650701413285525,
+    "ns_per_item": 0.0859110876917839,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 536870912,
+      "gpu_ms": 11.318875011056662,
+      "keys_per_tg": 65280
+    }
+  },
+  {
+    "op": "partition_pass",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 2483027968,
+    "items": 134217728,
+    "reps": 7,
+    "median_ms": 15.875625000000001,
+    "min_ms": 15.054124999999999,
+    "gbps": 156.40505290342898,
+    "ns_per_item": 0.11828262358903886,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 536870912,
+      "gpu_ms": 15.69074997678399,
+      "radix_bits": 8,
+      "stable": false,
+      "tiles": 65536
+    }
+  },
+  {
+    "op": "merge_path",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 1610612736,
+    "items": 134217728,
+    "reps": 7,
+    "median_ms": 6.3027500000000005,
+    "min_ms": 5.334042,
+    "gbps": 255.54126944587676,
+    "ns_per_item": 0.046959146857261665,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 536870912,
+      "gpu_ms": 6.129291607066989
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 1073741824,
+    "items": 268435456,
+    "reps": 7,
+    "median_ms": 3.9849580000000002,
+    "min_ms": 3.838792,
+    "gbps": 269.44871790367677,
+    "ns_per_item": 0.014845125377178192,
+    "params": {
+      "footprint_bytes": 1073741824,
+      "gpu_ms": 3.8217499386519194
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 2147483648,
+    "items": 268435456,
+    "reps": 7,
+    "median_ms": 9.101667,
+    "min_ms": 8.191333,
+    "gbps": 235.9439922379054,
+    "ns_per_item": 0.033906351774930954,
+    "params": {
+      "footprint_bytes": 1073741824,
+      "gpu_ms": 8.917999919503927
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 24.393459,
+    "min_ms": 24.370208,
+    "gbps": 176.0704497053903,
+    "ns_per_item": 0.7269817292690277,
+    "params": {
+      "footprint_bytes": 1073741824,
+      "gpu_ms": 24.182999972254038,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 24.355583,
+    "min_ms": 23.498708,
+    "gbps": 176.34426143689518,
+    "ns_per_item": 0.7258529365062714,
+    "params": {
+      "footprint_bytes": 1073741824,
+      "gpu_ms": 24.145750096067786,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 46.193958,
+    "min_ms": 45.356791,
+    "gbps": 185.95363904517558,
+    "ns_per_item": 1.376687228679657,
+    "params": {
+      "footprint_bytes": 1073741824,
+      "gpu_ms": 45.966958394274116,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 1073745920,
+    "items": 268435456,
+    "reps": 7,
+    "median_ms": 6.6885,
+    "min_ms": 6.413041000000001,
+    "gbps": 160.53613216715254,
+    "ns_per_item": 0.024916604161262512,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 1073741824,
+      "gpu_ms": 6.549291545525193,
+      "keys_per_tg": 262144
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 1074790400,
+    "items": 268435456,
+    "reps": 7,
+    "median_ms": 22.509874999999997,
+    "min_ms": 21.415,
+    "gbps": 47.74750637220332,
+    "ns_per_item": 0.08385581895709036,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 1073741824,
+      "gpu_ms": 22.596500115469098,
+      "keys_per_tg": 65280
+    }
+  },
+  {
+    "op": "partition_pass",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4966055936,
+    "items": 268435456,
+    "reps": 7,
+    "median_ms": 30.099792,
+    "min_ms": 29.407458000000002,
+    "gbps": 164.98638714845606,
+    "ns_per_item": 0.11213046312332153,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 1073741824,
+      "gpu_ms": 29.61099985986948,
+      "radix_bits": 8,
+      "stable": false,
+      "tiles": 131072
+    }
+  },
+  {
+    "op": "merge_path",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 3221225472,
+    "items": 268435456,
+    "reps": 7,
+    "median_ms": 10.822750000000001,
+    "min_ms": 10.736417,
+    "gbps": 297.6346558869049,
+    "ns_per_item": 0.04031788557767869,
+    "params": {
+      "correct": true,
+      "footprint_bytes": 1073741824,
+      "gpu_ms": 10.622374946251512
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 2147483648,
+    "items": 536870912,
+    "reps": 7,
+    "median_ms": 7.721666,
+    "min_ms": 7.534209,
+    "gbps": 278.1114396815402,
+    "ns_per_item": 0.014382723718881607,
+    "params": {
+      "footprint_bytes": 2147483648,
+      "gpu_ms": 7.513000164180994
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 536870912,
+    "reps": 7,
+    "median_ms": 16.448209,
+    "min_ms": 16.222417,
+    "gbps": 261.12066645067557,
+    "ns_per_item": 0.030637176707386967,
+    "params": {
+      "footprint_bytes": 2147483648,
+      "gpu_ms": 16.275791684165597
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 24.317583,
+    "min_ms": 24.188875,
+    "gbps": 176.61982673195772,
+    "ns_per_item": 0.7247204482555389,
+    "params": {
+      "footprint_bytes": 2147483648,
+      "gpu_ms": 24.074458284303546,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 24.266541,
+    "min_ms": 24.194958,
+    "gbps": 176.99132711168025,
+    "ns_per_item": 0.7231992781162262,
+    "params": {
+      "footprint_bytes": 2147483648,
+      "gpu_ms": 24.025249993428588,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 48.473167,
+    "min_ms": 48.253667,
+    "gbps": 177.21009629925769,
+    "ns_per_item": 1.4446129500865936,
+    "params": {
+      "footprint_bytes": 2147483648,
+      "gpu_ms": 48.224749974906445,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 2147487744,
+    "items": 536870912,
+    "reps": 7,
+    "median_ms": 12.392333,
+    "min_ms": 12.336500000000001,
+    "gbps": 173.29164282464004,
+    "ns_per_item": 0.023082518950104713,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 2147483648,
+      "gpu_ms": 12.189083499833941,
+      "keys_per_tg": 262144
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 2148532224,
+    "items": 536870912,
+    "reps": 7,
+    "median_ms": 42.074124999999995,
+    "min_ms": 41.9345,
+    "gbps": 51.06540478263066,
+    "ns_per_item": 0.07836916483938693,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 2147483648,
+      "gpu_ms": 41.84062499552965,
+      "keys_per_tg": 65280
+    }
+  },
+  {
+    "op": "seq_read",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 1073741824,
+    "reps": 7,
+    "median_ms": 15.517917,
+    "min_ms": 15.175291,
+    "gbps": 276.77473052601067,
+    "ns_per_item": 0.014452186413109303,
+    "params": {
+      "footprint_bytes": 4294967296,
+      "gpu_ms": 15.130583429709077
+    }
+  },
+  {
+    "op": "seq_copy",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 1073741824,
+    "reps": 7,
+    "median_ms": 32.437334,
+    "min_ms": 32.284542,
+    "gbps": 264.81629445872466,
+    "ns_per_item": 0.030209621414542198,
+    "params": {
+      "footprint_bytes": 4294967296,
+      "gpu_ms": 32.42887509986758
+    }
+  },
+  {
+    "op": "gather_line",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 25.4995,
+    "min_ms": 25.096083,
+    "gbps": 168.43339265475794,
+    "ns_per_item": 0.7599443197250366,
+    "params": {
+      "footprint_bytes": 4294967296,
+      "gpu_ms": 25.29141679406166,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "gather_coop",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294967296,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 25.144916,
+    "min_ms": 25.104833,
+    "gbps": 170.80857601592305,
+    "ns_per_item": 0.7493768930435181,
+    "params": {
+      "footprint_bytes": 4294967296,
+      "gpu_ms": 24.933333275839686,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "rmw_atomic",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 8589934592,
+    "items": 33554432,
+    "reps": 7,
+    "median_ms": 50.168125,
+    "min_ms": 50.108083,
+    "gbps": 171.22295465497263,
+    "ns_per_item": 1.495126634836197,
+    "params": {
+      "footprint_bytes": 4294967296,
+      "gpu_ms": 49.905250081792474,
+      "probes": 33554432
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4294971392,
+    "items": 1073741824,
+    "reps": 7,
+    "median_ms": 24.544166999999998,
+    "min_ms": 24.128792,
+    "gbps": 174.9894951415544,
+    "ns_per_item": 0.022858536802232262,
+    "params": {
+      "bins": 256,
+      "correct": true,
+      "footprint_bytes": 4294967296,
+      "gpu_ms": 24.24791664816439,
+      "keys_per_tg": 262144
+    }
+  },
+  {
+    "op": "hist_scan",
+    "processor": "gpu",
+    "threads": 1,
+    "bytes": 4296015872,
+    "items": 1073741824,
+    "reps": 7,
+    "median_ms": 83.69341600000001,
+    "min_ms": 83.485584,
+    "gbps": 51.330392249732036,
+    "ns_per_item": 0.0779455676674843,
+    "params": {
+      "bins": 65536,
+      "correct": true,
+      "footprint_bytes": 4294967296,
+      "gpu_ms": 83.48600007593632,
+      "keys_per_tg": 65280
+    }
+  }
+]

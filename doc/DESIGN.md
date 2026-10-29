@@ -72,9 +72,11 @@ Physical stand alone over `cq-syntax`; neither carries its producer's IR.
 
 Declarations supply ordered columns and optional leaf expressions. Declaration
 order fixes host layout; types and runtime traits determine native access.
-Leading-prefix stream reads use native traits when available, otherwise a
-recorded fallback is built lazily once. Const/range reads use direct access or
-scan/filter without building an index. Those predicate reads are distinct from
+Leading-prefix stream reads use native traits when available. A single
+nonleading borrowed-key read may use `IndexedColumn<N>` for its checked
+declaration slot, preserving the original payload-column order. Unsupported
+slots or capabilities use a recorded fallback built lazily once. Const/range
+reads use direct access or scan/filter without building an index. Those predicate reads are distinct from
 literal-bearing atom occurrences: every index for such an occurrence holds only
 its filtered, projected data, including retained rows when it is a stream source.
 Building that data uses native leading-prefix point lookup when available,

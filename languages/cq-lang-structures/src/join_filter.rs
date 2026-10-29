@@ -29,10 +29,10 @@ pub struct JoinFilterCandidate {
 }
 
 /// Every admissible filter of `covering`, one per scalar key column:
-/// an eager probe or semijoin into a total single-level exact index, whose
-/// recorded key layout supplies the conservative filter. Key enumeration is
-/// the provider's `cq_storage::Keys` obligation, checked by rustc. Automatic
-/// selection may apply a narrower cost policy; explicit providers retain this
+/// an eager probe or semijoin into a total single-level exact provider with
+/// declared distinct-key enumeration. Key enumeration is the provider's
+/// `cq_storage::Keys` obligation, checked by rustc. Automatic selection may
+/// apply a narrower cost policy; explicit providers retain this
 /// representation-independent contract. The left operand reaches a scan through an
 /// exclusive pipe spine of selections, projections and eager probes/semijoins,
 /// carrying the key column from the scan's lineage.
@@ -69,8 +69,12 @@ pub fn join_filter_candidates(
         || facts.physical.modes[&build] != ModeKind::Let
         || !facts.physical.rows[&build].computed.is_empty()
         || facts
-            .built_on(&build, &columns)
-            .is_none_or(|(_, levels)| levels != 1)
+            .membership
+            .contains(&(build.clone(), names(&k.columns)))
+        || !facts.provider_support(&build, &columns, None, ProviderCapability::Keys)
+        || facts
+            .selected_built(&build, &columns)
+            .is_none_or(|((levels, _), depth)| depth != 1 || levels.len() != 1)
     {
         return Vec::new();
     }
@@ -194,20 +198,7 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
                 );
             }
             concrete_type(&filter.ty)?;
-            let origin = &facts.lineage[scan];
-            let column = &origin.columns[key];
-            let index = syn::Index::from(
-                facts.host_layouts[&origin.base]
-                    .iter()
-                    .position(|c| c == column)
-                    .unwrap(),
-            );
-            if filter.marker != syn::parse_quote!(::cq_load::ColumnAt<#index>) {
-                return error(
-                    &filter.marker,
-                    "join filter marker must select the covered scalar key",
-                );
-            }
+            concrete_type(&filter.marker)?;
         }
     }
     Ok(())

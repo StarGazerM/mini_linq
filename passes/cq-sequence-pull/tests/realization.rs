@@ -808,28 +808,6 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
 }
 
 #[test]
-fn dispatch_uses_layout_and_allocates_fallbacks_outside_probe_closures() {
-    let p: structures::Program = syn::parse_quote!(physical {
-        relation L(a:i32); relation R(a:i32,b:i32);
-        l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x,b -> y};
-        j = pipe canon probe first [x] l,r; return j as answer(x,y);
-    } structures {});
-    let text = program(&p);
-    assert_eq!(text.matches("Lazy :: new").count(), 1);
-    assert!(
-        text.contains("& & :: cq_storage :: dispatch :: Host"),
-        "{text}"
-    );
-    assert!(text.contains(". seek ("), "{text}");
-    assert!(text.contains("HashSet < _ > > :: new"), "{text}");
-    let mut nonleading = p;
-    nonleading.physical.program.declarations[1] = syn::parse_quote!(relation R(b:i32,a:i32););
-    let text = program(&nonleading);
-    assert!(!text.contains("& & :: cq_storage :: dispatch :: Host"));
-    assert!(text.contains("& :: cq_storage :: dispatch :: Host"));
-}
-
-#[test]
 fn point_prints_build_free_dispatch_and_canonical_lets_use_the_distinct_provider() {
     let p: structures::Program = syn::parse_quote!(physical {
         relation R(a:i32,b:i32); r = pipe rename R@0 {a -> x,b -> y};

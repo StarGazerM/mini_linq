@@ -1,0 +1,4901 @@
+{
+  "case_order": [
+    "reuse"
+  ],
+  "data_preparation": [
+    {
+      "cpu_data_and_stable_reference": {
+        "cpu_process_major_faults": 0,
+        "cpu_process_minor_faults": 1796,
+        "wall_ms": 18.544625
+      },
+      "rows": 1048576
+    },
+    {
+      "cpu_data_and_stable_reference": {
+        "cpu_process_major_faults": 0,
+        "cpu_process_minor_faults": 28678,
+        "wall_ms": 311.12054099999995
+      },
+      "rows": 16777216
+    },
+    {
+      "cpu_data_and_stable_reference": {
+        "cpu_process_major_faults": 0,
+        "cpu_process_minor_faults": 0,
+        "wall_ms": 23.241875
+      },
+      "rows": 1048576
+    }
+  ],
+  "device": "Apple M3 Max",
+  "initialization_once": {
+    "cpu_process_major_faults": 0,
+    "cpu_process_minor_faults": 457,
+    "wall_ms": 13.992833
+  },
+  "results": [
+    {
+      "allocated_bytes": 25707020,
+      "buffer_count": 7,
+      "case": "reuse",
+      "cold": {
+        "allocation": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "cpu_readback": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "cpu_upload": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "encode_commit_wait": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 67,
+          "wall_ms": 5.785458
+        },
+        "first_process_submission": true,
+        "gpu_timestamp_ms": 1.2686249683611095,
+        "residency_prep": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "residency_release": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "round": 0,
+        "sample_scope": "first_submission_for_case",
+        "submission_ordinal": 0,
+        "total_build": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 67,
+          "wall_ms": 5.786875
+        },
+        "validation": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        }
+      },
+      "factors": {
+        "command_autorelease_pool": "each_submission",
+        "cpu_zero_new_allocations": false,
+        "explicit_residency_request": false,
+        "readback_each_round": false,
+        "replace_input_each_round": false,
+        "replace_output_and_directory_each_round": false,
+        "replace_scratch_and_scan_each_round": false,
+        "residency_scope": "none",
+        "upload_each_round": false
+      },
+      "mode_end": {
+        "all_4097_directory_offsets_validated": true,
+        "autorelease_pool_drain": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.00020800000000000001
+        },
+        "cpu_readback": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 514,
+          "wall_ms": 0.47350000000000003
+        },
+        "full_stable_rows_validated": true,
+        "persistent_residency_release": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "validation": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.3435
+        }
+      },
+      "resource_setup_once": {
+        "allocation": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 1,
+          "wall_ms": 0.12929200000000002
+        },
+        "cpu_upload": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 512,
+          "wall_ms": 0.478958
+        },
+        "residency_prep": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "total": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 513,
+          "wall_ms": 0.60975
+        }
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 4,
+            "wall_ms": 1.623708
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.6042499444447458,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 1,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 1,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 4,
+            "wall_ms": 1.628042
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 1,
+            "wall_ms": 1.455542
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 1.0316666448488832,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 2,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 2,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 1,
+            "wall_ms": 1.461084
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.670375
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.6270416779443622,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 3,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 3,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.673417
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 1,
+            "wall_ms": 1.638709
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5418749642558396,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 4,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 4,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 1,
+            "wall_ms": 1.642875
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.599917
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5366666591726243,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 5,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 5,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.6027909999999999
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.088709
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5326666869223118,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 6,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 6,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.092458
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.6219999999999999
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5372500163502991,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 7,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 7,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.626125
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.619541
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5319166230037808,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 8,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 8,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.6226669999999999
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.5603749999999998
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5297499592415988,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 9,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 9,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.5617910000000002
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.0876670000000002
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5019999807700515,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 10,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 10,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.089792
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.546208
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.543708389159292,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 11,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 11,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.548875
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.952666
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5744166555814445,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 12,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 12,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.954083
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.022875
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5763749941252172,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 13,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 13,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.025125
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.9585
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5648333462886512,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 14,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 14,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.959917
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.038417
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5827916320413351,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 15,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 15,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.040542
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.5512499999999998
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5375416367314756,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 16,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 16,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.555083
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.574834
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5440833047032356,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 17,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 17,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.5790000000000002
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.590208
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5417500506155193,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 18,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 18,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.592791
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.084042
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5279583274386823,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 19,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 19,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.087833
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.539917
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5416250205598772,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 20,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 20,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.5431659999999998
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.5332919999999999
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5375833716243505,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 21,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 21,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.536125
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.9835829999999999
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.49887498607859015,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 22,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 22,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.9852909999999999
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.05225
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5040832911618054,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 23,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 23,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.0544580000000001
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.682916
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.532749982085079,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 24,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 24,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.684458
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.9658340000000001
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.56975003099069,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 25,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 25,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.9692080000000001
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.5279580000000001
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 1.0147083085030317,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 26,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 26,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.5316660000000002
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.94425
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5687917000614107,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 27,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 27,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.946042
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.904583
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5567916668951511,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 28,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 28,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.905417
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.203667
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.610958319157362,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 29,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 29,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.205917
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.490458
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5499999970197678,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 30,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 30,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.4941659999999999
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.535
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5419999943114817,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 31,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 31,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 1.539167
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        }
+      ],
+      "warm_medians": {
+        "allocation": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "cpu_readback": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "cpu_upload": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "encode_commit_wait": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 1.5279580000000001
+        },
+        "gpu_timestamp_ms": 0.5419999943114817,
+        "residency_prep": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "residency_release": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "total_build": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 1.5316660000000002
+        },
+        "validation": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        }
+      }
+    },
+    {
+      "allocated_bytes": 411066388,
+      "buffer_count": 8,
+      "case": "reuse",
+      "cold": {
+        "allocation": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "cpu_readback": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "cpu_upload": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "encode_commit_wait": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 23.242124999999998
+        },
+        "first_process_submission": false,
+        "gpu_timestamp_ms": 16.4746250375174,
+        "residency_prep": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "residency_release": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "round": 0,
+        "sample_scope": "first_submission_for_case",
+        "submission_ordinal": 32,
+        "total_build": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 23.244708
+        },
+        "validation": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        }
+      },
+      "factors": {
+        "command_autorelease_pool": "each_submission",
+        "cpu_zero_new_allocations": false,
+        "explicit_residency_request": false,
+        "readback_each_round": false,
+        "replace_input_each_round": false,
+        "replace_output_and_directory_each_round": false,
+        "replace_scratch_and_scan_each_round": false,
+        "residency_scope": "none",
+        "upload_each_round": false
+      },
+      "mode_end": {
+        "all_4097_directory_offsets_validated": true,
+        "autorelease_pool_drain": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.00025
+        },
+        "cpu_readback": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 8194,
+          "wall_ms": 15.950417000000002
+        },
+        "full_stable_rows_validated": true,
+        "persistent_residency_release": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "validation": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 8.899916000000001
+        }
+      },
+      "resource_setup_once": {
+        "allocation": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 1,
+          "wall_ms": 0.155458
+        },
+        "cpu_upload": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 8192,
+          "wall_ms": 6.9135409999999995
+        },
+        "residency_prep": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "total": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 8193,
+          "wall_ms": 7.070542
+        }
+      },
+      "rows": 16777216,
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 7.4975
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 7.127874996513128,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 1,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 33,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 7.498917
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 7.729458
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 6.7733750329352915,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 2,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 34,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 7.730583
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.328625
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.718125030398369,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 3,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 35,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.332
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.406459
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.377791647333652,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 4,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 36,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.411458
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.410041
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.390500009525567,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 5,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 37,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.412959
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.781167
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.395125015638769,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 6,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 38,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.782833
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.833875
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.4427499999292195,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 7,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 39,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.837333999999999
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.256875
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.80308330245316,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 8,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 40,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.2602910000000005
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.804416
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.397666653152555,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 9,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 41,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.808332999999999
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.818417
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.381125025451183,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 10,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 42,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.822500000000001
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.79775
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.414458340965211,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 11,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 43,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.7995
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.818166
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.390000005718321,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 12,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 44,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.8215
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.81175
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.401541653554887,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 13,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 45,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.815875
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.154166
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.717916646972299,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 14,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 46,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.1583749999999995
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.812792
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.397624976467341,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 15,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 47,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.8167089999999995
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.775041
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.409875011537224,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 16,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 48,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.777209
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.073417
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.697624990716577,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 17,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 49,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.076041
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.0794999999999995
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.667999968864024,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 18,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 50,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.08225
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.825917
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.427249998319894,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 19,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 51,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.827083
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.148458
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.733375030104071,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 20,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 52,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.152125
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.8172500000000005
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.38966670865193,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 21,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 53,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.820416
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.825542
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.391291691921651,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 22,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 54,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.827125
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.801417
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.389750003814697,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 23,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 55,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.802917
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.836416
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.405250005424023,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 24,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 56,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.838083
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.2978749999999994
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.870291672181338,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 25,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 57,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.300625
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.831917
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.388041667174548,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 26,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 58,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.835667
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.854709
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.390083359088749,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 27,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 59,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.857084
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.884124999999999
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.419374967459589,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 28,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 60,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.8865
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.825165999999999
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.399666668381542,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 29,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 61,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.827542
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.924208
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.401999980676919,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 30,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 62,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 5.927042
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.243584
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 5.801583349239081,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 31,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 63,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 6.24575
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        }
+      ],
+      "warm_medians": {
+        "allocation": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "cpu_readback": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "cpu_upload": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "encode_commit_wait": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 5.836416
+        },
+        "gpu_timestamp_ms": 5.405250005424023,
+        "residency_prep": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "residency_release": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "total_build": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 5.838083
+        },
+        "validation": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        }
+      }
+    },
+    {
+      "allocated_bytes": 25707020,
+      "buffer_count": 7,
+      "case": "reuse",
+      "cold": {
+        "allocation": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "cpu_readback": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "cpu_upload": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "encode_commit_wait": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 1.9740830000000003
+        },
+        "first_process_submission": false,
+        "gpu_timestamp_ms": 0.36895833909511566,
+        "residency_prep": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "residency_release": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "round": 0,
+        "sample_scope": "first_submission_for_case",
+        "submission_ordinal": 64,
+        "total_build": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 1.9772499999999997
+        },
+        "validation": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        }
+      },
+      "factors": {
+        "command_autorelease_pool": "each_submission",
+        "cpu_zero_new_allocations": false,
+        "explicit_residency_request": false,
+        "readback_each_round": false,
+        "replace_input_each_round": false,
+        "replace_output_and_directory_each_round": false,
+        "replace_scratch_and_scan_each_round": false,
+        "residency_scope": "none",
+        "upload_each_round": false
+      },
+      "mode_end": {
+        "all_4097_directory_offsets_validated": true,
+        "autorelease_pool_drain": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.00025
+        },
+        "cpu_readback": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 514,
+          "wall_ms": 0.532042
+        },
+        "full_stable_rows_validated": true,
+        "persistent_residency_release": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.000042
+        },
+        "validation": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.388667
+        }
+      },
+      "resource_setup_once": {
+        "allocation": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.13025
+        },
+        "cpu_upload": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 512,
+          "wall_ms": 0.520125
+        },
+        "residency_prep": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 0,
+          "wall_ms": 0.0
+        },
+        "total": {
+          "cpu_process_major_faults": 0,
+          "cpu_process_minor_faults": 512,
+          "wall_ms": 0.6521250000000001
+        }
+      },
+      "rows": 1048576,
+      "samples": [
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.7468750000000001
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.35849999403581023,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 1,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 65,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.7494999999999999
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.700042
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.357625016476959,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 2,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 66,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.7016249999999999
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.6661250000000001
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3571250126697123,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 3,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 67,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.667125
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.631334
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.34320837585255504,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 4,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 68,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.632375
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.723083
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.35912496969103813,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 5,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 69,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.726625
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.660958
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.35137502709403634,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 6,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 70,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.662583
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.6485
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3520416794344783,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 7,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 71,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.649417
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.628083
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.341000035405159,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 8,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 72,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.628959
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.6531659999999999
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3537083393894136,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 9,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 73,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.654292
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.744042
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.360500009264797,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 10,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 74,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.74625
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.74825
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3593749715946615,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 11,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 75,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.7518330000000001
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.7119169999999999
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.36666664527729154,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 12,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 76,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.713459
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.883125
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3666249685920775,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 13,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 77,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.884
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.6858329999999999
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.34249998861923814,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 14,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 78,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.6867909999999999
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.685583
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3545416984707117,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 15,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 79,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.6875
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.7494999999999999
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.35512499744072556,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 16,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 80,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.752042
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.9032089999999999
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.5558749544434249,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 17,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 81,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.9061250000000001
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.717125
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.36149995867162943,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 18,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 82,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.718667
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.779209
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3647500416263938,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 19,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 83,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.781209
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.745417
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3673333558253944,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 20,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 84,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.746792
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.7675
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3619999624788761,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 21,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 85,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.769584
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.792709
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3645416582003236,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 22,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 86,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.795709
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.6947089999999999
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.36862498382106423,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 23,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 87,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.6965
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.702584
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.36287499824538827,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 24,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 88,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.7034170000000001
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.770416
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.36325003020465374,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 25,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 89,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.772583
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.746583
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.36616669967770576,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 26,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 90,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.747916
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.737667
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3555417060852051,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 27,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 91,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.739791
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.794667
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3632083535194397,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 28,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 92,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.797333
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.740334
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3673332976177335,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 29,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 93,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.74175
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.761042
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.364875013474375,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 30,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 94,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.763291
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        },
+        {
+          "allocation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_readback": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "cpu_upload": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "encode_commit_wait": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.812
+          },
+          "first_process_submission": false,
+          "gpu_timestamp_ms": 0.3667499986477196,
+          "residency_prep": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "residency_release": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          },
+          "round": 31,
+          "sample_scope": "warmed_submission",
+          "submission_ordinal": 95,
+          "total_build": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.814625
+          },
+          "validation": {
+            "cpu_process_major_faults": 0,
+            "cpu_process_minor_faults": 0,
+            "wall_ms": 0.0
+          }
+        }
+      ],
+      "warm_medians": {
+        "allocation": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "cpu_readback": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "cpu_upload": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "encode_commit_wait": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.740334
+        },
+        "gpu_timestamp_ms": 0.36149995867162943,
+        "residency_prep": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "residency_release": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        },
+        "total_build": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.74175
+        },
+        "validation": {
+          "cpu_process_major_faults": 0.0,
+          "cpu_process_minor_faults": 0.0,
+          "wall_ms": 0.0
+        }
+      }
+    }
+  ],
+  "schema": "gpu-index-lifetime-v1",
+  "scope": {
+    "allocation": "new buffers and replacement releases; CPU zeroing included only for fresh_pretouched; pipelines never recreated",
+    "cold": "first measured submission per case; no unmeasured GPU warmups; only ordinal 0 is process-first; fresh allocation does NOT guarantee cold physical pages",
+    "encode_commit_wait": "CPU wall including command creation, encoding, commit and wait; command autorelease drainage per-submission except explicit deferred-pool controls",
+    "execution": "canonical Sort(8 digit bits, 8 items/thread), then maintain_directory; one command buffer; same retained pipelines throughout",
+    "faults": "libc getrusage(RUSAGE_SELF) CPU process minor/major fault deltas, NOT GPU faults and NOT evidence of disk I/O; phases include all process threads",
+    "gpu_timestamp_ms": "completed command buffer GPUEndTime minus GPUStartTime; not CPU wall",
+    "input": "deterministic SplitMix64 full-u32 keys with deliberate duplicate keys; independent full-u32 nonmonotonic payloads; identical unsorted input every submission",
+    "medians": "componentwise medians of the odd warmed sample count, excluding first measured cold submission; not sums of medians",
+    "phase_faults": "before/after snapshots; disabled phases are zero; GPU timestamps have no separate CPU fault interval; no counter failures ignored",
+    "readback": "full output and directory copied into preallocated CPU storage; only readback cases read between submissions; other cases first read after every repetition",
+    "residency": "explicit create/add/commit/requestResidency; prep is a hint and may leave deferred work; original tracked bindings remain; endResidency after completion",
+    "resource_setup_once": "initial per-mode buffers, scratch resize, input upload, optional persistent residency; separate from builds, including for fresh cases",
+    "storage": "shared, default CPU cache, default tracked hazards, direct encoder buffer bindings",
+    "topology": "distinct immutable-source input, output, radix-12 directory, radix scratch, every hierarchical scan level; same sizes/count per row size",
+    "total_build": "enclosing wall/fault snapshot of allocation, upload, residency preparation, encode/commit/wait, optional readback, per-build residency release; includes phase instrumentation; excludes validation and one-time setup; deferred pool drainage reported separately at mode end",
+    "validation": "full stable row equality against CPU stable sort and all 4097 exact directory offsets; each readback round and every mode end; excluded from total build",
+    "warm": "subsequent submissions; fresh cases still replace their declared buffers each round"
+  },
+  "sizes": [
+    1048576,
+    16777216,
+    1048576
+  ],
+  "warm_runs": 31
+}

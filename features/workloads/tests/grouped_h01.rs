@@ -51,6 +51,7 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
                 .collect(),
             dictionaries,
         };
+
         let sql = format!(
             r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber,

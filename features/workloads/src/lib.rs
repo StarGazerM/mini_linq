@@ -37,11 +37,15 @@
 //! Synthetic and TPC-H-derived timings use release executables compiled without
 //! storage instrumentation. Counters come from separate instrumented executions.
 //! TPC workers require exact DuckDB agreement for every warm/timed run and both
-//! independent counted runs; no time threshold is a correctness gate. The TPC
-//! inventory retains its 12 kernels and 48 timing rows across both scales.
-//! retail_h07_block adds two pipelines at each scale, for 52 timing rows total.
+//! independent counted runs; no time threshold is a correctness gate. The
+//! current inventory contains 29 kernels. `--index-comparison` selects
+//! default/radix/radix_retained, preserving the same plan, plus the matched
+//! built_hash/built_radix pair on the 17 kernels that advertise it (121 rows).
 //! Q6/Q19 retain full-query identities; other kernels remain explicitly derived.
-//! Fresh acceptance evidence and final tables belong in the task ledger/stdout.
+//! Host fallback providers are not retyped by ordinary radix advice. Compare
+//! built_hash with built_radix to hold explicit materialization fixed, and
+//! separate real provider switches from no-ops. See `tpch-methodology.txt`
+//! and the Mac measurement records.
 
 //!
 //! Run acceptance from this standalone workspace. Corpus and benchmark contracts
@@ -63,6 +67,9 @@
 //! cargo run -p cq-xtask --features oracle -- bench --tpch --sf 1 --runs 5 --config default,le
 //! cargo run -p cq-xtask --features oracle -- bench --tpch --sf 1 --runs 5 --config default,le_runs
 //! cargo run -p cq-xtask --features oracle -- bench --tpch --sf 0.1 --runs 0 --config par
+//! cargo run -p cq-xtask --features oracle -- bench --tpch --sf 1 --runs 5 --index-comparison
+//! cargo run -p cq-xtask --features oracle -- bench --tpch --sf 1 --query retail_h09 --config built_hash
+//! cargo run -p cq-xtask --features oracle -- bench --tpch --sf 1 --query retail_h09 --config built_radix
 //! ```
 //!
 //! From the repository root: `python3 tools/check_external.py`.

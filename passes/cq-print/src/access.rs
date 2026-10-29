@@ -7,9 +7,15 @@ use super::*;
 pub struct HostAccess {
     pub value: Ident,
     pub prefix: bool,
+    /// Checked declaration slot for a single non-prefix key.
+    pub column: Option<usize>,
     pub fallback: Ident,
     /// Checked full-row-key probes observe existence, not witness payloads.
     pub membership: bool,
+    /// This read uses a declared immutable cursor contract and a borrowed fallback.
+    pub retained: bool,
+    /// The actual selected host cursor must also expose an exact finite length.
+    pub expand: bool,
     /// Computed prefix keys cannot borrow for the lifetime of host rows.
     pub owned_key: bool,
     /// Key columns in declaration order for an eligible prefix.
@@ -57,8 +63,18 @@ impl<'a> Context<'a> {
             .map(|(t, s)| (s, t))
             .collect();
         let layout: Vec<String> = host.layout.iter().map(|c| inverse[c].clone()).collect();
-        // Formal rule IF-Dispatch: Only declaration prefixes are eligible for native reads.
+        // Formal rule IF-Dispatch: Native reads require a declaration prefix or an explicit single-column slot.
         let prefix = layout[..columns.len()].iter().all(|c| columns.contains(c));
+        let column = if !prefix && columns.len() == 1 {
+            Some(
+                layout
+                    .iter()
+                    .position(|c| c == &columns[0])
+                    .expect("checked host column"),
+            )
+        } else {
+            None
+        };
         let key = if prefix {
             layout[..columns.len()].to_vec()
         } else {
@@ -80,6 +96,31 @@ impl<'a> Context<'a> {
                 .analysis
                 .membership
                 .contains(&(result.to_owned(), columns.to_vec())),
+            column,
+            retained: self.analysis.fallbacks.keys().any(|(name, reader, key)| {
+                name == result
+                    && key == columns
+                    && reader.result().is_some_and(|reader| {
+                        self.analysis.provider_support(
+                            result,
+                            columns,
+                            Some(reader),
+                            structures::ProviderCapability::Retain,
+                        )
+                    })
+            }),
+            expand: self.analysis.fallbacks.keys().any(|(name, reader, key)| {
+                name == result
+                    && key == columns
+                    && reader.result().is_some_and(|reader| {
+                        self.analysis.provider_support(
+                            result,
+                            columns,
+                            Some(reader),
+                            structures::ProviderCapability::Expand,
+                        )
+                    })
+            }),
             key,
             key_types,
             payload,
@@ -299,10 +340,37 @@ impl<'a> Context<'a> {
                 ty
             };
             let build = self.profile_build(&build_name, construct);
-            self.statements.push(syn::parse_quote! {
-                let #fallback: ::cq_storage::dispatch::Lazy<#declared_type, _> = ::cq_storage::dispatch::Lazy::new(move || #build);
+            let mut guards = Vec::new();
+            for ((name, selected, key), selected_ty) in &self.analysis.fallbacks {
+                if name == result && key == &columns {
+                    guards.extend(self.provider_guards(
+                        result,
+                        std::slice::from_ref(&columns),
+                        selected_ty,
+                        Some(selected),
+                        quote!(&__cq_provider),
+                    ));
+                }
+            }
+            // Ordinary access traits are checked on the handle actually chosen
+            // by autoref dispatch. Proving them on an unused fallback would
+            // impose Hash, ordering, or payload bounds on a native direct read.
+            let build = quote!({
+                let __cq_provider = #build;
+                #(#guards)*
+                __cq_provider
             });
-            self.owned.push(fallback);
+            if a.retained {
+                self.statements.push(syn::parse_quote! {
+                    let #fallback: &::cq_storage::dispatch::Lazy<#declared_type, _> = &::cq_storage::dispatch::Lazy::new(move || #build);
+                });
+                self.bound = true;
+            } else {
+                self.statements.push(syn::parse_quote! {
+                    let #fallback: ::cq_storage::dispatch::Lazy<#declared_type, _> = ::cq_storage::dispatch::Lazy::new(move || #build);
+                });
+                self.owned.push(fallback);
+            }
         }
         let mut merged = std::collections::BTreeSet::new();
         for (reader, columns) in self
@@ -317,11 +385,21 @@ impl<'a> Context<'a> {
             }
             let access = self.host_access(result, columns);
             let value = &access.value;
+            let selected = cq_lang_structures::ReaderRef::Result(reader.clone());
+            let ty = self.fallback_type(result, selected.clone(), columns);
+            let native_guards = self.provider_guards(
+                result,
+                std::slice::from_ref(columns),
+                ty,
+                Some(&selected),
+                quote!(#value),
+            );
             if access.prefix && access.key == *columns {
                 let types = columns.iter().map(|c| &self.infos[result].types[c]);
                 self.statements.push(
                     syn::parse_quote!(::cq_storage::require::ordered_key::<(#(#types,)*),_>(&#value);),
                 );
+                self.statements.extend(native_guards);
             } else {
                 let name = format_ident!("__cq_{}_merge_{}", result, columns.join("_"));
                 let ty = self.fallback_type(
@@ -338,11 +416,21 @@ impl<'a> Context<'a> {
                     .filter(|c| !columns.contains(c))
                     .map(|c| self.access(result, c));
                 let capture = self.carries_positions(result).then(|| quote!(move));
+                let guards = self.provider_guards(
+                    result,
+                    std::slice::from_ref(columns),
+                    ty,
+                    Some(&selected),
+                    quote!(#name),
+                );
                 self.statements.push(syn::parse_quote! {
                     let #name = &<#ty as ::cq_storage::Build<_>>::build(
                         ::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*),(#(#payload,)*)))
                     );
                 });
+                self.statements.extend(guards);
+                self.statements
+                    .push(syn::parse_quote!(::cq_storage::require::ordered(#name);));
                 self.bound = true;
             }
         }
@@ -444,6 +532,46 @@ impl<'a> Context<'a> {
             })
     }
 
+    /// A native or fallback handle whose cursor borrows stable query storage,
+    /// not the temporary autoref-dispatch wrapper.
+    pub fn host_retained_read(&self, left: &str, access: &HostAccess) -> TokenStream {
+        let value = self.host_dispatch_value(access);
+        let fallback = &access.fallback;
+        let types: Vec<_> = self.host_key_types(left, access).collect();
+        let receiver = if (access.prefix || access.column.is_some()) && !access.owned_key {
+            quote!(&&::cq_storage::dispatch::BorrowedHost::<_, (#(#types,)*), _, _>::new(#value, #fallback))
+        } else {
+            quote!(&::cq_storage::dispatch::BorrowedHost::<_, (#(#types,)*), _, _>::new(#value, #fallback))
+        };
+        let (dispatch, method, proof) = if access.expand {
+            (
+                quote!(ExpandedRead),
+                quote!(expanded_read),
+                quote!(::cq_storage::provider_contract::require_expand(&__cq_read);),
+            )
+        } else {
+            (
+                quote!(BorrowedRead),
+                quote!(borrowed_read),
+                quote!(::cq_storage::provider_contract::require_retain(&__cq_read);),
+            )
+        };
+        quote!({
+            use ::cq_storage::dispatch::#dispatch as _;
+            let __cq_read = (#receiver).#method();
+            #proof
+            __cq_read
+        })
+    }
+
+    fn host_dispatch_value(&self, access: &HostAccess) -> TokenStream {
+        let value = &access.value;
+        match access.column.filter(|_| !access.owned_key) {
+            Some(column) => quote!(::cq_storage::dispatch::ColumnHost::<_, #column>::new(#value)),
+            None => quote!(#value),
+        }
+    }
+
     pub fn host_lookup(
         &self,
         left: &str,
@@ -458,6 +586,11 @@ impl<'a> Context<'a> {
             return quote!(::core::iter::Iterator::next(
                 &mut ::cq_storage::rows::Rows::rows(#value)
             ).is_some());
+        }
+        if access.retained && !contains {
+            let read = self.host_retained_read(left, access);
+            let key = self.host_key(left, access);
+            return quote!(::cq_storage::provider_contract::retain(#read, #key));
         }
         let fallback = &access.fallback;
         let types = self.host_key_types(left, access);
@@ -480,10 +613,12 @@ impl<'a> Context<'a> {
                 (#receiver).contains_owned(#key)
             });
         }
+        let value = self.host_dispatch_value(access);
+        let native = (access.prefix || access.column.is_some()) && !access.owned_key;
         let key = self.host_key(left, access);
-        let receiver = if access.prefix && !access.owned_key && negative {
+        let receiver = if native && negative {
             quote!(&&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
-        } else if access.prefix && !access.owned_key {
+        } else if native {
             quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
         } else {
             quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))

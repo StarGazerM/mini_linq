@@ -302,6 +302,9 @@ pub enum Capability {
     Range,
     Membership,
     Ordered,
+    /// The native input handle already denotes immutable target-resident storage.
+    /// Its recorded read levels need no generated host-adapter retention.
+    Resident,
 }
 
 /// Ordered target tokens used to discharge planner obligations.
@@ -325,6 +328,9 @@ pub struct Catalog {
 pub struct ProviderToken {
     pub ty: syn::Type,
     pub capabilities: Vec<Capability>,
+    /// Provider-authored Structures optimizations, independent of execution
+    /// levels and contiguous-range read capabilities.
+    pub supports: Vec<structures::ProviderCapability>,
     pub levels: Vec<Vec<String>>,
     /// Accepted scalar row elements; `None` leaves the element type unrestricted.
     pub elements: Option<Vec<syn::Type>>,

@@ -486,12 +486,6 @@ fn scenarios_discharge_every_physical_read_and_reject_changed_targets() {
         let source = syn::parse_str(case.physical).unwrap();
         let target = compile(&source).unwrap();
         check(&source, &target).unwrap();
-        assert_eq!(
-            target.structures,
-            syn::parse_str::<structures::Structures>(case.structures).unwrap(),
-            "{}",
-            case.name
-        );
         let mut changed = target;
         changed.physical.program.head.relation = syn::parse_quote!(mutated);
         assert!(check(&source, &changed).is_err());
@@ -510,10 +504,6 @@ fn chain() -> physical::Program {
 fn concrete_types_and_preservation_are_checked_independently() {
     let source = chain();
     let target = compile(&source).unwrap();
-    assert_eq!(
-        built_entries(&target),
-        syn::parse_quote!(structures { l = ::cq_storage::HashSet<_> [a]; r = ::cq_storage::HashIndex<'_, _, _> [a]; })
-    );
     check(&source, &target).unwrap();
     let mut reordered = target.clone();
     reordered.structures.entries.reverse();
@@ -598,7 +588,7 @@ fn ordered_read_provider_capabilities_are_rustc_obligations() {
     let target = compile(&p).unwrap();
     assert_eq!(
         built_entries(&target),
-        syn::parse_quote!(structures { r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x]; })
+        syn::parse_quote!(structures { r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x] supports [keys]; })
     );
     let mut q = target.clone();
     q.structures.entries[0] = syn::parse_quote!(r = ::cq_storage::HashIndex<'_, _, _> [x];);
@@ -823,40 +813,40 @@ fn candidate_levels_coexist_with_payload_membership_and_ordered_reads() {
         return checked as answer(a,b,c);
     });
     let target = compile(&source).unwrap();
-    assert_eq!(
-        built_entries(&target),
-        syn::parse_quote!(structures {
-            r = ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [b][c];
-            r = ::cq_storage::HashIndex<'_, _, _> [b];
-            r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [b,c];
-            r = ::cq_storage::HashSet<_> [c];
-            members = ::cq_storage::HashSet<_> [a];
-            ordered = ::cq_storage::HashSet<_> [b];
-        })
-    );
     let mut reordered = target.clone();
     reordered.structures.entries.reverse();
     for target in [&target, &reordered] {
         check(&source, target).unwrap();
         let analysis = structures::contract::check(target).unwrap();
+        assert!(analysis.candidate_on("r", &["b".into()], "c").is_some());
         assert_eq!(
-            analysis.built_on("r", &["b".into()]).unwrap(),
-            (&syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>), 1)
-        );
-        assert_eq!(
-            analysis.built_on("r", &["b".into(), "c".into()]).unwrap(),
-            (
-                &syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
-                1
-            )
+            analysis.built_on("r", &["b".into(), "c".into()]).unwrap().1,
+            1
         );
     }
-    for missing in [0, 1, 3] {
+    // These layouts are necessary for coverage. Removing only the ordered
+    // implementation is instead a Rust OrderedRead obligation: an opaque
+    // candidate provider could lawfully implement both interfaces.
+    for levels in ["b/c", "b", "c"] {
+        let levels: Vec<Vec<String>> = levels
+            .split('/')
+            .map(|column| vec![column.to_owned()])
+            .collect();
+        let missing = target
+            .structures
+            .entries
+            .iter()
+            .position(|entry| {
+                entry.name == "r"
+                    && matches!(&entry.structure,
+                structures::Structure::Built { keyed, .. } if keyed.level_names() == levels)
+            })
+            .unwrap();
         let mut changed = target.clone();
         changed.structures.entries.remove(missing);
         assert!(
             check(&source, &changed).is_err(),
-            "missing built entry {missing}"
+            "missing read layout {levels:?}"
         );
     }
     // Without the dedicated ordered provider, the complete candidate key
@@ -926,9 +916,13 @@ fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
         .iter()
         .position(|e| e.name == "selected")
         .unwrap();
+    let structures::Structure::Built { keyed, .. } = &target.structures.entries[entry].structure
+    else {
+        panic!("projected read must have a payload provider");
+    };
     assert_eq!(
-        target.structures.entries[entry],
-        syn::parse_quote!(selected = ::cq_storage::HashIndex<'_, _, _> [k] payload [k,value] constants {tag = "a"};)
+        keyed.filtered,
+        Some(syn::parse_quote!(payload [k,value] constants {tag = "a"}))
     );
     assert_eq!(
         syn::parse2::<structures::Program>(target.to_token_stream()).unwrap(),

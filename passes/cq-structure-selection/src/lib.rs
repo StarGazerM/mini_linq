@@ -509,6 +509,24 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                 || !matches!(entry.structure, structures::Structure::Rows { .. })
         });
     }
+    // Built providers are actually constructed. Do not impose unused fallback
+    // bounds on native host reads (for example Ord-only keys need not be Hash).
+    for entry in &mut selected.entries {
+        let keyed = match &mut entry.structure {
+            structures::Structure::Built { keyed, .. } => keyed,
+            _ => continue,
+        };
+        if keyed.membership.is_none()
+            && keyed.levels.len() == 1
+            && !keyed.levels[0].columns.is_empty()
+            && (keyed.ty == Need::Seek.default_type()
+                || keyed.ty == Need::Ordered.default_type()
+                || keyed.ty
+                    == syn::parse_quote!(::std::collections::HashMap<_, ::std::vec::Vec<_>>))
+        {
+            keyed.supports = Some(syn::parse_quote!(supports[keys]));
+        }
+    }
     let target = structures::Program {
         physical: source.clone(),
         structures: selected,

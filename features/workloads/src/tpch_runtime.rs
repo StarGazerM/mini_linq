@@ -11,7 +11,7 @@ pub type Dedup<T> = cq_storage::HashSet<T>;
 /// Expand the same authored CQ with an explicit sequence of public passes.
 macro_rules! configuration {
     (default, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
-        crate::tpch_runtime::configuration!(@named default, $d, { $($stages)* }, { $($body)* });
+        crate::tpch_runtime::configuration!(default, $d, { $($stages)* }, [], { $($body)* });
         crate::tpch_runtime::configuration!(@named par, $d, {
             $($stages)*
             decompose = [::cq_sequence_tasks_macros::plan];
@@ -22,6 +22,19 @@ macro_rules! configuration {
             plan = ::mini_linq::passes::plan(no_reduce);
             $($stages)*
         }, { $($body)* });
+    };
+    (default, $d:tt, { $($stages:tt)* }, [$($extra:path),*], { $($body:tt)* }) => {
+        crate::tpch_runtime::configuration!(@named default, $d, { $($stages)* }, [$($extra),*], { $($body)* });
+        crate::tpch_runtime::configuration!(@named radix, $d, { $($stages)* }, [$($extra,)* ::cq_rewrites::radix_runs], { $($body)* });
+        crate::tpch_runtime::configuration!(@named radix_retained, $d, { $($stages)* }, [$($extra,)* ::cq_rewrites::radix_runs, ::cq_rewrites::retain_lookups], { $($body)* });
+        crate::tpch_runtime::configuration!(@named built_hash, $d, {
+            $($stages)*
+            physical = [::cq_rewrites::build_host_reads];
+        }, [$($extra),*], { $($body)* });
+        crate::tpch_runtime::configuration!(@named built_radix, $d, {
+            $($stages)*
+            physical = [::cq_rewrites::build_host_reads];
+        }, [$($extra,)* ::cq_rewrites::radix_runs], { $($body)* });
     };
     ($module:ident, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
         crate::tpch_runtime::configuration!(@named $module, $d, { $($stages)* }, [], { $($body)* });
@@ -66,8 +79,10 @@ pub(crate) use configuration;
 /// Each `query!` carries stage-local advice; only the advised variant applies it.
 macro_rules! standalone_configs {
     ($d:tt; $($body:tt)*) => {
-        pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "transfer", "le", "le_runs", "advised"];
+        pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "no-reduce", "transfer", "le", "le_runs", "advised"];
         crate::tpch_runtime::standalone_configuration!(default, $d, {}, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(radix, $d, {}, [::cq_rewrites::radix_runs], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(radix_retained, $d, {}, [::cq_rewrites::radix_runs, ::cq_rewrites::retain_lookups], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(par, $d, {
             decompose = [::cq_sequence_tasks_macros::plan];
             grade = ::cq_sequence_tasks_macros::tasks;
@@ -90,6 +105,8 @@ macro_rules! standalone_configs {
             match config {
                 "default" => default::run(data, config),
                 "par" => par::run(data, config),
+                "radix" => radix::run(data, config),
+                "radix_retained" => radix_retained::run(data, config),
                 "no-reduce" => no_reduce::run(data, config),
                 "transfer" => transfer::run(data, config),
                 "le" => le::run(data, config),
@@ -128,6 +145,7 @@ macro_rules! standalone_configuration {
         }
     };
 }
+
 pub(crate) use standalone_configuration;
 
 macro_rules! standalone_query {
@@ -185,7 +203,7 @@ macro_rules! retail_kernel {
     ) => {
         pub const NAME: &str = $name;
         pub const SQL: &str = $sql;
-        pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "transfer", "le", "le_runs", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
+        pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
         pub const EXPORTS: &[(&str, &str)] = &[$(
             (stringify!($table), concat!(stringify!($first) $(, ",", stringify!($column))*)),
         )*];
@@ -303,6 +321,10 @@ macro_rules! retail_kernel {
         pub fn run(data: &Data, config: &str) -> Vec<Answer> {
             match config {
                 "default" => default::run(data),
+                "radix" => radix::run(data),
+                "radix_retained" => radix_retained::run(data),
+                "built_hash" => built_hash::run(data),
+                "built_radix" => built_radix::run(data),
                 "par" => par::run(data),
                 "no-reduce" => no_reduce::run(data),
                 "transfer" => transfer::run(data),
@@ -433,3 +455,20 @@ macro_rules! extra_prepare {
     }};
 }
 pub(crate) use extra_prepare;
+
+/// Check complete canonical rows under the same plan and alternate indexes.
+#[cfg(test)]
+pub(crate) fn same_plan_answers<T>(
+    run: impl Fn(&str) -> Vec<T>,
+    canonical: impl Fn(&[T]) -> Vec<Vec<String>>,
+) -> Vec<T> {
+    let baseline = run("default");
+    let mut expected = canonical(&baseline);
+    expected.sort();
+    for config in ["radix", "radix_retained"] {
+        let mut actual = canonical(&run(config));
+        actual.sort();
+        assert_eq!(actual, expected, "{config} differs from the default query");
+    }
+    baseline
+}

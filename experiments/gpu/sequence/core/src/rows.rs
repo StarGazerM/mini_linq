@@ -1417,6 +1417,7 @@ fn host_rows(
             // Downloaded rows use the same scan adapter as default Structures;
             // the resident annotation describes only the original GPU view.
             keyed.ty = syn::parse_quote!(::core::iter::Map<_, _>);
+            keyed.supports = None;
         }
     }
     cq_lang_structures::check_rewrite(&program.structures, &host_structures)?;

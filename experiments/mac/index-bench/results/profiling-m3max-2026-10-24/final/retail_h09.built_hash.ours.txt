@@ -1,0 +1,31 @@
+retail_h09 / built_hash SF 1
+uninstrumented median 474.287 ms; profile median 576.830 ms; overhead +21.62%
+Stream time: inclusive first-demand-to-exhaustion/drop span; nested times overlap. Build time: initialization wall clock, including deferred initialization. in/inserted count actual input occurrences; inserted includes duplicates. Rows come from a separate counters execution; timings come from the same operator graph with row counters disabled. Both executions are verified exactly against DuckDB.
+QUERY            query [retail_h09] inputs= rows=319402 in=0 inserted=0 t=576.830ms
+  ANSWER           r12.answer [] inputs=r12 rows=319402 in=319402 inserted=0 t=546.578ms
+    PROJECT          r12 [order_key,part_key,supplier_key] inputs=r11 rows=319404 in=319404 inserted=0 t=526.855ms
+      PROBE            r11 [nation_key] inputs=r9,r10 rows=319404 in=319404 inserted=0 t=6.061ms
+        PROBE            r9 [supplier_key] inputs=r7,r8 rows=319404 in=319404 inserted=0 t=18.751ms
+          PROBE            r7 [order_key] inputs=r5,r6 rows=319404 in=319404 inserted=0 t=32.694ms
+            PROBE            r5 [part_key,supplier_key] inputs=r3,r4 rows=319404 in=319404 inserted=0 t=133.879ms
+              PROBE            r3 [part_key] inputs=r1,r2 rows=319404 in=10664 inserted=0 t=198.067ms
+                GUARD            r1 [part_key] inputs=r0 rows=10664 in=200000 inserted=0 t=526.854ms
+                  RENAME           r0 [Part] inputs= rows=200000 in=0 inserted=0 t=526.854ms
+                RENAME           r2 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=11.314ms
+              RENAME           r4 [PartSupp] inputs= rows=800000 in=0 inserted=0 t=0.642ms
+            RENAME           r6 [Orders] inputs= rows=1500000 in=0 inserted=0 t=1.039ms
+          RENAME           r8 [Supplier] inputs= rows=10000 in=0 inserted=0 t=0.018ms
+        RENAME           r10 [Nation] inputs= rows=25 in=0 inserted=0 t=0.001ms
+  DEDUP            r12.dedup [] inputs=r12 rows=319402 in=319404 inserted=319404 t=546.578ms
+    PROJECT          r12 [order_key,part_key,supplier_key] inputs=r11 rows=319404 in=319404 inserted=0 t=526.855ms (shared)
+  INDEX_BUILD      r10.index.nation_key [nation_key] inputs=r10 rows=25 in=25 inserted=25 t=0.003ms excl=0.003ms
+    RENAME           r10 [Nation] inputs= rows=25 in=0 inserted=0 t=0.001ms (shared)
+  INDEX_BUILD      r8.index.supplier_key [supplier_key] inputs=r8 rows=10000 in=10000 inserted=10000 t=0.183ms excl=0.166ms
+    RENAME           r8 [Supplier] inputs= rows=10000 in=0 inserted=0 t=0.018ms (shared)
+  INDEX_BUILD      r6.index.order_key [order_key] inputs=r6 rows=1500000 in=1500000 inserted=1500000 t=30.407ms excl=29.368ms
+    RENAME           r6 [Orders] inputs= rows=1500000 in=0 inserted=0 t=1.039ms (shared)
+  INDEX_BUILD      r4.index.part_key_supplier_key [part_key,supplier_key] inputs=r4 rows=800000 in=800000 inserted=800000 t=17.763ms excl=17.121ms
+    RENAME           r4 [PartSupp] inputs= rows=800000 in=0 inserted=0 t=0.642ms (shared)
+  INDEX_BUILD      r2.index.part_key [part_key] inputs=r2 rows=6001215 in=6001215 inserted=6001215 t=322.877ms excl=311.563ms
+    RENAME           r2 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=11.314ms (shared)
+BUILD_EXCLUSIVE_TOTAL t=358.220ms

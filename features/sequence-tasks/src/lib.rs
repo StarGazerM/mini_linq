@@ -145,6 +145,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     catalog.providers.insert(
         0,
         cq_lang_sequence::ProviderToken {
+            supports: vec![cq_lang_sequence::structures::ProviderCapability::Keys],
             ty: syn::parse_quote!(::cq_storage::sharded::Index<_, _>),
             capabilities: vec![
                 cq_lang_sequence::Capability::Exact,
@@ -157,48 +158,63 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     // Hash sharding retains exact probes, but not a shard's global ordering.
     // The synchronous pool join publishes native memory to host and task readers.
     use cq_lang_sequence::{Capability, ProviderToken};
-    for (ty, capabilities) in [
+    use cq_lang_sequence::structures::ProviderCapability::Keys;
+    for (ty, capabilities, supports) in [
         (
             syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::HashSet<_>>),
             vec![Capability::Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(
                 ::cq_storage::sharded::Sharded<::cq_storage::AdaptiveKeySet<_, _, _>>
             ),
             vec![Capability::Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(
                 ::cq_storage::sharded::Sharded<::cq_storage::AdaptiveMembership<_, _>>
             ),
             vec![Capability::Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(::cq_storage::sharded::Sharded<::std::collections::HashSet<_>>),
             vec![Capability::Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(::cq_storage::sharded::Sharded<::std::collections::HashSet<_, _>>),
             vec![Capability::Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>),
             vec![Capability::Exact, Capability::Membership],
+            vec![Keys],
         ),
         (
             syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>>),
             vec![Capability::Exact, Capability::Membership],
+            vec![Keys],
         ),
         (
             syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _, _>>),
             vec![Capability::Exact, Capability::Membership],
+            vec![Keys],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::RadixRun<_, _>>),
+            vec![Capability::Exact, Capability::Membership],
+            vec![Keys],
         ),
         (
             syn::parse_quote!(
                 ::cq_storage::sharded::Sharded<::std::collections::BTreeMap<_, ::std::vec::Vec<_>>>
             ),
             vec![Capability::Exact, Capability::Membership],
+            vec![Keys],
         ),
     ] {
         let ty: syn::Type = ty;
@@ -214,12 +230,14 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         catalog.providers.push(ProviderToken {
             ty: routed_ty,
             capabilities: capabilities.clone(),
+            supports: supports.clone(),
             levels: levels.clone(),
             elements: None,
         });
         catalog.providers.push(ProviderToken {
             ty,
             capabilities,
+            supports,
             levels: levels.clone(),
             elements: None,
         });
