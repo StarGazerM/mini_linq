@@ -5,8 +5,10 @@ use quote::ToTokens;
 #[proc_macro]
 pub fn sequence(input: TokenStream) -> TokenStream {
     let program = syn::parse_macro_input!(input as cq_lang_sequence::Program);
-    let result = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())
-        .and_then(|analysis| cq_gpu_sequence::translate(&program, &analysis));
+    let result = cq_gpu_sequence_core::runs::record_representation(&program).and_then(|program| {
+        let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())?;
+        cq_gpu_sequence::translate(&program, &analysis)
+    });
     match result {
         Ok(expression) => expression.into_token_stream().into(),
         Err(error) => error.into_compile_error().into(),
@@ -40,6 +42,7 @@ pub fn planned_h05(input: TokenStream) -> TokenStream {
     let result = (|| {
         let authored = fixture(name)?;
         let source = cq_sequence_lowering::compile(&authored.structures)?;
+        let source = cq_gpu_sequence_core::runs::record_representation(&source)?;
         let machine = cq_gpu_sequence::machine();
         let planned = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog())?;
         let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
@@ -76,6 +79,7 @@ pub fn h05(input: TokenStream) -> TokenStream {
     let capacity = syn::parse_macro_input!(input as syn::LitInt);
     let result = (|| {
         let program = h05_program::program_with_capacity(capacity.base10_parse()?);
+        let program = cq_gpu_sequence_core::runs::record_representation(&program)?;
         let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())?;
         cq_gpu_sequence::translate(&program, &analysis)
     })();
@@ -136,6 +140,7 @@ fn arena_hole(
     }
     let structures = cq_gpu_sequence_core::runs::bind(&structures)?;
     let source = cq_sequence_lowering::compile(&structures)?;
+    let source = cq_gpu_sequence_core::runs::record_representation(&source)?;
     let machine = cq_gpu_sequence::machine();
     let mut planned = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog())?;
     let terminal = planned.program.sequence.definitions.last_mut().unwrap();

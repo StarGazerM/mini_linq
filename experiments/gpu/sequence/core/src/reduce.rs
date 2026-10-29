@@ -1,5 +1,11 @@
 //! Collective reduction templates; the caller places these at the recorded
 //! partition boundary, never at an implementation stripe boundary.
+//!
+//! DESIGN translator-gpu-reduce
+//! Owns collective templates, not reduction placement (translator-decides-nothing, T-Gpu).
+//! Source: doc/PLANNING-REDESIGN.md Architecture; doc/formal/CONFORMANCE.md GPU-FoldCompletion.
+//! Consume the recorded partition boundary and completion/partial-combine facts.
+//! DO NOT fold once per implementation stripe, invent extra reductions, or pick a grouping strategy.
 
 use cq_lang_sequence::Monoid;
 use proc_macro2::TokenStream;
@@ -91,6 +97,7 @@ pub fn group(
     input_index: usize,
     kernel: &Ident,
     direct: Option<GroupInput>,
+    codecs: &crate::runs::Codecs,
 ) -> syn::Result<(TokenStream, TokenStream)> {
     use cq_lang_structures::{physical::symbol_name, syntax::algebra::AggregateKind};
     use quote::format_ident;
@@ -115,47 +122,11 @@ pub fn group(
             AggregateKind::Min => 2,
             AggregateKind::Max => 3,
         };
-        let ty = if kind >= 2 {
-            let syn::Type::Path(path) = &aggregate.ty else {
-                return Err(syn::Error::new_spanned(
-                    &aggregate.ty,
-                    "GPU extrema require Option<T>",
-                ));
-            };
-            let syn::PathArguments::AngleBracketed(args) =
-                &path.path.segments.last().unwrap().arguments
-            else {
-                return Err(syn::Error::new_spanned(
-                    &aggregate.ty,
-                    "GPU extrema require Option<T>",
-                ));
-            };
-            let Some(syn::GenericArgument::Type(ty)) = args.args.first() else {
-                return Err(syn::Error::new_spanned(
-                    &aggregate.ty,
-                    "GPU extrema require Option<T>",
-                ));
-            };
-            ty
-        } else {
-            &aggregate.ty
-        };
-        let spelling = quote!(#ty).to_string();
-        let (min, max) = match spelling.as_str() {
-            "i64" => (quote!(i64::MIN), quote!(i64::MAX)),
-            "i32" | "i16" | "i8" => (quote!(<#ty>::MIN as i64), quote!(<#ty>::MAX as i64)),
-            "u32" | "u16" | "u8" => (quote!(0i64), quote!(<#ty>::MAX as i64)),
-            "usize" if kind == 0 => (quote!(0i64), quote!(i64::MAX)),
-            _ => {
-                return Err(syn::Error::new_spanned(
-                    ty,
-                    "GPU group requires an integer codec fitting i64",
-                ));
-            }
-        };
-        descriptors.push(
-            quote!(::cq_gpu_sequence_runtime::group::Aggregate {kind:#kind,min:#min,max:#max}),
-        );
+        let ty = &aggregate.ty;
+        let optional = kind >= 2;
+        descriptors.push(quote!(
+            ::cq_gpu_sequence_runtime::group::aggregate::<#ty, #optional>(#kind)?
+        ));
         columns.push(symbol_name(&aggregate.name));
         arguments.push(if kind == 0 {
             None
@@ -212,6 +183,7 @@ pub fn group(
                 quote!(#fields[#field].bits),
             ]);
             let offset = crate::emit::packed_offset(quote!(packed), quote!(position), quote!(lanes), quote!(#shift), quote!(#bits));
+            // DECODE V: P6 grouped input reconstructs packed FOR fields before relational grouping and aggregation.
             writes.push(quote! {
                 let offset = #offset;
                 *values.add(position*#width+#column)=#base.wrapping_add(offset as i64);
@@ -231,7 +203,12 @@ pub fn group(
             symbol_name(&aggregate.name) == *column
                 && matches!(aggregate.kind, AggregateKind::Min | AggregateKind::Max)
         });
-        decoded.push(if optional {
+        // DECODE P: grouped answer decoder resolves symbols, nullable extrema and scalars only when the host requests logical rows.
+        decoded.push(if let Some(codec) = codecs.get(ty) {
+            quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(
+                u32::try_from(values[#slot]).map_err(|_| "GPU symbol code exceeds u32")?
+            ))
+        } else if optional {
             quote!(if valid[#slot]==0 {None} else {Some(::cq_gpu_runtime::decode_value(values[#slot], &__cq_dictionary)?)})
         } else {
             quote!(::cq_gpu_runtime::decode_value::<#ty>(values[#slot], &__cq_dictionary)?)

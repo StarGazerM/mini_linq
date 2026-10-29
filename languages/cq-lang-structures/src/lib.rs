@@ -2,13 +2,16 @@
 //! Ordinary host reads keep their recorded native/lazy fallback path. Explicit
 //! positional decisions name a base, total column lineage, marker and summary;
 //! generated Rust checks the asserted host and provider capabilities.
+//! Provider and codec names carry no Rust type meaning here: trait capabilities,
+//! including equality and ordered access, remain generated Rust obligations.
+//! Structural checks still enforce key coverage, lineage and read ownership.
 //! Host key levels retain their recorded order; their flattened, sorted key set
 //! must exactly match the named read. A scan has one empty level. Printers may
 //! impose stricter representation-specific level requirements.
 //! Smallest intersections require two candidate levels on every retained side,
 //! alongside any structures needed by other reads of the same result.
-//! The denotation is `bottom + Set`; opaque Rust binds and guards stay in their
-//! written chain. Const supplies use one point read and never justify a build.
+//! Rust expressions are opaque and total by premise, placed by free variables.
+//! Const supplies use one point read and never justify a build.
 //! ```text
 //! Entry ::= Ident ("=" RustType ("[" Ident,* "]")+
 //!                | "host" ReaderRef "=" RustType ("[" Ident,* "]")+
@@ -35,14 +38,11 @@
 //! Structures records union dedup providers and anti membership representations.
 //! A derived union used only by a shared-key index streams its chained scan directly into the filtered build path, without a retained row buffer.
 //!
-//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
-//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
-//! heading and I the common new interface; other binders remain branch-local.
+//! Core blocks denote sets: `{ B1 } | { B2 }` unions projected answers;
+//! `{ B1 } else { B2 }` selects the first nonempty arm. F is the free heading
+//! and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Only explicit relational predicates introduce comparisons and constraints.
 //!
 pub use cq_lang_physical as physical;
 
@@ -543,11 +543,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             }
             Structure::Built { keyed, .. } => keyed,
             Structure::Host { reader, keyed, .. } => {
-                if keyed.filtered.is_some() || keyed.membership.is_some() {
-                    return error(
-                        keyed,
-                        "a host fallback cannot retain a filtered projection or membership proof",
-                    );
+                if keyed.filtered.is_some() {
+                    return error(keyed, "a host fallback cannot retain a filtered projection");
                 }
                 if !(analysis.host_read(&name)
                     || matches!(reader, ReaderRef::Scan)
@@ -566,24 +563,6 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 let mut read_columns = columns.concat();
                 read_columns.sort();
                 let reader_name = reader.key();
-                if let ReaderRef::Result(result) = &reader_name
-                    && let Some(read) = program
-                        .physical
-                        .program
-                        .definitions
-                        .iter()
-                        .find(|d| symbol_name(&d.name) == *result)
-                {
-                    match &read.operator {
-                        Operator::Probe(..) => admissible(&keyed.ty, "payload")?,
-                        Operator::Merge(..) => admissible(&keyed.ty, "ordered")?,
-                        _ => {}
-                    }
-                }
-                if matches!(reader, ReaderRef::Candidates) {
-                    admissible(&keyed.ty, "candidates")?;
-                }
-
                 let valid = match &reader_name {
                     ReaderRef::Scan => columns.len() == 1 && read_columns.is_empty(),
                     ReaderRef::Candidates | ReaderRef::Membership => {
@@ -607,6 +586,34 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 };
                 if !valid {
                     return error(reader, "fallback does not match a host read");
+                }
+                if keyed.membership.is_some() {
+                    if columns.len() != 1
+                        || read_columns != heading
+                        || !matches!(reader, ReaderRef::Result(_))
+                        || analysis
+                            .physical
+                            .keyed_reads
+                            .get(&name)
+                            .into_iter()
+                            .flatten()
+                            .any(|(_, key, supply)| {
+                                key != &read_columns || *supply != SupplyKind::Stream
+                            })
+                        || analysis
+                            .physical
+                            .merge_reads
+                            .get(&name)
+                            .is_some_and(|reads| !reads.is_empty())
+                    {
+                        return error(
+                            keyed,
+                            "host membership requires one complete row key and no ordered reads",
+                        );
+                    }
+                    analysis
+                        .membership
+                        .insert((name.clone(), read_columns.clone()));
                 }
                 if analysis
                     .fallbacks
@@ -681,10 +688,6 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 if !all.insert(symbol_name(column)) {
                     return error(column, format!("`{column}` appears in two levels"));
                 }
-                cq_syntax::algebra::check_leibniz_type(
-                    &analysis.physical.rows[&name].types[&symbol_name(column)],
-                    column,
-                )?;
             }
             if analysis.physical.modes[&name] == ModeKind::Pipe {
                 return error(
@@ -717,10 +720,34 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 .or_default()
                 .push((columns, keyed.ty.clone()));
             if keyed.membership.is_some() {
-                if keyed.levels.len() != 1 || keyed.filtered.is_none() {
-                    return error(keyed, "membership storage requires one filtered key");
+                if keyed.levels.len() != 1 {
+                    return error(keyed, "membership storage requires one complete key");
                 }
-                admissible(&keyed.ty, "membership")?;
+                // Formal rule STR-FullKey: raw set rows can be represented by
+                // existence only when every logical column is bound by the key.
+                if keyed.filtered.is_none()
+                    && (keyed.level_names().concat() != analysis.physical.headings[&name]
+                        || analysis
+                            .physical
+                            .keyed_reads
+                            .get(&name)
+                            .into_iter()
+                            .flatten()
+                            .any(|(_, columns, supply)| {
+                                columns != &keyed.level_names().concat()
+                                    || *supply != SupplyKind::Stream
+                            })
+                        || analysis
+                            .physical
+                            .merge_reads
+                            .get(&name)
+                            .is_some_and(|reads| !reads.is_empty()))
+                {
+                    return error(
+                        keyed,
+                        "raw membership storage requires the complete row key and no ordered reads",
+                    );
+                }
                 analysis
                     .membership
                     .insert((name.clone(), keyed.level_names().concat()));
@@ -806,11 +833,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     .get(&name)
                     .into_iter()
                     .flatten()
-                    .any(|(levels, ty)| {
-                        levels.len() == 2
-                            && levels[0] == prefix
-                            && levels[1] == [v.clone()]
-                            && admissible(ty, "candidates").is_ok()
+                    .any(|(levels, _)| {
+                        levels.len() == 2 && levels[0] == prefix && levels[1] == [v.clone()]
                     });
                 if !valid {
                     return error(
@@ -858,23 +882,10 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 );
             }
             if let Some((ty, depth)) = analysis.built_on(result, columns) {
-                if membership
-                    && !analysis
-                        .keysets
-                        .contains_key(&(result.clone(), columns.clone()))
-                {
-                    admissible(ty, "membership")?;
-                }
                 let payload = program.physical.program.definitions.iter().any(|d| {
                     symbol_name(&d.name) == *reader && matches!(d.operator, Operator::Probe(..))
                 });
                 if payload {
-                    if !analysis
-                        .membership
-                        .contains(&(result.clone(), columns.clone()))
-                    {
-                        admissible(ty, "payload")?;
-                    }
                     let levels = &analysis.built[result]
                         .iter()
                         .find(|(levels, t)| t == ty && prefix_depth(levels, columns) == Some(depth))
@@ -904,9 +915,6 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 analysis.host_read(side) || analysis.built_on(side, columns).is_some();
             let by_stream = analysis.physical.modes[side] == ModeKind::Pipe
                 && merge_key.get(side) == Some(columns);
-            if let Some((ty, _)) = analysis.built_on(side, columns) {
-                admissible(ty, "ordered")?;
-            }
             if !by_structure && !by_stream {
                 return error(
                     &module.structures_token,
@@ -1224,7 +1232,7 @@ pub use share::{Share, leveled_host_read};
 mod stage;
 
 mod filtered;
-pub use filtered::{required_columns, selection_constants};
+pub use filtered::{reconstructible_constants, required_columns, selection_constants};
 
 impl cq_stage::Language for Program {
     fn context(&self) -> cq_stage::Context {
@@ -1235,72 +1243,5 @@ impl cq_stage::Language for Program {
     }
     fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
         check_rewrite(source, target)
-    }
-}
-
-/// Reject known incompatible runtime representations; rustc checks aliases and
-/// user types against the generated trait obligations.
-fn admissible(ty: &syn::Type, need: &str) -> syn::Result<()> {
-    let syn::Type::Path(path) = ty else {
-        return Ok(());
-    };
-    let qualified = path
-        .path
-        .segments
-        .iter()
-        .map(|s| s.ident.to_string())
-        .collect::<Vec<_>>()
-        .join("::");
-    if !matches!(
-        qualified.as_str(),
-        "std::collections::HashSet"
-            | "cq_storage::HashSet"
-            | "std::collections::BTreeSet"
-            | "std::collections::HashMap"
-            | "cq_storage::HashIndex"
-            | "cq_storage::dispatch::KeySet"
-            | "cq_storage::Trie"
-            | "cq_storage::Selection"
-            | "cq_storage::AdaptiveKeySet"
-    ) {
-        return Ok(());
-    }
-    let name = path
-        .path
-        .segments
-        .last()
-        .map(|s| s.ident.to_string())
-        .unwrap_or_default();
-    let incompatible = match need {
-        "membership" => name == "Selection",
-        "interval" => matches!(
-            name.as_str(),
-            "HashIndex" | "HashMap" | "HashSet" | "BTreeSet" | "KeySet" | "Trie" | "Selection"
-        ),
-        "payload" => matches!(
-            name.as_str(),
-            "HashSet" | "BTreeSet" | "KeySet" | "Selection" | "AdaptiveKeySet"
-        ),
-        "ordered" => matches!(
-            name.as_str(),
-            "HashIndex"
-                | "HashMap"
-                | "HashSet"
-                | "BTreeSet"
-                | "KeySet"
-                | "Trie"
-                | "Selection"
-                | "AdaptiveKeySet"
-        ),
-        "candidates" => matches!(
-            name.as_str(),
-            "HashSet" | "BTreeSet" | "KeySet" | "Selection" | "AdaptiveKeySet"
-        ),
-        _ => false,
-    };
-    if incompatible {
-        error(ty, format!("recorded type is not {need}-admissible"))
-    } else {
-        Ok(())
     }
 }

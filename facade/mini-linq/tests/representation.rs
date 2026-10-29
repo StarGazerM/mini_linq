@@ -8,7 +8,7 @@ fn represent_pipeline_fetches_filtered_columns() {
         pipeline { represent = ::mini_linq::passes::represent(positions); }
         struct RepresentScan;
         relation R(k:i32,v:i32) = (rows);
-        answer(v) :- R(k,v), if *k >= 2;
+        answer(v) :- R(k,v), where k >= 2;
     }
     .map(|(v,)| *v)
     .collect();
@@ -24,7 +24,7 @@ fn positions_feed_probe_keys_and_owned_bind_outputs() {
         struct RepresentProbe;
         relation L(k:i32) = (left);
         relation R(k:i32,v:i32) = (right);
-        answer(k,n) :- L(k), if *k >= 2, R(k,v), let n: i32 = *v + 1;
+        answer(k,n) :- L(k), where k >= 2, R(k,v), let n: i32 = *v + 1;
     }
     .map(|(k, n)| (*k, n))
     .collect();

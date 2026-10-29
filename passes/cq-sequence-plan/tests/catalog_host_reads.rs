@@ -1,8 +1,10 @@
 use cq_lang_sequence::{
-    CanonToken, Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken,
+    CanonToken, Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken, Term,
     check_grading, check_rewrite, structures,
 };
-use cq_sequence_plan::rewrites::{lookup_first, lookup_first_advice};
+use cq_sequence_plan::rewrites::{
+    adaptive_candidates, apply_adaptive, lookup_first, lookup_first_advice,
+};
 use cq_sequence_plan::{Advice, decompose, plan, select_from_catalog};
 use quote::ToTokens;
 
@@ -10,6 +12,7 @@ fn machine() -> Machine {
     fn node(name: &str, children: Vec<LevelNode>) -> LevelNode {
         LevelNode {
             name: syn::parse_str(name).unwrap(),
+            host_rust: name == "host",
             collaborative: name == "block",
             dynamic: name == "device",
             width: (name == "block").then_some(32),
@@ -341,4 +344,219 @@ fn catalog_retyping_composes_with_checked_join_reexpression() {
         keyed.ty = syn::parse_quote!(DifferentReader);
     }
     assert!(check_rewrite(&source, &changed_reader).is_err());
+}
+
+fn full_key_host_membership() -> structures::Program {
+    syn::parse_quote! {
+        physical {
+            relation L(a:i32,b:i32); relation R(a:i32);
+            l = pipe rename L@0 {a -> a,b -> b};
+            r = pipe rename R@1 {a -> a};
+            answer = pipe canon probe first [a] l,r;
+            return answer as answer(a,b);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            r host result(answer) = HostMembership [a] membership;
+            answer canon = Canon;
+        }
+    }
+}
+
+fn membership_catalog(ty: syn::Type) -> Catalog {
+    let mut available = catalog();
+    available.providers = vec![ProviderToken {
+        ty,
+        elements: None,
+        capabilities: vec![Capability::Membership],
+        levels: vec![vec!["host".into()]],
+    }];
+    available
+}
+
+#[test]
+fn catalog_preserves_admitted_raw_host_membership_without_enumeration() {
+    let source = full_key_host_membership();
+    let available = membership_catalog(syn::parse_quote!(HostMembership));
+    let selected = select_from_catalog(&source, &available).unwrap();
+    assert_eq!(selected, source);
+    let lowered = cq_sequence_lowering::compile(&selected).unwrap();
+    cq_sequence_lowering::check(&selected, &lowered).unwrap();
+    assert_eq!(
+        lowered.sequence.definitions[2].term,
+        syn::parse_quote!(canon compact answer lookup r [a] l)
+    );
+}
+
+#[test]
+fn catalog_retention_preserves_raw_membership_certificate_and_compact() {
+    let source = full_key_host_membership();
+    let available = membership_catalog(syn::parse_quote!(MembershipIndex));
+    let selected = select_from_catalog(&source, &available).unwrap();
+    let facts = structures::contract::check(&selected).unwrap();
+    assert!(facts.membership.contains(&("r".into(), vec!["a".into()])));
+    assert_eq!(
+        facts.built_on("r", &["a".into()]).map(|(ty, _)| ty),
+        Some(&syn::parse_quote!(MembershipIndex))
+    );
+    assert!(selected.structures.entries.iter().any(|entry| {
+        entry.name == "r"
+            && matches!(&entry.structure, structures::Structure::Built { keyed, .. }
+                if keyed.membership.is_some() && keyed.filtered.is_none())
+    }));
+    structures::check_retention_rewrite(&source, &selected).unwrap();
+    let before = cq_sequence_lowering::compile(&source).unwrap();
+    let after = cq_sequence_lowering::compile(&selected).unwrap();
+    cq_sequence_lowering::check(&selected, &after).unwrap();
+    check_rewrite(&before, &after).unwrap();
+    assert_eq!(
+        before.sequence.definitions[2].term,
+        after.sequence.definitions[2].term
+    );
+    assert_eq!(
+        cq_lang_sequence::contract::check(&after)
+            .unwrap()
+            .capabilities[&("r".into(), vec!["a".into()])],
+        Capability::Membership
+    );
+
+    let mut unavailable = available;
+    unavailable.providers[0].capabilities = vec![Capability::Exact, Capability::Range];
+    assert!(select_from_catalog(&source, &unavailable).is_err());
+}
+
+#[test]
+fn adaptive_candidates_clone_raw_host_membership_read_certificates() {
+    let structures = syn::parse_quote! {
+        physical {
+            relation L(a:i32,b:i32); relation R(a:i32); relation T(b:i32,c:i32);
+            l = pipe rename L@0 {a -> a,b -> b};
+            r = pipe rename R@1 {a -> a};
+            t = pipe rename T@2 {b -> b,c -> c};
+            tf = let select t if (c > 0);
+            member = pipe probe first [a] l,r;
+            optional = pipe semi eager [b] member,tf;
+            joined = pipe probe first [b] optional,tf;
+            answer = pipe canon project joined keep {a,b,c};
+            return answer as answer(a,b,c);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader []; t host scan = Reader [];
+            r host result(member) = HostMembership [a] membership;
+            tf = Index [b];
+            answer canon = Canon;
+        }
+    };
+    let mut source = cq_sequence_lowering::compile(&structures).unwrap();
+    source
+        .sequence
+        .optional_filters
+        .push(syn::parse_quote!(optional));
+    let candidates = adaptive_candidates(&source).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].filter, "optional");
+    for select in [None, Some(false), Some(true)] {
+        let mut candidate = candidates[0].clone();
+        candidate.select = select;
+        let target = apply_adaptive(&source, &candidate).unwrap();
+        check_rewrite(&source, &target).unwrap();
+        assert!(adaptive_candidates(&target).unwrap().is_empty());
+        let facts = cq_lang_sequence::contract::check(&target).unwrap();
+        assert!(
+            facts
+                .structures
+                .membership
+                .contains(&("r".into(), vec!["a".into()]))
+        );
+        let reads = &facts.structures.physical.keyed_reads["r"];
+        assert_eq!(
+            reads.len(),
+            2,
+            "both arms retain their mandatory membership read"
+        );
+        for (reader, keys, _) in reads {
+            assert!(target.structures.structures.entries.iter().any(|entry| {
+                entry.name == "r"
+                    && matches!(&entry.structure,
+                        structures::Structure::Host { reader: adapter, keyed, .. }
+                        if adapter.result().is_some_and(|name| name.to_string() == *reader)
+                            && keyed.membership.is_some()
+                            && keyed.ty == syn::parse_quote!(HostMembership)
+                            && keyed.level_names().concat() == *keys)
+            }));
+            assert!(target.sequence.definitions.iter().any(|definition| {
+                matches!(&definition.term, Term::Compact(result, inner)
+                    if result.to_string() == *reader
+                        && matches!(inner.as_ref(), Term::Lookup { provider, .. } if provider == "r"))
+            }));
+        }
+
+        let mut missing_adapter = target.clone();
+        missing_adapter
+            .structures
+            .structures
+            .entries
+            .retain(|entry| {
+                !matches!(&entry.structure, structures::Structure::Host { reader, .. }
+                if entry.name == "r"
+                    && reader.result().is_some_and(|name| name != "member"))
+            });
+        assert!(cq_lang_sequence::contract::check(&missing_adapter).is_err());
+        assert_eq!(target, apply_adaptive(&source, &candidate).unwrap());
+    }
+}
+
+#[test]
+fn lookup_first_rebuilds_raw_membership_when_prefix_reads_expand_its_domain() {
+    let physical = syn::parse_quote! {
+        physical {
+            relation L(x:i32,y:i32); relation R(y:i32,z:i32); relation S(x:i32,z:i32);
+            l = pipe rename L@0 {x -> x,y -> y};
+            r = let rename R@1 {y -> y,z -> z};
+            s = let rename S@2 {x -> x,z -> z};
+            joined = pipe probe first [y] l,r;
+            answer = pipe canon probe first [x,z] joined,s;
+            return answer as answer(x,y,z);
+        }
+    };
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let before = structures::contract::check(&source.structures).unwrap();
+    assert!(
+        before
+            .membership
+            .contains(&("s".into(), vec!["x".into(), "z".into()]))
+    );
+    let advice = quote::quote!(using HostIndex, order [l,r,s], transfer [], early []);
+    let target = lookup_first(&source, advice.clone()).unwrap();
+    check_rewrite(&source, &target).unwrap();
+    let after = structures::contract::check(&target.structures).unwrap();
+    assert!(after.membership.iter().all(|(name, _)| name != "s"));
+    assert!(target.structures.structures.entries.iter().any(|entry| {
+        matches!(&entry.structure, structures::Structure::Built { keyed, .. }
+            if keyed.level_names() == vec![vec!["x".to_owned()]]
+                && keyed.membership.is_none() && keyed.ty == syn::parse_quote!(HostIndex))
+    }));
+    assert_eq!(target, lookup_first(&source, advice).unwrap());
+}
+
+#[test]
+fn admitted_storage_type_does_not_move_unretained_host_membership_to_workers() {
+    let structures = full_key_host_membership();
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let mut available = membership_catalog(syn::parse_quote!(HostMembership));
+    available.providers[0].levels = vec![
+        vec!["host".into()],
+        vec!["host".into(), "device".into()],
+        vec!["host".into(), "device".into(), "block".into()],
+    ];
+    let planned = decompose(&source, &machine(), &available).unwrap();
+    let facts = check_grading(&planned.program, &machine()).unwrap();
+    assert_eq!(facts.levels["answer"], ["host"]);
+    assert!(facts.structures.host_read("r"));
+    check_rewrite(&source, &planned.program).unwrap();
+
+    let authored =
+        cq_sequence_plan::rewrites::grade(&source, quote::quote!(gpu, answer at device)).unwrap();
+    assert!(decompose(&authored, &machine(), &available).is_err());
 }

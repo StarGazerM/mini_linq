@@ -319,36 +319,38 @@ fn relational_selection_has_only_column_equalities_and_literals() {
 }
 
 #[test]
-fn opaque_nodes_form_one_ancestry_chain() {
+fn independent_rust_nodes_need_only_their_free_variables() {
     check(quote! { relational {
         relation R(a: i32); relation S(b: i32);
         r = rename R@0 {a -> x};
         g = guard r if (*x != 0);
         s = rename S@1 {b -> w};
         j = natural_join g with s;
-        b = bind j with y: i32 = (10 / *x);
+        b = bind j with y: i32 = (10 / (*x).max(1));
         p = project b keep {x, y}; output p as answer(x, y);
     }})
     .unwrap();
-    let error = check(quote! { relational {
+    check(quote! { relational {
         relation R(a: i32); relation S(b: i32);
         r = rename R@0 {a -> x}; s = rename S@1 {b -> w};
         g = guard r if (*x != 0);
-        b = bind s with y: i32 = (10 / *w);
+        b = bind s with y: i32 = (10 / (*w).max(1));
         j = natural_join g with b;
         output j as answer(x, w, y);
     }})
-    .unwrap_err();
-    assert!(error.to_string().contains("one ancestry chain"));
+    .unwrap();
 }
 
 #[test]
-fn selection_scope_and_float_leibniz_are_checked_with_column_diagnostics() {
+fn selection_scope_is_checked_but_host_trait_bounds_are_left_to_rustc() {
+    let error = check(quote! { relational {
+        relation R(a: i32); r = rename R@0 {a -> x};
+        s = select r if (y = 1); output s as answer(x);
+    }})
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("column") && error.contains("y"), "{error}");
     for program in [
-        quote! { relational {
-            relation R(a: i32); r = rename R@0 {a -> x};
-            s = select r if (y = 1); output s as answer(x);
-        }},
         quote! { relational {
             relation R(a: f64); r = rename R@0 {a -> x};
             s = select r if (x = 1.0); output s as answer(x);
@@ -359,11 +361,7 @@ fn selection_scope_and_float_leibniz_are_checked_with_column_diagnostics() {
             j = natural_join r with s; p = project j keep {}; output p as answer();
         }},
     ] {
-        let error = check(program).unwrap_err().to_string();
-        assert!(
-            error.contains("column") && (error.contains("x") || error.contains("y")),
-            "{error}"
-        );
+        check(program).unwrap();
     }
 }
 
@@ -414,7 +412,7 @@ fn rewrite_rejects_dropped_relational_predicates_and_existential_witnesses() {
 }
 
 #[test]
-fn rewrite_rejects_reordered_or_changed_rust_payloads() {
+fn rewrite_accepts_reordered_but_rejects_changed_rust_payloads() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); r = rename R@0 {a -> x};
         g = guard r if (first(x));
@@ -425,11 +423,29 @@ fn rewrite_rejects_reordered_or_changed_rust_payloads() {
     reordered.plan.definitions[2].operator = syn::parse_quote!(guard g if (first(x)));
     let mut changed = source.clone();
     changed.plan.definitions[2].operator = syn::parse_quote!(guard g if (third(x)));
-    for target in [reordered, changed] {
-        ra::contract::check(&target).unwrap();
-        let error = ra::check_rewrite(&source, &target).unwrap_err();
-        assert!(error.to_string().contains("Rust chain"), "{error}");
-    }
+    ra::contract::check(&reordered).unwrap();
+    ra::check_rewrite(&source, &reordered).unwrap();
+    ra::contract::check(&changed).unwrap();
+    let error = ra::check_rewrite(&source, &changed).unwrap_err();
+    assert!(error.to_string().contains("Rust expressions"), "{error}");
+}
+
+#[test]
+fn independent_rust_bindings_keep_identity_when_reordered() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); r = rename R@0 {a -> x};
+        a = bind r with y:i32 = (*x + 1);
+        b = bind a with z:i32 = (*x + 2);
+        output b as answer(x,y,z);
+    }};
+    let target: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); r = rename R@0 {a -> x};
+        b = bind r with z:i32 = (*x + 2);
+        a = bind b with y:i32 = (*x + 1);
+        output a as answer(x,y,z);
+    }};
+    ra::check_rewrite(&source, &target).unwrap();
+    ra::check_rewrite(&target, &source).unwrap();
 }
 
 #[test]
@@ -443,48 +459,46 @@ fn rewrite_rejects_changed_bindings_even_when_projected_away() {
     target.plan.definitions[1].operator = syn::parse_quote!(bind r with z:i32 = (10 / *x));
     ra::contract::check(&target).unwrap();
     let error = ra::check_rewrite(&source, &target).unwrap_err();
-    assert!(error.to_string().contains("Rust chain"), "{error}");
+    assert!(error.to_string().contains("Rust expressions"), "{error}");
 }
 
 #[test]
-fn rewrite_relational_movement_across_rust_is_directional() {
+fn relational_selection_can_cross_total_rust_in_either_direction() {
     let earlier: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); r = rename R@0 {a -> x};
         s = select r if (x > 0);
-        g = guard s if (10 / *x > 0); output g as answer(x);
+        g = guard s if (10 / (*x).max(1) > 0); output g as answer(x);
     }};
     let later: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); r = rename R@0 {a -> x};
-        g = guard r if (10 / *x > 0);
+        g = guard r if (10 / (*x).max(1) > 0);
         s = select g if (x > 0); output s as answer(x);
     }};
     ra::contract::check(&earlier).unwrap();
     ra::contract::check(&later).unwrap();
     ra::check_rewrite(&later, &earlier).unwrap();
-    let error = ra::check_rewrite(&earlier, &later).unwrap_err();
-    assert!(error.to_string().contains("source-before"), "{error}");
+    ra::check_rewrite(&earlier, &later).unwrap();
 }
 
 #[test]
-fn rewrite_checks_the_full_source_prefix_even_outside_rust_free_variables() {
+fn relational_atoms_can_cross_rust_without_free_variable_dependencies() {
     let earlier: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); relation S(b:i32);
         r = rename R@0 {a -> x}; s = rename S@1 {b -> y};
         j = natural_join r with s;
-        g = guard j if (10 / *x > 0);
+        g = guard j if (10 / (*x).max(1) > 0);
         p = project g keep {x}; output p as answer(x);
     }};
     let later: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); relation S(b:i32);
         r = rename R@0 {a -> x}; s = rename S@1 {b -> y};
-        g = guard r if (10 / *x > 0);
+        g = guard r if (10 / (*x).max(1) > 0);
         j = natural_join g with s;
         p = project j keep {x}; output p as answer(x);
     }};
     ra::contract::check(&later).unwrap();
     ra::check_rewrite(&later, &earlier).unwrap();
-    let error = ra::check_rewrite(&earlier, &later).unwrap_err();
-    assert!(error.to_string().contains("source-before"), "{error}");
+    ra::check_rewrite(&earlier, &later).unwrap();
 }
 
 #[test]
@@ -579,12 +593,7 @@ fn result_renames_and_earlier_selection_and_semijoin_are_accepted() {
         result = guard filtered if (opaque(x)); output result as answer(x);
     }};
     ra::check_rewrite(&source, &target).unwrap();
-    assert!(
-        ra::check_rewrite(&target, &source)
-            .unwrap_err()
-            .to_string()
-            .contains("source-before")
-    );
+    ra::check_rewrite(&target, &source).unwrap();
 }
 
 #[test]
@@ -609,7 +618,7 @@ fn equality_edges_are_compared_after_transitive_closure() {
 }
 
 #[test]
-fn a_later_equality_cannot_repair_an_earlier_predicate_binding() {
+fn total_rust_allows_equality_closure_across_predicate_placement() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); relation S(b:i32);
         r = rename R@0 {a -> x}; s = rename S@1 {b -> y};
@@ -620,16 +629,11 @@ fn a_later_equality_cannot_repair_an_earlier_predicate_binding() {
     let mut target = source.clone();
     target.plan.definitions[3].operator = syn::parse_quote!(select j if (y = 1));
     ra::contract::check(&target).unwrap();
-    assert!(
-        ra::check_rewrite(&source, &target)
-            .unwrap_err()
-            .to_string()
-            .contains("source-before")
-    );
+    ra::check_rewrite(&source, &target).unwrap();
 }
 
 #[test]
-fn before_is_dag_ancestry_even_when_a_selection_is_written_early() {
+fn selection_can_follow_rust_through_shared_dag_ancestry() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); r = rename R@0 {a -> x};
         f = select r if (x = 1); g = guard f if (opaque(x)); output g as answer(x);
@@ -640,16 +644,11 @@ fn before_is_dag_ancestry_even_when_a_selection_is_written_early() {
         j = natural_join g with f; output j as answer(x);
     }};
     ra::contract::check(&target).unwrap();
-    assert!(
-        ra::check_rewrite(&source, &target)
-            .unwrap_err()
-            .to_string()
-            .contains("source-before")
-    );
+    ra::check_rewrite(&source, &target).unwrap();
 }
 
 #[test]
-fn output_layout_declarations_and_chain_length_are_contracts() {
+fn output_layout_declarations_and_rust_occurrences_are_contracts() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
         g = guard r if (opaque(x)); output g as answer(x,y);
@@ -869,7 +868,7 @@ fn inverse_dead_expansion_restores_only_a_checked_primary_witness() {
 }
 
 #[test]
-fn final_equality_does_not_deduplicate_distinct_before_constraints() {
+fn final_equality_deduplicates_relational_constraints_across_total_rust() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
         f = select r if (x = 1, y = 1); g = guard f if (opaque());
@@ -880,12 +879,7 @@ fn final_equality_does_not_deduplicate_distinct_before_constraints() {
         f = select r if (x = 1); g = guard f if (opaque());
         e = select g if (x = y, y = 1); p = project e keep {x}; output p as answer(x);
     }};
-    assert!(
-        ra::check_rewrite(&source, &target)
-            .unwrap_err()
-            .to_string()
-            .contains("source-before")
-    );
+    ra::check_rewrite(&source, &target).unwrap();
     ra::check_rewrite(&target, &source).unwrap();
     let mut earlier = target.clone();
     // The existing x constraint is retained even if an additional y predicate
@@ -931,7 +925,7 @@ fn a_cut_of_a_joined_prefix_keeps_its_witness_scope() {
 }
 
 #[test]
-fn before_constraints_use_current_equality_classes_among_all_aliases() {
+fn relational_constraints_use_equality_classes_across_total_rust() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32,c:i32); r = rename R@0 {a -> x,b -> y,c -> z};
         f = select r if (x = z, z = 1); g = guard f if (opaque());
@@ -943,21 +937,16 @@ fn before_constraints_use_current_equality_classes_among_all_aliases() {
         e = select g if (x = y); p = project e keep {x}; output p as answer(x);
     }};
     ra::check_rewrite(&source, &target).unwrap();
-    assert!(
-        ra::check_rewrite(&target, &source)
-            .unwrap_err()
-            .to_string()
-            .contains("source-before")
-    );
+    ra::check_rewrite(&target, &source).unwrap();
 }
 
 #[test]
-fn reducer_column_matches_do_not_replace_a_before_generator_equality() {
+fn reducer_column_matches_preserve_total_rust_selection() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); relation S(b:i32);
         r = rename R@0 {a -> x}; s = rename S@1 {b -> y};
         j = natural_join r with s; e = select j if (x = y);
-        g = guard e if (*x == *y || panic!()); output g as answer(x,y);
+        g = guard e if (*x == *y); output g as answer(x,y);
     }};
     let target: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); relation S(b:i32);
@@ -965,16 +954,11 @@ fn reducer_column_matches_do_not_replace_a_before_generator_equality() {
         rs = natural_join r with s; re = select rs if (x = y); rr = project re keep {x};
         sr = natural_join s with r; se = select sr if (x = y); ss = project se keep {y};
         j = natural_join rr with ss;
-        g = guard j if (*x == *y || panic!()); e = select g if (x = y);
+        g = guard j if (*x == *y); e = select g if (x = y);
         output e as answer(x,y);
     }};
     ra::contract::check(&target).unwrap();
-    assert!(
-        ra::check_rewrite(&source, &target)
-            .unwrap_err()
-            .to_string()
-            .contains("source-before")
-    );
+    ra::check_rewrite(&source, &target).unwrap();
 }
 
 #[test]
@@ -1015,7 +999,7 @@ fn generator_bind_round_trip_freshness_and_structural_mode() {
 }
 
 #[test]
-fn generator_before_facts_are_structural() {
+fn total_generators_commute_with_relational_selection() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32);
         r = rename R@0 {a -> x};
@@ -1030,7 +1014,8 @@ fn generator_before_facts_are_structural() {
         s = select g if (x = 1);
         output s as answer(x,y);
     } };
-    assert!(ra::check_rewrite(&source, &moved).is_err());
+    ra::check_rewrite(&source, &moved).unwrap();
+    ra::check_rewrite(&moved, &source).unwrap();
 }
 
 #[test]
@@ -1080,7 +1065,7 @@ fn occurrence_constants_require_an_exact_literal_source_partition() {
             r = rename R@0 {a -> x} constants {b = 1.0};
             output r as answer(x);
         }})
-        .is_err()
+        .is_ok()
     );
 }
 

@@ -2,7 +2,7 @@
 //! reads, and in what column order.
 //!
 //! Formal rule EXT-SortedIndexes: for a built `let` result whose stream reads
-//! are probes or semijoins on integral keys, record a minimum set of
+//! are probes or semijoins, record a minimum set of
 //! lexicographic layouts such that every read key is exactly a level prefix
 //! of one layout (a minimum chain cover of the read key sets). Each chain's
 //! successive differences become singleton levels, ordered by when their
@@ -17,7 +17,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_structures::{self as ir, Structure, physical::Operator, symbol_name};
-use cq_structure_selection::arguments::sorted_key;
 use proc_macro2::TokenStream;
 use syn::{Ident, Token, Type};
 
@@ -223,11 +222,6 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
         let candidate = candidates
             .iter()
             .any(|c| c.sides.iter().any(|(side, _)| *side == name));
-        let integral_keys = reads.iter().all(|(_, columns, _)| {
-            columns
-                .iter()
-                .all(|c| sorted_key(&physical.rows[&name].types[c]))
-        });
         let chosen = choices.iter().position(|choice| {
             let build = symbol_name(&choice.build);
             build == name
@@ -236,7 +230,7 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                     .get(&name)
                     .is_some_and(|origin| origin.base == build)
         });
-        if !eligible || reads.is_empty() || !keyed_only || candidate || !integral_keys {
+        if !eligible || reads.is_empty() || !keyed_only || candidate {
             if let Some(choice) = chosen {
                 return Err(syn::Error::new_spanned(
                     &choices[choice].build,

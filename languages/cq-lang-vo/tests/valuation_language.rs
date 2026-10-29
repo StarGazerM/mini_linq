@@ -93,7 +93,7 @@ fn contract_rejects_late_misaligned_and_foreign_reductions() {
 }
 
 #[test]
-fn generators_round_trip_and_retain_chain_and_before() {
+fn generators_round_trip_and_require_their_free_variables() {
     let source: valuation::Program = syn::parse2(quote! {
         struct Q; relation R(a: i32); relation answer(b: i32);
         answer(b) :- R(a), for b in 0..a, let c = b;
@@ -122,7 +122,7 @@ fn generators_round_trip_and_retain_chain_and_before() {
 }
 
 #[test]
-fn negations_round_trip_bind_nothing_and_enforce_before_without_rust_chain_membership() {
+fn negations_round_trip_bind_nothing_and_commute_with_rust() {
     let source: valuation::Program = syn::parse_quote! {
         struct Negative; relation R(a:i32); relation K(a:i32,b:i32);
         answer(x) :- R(x), if opaque(x), !K(x,_), let y = x;
@@ -141,12 +141,7 @@ fn negations_round_trip_bind_nothing_and_enforce_before_without_rust_chain_membe
     let mut late = source.clone();
     let negation = late.valuation.steps.remove(1);
     late.valuation.steps.push(negation);
-    assert!(
-        valuation::contract::check(&late)
-            .unwrap_err()
-            .to_string()
-            .contains("Before")
-    );
+    valuation::contract::check(&late).unwrap();
     let mut missing = source.clone();
     missing.valuation.steps.remove(1);
     assert!(valuation::contract::check(&missing).is_err());

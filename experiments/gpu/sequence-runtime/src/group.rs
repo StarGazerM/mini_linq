@@ -1,9 +1,70 @@
 //! GPU machine instance of segmented grouped monoid folds.
+//! Kernel programs are retained per context for the active query scope; each
+//! fold binds them to its caller's current stream and allocator.
 use crate::{Result, pointer, release, temporary};
 use cq_gpu_runtime::{Buffer, Pool};
 use gpu_device_columns::OutputCount;
 use rccl_thrust::{DeviceBufferExt, arithmetic_range, select_flagged};
-use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
+
+// RCCL programs borrow a context, but own their module handles. Keep that
+// context alive at a stable Arc allocation and drop it after both programs.
+// The extended program lifetimes never escape this private owner.
+struct GroupPrograms {
+    module: group_kernels::LoadedModule,
+    thrust: rccl_thrust::cuda::Program<'static>,
+    cub: rccl_cub::cuda::Program<'static>,
+    context: Arc<cuda_core::CudaContext>,
+}
+
+impl GroupPrograms {
+    fn load(pool: &Pool) -> Result<Self> {
+        let context = pool.context().clone();
+        let module = unsafe { group_kernels::load(&context)? };
+        let thrust = rccl_thrust::cuda::Program::load(&context)?;
+        let cub = rccl_cub::cuda::Program::load(&context)?;
+        // SAFETY: the programs retain a reference only to the CudaContext
+        // pointee, not to this local Arc handle. Moving an Arc does not move
+        // that pointee. The owning context field is declared last so both
+        // programs are destroyed before it. No program is exposed without
+        // retaining this owner; executions borrow it for their full lifetime.
+        let (thrust, cub) = unsafe {
+            (
+                std::mem::transmute::<
+                    rccl_thrust::cuda::Program<'_>,
+                    rccl_thrust::cuda::Program<'static>,
+                >(thrust),
+                std::mem::transmute::<
+                    rccl_cub::cuda::Program<'_>,
+                    rccl_cub::cuda::Program<'static>,
+                >(cub),
+            )
+        };
+        Ok(Self { module, thrust, cub, context })
+    }
+}
+
+thread_local! {
+    static GROUP_PROGRAMS: RefCell<Option<Rc<GroupPrograms>>> = const { RefCell::new(None) };
+}
+
+fn release_query_programs() {
+    GROUP_PROGRAMS.with(|cache| cache.borrow_mut().take());
+}
+
+fn programs(pool: &Pool) -> Result<Rc<GroupPrograms>> {
+    crate::register_query_cleanup(release_query_programs);
+    GROUP_PROGRAMS.with(|cache| {
+        if let Some(programs) = cache.borrow().as_ref() {
+            if Arc::ptr_eq(&programs.context, pool.context()) {
+                return Ok(programs.clone());
+            }
+        }
+        let programs = Rc::new(GroupPrograms::load(pool)?);
+        *cache.borrow_mut() = Some(programs.clone());
+        Ok(programs)
+    })
+}
 
 /// A checked aggregate's machine representation. Extrema use a separate validity
 /// column, so every i64 bit pattern remains a representable value.
@@ -12,6 +73,57 @@ pub struct Aggregate {
     pub kind: u32,
     pub min: i64,
     pub max: i64,
+}
+
+/// Recorded scalar representation of an aggregate output. Extrema carry their
+/// validity separately; rustc resolves aliases and the optional payload type.
+pub trait AggregateRepresentation<const OPTIONAL: bool> {
+    const MIN: i128;
+    const MAX: i128;
+}
+
+impl<T: gpu_datalog_runtime::Scalar> AggregateRepresentation<false> for T {
+    const MIN: i128 = T::MIN;
+    const MAX: i128 = T::MAX;
+}
+
+impl<T: gpu_datalog_runtime::Scalar> AggregateRepresentation<true> for Option<T> {
+    const MIN: i128 = T::MIN;
+    const MAX: i128 = T::MAX;
+}
+
+pub fn aggregate<T: AggregateRepresentation<OPTIONAL>, const OPTIONAL: bool>(
+    kind: u32,
+) -> Result<Aggregate> {
+    let min = if kind == 0 { 0 } else { T::MIN };
+    let max = if kind == 0 { T::MAX.min(i64::MAX as i128) } else { T::MAX };
+    Ok(Aggregate {
+        kind,
+        min: i64::try_from(min).map_err(|_| "GPU aggregate representation exceeds i64")?,
+        max: i64::try_from(max).map_err(|_| "GPU aggregate representation exceeds i64")?,
+    })
+}
+
+#[cfg(test)]
+mod representation_tests {
+    use super::aggregate;
+
+    #[test]
+    fn aliases_and_optional_payloads_use_scalar_metadata() {
+        type Value = i32;
+        type Optional = Option<Value>;
+        let sum = aggregate::<Value, false>(1).unwrap();
+        let min = aggregate::<Optional, true>(2).unwrap();
+        assert_eq!((sum.min, sum.max), (i32::MIN as i64, i32::MAX as i64));
+        assert_eq!((min.min, min.max), (sum.min, sum.max));
+    }
+
+    #[test]
+    fn count_bounds_fit_the_machine_accumulator() {
+        let count = aggregate::<usize, false>(0).unwrap();
+        assert_eq!(count.min, 0);
+        assert_eq!(count.max as i128, (usize::MAX as i128).min(i64::MAX as i128));
+    }
 }
 
 pub struct GroupedOutput {
@@ -117,6 +229,7 @@ impl<F> GroupedRows<F> {
         };
         Ok(unsafe { DeviceColumns::from_parts(table, Arc::new(Dictionary::default()), pool) })
     }
+    // DECODE P: GroupedRows explicitly publishes final logical host aggregate answers.
     pub fn to_host<Row>(&self) -> Result<Vec<Row>>
     where
         F: Fn(&[i64], &[u8]) -> Result<Row>,
@@ -127,6 +240,7 @@ impl<F> GroupedRows<F> {
         (0..rows)
             .map(|row| {
                 let range = row * self.output.width..(row + 1) * self.output.width;
+                // DECODE P: final grouped answer decoder reconstructs logical keys and nullable aggregates.
                 (self.decode)(&values[range.clone()], &valid[range])
             })
             .collect()
@@ -161,11 +275,10 @@ pub unsafe fn fold(
         return Err("invalid grouped input extent or pool".into());
     }
     let stream = pool.stream();
-    let module = unsafe { group_kernels::load(pool.context())? };
-    let thrust = rccl_thrust::cuda::Program::load(pool.context())?;
-    let exec = thrust.par_in(stream, pool.resource())?;
-    let cub = rccl_cub::cuda::Program::load(pool.context())?;
-    let launch = cub.on(stream)?;
+    let programs = programs(&pool)?;
+    let module = &programs.module;
+    let exec = programs.thrust.par_in(stream, pool.resource())?;
+    let launch = programs.cub.on(stream)?;
     let mut order = temporary::<u32>(stream, rows)?;
     let rows = if let Some(live) = live {
         let mut count = temporary::<u64>(stream, 1)?;
@@ -507,6 +620,40 @@ mod publication_tests {
     use super::*;
 
     #[test]
+    fn grouped_program_cache_tracks_context_and_query_lifetime() -> Result<()> {
+        let first_pool = Pool::new(0, 0, 0)?;
+        let second_pool = Pool::new(0, 0, 0)?;
+        assert!(!Arc::ptr_eq(first_pool.context(), second_pool.context()));
+        let retained = {
+            let _scope = crate::QueryScope::new();
+            let first = programs(&first_pool)?;
+            assert!(Rc::ptr_eq(&first, &programs(&first_pool)?));
+            let second = programs(&second_pool)?;
+            assert!(!Rc::ptr_eq(&first, &second));
+            assert!(Rc::ptr_eq(&second, &programs(&second_pool)?));
+            for (programs, pool) in [(&first, &first_pool), (&second, &second_pool)] {
+                let exec = programs.thrust.par_in(pool.stream(), pool.resource())?;
+                assert!(std::ptr::eq(*exec.allocator(), pool.resource()));
+                programs.cub.on(pool.stream())?;
+            }
+            // Replacing the cached context must not invalidate an active owner.
+            first.cub.on(first_pool.stream())?;
+            let replacement = programs(&first_pool)?;
+            assert!(!Rc::ptr_eq(&first, &replacement));
+            Rc::downgrade(&replacement)
+        };
+        assert!(retained.upgrade().is_none());
+        GROUP_PROGRAMS.with(|cache| assert!(cache.borrow().is_none()));
+        {
+            let _scope = crate::QueryScope::new();
+            let reloaded = programs(&first_pool)?;
+            assert!(Rc::ptr_eq(&reloaded, &programs(&first_pool)?));
+        }
+        GROUP_PROGRAMS.with(|cache| assert!(cache.borrow().is_none()));
+        Ok(())
+    }
+
+    #[test]
     fn resident_group_publication_preserves_values_count_and_failure() -> Result<()> {
         let pool = Pool::new(0, 0, 0)?;
         let input = Buffer::from_host(pool.clone(), &[1i64, 3, 1, 7, 2, 5])?;
@@ -544,8 +691,10 @@ mod publication_tests {
                 gpu_device_columns::Bounds::Inclusive { min: 1, max: 2 }
             );
             if error == 0 {
+                // DECODE P: diagnostic resident grouped projection exposes reconstructed host rows.
                 assert_eq!(published.to_host()?, [(10, 1), (5, 2)]);
             } else {
+                // DECODE P: diagnostic grouped publication checks retained device-error rejection.
                 assert!(published.to_host().is_err());
             }
         }

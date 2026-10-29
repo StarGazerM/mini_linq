@@ -189,7 +189,7 @@ that stream directly without adding another distinct set. Unknown terminals
 may repeat rows and retain an explicit fast-hashed distinct boundary.
 \begin{mathpar}
 \Rule{EXT-SetFold}{\mathsf{checkedCanonicalTerminal}(\pi)\quad
- Q:\bot+\mathcal P(Row)}
+ Q:\mathcal P_{\rm fin}(Row)}
  {\mathsf{aggregate}(Q)=\mathsf{fold}(Q)}
 
 \Rule{EXT-ConstantGroup}{\forall k\in K.\ \mathsf{literalBound}(k)}

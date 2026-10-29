@@ -51,7 +51,7 @@ fn duplicates_fail_before_consumption_even_when_filtered_out() {
             pipeline { physical = [cq_rewrites::host_sets(E)]; }
             struct CertifiedFilteredRows;
             relation E(a:i32, b:i32) = (rows);
-            answer(a,b) :- E(a,b), if (*a < 0);
+            answer(a,b) :- E(a,b), where a < 0;
         };
     });
 }

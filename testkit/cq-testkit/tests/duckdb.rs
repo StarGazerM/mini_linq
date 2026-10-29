@@ -64,7 +64,7 @@ fn raw_oracle_rejects_bad_width_null_outputs_and_out_of_range_integers() {
 }
 
 #[test]
-fn fuzz_sql_adapter_is_total_only_and_preserves_sorted_distinct_results() {
+fn fuzz_sql_adapter_routes_opaque_rust_and_preserves_sorted_distinct_results() {
     for seed in [1, 3, 5, 7, 9, 11, 13, 15] {
         let rows = duckdb::evaluate_fuzz(&fuzz::generate(seed)).unwrap();
         assert!(rows.windows(2).all(|pair| pair[0] < pair[1]));
@@ -73,7 +73,7 @@ fn fuzz_sql_adapter_is_total_only_and_preserves_sorted_distinct_results() {
         duckdb::evaluate_fuzz(&fuzz::generate(0))
             .unwrap_err()
             .to_string()
-            .contains("partial terms")
+            .contains("opaque Rust operations")
     );
     let mut malformed = fuzz::generate(1);
     malformed.data.clear();

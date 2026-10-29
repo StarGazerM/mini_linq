@@ -10,8 +10,7 @@ fn types(context: &RoundContext, index: usize) -> Vec<&Type> {
     context.relations[index].declaration.columns.iter().map(|column| &column.ty).collect()
 }
 fn packing(types: &[&Type]) -> syn::Result<TokenStream> {
-    let columns = types.iter().map(|ty| crate::storage::scalar(ty).map(|(_, column)| column))
-        .collect::<syn::Result<Vec<_>>>()?;
+    let columns = types.iter().map(|ty| quote!(<#ty as ::gpu_datalog_runtime::Scalar>::COLUMN));
     Ok(quote!(::gpu_datalog_runtime::Packing::with_columns(&[#(#columns),*])?))
 }
 fn canonical_type(schemas: &[Vec<Type>], index: usize) -> Type {
@@ -167,8 +166,6 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     let schemas = (0..context.relations.len()).map(|index|
         types(context, index).into_iter().map(|ty| symbols.device_type(ty)).collect::<Vec<_>>()
     ).collect::<Vec<_>>();
-    // Check eligibility independently, including schemas not read by a hole.
-    for schema in &schemas { crate::storage::word_type(schema)?; }
     let input_types = input_types(program, &schemas)?;
     // Hosts a hole may read through its CQ declarations, with their local types.
     let mut hosts = std::collections::BTreeMap::<String, Type>::new();
@@ -399,7 +396,9 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let packed = local("packing", index);
         let fields = types(context, index).into_iter().enumerate().map(|(i, ty)| {
             match symbols.codec(ty) {
+                // DECODE P: generated SymbolCodec inverse resolves final datalog host output fields.
                 Some(codec) => quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(row[#i] as u32)),
+                // DECODE P: generated numeric carrier inversion constructs final host output fields.
                 None => quote!(row[#i] as #ty),
             }
         });
@@ -407,6 +406,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let runner = program_runner(index);
         quote!(#runner(#[inline] || -> ::gpu_datalog_runtime::Result<_> {
             Ok(#state.to_host()?.into_iter().map(|word| {
+                // DECODE P: generated final host output unpack inverts packed tuple ordinals after raw word download.
                 let row = #packed.unpack(word)?;
                 Ok((#(#fields,)*))
             }).collect::<::gpu_datalog_runtime::Result<::std::vec::Vec<_>>>()?.into_iter())

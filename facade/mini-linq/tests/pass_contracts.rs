@@ -11,7 +11,7 @@ fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
     use quote::ToTokens;
     let source: cq::Program = syn::parse_quote! {
         struct Q; relation R(k:i32,v:i32);
-        answer(x,y) :- R(x,y), if * x >= lower, if * x < upper;
+        answer(x,y) :- R(x,y), where x >= lower, where x < upper;
     };
     let normal = cq::normal::normalize(&source).unwrap();
     let vo = cq_order::compile(&normal, &Default::default()).unwrap();
@@ -43,7 +43,7 @@ fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
     let ra::Operator::Select(s) = &mut changed.plan.definitions[select].operator else {
         panic!()
     };
-    s.condition.constraints[1] = syn::parse_quote!(x <= @upper);
+    s.condition.constraints[1] = syn::parse_quote!(x <= @(upper));
     assert!(cq_elaborate::check(&vo, &changed).is_err());
     let mut lost = ra.clone();
     let ra::Operator::Select(s) = &mut lost.plan.definitions[select].operator else {
@@ -128,10 +128,10 @@ fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
 }
 
 #[test]
-fn rust_comparison_is_a_relational_select_with_a_host_bound() {
+fn where_comparison_is_a_relational_select_with_a_host_bound() {
     let source: cq::Program = syn::parse_quote! {
         struct Q; relation R(a:i32); relation S(a:i32);
-        answer(od) :- R(od), S(s), if *od < cutoff;
+        answer(od) :- R(od), S(s), where od < cutoff;
     };
     assert!(matches!(source.query.body[2], cq::BodyItem::Constraint(_)));
     let normal = cq::normal::normalize(&source).unwrap();
@@ -166,20 +166,19 @@ fn rust_comparison_is_a_relational_select_with_a_host_bound() {
 }
 
 #[test]
-fn mixed_conjunction_pushes_the_comparison_and_pins_the_residual_in_written_order() {
+fn rust_conjunction_stays_whole_and_moves_when_its_variables_are_bound() {
     use quote::ToTokens;
     let source: cq::Program = syn::parse_quote! {
         struct Q; relation R(a:i32,b:i32); relation S(a:i32);
         answer(od) :- R(od,x), S(s), if *od < cutoff && f(*x) && g(*x);
     };
-    assert_eq!(source.query.body.len(), 4);
-    assert!(matches!(source.query.body[2], cq::BodyItem::Constraint(_)));
-    let cq::BodyItem::Filter(residual) = &source.query.body[3] else {
+    assert_eq!(source.query.body.len(), 3);
+    let cq::BodyItem::Filter(residual) = &source.query.body[2] else {
         panic!()
     };
     assert_eq!(
         residual.condition.to_token_stream().to_string(),
-        "f (* x) && g (* x)"
+        "* od < cutoff && f (* x) && g (* x)"
     );
     let normal = cq::normal::normalize(&source).unwrap();
     let options = cq_order::Options {
@@ -193,20 +192,10 @@ fn mixed_conjunction_pushes_the_comparison_and_pins_the_residual_in_written_orde
         .iter()
         .position(|s| matches!(s, cq_lang_vo::Step::Guard(..)))
         .unwrap();
-    assert!(
-        vo.valuation.steps[..rust_step]
-            .iter()
-            .any(|s| matches!(s,cq_lang_vo::Step::Atom(a,_) if a.clause()==1))
-    );
     let mut moved = vo.clone();
     let guard = moved.valuation.steps.remove(rust_step);
     moved.valuation.steps.insert(1, guard);
-    assert!(
-        cq_lang_vo::contract::check(&moved)
-            .unwrap_err()
-            .to_string()
-            .contains("Before")
-    );
+    cq_lang_vo::contract::check(&moved).unwrap();
     let mut reversed = vo.clone();
     let cq_lang_vo::Step::Guard(g, _) = &mut reversed.valuation.steps[rust_step] else {
         panic!()
@@ -215,31 +204,54 @@ fn mixed_conjunction_pushes_the_comparison_and_pins_the_residual_in_written_orde
     assert!(cq_order::check(&normal, &reversed, &options).is_err());
     let ra = cq_elaborate::compile(&vo).unwrap();
     cq_elaborate::check(&vo, &ra).unwrap();
-    let select = ra
-        .plan
-        .definitions
-        .iter()
-        .position(|d| matches!(d.operator, ra::Operator::Select(_)))
-        .unwrap();
-    let later = ra
-        .plan
-        .definitions
-        .iter()
-        .position(|d| matches!(&d.operator,ra::Operator::Rename(r) if r.relation=="S"))
-        .unwrap();
+    assert!(
+        ra.plan
+            .definitions
+            .iter()
+            .all(|definition| { !matches!(definition.operator, ra::Operator::Select(_)) })
+    );
     let guard = ra
         .plan
         .definitions
         .iter()
         .position(|d| matches!(d.operator, ra::Operator::Guard(_)))
         .unwrap();
-    assert!(select < later && later < guard);
     let mut changed = ra.clone();
     let ra::Operator::Guard(g) = &mut changed.plan.definitions[guard].operator else {
         panic!()
     };
     g.condition = syn::parse_quote!(g(*x) && f(*x));
     assert!(cq_elaborate::check(&vo, &changed).is_err());
+}
+
+#[test]
+fn rust_block_depends_on_free_variables_not_the_written_prefix() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(a:i32); relation S(b:i32);
+        answer(x,z) :- R(x), S(y),
+            { let z:i32 = *x + 1 } | { let z:i32 = *x + 2 };
+    };
+    let normal = cq::normal::normalize(&source).unwrap();
+    let options = cq_order::Options {
+        heuristic: cq_order::Heuristic::Written,
+        split: cq_order::Split::Coarse,
+    };
+    let original = cq_order::compile(&normal, &options).unwrap();
+    let mut moved = original.clone();
+    let index = moved
+        .valuation
+        .steps
+        .iter()
+        .position(|step| matches!(step, cq_lang_vo::Step::Block(..)))
+        .unwrap();
+    let block = moved.valuation.steps.remove(index);
+    moved.valuation.steps.insert(1, block);
+    cq_lang_vo::contract::check(&moved).unwrap();
+    let earlier = cq_elaborate::compile(&moved).unwrap();
+    cq_elaborate::check(&moved, &earlier).unwrap();
+    let later = cq_elaborate::compile(&original).unwrap();
+    ra::check_rewrite(&later, &earlier).unwrap();
+    ra::check_rewrite(&earlier, &later).unwrap();
 }
 
 #[test]
@@ -271,16 +283,16 @@ fn mixed_disjunction_and_negation_stay_wholly_opaque() {
         );
         let mut moved = vo.clone();
         moved.valuation.steps.swap(1, 2);
-        assert!(cq_lang_vo::contract::check(&moved).is_err());
+        cq_lang_vo::contract::check(&moved).unwrap();
     }
 }
 
 #[test]
-fn a_constraint_on_a_let_result_stays_before_rust_even_if_a_later_atom_uses_it() {
-    for predicate in [quote::quote!(if m > cutoff), quote::quote!(if m == 2)] {
+fn a_constraint_on_a_let_result_can_cross_total_rust() {
+    for predicate in [quote::quote!(where m > cutoff), quote::quote!(where m == 2)] {
         let source: cq::Program = syn::parse2(quote::quote! {
             struct Bound; relation R(a:i32); relation S(a:i32,b:i32);
-            answer(y) :- R(x), let m:i32 = *x, #predicate, if 10 / *m > 0, S(m,y);
+            answer(y) :- R(x), let m:i32 = *x, #predicate, if 10 / (*m).max(1) > 0, S(m,y);
         })
         .unwrap();
         let nf = cq::normal::normalize(&source).unwrap();
@@ -312,12 +324,7 @@ fn a_constraint_on_a_let_result_stays_before_rust_even_if_a_later_atom_uses_it()
         bad.plan.definitions[select].operator = ra::Operator::Guard(g);
         bad.plan.definitions[guard].operator = ra::Operator::Select(s);
         ra::contract::check(&bad).unwrap();
-        assert!(
-            cq_elaborate::check(&vo, &bad)
-                .unwrap_err()
-                .to_string()
-                .contains("source-before")
-        );
+        cq_elaborate::check(&vo, &bad).unwrap();
     }
 }
 
@@ -367,7 +374,7 @@ fn hypergraph_reduced_prefix_tuple_survives_elaboration_checks() {
     let source: cq::Program = syn::parse_quote! {
         struct PrefixTuple;
         relation R(x:i32); relation Other(y:i32); relation T(x:i32,y:i32,z:i32);
-        answer(z) :- R(x), Other(y), if *x > *y, if 10 / (*x - *y) > 0, T(x,y,z);
+        answer(z) :- R(x), Other(y), where x > y, if 10 / (*x - *y).max(1) > 0, T(x,y,z);
     };
     let normal = cq::normal::normalize(&source).unwrap();
     let order = cq_order::Options {

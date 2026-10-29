@@ -1,10 +1,10 @@
 //! Seeded abstract queries and independent MiniLinq/SQL printers.
 //!
-//! This module never compiles or executes generated MiniLinq. The total lane
-//! has SQL semantics over bounded integers; partial terms and finite Rust
-//! generators use executable written-order refinement. Generators stay in the
-//! existing binding schedule, including dependency-aware minimization and scope
-//! checks. Coverage counts properties once per case.
+//! This module never compiles or executes generated MiniLinq. Both lanes obey
+//! the total-Rust premise: bounded arithmetic has independent SQL semantics,
+//! while opaque Rust operations and finite generators use an executable written
+//! reference. Placement depends only on free variables, not written-order
+//! chains. Coverage counts properties once per case.
 
 mod model;
 mod sql;
@@ -35,8 +35,8 @@ pub const FEATURE_TAGS: &[&str] = &[
     "for-inclusive-range",
     "for-duplicates",
     "for-empty",
-    "for-iterator-panic",
-    "partial-for",
+    "for-mapped",
+    "rust-for",
     "nested-for",
     "computed-head",
     "repeated-head-variable",
@@ -62,16 +62,16 @@ pub const FEATURE_TAGS: &[&str] = &[
     "expression-multiply",
     "expression-remainder",
     "expression-negate",
-    "partial-divide",
-    "partial-remainder",
-    "partial-overflow-add",
-    "partial-overflow-subtract",
-    "partial-overflow-multiply",
-    "partial-unwrap",
-    "partial-guard",
-    "partial-let",
-    "partial-argument",
-    "partial-head",
+    "rust-divide",
+    "rust-remainder",
+    "rust-bounded-add",
+    "rust-bounded-subtract",
+    "rust-bounded-multiply",
+    "rust-unwrap",
+    "rust-guard",
+    "rust-let",
+    "rust-argument",
+    "rust-head",
     "relational-constraint",
     "relational-parameter",
     "relational-eq",
@@ -83,7 +83,7 @@ pub const FEATURE_TAGS: &[&str] = &[
     "relational-between",
     "relational-in",
     "relational-or",
-    "partial-term",
+    "rust-term",
     "cases",
     "atoms=1",
     "atoms=2",

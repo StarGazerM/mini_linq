@@ -28,10 +28,12 @@ pub struct JoinFilterCandidate {
     pub filtered: bool,
 }
 
-/// Every admissible filter of `covering`, one per scalar `i64` key column:
-/// an eager probe or semijoin into a total single-level exact hash index or
-/// sorted run (including a checked routed family), whose unique keys supply
-/// the conservative filter, and whose left operand reaches a scan through an
+/// Every admissible filter of `covering`, one per scalar key column:
+/// an eager probe or semijoin into a total single-level exact index, whose
+/// recorded key layout supplies the conservative filter. Key enumeration is
+/// the provider's `cq_storage::Keys` obligation, checked by rustc. Automatic
+/// selection may apply a narrower cost policy; explicit providers retain this
+/// representation-independent contract. The left operand reaches a scan through an
 /// exclusive pipe spine of selections, projections and eager probes/semijoins,
 /// carrying the key column from the scan's lineage.
 pub fn join_filter_candidates(
@@ -66,45 +68,9 @@ pub fn join_filter_candidates(
         || fused(covering)
         || facts.physical.modes[&build] != ModeKind::Let
         || !facts.physical.rows[&build].computed.is_empty()
-        || facts.built_on(&build, &columns).is_none_or(|(ty, levels)| {
-            let enumerable = |ty: &syn::Type| {
-                let syn::Type::Path(path) = ty else {
-                    return false;
-                };
-                path.qself.is_none()
-                    && ((path.path.segments.len() == 2
-                        && path.path.segments[0].ident == "cq_storage"
-                        && path.path.segments[1].ident == "SortedRun")
-                        || (path.path.segments.len() == 3
-                            && path.path.segments[0].ident == "cq_storage"
-                            && path.path.segments[1].ident == "sharded"
-                            && path.path.segments[2].ident == "Index"))
-            };
-            let routed = match ty {
-                syn::Type::Path(path)
-                    if path.qself.is_none()
-                        && path.path.segments.len() == 3
-                        && path.path.segments[0].ident == "cq_storage"
-                        && path.path.segments[1].ident == "sharded"
-                        && path.path.segments[2].ident == "Sharded" =>
-                {
-                    match &path.path.segments[2].arguments {
-                        syn::PathArguments::AngleBracketed(arguments)
-                            if arguments.args.len() == 1 =>
-                        {
-                            matches!(&arguments.args[0], syn::GenericArgument::Type(inner)
-                                        if enumerable(inner))
-                        }
-                        _ => false,
-                    }
-                }
-                _ => false,
-            };
-            levels != 1
-                || !(*ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>)
-                    || enumerable(ty)
-                    || routed)
-        })
+        || facts
+            .built_on(&build, &columns)
+            .is_none_or(|(_, levels)| levels != 1)
     {
         return Vec::new();
     }
@@ -138,11 +104,10 @@ pub fn join_filter_candidates(
     };
     let mut result = Vec::new();
     for key in columns {
-        if ungroup_type(&facts.physical.rows[&build].types[&key]) != &syn::parse_quote!(i64)
-            || facts
-                .filtered
-                .get(&build)
-                .is_some_and(|f| f.constants.iter().any(|c| symbol_name(&c.column) == key))
+        if facts
+            .filtered
+            .get(&build)
+            .is_some_and(|f| f.constants.iter().any(|c| symbol_name(&c.column) == key))
         {
             continue;
         }

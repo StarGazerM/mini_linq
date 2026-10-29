@@ -44,13 +44,16 @@ fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()
         columns[2].extend([0, 1, 1]);
         Ok(())
     })?;
+    // DECODE P: diagnostic typed numeric upload round trip publishes logical host values for exact assertions.
     assert_eq!(values.to_host()?, [(i64::MIN, u32::MAX, false), (7, 3, true), (7, 3, true)]);
     // Reusing capacity must not reuse old rows, even when the new input is empty.
+    // DECODE P: diagnostic empty reused upload publishes logical host values for exact assertions.
     assert!(upload_numeric_columns::<(i64,), _>(pool.clone(), |_| Ok(()))?.to_host()?.is_empty());
     let changed = upload_numeric_columns::<(i64,), _>(pool.clone(), |columns| {
         columns[0].push(-9);
         Ok(())
     })?;
+    // DECODE P: diagnostic changed reused upload publishes logical host values for exact assertions.
     assert_eq!(changed.to_host()?, [(-9,)]);
     let large = upload_numeric_columns::<(i64,), _>(pool.clone(), |columns| {
         columns[0].resize(300_003, 1);
@@ -59,6 +62,7 @@ fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()
         Ok(())
     })?;
     assert_eq!(large.storage().columns[0].bounds(), Bounds::Inclusive { min: i64::MIN, max: i64::MAX });
+    // DECODE P: diagnostic large signed maximum publishes logical host values for exact assertions.
     assert_eq!(large.to_host()?[300_002], (i64::MAX,));
     assert!(upload_numeric_columns::<(), _>(pool.clone(), |_| Ok(())).is_err());
     assert!(upload_numeric_columns::<(i64, i64), _>(pool, |columns| {
@@ -118,11 +122,16 @@ fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
         selection: None,
         payload: vec![PayloadDescriptor { column: source, kind: PayloadKind::I64 }],
     })?;
+    // DECODE P: diagnostic gathered wide payload publishes logical host values for exact assertions.
     assert_eq!(gathered.payload()[0].to_host()?, [3, 3, 1i64 << 35]);
     let dictionary = Arc::new(cq_gpu_runtime::Dictionary::default());
+    // DECODE P: diagnostic canonical tuple adapter reconstructs packed fields solely for the following host oracle.
     let output = keys.into_columns::<(i64, i64)>(&fields, dictionary.clone(), vec![])?;
+    // DECODE P: diagnostic canonical packed tuples publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, [(7, 3), (9, 3), (7, 1 << 35)]);
+    // DECODE P: diagnostic noncanonical tuple adapter reconstructs packed fields solely for the following host oracle.
     let output = packed_columns::<(i64, i64)>(input, rows.len(), &fields, dictionary.clone(), vec![])?;
+    // DECODE P: diagnostic noncanonical packed tuples publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, rows);
 
     // Both lanes participate in equality, including the most significant bit.
@@ -132,7 +141,9 @@ fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
         PackedField { shift: 0, bits: 64, base: i64::MIN },
         PackedField { shift: 64, bits: 64, base: i64::MIN },
     ];
+    // DECODE P: diagnostic signed-boundary adapter reconstructs packed fields solely for the following host oracle.
     let output = keys.into_columns::<(i64, i64)>(&fields, dictionary, vec![])?;
+    // DECODE P: diagnostic full-width signed tuple boundaries publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, [(i64::MIN, i64::MIN), (i64::MIN, 0), (i64::MAX, i64::MAX)]);
     Ok(())
 }
@@ -172,13 +183,16 @@ fn wide_canon_deduplicates_three_lane_keys_with_stable_order() -> Result<()> {
         let keys = unsafe { canon.canonicalize(&input, rows.len(), 192)? };
         assert_eq!(keys.logical_count()?, 4);
         assert_eq!(keys.lanes(), 3);
+        // DECODE P: diagnostic three-lane adapter reconstructs packed fields solely for the following host oracle.
         let output = keys.into_columns::<(i64, i64, i64)>(
             &fields,
             Arc::new(cq_gpu_runtime::Dictionary::default()),
             vec![],
         )?;
         let expected = [[7, 3, 1], [8, 3, 1], [7, 4, 1], [7, 3, 9]]
+            // DECODE P: diagnostic expected three-lane answer restores each recorded signed frame base.
             .map(|[a, b, c]| (i64::MIN + a, i64::MIN + b, i64::MIN + c));
+        // DECODE P: diagnostic three-lane packed tuples publishes logical host values for exact assertions.
         assert_eq!(output.to_host()?, expected);
     }
     let empty = unsafe { canon.canonicalize(&input, 0, 192)? };
@@ -221,7 +235,9 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
         .build(&descriptor)
         .map_err(|error| format!("range build: {error}"))?;
     assert_eq!(selected.len(), 3);
+    // DECODE P: diagnostic selected directory offsets publishes logical host values for exact assertions.
     assert_eq!(selected.offsets().to_host()?, [0, 2, 3, 3]);
+    // DECODE P: diagnostic selected payload values publishes logical host values for exact assertions.
     assert_eq!(selected.payload()[0].to_host()?, [11, 13, 12]);
 
     let positions = cq_gpu_sequence_runtime::select(pool.clone(), &selection)?;
@@ -232,7 +248,9 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
     empty.selection.as_mut().unwrap().end = 30;
     let empty = builder.build(&empty)?;
     assert!(empty.is_empty());
+    // DECODE P: diagnostic empty selected directory publishes logical host values for exact assertions.
     assert_eq!(empty.offsets().to_host()?, [0, 0, 0, 0]);
+    // DECODE P: diagnostic empty selected payload publishes logical host values for exact assertions.
     assert!(empty.payload()[0].to_host()?.is_empty());
 
     let keys = Buffer::from_host(pool.clone(), &[7u64, 2, 7, 1, 2])?;
@@ -247,9 +265,13 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
         base: 0,
     }];
     let dictionary = Arc::new(cq_gpu_runtime::Dictionary::default());
+    // DECODE P: diagnostic canonical scalar adapter reconstructs packed fields solely for the following host oracle.
     let output = unique.into_columns::<(u32,)>(&fields, dictionary.clone(), vec![])?;
+    // DECODE P: diagnostic canonical scalar keys publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, [(1,), (2,), (7,)]);
+    // DECODE P: diagnostic noncanonical scalar adapter reconstructs packed fields solely for the following host oracle.
     let output = packed_columns::<(u32,)>(keys, 5, &fields, dictionary, vec![])?;
+    // DECODE P: diagnostic noncanonical scalar keys publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, [(7,), (2,), (7,), (1,), (2,)]);
 
     // Setup-time metadata can be reused without changing retained publications.
@@ -258,16 +280,22 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
     let mut changed = descriptor.clone();
     changed.selection.as_mut().unwrap().end = 12;
     let newer = builder.build_with_workspace(&changed, &mut workspace)?;
+    // DECODE P: diagnostic retained workspace payload publishes logical host values for exact assertions.
     assert_eq!(retained.payload()[0].to_host()?, [11, 13, 12]);
+    // DECODE P: diagnostic new workspace payload publishes logical host values for exact assertions.
     assert_eq!(newer.payload()[0].to_host()?, [11]);
+    // DECODE P: diagnostic retained workspace directory publishes logical host values for exact assertions.
     assert_eq!(retained.offsets().to_host()?, [0, 2, 3, 3]);
+    // DECODE P: diagnostic new workspace directory publishes logical host values for exact assertions.
     assert_eq!(newer.offsets().to_host()?, [0, 1, 1, 1]);
     drop((retained, newer));
     let reused = builder.build_with_workspace(&descriptor, &mut workspace)?;
+    // DECODE P: diagnostic reused workspace payload publishes logical host values for exact assertions.
     assert_eq!(reused.payload()[0].to_host()?, [11, 13, 12]);
 
     let mut adapter = PackedColumnsAdapter::new(pool.clone(), 1)?;
     let dictionary = Arc::new(cq_gpu_runtime::Dictionary::default());
+    // DECODE P: diagnostic first retained adapter reconstructs packed fields solely for the following host oracle.
     let first = adapter.packed_columns::<(u32,)>(
         Buffer::from_host_async(pool.clone(), &[3u64, 1])?,
         2,
@@ -275,6 +303,7 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
         dictionary.clone(),
         vec![],
     )?;
+    // DECODE P: diagnostic second retained adapter reconstructs packed fields solely for the following host oracle.
     let second = adapter.packed_columns::<(u32,)>(
         Buffer::from_host_async(pool.clone(), &[4u64])?,
         1,
@@ -282,9 +311,12 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
         dictionary.clone(),
         vec![],
     )?;
+    // DECODE P: diagnostic first retained adapter output publishes logical host values for exact assertions.
     assert_eq!(first.to_host()?, [(3,), (1,)]);
+    // DECODE P: diagnostic second retained adapter output publishes logical host values for exact assertions.
     assert_eq!(second.to_host()?, [(4,)]);
     drop((first, second));
+    // DECODE P: diagnostic empty reused adapter reconstructs packed fields solely for the following host oracle.
     let empty = adapter.packed_columns::<(u32,)>(
         Buffer::from_host_async(pool.clone(), &[] as &[u64])?,
         0,
@@ -292,6 +324,7 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
         dictionary,
         vec![],
     )?;
+    // DECODE P: diagnostic empty reused adapter output publishes logical host values for exact assertions.
     assert!(empty.to_host()?.is_empty());
 
     let upload = Buffer::from_host_async(pool.clone(), &[1u32, 2])?;
@@ -338,7 +371,9 @@ fn i64_payloads_preserve_full_width_values_and_partial_vectors() -> Result<()> {
             }],
         };
         let result = builder.build(&descriptor)?;
+        // DECODE P: diagnostic codec-sweep gathered payload publishes logical host values for exact assertions.
         assert_eq!(result.payload()[0].to_host()?, expected);
+        // DECODE P: diagnostic codec-sweep gathered directory publishes logical host values for exact assertions.
         assert_eq!(result.offsets().to_host()?, [0, 684, 1368, 2051, 2051]);
         descriptor.selection = Some(RangeSelection {
             column: payload,
@@ -346,7 +381,9 @@ fn i64_payloads_preserve_full_width_values_and_partial_vectors() -> Result<()> {
             end: 1,
         });
         let empty = builder.build(&descriptor)?;
+        // DECODE P: diagnostic codec-sweep empty payload publishes logical host values for exact assertions.
         assert!(empty.payload()[0].to_host()?.is_empty());
+        // DECODE P: diagnostic codec-sweep empty directory publishes logical host values for exact assertions.
         assert_eq!(empty.offsets().to_host()?, [0, 0, 0, 0, 0]);
     }
     Ok(())
@@ -399,6 +436,7 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
     let builder = RangeBuilder::new(&pool)?;
     let retained = builder.build(&descriptor)?;
     assert_eq!(
+        // DECODE P: diagnostic signed extrema retained payload publishes logical host values for exact assertions.
         retained.payload()[0].to_host()?,
         [i64::MIN, 4_294_967_297, i64::MAX, -4_294_967_297]
     );
@@ -408,7 +446,9 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
         end: 0,
     });
     let negative = builder.build(&descriptor)?;
+    // DECODE P: diagnostic negative-only directory publishes logical host values for exact assertions.
     assert_eq!(negative.offsets().to_host()?, [0, 1, 2, 2]);
+    // DECODE P: diagnostic negative-only payload publishes logical host values for exact assertions.
     assert_eq!(negative.payload()[0].to_host()?, [i64::MIN, -4_294_967_297]);
     assert_eq!(
         cq_gpu_sequence_runtime::select(pool.clone(), descriptor.selection.as_ref().unwrap())?
@@ -462,8 +502,10 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
             kind: PayloadKind::I64,
         }],
     })?;
+    // DECODE P: diagnostic packed-source directory publishes logical host values for exact assertions.
     assert_eq!(packed.offsets().to_host()?, [0, 4, 4]);
     assert_eq!(
+        // DECODE P: diagnostic packed-source signed payload publishes logical host values for exact assertions.
         packed.payload()[0].to_host()?,
         [i64::MIN, i64::MAX, i64::MIN + 1, 0]
     );
@@ -520,8 +562,10 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
             kind: PayloadKind::I64,
         }],
     })?;
+    // DECODE P: diagnostic shifted packed-source directory publishes logical host values for exact assertions.
     assert_eq!(shifted.offsets().to_host()?, [0, 2, 4, 4]);
     assert_eq!(
+        // DECODE P: diagnostic shifted packed-source payload publishes logical host values for exact assertions.
         shifted.payload()[0].to_host()?,
         [-base - 1, base + 1, base, 0]
     );
@@ -546,17 +590,23 @@ fn keyless_provider_preserves_one_complete_segment() -> Result<()> {
     let complete = builder.build_with_workspace(&descriptor, &mut workspace)?;
     assert_eq!(complete.len(), 4);
     assert_eq!(complete.domain_size(), 0);
+    // DECODE P: diagnostic keyless complete empty directory publishes logical host values for exact assertions.
     assert!(complete.offsets().to_host()?.is_empty());
+    // DECODE P: diagnostic keyless complete payload publishes logical host values for exact assertions.
     assert_eq!(complete.payload()[0].to_host()?, [7, 2, 7, 4]);
     descriptor.selection = Some(RangeSelection { column: values, start: 4, end: 8 });
     let selected = builder.build_with_workspace(&descriptor, &mut workspace)?;
+    // DECODE P: diagnostic keyless selected payload publishes logical host values for exact assertions.
     assert_eq!(selected.payload()[0].to_host()?, [7, 7, 4]);
     descriptor.selection.as_mut().unwrap().start = 9;
     descriptor.selection.as_mut().unwrap().end = 10;
     let empty = builder.build_with_workspace(&descriptor, &mut workspace)?;
     assert!(empty.is_empty());
+    // DECODE P: diagnostic keyless empty directory publishes logical host values for exact assertions.
     assert!(empty.offsets().to_host()?.is_empty());
+    // DECODE P: diagnostic keyless empty payload publishes logical host values for exact assertions.
     assert!(empty.payload()[0].to_host()?.is_empty());
+    // DECODE P: diagnostic keyless retained complete payload publishes logical host values for exact assertions.
     assert_eq!(complete.payload()[0].to_host()?, [7, 2, 7, 4]);
     Ok(())
 }

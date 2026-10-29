@@ -28,6 +28,7 @@ impl<S: Relation> Loader<S> {
 
     /// Read rows directly into the dispatch rule's tuple-vector host.
     pub fn csv(path: impl AsRef<Path>, options: CsvOptions) -> Result<Vec<S::Row>> {
+        // DECODE ?: read_csv reconstructs the entire host relation; this generic convenience API records no final consumer.
         crate::read_csv::<S>(path, options)
     }
 
@@ -40,6 +41,7 @@ impl<S: Relation> Loader<S> {
         S: Group<PREFIX>,
         S::Key: Eq + Hash,
     {
+        // DECODE V: CSV batch decoding precedes hash grouping; P4 builds indexes over retained representations and P5 loads columnar scans directly.
         collect_hash::<S, PREFIX>(Self::csv_batches(path, options)?)
     }
 
@@ -52,6 +54,7 @@ impl<S: Relation> Loader<S> {
         S: Group<PREFIX>,
         S::Key: Ord,
     {
+        // DECODE V: CSV batch decoding precedes ordered grouping; P4 retains encoded index keys and P5 avoids eager logical scan tuples.
         collect_btree::<S, PREFIX>(Self::csv_batches(path, options)?)
     }
 
@@ -67,7 +70,38 @@ impl<S: Relation> Loader<S> {
     /// Read Arrow batches into the dispatch rule's tuple-vector host.
     #[cfg(feature = "parquet")]
     pub fn parquet(path: impl AsRef<Path>, options: crate::ParquetOptions) -> Result<Vec<S::Row>> {
+        // DECODE ?: read_parquet reconstructs a tuple-vector host but this generic loader records no publication or Rust-read boundary.
         crate::read_parquet::<S>(path, options)
+    }
+}
+
+impl<S: crate::InternedRelation> Loader<S> {
+    /// Encode owned source rows once, retaining sorted dictionaries separately.
+    ///
+    /// Useful for in-memory fixtures and callers with an existing source reader.
+    /// String fields in the source schema become `StringCode` fields only where
+    /// the authored relation explicitly declares that type.
+    pub fn intern(
+        rows: Vec<<S::Source as Relation>::Row>,
+        dictionaries: &mut crate::Dictionaries,
+    ) -> Vec<S::Row> {
+        S::intern(rows, dictionaries)
+    }
+
+    /// Load input-only source rows, prepare sorted per-column dictionaries, and
+    /// return encoded relation rows. Temporary source strings are then dropped.
+    ///
+    /// All source batches are loaded before interning so codes are independent
+    /// of batch size and source row order. A source error leaves dictionaries
+    /// unchanged. Retain `dictionaries` for literal translation and publication.
+    #[cfg(feature = "parquet")]
+    pub fn parquet_interned(
+        path: impl AsRef<Path>,
+        options: crate::ParquetOptions,
+        dictionaries: &mut crate::Dictionaries,
+    ) -> Result<Vec<S::Row>> {
+        let rows = crate::read_parquet::<S::Source>(path, options)?;
+        Ok(Self::intern(rows, dictionaries))
     }
 }
 

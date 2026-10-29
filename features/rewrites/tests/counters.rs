@@ -69,11 +69,31 @@ fn canonical_prefixes_and_smallest_intersections_reduce_fan_work() {
     assert!(canonical.rows_enumerated < first.rows_enumerated);
     assert!(canonical.lookups < first.lookups);
     assert!(smallest.rows_enumerated < first.rows_enumerated);
-    // The extra membership build enumerates the same rows saved by candidate
-    // selection on this fan. Lookup and cursor work still fall independently.
-    assert!(combined.rows_enumerated <= canonical.rows_enumerated);
+    // STR-FullKey makes canonical's T[a,c] probe contains-only: neither a
+    // successful witness nor exhaustion enters the storage cursor counters
+    // (cq-print/access.rs::host_lookup, cq-storage/adaptive.rs::contains).
+    // Its scans are R twice, S once and T once; payload cursors yield n R
+    // rows and n*n S rows. Four scans, one R cursor and n S cursors exhaust.
+    let n = n as u64;
+    assert_eq!(canonical.index_builds, 3);
+    assert_eq!(canonical.rows_enumerated, 2 * n * n + 3 * n + 1);
+    assert_eq!(canonical.cursor_steps, canonical.rows_enumerated + n + 5);
+    assert_eq!(canonical.lookups, n * n + n + 1);
+    assert_eq!(canonical.candidate_insertions, 0);
+
+    // Smallest counts both S[b] and T[a], enumerates T's one c per b, and
+    // checks S[b,c] (cq-physical-realization/intersection.rs). Its separate
+    // eager S membership build scans n*n rows, replacing the n*n S payload
+    // rows above, but candidate enumeration adds n rows. The extra build
+    // scan also exhausts once: total rows rise by n and cursor steps by n+1.
+    // Counts + candidate reads + membership checks cost four lookups per b,
+    // plus the initial R[a] lookup, rather than quadratic T membership work.
+    assert_eq!(combined.index_builds, canonical.index_builds + 1);
+    assert_eq!(combined.rows_enumerated, canonical.rows_enumerated + n);
+    assert_eq!(combined.cursor_steps, canonical.cursor_steps + n + 1);
+    assert_eq!(combined.lookups, 4 * n + 1);
+    assert_eq!(combined.candidate_insertions, n);
     assert!(combined.lookups < canonical.lookups);
-    assert!(combined.cursor_steps < canonical.cursor_steps);
     assert!(combined.rows_enumerated < smallest.rows_enumerated);
     assert!(combined.rows_enumerated < first.rows_enumerated);
 }

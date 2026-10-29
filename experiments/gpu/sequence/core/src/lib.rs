@@ -63,24 +63,28 @@ pub fn machine() -> Machine {
     layout: Some(layout::shared_bytes),
     root: LevelNode {
         name: syn::parse_quote!(host),
+        host_rust: true,
         collaborative: false,
         dynamic: false,
         width: None,
         shared_bytes: None,
         children: vec![LevelNode {
             name: syn::parse_quote!(device),
+            host_rust: false,
             collaborative: false,
             dynamic: true,
             width: None,
             shared_bytes: None,
             children: vec![LevelNode {
                 name: syn::parse_quote!(block),
+                host_rust: false,
                 collaborative: true,
                 dynamic: false,
                 width: Some(256),
                 shared_bytes: Some(101_376),
                 children: vec![LevelNode {
                     name: syn::parse_quote!(lane),
+                    host_rust: false,
                     collaborative: false,
                     dynamic: false,
                     width: None,
@@ -117,16 +121,10 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             ProviderToken {
                 ty: syn::parse_quote!(#range),
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-                elements: Some(vec![
-                    syn::parse_quote!(i8),
-                    syn::parse_quote!(i16),
-                    syn::parse_quote!(i32),
-                    syn::parse_quote!(i64),
-                    syn::parse_quote!(u8),
-                    syn::parse_quote!(u16),
-                    syn::parse_quote!(u32),
-                    syn::parse_quote!(bool),
-                ]),
+                // Range providers consume the recorded scalar/code carrier,
+                // not logical type spellings. Native Scalar bounds and explicit
+                // codec declarations establish the publication representation.
+                elements: None,
                 levels: levels.clone(),
             },
             ProviderToken {

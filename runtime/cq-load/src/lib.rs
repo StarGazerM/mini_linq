@@ -45,9 +45,24 @@
 //! for cq-storage's positional reads and selections. Summaries always come
 //! from decoded rows; block skipping saves in-memory row tests, not Parquet I/O.
 //!
-//! [`StringDictionary`] lets caller-side preparation replace exact string values
-//! with deterministic, sorted-distinct `u32` codes. Dictionaries are per chosen
-//! column, not compiler rewrites or implicit changes to source loading.
+//! [`Loader::intern`] and, with `parquet`, `Loader::parquet_interned` prepare
+//! sorted per-column [`Dictionaries`] and return rows with [`StringCode`] fields.
+//! Opt in with `mini_linq::interned_relation_loaders!`, which accepts the same
+//! declarations as the unchanged plain `relation_loaders!` macro. It selects
+//! source types through [`InternedField`]: codes load from input-only strings;
+//! ordinary [`Load`] types remain unchanged.
+//! Source strings are discarded before the encoded relation is returned.
+//! Existing plain CSV/Parquet readers retain their original behavior.
+//!
+//! Codes preserve exact lexicographic string order within one column only.
+//! Column names must be unique across the retained dictionaries; joining codes
+//! from different columns does not compare their text. Translate query literals
+//! once with [`Dictionaries::literal`] (`StringCode::MAX` means absent), and
+//! prepare predicate relations at load time with [`Dictionaries::select`],
+//! which evaluates a predicate once per distinct value. Never insert literals
+//! into a loaded dictionary. Use [`Dictionaries::publish`] only for final owned
+//! answers or [`Dictionaries::read`] for an explicit opaque Rust read.
+//! [`StringDictionary`] also remains available for standalone `u32` encoding.
 
 mod csv_source;
 mod intern;
@@ -60,7 +75,9 @@ mod zone_docs;
 mod parquet_source;
 
 pub use csv_source::{Csv, CsvOptions, read_csv};
-pub use intern::StringDictionary;
+pub use intern::{
+    Dictionaries, InternedField, InternedRelation, StringCode, StringDictionary, dictionary_where,
+};
 pub use loader::{Group, Loader};
 pub use scalar::{Date, Decimal};
 pub use zone::{ColumnAt, MinMax, NoBounds, ZoneField, ZoneMetadata, ZoneRows, ZoneSchema, column};
@@ -122,9 +139,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Parse one owned column value; optional Arrow decoding works column at a time.
 pub trait Load: Sized {
+    // DECODE ?: Load is a generic source-to-logical conversion contract with no consumer boundary evidence.
     fn load(field: &str) -> std::result::Result<Self, String>;
 
     #[cfg(feature = "parquet")]
+    // DECODE ?: default Arrow loading delegates logical reconstruction to a caller-defined Load implementation.
     fn load_arrow(column: &dyn arrow_array::Array) -> std::result::Result<Vec<Self>, ColumnError> {
         parquet_source::parse_arrow(column, Self::load)
     }
@@ -134,6 +153,7 @@ pub trait Load: Sized {
 pub trait Relation {
     type Row;
     const COLUMNS: &'static [&'static str];
+    // DECODE ?: Relation requires owned logical rows but does not record whether callers publish or continue querying.
     fn decode(batch: &Batch<'_>) -> Result<Vec<Self::Row>>;
 }
 
@@ -165,6 +185,7 @@ impl Batch<'_> {
     }
 
     /// Decode a declaration column, reporting the original field on failure.
+    // DECODE ?: Batch::column materializes logical values for arbitrary Relation decoders; consumer facts are absent.
     pub fn column<T: Load>(&self, index: usize) -> Result<Vec<T>> {
         let Some((&column, &source)) = self.columns.get(index).zip(self.mapping.get(index)) else {
             return Err(Error::new(
@@ -180,6 +201,7 @@ impl Batch<'_> {
                 .iter()
                 .map(|record| {
                     let value = &record[source];
+                    // DECODE ?: CSV field parsing invokes arbitrary T::load without a recorded downstream read boundary.
                     T::load(value).map_err(|message| {
                         Error::new(
                             self.file,
@@ -193,6 +215,7 @@ impl Batch<'_> {
                 .collect(),
             #[cfg(feature = "parquet")]
             BatchData::Parquet(batch, first_row) => {
+                // DECODE ?: Arrow column reconstruction invokes arbitrary T::load_arrow before its consumer is known.
                 let values = T::load_arrow(batch.column(source).as_ref()).map_err(|error| {
                     Error::new(
                         self.file,

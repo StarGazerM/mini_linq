@@ -10,8 +10,7 @@
 //! by normalization therefore preserve the original join graph. The analysis
 //! expands each equality class in its incident edges while retaining actual
 //! variable spellings for scheduling. Rust guards and bindings add no edges;
-//! their opaque partial-function chain has denotation `bottom + Set X` and is
-//! checked by the valuation contract. Other effects are outside that meaning.
+//! their free variables determine placement and they are total by premise.
 //!
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -162,7 +161,7 @@ impl Analysis {
                 }
                 BodyItem::Block(block) => {
                     let facts = block.analyze(&prefix);
-                    if !facts.rust && !excluded.contains(&clause) {
+                    if !excluded.contains(&clause) {
                         clauses.insert(
                             clause,
                             facts
@@ -193,15 +192,22 @@ impl Analysis {
             .iter()
             .map(|name| (name.clone(), name.clone()))
             .collect();
-        for item in body {
-            if let BodyItem::Equality(super::Equality {
+        fn equalities(item: &BodyItem) -> Vec<super::Equality> {
+            match item {
+                BodyItem::Equality(equality) => vec![equality.clone()],
+                BodyItem::Constraint(constraint) => constraint.equalities(),
+                _ => Vec::new(),
+            }
+        }
+        for equality in body.iter().flat_map(equalities) {
+            if let super::Equality {
                 left,
                 right: super::EqualityValue::Variable(right),
                 ..
-            }) = item
+            } = equality
             {
-                let left = symbol_name(left);
-                let right = symbol_name(right);
+                let left = symbol_name(&left);
+                let right = symbol_name(&right);
                 let a = analysis.canonical_names.get(&left).unwrap_or(&left).clone();
                 let b = analysis
                     .canonical_names

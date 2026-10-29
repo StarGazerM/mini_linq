@@ -558,6 +558,7 @@ name = "cq-print"
 version = "0.1.0"
 dependencies = [
  "cq-lang-structures",
+ "cq-structure-selection",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

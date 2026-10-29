@@ -43,6 +43,7 @@ impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> RangeCursor<K> for SortedRun<K, V, 
 pub trait SequenceCodec<T> {
     type Code: Copy + Eq;
     fn encode(&self, value: &T) -> Option<Self::Code>;
+    // DECODE ?: SequenceCodec exposes a generic logical boundary without caller Rust-read or publication facts.
     fn decode(&self, code: Self::Code) -> T;
 }
 
@@ -54,6 +55,7 @@ impl<T: Copy + Eq> SequenceCodec<T> for Identity {
     fn encode(&self, value: &T) -> Option<T> {
         Some(*value)
     }
+    // DECODE ?: Identity implements the generic decode boundary as a no-op; caller purpose is not recorded.
     fn decode(&self, code: T) -> T {
         code
     }
@@ -85,6 +87,7 @@ impl<T: Ord + Clone> SequenceCodec<T> for Dense<T> {
     fn encode(&self, value: &T) -> Option<u32> {
         self.domain.binary_search(value).ok().map(|i| i as u32)
     }
+    // DECODE ?: Dense resolves a dictionary ordinal to T; mixed generic callers supply no boundary evidence.
     fn decode(&self, code: u32) -> T {
         self.domain[code as usize].clone()
     }
@@ -105,6 +108,7 @@ where
         let Some(code) = codec.encode(value) else {
             return Err("sample value outside the codec domain");
         };
+        // DECODE P: check_codec exposes the reconstructed value only to its round-trip diagnostic equality oracle.
         if codec.decode(code) != *value {
             return Err("decode(encode(v)) != v");
         }
@@ -170,9 +174,11 @@ mod tests {
     fn dense_codec_round_trips_and_is_monotone_and_rejects_outside_domain() {
         let codec = Dense::new(["ASIA", "EUROPE", "AFRICA", "ASIA"]);
         assert_eq!(codec.len(), 3);
+        // DECODE P: this diagnostic invokes check_codec to expose every dense sample for round-trip assertions.
         check_codec(&codec, &["AFRICA", "ASIA", "EUROPE"]).unwrap();
         assert_eq!(codec.encode(&"ASIA"), Some(1));
         assert_eq!(codec.encode(&"MARS"), None);
+        // DECODE P: this identity-codec diagnostic exposes sample values through check_codec's equality oracle.
         assert_eq!(check_codec(&Identity, &[5i64, -1, 7]), Ok(()));
     }
 }

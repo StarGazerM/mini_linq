@@ -68,8 +68,8 @@ the directory); the default and `computed_key` programs also write
 The shared driver checks local contracts and order, reduction (when used),
 elaboration, and index correspondence. The standalone argument-placement and
 constraint-planning drivers check their stated boundaries. None
-compares generated-query execution with its oracle. Runtime answers, partial-expression panic-domain cases, Rust
-trait guards and expansion fixtures are covered by the crate tests listed in
+compares generated-query execution with its oracle. Runtime answers,
+free-variable placement, Rust trait obligations and expansion fixtures belong to
 [validation.tex](validation.tex); realization has no source/target
 correspondence `check`.
 

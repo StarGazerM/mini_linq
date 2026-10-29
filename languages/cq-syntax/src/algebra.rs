@@ -122,32 +122,6 @@ fn parse_aggregate_expression(
     }
 }
 
-impl AggregateBinding {
-    /// The argument's type, derived from the declared fold result.
-    pub fn value_type(&self) -> syn::Result<&syn::Type> {
-        if matches!(self.kind, AggregateKind::Min | AggregateKind::Max) {
-            if let syn::Type::Path(path) = &self.ty {
-                if let Some(segment) = path.path.segments.last() {
-                    if segment.ident == "Option" {
-                        if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                            if args.args.len() == 1 {
-                                if let syn::GenericArgument::Type(ty) = &args.args[0] {
-                                    return Ok(ty);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            return Err(syn::Error::new_spanned(
-                &self.ty,
-                "min/max output must declare Option<T>",
-            ));
-        }
-        Ok(&self.ty)
-    }
-}
-
 impl Group {
     /// Check the complete input valuation schema and typed fold payloads.
     pub fn check(&self, input: &std::collections::BTreeMap<String, syn::Type>) -> syn::Result<()> {
@@ -162,9 +136,6 @@ impl Group {
                 ));
             }
         }
-        for (name, ty) in input {
-            check_leibniz_type(ty, &Ident::new(name, proc_macro2::Span::call_site()))?;
-        }
         if self.aggregates.is_empty() {
             return Err(syn::Error::new_spanned(self, "group requires an aggregate"));
         }
@@ -176,17 +147,15 @@ impl Group {
                     "aggregate outputs must be fresh and distinct",
                 ));
             }
-            check_leibniz_type(&aggregate.ty, &aggregate.name)?;
             if aggregate.kind == AggregateKind::Count {
-                if aggregate.expression.is_some() || aggregate.ty != syn::parse_quote!(usize) {
+                if aggregate.expression.is_some() {
                     return Err(syn::Error::new_spanned(
                         aggregate,
-                        "count() requires no argument and a usize output",
+                        "count() requires no argument",
                     ));
                 }
                 continue;
             }
-            let value_type = aggregate.value_type()?;
             let variable = aggregate
                 .expression
                 .as_ref()
@@ -197,21 +166,12 @@ impl Group {
                         "aggregate argument must be a normalized input variable",
                     )
                 })?;
-            let ty = input.get(&crate::symbol_name(variable)).ok_or_else(|| {
+            input.get(&crate::symbol_name(variable)).ok_or_else(|| {
                 syn::Error::new_spanned(
                     variable,
                     "aggregate argument is not in the input valuation",
                 )
             })?;
-            if !matches!(ty, syn::Type::Infer(_)) && ty != value_type {
-                return Err(syn::Error::new_spanned(
-                    aggregate,
-                    "aggregate argument and declared output types disagree",
-                ));
-            }
-            if matches!(aggregate.kind, AggregateKind::Min | AggregateKind::Max) {
-                check_ord_type(value_type, variable)?;
-            }
         }
         Ok(())
     }
@@ -392,7 +352,7 @@ fn parse_constants(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<Occ
 
 /// A conjunction of central relational constraints, including boolean
 /// disjunctions. Rust guards use [`Guard`]. Commas mean conjunction:
-/// `select r if (x >= @lower, x < @upper)`. Captures are explicit in IR.
+/// `select r if (x >= @(lower), x < @(upper))`. Captures are explicit in IR.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Theta {
     pub equalities: CommaList<crate::Equality>,
@@ -404,11 +364,7 @@ impl syn::parse::Parse for Theta {
         let mut theta = Self::default();
         while !input.is_empty() {
             let c: crate::Constraint = input.parse()?;
-            if let Some(e) = c.equality() {
-                theta.equalities.push(e);
-            } else {
-                theta.constraints.push(c);
-            }
+            theta.push_constraint(c);
             if input.is_empty() {
                 break;
             }
@@ -447,6 +403,25 @@ impl quote::ToTokens for Theta {
 }
 
 impl Theta {
+    /// Insert a relational predicate in conjunction normal form. A one-branch
+    /// `Or` denotes conjunction, not an alternative or a Rust expression.
+    pub fn push_constraint(&mut self, constraint: crate::Constraint) {
+        match constraint {
+            crate::Constraint::Or(mut branches) if branches.len() == 1 => {
+                for conjunct in branches.pop().unwrap() {
+                    self.push_constraint(conjunct);
+                }
+            }
+            constraint => {
+                if let Some(equality) = constraint.equality() {
+                    self.equalities.push(equality);
+                } else {
+                    self.constraints.push(constraint);
+                }
+            }
+        }
+    }
+
     /// Exact literal assignments written in conjuncts. No data keys or input
     /// constraints are inferred. Disjunctions and captured constants prove none.
     pub fn literal_bindings(&self) -> std::collections::BTreeMap<String, String> {
@@ -716,8 +691,7 @@ pub struct Select {
     pub condition: Theta,
 }
 
-/// Scalar computation: total when CQ-Arith recognizes its declared types;
-/// otherwise an opaque function from free variables to a value or query abort.
+/// Opaque, pure, total scalar computation placed by its free variables.
 /// I/O, mutation and evaluation counts are outside this meaning.
 /// With `for`, unnest a finite pure iterator instead of binding one scalar.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -845,58 +819,6 @@ pub struct Project {
     pub attributes: CommaList<Ident>,
 }
 
-/// Diagnose syntactically known failures of Leibniz admissibility. Generated
-/// Rust checks necessary `Eq + Hash`/`Ord` bounds for aliases and user types;
-/// their semantic admissibility remains a caller premise.
-pub fn check_leibniz_type(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
-    fn contains_float(ty: &syn::Type) -> bool {
-        match ty {
-            syn::Type::Path(path) => {
-                let segments = &path.path.segments;
-                path.qself.is_none()
-                    && ((segments.len() == 1
-                        && matches!(segments[0].ident.to_string().as_str(), "f32" | "f64"))
-                        || (segments.len() == 3
-                            && (segments[0].ident == "core" || segments[0].ident == "std")
-                            && segments[1].ident == "primitive"
-                            && matches!(segments[2].ident.to_string().as_str(), "f32" | "f64")))
-            }
-            syn::Type::Reference(ty) => contains_float(&ty.elem),
-            syn::Type::Tuple(ty) => ty.elems.iter().any(contains_float),
-            syn::Type::Array(ty) => contains_float(&ty.elem),
-            syn::Type::Slice(ty) => contains_float(&ty.elem),
-            syn::Type::Paren(ty) => contains_float(&ty.elem),
-            syn::Type::Group(ty) => contains_float(&ty.elem),
-            _ => false,
-        }
-    }
-    if contains_float(ty) {
-        Err(syn::Error::new_spanned(
-            ty,
-            format!(
-                "column `{column}` requires Eq + Hash or Ord for relational storage and must satisfy this premise. Leibniz admissibility of a column type: a type may be compared, joined, grouped, keyed or deduplicated by the relational centre only if its `==` decides Leibniz equality (Rust code cannot distinguish `==`-equal values). Holds for integers, bool, char, String/&str, the cq-load Date/Decimal, tuples and derived-Eq structs of admissible types; fails for f64/f32 (0.0 == -0.0) and hand-written lenient Eq."
-            ),
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-/// Necessary syntactic checks; rustc checks Ord for aliases and user types.
-/// Formal rule ORD-Admissible: Order is total and consistent with Leibniz identity.
-pub fn check_ord_type(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
-    check_leibniz_type(ty, column)?;
-    if matches!(ty, syn::Type::BareFn(_) | syn::Type::TraitObject(_)) {
-        return Err(syn::Error::new_spanned(
-            ty,
-            format!(
-                "column `{column}` requires Ord: a total order consistent with Leibniz equality"
-            ),
-        ));
-    }
-    Ok(())
-}
-
 /// Borrowed operator facts used by the literal-disjointness fold.
 pub enum LiteralStep<'a> {
     Empty,
@@ -930,17 +852,7 @@ pub fn disjoint_unions<'a>(
                 values.extend(select.condition.literal_bindings());
                 values
             }
-            LiteralStep::Bind(bind) => {
-                let mut values = of(&bind.input);
-                if let syn::Pat::Ident(pattern) = &bind.pattern
-                    && bind.for_token.is_none()
-                {
-                    if let Some(value) = literal_value(&bind.expression) {
-                        values.insert(crate::symbol_name(&pattern.ident), value);
-                    }
-                }
-                values
-            }
+            LiteralStep::Bind(bind) => of(&bind.input),
             LiteralStep::Project(project) => {
                 let mut values = of(&project.input);
                 values.retain(|name, _| {

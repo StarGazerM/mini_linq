@@ -65,6 +65,9 @@ mod kw {
     syn::custom_keyword!(reserve);
     syn::custom_keyword!(reserve_previous);
     syn::custom_keyword!(bounded);
+    syn::custom_keyword!(representation);
+    syn::custom_keyword!(identity);
+    syn::custom_keyword!(encoded);
 }
 
 /// A complete Structures program and its sequence refinement.
@@ -74,6 +77,65 @@ pub struct Program {
     pub sequence: Sequence,
     pub graded: Option<Graded>,
     pub evidence: Evidence,
+    pub representation: Representation,
+}
+
+// DESIGN contract7-representation
+// Owns recorded `representation { identity, encoded }` facts; absent columns remain unknown.
+// Contract 7, STR-Repr/BE-RustRepresentation; source: doc/PLANNING-REDESIGN.md Architecture.
+// Source: doc/STORAGE.md §§1,4,9; doc/formal/CONFORMANCE.md BE-RustRepresentation.
+// DO NOT infer identity, codecs, widths or preserved operations from Rust type spelling.
+// Device Rust needs identity for every read column plus closed captures; encoded comparisons use `where`.
+// Width/preserved-op and grouped-offset facts remain storage work in Plan P4-P6, not printer guesses.
+/// Target-recorded device column representations; missing columns are unknown.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Representation {
+    pub identity: BTreeSet<String>,
+    pub encoded: BTreeSet<String>,
+}
+
+impl Parse for Representation {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<kw::representation>()?;
+        let body;
+        braced!(body in input);
+        let mut result = Self::default();
+        while !body.is_empty() {
+            let columns = if body.peek(kw::identity) {
+                body.parse::<kw::identity>()?;
+                &mut result.identity
+            } else {
+                body.parse::<kw::encoded>()?;
+                &mut result.encoded
+            };
+            let names;
+            bracketed!(names in body);
+            for name in Punctuated::<Ident, Token![,]>::parse_terminated(&names)? {
+                columns.insert(cq_syntax::symbol_name(&name));
+            }
+            body.parse::<Token![;]>()?;
+        }
+        Ok(result)
+    }
+}
+
+impl ToTokens for Representation {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        if self.identity.is_empty() && self.encoded.is_empty() {
+            return;
+        }
+        let identity = self
+            .identity
+            .iter()
+            .map(|name| Ident::new(name, Span::call_site()));
+        let encoded = self
+            .encoded
+            .iter()
+            .map(|name| Ident::new(name, Span::call_site()));
+        tokens.extend(quote! { representation {
+            identity [#(#identity),*]; encoded [#(#encoded),*];
+        } });
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,6 +251,8 @@ pub struct Machine {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LevelNode {
     pub name: Ident,
+    /// Whether this level executes host-compiled Rust rather than device Rust.
+    pub host_rust: bool,
     pub collaborative: bool,
     pub dynamic: bool,
     /// Fixed distributing width, or `None` for dynamically sized levels.
@@ -405,6 +469,22 @@ pub struct Analysis {
     pub obligations: Vec<Obligation>,
     /// Planning estimates and explicit author-asserted key premises.
     pub evidence: Evidence,
+    pub representation: Representation,
+}
+
+impl Analysis {
+    /// Rust row expressions require identity representations for every read column.
+    /// Closed captures are evaluated by the host and do not read encoded rows.
+    /// An unannotated computed binding has no authored device result layout.
+    pub fn rust_requires_host(&self, operator: &cq_lang_structures::physical::Operator) -> bool {
+        matches!(operator, cq_lang_structures::physical::Operator::Bind(bind)
+            if bind.annotation.is_none())
+            || self
+                .structures
+                .physical
+                .rust_reads(operator)
+                .is_some_and(|reads| !reads.is_subset(&self.representation.identity))
+    }
 }
 
 impl Parse for Program {
@@ -422,6 +502,11 @@ impl Parse for Program {
             } else {
                 Evidence::default()
             },
+            representation: if input.peek(kw::representation) {
+                input.parse()?
+            } else {
+                Representation::default()
+            },
         })
     }
 }
@@ -433,9 +518,10 @@ impl ToTokens for Program {
             sequence,
             graded,
             evidence,
+            representation,
         } = self;
         let evidence = (!evidence.facts.is_empty()).then_some(evidence);
-        tokens.extend(quote! { #structures #sequence #graded #evidence });
+        tokens.extend(quote! { #structures #sequence #graded #evidence #representation });
     }
 }
 

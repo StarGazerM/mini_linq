@@ -126,15 +126,17 @@ fn canon_avoids_projection_that_preserves_an_inferred_key() {
 }
 
 #[test]
-fn canon_does_not_require_equality_on_unobserved_float_columns() {
+fn canon_records_the_choice_without_classifying_column_types() {
     let source: ir::Program = syn::parse_quote!(physical {
         relation R(a:i32,b:f64,c:i32);
         r = pipe rename R@0 {a -> x,b -> y,c -> z};
         p = pipe project r keep {x,y};
         q = pipe canon project p keep {x}; return q as answer(x);
     });
-    assert_eq!(canon_prefixes(&source, quote!(all)).unwrap(), source);
-    assert!(canon_prefixes(&source, quote!(p)).is_err());
+    let mut expected = source.clone();
+    expected.program.definitions[1].canon = Some(Default::default());
+    assert_eq!(canon_prefixes(&source, quote!(all)).unwrap(), expected);
+    assert_eq!(canon_prefixes(&source, quote!(p)).unwrap(), expected);
 }
 
 #[test]

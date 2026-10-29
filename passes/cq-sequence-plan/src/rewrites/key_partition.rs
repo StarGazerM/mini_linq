@@ -9,7 +9,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitInt, Token, bracketed};
 
 /// Replayable routing advice. Empty keys select contiguous partial folds of a
-/// globally unique Group: total spines stream; opaque spines publish host parts.
+/// globally unique Group; Rust and relational spines both stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyPartition {
     pub name: Ident,
@@ -257,22 +257,17 @@ fn streaming_partial_group(
     source: &Program,
     counts: &std::collections::BTreeMap<String, usize>,
     parts: usize,
-    host_input: Option<&Ident>,
     updates: &mut Vec<(usize, Term)>,
 ) -> syn::Result<Term> {
     match term {
         Term::Group(group, input) => Ok(Term::Group(
             group.clone(),
-            Box::new(if let Some(name) = host_input {
-                Term::Ref(name.clone())
-            } else {
-                tile_group_spine(input, source, counts, parts, updates)?
-            }),
+            Box::new(tile_group_spine(input, source, counts, parts, updates)?),
         )),
         Term::Store { capacity, inner } => Ok(Term::Store {
             capacity: *capacity,
             inner: Box::new(streaming_partial_group(
-                inner, source, counts, parts, host_input, updates,
+                inner, source, counts, parts, updates,
             )?),
         }),
         _ => Err(syn::Error::new_spanned(
@@ -497,68 +492,18 @@ pub fn key_partition_in(
                 _ => None,
             }
         }
-        let (group_name, group_input) = group(&source.sequence.definitions[index].term)
-            .ok_or_else(|| {
-                syn::Error::new_spanned(
-                    &advice.name,
-                    "BE-GroupPartial: empty routing keys require a globally unique Group",
-                )
-            })?;
-        let physical = &source.structures.physical.program.definitions;
-        let group_definition = physical
-            .iter()
-            .find(|d| d.name == *group_name)
-            .expect("checked group");
-        let cq_lang_sequence::structures::physical::Operator::Group(group) =
-            &group_definition.operator
-        else {
-            unreachable!("checked group")
-        };
-        // Match BE-Partial's materialized boundaries. Existing stored providers
-        // and row results have already evaluated their opaque dependencies.
-        let stored: std::collections::BTreeSet<_> = source
-            .sequence
-            .definitions
-            .iter()
-            .take(index)
-            .filter(|d| matches!(d.term, Term::Store { .. }))
-            .filter_map(|d| analysis.results.get(&symbol_name(&d.name)))
-            .collect();
-        let mut pending = vec![symbol_name(&group.input)];
-        let mut seen = std::collections::BTreeSet::new();
-        let mut host_owned = false;
-        while let Some(name) = pending.pop() {
-            if stored.contains(&name) || !seen.insert(name.clone()) {
-                continue;
-            }
-            let Some(definition) = physical.iter().find(|d| symbol_name(&d.name) == name) else {
-                continue;
-            };
-            if analysis.structures.physical.opaque(&definition.operator) {
-                host_owned = true;
-                break;
-            }
-            pending.extend(definition.operator.operands().into_iter().map(symbol_name));
-        }
-        if host_owned
-            && source
-                .sequence
-                .definitions
-                .iter()
-                .any(|d| d.name == advice.input)
-        {
-            return Err(syn::Error::new_spanned(
-                &advice.input,
-                "key partition publication name already exists",
-            ));
-        }
+        group(&source.sequence.definitions[index].term).ok_or_else(|| {
+            syn::Error::new_spanned(
+                &advice.name,
+                "BE-GroupPartial: empty routing keys require a globally unique Group",
+            )
+        })?;
         let mut updates = Vec::new();
         let output = streaming_partial_group(
             &source.sequence.definitions[index].term,
             source,
             &counts,
             advice.parts,
-            host_owned.then_some(&advice.input),
             &mut updates,
         )?;
         let mut target = source.clone();
@@ -573,22 +518,6 @@ pub fn key_partition_in(
                 inner: Box::new(output),
             }
         };
-        if host_owned {
-            target.sequence.definitions.insert(
-                index,
-                Definition {
-                    name: advice.input.clone(),
-                    term: Term::Store {
-                        capacity: None,
-                        inner: Box::new(Term::Tile {
-                            n: advice.parts,
-                            items: None,
-                            inner: Box::new(group_input.clone()),
-                        }),
-                    },
-                },
-            );
-        }
         return super::checked_in(checker, source, target);
     }
     fn split(
@@ -738,6 +667,19 @@ pub fn key_partition_in(
     {
         let analysis = checker.check_shared(source)?;
         let result = analysis.results.get(&symbol_name(&advice.name));
+        if result.is_some_and(|result| {
+            analysis
+                .structures
+                .physical
+                .fused
+                .values()
+                .any(|group| group.members.contains(result))
+        }) {
+            return Err(syn::Error::new_spanned(
+                &advice.name,
+                "BE-KeyPartProvider: a fused arm's provider is constructed inside its prefix, not by this Store",
+            ));
+        }
         let keys: Vec<_> = advice.keys.iter().map(symbol_name).collect();
         let reads: Vec<_> = analysis
             .obligations

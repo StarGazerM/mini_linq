@@ -61,6 +61,7 @@ fn grouped_adapter_emits_one_typed_hash_fold_over_complete_valuations() {
     let printed = rows.to_string();
     assert_eq!(printed.matches("for ").count(), 1, "{printed}");
     assert!(printed.contains("HashMap"), "{printed}");
+    assert!(printed.contains("cq_storage :: HashState"), "{printed}");
     assert!(
         printed.contains("usize , i32 , Option < i32 > , Option < i32 >"),
         "{printed}"
@@ -80,6 +81,17 @@ fn grouped_adapter_emits_one_typed_hash_fold_over_complete_valuations() {
     assert!(printed.contains("BTreeMap"), "{printed}");
     assert!(!printed.contains("HashMap"), "{printed}");
     assert!(printed.contains("Default :: default"), "{printed}");
+    let standard = cq_structure_selection::retype(
+        &selected,
+        quote!(group => ::std::collections::HashMap<_, (usize,i32,Option<i32>,Option<i32>)>),
+    )
+    .unwrap();
+    let printed = source_tokens(&standard).unwrap().to_string();
+    assert!(
+        printed.contains("std :: collections :: HashMap"),
+        "{printed}"
+    );
+    assert!(!printed.contains("cq_storage :: HashState"), "{printed}");
 }
 
 #[test]

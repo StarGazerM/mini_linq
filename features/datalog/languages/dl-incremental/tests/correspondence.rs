@@ -117,10 +117,6 @@ fn malformed_variants_fail_standalone_cq_validation_before_erasure() {
             "not declared",
         ),
         (
-            quote!(Reach(*x,*z) :- if *x > 0, ReachChanges(x,y), Reach(y,z);),
-            "before",
-        ),
-        (
             quote!(Reach(*x,*z) :- ReachChanges(x,y), !Blocked(z,_), Reach(y,z);),
             "before",
         ),
@@ -136,6 +132,20 @@ fn malformed_variants_fail_standalone_cq_validation_before_erasure() {
         assert!(
             !error.contains("erasure"),
             "standalone check must run first: {error}"
+        );
+    }
+    for query in [
+        quote!(Reach(*x,*z) :- where x > 0, ReachChanges(x,y), Reach(y,z);),
+        quote!(Reach(*x,*z) :- if *x > 0, ReachChanges(x,y), Reach(y,z);),
+        quote!(Reach(*x,*z) :- let copied = *x, ReachChanges(x,y), Reach(y,z);),
+        quote!(Reach(*x,*z) :- for copied in [*x], ReachChanges(x,y), Reach(y,z);),
+    ] {
+        let mut program = scheduled();
+        program.variants[1].query = syn::parse2(query).unwrap();
+        let error = contract::check(&program).unwrap_err().to_string();
+        assert!(
+            !error.contains("erasure"),
+            "unbound clause inputs must fail standalone validation first: {error}"
         );
     }
 }

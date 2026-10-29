@@ -90,7 +90,7 @@ replaces their recorded type. Retyping \code{group} selects these entries.
  {\mathsf{accumulator}(r)=T}
 
 \Rule{SEL-Group}{r=\mathsf{group}_{G;A}(s)\quad G\ne\varnothing}
- {\mathsf{select}(r)\text{ records }\code{group = std::collections::HashMap<\_, AccTuple>}}
+ {\mathsf{select}(r)\text{ records }\code{group = std::collections::HashMap<\_, AccTuple, cq_storage::HashState>}}
 
 \Rule{P-GroupState}{\mathsf{accumulator}(r)=T\quad
  T:\mathsf{FiniteMap}(G,\mathsf{AccTuple})}
@@ -115,6 +115,15 @@ replaces their recorded type. Retyping \code{group} selects these entries.
  \mathsf{readKeys}(r)=\{K\}\quad \mathsf{reads}(r)\subseteq\{probe\ first,semi,anti\}}
  {\mathsf{membershipBuild}(r,K)\text{ replaces witness enumeration by existence}}
 
+\Rule{STR-FullKey}{K=\mathsf{heading}(r)\quad \mathsf{set}(r)\\
+ \mathsf{readKeys}(r)=\{K\}\quad \mathsf{read}(l,r)=\mathsf{probe}(K)\quad \mathsf{orderedReads}(r)=\varnothing}
+ {\mathsf{membershipBuild}(r,K)\text{ answers the positive probe by existence}}
+
+Every right-hand column is already fixed by the supplied key.  Equal
+witnesses therefore add no new valuation during a positive probe; the
+recorded membership decision returns zero or one copy of the left row.
+This rule does not depend on Rust type spelling or on a preceding selection.
+
 \Rule{STR-Range}{\text{constant window on }r,c}
  {\mathsf{answers}(r,\{c\},range)\text{ by direct range or scan/filter; no build}}
 
@@ -136,9 +145,43 @@ An explicit \code{membership} modifier on a single-level filtered build proves
 that every downstream observation is a supplied key or reconstructed constant.
 The checker rederives projection coverage and rejects partial-key or ordered
 reads. The printer emits one unit witness on successful membership, without an
-occurrence-preserving payload index. The default integral-key representation is
-\code{AdaptiveKeySet} with its recorded borrowed codec and bitmap bound.
+occurrence-preserving payload index. Default selection applies this representation
+only when exactly one key column remains after removing reconstructed constants:
+\code{AdaptiveMembership<K,16777216>}, independent of the spelling of $K$.
+Composite stored keys retain their existing payload or hash-set provider.
+The membership contract itself remains valid for explicitly recorded composite keys.
 No base-table key or foreign-key assumption is used.
+
+\paragraph{Adaptive membership representation law.}
+\code{AdaptiveMembership<K,B>} denotes exactly the supplied set of keys.
+Its \code{DenseOrdinal} capability supplies a total injective ordinal:
+$\mathsf{ord}(x)=\mathsf{ord}(y)\iff x=y$. Ordinary Rust trait resolution
+at \code{cq_storage::build!} selects a statically specialized dense-capable
+result when this capability is available; neither selection nor printing
+inspects Rust types. The associated result carries the ordinal capability in
+its Rust type, so each membership probe has no indirect codec call.
+The capability also records an associated unsigned word type: ordinary
+integer and string-code ordinals use \code{u64}; wide custom ordinals may use
+\code{u128}. Bounds and offsets use that word without a universal widening.
+A checked conversion of the complete span to \code{usize}, followed by the
+budget check, precedes bitmap allocation and every bounded offset conversion.
+The provider uses a bitmap only when its observed ordinal span fits the
+recorded bound $B$. Otherwise, and for arbitrary equality/hash keys without
+the capability, it uses exact hash membership. Contains-only fallback does
+not construct a sorted interval index or require \code{Ord}.
+The compiler records the provider and budget, not a guessed codec;
+integer aliases and user implementations obey the same capability law.
+\[
+\Rule{STR-AdaptiveMembership}{
+ \mathsf{DenseOrdinal}(K)\quad
+ \forall x,y:K.\ \mathsf{ord}(x)=\mathsf{ord}(y)\iff x=y\\
+ \mathsf{span}(\mathsf{ord}(I))\le B
+}{
+ \alpha(\mathsf{bitmap}_{K,B}(I))=\mathsf{set}(I)
+}
+\]
+The hash alternative has the same abstraction for every \code{Eq + Hash} key.
+Existing explicit providers retain their ordinary \code{Build} implementation.
 
 \paragraph{Sorted runs.}
 \code{SortedRun} stably clusters payload occurrences by key. Its directory
@@ -190,8 +233,10 @@ Positions identify base occurrences without becoming logical columns. A selectio
 is not Canonical or OrderedRead. Nothing is substituted at print time.
 
 \paragraph{Default hash representations.} Selection records
-\code{::cq_storage::HashSet<_>} for built membership, canonicalization and
-head deduplication. This alias names
+\code{::cq_storage::HashSet<_>} for general built membership, candidate-key
+enumeration, canonicalization and head deduplication; membership-only projections
+use the adaptive provider above.
+This alias names
 \code{std::collections::HashSet<K, cq_storage::HashState>};
 \code{HashState} uses keyed aHash. Payload reads record
 \code{::cq_storage::HashIndex<'_,_,_>}; its definition uses the same fast
@@ -199,7 +244,8 @@ hash state. A deferred host membership fallback records
 \code{::cq_storage::dispatch::KeySet<_>} (or the lazy \code{false} form),
 whose key set uses that state. Trie levels and the staging and hash forms of
 \code{AdaptiveKeySet} likewise fix their hash representation in the named
-runtime type. The printer emits recorded type tokens directly; retyping to
+runtime type. The printer passes recorded provider tokens to capability
+construction without choosing the resulting Rust implementation; retyping to
 \code{std::collections::HashSet<_>} retains the standard hasher.
 Dedup construction imports \code{HashSetConstructor} for hash sets with an
 explicit state, preserving the existing \code{new()} protocol and inherent
@@ -230,7 +276,7 @@ stage entries mean scalar demand. Already-reduced/joined streams, opaque guards
 and branches retain scalar demand by default; computed rows and curried access
 retain their existing lookup protocol. The printer consumes the recorded
 decision. No runtime statistics or adaptive choice is used, and bounded
-lookahead cannot force an unvisited partial Rust expression.
+lookahead preserves the recorded operator plan and free-variable bindings.
 Candidate counts remain exact occurrence counts (upper bounds for distinct
 candidate enumeration), without enumerating a bucket. Retained-capacity
 counters account for the directory, arena and live tail buffers separately.
@@ -254,6 +300,11 @@ semijoin of \code{b} on a key $K\ni k$ served by a single-level exact key index,
 that the build is total, and that the scan reaches \code{j} through an
 exclusive pipe spine whose every result carries $k$: renames, projections,
 declarative selections and left operands of eager probes and semijoins.
+The recorded single-level key layout, not the provider's Rust type name,
+establishes eligibility. The printer requires \code{Keys}: \code{distinct_keys}
+enumerates exactly the stored distinct key tuples and \code{key_count} gives
+their count. Custom and routed providers discharge this law through the same
+trait obligation as built-in providers.
 Rows of the scan with $k\notin\pi_k(b)$ produce, along that spine, only rows
 with the same $k$, which \code{j} drops; so the filter keeps a superset of the
 rows \code{j} can keep ($R\ltimes b\subseteq\sigma_F(R)\subseteq R$). A key bound
@@ -289,9 +340,7 @@ conditions and relational readers can reduce the surviving count further.
 \begin{mathpar}
 \Rule{STR-JoinFilter}{
  j\in\{\mathsf{probe}[K](l,b),\mathsf{semi}[K](l,b)\}\ \text{eager}\quad
- k\in K\quad k:\code{i64}\quad
- \mathsf{exactKeyIndex}(b,K)\in\{\code{HashIndex},\code{SortedRun},\code{sharded::Index},
- \code{Sharded<SortedRun>},\code{Sharded<sharded::Index>}\}\\
+ k\in K\quad \mathsf{exactKeyIndex}(b,K)=P\quad P:\code{Keys}\\
  \mathsf{exclusiveSpine}_k(s,l)\quad
  \mathsf{totalBuild}(b)\quad
  \mathsf{marker}(s,k)=C\\

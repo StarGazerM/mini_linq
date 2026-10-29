@@ -427,15 +427,15 @@ pub(crate) fn check_storage_with_analysis(
                     None
                 } else {
                     let variable = variables[*column].expect("checked filter variable");
-                    Some(quote!(if *#variable == (#expression)))
+                    Some(quote!(where #variable == (#expression)))
                 }
             });
             let repeated = key.equalities.iter().map(|&(first, repeated)| {
                 let first = variables[first].expect("checked key variable");
                 let repeated = variables[repeated].expect("checked repeated variable");
-                quote!(if #first == #repeated)
+                quote!(where #first == #repeated)
             });
-            // Parse complete CQ to preserve recognition of authored predicates.
+            // Parse complete CQ to resolve the relational predicate's terms.
             let expected: CqProgram = syn::parse2(quote! {
                 struct #name;
                 #(#expected_declarations)*

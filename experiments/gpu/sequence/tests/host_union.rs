@@ -40,6 +40,7 @@ fn host_union_concatenates_published_dispatches_before_optional_canon() {
                 result at host;
             }
         }).unwrap();
+        let program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
         let analysis = check_grading(&program, &cq_gpu_sequence::machine()).unwrap();
         assert_eq!(analysis.dispatches.len(), 2);
         let generated = cq_gpu_sequence::translate(&program, &analysis).unwrap()

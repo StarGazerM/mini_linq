@@ -171,7 +171,7 @@ fn absorbed_and_bound_variables_keep_the_tree_and_the_facts_honest() {
         struct Q;
         relation R(a: i32, b: i32, c: i32);
         relation S(b: i32, c: i32, e: i32);
-        answer(a, d) :- R(a, b, c), S(b, c, e), if a > 0, let d: i32 = a + c;
+        answer(a, d) :- R(a, b, c), S(b, c, e), where a > 0, let d: i32 = a + c;
     });
     assert_eq!(analysis.variables, names(&["a", "b", "c", "e"]));
     assert!(analysis.acyclic);

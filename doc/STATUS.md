@@ -2,6 +2,13 @@
 
 ## Where we are
 
+- Contract 7: `if`/`let`/`for` embed unchanged opaque Rust, pure and total by
+  premise, placed by free variables only. Explicit `where` owns relational
+  comparisons, membership, ranges and boolean predicates; closed Rust operands
+  are evaluated once at host. Types are opaque host syntax, and GPU Rust
+  eligibility uses recorded identity representations plus closed captures.
+  Formal rules, inventory and conformance records describe this cutover;
+  updated conformance rows are explicitly unverified pending integration.
 - Semantics, IRs, checks and the pass protocol are complete. Every decision is
   recorded in IR text, and all features build outside the repository.
 - Default pipeline (`mini_linq::passes::plan`): left-deep in written order
@@ -39,9 +46,9 @@
 - Back end (`doc/formal/backend.tex`): three recorded layers over one
   Physical program. R, representation: `r repr = tuples | positions {..}
   owned [..]` (data refinement, α fetches columns by lineage). E, evaluation
-  unit: `r stage = batch N` (a ⊥-free segment from a `for` producer runs at
-  most N rows ahead; opaque Rust ends a stage; probe/merge cursors start
-  one). C, control: pull (unfold) or push (fold) of the same stream algebra,
+  unit: `r stage = batch N` (a representable indexable segment runs at most
+  N rows ahead; unsupported batch operators end a stage, not a Rust-totality
+  category). C, control: pull (unfold) or push (fold) of the same stream algebra,
   an emitter choice. Default passes `represent` and `stage` record today's
   decisions only (the probe lookahead is now `stage = batch 128` in text);
   `represent(positions)` and `stage(batch(N))` opt in. Printers bind only
@@ -133,16 +140,16 @@ derived kernels do not establish global non-regression or full Yannakakis covera
 The external planner records existing VO subatoms: a no-new-name lookup on
 the currently bound join key, followed by one coarse full correlated row.
 Ready lookups follow the GYO ear order (then the Masks cyclic-core tree);
-the outer stream and Rust chain remain Written/Coarse. Expansions wait for
-column demand, a written Rust Before boundary, or scope exit. Opaque Rust
-retains its whole lexical environment through `FreeVariables::dependencies`.
+the outer stream remains explicit. Expansions wait for column demand or scope
+exit. Rust placement requires free variables, and lexical opacity retains the
+whole environment through `FreeVariables::dependencies`.
 Blocks recurse without changing their interface or fallback ancestry.
 
 Coarse expansion is deliberate: CK-Le checks exactly one full expansion per
 non-stream occurrence, rather than claiming Fine's one-variable obligation.
 It independently checks the non-introducing lookup before that expansion and
-written column ownership; WF-VO checks first uses, complete rows and Rust
-boundaries, Masks checks reductions, and the final CQ→RA′ check remains active.
+written column ownership; WF-VO checks first uses, complete rows and free-variable
+bindings, Masks checks reductions, and the CQ-to-RA correspondence remains active.
 No RA′, VO, Physical grammar, runtime feature, or core compiler dependency is
 added. `physical = [cq_rewrites::smallest_intersections]` remains the public
 intersection hook; this coarse planner does not manufacture Fine ranges or
@@ -447,8 +454,8 @@ approval.
   workspace pins pushed forks (cuda-oxide and RCCL `mini-linq/main`), Rust
   1.99.1, CUDA 13.0.
 - Open: reach chain at 15 threads below sequential; nested CQ code in one
-  codegen unit; rule-local aggregates; FlowLog comparison; partial-Rust
-  multi-round refinement; surface sugar (disjunction, facts, rule macros).
+  codegen unit; rule-local aggregates; FlowLog comparison; surface sugar
+  (disjunction, facts, rule macros). Pure-total Rust remains a semantic premise.
 - On hold: lattices and custom providers; DOOP probe efficiency.
 - Not context facts (see context.tex): declared keys (need a provenance
   model), first-witness consumption, guard totality, terminal canonical

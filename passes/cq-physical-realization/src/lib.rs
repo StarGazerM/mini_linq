@@ -1,9 +1,7 @@
 //! Physical row and storage adapters for checked Sequence and explicit push emitters.
 //!
-//! Queries denote `bottom + Set`: one panic aborts evaluation. Opaque Rust
-//! binds and guards keep their written chain; relational steps may move only
-//! earlier across them. Their free variables determine their partial-function
-//! meaning; I/O, mutation and evaluation counts are outside that meaning.
+//! Rust expressions are opaque and total by premise. Their free variables
+//! determine placement; each expression is emitted unchanged.
 //! Relational `==` decides Leibniz identity. `Eq` and the selected storage's
 //! `Hash` or `Ord` bounds are necessary checks, not a proof of admissibility.
 //!
@@ -39,14 +37,11 @@
 //! Global groups use a single accumulator without a table, so empty input
 //! still publishes the identities.
 //!
-//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
-//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
-//! heading and I the common new interface; other binders remain branch-local.
+//! Core blocks denote sets: `{ B1 } | { B2 }` unions projected answers;
+//! `{ B1 } else { B2 }` selects the first nonempty arm. F is the free heading
+//! and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Only explicit relational predicates introduce comparisons and constraints.
 //!
 use cq_lang_structures as structures;
 use cq_lang_structures::physical;
@@ -290,7 +285,9 @@ impl<'a> RowEmitter<'a> {
         let definition = self.printer.physical[name];
         if physical::ModeKind::from(&definition.mode) != physical::ModeKind::Pipe
             || !self.printer.carried_witnesses[name].is_empty()
-            || (self.printer.analysis.stages.contains_key(name) && !self.printer.probe_stage(name))
+            || (self.printer.analysis.stages.contains_key(name)
+                && !self.printer.probe_stage(name)
+                && !self.printer.analysis.reads.contains_key(name))
         {
             return Ok(None);
         }
@@ -373,6 +370,18 @@ impl Printer<'_> {
         let consumer = self.consumer.replace(name.clone());
         let repr = match physical::ModeKind::from(&definition.mode) {
             physical::ModeKind::Pipe
+                if self.analysis.reads.contains_key(&name)
+                    && self.carried_witnesses[&name].is_empty() =>
+            {
+                let ids = if let Some(ids) = self.staged_ids(&name) {
+                    ids
+                } else {
+                    let ids = self.read_ids(&name)?;
+                    self.buffer_stage(&name, ids)
+                };
+                Repr::Positions(Some(self.profile_stream(&name, ids)))
+            }
+            physical::ModeKind::Pipe
                 if (!self.carried_witnesses[&name].is_empty()
                     || (self.analysis.stages.contains_key(&name) && !self.probe_stage(&name)))
                     && !matches!(definition.operator, Operator::Rename(_)) =>
@@ -411,10 +420,6 @@ impl Printer<'_> {
                     _ => unreachable!(),
                 };
                 let ids = self.profile_input(&name, ids);
-                Repr::Positions(Some(self.profile_stream(&name, ids)))
-            }
-            physical::ModeKind::Pipe if self.analysis.reads.contains_key(&name) => {
-                let ids = self.read_ids(&name)?;
                 Repr::Positions(Some(self.profile_stream(&name, ids)))
             }
             physical::ModeKind::Pipe => {

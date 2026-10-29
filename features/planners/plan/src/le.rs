@@ -2,6 +2,8 @@
 //! Expansions are coarse: exactly one full correlated row after each lookup.
 //! CK-Le checks this authored schedule before checked RA simplification may
 //! erase an expansion's unobservable columns under canonical answer semantics.
+//! Rust steps retain their source payloads and depend only on their free
+//! variables; neither source order nor earlier unrelated expansions constrain them.
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{cq, vo};
@@ -122,7 +124,7 @@ pub(super) fn check(normal: &cq::Program, target: &vo::Program) -> syn::Result<(
                 ));
             }
         }
-        // WF-VO independently establishes all first-use and Rust Before obligations,
+        // WF-VO independently establishes all first-use and Rust dependency obligations,
         // full correlated rows, block interfaces, and fallback ancestry.
         Ok(())
     }
@@ -207,7 +209,7 @@ impl Scope {
     }
 }
 
-// Formal rule Plan-Le: Emit ready ear lookups and postpone coarse expansions to demand or Before boundaries.
+// Formal rule Plan-Le: Emit ready ear lookups and postpone coarse expansions to demand.
 pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
     let analysis = vo::contract::check(source)?;
     fn scope(
@@ -275,7 +277,7 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
                 state.ears.push(clause);
             }
         }
-        let mut rust_clause = 0;
+        let mut placed_rust = BTreeSet::new();
         for (index, step) in steps.iter().enumerate() {
             let mut step = step.clone();
             match &mut step {
@@ -303,21 +305,20 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
                     let (clause, rust) = body
                         .iter()
                         .enumerate()
-                        .skip(rust_clause)
-                        .find_map(|(c, item)| item.rust_step().map(|r| (c, r)))
-                        .expect("checked Rust chain");
-                    rust_clause = clause + 1;
+                        .find_map(|(clause, item)| {
+                            let identical = match (&step, item) {
+                                (vo::Step::Guard(a, _), cq::BodyItem::Filter(b)) => a == b,
+                                (vo::Step::Let(a, _), cq::BodyItem::Let(b)) => a == b,
+                                (vo::Step::For(a, _), cq::BodyItem::For(b)) => a == b,
+                                _ => false,
+                            };
+                            (identical && !placed_rust.contains(&clause))
+                                .then(|| (clause, item.rust_step().expect("Rust step")))
+                        })
+                        .expect("checked Rust expression");
+                    placed_rust.insert(clause);
                     let environment = analysis.bound_before[index].iter().cloned().collect();
                     state.demand(&rust.free_variables.dependencies(&environment));
-                    let before: Vec<_> = state
-                        .atoms
-                        .keys()
-                        .copied()
-                        .filter(|c| *c < clause)
-                        .collect();
-                    for clause in before {
-                        state.expand(clause);
-                    }
                     state.bound.extend(rust.bindings.iter().map(symbol_name));
                 }
                 vo::Step::Block(block, _) => {
@@ -356,4 +357,49 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
     target.valuation.steps = scope(&source.cq.query.body, &source.valuation.steps, &analysis);
     check(&source.cq, &target)?;
     Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reordered_rust_payloads_keep_dependencies_and_duplicate_occurrences() {
+        let source: vo::Program = syn::parse_quote! {
+            struct Q;
+            relation R(x:i32); relation S(y:i32);
+            relation answer(x:i32,y:i32,z:i32,w:i32);
+            answer(x,y,z,w) :- R(x), S(y), if keep(y),
+                let z:i32 = *y + 1, for w in values(z), if keep(x), if keep(x);
+            valuation {
+                R@0(x);
+                if keep(x);
+                if keep(x);
+                S@1(y);
+                let z:i32 = *y + 1;
+                for w in values(z);
+                if keep(y);
+            }
+        };
+        let target = compile(&source).unwrap();
+        check(&source.cq, &target).unwrap();
+        let analysis = vo::contract::check(&target).unwrap();
+        let guards: Vec<_> = target
+            .valuation
+            .steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| matches!(step, vo::Step::Guard(..)).then_some(index))
+            .collect();
+        assert_eq!(guards.len(), 3);
+        for &index in &guards[..2] {
+            assert!(analysis.bound_before[index].iter().any(|name| name == "x"));
+            assert!(!analysis.bound_before[index].iter().any(|name| name == "y"));
+        }
+        assert!(
+            analysis.bound_before[guards[2]]
+                .iter()
+                .any(|name| name == "y")
+        );
+    }
 }

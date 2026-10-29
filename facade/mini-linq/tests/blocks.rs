@@ -62,7 +62,7 @@ fn fallback_is_per_free_variable_and_preserves_the_suffix() {
     let result: BTreeSet<_> = mini_linq::compile! {
         pipeline {}
         struct Q; relation P(x:i32); relation R(x:i32,y:i32); relation S(x:i32,y:i32);
-        answer(x,y) :- P(x), { R(x,y) } else { S(x,y) }, if *y < 90;
+        answer(x,y) :- P(x), { R(x,y) } else { S(x,y) }, where y < 90;
     }
     .map(|(x, y)| (*x, *y))
     .collect();
@@ -89,10 +89,10 @@ fn rust_fallback_never_evaluates_a_later_nonempty_rows_branch() {
 }
 
 #[test]
-fn test_union_can_remove_a_second_branch_panic() {
+fn test_union_accepts_overlapping_total_branches() {
     let P = [(1,)];
     let first = |_: &i32| true;
-    let second = |_: &i32| -> bool { panic!("second arm should not be needed") };
+    let second = |_: &i32| true;
     let result: Vec<_> = mini_linq::compile! {
         pipeline {}
         struct Q; relation P(x:i32);
@@ -125,7 +125,7 @@ fn constraint_only_pure_arms_use_the_prefix_domain() {
     let result: BTreeSet<_> = mini_linq::compile! {
         pipeline {}
         struct Q; relation P(x:i32);
-        answer(x) :- P(x), { if *x == 1 } | { if *x == 2 };
+        answer(x) :- P(x), { where x == 1 } | { where x == 2 };
     }
     .map(|(x,)| *x)
     .collect();
@@ -226,7 +226,7 @@ fn union_leaf_expressions_run_once_for_all_disjuncts() {
        struct Leaves;
        relation A(x:i32) = ({calls.set(calls.get()+1); [(1,),(2,),(2,)]});
        relation answer(x:i32);
-       answer(*x) :- A(x); answer(*x) :- A(x), if *x > 1;
+       answer(*x) :- A(x); answer(*x) :- A(x), where x > 1;
     }
     .collect();
     assert_eq!(result, [(1,), (2,)].into());
@@ -279,8 +279,8 @@ fn finite_branch_domains_keep_suffix_constraints() {
             mini_linq::compile! {
                 pipeline {}
                 struct Q; relation R(x:i32); relation S(x:i32);
-                answer(x) :- R(x), if *x >= 0,
-                    {if *x == 1} $choice {S(x)}, if *x <= 2;
+                answer(x) :- R(x), where x >= 0,
+                    {where x == 1} $choice {S(x)}, where x <= 2;
             }
             .map(|(x,)| *x)
             .collect::<BTreeSet<_>>()

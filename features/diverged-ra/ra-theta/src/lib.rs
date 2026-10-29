@@ -1,22 +1,21 @@
 //! An independent theta-join surface lowered to a complete IX program.
 //!
-//! Its denotation is `T X = bottom + Set X`: the join is relational and its Rust
-//! guard is an opaque partial function of free variables. One panic aborts the
-//! evaluation. I/O, mutation and evaluation counts are outside this meaning.
-//! The guard remains after both written relation operands; RA laws do not apply
-//! to the guard.
+//! Its denotation is Set: the join is relational and its Rust guard is opaque,
+//! pure and total. The guard must follow the binders of its free variables;
+//! written order, panic positions and evaluation counts are not constraints.
+//! Core relational predicates use `where`, rather than interpreting Rust guards.
 //!
 //! The public surface accepts declarations, `theta_join L { ... } with
 //! R { ... } if expression;`, and `output answer(...);`. [`Query::indexes`]
 //! authors exact demands in IX without invoking a core planner. A complete
 //! `relational { ... }` input also forwards union/anti, block paths and origin
 //! metadata. Anti requests its exact F key; union adds no demand. Meaning and
-//! branch Before/order contracts remain the core language's.
+//! free-variable placement contracts remain the core language's.
 //! Core blocks preserve union and ordered fallback through this consumer.
 //! Their laws are join distribution over union and `B1 else B2 = B1 union
 //! (B2 anti_F B1)`. Common interface bindings escape; locals do not. The complete
-//! IR retains union/anti, nested occurrence paths and branch Before ancestry.
-//! Rust-free blocks hoist; Rust arms run from one prefix row with ordered else.
+//! IR retains union/anti, nested occurrence paths and branch-local bindings.
+//! Rust placement follows free-variable dependencies in each branch.
 //!
 use cq_lang_ix::{
     self as ix, ra,

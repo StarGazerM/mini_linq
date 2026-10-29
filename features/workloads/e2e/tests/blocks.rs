@@ -59,7 +59,7 @@ fn prefix_let_domains_execute_once_and_preserve_all_planners() {
             let rows: std::collections::BTreeSet<_> = mini_linq::compile! {
                 pipeline {plan = cq_planners::order($($plan)*);}
                 struct Q; relation R(x:i32);
-                answer(x) :- R(x), let k:i32 = std::convert::identity(*x), {if *k == 1} | {if *k == 2};
+                answer(x) :- R(x), let k:i32 = std::convert::identity(*x), {where k == 1} | {where k == 2};
             }.map(|(x,)|*x).collect();
             assert_eq!(rows,std::collections::BTreeSet::from([1,2]));
         }};

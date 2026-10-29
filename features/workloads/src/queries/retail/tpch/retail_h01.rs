@@ -1,8 +1,12 @@
+//! String columns use load-time sorted dictionary codes throughout query execution.
+//! Text is decoded only when publishing the final answer.
 //! TPC-H H01-style grouped sums/count over distinct projected lineitems.
 //! Order/line identity is retained, so equal prices on different lines add twice.
 //! Sums are exact scale-two integer coefficients; this derived query omits
 //! Q1's averages, discount/tax expressions, and final ordering.
 use cq_load::{Date, Decimal, Load};
+
+use cq_load::StringCode;
 
 pub const NAME: &str = "retail_h01";
 
@@ -18,25 +22,29 @@ FROM (SELECT DISTINCT l_orderkey, l_linenumber, l_returnflag, l_linestatus,
     WHERE l_shipdate <= DATE '1998-09-02') AS matches
 GROUP BY l_returnflag, l_linestatus"#;
 
-pub type Lineitem = (i64, i64, String, String, Decimal, Decimal, Date);
+pub type Lineitem = (i64, i64, StringCode, StringCode, Decimal, Decimal, Date);
 pub type Answer = (String, String, i64, i64, usize);
 pub struct Data {
     pub lineitem: Vec<Lineitem>,
+    pub dictionaries: cq_load::Dictionaries,
 }
 
-mini_linq::relation_loaders! {
+mini_linq::interned_relation_loaders! {
     relation Lineitem(l_orderkey: i64, l_linenumber: i64,
-        l_returnflag: String, l_linestatus: String, l_quantity: Decimal,
+        l_returnflag: StringCode, l_linestatus: StringCode, l_quantity: Decimal,
         l_extendedprice: Decimal, l_shipdate: Date);
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
     assert!(CONFIGS.contains(&config), "unknown H01 configuration");
+    let mut dictionaries = cq_load::Dictionaries::default();
     Ok(Data {
-        lineitem: <relation_loader!(Lineitem)>::parquet(
+        lineitem: <relation_loader!(Lineitem)>::parquet_interned(
             root.join("lineitem.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
+        dictionaries,
     })
 }
 
@@ -51,18 +59,24 @@ crate::tpch_runtime::standalone_configs! { $;
             evidence { key Lineitem [l_orderkey, l_linenumber]; }
             struct Query;
             relation Lineitem(l_orderkey: i64, l_linenumber: i64,
-                l_returnflag: String, l_linestatus: String, l_quantity: Decimal,
+                l_returnflag: StringCode, l_linestatus: StringCode, l_quantity: Decimal,
                 l_extendedprice: Decimal, l_shipdate: Date);
-            relation answer(returnflag: String, linestatus: String,
+            relation answer(returnflag: StringCode, linestatus: StringCode,
                 sum_quantity: i64, sum_price: i64, count_order: usize);
             answer(returnflag, linestatus, sum(quantity_units), sum(price_units), count()) :-
                 Lineitem(order_key, line_number, returnflag, linestatus, quantity, price, shipdate),
-                if *shipdate <= cutoff,
+                where shipdate <= cutoff,
                 let quantity_units: i64 = quantity.scaled(),
                 let price_units: i64 = price.scaled();
         }
         .map(|(flag, status, quantity, price, count)| {
-            (flag.clone(), status.clone(), quantity, price, count)
+            (
+                // DECODE P: publish l_returnflag in H01 answer.
+                data.dictionaries.publish("l_returnflag", *flag),
+                // DECODE P: publish l_linestatus in H01 answer.
+                data.dictionaries.publish("l_linestatus", *status),
+                quantity, price, count,
+            )
         })
         .collect()
     }

@@ -59,6 +59,11 @@ pub(crate) fn provider_available(
     ty: &Type,
 ) -> bool {
     let levels = provider_levels(analysis, provider);
+    // Storage-family capabilities do not make an unretained host adapter
+    // shareable. Retention must publish a Built provider before descendant reads.
+    if analysis.structures.host_read(provider) && levels.iter().any(|level| level.len() > 1) {
+        return false;
+    }
     catalog.providers.iter().any(|token| {
         matches_type(&token.ty, ty)
             && token.elements.as_ref().is_none_or(|accepted| {

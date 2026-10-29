@@ -2,7 +2,7 @@
 //! Parsing alone does not make negation or aggregation executable core CQ.
 //! Nested union/fallback blocks preserve interfaces, locals and occurrence paths.
 //! Inspection walks all arms; execution chooses Set union or ordered first
-//! nonempty fallback, with prefix Before facts inherited by each Rust arm.
+//! nonempty fallback. Pure, total Rust follows its free-variable binders only.
 #![recursion_limit = "512"]
 
 use cq_lang_cq as cq;
@@ -108,7 +108,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cq_testkit::{Rows, harness};
+    use cq_testkit::Rows;
     use std::collections::BTreeSet;
 
     fn names(values: &[&str]) -> BTreeSet<String> {
@@ -184,56 +184,55 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn inspected_scopes_and_macros_execute_with_written_order_refinement() {
-        fn partial(x: &i32) -> bool {
-            assert_ne!(*x, 9);
+    fn inspected_scopes_and_macros_preserve_total_answers_after_their_binders() {
+        fn positive(x: &i32) -> bool {
             *x > 0
         }
+        let condition: syn::Expr = syn::parse_quote!(positive(x) && !label.is_empty());
+        assert_eq!(
+            cq::rust::free_variables(&condition).dependencies(&names(&["x", "label"])),
+            names(&["x", "label"]),
+        );
         for R in [vec![], vec![(0,), (1,), (1,), (2,)], vec![(9,)]] {
             let limit = 0;
-            harness::check_refinement(
-                || {
-                    let mut answer = Rows::new();
-                    for &(x,) in &R {
-                        let passes = {
-                            let threshold = limit;
-                            let above = |limit| x > limit;
-                            above(threshold)
-                        };
-                        if passes {
-                            let label = format!("{x}");
-                            if partial(&x) && !label.is_empty() {
-                                answer.insert(vec![x]);
-                            }
-                        }
+            let mut expected = Rows::new();
+            for &(x,) in &R {
+                let passes = {
+                    let threshold = limit;
+                    let above = |limit| x > limit;
+                    above(threshold)
+                };
+                if passes {
+                    let label = format!("{x}");
+                    if positive(&x) && !label.is_empty() {
+                        expected.insert(vec![x]);
                     }
-                    answer
-                },
-                || {
-                    mini_linq::compile! {
-                        pipeline {
-                            plan = mini_linq::passes::plan;
-                            ix = mini_linq::passes::index_demands;
-                            lower = mini_linq::passes::lower;
-                            select = mini_linq::passes::select;
-                            print = mini_linq::passes::translate_pull;
-                        }
-                        struct Scoped;
-                        relation R(value: i32);
-                        answer(x) :- R(x),
-                            if {
-                                let threshold = limit;
-                                let above = |limit| *x > limit;
-                                above(threshold)
-                            },
-                            let label: String = format!("{x}"),
-                            if partial(x) && !label.is_empty();
-                    }
-                    .map(|(x,)| vec![*x])
-                    .collect::<Rows>()
-                },
-            )
-            .unwrap();
+                }
+            }
+            // The final guard needs x from R and label from the macro let;
+            // the independent scoped guard adds no written-order dependency.
+            let actual = mini_linq::compile! {
+                pipeline {
+                    plan = mini_linq::passes::plan;
+                    ix = mini_linq::passes::index_demands;
+                    lower = mini_linq::passes::lower;
+                    select = mini_linq::passes::select;
+                    print = mini_linq::passes::translate_pull;
+                }
+                struct Scoped;
+                relation R(value: i32);
+                answer(x) :- R(x),
+                    if {
+                        let threshold = limit;
+                        let above = |limit| *x > limit;
+                        above(threshold)
+                    },
+                    let label: String = format!("{x}"),
+                    if positive(x) && !label.is_empty();
+            }
+            .map(|(x,)| vec![*x])
+            .collect::<Rows>();
+            assert_eq!(actual, expected);
         }
     }
 }

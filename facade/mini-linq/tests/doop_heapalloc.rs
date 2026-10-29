@@ -17,14 +17,14 @@ const SOURCE: &str = "
     answer(heap, baseheap) :-
         Alloc(heap, heaptype), Alloc(baseheap, baseheaptype),
         Component(baseheaptype, comptype), Super(comptype, heaptype),
-        if *baseheaptype != constants.c_object_array && *baseheaptype != constants.c_string_array;
+        where baseheaptype != constants.c_object_array && baseheaptype != constants.c_string_array;
 ";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Shape {
     /// `natural_join` definitions whose operands share no column.
     cross_joins: usize,
-    /// Relational selections (recognized predicates) and opaque guards.
+    /// Explicit relational selections and opaque Rust guards.
     selects: usize,
     guards: usize,
     semijoins: usize,
@@ -110,7 +110,7 @@ fn default_plan_is_output_bounded() {
 #[test]
 fn explicit_written_order_is_the_reference_and_keeps_the_cross_product() {
     // The exact written reference deliberately keeps the authored join order; it
-    // must still recognize the captured-constant selection.
+    // must still place the explicit captured-constant selection.
     let plan = default_plan(
         cq_order::Options {
             heuristic: cq_order::Heuristic::Written,
@@ -133,7 +133,7 @@ fn facade_plan_macro_emits_the_same_output_bounded_relational_plan() {
         answer(heap, baseheap) :-
             Alloc(heap, heaptype), Alloc(baseheap, baseheaptype),
             Component(baseheaptype, comptype), Super(comptype, heaptype),
-            if *baseheaptype != constants.c_object_array && *baseheaptype != constants.c_string_array;
+            where baseheaptype != constants.c_object_array && baseheaptype != constants.c_string_array;
     };
     let relational = &text[text.find("relational").unwrap()..];
     let plan: ra::Program = syn::parse_str(relational).unwrap();
@@ -198,7 +198,7 @@ mod instance {
             answer(heap, baseheap) :-
                 Alloc(heap, heaptype), Alloc(baseheap, baseheaptype),
                 Component(baseheaptype, comptype), Super(comptype, heaptype),
-                if *baseheaptype != constants.c_object_array && *baseheaptype != constants.c_string_array;
+                where baseheaptype != constants.c_object_array && baseheaptype != constants.c_string_array;
         }
         .map(|(heap, baseheap)| (*heap, *baseheap))
         .collect()

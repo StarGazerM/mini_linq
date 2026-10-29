@@ -1,22 +1,10 @@
-//! VO to RA prime, preserving the opaque Rust chain.
+//! VO to RA prime, preserving recorded relational decisions and Rust payloads.
 //!
-//! The meaning is `T X = bottom + Set X`: one panic aborts evaluation.
-//! Each Rust step is a partial function of its free variables; I/O, mutation
-//! and evaluation counts are outside the meaning. Relational equalities are
-//! Leibniz identities decided by admissible `==`; residual Rust guards remain opaque.
-//! Relational constraints may
-//! move earlier across a Rust node, shrinking its domain, while Rust nodes retain
-//! written order. Identical chain payloads and source-before constraints retained
-//! before each node are a sufficient refinement condition. [`check`] compares
-//! fixed VO clause occurrences with `rename R@clause`, their positional
-//! bindings, equality closure and constraints, named semijoin reductions,
-//! Rust payloads and output. Partial subatoms retain their projection and
-//! correlation obligations. A DAG traversal assigns facts to their first
-//! observing Rust region; moving a fact earlier is allowed, delaying it is
-//! rejected. This is an ordinary structural contract, with no containment
-//! search or equivalence decision. Leibniz admissibility makes equalities
-//! identities. Functional extensionality permits alias solving, deduplication
-//! and projection before Rust while retaining its free variables.
+//! Every Rust expression is opaque, pure and total by premise. Its only placement
+//! requirements are its free variables. [`check`] compares fixed VO clause
+//! occurrences with `rename R@clause`, positional bindings, equality closure,
+//! explicit relational constraints, named reductions, Rust payloads and output.
+//! Partial subatoms retain their projection and correlation obligations.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -25,16 +13,15 @@
 
 //! Elaboration projects arms to their common heading, emits explicit union/anti equations and names negative originals.
 //! Recorded hoisted blocks use free/interface columns and a finite prefix domain for missing branch generators.
-//! Recorded correlated arms retain the prefix and anti Before dependencies.
+//! Recorded correlated arms retain their free prefix and relational anti dependencies.
+//! Rust occurrence scopes record only free-variable dependencies, not the written prefix.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Only differing literals on one interface column prove union arms disjoint.
 //! CQ negations bind nothing and lower to anti joins over constant-selected,
 //! existentially projected input relations, reusing the block anti machinery.
 //!
@@ -108,6 +95,12 @@ pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> 
                         }
                         (BodyItem::Equality(a), valuation::Step::Equality(b, _)) => a == b,
                         (BodyItem::Constraint(a), valuation::Step::Constraint(b, _)) => a == b,
+                        (BodyItem::Constraint(a), valuation::Step::Equality(b, _)) => {
+                            a.equality().as_ref() == Some(b)
+                        }
+                        (BodyItem::Equality(a), valuation::Step::Constraint(b, _)) => {
+                            b.equality().as_ref() == Some(a)
+                        }
                         (BodyItem::Negation(a), valuation::Step::Negation(b, _)) => a == b,
                         (BodyItem::Filter(a), valuation::Step::Guard(b, _)) => a == b,
                         (BodyItem::Let(a), valuation::Step::Let(b, _)) => a == b,
@@ -229,11 +222,11 @@ pub fn simplify_expansions(source: &ra::Program) -> syn::Result<ra::Program> {
     reductions::eliminate_expansions(source.clone())
 }
 
-/// The RA definitions refine the supplied VO schedule, retaining its Rust
-/// chain and preceding relational constraints.
+/// The RA definitions refine the supplied VO schedule, retaining its unchanged
+/// Rust payloads and relational constraints.
 /// Pure targets may use checked inverse dead expansions under canonicalization
 /// to establish a primary witness, without recompiling or selecting a plan.
-/// Formal rule CK-Elaborate: Check contracts, clause occurrences, named reductions, constraints, Rust chain and Before.
+/// Formal rule CK-Elaborate: Check contracts, clause occurrences, named reductions, constraints and unchanged Rust payloads with their free variables.
 pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
     let analysis = valuation::contract::check(source)?;
     let target_schedule = ra::contract::Schedule::from_program(target)?;
@@ -363,14 +356,16 @@ impl<'a> State<'a> {
             .iter()
             .enumerate()
             .flat_map(|(clause, item)| match item {
-                valuation::cq::BodyItem::Constraint(c) => std::iter::once(c.clone())
-                    .chain(c.implied_domains())
-                    .map(|predicate| {
-                        let binders =
-                            targets(predicate.variables().map(symbol_name).collect(), clause);
-                        (predicate, binders)
-                    })
-                    .collect::<Vec<_>>(),
+                valuation::cq::BodyItem::Constraint(c) if c.equality().is_none() => {
+                    std::iter::once(c.clone())
+                        .chain(c.implied_domains())
+                        .map(|predicate| {
+                            let binders =
+                                targets(predicate.variables().map(symbol_name).collect(), clause);
+                            (predicate, binders)
+                        })
+                        .collect::<Vec<_>>()
+                }
                 _ => Vec::new(),
             })
             .collect();
@@ -378,12 +373,14 @@ impl<'a> State<'a> {
             .body
             .iter()
             .enumerate()
-            .filter_map(|(clause, item)| match item {
-                valuation::cq::BodyItem::Equality(e) => Some((
-                    e.clone(),
-                    targets(e.variables().map(symbol_name).collect(), clause),
-                )),
-                _ => None,
+            .filter_map(|(clause, item)| {
+                let equality = match item {
+                    valuation::cq::BodyItem::Equality(equality) => equality.clone(),
+                    valuation::cq::BodyItem::Constraint(constraint) => constraint.equality()?,
+                    _ => return None,
+                };
+                let binders = targets(equality.variables().map(symbol_name).collect(), clause);
+                Some((equality, binders))
             })
             .collect();
     }
@@ -676,8 +673,9 @@ impl<'a> State<'a> {
             .find(|d| symbol_name(&d.name) == symbol_name(&negation.atom.relation))
             .expect("contracted negative input");
         let layout = negation::layout(declaration, negation, &bound, |v| self.canonical(v));
-        let needs_projection =
-            layout.keys.len() != layout.mapping.len() && !layout.condition.constraints.is_empty();
+        let filtered =
+            !layout.condition.equalities.is_empty() || !layout.condition.constraints.is_empty();
+        let needs_projection = layout.keys.len() != layout.mapping.len() && filtered;
         let mut right = self.emit(ra::Operator::Rename(Box::new(ra::Rename {
             rename_token: Default::default(),
             relation: negation.atom.relation.clone(),
@@ -699,9 +697,8 @@ impl<'a> State<'a> {
                 .collect(),
             constants: None,
         })));
-        if !layout.condition.constraints.is_empty() {
-            right =
-                self.select_constraints(right, layout.condition.constraints.into_iter().collect());
+        if filtered {
+            right = self.select_theta(right, layout.condition);
         }
         // Anti observes only its keys: wildcards stay existential without
         // wrapping a direct host read in a materialized projection.
@@ -883,7 +880,7 @@ impl<'a> State<'a> {
                     // Opaque Rust may protect both names in an equality class.
                     // A natural semijoin would then check only support existence.
                     // Express the equality-class semijoin as join/select/project,
-                    // without renaming Rust inputs or adding any Rust chain node.
+                    // without renaming Rust inputs or adding a Rust expression.
                     let joined = self.emit(ra::Operator::NaturalJoin(Box::new(ra::NaturalJoin {
                         natural_join_token: Default::default(),
                         left,
@@ -924,33 +921,39 @@ impl<'a> State<'a> {
     }
 
     fn select(&mut self, input: Ident, equalities: Vec<ra::Equality>) -> Ident {
-        self.emit(ra::Operator::Select(Box::new(ra::Select {
-            select_token: Default::default(),
+        self.select_theta(
             input,
-            if_token: Default::default(),
-            condition_paren: Default::default(),
-            condition: ra::Theta {
+            ra::Theta {
                 equalities: equalities.into_iter().collect(),
                 constraints: Default::default(),
             },
-        })))
+        )
     }
 
     fn select_constraints(&mut self, input: Ident, constraints: Vec<cq::Constraint>) -> Ident {
+        let mut condition = ra::Theta::default();
+        for constraint in constraints {
+            condition.push_constraint(constraint);
+        }
+        self.select_theta(input, condition)
+    }
+
+    fn select_theta(&mut self, input: Ident, condition: ra::Theta) -> Ident {
         self.emit(ra::Operator::Select(Box::new(ra::Select {
             select_token: Default::default(),
             input,
             if_token: Default::default(),
             condition_paren: Default::default(),
-            condition: ra::Theta {
-                equalities: Default::default(),
-                constraints: constraints.into_iter().collect(),
-            },
+            condition,
         })))
     }
 
     /// Formal rule E-Constraint: Push a central constraint onto its complete binder or select the prefix.
     fn constraint(&mut self, constraint: &cq::Constraint) {
+        if let Some(equality) = constraint.equality() {
+            self.equality(&equality);
+            return;
+        }
         if self.optimize_predicates
             && self
                 .constraints
@@ -1028,7 +1031,12 @@ impl<'a> State<'a> {
             .map(|(c, _)| c)
             .expect("VO Rust step source slot");
         self.placed_rust.insert(clause);
-        let names = valuation::cq::blocks::bound_before(self.body, clause, &self.context);
+        let scope = valuation::cq::blocks::bound_before(self.body, clause, &self.context);
+        let names = self.body[clause]
+            .rust_step()
+            .expect("VO Rust source slot")
+            .free_variables
+            .dependencies(&scope);
         let mut ids = BTreeMap::new();
         for definition in &self.definitions {
             match &definition.operator {
@@ -1112,7 +1120,7 @@ impl<'a> State<'a> {
     }
 
     /// Retain the normalized head variables and name the output.
-    /// Formal rule C-Finish: Project the head variables after the complete chain.
+    /// Formal rule C-Finish: Project the head variables after the complete schedule.
     fn finish(&mut self, query: &valuation::cq::Query) -> ra::Output {
         let head = &query.head;
         let retained: BTreeSet<String> = query.valuation_variables().map(symbol_name).collect();
@@ -1270,10 +1278,11 @@ fn aliases(source: &valuation::cq::Program) -> BTreeMap<String, Ident> {
     let canonical = |id: &Ident, aliases: &BTreeMap<String, Ident>| {
         aliases.get(&symbol_name(id)).unwrap_or(id).clone()
     };
-    for item in &source.query.body {
-        let BodyItem::Equality(equality) = item else {
-            continue;
-        };
+    for equality in source.query.body.iter().flat_map(|item| match item {
+        BodyItem::Equality(equality) => vec![equality.clone()],
+        BodyItem::Constraint(constraint) => constraint.equalities(),
+        _ => Vec::new(),
+    }) {
         let ra::EqualityValue::Variable(right) = &equality.right else {
             continue;
         };

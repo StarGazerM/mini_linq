@@ -17,18 +17,21 @@ fn machine(parts: Option<usize>) -> Machine {
         key_partition_cache_threshold: 6 * 1024 * 1024,
         root: LevelNode {
             name: syn::parse_quote!(host),
+            host_rust: true,
             collaborative: false,
             dynamic: false,
             width: None,
             shared_bytes: None,
             children: vec![LevelNode {
                 name: syn::parse_quote!(pool),
+                host_rust: true,
                 collaborative: false,
                 dynamic: true,
                 width: parts,
                 shared_bytes: None,
                 children: vec![LevelNode {
                     name: syn::parse_quote!(task),
+                    host_rust: true,
                     collaborative: false,
                     dynamic: false,
                     width: None,
@@ -1477,7 +1480,7 @@ fn streaming_partial_group_preserves_existing_stores_and_rejects_shared_pipes() 
 }
 
 #[test]
-fn opaque_partial_group_publishes_host_owned_parts_without_totality_claims() {
+fn total_rust_partial_group_streams_without_an_extra_host_publication() {
     let mut source = grouped(false);
     source.structures.physical.program.definitions.insert(
         1,
@@ -1506,16 +1509,16 @@ fn opaque_partial_group_publishes_host_owned_parts_without_totality_claims() {
     ];
     let target = key_partition(&source, quote!(result, host_parts, [], 8)).unwrap();
     assert_eq!(
-        target.sequence.definitions[1],
-        source.sequence.definitions[1]
+        target.sequence.definitions.len(),
+        source.sequence.definitions.len()
+    );
+    assert_eq!(
+        target.sequence.definitions[1].term,
+        syn::parse_quote!(map mapped tile 8 input)
     );
     assert_eq!(
         target.sequence.definitions[2].term,
-        syn::parse_quote!(store tile 8 valuations)
-    );
-    assert_eq!(
-        target.sequence.definitions[3].term,
-        syn::parse_quote!(store group totals host_parts)
+        syn::parse_quote!(store group totals valuations)
     );
     assert_eq!(target.structures.physical, source.structures.physical);
 
@@ -1533,22 +1536,15 @@ fn opaque_partial_group_publishes_host_owned_parts_without_totality_claims() {
         .unwrap();
     assert!(partial.keys.is_empty());
     let facts = cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
-    assert_eq!(facts.levels["valuations"], vec!["host".to_owned()]);
-    assert_eq!(
-        facts.levels[&partial.input.to_string()],
-        vec!["host".to_owned()]
+    assert!(
+        !planned
+            .program
+            .sequence
+            .definitions
+            .iter()
+            .any(|definition| definition.name == partial.input)
     );
-    assert_eq!(facts.shapes[&partial.input.to_string()].len(), 2);
     assert_eq!(facts.shapes["result"].len(), 1);
-    let result = planned
-        .program
-        .sequence
-        .definitions
-        .iter()
-        .find(|d| d.name == "result")
-        .unwrap();
-    let input = &partial.input;
-    assert_eq!(result.term, syn::parse_quote!(store group totals #input));
     replay(&source, &planned);
 }
 

@@ -1,11 +1,12 @@
 //! Import authored CPU queries, including standalone grouped compile! programs.
-//! Standalone sources retain aggregate heads and result declarations. Their
-//! EXPORTS projections identify loader tables; scale-two Decimal::scaled()
-//! reads and ISO date captures use the manifest's coefficient/day encodings.
-//! Dictionary-coded group keys are decoded only at the comparison boundary.
-//! String methods retain their authored host representation and remain subject
-//! to checked planning/translation. Staged sources retain every compiled rule,
-//! materialized dependency and final iterator composition.
+//! Standalone sources retain aggregate heads, Rust expressions and result
+//! declarations. EXPORTS projections identify loader tables and column domains.
+//! Ordinary run bindings to Data code sets resolve to their load-time producers.
+//! Dictionary inputs use manifest IDs regardless of Rust type spellings; only
+//! relational operands and literal captures are adapted, never authored Rust.
+//! Three-argument `dictionary_where` closures run once per dictionary entry at
+//! load time. Decimal/Date Rust reads retain their scalar ABI.
+//! Staged sources retain every rule, dependency and final iterator composition.
 use crate::manifest::{Manifest, Result};
 use proc_macro2::{Group, TokenStream, TokenTree};
 use quote::{ToTokens, quote};
@@ -28,17 +29,35 @@ pub(crate) fn authored_file(source: &str) -> Result<syn::File> {
             Ok(Self(input.parse()?))
         }
     }
+    struct QueryBody(syn::ItemFn);
+    impl Parse for QueryBody {
+        fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+            let pattern;
+            syn::parenthesized!(pattern in input);
+            if !pattern.is_empty() {
+                return Err(pattern.error("query_body must have no macro arguments"));
+            }
+            input.parse::<Token![=>]>()?;
+            let body;
+            syn::braced!(body in input);
+            let runner = body.parse()?;
+            if !body.is_empty() {
+                return Err(body.error("query_body must contain one runner"));
+            }
+            if input.peek(Token![;]) { input.parse::<Token![;]>()?; }
+            Ok(Self(runner))
+        }
+    }
     struct Query(TokenStream);
     impl Parse for Query {
         fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-            let keyword: Ident = input.parse()?;
-            if keyword != "plan" {
-                return Err(syn::Error::new_spanned(keyword, "expected stage-local plan"));
+            if input.peek(Ident) && input.fork().parse::<Ident>()? == "plan" {
+                let _: Ident = input.parse()?;
+                let advice;
+                syn::parenthesized!(advice in input);
+                let _: TokenStream = advice.parse()?;
+                input.parse::<Token![;]>()?;
             }
-            let advice;
-            syn::parenthesized!(advice in input);
-            let _: TokenStream = advice.parse()?;
-            input.parse::<Token![;]>()?;
             Ok(Self(input.parse()?))
         }
     }
@@ -56,6 +75,27 @@ pub(crate) fn authored_file(source: &str) -> Result<syn::File> {
             }
         }
     }
+    // A query-local configuration shell contains one authored runner. Inspect
+    // its declaration, never expand its CPU configuration invocations.
+    fn configuration(tokens: TokenStream) -> Option<TokenStream> {
+        let tokens: Vec<_> = tokens.into_iter().collect();
+        for window in tokens.windows(3) {
+            if matches!(&window[0], TokenTree::Ident(name) if name == "configuration")
+                && matches!(&window[1], TokenTree::Punct(mark) if mark.as_char() == '!')
+                && let TokenTree::Group(arguments) = &window[2]
+            {
+                return arguments.stream().into_iter().filter_map(|token| match token {
+                    TokenTree::Group(group) if group.delimiter() == proc_macro2::Delimiter::Brace =>
+                        Some(group.stream()),
+                    _ => None,
+                }).last();
+            }
+        }
+        tokens.into_iter().find_map(|token| match token {
+            TokenTree::Group(group) => configuration(group.stream()),
+            _ => None,
+        })
+    }
     let mut file = syn::parse_file(source)?;
     for item in &mut file.items {
         if let syn::Item::Macro(shell) = item
@@ -67,6 +107,29 @@ pub(crate) fn authored_file(source: &str) -> Result<syn::File> {
             if let Some(error) = queries.0 {
                 return Err(error.into());
             }
+            *item = syn::Item::Fn(runner);
+        }
+        else if let syn::Item::Macro(shell) = item
+            && shell.ident.as_ref().is_some_and(|name| name == "runner")
+            && let Some(body) = configuration(shell.mac.tokens.clone())
+        {
+            let body: syn::File = syn::parse2(body)?;
+            let mut runner = body.items.into_iter().find_map(|item| match item {
+                syn::Item::Fn(function) if function.sig.ident == "run" => Some(function),
+                _ => None,
+            }).ok_or("configuration shell has no run function")?;
+            let mut queries = Queries(None);
+            queries.visit_block_mut(&mut runner.block);
+            if let Some(error) = queries.0 { return Err(error.into()); }
+            *item = syn::Item::Fn(runner);
+        }
+        else if let syn::Item::Macro(shell) = item
+            && shell.ident.as_ref().is_some_and(|name| name == "query_body")
+        {
+            let QueryBody(mut runner) = syn::parse2(shell.mac.tokens.clone())?;
+            let mut queries = Queries(None);
+            queries.visit_block_mut(&mut runner.block);
+            if let Some(error) = queries.0 { return Err(error.into()); }
             *item = syn::Item::Fn(runner);
         }
     }
@@ -123,7 +186,11 @@ pub struct Kernel {
     pub derived: Vec<(Ident, Vec<(Ident, syn::Type)>)>,
     /// Inputs published by preceding stages, in declaration order.
     pub published: Vec<Relation>,
+    /// Source dictionary domains travel independently of published Rust types.
+    pub published_origins: BTreeMap<String, Vec<Option<(String, String)>>>,
     pub body: TokenStream,
+    /// Declared loader projections, including dictionary-only producers.
+    pub exports: Vec<(String, Vec<String>)>,
     /// Standalone programs retain their declared output and aggregate head.
     program: Option<cq_lang_cq::Program>,
 }
@@ -243,6 +310,10 @@ impl Parse for Kernel {
         let answer = columns(&fields)?;
         input.parse::<Token![:]>()?;
         input.parse::<Token![-]>()?;
+        let exports = relations.iter().map(|relation| (
+            relation.table.to_string(),
+            relation.columns.iter().map(|(column, _)| column.to_string()).collect(),
+        )).collect();
         Ok(Self {
             plan_advice,
             evidence: Default::default(),
@@ -250,11 +321,161 @@ impl Parse for Kernel {
             relations,
             derived,
             published: Vec::new(),
+            published_origins: BTreeMap::new(),
+            exports,
             answer,
             program: None,
             body: input.parse()?,
         })
     }
+}
+
+fn local_name(pattern: &syn::Pat) -> Option<&Ident> {
+    match pattern {
+        syn::Pat::Ident(name) => Some(&name.ident),
+        syn::Pat::Type(typed) => local_name(&typed.pat),
+        _ => None,
+    }
+}
+
+/// Explicit authored input declaration; its predicate is never inspected.
+pub fn dictionary_predicate(expression: &syn::Expr) -> Result<Option<(String, &syn::ExprClosure)>> {
+    let syn::Expr::Call(call) = expression else { return Ok(None) };
+    let syn::Expr::Path(path) = call.func.as_ref() else { return Ok(None) };
+    if !path.path.segments.last().is_some_and(|part| part.ident == "dictionary_where") {
+        return Ok(None);
+    }
+    if call.args.len() != 3 {
+        return Err("dictionary_where requires dictionaries, column and predicate".into());
+    }
+    let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(column), .. }) = &call.args[1] else {
+        return Err("dictionary_where domain must use a column literal".into());
+    };
+    let syn::Expr::Closure(predicate) = &call.args[2] else {
+        return Err("dictionary_where requires an authored predicate closure".into());
+    };
+    Ok(Some((column.value(), predicate)))
+}
+
+pub fn dictionary_initializer(
+    expression: &syn::Expr,
+    exports: &[(String, Vec<String>)],
+) -> Result<Option<TokenStream>> {
+    let Some((column, predicate)) = dictionary_predicate(expression)? else {
+        return Ok(None);
+    };
+    let table = column_table(exports, &column)?;
+    Ok(Some(quote!({
+        let dictionary = manifest.dictionary(manifest.column(#table, #column)?)?;
+        let mut predicate = #predicate;
+        // DECODE R: explicit authored dictionary_where closure reads each dictionary value once; its derived code set feeds relational joins.
+        dictionary.iter().enumerate().filter_map(|(code, value)| {
+            predicate(value.as_str()).then(|| (
+                u32::try_from(code).expect("validated dictionary size"),
+            ))
+        }).collect::<Vec<(u32,)>>()
+    })))
+}
+
+fn column_table<'a>(exports: &'a [(String, Vec<String>)], column: &str) -> Result<&'a str> {
+    let mut matches = exports.iter().filter(|(_, columns)| columns.iter().any(|name| name == column));
+    let table = matches.next().ok_or_else(|| format!("no EXPORTS provenance for {column}"))?;
+    if matches.next().is_some() {
+        return Err(format!("ambiguous EXPORTS provenance for {column}").into());
+    }
+    Ok(&table.0)
+}
+
+/// Follow an ordinary run binding to its explicit load-time Data producer.
+pub(crate) fn load_initializer(file: &syn::File, expression: &syn::Expr) -> Result<syn::Expr> {
+    fn data_field(expression: &syn::Expr) -> Option<&Ident> {
+        match expression {
+            syn::Expr::Reference(reference) => data_field(&reference.expr),
+            syn::Expr::MethodCall(method) if method.method == "as_slice" =>
+                data_field(&method.receiver),
+            syn::Expr::Field(field)
+                if matches!(field.base.as_ref(), syn::Expr::Path(path) if path.path.is_ident("data")) =>
+                match &field.member { syn::Member::Named(name) => Some(name), _ => None },
+            _ => None,
+        }
+    }
+    let Some(field) = data_field(expression) else { return Ok(expression.clone()) };
+    Ok(load_field_initializer(file, field)?.unwrap_or_else(|| expression.clone()))
+}
+
+pub(crate) fn load_field_initializer(file: &syn::File, field: &Ident) -> Result<Option<syn::Expr>> {
+    use syn::visit_mut::VisitMut;
+    let Some(load) = file.items.iter().find_map(|item| match item {
+        syn::Item::Fn(function) if function.sig.ident == "load" => Some(function),
+        _ => None,
+    }) else { return Ok(None) };
+    struct Fields(BTreeMap<String, syn::Expr>);
+    impl VisitMut for Fields {
+        fn visit_expr_struct_mut(&mut self, value: &mut syn::ExprStruct) {
+            if value.path.is_ident("Data") {
+                for field in &value.fields {
+                    if let syn::Member::Named(name) = &field.member {
+                        self.0.insert(name.to_string(), field.expr.clone());
+                    }
+                }
+            }
+            syn::visit_mut::visit_expr_struct_mut(self, value);
+        }
+    }
+    let mut fields = Fields(BTreeMap::new());
+    fields.visit_block_mut(&mut load.block.clone());
+    let Some(mut producer) = fields.0.remove(&field.to_string()) else {
+        return Ok(None);
+    };
+    // Data { codes } and Data { codes: selected } both retain the authored
+    // producer; only load locals are followed, never row-dependent Rust.
+    let mut seen = std::collections::BTreeSet::new();
+    while let syn::Expr::Path(path) = &producer {
+        let Some(name) = path.path.get_ident() else { break };
+        if !seen.insert(name.to_string()) {
+            return Err("cyclic load initializer".into());
+        }
+        let Some(value) = load.block.stmts.iter().find_map(|statement| match statement {
+            syn::Stmt::Local(local) if local_name(&local.pat) == Some(name) =>
+                local.init.as_ref().map(|init| init.expr.as_ref()),
+            _ => None,
+        }) else { break };
+        producer = value.clone();
+    }
+    Ok(Some(producer))
+}
+
+fn dictionary_literal(expression: &syn::Expr) -> Option<&syn::ExprMethodCall> {
+    match expression {
+        syn::Expr::MethodCall(method) if method.method == "literal" => Some(method),
+        _ => None,
+    }
+}
+
+pub(crate) fn export_tables(file: &syn::File) -> Result<Vec<(String, Vec<String>)>> {
+    let exports = file.items.iter().find_map(|item| match item {
+        syn::Item::Const(item) if item.ident == "EXPORTS" => Some(item.expr.as_ref()),
+        _ => None,
+    }).ok_or("CPU source has no EXPORTS")?;
+    let syn::Expr::Reference(exports) = exports else {
+        return Err("EXPORTS must be a literal slice".into());
+    };
+    let syn::Expr::Array(exports) = exports.expr.as_ref() else {
+        return Err("EXPORTS must be a literal slice".into());
+    };
+    exports.elems.iter().map(|export| {
+        let syn::Expr::Tuple(pair) = export else {
+            return Err("EXPORTS entries must be table/projection pairs".into());
+        };
+        let strings = pair.elems.iter().map(|value| match value {
+            syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(value), .. }) => Ok(value.value()),
+            _ => Err("EXPORTS table/projection must be literals"),
+        }).collect::<std::result::Result<Vec<_>, _>>()?;
+        let [table, projection] = strings.as_slice() else {
+            return Err("EXPORTS entries must have two fields".into());
+        };
+        Ok((table.clone(), projection.split(',').map(|column| column.trim().to_owned()).collect()))
+    }).collect()
 }
 
 impl Kernel {
@@ -268,17 +489,14 @@ impl Kernel {
                 let syn::Stmt::Local(local) = statement else {
                     return None;
                 };
-                let syn::Pat::Type(typed) = &local.pat else {
-                    return None;
-                };
-                let syn::Pat::Ident(binding) = typed.pat.as_ref() else {
-                    return None;
-                };
-                (binding.ident == *name)
+                (local_name(&local.pat) == Some(name))
                     .then(|| local.init.as_ref().map(|init| init.expr.as_ref()))
                     .flatten()
             })
             .ok_or_else(|| format!("derived relation {name} lacks an authored initializer"))?;
+        if dictionary_predicate(expression)?.is_some() {
+            return Ok((expression, Vec::new()));
+        }
         fn mentions(tokens: TokenStream, name: &Ident) -> bool {
             tokens.into_iter().any(|token| match token {
                 TokenTree::Ident(ident) => ident == *name,
@@ -364,66 +582,25 @@ impl Kernel {
         let body = program.query.body.to_token_stream();
         let mut setup: syn::Block = syn::parse_quote!({});
         for statement in &run.block.stmts {
-            if let syn::Stmt::Local(local) = statement {
-                let name = match &local.pat {
-                    syn::Pat::Ident(name) => Some(&name.ident),
-                    syn::Pat::Type(typed) => match typed.pat.as_ref() {
-                        syn::Pat::Ident(name) => Some(&name.ident),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                if let Some(name) = name
-                    && !program.inputs().any(|input| input.name == *name)
-                    && mentions(body.clone(), name)
+            let syn::Stmt::Local(local) = statement else { continue };
+            let Some(name) = local_name(&local.pat) else { continue };
+            if !mentions(body.clone(), name) { continue; }
+            let mut local = local.clone();
+            if let Some(init) = &mut local.init {
+                let producer = load_initializer(file, &init.expr)?;
+                if program.inputs().any(|input| input.name == *name)
+                    && dictionary_predicate(&producer)?.is_none()
                 {
-                    setup.stmts.push(statement.clone());
+                    continue;
                 }
+                init.expr = Box::new(producer);
             }
+            setup.stmts.push(syn::Stmt::Local(local));
         }
-        let exports = file
-            .items
-            .iter()
-            .find_map(|item| match item {
-                syn::Item::Const(item) if item.ident == "EXPORTS" => Some(item.expr.as_ref()),
-                _ => None,
-            })
-            .ok_or("standalone CPU source has no EXPORTS")?;
-        let syn::Expr::Reference(exports) = exports else {
-            return Err("EXPORTS must be a literal slice".into());
-        };
-        let syn::Expr::Array(exports) = exports.expr.as_ref() else {
-            return Err("EXPORTS must be a literal slice".into());
-        };
-        let mut tables = Vec::new();
-        for export in &exports.elems {
-            let syn::Expr::Tuple(pair) = export else {
-                return Err("EXPORTS entries must be table/projection pairs".into());
-            };
-            let strings = pair
-                .elems
-                .iter()
-                .map(|value| match value {
-                    syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(value),
-                        ..
-                    }) => Ok(value.value()),
-                    _ => Err("EXPORTS table/projection must be literals"),
-                })
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            if strings.len() != 2 {
-                return Err("EXPORTS entries must have two fields".into());
-            }
-            tables.push((
-                strings[0].clone(),
-                strings[1]
-                    .split(',')
-                    .map(|s| s.trim().to_owned())
-                    .collect::<Vec<_>>(),
-            ));
-        }
+        let tables = export_tables(file)?;
         let mut relations = Vec::new();
         let mut published = Vec::new();
+        let mut derived = Vec::new();
         for input in program.inputs() {
             if let Some(columns) = publications.get(&input.name.to_string()) {
                 published.push(Relation {
@@ -431,6 +608,13 @@ impl Kernel {
                     table: input.name.clone(),
                     columns: columns.clone(),
                 });
+                continue;
+            }
+            if setup.stmts.iter().any(|statement| matches!(statement,
+                syn::Stmt::Local(local) if local_name(&local.pat) == Some(&input.name)
+            )) {
+                derived.push((input.name.clone(), input.columns.iter()
+                    .map(|column| (column.name.clone(), column.ty.clone())).collect()));
                 continue;
             }
             let projection: Vec<_> = input
@@ -461,7 +645,7 @@ impl Kernel {
         }
         let answer = program
             .output()
-            .ok_or("standalone program requires an answer declaration")?
+            .ok_or("authored query requires an answer relation declaration")?
             .columns
             .iter()
             .map(|column| (column.name.clone(), column.ty.clone()))
@@ -472,8 +656,10 @@ impl Kernel {
             setup,
             relations,
             answer,
-            derived: Vec::new(),
+            derived,
             published,
+            published_origins: BTreeMap::new(),
+            exports: tables,
             body,
             program: Some(program),
         })
@@ -506,42 +692,137 @@ impl Kernel {
         quote!(struct Query; #(#declarations)* #(#derived)* answer(#(#outputs),*) :- #body)
     }
 
-    /// Column-local dictionary codes preserve literal equality, including
-    /// disjunctions and finite membership. Opaque or ordered String uses still
-    /// require the authored host representation.
+    /// Dictionary IDs are a loader representation fact, not a Rust capability.
+    /// Use the authored interner's unsigned code domain, retaining manifest order.
     pub fn dictionary_types(
         &self,
         manifest: &Manifest,
     ) -> Result<BTreeMap<(String, String), syn::Type>> {
+        let mut storage = BTreeMap::new();
+        let dictionaries = self.dictionary_relations()?;
+        for relation in self.relations.iter().chain(&dictionaries) {
+            for (column, _) in &relation.columns {
+                let origin = (relation.table.to_string(), column.to_string());
+                if manifest.column(&origin.0, &origin.1)?.encoding == "dictionary" {
+                    storage.insert(origin, syn::parse_quote!(u32));
+                }
+            }
+        }
+        for origin in self.published_origins.values().flatten().flatten() {
+            if manifest.column(&origin.0, &origin.1)?.encoding == "dictionary" {
+                storage.insert(origin.clone(), syn::parse_quote!(u32));
+            }
+        }
+        Ok(storage)
+    }
+
+    /// Provider codecs may adapt relational-only columns, never Rust reads.
+    pub fn scalar_codec_types(&self, manifest: &Manifest) -> Result<BTreeMap<(String, String), syn::Type>> {
         let program = self.cpu_program()?;
-        let mut variables = BTreeMap::new();
-        collect_variables(self.body.clone(), &self.relations, &mut variables)?;
+        let variables = self.variable_origins()?;
         let mut storage = BTreeMap::new();
         for relation in &self.relations {
-            for (column, logical) in &relation.columns {
+            for (column, _) in &relation.columns {
                 let origin = (relation.table.to_string(), column.to_string());
-                if logical.to_token_stream().to_string() == "String"
-                    && manifest.column(&origin.0, &origin.1)?.encoding == "dictionary"
-                    && variables.iter().all(|(variable, source)| {
-                        source != &origin
-                            || (dictionary_body(&program.query.body, variable)
-                                && program.query.head.args.iter().all(|argument| {
-                                    matches!(argument, syn::Expr::Path(path) if path.path.is_ident(variable))
-                                        || dictionary_expression(argument, variable)
-                                }))
-                    })
+                let metadata = manifest.column(&origin.0, &origin.1)?;
+                if matches!(metadata.encoding.as_str(), "days_since_epoch" | "scaled_integer")
+                    && variables.iter().all(|(variable, source)| source != &origin
+                        || (scalar_codec_body(&program.query.body, variable)
+                            && program.query.head.args.iter().all(|argument| {
+                                matches!(argument, syn::Expr::Path(path) if path.path.is_ident(variable))
+                                    || dictionary_expression(argument, variable)
+                            })))
                 {
-                    storage.insert(origin, syn::parse_quote!(i32));
+                    storage.insert(origin, syn::parse_str(&metadata.ty)?);
                 }
             }
         }
         Ok(storage)
     }
 
+    fn dictionary_relations(&self) -> Result<Vec<Relation>> {
+        let mut relations = Vec::new();
+        for statement in &self.setup.stmts {
+            let syn::Stmt::Local(local) = statement else { continue };
+            let Some(name) = local_name(&local.pat) else { continue };
+            let Some(init) = &local.init else { continue };
+            if let Some((column, _)) = dictionary_predicate(&init.expr)? {
+                let table = column_table(&self.exports, &column)?;
+                relations.push(Relation {
+                    name: name.clone(),
+                    table: syn::parse_str(table)?,
+                    columns: vec![(syn::parse_str(&column)?, syn::parse_quote!(u32))],
+                });
+            }
+        }
+        Ok(relations)
+    }
+
+    pub fn variable_origins(&self) -> Result<BTreeMap<String, (String, String)>> {
+        let mut variables = BTreeMap::new();
+        collect_variables(self.body.clone(), &self.relations, &mut variables)?;
+        collect_variables(self.body.clone(), &self.dictionary_relations()?, &mut variables)?;
+        fn published(
+            body: &cq_lang_cq::CommaList<cq_lang_cq::BodyItem>,
+            inputs: &BTreeMap<String, Vec<Option<(String, String)>>>,
+            variables: &mut BTreeMap<String, (String, String)>,
+        ) {
+            for item in body {
+                match item {
+                    cq_lang_cq::BodyItem::Positive { atom } => {
+                        if let Some(origins) = inputs.get(&atom.relation.to_string()) {
+                            for (argument, origin) in atom.args.iter().zip(origins) {
+                                if let Some(origin) = origin
+                                    && let syn::Expr::Path(path) = argument
+                                    && let Some(name) = path.path.get_ident()
+                                {
+                                    variables.insert(name.to_string(), origin.clone());
+                                }
+                            }
+                        }
+                    }
+                    cq_lang_cq::BodyItem::Block(block) => {
+                        for branch in &block.branches {
+                            published(&branch.body, inputs, variables);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        published(&self.cpu_program()?.query.body, &self.published_origins, &mut variables);
+        Ok(variables)
+    }
+
+    pub fn setup_bindings(&self, manifest: &Manifest) -> Result<TokenStream> {
+        let constants = setup_constants(&self.setup, &self.derived, &self.exports, manifest)?;
+        let mut bindings = TokenStream::new();
+        for statement in &self.setup.stmts {
+            let syn::Stmt::Local(local) = statement else { continue };
+            let name = match &local.pat {
+                syn::Pat::Ident(name) => Some(&name.ident),
+                syn::Pat::Type(typed) => match &*typed.pat {
+                    syn::Pat::Ident(name) => Some(&name.ident),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(value) = name.and_then(|name| constants.get(&name.to_string())) {
+                let pattern = if local.init.as_ref().is_some_and(|init| dictionary_literal(&init.expr).is_some()) {
+                    local_name(&local.pat).unwrap().to_token_stream()
+                } else {
+                    local.pat.to_token_stream()
+                };
+                bindings.extend(quote!(let #pattern = #value;));
+            }
+        }
+        Ok(bindings)
+    }
+
     #[cfg(test)]
     /// Storage adaptation only: types and constants, not order/providers/plans.
     pub fn encoded_query(&self, manifest: &Manifest) -> Result<TokenStream> {
-        self.encoded_query_with_types(manifest, &BTreeMap::new())
+        self.encoded_query_with_types(manifest, &self.dictionary_types(manifest)?)
     }
 
     /// A loader profile may replace stored scalar types; predicates and atom
@@ -553,60 +834,30 @@ impl Kernel {
         storage: &BTreeMap<(String, String), syn::Type>,
     ) -> Result<TokenStream> {
         let mut relations = self.relations.clone();
-        let dictionary_storage = self.dictionary_types(manifest)?;
         for relation in &mut relations {
             for (column, ty) in &mut relation.columns {
                 if let Some(stored) = storage.get(&(relation.table.to_string(), column.to_string()))
                 {
                     *ty = stored.clone();
-                } else if self.is_standalone() {
-                    let metadata =
-                        manifest.column(&relation.table.to_string(), &column.to_string())?;
-                    let declared = ty.to_token_stream().to_string();
-                    let keep_string = declared == "String"
-                        && !dictionary_storage.contains_key(&(relation.table.to_string(), column.to_string()));
-                    let authored_code = declared == "u32" && metadata.encoding == "dictionary";
-                    if !keep_string && !authored_code {
-                        *ty = syn::parse_str(&metadata.ty)?;
-                    }
                 }
             }
         }
-        let constants = setup_constants(&self.setup, &self.derived, manifest)?;
-        let mut variables = BTreeMap::new();
-        collect_variables(self.body.clone(), &relations, &mut variables)?;
+        let variables = self.variable_origins()?;
+        relations.extend(self.dictionary_relations()?);
         let mut body = self.cpu_program()?.query.body;
-        encode_dictionary_body(&mut body, &relations, manifest, &variables)?;
-        let body = encode_tokens(
-            body.to_token_stream(),
-            &relations,
-            manifest,
-            &constants,
-            &variables,
-        )?;
+        let dictionary_relations: Vec<_> = relations.iter().cloned().map(|mut relation| {
+            relation.columns.retain(|(column, _)| storage.contains_key(&(relation.table.to_string(), column.to_string())));
+            relation
+        }).collect();
+        encode_dictionary_body(&mut body, &dictionary_relations, manifest, &variables)?;
+        encode_atom_body(&mut body, &relations, &dictionary_relations, manifest)?;
+        let body = body.to_token_stream();
         let mut declarations = TokenStream::new();
         for relation in &self.relations {
             let name = &relation.name;
             let mut fields = Vec::new();
             for (column, logical) in &relation.columns {
-                let metadata = manifest.column(&relation.table.to_string(), &column.to_string())?;
-                let declared = logical.to_token_stream().to_string();
-                if metadata.logical_type != declared
-                    && metadata.ty != declared
-                    && !(declared == "u32" && metadata.encoding == "dictionary")
-                    && !(self.is_standalone()
-                        && declared == "i64"
-                        && metadata.logical_type == "Integer")
-                {
-                    return Err(format!(
-                        "{}.{}: CPU type {} differs from manifest logical type {}",
-                        relation.table,
-                        column,
-                        logical.to_token_stream(),
-                        metadata.logical_type
-                    )
-                    .into());
-                }
+                let _ = logical;
                 let ty = &relations
                     .iter()
                     .find(|encoded| encoded.name == relation.name)
@@ -616,23 +867,19 @@ impl Kernel {
                     .find(|(name, _)| name == column)
                     .expect("cloned input column")
                     .1;
-                let ty: syn::Type = if self.is_standalone()
-                    || storage.contains_key(&(relation.table.to_string(), column.to_string()))
-                {
-                    ty.clone()
-                } else if declared == "String"
-                    || (declared == "u32" && metadata.encoding == "dictionary")
-                {
-                    logical.clone()
-                } else {
-                    syn::parse_str(&metadata.ty)?
-                };
+                let ty = ty.clone();
                 fields.push(quote!(#column: #ty));
             }
             declarations.extend(quote!(relation #name(#(#fields),*);));
         }
         for (name, columns) in &self.derived {
-            let fields = columns.iter().map(|(column, ty)| quote!(#column: #ty));
+            let dictionary = relations.iter().any(|relation| relation.name == *name);
+            if dictionary && columns.len() != 1 {
+                return Err("dictionary_where input must have one code column".into());
+            }
+            let fields = columns.iter().map(|(column, ty)| {
+                if dictionary { quote!(#column: u32) } else { quote!(#column: #ty) }
+            });
             declarations.extend(quote!(relation #name(#(#fields),*);));
         }
         for relation in &self.published {
@@ -644,10 +891,7 @@ impl Kernel {
             declarations.extend(quote!(relation #name(#(#fields),*);));
         }
         if let Some(program) = &self.program {
-            let mut head = program.query.head.clone();
-            for argument in &mut head.args {
-                encode_dictionary_expression(argument, &relations, manifest, &variables)?;
-            }
+            let head = program.query.head.clone();
             let answer_name = &head.relation;
             let origins = self.answer_columns()?;
             let fields = self
@@ -669,6 +913,7 @@ impl Kernel {
                                 })
                                 .map(|(_, ty)| ty)
                         })
+                        .or_else(|| origin.as_ref().and_then(|origin| storage.get(origin)))
                         .unwrap_or(logical);
                     quote!(#name: #ty)
                 });
@@ -681,8 +926,7 @@ impl Kernel {
     }
 
     pub fn answer_columns(&self) -> Result<Vec<Option<(String, String)>>> {
-        let mut variables = BTreeMap::new();
-        collect_variables(self.body.clone(), &self.relations, &mut variables)?;
+        let variables = self.variable_origins()?;
         Ok(self
             .cpu_program()?
             .query
@@ -702,127 +946,21 @@ impl Kernel {
             .collect())
     }
 }
-// A coded string may occur inside an arithmetic/conditional expression only
-// through literal equality. Any other use keeps the entire column as String.
+// Scalar codecs may adapt relational operands without inspecting Rust.
 fn dictionary_expression(expression: &syn::Expr, variable: &str) -> bool {
-    use syn::visit::Visit;
-    struct Check<'a> { variable: &'a str, safe: bool }
-    impl<'ast> Visit<'ast> for Check<'_> {
-        fn visit_expr(&mut self, expression: &'ast syn::Expr) {
-            if let syn::Expr::Binary(binary) = expression
-                && matches!(binary.op, syn::BinOp::Eq(_) | syn::BinOp::Ne(_))
-                && [(&*binary.left, &*binary.right), (&*binary.right, &*binary.left)]
-                    .iter().any(|(variable, literal)| {
-                        matches!(variable, syn::Expr::Path(path) if path.path.is_ident(self.variable))
-                            && matches!(literal, syn::Expr::Lit(lit) if matches!(lit.lit, syn::Lit::Str(_)))
-                    })
-            {
-                return;
-            }
-            if matches!(expression, syn::Expr::Path(path) if path.path.is_ident(self.variable))
-                || matches!(expression, syn::Expr::Macro(mac) if mentions(mac.mac.tokens.clone(), &quote::format_ident!("{}", self.variable)))
-            {
-                self.safe = false;
-            }
-            syn::visit::visit_expr(self, expression);
-        }
-    }
-    let mut check = Check { variable, safe: true };
-    check.visit_expr(expression);
-    check.safe
+    let free = cq_lang_cq::rust::free_variables(expression);
+    !free.opaque && !free.names.contains(variable)
 }
 
-fn encode_dictionary_expression(
-    expression: &mut syn::Expr,
-    relations: &[Relation],
-    manifest: &Manifest,
-    variables: &BTreeMap<String, (String, String)>,
-) -> Result<()> {
-    use syn::visit_mut::VisitMut;
-    struct Encode<'a> {
-        relations: &'a [Relation],
-        manifest: &'a Manifest,
-        variables: &'a BTreeMap<String, (String, String)>,
-        error: Option<Box<dyn std::error::Error>>,
-    }
-    impl VisitMut for Encode<'_> {
-        fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
-            if let syn::Expr::Binary(binary) = expression
-                && matches!(binary.op, syn::BinOp::Eq(_) | syn::BinOp::Ne(_))
-            {
-                let pair = if matches!(&*binary.left, syn::Expr::Path(_)) {
-                    (&*binary.left, &mut *binary.right)
-                } else {
-                    (&*binary.right, &mut *binary.left)
-                };
-                if let syn::Expr::Path(path) = pair.0
-                    && let Some(name) = path.path.get_ident()
-                    && let Some((table, column)) = self.variables.get(&name.to_string())
-                    && self.relations.iter().any(|relation| relation.table == table.as_str()
-                        && relation.columns.iter().any(|(name, ty)| name == column.as_str()
-                            && ty.to_token_stream().to_string() != "String"))
-                    && let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(text), .. }) = pair.1
-                {
-                    match self.manifest.text_id(table, column, &text.value()) {
-                        Ok(code) => *pair.1 = syn::parse_quote!(#code),
-                        Err(error) => self.error = Some(error),
-                    }
-                }
-            }
-            syn::visit_mut::visit_expr_mut(self, expression);
-        }
-    }
-    let mut encode = Encode { relations, manifest, variables, error: None };
-    encode.visit_expr_mut(expression);
-    match encode.error { Some(error) => Err(error), None => Ok(()) }
-}
 
-fn dictionary_constraint(predicate: &cq_lang_cq::Constraint, variable: &str) -> bool {
-    use cq_lang_cq::syntax::constraint::{Constraint, Term};
-    let is_variable = |term: &Term| matches!(term, Term::Variable(name) if name == variable);
-    let string = |expression: &syn::Expr| matches!(expression, syn::Expr::Lit(literal) if matches!(literal.lit, syn::Lit::Str(_)));
-    if !predicate.variables().any(|name| name == variable) {
-        return true;
-    }
-    match predicate {
-        Constraint::Compare {
-            left,
-            comparison,
-            right,
-        } if !comparison.ordered() => {
-            matches!(right, Term::Literal(literal) if is_variable(left) && string(literal))
-                || matches!(left, Term::Literal(literal) if is_variable(right) && string(literal))
-        }
-        Constraint::In { term, literals } => is_variable(term) && literals.iter().all(string),
-        Constraint::Or(arms) => arms
-            .iter()
-            .flatten()
-            .all(|arm| dictionary_constraint(arm, variable)),
-        _ => false,
-    }
-}
-
-fn dictionary_body(body: &cq_lang_cq::CommaList<cq_lang_cq::BodyItem>, variable: &str) -> bool {
-    use cq_lang_cq::{BodyItem, Constraint};
+fn scalar_codec_body(body: &cq_lang_cq::CommaList<cq_lang_cq::BodyItem>, variable: &str) -> bool {
+    use cq_lang_cq::BodyItem;
     body.iter().all(|item| match item {
-        BodyItem::Block(block) => block
-            .branches
-            .iter()
-            .all(|branch| dictionary_body(&branch.body, variable)),
-        BodyItem::Equality(equality) => {
-            dictionary_constraint(&Constraint::from_equality(equality), variable)
-        }
-        BodyItem::Constraint(predicate) => dictionary_constraint(predicate, variable),
-        BodyItem::Let(binding) => dictionary_expression(&binding.expression, variable),
-        BodyItem::Positive { atom } => atom.args.iter().all(|argument| {
-            matches!(
-                argument,
-                syn::Expr::Path(_) | syn::Expr::Lit(_) | syn::Expr::Infer(_)
-            ) || !mentions(
-                argument.to_token_stream(),
-                &quote::format_ident!("{variable}"),
-            )
-        }),
+        _ if item.rust_step().is_some_and(|step|
+            step.free_variables.opaque || step.free_variables.names.contains(variable)) => false,
+        BodyItem::Block(block) => block.branches.iter()
+            .all(|branch| scalar_codec_body(&branch.body, variable)),
+        BodyItem::Equality(_) | BodyItem::Constraint(_) | BodyItem::Positive { .. } => true,
         _ => !mentions(item.to_token_stream(), &quote::format_ident!("{variable}")),
     })
 }
@@ -845,21 +983,45 @@ fn encode_dictionary_body(
     ) -> Result<()> {
         if let Term::Variable(name) = term
             && let Some((table, column)) = variables.get(&name.to_string())
-            && let syn::Expr::Lit(syn::ExprLit {
-                lit: syn::Lit::Str(text),
-                ..
-            }) = expression
             && relations.iter().any(|relation| {
                 relation.table == table.as_str()
-                    && relation.columns.iter().any(|(name, ty)| {
-                        name == column.as_str() && ty.to_token_stream().to_string() != "String"
-                    })
+                    && relation.columns.iter().any(|(column_name, _)| column_name == column.as_str())
             })
         {
-            let code = manifest.text_id(table, column, &text.value())?;
-            *expression = syn::parse_quote!(#code);
+            match manifest.column(table, column)?.encoding.as_str() {
+                "days_since_epoch" => {
+                    *expression = syn::parse_quote!((#expression).days_since_epoch());
+                    return Ok(());
+                }
+                "scaled_integer" => {
+                    *expression = syn::parse_quote!((#expression).scaled());
+                    return Ok(());
+                }
+                "dictionary" => {}
+                _ => return Ok(()),
+            }
+            if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(text), .. }) = expression {
+                let code = manifest.text_id(table, column, &text.value())?;
+                let code = if code < 0 { u32::MAX } else { u32::try_from(code)? };
+                *expression = syn::parse_quote!(#code);
+            } else {
+                let dictionary = manifest.dictionary(manifest.column(table, column)?)?;
+                *expression = syn::parse_quote!({
+                    let value = #expression;
+                    let dictionary: &[&str] = &[#(#dictionary),*];
+                    crate::manifest::DictionaryLiteral::dictionary_code(&value, dictionary)
+                });
+            }
         }
         Ok(())
+    }
+
+    fn operand(term: &mut Term) -> Option<&mut syn::Expr> {
+        match term {
+            Term::Literal(expression) => Some(expression.as_mut()),
+            Term::Closed(expression) => Some(expression),
+            Term::Variable(_) => None,
+        }
     }
 
     fn constraint(
@@ -868,16 +1030,26 @@ fn encode_dictionary_body(
         manifest: &Manifest,
         variables: &BTreeMap<String, (String, String)>,
     ) -> Result<()> {
+        let dictionary = |term: &Term| -> Result<bool> {
+            let Term::Variable(name) = term else { return Ok(false) };
+            let Some((table, column)) = variables.get(&name.to_string()) else { return Ok(false) };
+            Ok(relations.iter().any(|relation| relation.table == table.as_str()
+                && relation.columns.iter().any(|(name, _)| name == column.as_str()))
+                && manifest.column(table, column)?.encoding == "dictionary")
+        };
         match predicate {
             Constraint::Compare {
                 left,
                 comparison,
                 right,
-            } if !comparison.ordered() => {
-                if let Term::Literal(expression) = right {
+            } => {
+                if comparison.ordered() && (dictionary(left)? || dictionary(right)?) {
+                    return Err("dictionary IDs do not preserve lexical order; use an explicit dictionary predicate".into());
+                }
+                if let Some(expression) = operand(right) {
                     literal(left, expression, relations, manifest, variables)?;
                 }
-                if let Term::Literal(expression) = left {
+                if let Some(expression) = operand(left) {
                     literal(right, expression, relations, manifest, variables)?;
                 }
             }
@@ -886,12 +1058,21 @@ fn encode_dictionary_body(
                     literal(term, expression, relations, manifest, variables)?;
                 }
             }
+            Constraint::Between { term, low, high } => {
+                if dictionary(term)? {
+                    return Err("dictionary IDs do not preserve lexical order; use an explicit dictionary predicate".into());
+                }
+                for bound in [low, high] {
+                    if let Some(expression) = operand(bound) {
+                        literal(term, expression, relations, manifest, variables)?;
+                    }
+                }
+            }
             Constraint::Or(arms) => {
                 for predicate in arms.iter_mut().flatten() {
                     constraint(predicate, relations, manifest, variables)?;
                 }
             }
-            _ => {}
         }
         Ok(())
     }
@@ -913,9 +1094,6 @@ fn encode_dictionary_body(
             BodyItem::Constraint(predicate) => {
                 constraint(predicate, relations, manifest, variables)?
             }
-            BodyItem::Let(binding) => {
-                encode_dictionary_expression(&mut binding.expression, relations, manifest, variables)?;
-            }
             _ => {}
         }
     }
@@ -934,6 +1112,7 @@ fn mentions(tokens: TokenStream, name: &Ident) -> bool {
 fn setup_constants(
     setup: &syn::Block,
     derived: &[(Ident, Vec<(Ident, syn::Type)>)],
+    exports: &[(String, Vec<String>)],
     manifest: &Manifest,
 ) -> Result<BTreeMap<String, TokenStream>> {
     let mut constants = BTreeMap::new();
@@ -941,9 +1120,9 @@ fn setup_constants(
         let syn::Stmt::Local(local) = statement else {
             return Err("unsupported workload setup statement".into());
         };
-        if let syn::Pat::Type(typed) = &local.pat
-            && let syn::Pat::Ident(name) = typed.pat.as_ref()
-            && derived.iter().any(|(relation, _)| *relation == name.ident)
+        if local_name(&local.pat).is_some_and(|name| derived.iter().any(|(relation, _)| relation == name))
+            || local.init.as_ref().is_some_and(|init|
+                dictionary_predicate(&init.expr).is_ok_and(|value| value.is_some()))
         {
             continue;
         }
@@ -961,24 +1140,23 @@ fn setup_constants(
             .ok_or("setup local needs initializer")?
             .expr;
         let value = match expression.as_ref() {
-            syn::Expr::Call(call) if call.func.to_token_stream().to_string() == "intern" => {
-                let arguments: Vec<_> = call.args.iter().map(|argument| {
-                    match argument {
-                        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(value), .. }) =>
-                            Ok(value.value()),
-                        _ => Err("intern needs table, column and text literals"),
-                    }
-                }).collect::<std::result::Result<_, _>>()?;
-                let [table, column, text] = arguments.as_slice() else {
-                    return Err("intern needs table, column and text literals".into());
-                };
-                if manifest.column(table, column)?.encoding != "dictionary" {
-                    return Err(format!("intern requires a dictionary column: {table}.{column}").into());
+            expression if dictionary_literal(expression).is_some() => {
+                let method = dictionary_literal(expression).unwrap();
+                if method.args.len() != 2 {
+                    return Err("dictionary literal requires column and text".into());
                 }
-                let code = manifest.text_id(table, column, text)?;
-                // The authored interner reserves MAX for absent literals.
-                let code = if code < 0 { u32::MAX } else { u32::try_from(code)? };
-                quote!(#code)
+                let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(column), .. }) = &method.args[0] else {
+                    return Err("dictionary literal requires a column literal".into());
+                };
+                let column = column.value();
+                let table = column_table(exports, &column)?;
+                let dictionary = manifest.dictionary(manifest.column(table, &column)?)?;
+                let text = &method.args[1];
+                quote!({
+                    let value = #text;
+                    let dictionary: &[&str] = &[#(#dictionary),*];
+                    crate::manifest::DictionaryLiteral::dictionary_code(&value, dictionary)
+                })
             }
             syn::Expr::Call(call) if call.func.to_token_stream().to_string() == "date" => {
                 let Some(syn::Expr::Lit(syn::ExprLit {
@@ -989,45 +1167,10 @@ fn setup_constants(
                     return Err("date needs an ISO literal".into());
                 };
                 let days = date.value().parse::<cq_load::Date>()?.days_since_epoch();
-                quote!(#days)
+                // DECODE R: closed authored date literal is reconstructed for its opaque host expression, not a row-dependent relational decode.
+                quote!(::cq_load::Date::from_days(#days))
             }
-            syn::Expr::MethodCall(method) if method.method == "expect" => {
-                let syn::Expr::Call(call) = method.receiver.as_ref() else {
-                    return Err("unsupported setup initializer".into());
-                };
-                if call.func.to_token_stream().to_string() == "Date :: load" {
-                    let Some(syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(date),
-                        ..
-                    })) = call.args.first()
-                    else {
-                        return Err("Date::load needs an ISO literal".into());
-                    };
-                    let days = date.value().parse::<cq_load::Date>()?.days_since_epoch();
-                    constants.insert(name.ident.to_string(), quote!(#days));
-                    continue;
-                }
-                if call.func.to_token_stream().to_string() != "Decimal :: from_scaled" {
-                    return Err("unsupported setup initializer".into());
-                }
-                let Some(syn::Expr::Lit(syn::ExprLit {
-                    lit: syn::Lit::Int(number),
-                    ..
-                })) = call.args.first()
-                else {
-                    return Err("scaled decimal needs integer literal".into());
-                };
-                let value = number.base10_parse::<i64>()?;
-                quote!(#value)
-            }
-            syn::Expr::Lit(_) => expression.to_token_stream(),
-            _ => {
-                return Err(format!(
-                    "unsupported setup initializer: {}",
-                    expression.to_token_stream()
-                )
-                .into());
-            }
+            _ => expression.to_token_stream(),
         };
         constants.insert(name.ident.to_string(), value);
     }
@@ -1067,111 +1210,127 @@ fn collect_variables(
     Ok(())
 }
 
-fn encode_tokens(
-    tokens: TokenStream,
+fn encode_atom_body(
+    body: &mut cq_lang_cq::CommaList<cq_lang_cq::BodyItem>,
     relations: &[Relation],
+    dictionaries: &[Relation],
     manifest: &Manifest,
-    constants: &BTreeMap<String, TokenStream>,
-    variables: &BTreeMap<String, (String, String)>,
-) -> Result<TokenStream> {
-    let tokens: Vec<_> = tokens.into_iter().collect();
-    let mut encoded = TokenStream::new();
-    let mut skip_until = 0;
-    for (index, token) in tokens.iter().enumerate() {
-        if index < skip_until {
-            continue;
-        }
-        if let TokenTree::Ident(name) = token
-            && let Some((table, column)) = variables.get(&name.to_string())
-            && manifest.column(table, column)?.logical_type == "Decimal"
-            && let Some(
-                [
-                    TokenTree::Punct(dot),
-                    TokenTree::Ident(method),
-                    TokenTree::Group(args),
-                ],
-            ) = tokens.get(index + 1..index + 4)
-            && dot.as_char() == '.'
-            && method == "scaled"
-            && args.stream().is_empty()
-        {
-            encoded.extend(quote!((*#name)));
-            skip_until = index + 4;
-            continue;
-        }
-        if let TokenTree::Ident(name) = token
-            && let Some((table, column)) = variables.get(&name.to_string())
-            && manifest.column(table, column)?.logical_type == "String"
-            && relations
-                .iter()
-                .find(|relation| relation.table == table.as_str())
-                .and_then(|relation| {
-                    relation
-                        .columns
-                        .iter()
-                        .find(|(name, _)| name == column.as_str())
-                })
-                .is_some_and(|(_, ty)| ty.to_token_stream().to_string() != "String")
-            && matches!(tokens.get(index + 1..index + 3),
-                Some([TokenTree::Punct(a), TokenTree::Punct(b)])
-                    if matches!(a.as_char(), '=' | '!') && b.as_char() == '=')
-            && !matches!(index.checked_sub(1).and_then(|index| tokens.get(index)),
-                Some(TokenTree::Punct(punct)) if punct.as_char() == '*')
-        {
-            encoded.extend(quote!(*#name));
-            continue;
-        }
-        match token {
-            TokenTree::Ident(name) if constants.contains_key(&name.to_string()) => {
-                encoded.extend(constants[&name.to_string()].clone())
+) -> Result<()> {
+    for item in body {
+        match item {
+            cq_lang_cq::BodyItem::Block(block) => {
+                for branch in &mut block.branches {
+                    encode_atom_body(&mut branch.body, relations, dictionaries, manifest)?;
+                }
             }
-            TokenTree::Group(group) => {
-                let relation = index
-                    .checked_sub(1)
-                    .and_then(|i| tokens.get(i))
-                    .and_then(|token| {
-                        if let TokenTree::Ident(name) = token {
-                            relations.iter().find(|r| r.name == *name)
-                        } else {
-                            None
-                        }
-                    });
-                let contents = if let Some(relation) = relation {
-                    let mut args = arguments(group)?;
-                    for (arg, (column, ty)) in args.iter_mut().zip(&relation.columns) {
-                        if ty.to_token_stream().to_string() == "String" {
+            cq_lang_cq::BodyItem::Positive { atom } => {
+                if let Some(relation) = relations.iter().find(|relation| relation.name == atom.relation) {
+                    for (argument, (column, _)) in atom.args.iter_mut().zip(&relation.columns) {
+                        if !dictionaries.iter().any(|encoded| encoded.name == relation.name
+                            && encoded.columns.iter().any(|(name, _)| name == column)) {
                             continue;
                         }
-                        if let syn::Expr::Lit(syn::ExprLit {
-                            lit: syn::Lit::Str(text),
-                            ..
-                        }) = arg
-                        {
-                            let id = manifest.text_id(
-                                &relation.table.to_string(),
-                                &column.to_string(),
-                                &text.value(),
-                            )?;
-                            *arg = syn::parse_quote!(#id);
+                        let table = relation.table.to_string();
+                        let column = column.to_string();
+                        let metadata = manifest.column(&table, &column)?;
+                        if metadata.encoding != "dictionary" { continue; }
+                        if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(text), .. }) = argument {
+                            let code = manifest.text_id(&table, &column, &text.value())?;
+                            let code = if code < 0 { u32::MAX } else { u32::try_from(code)? };
+                            *argument = syn::parse_quote!(#code);
+                        } else if matches!(argument, syn::Expr::Block(_)) {
+                            // Closed atom operands keep their authored position
+                            // and Rust body. The declared column domain selects
+                            // the literal codec, including already encoded captures.
+                            let dictionary = manifest.dictionary(metadata)?;
+                            *argument = syn::parse_quote!({
+                                let value = #argument;
+                                let dictionary: &[&str] = &[#(#dictionary),*];
+                                crate::manifest::DictionaryLiteral::dictionary_code(&value, dictionary)
+                            });
                         }
                     }
-                    args.to_token_stream()
-                } else {
-                    encode_tokens(group.stream(), relations, manifest, constants, variables)?
-                };
-                let mut replacement = Group::new(group.delimiter(), contents);
-                replacement.set_span(group.span());
-                encoded.extend([TokenTree::Group(replacement)]);
+                }
             }
-            _ => encoded.extend([token.clone()]),
+            _ => {}
         }
     }
-    Ok(encoded)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_kernel_records_dictionary_domains_from_declared_relations() {
+        let kernel: Kernel = syn::parse_str(r#"
+            $; setup {
+                let Selected = cq_load::dictionary_where(
+                    &dictionaries, "label", |text: &str| text.contains("x"));
+            }
+            relations { relation Item => source_table(label: CallerOwnedAlias); }
+            derived { relation Selected(code: CallerOwnedAlias); }
+            answer(value: CallerOwnedAlias) :- Item(value), Selected(value);
+        "#).unwrap();
+        assert_eq!(kernel.exports, vec![("source_table".into(), vec!["label".into()])]);
+        let domains = kernel.dictionary_relations().unwrap();
+        assert_eq!(domains.len(), 1);
+        assert_eq!(domains[0].table, "source_table");
+        assert_eq!(domains[0].columns[0].0, "label");
+    }
+
+    #[test]
+    fn load_dictionary_producers_follow_data_fields_and_declared_origins() {
+        for (locals, field) in [
+            ("", r#"codes: cq_load::dictionary_where(&dictionaries, "label", |text| text.contains("x"))"#),
+            (r#"let codes = cq_load::dictionary_where(&dictionaries, "label", |text| text.contains("x"));"#, "codes"),
+            (r#"let selected = cq_load::dictionary_where(&dictionaries, "label", |text| text.contains("x")); let codes = selected;"#, "codes"),
+        ] {
+            let source = format!(r#"
+                const EXPORTS: &[(&str, &str)] = &[("unrelated_table_name", "label")];
+                fn load() -> Data {{
+                    {locals}
+                    Ok(Data {{ {field}, dictionaries }})
+                }}
+                fn run(data: &Data) {{
+                    let Codes = data.codes.as_slice();
+                    mini_linq::compile! {{
+                        pipeline {{}}
+                        struct Query;
+                        relation Codes(code: UserAlias);
+                        relation answer(value: UserAlias);
+                        answer(value) :- Codes(value);
+                    }}
+                }}
+            "#);
+            let kernel = Kernel::import(&source).unwrap();
+            assert!(kernel.relations.is_empty());
+            assert_eq!(kernel.derived.len(), 1);
+            assert_eq!(kernel.answer_columns().unwrap(),
+                vec![Some(("unrelated_table_name".into(), "label".into()))]);
+            let (expression, inputs) = kernel.derived_input(&syn::parse_quote!(Codes)).unwrap();
+            assert!(inputs.is_empty());
+            let (column, predicate) = dictionary_predicate(expression).unwrap().unwrap();
+            assert_eq!(column, "label");
+            assert_eq!(predicate.to_token_stream().to_string(), quote!(|text| text.contains("x")).to_string());
+            let generated = dictionary_initializer(expression, &kernel.exports).unwrap().unwrap().to_string();
+            assert!(generated.contains("unrelated_table_name"));
+            assert_eq!(generated.matches("predicate (value . as_str ())").count(), 1);
+            assert!(!kernel.cpu_query().to_string().contains("contains"));
+        }
+    }
+
+    #[test]
+    fn dictionary_provenance_rejects_missing_and_ambiguous_columns() {
+        let expression = syn::parse_quote!(cq_load::dictionary_where(&dictionaries, "label", |text| true));
+        assert!(dictionary_initializer(&expression, &[]).unwrap_err().to_string().contains("no EXPORTS"));
+        let exports = vec![("a".into(), vec!["label".into()]), ("b".into(), vec!["label".into()])];
+        assert!(dictionary_initializer(&expression, &exports).unwrap_err().to_string().contains("ambiguous"));
+        let old = syn::parse_quote!(dictionary_where("a", "label", values, |text| true));
+        assert!(dictionary_predicate(&old).is_err());
+    }
+
     #[test]
     fn shared_key_evidence_survives_single_and_staged_imports() {
         let source = |name| SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
@@ -1181,30 +1340,74 @@ mod tests {
             &["l_orderkey".into(), "l_linenumber".into()],
         ));
         let h13 = crate::stages::Program::import(source("h13")).unwrap().unwrap();
-        let publications = h13.preprocessing.iter()
-            .map(|preprocess| (preprocess.name.to_string(), preprocess.columns.clone()))
-            .collect();
         for index in 0..h13.stages.len() {
+            let mut publications: BTreeMap<_, _> = h13.preprocessing.iter()
+                .map(|preprocess| (preprocess.name.to_string(), preprocess.columns.clone()))
+                .collect();
+            for input in h13.stages[index].program.inputs() {
+                if h13.aliases.contains_key(&input.name.to_string()) {
+                    publications.insert(input.name.to_string(), input.columns.iter()
+                        .map(|column| (column.name.clone(), column.ty.clone())).collect());
+                }
+            }
             let kernel = h13.kernel(index, &publications).unwrap();
             assert_eq!(kernel.evidence, h13.stages[index].evidence);
-            assert!(kernel.evidence.has_key("Customer", &["c_custkey".into()]));
-            assert!(kernel.evidence.has_key("QualifiedOrders", &["order_key".into()]));
+            assert!(!kernel.evidence.has_key("Customer", &["c_custkey".into()]));
+            assert!(!kernel.evidence.has_key("Orders", &["o_orderkey".into()]));
         }
     }
 
     #[test]
-    fn imported_plan_hints_are_not_discarded() {
-        let source = SOURCES
-            .iter()
-            .find(|(name, _)| *name == "d72_inner")
-            .unwrap()
-            .1;
-        let kernel = Kernel::import(source).unwrap();
-        assert_eq!(
-            kernel.plan_advice.to_string(),
-            quote!(no_reduce, order(Nation, Supplier, Lineitem, Orders, Customer, PartSupp, Part)).to_string()
-        );
+    fn output_schema_comes_only_from_the_authored_relation_declaration() {
+        let source = |declaration| format!(r#"
+            const EXPORTS: &[(&str, &str)] = &[("source_table", "value")];
+            type Answer = (String,);
+            fn run(data: &Data) -> Vec<Answer> {{
+                let Input = data.input.as_slice();
+                mini_linq::compile! {{
+                    pipeline {{}}
+                    struct Query;
+                    relation Input(value: DeclaredScalar);
+                    {declaration}
+                    answer(value) :- Input(value);
+                }}
+            }}
+        "#);
+        let kernel = Kernel::import(&source("relation answer(value: DeclaredScalar);")).unwrap();
+        assert_eq!(kernel.answer, vec![(syn::parse_quote!(value), syn::parse_quote!(DeclaredScalar))]);
+        let error = Kernel::import(&source("")).err().unwrap();
+        assert!(error.to_string().contains("answer relation declaration"));
     }
+
+    #[test]
+    fn compact_configuration_shell_keeps_the_single_authored_query() {
+        let source = SOURCES.iter().find(|(name, _)| *name == "d72_inner").unwrap().1;
+        let file = authored_file(source).unwrap();
+        assert_eq!(file.items.iter().filter(|item| matches!(item,
+            syn::Item::Fn(function) if function.sig.ident == "run")).count(), 1);
+        let kernel = Kernel::import(source).unwrap();
+        // CPU provider/configuration choices are not a second GPU plan.
+        assert!(kernel.plan_advice.is_empty());
+        assert_eq!(kernel.cpu_program().unwrap().query.body.to_token_stream().to_string(),
+            kernel.body.to_string());
+    }
+    #[test]
+    fn query_body_shell_imports_the_authored_runner_not_its_dispatcher() {
+        let source = SOURCES.iter().find(|(name, _)| *name == "h22").unwrap().1;
+        assert!(crate::stages::Program::import(source).unwrap().is_none());
+        let kernel = Kernel::import(source).unwrap();
+        assert_eq!(kernel.derived.len(), 1);
+        assert_eq!(kernel.derived[0].0, "QualifyingPhones");
+        let program = kernel.cpu_program().unwrap();
+        assert_eq!(program.inputs().count(), 3);
+        assert!(program.query.body.iter().any(|item|
+            matches!(item, cq_lang_cq::BodyItem::Negation(_))));
+        let (expression, inputs) = kernel.derived_input(&syn::parse_quote!(QualifyingPhones)).unwrap();
+        assert!(inputs.is_empty());
+        assert_eq!(dictionary_predicate(expression).unwrap().unwrap().0, "c_phone");
+        assert_eq!(kernel.answer_columns().unwrap(), vec![Some(("customer".into(), "c_custkey".into()))]);
+    }
+
     #[test]
     fn every_cpu_query_is_imported_without_a_second_body() {
         assert_eq!(SOURCES.len(), 26);
@@ -1225,7 +1428,7 @@ mod tests {
 
     #[test]
     fn standalone_import_retains_aggregate_heads_and_output_types() {
-        for name in ["h01", "h06", "h10", "h12", "h19"] {
+        for name in ["h01", "h06", "h10", "h19"] {
             let source = SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
             let kernel = Kernel::import(source).unwrap();
             assert!(kernel.is_standalone());
@@ -1249,8 +1452,10 @@ mod tests {
         for (name, count, terminals) in [
             ("h02", 2, vec![1]),
             ("h11", 4, vec![3]),
+            ("h12", 5, vec![3, 4]),
             ("h13", 2, vec![0, 1]),
             ("h15", 3, vec![2]),
+            ("h16", 2, vec![1]),
             ("h18", 2, vec![1]),
             ("h20", 2, vec![1]),
         ] {
@@ -1302,7 +1507,21 @@ mod tests {
                         .to_string()
                         .contains("split_once")
                 );
-                assert_eq!(program.preprocessing[0].relations[0].table, "orders");
+                assert_eq!(program.preprocessing[0].relations.len(), 1);
+                assert_eq!(program.preprocessing[0].relations[0].name, "Orders");
+                assert_eq!(program.preprocessing[0].columns.len(), 2);
+                assert!(program.preprocessing[0].columns.iter().all(|(_, ty)|
+                    *ty == syn::parse_quote!(i64)));
+                let prepared = program.preprocessing_tokens().to_string();
+                assert_eq!(prepared.matches("from_dense_keys").count(), 1);
+                assert!(prepared.find("from_dense_keys").unwrap() < prepared.find("filter (").unwrap());
+                assert_eq!(program.aliases["CountedCustomers"], 0);
+            }
+            if name == "h16" {
+                assert_eq!(program.aliases["BadSupplier"], 0);
+                assert_eq!(program.preprocessing.len(), 2);
+                assert!(program.stages[1].program.query.body.iter()
+                    .any(|item| matches!(item, cq_lang_cq::BodyItem::Negation(_))));
             }
         }
     }
@@ -1313,7 +1532,6 @@ mod tests {
         for (query, derived, dependency, negatives) in [
             ("h04", None, None, 0),
             ("h04_not_exists", Some("LateLineitem"), Some("Lineitem"), 1),
-            ("h16", Some("BadSupplier"), Some("Supplier"), 1),
             ("h22", None, None, 1),
         ] {
             let source = SOURCES.iter().find(|(name, _)| *name == query).unwrap().1;
@@ -1362,17 +1580,22 @@ mod encoding_tests {
                 for (code, text) in values.iter().enumerate() {
                     assert_eq!(dictionary.lookup(text), Some(code as u32));
                     let setup = syn::parse_quote!({
-                        let value: u32 = intern(#table, #column, #text);
+                        let value: Alias = data.dictionaries.literal(#column, #text);
                     });
-                    let constants = setup_constants(&setup, &[], &manifest).unwrap();
-                    assert_eq!(constants["value"].to_string(), format!("{code}u32"));
+                    let constants = setup_constants(&setup, &[], &kernel.exports, &manifest).unwrap();
+                    assert!(constants["value"].to_string().contains("DictionaryLiteral"));
+                    let entries: Vec<_> = values.iter().map(String::as_str).collect();
+                    assert_eq!(crate::manifest::DictionaryLiteral::dictionary_code(text, &entries), code as u32);
                 }
             }
             let setup = syn::parse_quote!({
-                let absent: u32 = intern("part", "p_brand", "__absent__");
+                let absent: Alias = dictionaries.literal("p_brand", "__absent__");
             });
-            let constants = setup_constants(&setup, &[], &manifest).unwrap();
-            assert_eq!(constants["absent"].to_string(), format!("{}u32", u32::MAX));
+            let constants = setup_constants(&setup, &[], &kernel.exports, &manifest).unwrap();
+            assert!(constants["absent"].to_string().contains("__absent__"));
+            let values = manifest.dictionary(manifest.column("part", "p_brand").unwrap()).unwrap();
+            let entries: Vec<_> = values.iter().map(String::as_str).collect();
+            assert_eq!(crate::manifest::DictionaryLiteral::dictionary_code("__absent__", &entries), u32::MAX);
             let encoded = kernel.encoded_query(&manifest).unwrap();
             assert!(!encoded.to_string().contains("intern"));
             let program: cq_lang_cq::Program = syn::parse2(encoded).unwrap();
@@ -1382,31 +1605,88 @@ mod encoding_tests {
     }
 
     #[test]
-    fn grouped_storage_adaptation_preserves_folds_and_scalar_encodings() {
+    fn grouped_storage_adaptation_preserves_authored_rust_and_types() {
         let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
-        for name in ["h01", "h06", "h10", "h12", "h19"] {
+        for name in ["h01", "h06", "h10", "h19"] {
             let source = SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
             let kernel = Kernel::import(source).unwrap();
             let encoded = kernel.encoded_query(&manifest).unwrap();
-            let spelling = encoded.to_string();
-            assert!(!spelling.contains("scaled"), "{name}: {spelling}");
-            assert!(!spelling.contains("Date"), "{name}: {spelling}");
-            assert!(!spelling.contains("Decimal"), "{name}: {spelling}");
             let program: cq_lang_cq::Program = syn::parse2(encoded).unwrap();
             assert_eq!(program.query.head, kernel.cpu_program().unwrap().query.head);
             let normal = cq_lang_cq::normal::normalize(&program).unwrap();
             assert!(normal.query.group.is_some(), "{name}");
-            if name == "h01" {
-                assert!(spelling.contains("10471i32"));
-                let types: Vec<_> = program
-                    .output()
-                    .unwrap()
-                    .columns
-                    .iter()
-                    .map(|column| column.ty.to_token_stream().to_string())
-                    .collect();
-                assert_eq!(types, ["i32", "i32", "i64", "i64", "usize"]);
+            for ((actual, authored), origin) in program.output().unwrap().columns.iter()
+                .zip(&kernel.cpu_program().unwrap().output().unwrap().columns)
+                .zip(kernel.answer_columns().unwrap())
+            {
+                if origin.is_some_and(|(table, column)|
+                    manifest.column(&table, &column).unwrap().encoding == "dictionary")
+                {
+                    assert_eq!(actual.ty, syn::parse_quote!(u32));
+                } else {
+                    assert_eq!(actual, authored);
+                }
             }
+        }
+    }
+
+    #[test]
+    fn relational_scalar_codecs_do_not_rewrite_rust_reads() {
+        let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
+        let source = |name| SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
+        let h05 = Kernel::import(source("h05")).unwrap();
+        let storage = h05.scalar_codec_types(&manifest).unwrap();
+        assert!(storage.contains_key(&("orders".into(), "o_orderdate".into())));
+        let encoded = h05.encoded_query_with_types(&manifest, &storage).unwrap().to_string();
+        assert!(encoded.contains("days_since_epoch"), "{encoded}");
+        let h01 = Kernel::import(source("h01")).unwrap();
+        let storage = h01.scalar_codec_types(&manifest).unwrap();
+        assert!(storage.contains_key(&("lineitem".into(), "l_shipdate".into())));
+        assert!(!storage.contains_key(&("lineitem".into(), "l_quantity".into())));
+        assert!(!storage.contains_key(&("lineitem".into(), "l_extendedprice".into())));
+        let program: cq_lang_cq::Program = syn::parse2(
+            h01.encoded_query_with_types(&manifest, &storage).unwrap()
+        ).unwrap();
+        let rust_steps = |program: &cq_lang_cq::Program| program.query.body.iter()
+            .filter(|item| item.rust_step().is_some()).map(ToTokens::to_token_stream)
+            .map(|tokens| tokens.to_string()).collect::<Vec<_>>();
+        assert_eq!(rust_steps(&program), rust_steps(&h01.cpu_program().unwrap()));
+    }
+
+    #[test]
+    fn staged_symbol_domains_survive_priority_aggregation() {
+        let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
+        let source = SOURCES.iter().find(|(name, _)| *name == "h12").unwrap().1;
+        let program = crate::stages::Program::import(source).unwrap().unwrap();
+        let mut outputs: Vec<Vec<(Ident, syn::Type)>> = Vec::new();
+        let mut domains: Vec<Vec<Option<(String, String)>>> = Vec::new();
+        for (index, stage) in program.stages.iter().enumerate() {
+            let mut inputs = BTreeMap::new();
+            let mut origins = BTreeMap::new();
+            for input in stage.program.inputs() {
+                if let Some(&producer) = program.aliases.get(&input.name.to_string()) {
+                    inputs.insert(input.name.to_string(), input.columns.iter().zip(&outputs[producer])
+                        .map(|(column, (_, ty))| (column.name.clone(), ty.clone())).collect());
+                    origins.insert(input.name.to_string(), domains[producer].clone());
+                } else if let Some(preprocess) = program.preprocessing.iter()
+                    .find(|preprocess| preprocess.name == input.name)
+                {
+                    inputs.insert(input.name.to_string(), preprocess.columns.clone());
+                }
+            }
+            let mut kernel = program.kernel(index, &inputs).unwrap();
+            kernel.published_origins = origins;
+            let storage = kernel.dictionary_types(&manifest).unwrap();
+            let encoded: cq_lang_cq::Program = syn::parse2(
+                kernel.encoded_query_with_types(&manifest, &storage).unwrap(),
+            ).unwrap();
+            let output = encoded.output().unwrap();
+            outputs.push(output.columns.iter().map(|column|
+                (column.name.clone(), column.ty.clone())).collect());
+            domains.push(kernel.answer_columns().unwrap());
+            let mode = if index == 0 { 2 } else { 0 };
+            assert_eq!(domains[index][mode], Some(("lineitem".into(), "l_shipmode".into())));
+            assert_eq!(output.columns[mode].ty, syn::parse_quote!(u32));
         }
     }
 
@@ -1429,6 +1709,8 @@ mod encoding_tests {
         }
         for sf in [1, 10] {
             let manifest = Manifest::load(&crate::data_root().join(format!("sf{sf}"))).unwrap();
+            let mut storage = storage.clone();
+            storage.extend(kernel.dictionary_types(&manifest).unwrap());
             let program: cq_lang_cq::Program = syn::parse2(
                 kernel
                     .encoded_query_with_types(&manifest, &storage)
@@ -1513,17 +1795,69 @@ mod encoding_tests {
         )
         .unwrap();
         let manifest = Manifest::load(&root).unwrap();
+        let literal_source = r#"
+            const EXPORTS: &[(&str, &str)] = &[("part", "p_name")];
+            fn run(data: &Data) {
+                let Part = data.part.as_slice();
+                let selected: ArbitraryAlias = data.dictionaries.literal("p_name", { "green part".to_owned() });
+                mini_linq::compile! {
+                    pipeline {}
+                    struct Query;
+                    relation Part(p_name: ArbitraryAlias);
+                    relation answer(name: ArbitraryAlias);
+                    answer(name) :- Part(name), where name == selected;
+                }
+            }
+        "#;
+        let literal_kernel = Kernel::import(literal_source).unwrap();
+        let bindings = literal_kernel.setup_bindings(&manifest).unwrap().to_string();
+        assert!(bindings.contains("DictionaryLiteral"));
+        assert!(bindings.contains("to_owned"));
+        assert!(!bindings.contains("ArbitraryAlias"));
+        assert!(!bindings.contains("data"));
+        let encoded = literal_kernel.encoded_query(&manifest).unwrap().to_string();
+        assert!(encoded.contains("p_name : u32"));
+        assert!(!encoded.contains("ArbitraryAlias"));
+        assert_eq!(literal_kernel.answer_columns().unwrap(), vec![Some(("part".into(), "p_name".into()))]);
+        for operand in ["{ selected }", "{ { selected } }", "{ \"green part\".to_owned() }"] {
+            let source = literal_source.replace(
+                "Part(name), where name == selected",
+                &format!("Part(name), Part({operand})"),
+            );
+            let kernel = Kernel::import(&source).unwrap();
+            let authored = kernel.cpu_program().unwrap();
+            let encoded: cq_lang_cq::Program = syn::parse2(kernel.encoded_query(&manifest).unwrap()).unwrap();
+            assert_eq!(encoded.query.body.len(), authored.query.body.len());
+            for (actual, original) in encoded.query.body.iter().zip(&authored.query.body) {
+                let (cq_lang_cq::BodyItem::Positive { atom: actual },
+                    cq_lang_cq::BodyItem::Positive { atom: original }) = (actual, original)
+                else { panic!("closed literal adaptation must not introduce relational steps") };
+                assert_eq!(actual.relation, original.relation);
+                assert_eq!(actual.args.len(), original.args.len());
+            }
+            let spelling = encoded.to_token_stream().to_string();
+            assert!(spelling.contains("DictionaryLiteral"));
+            assert!(spelling.contains("\"green part\""));
+            assert!(spelling.contains("\"red\""));
+            assert!(spelling.contains(&syn::parse_str::<syn::Expr>(operand).unwrap().to_token_stream().to_string()));
+            if operand.contains("selected") {
+                assert!(kernel.setup_bindings(&manifest).unwrap().to_string().contains("DictionaryLiteral"));
+            }
+        }
         let strings = String::read(&manifest, "part", "p_name").unwrap();
         assert_eq!(strings, ["green part", "red", "green part"]);
         assert!(strings[0].contains("green"));
         assert_eq!(i32::read(&manifest, "part", "p_name").unwrap(), [1, 0, 1]);
-        for (ty, expected) in [("String", "\"green part\""), ("i32", "1i32")] {
+        for (ty, expected) in [("String", "\"green part\""), ("u32", "1u32")] {
             let kernel: Kernel = syn::parse_str(&format!(
                 "$; setup {{}} relations {{ relation Part => part(p_name: {ty}); }}
-                 answer(name: {ty}) :- Part(name), if name == \"green part\";"
+                 answer(name: {ty}) :- Part(name), where name == \"green part\";"
             ))
             .unwrap();
-            let encoded = kernel.encoded_query(&manifest).unwrap().to_string();
+            let storage = if ty == "u32" {
+                kernel.dictionary_types(&manifest).unwrap()
+            } else { BTreeMap::new() };
+            let encoded = kernel.encoded_query_with_types(&manifest, &storage).unwrap().to_string();
             assert!(encoded.contains(&format!("p_name : {ty}")), "{encoded}");
             assert!(
                 encoded.contains(&format!("name == {expected}")),
@@ -1534,76 +1868,89 @@ mod encoding_tests {
                  answer() :- Part(\"green part\");"
             ))
             .unwrap();
-            let encoded = literal.encoded_query(&manifest).unwrap().to_string();
+            let encoded = literal.encoded_query_with_types(&manifest, &storage).unwrap().to_string();
             assert!(encoded.contains(&format!("Part ({expected})")), "{encoded}");
         }
-        for (guard, dictionary) in [
-            ("name == \"red\"", true),
-            ("name == \"red\" || name == \"green part\"", true),
+        for (guard, relational) in [
+            ("where name == \"red\"", true),
+            ("where name == \"red\" || name == \"green part\"", true),
             (
-                "(name == \"red\" && other == \"green part\") || (name == \"green part\" && other == \"red\")",
+                "where (name == \"red\" && other == \"green part\") || (name == \"green part\" && other == \"red\")",
                 true,
             ),
-            ("\"red\" == name || \"green part\" == name", true),
-            ("name.contains(\"red\")", false),
-            ("name == \"red\" || name.contains(\"green\")", false),
-            ("name == \"red\" && name.contains(\"green\")", false),
-            ("name < \"red\"", false),
+            ("if name.contains(\"red\")", false),
+            ("if name == \"red\" || name.contains(\"green\")", false),
+            ("if name == \"red\" && name.contains(\"green\")", false),
         ] {
             let kernel: Kernel = syn::parse_str(&format!(
                 "$; setup {{}} relations {{ relation Part => part(p_name: String); }}
-                 answer(name: String) :- Part(name), Part(other), if {guard};"
+                 answer(name: String) :- Part(name), Part(other), {guard};"
             ))
             .unwrap();
             let storage = kernel.dictionary_types(&manifest).unwrap();
-            assert_eq!(!storage.is_empty(), dictionary, "{guard}");
+            assert!(!storage.is_empty(), "{guard}");
             let encoded = kernel
                 .encoded_query_with_types(&manifest, &storage)
                 .unwrap();
             let spelling = encoded.to_string();
-            assert_eq!(spelling.contains("p_name : i32"), dictionary, "{spelling}");
-            if dictionary {
+            assert!(spelling.contains("p_name : u32"), "{spelling}");
+            if relational {
                 assert!(!spelling.contains('"'), "{spelling}");
-                assert!(spelling.contains("0i32"), "{spelling}");
+                assert!(spelling.contains("0u32"), "{spelling}");
             } else {
-                assert!(spelling.contains("p_name : String"), "{spelling}");
                 assert!(spelling.contains('"'), "{spelling}");
             }
             let program: cq_lang_cq::Program = syn::parse2(encoded).unwrap();
             cq_lang_cq::normal::normalize(&program).unwrap();
         }
-        for (expression, coded) in [
-            ("if name == \"red\" || name == \"green part\" { 1i64 } else { 0i64 }", true),
-            ("2i64 * (if \"red\" != name { 1i64 } else { 0i64 })", true),
-            ("if name.contains(\"red\") { 1i64 } else { 0i64 }", false),
-            ("if name < \"red\" { 1i64 } else { 0i64 }", false),
+        let ordered: Kernel = syn::parse_str(
+            "$; setup {} relations { relation Part => part(p_name: String); }
+             answer(name: String) :- Part(name), where name < \"red\";"
+        ).unwrap();
+        assert!(ordered.encoded_query_with_types(
+            &manifest, &ordered.dictionary_types(&manifest).unwrap(),
+        ).unwrap_err().to_string().contains("lexical order"));
+        let closed: Kernel = syn::parse_str(
+            "$; setup {} relations { relation Part => part(p_name: String); }
+             answer(name: String) :- Part(name), where name == { \"red\".to_owned() };"
+        ).unwrap();
+        let storage = closed.dictionary_types(&manifest).unwrap();
+        let encoded = closed.encoded_query_with_types(&manifest, &storage).unwrap().to_string();
+        assert!(encoded.contains("DictionaryLiteral"), "{encoded}");
+        assert!(encoded.contains("to_owned"), "{encoded}");
+        for expression in [
+            "if name == \"red\" || name == \"green part\" { 1i64 } else { 0i64 }",
+            "2i64 * (if \"red\" != name { 1i64 } else { 0i64 })",
+            "if name.contains(\"red\") { 1i64 } else { 0i64 }",
+            "if name < \"red\" { 1i64 } else { 0i64 }",
         ] {
             let mut kernel: Kernel = syn::parse_str(&format!(
                 "$; setup {{}} relations {{ relation Part => part(p_name: String); }}
                  answer(value: i64) :- Part(name), let value: i64 = {expression};"
             )).unwrap();
             let storage = kernel.dictionary_types(&manifest).unwrap();
-            assert_eq!(!storage.is_empty(), coded, "{expression}");
+            assert!(!storage.is_empty(), "{expression}");
             let encoded = kernel.encoded_query_with_types(&manifest, &storage).unwrap();
             let spelling = encoded.to_string();
-            assert_eq!(spelling.contains("p_name : i32"), coded, "{spelling}");
-            assert_eq!(spelling.contains('"'), !coded, "{spelling}");
+            assert!(spelling.contains("p_name : u32"), "{spelling}");
+            assert!(spelling.contains('"'), "{spelling}");
             let program: cq_lang_cq::Program = syn::parse2(encoded).unwrap();
+            assert_eq!(program.query.body, kernel.cpu_program().unwrap().query.body);
             cq_lang_cq::normal::normalize(&program).unwrap();
-            // Aggregate heads are normalized into Bind expressions later;
-            // their literals must already use the input dictionary here.
+            // Aggregate Rust heads remain verbatim, independent of input encoding.
             kernel.program = Some(syn::parse_str(&format!(
                 "struct Query; relation Part(p_name: String); relation answer(value: i64);
                  answer(sum({expression})) :- Part(name);"
             )).unwrap());
             kernel.body = quote!(Part(name));
             let storage = kernel.dictionary_types(&manifest).unwrap();
-            assert_eq!(!storage.is_empty(), coded, "{expression}");
+            assert!(!storage.is_empty(), "{expression}");
             let encoded = kernel.encoded_query_with_types(&manifest, &storage).unwrap();
             let spelling = encoded.to_string();
-            assert_eq!(spelling.contains("p_name : i32"), coded, "{spelling}");
-            assert_eq!(spelling.contains('"'), !coded, "{spelling}");
+            assert!(spelling.contains("p_name : u32"), "{spelling}");
+            assert!(spelling.contains('"'), "{spelling}");
             let program: cq_lang_cq::Program = syn::parse2(encoded).unwrap();
+            assert_eq!(program.query.head, kernel.cpu_program().unwrap().query.head);
             cq_lang_cq::normal::normalize(&program).unwrap();
         }
         fs::write(
@@ -1627,28 +1974,35 @@ mod encoding_tests {
                     continue;
                 }
                 let kernel = Kernel::import(source).unwrap();
-                let encoded = kernel.encoded_query(&manifest).unwrap();
+                let storage = kernel.dictionary_types(&manifest).unwrap();
+                let encoded = kernel.encoded_query_with_types(&manifest, &storage).unwrap();
                 let program: cq_lang_cq::Program = syn::parse2(encoded.clone()).unwrap();
                 assert_eq!(
                     program.inputs().count(),
                     kernel.relations.len() + kernel.derived.len(),
                     "{name}"
                 );
-                for relation in &program.declarations {
-                    for column in &relation.columns {
-                        assert!(matches!(
-                            column.ty.to_token_stream().to_string().as_str(),
-                            "i32" | "i64" | "u32" | "String" | "usize"
-                        ));
+                for (actual, authored) in program.inputs().zip(kernel.cpu_program().unwrap().inputs()) {
+                    for (actual, authored) in actual.columns.iter().zip(&authored.columns) {
+                        let dictionary = kernel.relations.iter().any(|relation| {
+                            relation.columns.iter().any(|(column, _)| column == &authored.name)
+                                && storage.contains_key(&(relation.table.to_string(), authored.name.to_string()))
+                        }) || kernel.dictionary_relations().unwrap().iter()
+                            .any(|relation| program.inputs().any(|input| input.name == relation.name
+                                && input.columns.iter().any(|column| column.name == actual.name)));
+                        if dictionary {
+                            assert_eq!(actual.ty, syn::parse_quote!(u32), "{name}");
+                        } else {
+                            assert_eq!(actual, authored, "{name}");
+                        }
                     }
                 }
             }
             let kernel =
                 Kernel::import(SOURCES.iter().find(|(name, _)| *name == "h03").unwrap().1).unwrap();
             let encoded = kernel.encoded_query(&manifest).unwrap().to_string();
-            assert!(encoded.contains("9204i32"));
-            assert!(encoded.contains("BUILDING"));
-            assert!(!encoded.contains("cutoff"));
+            assert!(kernel.setup_bindings(&manifest).unwrap().to_string().contains("BUILDING"));
+            assert!(encoded.contains("cutoff"));
             assert_eq!(
                 manifest
                     .text_id("customer", "c_mktsegment", "__not_in_dictionary__")

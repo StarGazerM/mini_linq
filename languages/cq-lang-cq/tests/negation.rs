@@ -84,14 +84,13 @@ fn negation_only_queries_support_existential_emptiness_and_parameters() {
 }
 
 #[test]
-fn negation_requires_leibniz_only_for_compared_columns() {
+fn negation_leaves_column_type_obligations_to_rustc() {
     for argument in ["x", "parameter", "1.0"] {
         let query: cq::Program = syn::parse_str(&format!(
             "struct Q; relation R(a:i32); relation S(a:f64); answer(x) :- R(x), !S({argument});"
         ))
         .unwrap();
-        let error = cq::contract::check(&query).unwrap_err().to_string();
-        assert!(error.contains("Leibniz"), "{argument}: {error}");
+        cq::contract::check(&query).unwrap();
     }
     let wildcard: cq::Program = syn::parse_quote! {
         struct Q; relation R(a:i32); relation S(a:f64,b:f32);
@@ -103,8 +102,7 @@ fn negation_requires_leibniz_only_for_compared_columns() {
         "struct Q; relation R(a:i32); relation S(a:i32); answer(y) :- R(y), let x:f64 = 0.0, !S(x);",
     ] {
         let query: cq::Program = syn::parse_str(source).unwrap();
-        let error = cq::normal::check(&query).unwrap_err().to_string();
-        assert!(error.contains("Leibniz"), "{source}: {error}");
+        cq::normal::check(&query).unwrap();
     }
 }
 

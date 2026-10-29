@@ -1,6 +1,6 @@
 //! Printing central relational predicates; Rust guards are emitted verbatim.
-//! Only language-recognized comparisons and Boolean combinations reach this
-//! constraint printer; arbitrary host predicates remain opaque Rust guards.
+//! Only explicit `where` predicates reach this constraint printer; Rust
+//! predicates remain unchanged opaque guards.
 use cq_lang_structures::syntax::{
     EqualityValue,
     algebra::Theta,

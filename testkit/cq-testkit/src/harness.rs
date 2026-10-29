@@ -3,8 +3,8 @@
 //! Pass cases test only the supplied fixtures, mutations, and authored data.
 //! Checkers are supplied independently of compilation. Panics propagate in
 //! pass testing, so a crashing checker cannot count as mutation rejection.
-//! Refinement catches unwinding panics and implements `bottom + Set`: a target
-//! may panic only when the reference panics, and must match a returned answer.
+//! Refinement catches unwinding panics and checks equal set answers under the
+//! total-Rust premise: either executable panicking is a conformance failure.
 
 use crate::{Case, Database, Rows};
 use std::fmt;
@@ -121,7 +121,7 @@ impl<CE: fmt::Debug + fmt::Display, KE: fmt::Debug + fmt::Display> std::error::E
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome<A> {
     Returned(A),
-    /// Panic messages are diagnostic only; all panics denote the same bottom.
+    /// A panic violates the total-Rust premise; its message is diagnostic.
     Panicked(String),
 }
 
@@ -132,11 +132,12 @@ pub struct Refinement<A> {
     pub target: Outcome<A>,
 }
 
-/// A target violated a returning written-order reference's denotation.
+/// Either executable violated totality, or their returned answers differed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RefinementFailure<A> {
     AnswersDiffer { reference: A, target: A },
     TargetPanicked { reference: A, message: String },
+    ReferencePanicked { message: String },
 }
 
 impl<A: fmt::Debug> fmt::Display for RefinementFailure<A> {
@@ -154,6 +155,9 @@ impl<A: fmt::Debug> fmt::Display for RefinementFailure<A> {
                     "reference returned {reference:?}; target panicked: {message}"
                 )
             }
+            Self::ReferencePanicked { message } => {
+                write!(f, "reference violated the total-Rust premise: {message}")
+            }
         }
     }
 }
@@ -162,10 +166,10 @@ impl<A: fmt::Debug> std::error::Error for RefinementFailure<A> {}
 
 /// Run both executables once and check target refinement of the reference.
 ///
-/// For query conformance, return `Rows` to compare answers as sets. A panicking
-/// reference permits either target outcome. Effects and panic message equality
-/// are not checked. Only unwinding panics can be caught; no global panic hook
-/// is installed or modified.
+/// For query conformance, return `Rows` to compare answers as sets. Either
+/// executable panicking is a failure of the total-Rust premise, never bottom.
+/// Effects and panic message equality are not checked. Only unwinding panics
+/// can be caught; no global panic hook is installed or modified.
 pub fn check_refinement<A: PartialEq, F: FnOnce() -> A, G: FnOnce() -> A>(
     reference: F,
     target: G,
@@ -173,6 +177,7 @@ pub fn check_refinement<A: PartialEq, F: FnOnce() -> A, G: FnOnce() -> A>(
     let reference = observe(reference);
     let target = observe(target);
     match (reference, target) {
+        (Outcome::Panicked(message), _) => Err(RefinementFailure::ReferencePanicked { message }),
         (Outcome::Returned(reference), Outcome::Returned(target)) if reference != target => {
             Err(RefinementFailure::AnswersDiffer { reference, target })
         }

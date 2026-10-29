@@ -5,6 +5,72 @@ use cq_testkit::corpus as scenarios;
 use quote::ToTokens;
 
 #[test]
+fn full_row_positive_probes_record_membership_without_a_filtered_source() {
+    for mode in [quote::quote!(pipe), quote::quote!(let)] {
+        let source: physical::Program = syn::parse_quote! { physical {
+            relation L(a: CallerOwnedAlias, id:i64);
+            relation R(a: CallerOwnedAlias);
+            l = pipe rename L@0 {a -> x,id -> id};
+            r = #mode rename R@1 {a -> x};
+            joined = pipe probe first [x] l,r;
+            result = pipe canon project joined keep {id};
+            return result as answer(id);
+        }};
+        let target = compile(&source).unwrap();
+        let facts = structures::contract::check(&target).unwrap();
+        assert!(facts.membership.contains(&("r".into(), vec!["x".into()])));
+        assert!(!facts.filtered.contains_key("r"));
+        let provider = facts
+            .built
+            .get("r")
+            .map(|entries| entries[0].1.clone())
+            .or_else(|| {
+                facts
+                    .fallbacks
+                    .iter()
+                    .find(|((name, _, key), _)| name == "r" && key == &["x"])
+                    .map(|(_, ty)| ty.clone())
+            })
+            .unwrap();
+        assert_eq!(
+            provider,
+            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>)
+        );
+        check(&source, &target).unwrap();
+    }
+}
+
+#[test]
+fn raw_membership_proof_rejects_unbound_payload_columns() {
+    let mut source: structures::Program = syn::parse_quote! {
+        physical {
+            relation L(a:i64); relation R(a:i64,b:i64);
+            l = pipe rename L@0 {a -> x};
+            r = let rename R@1 {a -> x,b -> y};
+            joined = pipe probe first [x] l,r;
+            result = pipe canon project joined keep {x,y};
+            return result as answer(x,y);
+        }
+        structures {
+            r = ::cq_storage::AdaptiveMembership<_, 64> [x] membership;
+            r rows = ::std::vec::Vec<_>;
+            l host scan = ::core::iter::Map<_, _> [];
+            r host scan = ::core::iter::Map<_, _> [];
+            result canon = ::cq_storage::HashSet<_>;
+        }
+    };
+    assert!(
+        structures::contract::check(&source)
+            .unwrap_err()
+            .to_string()
+            .contains("complete row key")
+    );
+    source.structures.entries[0] = syn::parse_quote!(
+        r = ::cq_storage::HashIndex<'_, _, _> [x];
+    );
+    structures::contract::check(&source).unwrap();
+}
+#[test]
 fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(k:i32,id:i32,v:i32);
@@ -29,7 +95,7 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
     assert_eq!(
         facts.groups["grouped"],
         syn::parse_quote!(
-            ::std::collections::HashMap<_, (usize, i32, Option<i32>, Option<i32>,)>
+            ::std::collections::HashMap<_, (usize, i32, Option<i32>, Option<i32>,), ::cq_storage::HashState>
         )
     );
     let group_entry = target
@@ -199,11 +265,9 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
             .membership
             .contains(&("selected".into(), vec!["x".into()]))
     );
-    assert!(
-        target
-            .to_token_stream()
-            .to_string()
-            .contains("AdaptiveKeySet")
+    assert_eq!(
+        facts.built["selected"][0].1,
+        syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>)
     );
     let mut changed = target.clone();
     let entry = changed
@@ -226,8 +290,8 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
         .columns
         .push(syn::parse_quote!(y));
     assert!(check(&source, &changed).is_err());
-    let mut incompatible = target.clone();
-    let entry = incompatible
+    let mut alternate_provider = target.clone();
+    let entry = alternate_provider
         .structures
         .entries
         .iter_mut()
@@ -240,7 +304,8 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
         unreachable!()
     };
     keyed.ty = syn::parse_quote!(::cq_storage::Selection<_>);
-    assert!(check(&source, &incompatible).is_err());
+    // Provider capabilities are Rust obligations, not inferred from its name.
+    check(&source, &alternate_provider).unwrap();
     let mut changed = target;
     let entry = changed
         .structures
@@ -255,7 +320,9 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
         unreachable!()
     };
     keyed.membership = None;
-    assert!(check(&source, &changed).is_err());
+    // Without the membership marker this is an ordinary keyed provider; its
+    // payload-read capability is a rustc obligation, not a provider name check.
+    check(&source, &changed).unwrap();
     let mut grouped_types = source;
     for declaration in &mut grouped_types.program.declarations {
         for column in &mut declaration.columns {
@@ -272,6 +339,67 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
             .membership
             .contains(&("selected".into(), vec!["x".into()]))
     );
+}
+
+#[test]
+fn composite_filtered_keys_retain_their_original_provider() {
+    let source: physical::Program = syn::parse_quote! {physical {
+        relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = pipe rename R@1 {a -> x,b -> y,c -> z};
+        selected = let range select r if (z > 1);
+        joined = pipe probe first [x,y] l,selected;
+        result = pipe canon project joined keep {x,y};
+        return result as answer(x,y);
+    }};
+    for (reader, provider) in [
+        (
+            syn::parse_quote!(probe first [x,y] l,selected),
+            syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>),
+        ),
+        (
+            syn::parse_quote!(semi eager [x,y] l,selected),
+            syn::parse_quote!(::cq_storage::HashSet<_>),
+        ),
+    ] {
+        let mut source = source.clone();
+        source.program.definitions[3].operator = reader;
+        let target = compile(&source).unwrap();
+        let facts = structures::contract::check(&target).unwrap();
+        assert!(facts.filtered.contains_key("selected"));
+        assert!(
+            !facts
+                .membership
+                .contains(&("selected".into(), vec!["x".into(), "y".into()],))
+        );
+        assert_eq!(facts.built["selected"][0].1, provider);
+        check(&source, &target).unwrap();
+    }
+}
+
+#[test]
+fn reconstructed_key_constants_do_not_disable_singleton_membership() {
+    let source: physical::Program = syn::parse_quote! {physical {
+        relation L(a:i64,b:i64); relation R(a:i64,b:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = pipe rename R@1 {a -> x,b -> y};
+        selected = let point select r if (y = 1);
+        joined = pipe probe first [x,y] l,selected;
+        result = pipe canon project joined keep {x,y};
+        return result as answer(x,y);
+    }};
+    let target = compile(&source).unwrap();
+    let facts = structures::contract::check(&target).unwrap();
+    assert!(
+        facts
+            .membership
+            .contains(&("selected".into(), vec!["x".into(), "y".into()],))
+    );
+    assert_eq!(
+        facts.built["selected"][0].1,
+        syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>)
+    );
+    check(&source, &target).unwrap();
 }
 
 #[test]
@@ -461,7 +589,7 @@ fn const_supplies_on_host_and_materialized_inputs_never_build() {
 }
 
 #[test]
-fn ordered_read_types_and_changed_key_streams_have_mutation_coverage() {
+fn ordered_read_provider_capabilities_are_rustc_obligations() {
     let p: physical::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32);
         l = pipe rename L@0 {a -> x}; r = let rename R@1 {a -> x};
@@ -472,9 +600,13 @@ fn ordered_read_types_and_changed_key_streams_have_mutation_coverage() {
         built_entries(&target),
         syn::parse_quote!(structures { r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x]; })
     );
-    let mut q = target;
+    let mut q = target.clone();
     q.structures.entries[0] = syn::parse_quote!(r = ::cq_storage::HashIndex<'_, _, _> [x];);
-    assert!(check(&p, &q).is_err());
+    check(&p, &q).unwrap();
+    // The recorded key remains a structural obligation regardless of provider.
+    let mut changed_key = target;
+    changed_key.structures.entries[0] = syn::parse_quote!(r = Custom [];);
+    assert!(check(&p, &changed_key).is_err());
 }
 
 #[test]
@@ -504,6 +636,38 @@ fn compatible_membership_chains_use_recorded_trie_levels() {
     let mut q = target;
     q.structures.entries[entry] = syn::parse_quote!(r = ::cq_storage::HashIndex<'_, _, _> [a,b];);
     assert!(check(&p, &q).is_err());
+}
+
+#[test]
+fn smallest_shared_full_key_adapters_retain_one_seek_representation() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(b:i64,c:i64); relation S(a:i64,c:i64);
+        l = pipe rename L@0 {a -> a,b -> b};
+        r = pipe rename R@1 {b -> b,c -> c};
+        s = pipe rename S@2 {a -> a,c -> c};
+        candidate = pipe probe smallest [b] l,r;
+        result = pipe canon probe first [a,c] candidate,s;
+        return result as answer(a,b,c);
+    }};
+    let target = compile(&source).unwrap();
+    let facts = structures::contract::check(&target).unwrap();
+    assert!(
+        !facts
+            .membership
+            .contains(&("s".into(), vec!["a".into(), "c".into()]))
+    );
+    let adapters: Vec<_> = facts
+        .fallbacks
+        .iter()
+        .filter(|((name, _, key), _)| name == "s" && key == &["a", "c"])
+        .map(|(_, ty)| ty)
+        .collect();
+    assert!(adapters.len() >= 2);
+    assert!(
+        adapters
+            .iter()
+            .all(|ty| **ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>))
+    );
 }
 
 #[test]
@@ -545,7 +709,9 @@ fn smallest_candidate_let_levels_keep_independent_mutation_checks() {
         panic!()
     };
     keyed.ty = syn::parse_quote!(::std::collections::HashSet<_>);
-    assert!(check(&source, &changed).is_err());
+    // The two recorded levels are authoritative; Rust checks the provider's
+    // implementation of the required candidate access.
+    check(&source, &changed).unwrap();
 }
 
 #[test]
@@ -605,7 +771,6 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
             format!(
                 "{retained} = ::cq_storage::Trie<'_, _, ::std::collections::HashSet<_>> [c][{prefix}];"
             ),
-            format!("{retained} = ::std::collections::HashSet<_> [{prefix}][c];"),
         ] {
             let mut changed = target.clone();
             changed.structures.entries[entry] = syn::parse_str(&replacement).unwrap();
@@ -615,6 +780,13 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
             );
             assert!(check(&source, &changed).is_err(), "{replacement}");
         }
+        let mut alternate_provider = target.clone();
+        alternate_provider.structures.entries[entry] = syn::parse_str(&format!(
+            "{retained} = ::std::collections::HashSet<_> [{prefix}][c];"
+        ))
+        .unwrap();
+        // Provider names do not prove or disprove candidate access.
+        check(&source, &alternate_provider).unwrap();
         for reader in [
             structures::ReaderRef::Candidates,
             structures::ReaderRef::Membership,
@@ -679,7 +851,7 @@ fn candidate_levels_coexist_with_payload_membership_and_ordered_reads() {
             )
         );
     }
-    for missing in 0..4 {
+    for missing in [0, 1, 3] {
         let mut changed = target.clone();
         changed.structures.entries.remove(missing);
         assert!(
@@ -687,6 +859,14 @@ fn candidate_levels_coexist_with_payload_membership_and_ordered_reads() {
             "missing built entry {missing}"
         );
     }
+    // Without the dedicated ordered provider, the complete candidate key
+    // still records coverage. Rust must establish Ordered access for its type.
+    let mut shared_provider = target.clone();
+    shared_provider.structures.entries.remove(2);
+    check(&source, &shared_provider).unwrap();
+    // Removing both complete-key records really does lose merge coverage.
+    shared_provider.structures.entries.remove(0);
+    assert!(check(&source, &shared_provider).is_err());
 }
 
 #[test]

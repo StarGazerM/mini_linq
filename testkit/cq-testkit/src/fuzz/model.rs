@@ -40,13 +40,13 @@ pub enum Expr {
     Constant(i32),
     Binary(Arithmetic, Box<Expr>, Box<Expr>),
     Negate(Box<Expr>),
-    Partial(PartialOp, Box<Expr>),
+    Rust(RustOp, Box<Expr>),
     OpaqueCall(Box<Expr>),
 }
 
-/// Ordinary Rust expressions whose partiality is observable as whole-query abort.
+/// Opaque Rust operations authored to be total for every i32 input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PartialOp {
+pub enum RustOp {
     Divide,
     Remainder,
     Add,
@@ -55,14 +55,14 @@ pub enum PartialOp {
     Unwrap,
 }
 
-impl PartialOp {
+impl RustOp {
     fn name(self) -> &'static str {
         match self {
             Self::Divide => "divide",
             Self::Remainder => "remainder",
-            Self::Add => "overflow-add",
-            Self::Subtract => "overflow-subtract",
-            Self::Multiply => "overflow-multiply",
+            Self::Add => "bounded-add",
+            Self::Subtract => "bounded-subtract",
+            Self::Multiply => "bounded-multiply",
             Self::Unwrap => "unwrap",
         }
     }
@@ -108,8 +108,8 @@ pub enum Guard {
     Not(Box<Guard>),
 }
 
-/// Relational terms contain no arithmetic or partial operations. Parameters
-/// are enclosing values; their printed CQ names are never query binders.
+/// Relational operands are query columns, literals, or closed host captures.
+/// Capture names are never query binders.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RelTerm {
     Var(usize),
@@ -184,16 +184,15 @@ impl Relational {
     }
 }
 
-/// Finite Rust iterables, routed through the compiled partial-term lane even
-/// when their scalar expression is total. Range endpoints are bounded before
-/// iteration; the iterator-panic variant fails after yielding its first item.
+/// Finite, total Rust iterables use the compiled oracle because SQL does not
+/// model arbitrary IntoIterator values. Range endpoints are bounded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Generator {
     Range,
     InclusiveRange,
     Duplicates,
     Empty,
-    IteratorPanic,
+    Mapped,
 }
 
 impl Generator {
@@ -203,7 +202,7 @@ impl Generator {
             Self::InclusiveRange => "for-inclusive-range",
             Self::Duplicates => "for-duplicates",
             Self::Empty => "for-empty",
-            Self::IteratorPanic => "for-iterator-panic",
+            Self::Mapped => "for-mapped",
         }
     }
 
@@ -214,9 +213,7 @@ impl Generator {
             Self::InclusiveRange => format!("(0i32..=(({value}) % 4))"),
             Self::Duplicates => format!("{{ let value: i32 = {value}; vec![value, value, 0i32] }}"),
             Self::Empty => format!("{{ let _: i32 = {value}; std::iter::empty::<i32>() }}"),
-            Self::IteratorPanic => format!(
-                "{{ let value: i32 = {value}; (0..2).map(move |i| {{ assert!(i == 0, \"generator next\"); value }}) }}"
-            ),
+            Self::Mapped => format!("{{ let value: i32 = {value}; (0..2).map(move |_| value) }}"),
         }
     }
 }
@@ -251,9 +248,14 @@ pub struct Case {
 }
 
 impl Case {
-    /// Select the executable Rust oracle, including all generators: SQL does
-    /// not model arbitrary IntoIterator values or partial iterator advancement.
-    pub fn has_partial_terms(&self) -> bool {
+    // DESIGN contract7-rust-oracle
+    // Owns oracle routing: opaque Rust/generators use the compiled written-order Rust reference.
+    // Contract 7; source: doc/PLANNING-REDESIGN.md Contract and Plan P0; doc/formal/CONFORMANCE.md.
+    // Both lanes assume total expressions; SQL covers only its independently modeled fragment.
+    // DO NOT make SQL simulate arbitrary Rust, silently discard Rust cases, or weaken the total premise.
+    /// Select the executable Rust oracle for operations and iterables not
+    /// modeled by the independent SQL printer. Both lanes are total.
+    pub fn requires_rust_oracle(&self) -> bool {
         if self
             .query
             .bindings
@@ -279,7 +281,7 @@ impl Case {
         for expression in &self.query.head {
             expression.features(&mut features);
         }
-        features.contains("partial-term")
+        features.contains("rust-term")
     }
 
     pub fn parameters(&self) -> BTreeMap<String, i32> {
@@ -300,16 +302,16 @@ impl Case {
 
     /// Emit a full macro input, with explicitly typed computed output columns.
     pub fn cq(&self) -> String {
-        self.print_cq(false)
+        self.print_cq()
     }
 
-    /// Keep the original short-circuit guard opaque in the executable written
-    /// reference, so the recognizer cannot split both sides of the comparison.
+    /// The written planner consumes the same opaque Rust and explicit
+    /// relational syntax as every optimized planner.
     pub fn written_cq(&self) -> String {
-        self.print_cq(true)
+        self.print_cq()
     }
 
-    fn print_cq(&self, opaque_guards: bool) -> String {
+    fn print_cq(&self) -> String {
         let mut source = String::from("struct Fuzz;\n");
         for relation in &self.query.schema {
             writeln!(
@@ -332,7 +334,7 @@ impl Case {
                 .join(", ")
         )
         .unwrap();
-        let clauses = self.query.cq_steps(&self.query.body_order(), opaque_guards);
+        let clauses = self.query.cq_steps(&self.query.body_order());
         writeln!(
             source,
             "answer({}) :- {};",
@@ -355,7 +357,7 @@ impl Case {
     /// need no input deduplication: positive CQs with a DISTINCT output have
     /// set semantics, including self-joins and existential wildcard columns.
     pub fn sql(&self) -> String {
-        if self.has_partial_terms() {
+        if self.requires_rust_oracle() {
             return "-- Opaque Rust terms/generators: oracle is the compiled written-order Rust program.\n"
                 .into();
         }
@@ -474,17 +476,15 @@ fn rust_expression(expression: &Expr) -> String {
         Expr::Constant(value) => value.to_string(),
         Expr::Negate(inner) => format!("(-({}))", rust_expression(inner)),
         Expr::OpaqueCall(inner) => format!("std::convert::identity({})", rust_expression(inner)),
-        Expr::Partial(operator, inner) => {
+        Expr::Rust(operator, inner) => {
             let value = rust_expression(inner);
             match operator {
-                PartialOp::Divide => format!("(10i32 / ({value}))"),
-                PartialOp::Remainder => format!("(10i32 % ({value}))"),
-                PartialOp::Add => format!("(i32::MAX + ({value}))"),
-                PartialOp::Subtract => format!("(i32::MIN - ({value}))"),
-                PartialOp::Multiply => format!("(i32::MAX * ({value}))"),
-                PartialOp::Unwrap => {
-                    format!("(if ({value}) != 0 {{ Some({value}) }} else {{ None }}).unwrap()")
-                }
+                RustOp::Divide => format!("(10i32 / ((({value}) % 3) + 4))"),
+                RustOp::Remainder => format!("(10i32 % ((({value}) % 3) + 4))"),
+                RustOp::Add => format!("((i32::MAX - 3) + (({value}) % 4))"),
+                RustOp::Subtract => format!("((i32::MIN + 3) - (({value}) % 4))"),
+                RustOp::Multiply => format!("((i32::MAX / 4) * (({value}) % 4))"),
+                RustOp::Unwrap => format!("Some({value}).unwrap()"),
             }
         }
         Expr::Binary(operator, left, right) => {
@@ -526,9 +526,9 @@ fn rust_guard(guard: &Guard) -> String {
     }
 }
 
-fn rust_constraint(c: &Relational) -> String {
+fn cq_constraint(c: &Relational) -> String {
     let term = |t: &RelTerm| match t {
-        RelTerm::Var(v) => format!("*v{v}"),
+        RelTerm::Var(v) => format!("v{v}"),
         RelTerm::Literal(v) => v.to_string(),
         RelTerm::Parameter(v) => parameter_name(*v),
     };
@@ -547,24 +547,22 @@ fn rust_constraint(c: &Relational) -> String {
             term(r)
         ),
         Relational::Between(t, l, h) => {
-            format!("({} >= {} && {} <= {})", term(t), term(l), term(t), term(h))
+            format!("{} in {}..={}", term(t), term(l), term(h))
         }
         Relational::In(t, ls) => format!(
-            "({})",
+            "{} in [{}]",
+            term(t),
             ls.iter()
-                .map(|v| format!("{} == {v}", term(t)))
+                .map(ToString::to_string)
                 .collect::<Vec<_>>()
-                .join(" || ")
+                .join(", ")
         ),
         Relational::Or(bs) => bs
             .iter()
             .map(|b| {
                 format!(
                     "({})",
-                    b.iter()
-                        .map(rust_constraint)
-                        .collect::<Vec<_>>()
-                        .join(" && ")
+                    b.iter().map(cq_constraint).collect::<Vec<_>>().join(" && ")
                 )
             })
             .collect::<Vec<_>>()
@@ -621,7 +619,7 @@ pub(super) fn sql_constraint(c: &Relational, environment: &BTreeMap<usize, Strin
 
 pub(super) fn sql_expression(expression: &Expr, environment: &BTreeMap<usize, String>) -> String {
     match expression {
-        Expr::Partial(..) => unreachable!("partial terms use the compiled Rust reference"),
+        Expr::Rust(..) => unreachable!("opaque Rust operations use the compiled reference"),
         Expr::Var(variable) => environment[variable].clone(),
         Expr::Constant(value) => value.to_string(),
         Expr::Negate(inner) => format!("(-({}))", sql_expression(inner, environment)),
@@ -679,9 +677,9 @@ impl Expr {
     fn features(&self, output: &mut BTreeSet<String>) {
         match self {
             Self::Var(_) | Self::Constant(_) => (),
-            Self::Partial(operator, inner) => {
-                output.insert("partial-term".into());
-                output.insert(format!("partial-{}", operator.name()));
+            Self::Rust(operator, inner) => {
+                output.insert("rust-term".into());
+                output.insert(format!("rust-{}", operator.name()));
                 inner.features(output);
             }
             Self::Binary(operator, left, right) => {
@@ -718,19 +716,19 @@ impl Expr {
                 left.variables(output);
                 right.variables(output);
             }
-            Self::Negate(inner) | Self::Partial(_, inner) | Self::OpaqueCall(inner) => {
+            Self::Negate(inner) | Self::Rust(_, inner) | Self::OpaqueCall(inner) => {
                 inner.variables(output)
             }
         }
     }
 
     fn has_arithmetic(&self) -> bool {
-        matches!(self, Self::Binary(..) | Self::Negate(_) | Self::Partial(..))
+        matches!(self, Self::Binary(..) | Self::Negate(_) | Self::Rust(..))
     }
 
     fn value(&self, environment: &[i32]) -> i32 {
         match self {
-            Self::Partial(..) => unreachable!("partial terms use the compiled Rust reference"),
+            Self::Rust(..) => unreachable!("opaque Rust operations use the compiled reference"),
             Self::Var(variable) => environment[*variable],
             Self::Constant(value) => *value,
             Self::Negate(inner) => -inner.value(environment),
@@ -750,14 +748,14 @@ impl Expr {
 }
 
 impl Guard {
-    fn recognizable(&self) -> bool {
+    fn has_simple_operands(&self) -> bool {
         match self {
             Self::Compare(_, l, r) => {
                 matches!(l, Expr::Var(_) | Expr::Constant(_))
                     && matches!(r, Expr::Var(_) | Expr::Constant(_))
             }
-            Self::And(l, r) | Self::Or(l, r) => l.recognizable() && r.recognizable(),
-            Self::Not(g) => g.recognizable(),
+            Self::And(l, r) | Self::Or(l, r) => l.has_simple_operands() && r.has_simple_operands(),
+            Self::Not(g) => g.has_simple_operands(),
         }
     }
 
@@ -787,7 +785,7 @@ impl Guard {
                     }
                     .into(),
                 );
-                if left.recognizable() != right.recognizable() {
+                if left.has_simple_operands() != right.has_simple_operands() {
                     output.insert(
                         if matches!(self, Self::And(..)) {
                             "mixed-and"
@@ -802,7 +800,7 @@ impl Guard {
             }
             Self::Not(inner) => {
                 output.insert("boolean-not".into());
-                if !inner.recognizable() {
+                if !inner.has_simple_operands() {
                     output.insert("opaque-not".into());
                 }
                 inner.features(output);
@@ -856,14 +854,7 @@ impl Guard {
 }
 
 impl Query {
-    fn cq_steps(&self, steps: &[Step], opaque_guards: bool) -> String {
-        let guard_clause = |expression: String| {
-            if opaque_guards {
-                format!("if {{ {expression} }}")
-            } else {
-                format!("if {expression}")
-            }
-        };
+    fn cq_steps(&self, steps: &[Step]) -> String {
         let mut clauses = Vec::new();
         for step in steps.iter().copied() {
             match step {
@@ -878,7 +869,7 @@ impl Query {
                         block
                             .branches
                             .iter()
-                            .map(|arm| format!("{{ {} }}", self.cq_steps(arm, opaque_guards)))
+                            .map(|arm| format!("{{ {} }}", self.cq_steps(arm)))
                             .collect::<Vec<_>>()
                             .join(operator),
                     );
@@ -915,11 +906,11 @@ impl Query {
                     });
                 }
                 Step::Constraint(index) => {
-                    clauses.push(guard_clause(rust_constraint(&self.constraints[index])))
+                    clauses.push(format!("where {}", cq_constraint(&self.constraints[index])))
                 }
                 Step::Guard(index) => {
                     let guard = &self.guards[index];
-                    clauses.push(guard_clause(rust_guard(guard)));
+                    clauses.push(format!("if {}", rust_guard(guard)));
                 }
             }
         }
@@ -1124,7 +1115,7 @@ impl Random {
                     4 => Comparison::Greater,
                     _ => Comparison::GreaterEqual,
                 },
-                self.relational_term(variables),
+                v,
                 self.relational_term(variables),
             ),
         }
@@ -1189,15 +1180,15 @@ impl Random {
 
 /// Generate a reproducible bounded query and raw input tables.
 ///
-/// Even seeds sample opaque partial Rust terms; odd seeds sample total queries
-/// with independent SQL. Schemas have 1..=4 tables of arity 1..=3, bodies have
+/// Even seeds sample total opaque Rust with a compiled oracle; odd seeds sample
+/// total queries with independent SQL. Schemas have 1..=4 tables of arity 1..=3,
 /// 1..=5 atoms, and heads have 1..=3 columns. Raw duplicate rows are retained.
 pub fn generate(seed: u64) -> Case {
     if matches!(seed % 10, 3 | 8) {
         return generate_block(seed);
     }
     if seed & 1 == 0 {
-        return generate_partial(seed);
+        return generate_rust(seed);
     }
     let mut random = Random(crate::random::SplitMix64::new(seed));
     let relations = 1 + random.pick(4);
@@ -1332,7 +1323,7 @@ pub fn generate(seed: u64) -> Case {
 
 fn generate_block(seed: u64) -> Case {
     let mut random = Random(crate::random::SplitMix64::new(seed));
-    let partial = seed & 1 == 0;
+    let rust_oracle = seed & 1 == 0;
     let test = (seed / 10) % 3 == 0;
     let kind = if (seed / 10) % 2 == 0 {
         BlockKind::Union
@@ -1384,10 +1375,10 @@ fn generate_block(seed: u64) -> Case {
         order: vec![Step::Atom(0), Step::Block(0)],
     };
     let mut second = vec![Step::Atom(2)];
-    if partial {
+    if rust_oracle {
         query.guards.push(Guard::Compare(
             Comparison::GreaterEqual,
-            Expr::Partial(PartialOp::Divide, Box::new(Expr::Var(0))),
+            Expr::Rust(RustOp::Divide, Box::new(Expr::Var(0))),
             Expr::Constant(0),
         ));
         second.push(Step::Guard(0));
@@ -1420,8 +1411,8 @@ fn generate_block(seed: u64) -> Case {
         query.bindings.push(Binding {
             variable: 1,
             generator: None,
-            expression: if partial {
-                Expr::Partial(PartialOp::Divide, Box::new(Expr::Var(0)))
+            expression: if rust_oracle {
+                Expr::Rust(RustOp::Divide, Box::new(Expr::Var(0)))
             } else {
                 Expr::OpaqueCall(Box::new(Expr::Var(0)))
             },
@@ -1459,29 +1450,29 @@ fn generate_block(seed: u64) -> Case {
     Case { seed, query, data }
 }
 
-fn generate_partial(seed: u64) -> Case {
+fn generate_rust(seed: u64) -> Case {
     let mut random = Random(crate::random::SplitMix64::new(seed ^ 0x0050_4152_5449_414c));
     // Consecutive even seeds cover every operator/position combination before
     // random data and body schedules vary its domain of evaluation.
     let ordinal = seed / 2;
     let operator = [
-        PartialOp::Divide,
-        PartialOp::Remainder,
-        PartialOp::Add,
-        PartialOp::Subtract,
-        PartialOp::Multiply,
-        PartialOp::Unwrap,
+        RustOp::Divide,
+        RustOp::Remainder,
+        RustOp::Add,
+        RustOp::Subtract,
+        RustOp::Multiply,
+        RustOp::Unwrap,
     ][(ordinal % 6) as usize];
     let position = ((ordinal / 6) % 7) as usize;
-    let partial = |variable| Expr::Partial(operator, Box::new(Expr::Var(variable)));
-    let safe = match operator {
-        PartialOp::Divide | PartialOp::Remainder | PartialOp::Unwrap => {
+    let operation = |variable| Expr::Rust(operator, Box::new(Expr::Var(variable)));
+    let selection = match operator {
+        RustOp::Divide | RustOp::Remainder | RustOp::Unwrap => {
             Guard::Compare(Comparison::NotEqual, Expr::Var(0), Expr::Constant(0))
         }
-        PartialOp::Add | PartialOp::Subtract => {
+        RustOp::Add | RustOp::Subtract => {
             Guard::Compare(Comparison::LessEqual, Expr::Var(0), Expr::Constant(0))
         }
-        PartialOp::Multiply => Guard::And(
+        RustOp::Multiply => Guard::And(
             Box::new(Guard::Compare(
                 Comparison::GreaterEqual,
                 Expr::Var(0),
@@ -1516,25 +1507,25 @@ fn generate_partial(seed: u64) -> Case {
             },
         ],
         bindings: Vec::new(),
-        guards: vec![safe],
+        guards: vec![selection],
         constraints: Vec::new(),
         blocks: Vec::new(),
         head: vec![Expr::Var(0), Expr::Var(2)],
         order: vec![Step::Atom(0)],
     };
-    let protected = random.pick(3) != 0;
+    let guard_first = random.pick(3) != 0;
     let relation_before_rust = random.pick(2) == 0;
     if relation_before_rust && !(2..5).contains(&position) {
         query.order.push(Step::Atom(1));
     }
-    if protected {
+    if guard_first {
         query.order.push(Step::Guard(0));
     }
     match position {
         0 => {
             query.guards.push(Guard::Compare(
                 Comparison::GreaterEqual,
-                partial(0),
+                operation(0),
                 Expr::Constant(0),
             ));
             query.order.push(Step::Guard(1));
@@ -1542,7 +1533,7 @@ fn generate_partial(seed: u64) -> Case {
         1 => {
             query.bindings.push(Binding {
                 variable: 3,
-                expression: partial(0),
+                expression: operation(0),
                 generator: None,
             });
             query.order.push(Step::Binding(0));
@@ -1551,11 +1542,12 @@ fn generate_partial(seed: u64) -> Case {
         2 | 3 => {
             // Both dependencies from earlier atoms and same-atom variables
             // exercise the two argument-expression desugaring rules.
-            query.atoms[1].terms[0] = Term::Expression(partial(if position == 2 { 0 } else { 2 }));
+            query.atoms[1].terms[0] =
+                Term::Expression(operation(if position == 2 { 0 } else { 2 }));
             query.order.push(Step::Atom(1));
             if position == 3 {
-                // Literal positions filter the original row before same-atom
-                // partial expressions, regardless of argument order.
+                // Occurrence literals restrict rows independently of same-atom
+                // total Rust expressions, regardless of argument order.
                 query.schema[1].arity = 3;
                 query.atoms[1].terms.push(Term::Constant(5));
             }
@@ -1566,12 +1558,12 @@ fn generate_partial(seed: u64) -> Case {
                 Generator::InclusiveRange,
                 Generator::Duplicates,
                 Generator::Empty,
-                Generator::IteratorPanic,
+                Generator::Mapped,
             ][((ordinal / 42) % 5) as usize];
             query.bindings.push(Binding {
                 variable: 3,
                 expression: if position == 5 {
-                    partial(0)
+                    operation(0)
                 } else {
                     Expr::Var(0)
                 },
@@ -1594,14 +1586,14 @@ fn generate_partial(seed: u64) -> Case {
             }
         }
         _ => {
-            query.head[0] = partial(0);
+            query.head[0] = operation(0);
             query.order.push(Step::Atom(1));
         }
     }
     if !(2..5).contains(&position) && !relation_before_rust {
         query.order.push(Step::Atom(1));
     }
-    if !protected {
+    if !guard_first {
         query.order.push(Step::Guard(0));
     }
     if position == 0 {
@@ -1633,8 +1625,8 @@ fn generate_partial(seed: u64) -> Case {
         };
         query.guards[1] = mixed;
     }
-    // Central constraints sample both sides of the opaque Rust chain. The
-    // independent written-order reference retains these exact source positions.
+    // Relational constraints sample either side of opaque Rust in source.
+    // Placement depends only on available variables, not a written-order chain.
     for i in 0..1 + random.pick(2) {
         query.constraints.push(random.relational(1));
         if random.pick(2) == 0 {
@@ -1661,12 +1653,11 @@ fn generate_partial(seed: u64) -> Case {
         for row in &mut data[1] {
             row.push(5 + random.pick(2) as i32);
         }
-        // This row must be removed by the occurrence literal before evaluating
-        // a local division/remainder/unwrap at zero, even with the literal last.
+        // The occurrence literal excludes this row independently of where the
+        // total local expression is evaluated.
         data[1].push(vec![0, 0, 6]);
     }
-    // Domain-sensitive emptiness: an earlier empty generator must suppress
-    // later partial terms even under eager-index and split configurations.
+    // Empty inputs must give empty answers under eager and split configurations.
     if random.pick(4) == 0 {
         data[1].clear();
     }
@@ -1781,7 +1772,7 @@ impl Coverage {
                         features.insert("wildcard".into());
                     }
                     Term::Expression(expression) => {
-                        features.insert("partial-argument".into());
+                        features.insert("rust-argument".into());
                         expression.features(&mut features);
                     }
                 }
@@ -1797,8 +1788,8 @@ impl Coverage {
             guard.features(&mut features);
             let mut own = BTreeSet::new();
             guard.features(&mut own);
-            if own.contains("partial-term") {
-                features.insert("partial-guard".into());
+            if own.contains("rust-term") {
+                features.insert("rust-guard".into());
             }
         }
         for binding in &query.bindings {
@@ -1807,7 +1798,7 @@ impl Coverage {
             if let Some(generator) = binding.generator {
                 features.insert("for".into());
                 features.insert(generator.feature().into());
-                features.insert("partial-term".into());
+                features.insert("rust-term".into());
                 let mut variables = BTreeSet::new();
                 binding.expression.variables(&mut variables);
                 if variables.iter().any(|variable| {
@@ -1817,18 +1808,18 @@ impl Coverage {
                 }) {
                     features.insert("nested-for".into());
                 }
-                if own.contains("partial-term") {
-                    features.insert("partial-for".into());
+                if own.contains("rust-term") {
+                    features.insert("rust-for".into());
                 }
-            } else if own.contains("partial-term") {
-                features.insert("partial-let".into());
+            } else if own.contains("rust-term") {
+                features.insert("rust-let".into());
             }
         }
         for expression in &query.head {
             let mut own = BTreeSet::new();
             expression.features(&mut own);
-            if own.contains("partial-term") {
-                features.insert("partial-head".into());
+            if own.contains("rust-term") {
+                features.insert("rust-head".into());
             }
         }
         for expression in query
@@ -1908,17 +1899,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn written_reference_keeps_the_original_guards_unsplit() {
+    fn written_reference_uses_the_same_opaque_rust_and_relational_syntax() {
         for seed in 0..64 {
             let case = generate(seed);
+            assert_eq!(case.written_cq(), case.cq());
             let written: cq_lang_cq::Program = syn::parse_str(&case.written_cq()).unwrap();
             cq_lang_cq::contract::check(&written).unwrap();
-            assert_eq!(written.query.body.len(), case.query.body_order().len());
-            assert!(written.query.body.iter().all(|item| match item {
-                cq_lang_cq::BodyItem::Filter(f) => matches!(f.condition, syn::Expr::Block(_)),
-                cq_lang_cq::BodyItem::Equality(_) | cq_lang_cq::BodyItem::Constraint(_) => false,
-                _ => true,
-            }));
+            for constraint in &case.query.constraints {
+                assert!(
+                    case.cq()
+                        .contains(&format!("where {}", cq_constraint(constraint)))
+                );
+            }
         }
     }
 
@@ -1936,7 +1928,7 @@ mod tests {
             for (relation, rows) in case.query.schema.iter().zip(&case.data) {
                 assert!((1..=3).contains(&relation.arity));
                 assert!(rows.iter().all(|row| row.len() == relation.arity));
-                if !case.has_partial_terms() {
+                if !case.requires_rust_oracle() {
                     assert!(rows.iter().flatten().all(|value| (-3..=3).contains(value)));
                 }
             }

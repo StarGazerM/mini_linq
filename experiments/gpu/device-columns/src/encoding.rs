@@ -16,6 +16,13 @@ impl Text<'_> {
         }
     }
 }
+// DESIGN contract8-device-dictionary
+// Owns single-writer first-sight codes: equality only, not lexical order (contract 8 §10).
+// Sources: doc/STORAGE.md §§1,10; Data Blocks §3.3 distinguishes local dictionaries and translation.
+// DO NOT compare codes as string order, join unrelated dictionaries, or recode published runs.
+// Parallel code assignment is a publication decision; stable/dense codes affect routing and merges.
+// Publication-point assignment is an unmeasured direction, not implemented policy (Plan P4).
+// Constant translation for `where` must not insert; missing values mean empty matches.
 #[derive(Clone, Default)]
 pub struct Dictionary<'data> {
     ids: HashMap<&'data str, i64>,
@@ -42,6 +49,7 @@ impl<'data> Dictionary<'data> {
         Ok(id)
     }
 
+    // DECODE ?: borrowed dictionary inverse requires caller publication or opaque Rust read evidence.
     pub fn decode(&self, value: i64) -> Result<&'data str> {
         match usize::try_from(value)
             .ok()
@@ -59,6 +67,7 @@ impl<'data> Dictionary<'data> {
         }
     }
 
+    // DECODE ?: owned/borrowed dictionary lookup alone does not establish its logical read boundary.
     pub fn text(&self, value: i64) -> Result<&str> {
         usize::try_from(value)
             .ok()
@@ -132,11 +141,15 @@ impl<'data> Dictionary<'data> {
     }
 }
 
+/// Host scalar publication encoding. Decimal retains its signed scaled
+/// coefficient, Date retains epoch days, and text retains dataset dictionary IDs.
 pub trait EncodeValue<'data> {
     fn encode(self, dictionary: &mut Dictionary<'data>) -> Result<i64>;
 }
 
+/// Reconstruct a typed Rust scalar at a host read or answer publication boundary.
 pub trait DecodeValue<'data>: Sized {
+    // DECODE ?: logical scalar inverse contract is shared by host reads and answer publication.
     fn decode(value: i64, dictionary: &Dictionary<'data>) -> Result<Self>;
 }
 
@@ -147,10 +160,12 @@ pub fn encode_value<'data, T: EncodeValue<'data>>(
     value.encode(dictionary)
 }
 
+// DECODE ?: generic typed reconstruction needs the caller read fact; a Rust type is not evidence.
 pub fn decode_value<'data, T: DecodeValue<'data>>(
     value: i64,
     dictionary: &Dictionary<'data>,
 ) -> Result<T> {
+    // DECODE ?: trait dispatch inherits the generic caller boundary.
     T::decode(value, dictionary)
 }
 
@@ -168,6 +183,7 @@ macro_rules! integers {
             }
         }
         impl<'data> DecodeValue<'data> for $ty {
+            // DECODE ?: integer carrier inverse serves generic typed reads and answers.
             fn decode(value: i64, _: &Dictionary<'data>) -> Result<Self> {
                 <$ty>::try_from(value).map_err(|_| failure("CQ_GPU_DECODE_RANGE",
                     concat!("encoded value is outside ", stringify!($ty))))
@@ -178,6 +194,43 @@ macro_rules! integers {
 integers!(
     i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
 );
+
+// Host publication codecs preserve the scalar's identity representation. These
+// traits serve typed Rust reads/answers, not a separate staging conversion.
+impl<'data, const SCALE: u32> EncodeValue<'data> for cq_load::Decimal<SCALE> {
+    fn encode(self, _: &mut Dictionary<'data>) -> Result<i64> {
+        Ok(self.scaled())
+    }
+}
+impl<'data, const SCALE: u32> EncodeValue<'data> for &cq_load::Decimal<SCALE> {
+    fn encode(self, dictionary: &mut Dictionary<'data>) -> Result<i64> {
+        (*self).encode(dictionary)
+    }
+}
+impl<'data, const SCALE: u32> DecodeValue<'data> for cq_load::Decimal<SCALE> {
+    // DECODE ?: Decimal inverse is host-only but its caller must establish the allowed read.
+    fn decode(value: i64, _: &Dictionary<'data>) -> Result<Self> {
+        // DECODE ?: coefficient-to-Decimal construction inherits the host caller boundary.
+        Self::from_scaled(value).map_err(|message| failure("CQ_GPU_DECODE_RANGE", message))
+    }
+}
+impl<'data> EncodeValue<'data> for cq_load::Date {
+    fn encode(self, _: &mut Dictionary<'data>) -> Result<i64> {
+        Ok(i64::from(self.days_since_epoch()))
+    }
+}
+impl<'data> EncodeValue<'data> for &cq_load::Date {
+    fn encode(self, dictionary: &mut Dictionary<'data>) -> Result<i64> {
+        (*self).encode(dictionary)
+    }
+}
+impl<'data> DecodeValue<'data> for cq_load::Date {
+    // DECODE ?: Date inverse is host-only but its caller must establish publication or opaque read.
+    fn decode(value: i64, dictionary: &Dictionary<'data>) -> Result<Self> {
+        // DECODE ?: checked day-carrier inverse and Date construction inherit the host caller boundary.
+        decode_value::<i32>(value, dictionary).map(Self::from_days)
+    }
+}
 
 impl<'data> EncodeValue<'data> for bool {
     fn encode(self, _: &mut Dictionary<'data>) -> Result<i64> {
@@ -190,6 +243,7 @@ impl<'data> EncodeValue<'data> for &bool {
     }
 }
 impl<'data> DecodeValue<'data> for bool {
+    // DECODE ?: boolean carrier inverse requires caller logical-consumption evidence.
     fn decode(value: i64, _: &Dictionary<'data>) -> Result<Self> {
         match value {
             0 => Ok(false),
@@ -217,12 +271,16 @@ impl<'data> EncodeValue<'data> for &'data String {
     }
 }
 impl<'data> DecodeValue<'data> for &'data str {
+    // DECODE ?: borrowed string decoder delegates dictionary inversion without caller evidence.
     fn decode(value: i64, dictionary: &Dictionary<'data>) -> Result<Self> {
+        // DECODE ?: borrowed dictionary resolution inherits its generic caller boundary.
         dictionary.decode(value)
     }
 }
 impl<'data> DecodeValue<'data> for String {
+    // DECODE ?: owned string decoder lacks a caller-level publication fact.
     fn decode(value: i64, dictionary: &Dictionary<'data>) -> Result<Self> {
+        // DECODE ?: dictionary resolution and String allocation require the eventual logical-read fact.
         Ok(dictionary.text(value)?.to_owned())
     }
 }
@@ -232,10 +290,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decimal_publication_preserves_coefficients_and_scale() {
+        fn round_trip<const SCALE: u32>() {
+            let mut dictionary = Dictionary::default();
+            for coefficient in [i64::MIN, -12345, 0, 12345, i64::MAX] {
+                // DECODE P: diagnostic Decimal fixture constructs the expected coefficient answer.
+                let value = cq_load::Decimal::<SCALE>::from_scaled(coefficient).unwrap();
+                assert_eq!(encode_value(value, &mut dictionary).unwrap(), coefficient);
+                assert_eq!(encode_value(&value, &mut dictionary).unwrap(), coefficient);
+                assert_eq!(
+                    // DECODE P: diagnostic Decimal round trip exposes the reconstructed scalar.
+                    decode_value::<cq_load::Decimal<SCALE>>(coefficient, &dictionary).unwrap(),
+                    value
+                );
+            }
+        }
+        round_trip::<0>();
+        round_trip::<2>();
+        round_trip::<18>();
+        // DECODE P: diagnostic unsupported scale checks logical decode rejection.
+        assert!(decode_value::<cq_load::Decimal<19>>(0, &Dictionary::default()).is_err());
+    }
+
+    #[test]
+    fn date_publication_preserves_epoch_days_and_checks_range() {
+        let mut dictionary = Dictionary::default();
+        for days in [i32::MIN, -1, 0, 1, i32::MAX] {
+            // DECODE P: diagnostic Date fixture constructs the expected epoch-day answer.
+            let value = cq_load::Date::from_days(days);
+            assert_eq!(encode_value(value, &mut dictionary).unwrap(), i64::from(days));
+            assert_eq!(encode_value(&value, &mut dictionary).unwrap(), i64::from(days));
+            // DECODE P: diagnostic Date round trip exposes the reconstructed date.
+            assert_eq!(decode_value::<cq_load::Date>(i64::from(days), &dictionary).unwrap(), value);
+        }
+        // DECODE P: diagnostic lower day overflow checks logical decode rejection.
+        assert!(decode_value::<cq_load::Date>(i64::from(i32::MIN) - 1, &dictionary).is_err());
+        // DECODE P: diagnostic upper day overflow checks logical decode rejection.
+        assert!(decode_value::<cq_load::Date>(i64::from(i32::MAX) + 1, &dictionary).is_err());
+    }
+
+    #[test]
+    fn scalar_row_codec_preserves_published_dictionary_ids() {
+        use crate::RowCodec;
+        type Row = (cq_load::Decimal<2>, cq_load::Date, String);
+
+        let row: Row = (
+            // DECODE P: diagnostic row fixture constructs its Decimal field.
+            cq_load::Decimal::from_scaled(-12345).unwrap(),
+            // DECODE P: diagnostic row fixture constructs its Date field.
+            cq_load::Date::from_days(-1),
+            String::from("published"),
+        );
+        let mut dictionary = Dictionary::default();
+        dictionary.intern_owned("earlier").unwrap();
+        let id = dictionary.intern_owned(&row.2).unwrap();
+        let mut encoded = [0; 3];
+        row.encode(&mut dictionary, &mut encoded).unwrap();
+        assert_eq!(encoded, [-12345, -1, id]);
+        // DECODE P: diagnostic row inverse exposes the reconstructed scalar-and-symbol answer.
+        assert_eq!(Row::decode(&encoded, &dictionary).unwrap(), row);
+        assert_eq!(dictionary.intern_owned("published").unwrap(), id);
+        // DECODE P: diagnostic dictionary lookup exposes the preserved earlier symbol.
+        assert_eq!(dictionary.text(0).unwrap(), "earlier");
+    }
+
+    #[test]
     fn integral_encoding_is_checked_and_reversible() {
         let mut dictionary = Dictionary::default();
         assert_eq!(encode_value(i64::MIN, &mut dictionary).unwrap(), i64::MIN);
         assert_eq!(
+            // DECODE P: diagnostic integer round trip exposes the reconstructed maximum.
             decode_value::<u32>(u32::MAX as i64, &dictionary).unwrap(),
             u32::MAX
         );
@@ -245,7 +369,9 @@ mod tests {
                 .to_string()
                 .contains("CQ_GPU_INTEGER_RANGE")
         );
+        // DECODE P: diagnostic integer overflow checks typed decode rejection.
         assert!(decode_value::<u8>(256, &dictionary).is_err());
+        // DECODE P: diagnostic invalid boolean checks typed decode rejection.
         assert!(decode_value::<bool>(2, &dictionary).is_err());
     }
 
@@ -257,7 +383,9 @@ mod tests {
             let a = encode_value(&text, &mut dictionary).unwrap();
             let b = encode_value("shared", &mut dictionary).unwrap();
             assert_eq!(a, b);
+            // DECODE P: diagnostic negative dictionary ID checks answer rejection.
             assert!(dictionary.decode(-1).is_err());
+            // DECODE P: diagnostic borrowed answer is exposed for lifetime and equality assertions.
             decode_value::<&str>(a, &dictionary).unwrap()
         };
         assert_eq!(answer, text);
@@ -275,13 +403,16 @@ mod tests {
         let second = dictionary.intern_owned("second").unwrap();
         first_relation.merge(&dictionary).unwrap();
         assert_eq!(
+            // DECODE P: diagnostic first owned symbol exposes the merged-dictionary answer.
             decode_value::<String>(first, &first_relation).unwrap(),
             "shared"
         );
         assert_eq!(
+            // DECODE P: diagnostic second owned symbol exposes the appended-dictionary answer.
             decode_value::<String>(second, &first_relation).unwrap(),
             "second"
         );
+        // DECODE P: diagnostic owned-only dictionary checks borrowed answer rejection.
         assert!(decode_value::<&str>(first, &first_relation).is_err());
         let mut incompatible = Dictionary::default();
         incompatible.intern_owned("different").unwrap();
@@ -295,13 +426,16 @@ mod tests {
         let mut common = owned.clone();
         assert_eq!(common.intern("shared").unwrap(), 0);
         assert_eq!(common.intern("second").unwrap(), 1);
+        // DECODE P: diagnostic common dictionary exposes a promoted borrowed answer.
         assert_eq!(common.decode(0).unwrap(), "shared");
         owned.check_extension(&common).unwrap();
         assert!(common.check_extension(&owned).is_err());
 
         let mut merged = owned.clone();
         merged.merge(&common).unwrap();
+        // DECODE P: diagnostic merged first symbol exposes its retained borrowed answer.
         assert_eq!(merged.decode(0).unwrap(), "shared");
+        // DECODE P: diagnostic merged second symbol exposes its extended borrowed answer.
         assert_eq!(merged.decode(1).unwrap(), "second");
         assert_eq!(merged.intern_owned("shared").unwrap(), 0);
         common.check_extension(&merged).unwrap();

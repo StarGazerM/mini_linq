@@ -56,7 +56,9 @@ pub use gpu_tiles::owner;
 pub unsafe fn range(offsets: ColumnView, key: u32) -> (u32, u32) {
     unsafe {
         (
+            // DECODE V: lower directory offset FOR inversion precedes range expansion; P6 use plain index directories.
             decode_u32(offsets, key as u64),
+            // DECODE V: upper directory offset FOR inversion precedes range expansion; P6 avoid compressed random-access directories.
             decode_u32(offsets, key as u64 + 1),
         )
     }
@@ -74,11 +76,13 @@ pub unsafe fn contains_u32(column: ColumnView, begin: u32, end: u32, value: u32)
     let (mut low, mut high) = (begin, end);
     while low < high {
         let middle = low + (high - low) / 2;
+        // DECODE V: binary membership probe reconstructs each midpoint; P6 compare code-domain keys or use plain indexes.
         if unsafe { decode_u32(column, middle as u64) } < value {
             low = middle + 1;
         } else {
             high = middle;
         }
     }
+    // DECODE V: final membership comparison reconstructs the candidate; P6 retain encoded comparison operands.
     low < end && unsafe { decode_u32(column, low as u64) } == value
 }

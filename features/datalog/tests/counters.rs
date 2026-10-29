@@ -53,7 +53,7 @@ fn shared_owned_delta_layouts_probe_without_core_fallback_builds() {
         Reach((*x).clone(),(*z).clone()) :- Edge(x,y), Reach(y,z);
         Reach((*x).clone(),(*z).clone()) :- Edge(y,z), Reach(x,y);
         Reach((*x).clone(),(*y).clone()) :- Edge(x,y), Reach(x,y);
-        Reach((*x).clone(),(*y).clone()) :- Flag(f), if *f == 7, Reach(x,y);
+        Reach((*x).clone(),(*y).clone()) :- Flag(f), where f == 7, Reach(x,y);
         Flag(*f) :- FlagInput(f), Reach(x,y);
     };
     let rows: Vec<_> = rows.collect();
@@ -266,7 +266,7 @@ fn heapalloc_helper_hole_work_is_bounded_by_input_plus_output() {
         HeapAllocHelper: Compat(*heap, *baseheap) :-
             Alloc(heap, heaptype), Alloc(baseheap, baseheaptype),
             Component(baseheaptype, comptype), Super(comptype, heaptype),
-            if *baseheaptype != constants.c_object_array && *baseheaptype != constants.c_string_array;
+            where baseheaptype != constants.c_object_array && baseheaptype != constants.c_string_array;
     }
     .collect();
     let cost = cq_storage::counters::snapshot();
@@ -317,8 +317,8 @@ fn authored_rule_order_is_the_hole_plan() {
                 HeapAllocHelper: Compat(*heap, *baseheap) :-
                     Alloc(heap, heaptype), Alloc(baseheap, baseheaptype),
                     Component(baseheaptype, comptype), Super(comptype, heaptype),
-                    if *baseheaptype != constants.c_object_array
-                        && *baseheaptype != constants.c_string_array;
+                    where baseheaptype != constants.c_object_array
+                        && baseheaptype != constants.c_string_array;
             }
             .collect::<std::collections::BTreeSet<_>>()
         };

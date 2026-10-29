@@ -553,6 +553,18 @@ fn keys(program: &Program, facts: &Analysis, name: &Ident, term: &Term) -> Optio
                 return None;
             }
             let result = facts.results.get(&symbol_name(name))?;
+            // Fused arms are constructed inside each prefix-row invocation.
+            // Their flat Sequence definitions are deferred by the interpreter,
+            // so rewriting that Store cannot supply a routed constructor.
+            if facts
+                .structures
+                .physical
+                .fused
+                .values()
+                .any(|group| group.members.contains(result))
+            {
+                return None;
+            }
             let reads: Vec<_> = facts
                 .obligations
                 .iter()

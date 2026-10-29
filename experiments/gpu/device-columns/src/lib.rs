@@ -293,6 +293,7 @@ impl EncodedColumn {
     /// # Safety
     /// `order` must hold `rows` indices into `source`'s live rows, ready on
     /// pool.stream. `bounds` must enclose every gathered value.
+    // DECODE I: gather wrapper reconstructs then FOR-reencodes a permutation; avoidable reorganization, P4 keep index runs plain.
     pub unsafe fn from_gather<T: DeviceCopy + 'static, L: Lane>(
         pool: Arc<Pool>,
         source: ColumnView,
@@ -303,6 +304,7 @@ impl EncodedColumn {
         bounds: Bounds,
     ) -> Result<Self> {
         unsafe {
+            // DECODE I: gather delegates source inversion and immediate FOR re-encoding; this reorganization is avoidable.
             Self::from_gather_source::<T, L>(
                 pool,
                 source.into(),
@@ -323,6 +325,7 @@ impl EncodedColumn {
     /// Every selected index (or every row in the identity prefix) must address
     /// an initialized source row, and `bounds` must enclose every gathered value,
     /// which must fit the declared lane type.
+    // DECODE I: source gather recomputes frames after value reconstruction; avoidable reorganization, P4 prefer plain indexes.
     pub unsafe fn from_gather_source<T: DeviceCopy + 'static, L: Lane>(
         pool: Arc<Pool>,
         source: SourceView,
@@ -358,6 +361,7 @@ impl EncodedColumn {
                 },
             ))?;
             unsafe {
+                // DECODE I: fused gather launch decodes and immediately re-encodes values; this reorganization is avoidable.
                 module.gather_encode(
                     pool.stream(),
                     &launch,
@@ -529,9 +533,11 @@ impl EncodedColumn {
         self.data.pool()
     }
     /// Device-only decoded scratch for builds which consume native integers.
+    // DECODE ?: whole-column scratch inverse serves both final answers and device-side build consumers.
     pub fn decoded(&self) -> Result<Buffer<i64>> {
         let output = Buffer::zeroed(self.pool().clone(), self.capacity)?;
         unsafe {
+            // DECODE ?: scratch reconstruction inherits decoded caller evidence, not the allocation location.
             self.decode_into(output.ptr())?;
         }
         Ok(output)
@@ -539,6 +545,7 @@ impl EncodedColumn {
     /// # Safety
     /// Output must have capacity writable i64 slots on this pool's stream.
     /// Only the live prefix is initialized; inactive slots remain untouched.
+    // DECODE ?: decode_into accepts arbitrary device consumers; no opaque-read or publication fact is recorded.
     pub unsafe fn decode_into(&self, output: *mut i64) -> Result<()> {
         let module = module(self.pool())?;
         let launch = module.prepare_fastlanes_decode_column(LaunchConfig1D::new(
@@ -547,6 +554,7 @@ impl EncodedColumn {
             0,
         ))?;
         unsafe {
+            // DECODE ?: whole-column kernel launch inherits the caller boundary and may precede relational work.
             module.fastlanes_decode_column(self.pool().stream(), &launch, self.view(), output)?;
         }
         Ok(())
@@ -568,11 +576,13 @@ impl EncodedColumn {
             usize::try_from(len)?.min(self.capacity)
         })
     }
+    // DECODE P: explicit logical column host publication reconstructs stored integer values.
     pub fn to_host(&self) -> Result<Vec<i64>> {
         let len = self.logical_rows()?;
         if let ColumnData::Plain(data) = &self.data {
             return data.to_host_prefix(len);
         }
+        // DECODE P: compressed host answer download invokes the column inverse before transfer.
         self.decoded()?.to_host_prefix(len)
     }
     /// Explicit diagnostic download of live headers and packed words; never
@@ -594,6 +604,7 @@ impl EncodedColumn {
             // Native Plain deliberately has no FastLanes headers or payload.
             (None, None, ColumnData::Plain(_)) => Ok((
                 Vec::new(),
+                // DECODE P: diagnostic Plain inspection uses logical publication; its identity branch performs no packed inversion.
                 self.to_host()?.into_iter().map(|v| v as u64).collect(),
             )),
             _ => unreachable!(),

@@ -121,23 +121,26 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
                     .iter()
                     .any(|(build, prefix)| build == &share.build && prefix == &share.keys)
         });
-        let payload = facts.built.get(&share.build).into_iter().flatten().any(|(levels, ty)| {
-            let syn::Type::Path(path) = ty else { return false };
-            let Some(segment) = path.path.segments.last() else { return false };
-            if levels.len() == 1 && levels[0] == share.keys
-                && (segment.ident == "HashIndex" || segment.ident == "SortedRun")
-            {
-                return true;
-            }
-            segment.ident == "PrefixRun"
-                && prefix_depth(levels, &share.keys).is_some()
-                && share.keys.iter().all(|key| matches!(
-                    ungroup_type(&facts.physical.rows[&share.build].types[key]),
-                    syn::Type::Path(path) if path.qself.is_none()
-                        && ["i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize"]
-                            .iter().any(|name| path.path.is_ident(name))
-                ))
-        });
+        let payload = facts
+            .built
+            .get(&share.build)
+            .into_iter()
+            .flatten()
+            .any(|(levels, ty)| {
+                let syn::Type::Path(path) = ty else {
+                    return false;
+                };
+                let Some(segment) = path.path.segments.last() else {
+                    return false;
+                };
+                if levels.len() == 1
+                    && levels[0] == share.keys
+                    && (segment.ident == "HashIndex" || segment.ident == "SortedRun")
+                {
+                    return true;
+                }
+                segment.ident == "PrefixRun" && prefix_depth(levels, &share.keys).is_some()
+            });
         if !(payload || leveled)
             || facts
                 .membership

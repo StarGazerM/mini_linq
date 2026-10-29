@@ -82,30 +82,31 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
         }
         unique_branch_rust(source, &sn, sc, &so.occurrence)?;
         unique_branch_rust(target, &tn, tc, &to.occurrence)?;
-        let pinned = has_rust(source, &sn, sc, &so.occurrence);
-        if pinned != has_rust(target, &tn, tc, &to.occurrence) {
+        let rust = has_rust(source, &sn, sc, &so.occurrence);
+        if rust != has_rust(target, &tn, tc, &to.occurrence) {
             return Err(format!("block @{path} changes its Rust tree"));
         }
-        if pinned {
-            let (sp, tp) = (
-                s.correlation.ok_or("Rust block lacks its prefix")?,
-                t.correlation.ok_or("Rust block lacks its prefix")?,
-            );
-            let source_names: BTreeSet<_> = source.nodes[sp].heading.keys().cloned().collect();
-            let target_names: BTreeSet<_> = target.nodes[tp].heading.keys().cloned().collect();
-            if !source_names.is_subset(&target_names)
+        if rust {
+            let required: BTreeSet<_> = so.free.iter().map(symbol_name).collect();
+            let context = |schedule: &Schedule, node: Option<usize>| {
+                node.map(|node| schedule.nodes[node].heading.keys().cloned().collect())
+                    .unwrap_or_default()
+            };
+            let source_names: BTreeSet<_> = context(source, sc);
+            let target_names: BTreeSet<_> = context(target, tc);
+            if !required.is_subset(&source_names)
+                || !required.is_subset(&target_names)
                 || to
                     .interface
                     .iter()
                     .any(|id| target_names.contains(&symbol_name(id)))
             {
                 return Err(format!(
-                    "block @{path} changes its prefix scope or binds an interface column outside the block"
+                    "block @{path} loses free-variable bindings or binds an interface column outside the block"
                 ));
             }
-            // The surrounding proof checks every source Before fact at the
-            // block's opaque boundary. Extra relational prefix facts may shrink
-            // the arm domain; the source lexical scope remains fixed.
+            // Rust dependencies retain their lexical scope; total expressions
+            // impose no written-order obligations on relational prefix facts.
         } else if s.domain.is_some() || t.domain.is_some() {
             // A projected finite context domain is an explicit dependency.
             // Preserve its proof independently from branch-local constraints.
@@ -117,11 +118,7 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
                 compare(&sv.result, &tv.result)?;
             }
         }
-        let context_names: BTreeSet<_> = if pinned {
-            source.nodes[sc.unwrap()].heading.keys().cloned().collect()
-        } else {
-            so.free.iter().map(symbol_name).collect()
-        };
+        let context_names: BTreeSet<_> = so.free.iter().map(symbol_name).collect();
         let mut heading = context_names.clone();
         heading.extend(so.interface.iter().map(symbol_name));
         let signature = format!("branch @{path} {heading:?}");
@@ -253,7 +250,7 @@ fn unique_branch_rust(
 
 fn branch_rust(schedule: &Schedule, node: usize, block: &cq_syntax::Occurrence) -> bool {
     schedule.nodes[node].rust_index.is_some_and(|index| {
-        schedule.chain[index]
+        schedule.rust_steps[index]
             .environment
             .as_ref()
             .and_then(|env| env.path.as_ref())
@@ -375,7 +372,11 @@ fn footprint(schedule: &Schedule) -> Footprint {
         .collect();
     predicates.sort();
     predicates.dedup();
-    let mut rust: Vec<_> = schedule.chain.iter().map(|r| r.payload.clone()).collect();
+    let mut rust: Vec<_> = schedule
+        .rust_steps
+        .iter()
+        .map(|r| r.payload.clone())
+        .collect();
     rust.sort();
     Footprint {
         atoms,
@@ -522,9 +523,14 @@ impl<'a> View<'a> {
         {
             let _ = boundary;
             let node = self.context(&label, &names);
-            for (name, column) in &self.original.nodes[index].heading {
-                self.columns
-                    .insert(column.clone(), Column::Context(label.clone(), name.clone()));
+            // A joined prefix may give one name several equal atom origins.
+            // The boundary abstracts every one of them, not just the heading's
+            // representative; none of those prefix atoms lives in this view.
+            for (name, columns) in &self.original.nodes[index].origins {
+                for column in columns {
+                    self.columns
+                        .insert(column.clone(), Column::Context(label.clone(), name.clone()));
+                }
             }
             self.memo.insert(index, node);
             return Ok(node);
@@ -578,17 +584,9 @@ impl<'a> View<'a> {
         }
         node.operands = operands;
         if let Some(rust_index) = original.rust_index {
-            let rust = &self.original.chain[rust_index];
-            let ordinal = self.result.chain.len();
-            for column in original.heading.values() {
-                if let Column::Bind(id, name) = column {
-                    if *id == rust_index {
-                        self.columns
-                            .insert(column.clone(), Column::Bind(ordinal, name.clone()));
-                    }
-                }
-            }
-            self.result.chain.push(Rust {
+            let rust = &self.original.rust_steps[rust_index];
+            let ordinal = self.result.rust_steps.len();
+            self.result.rust_steps.push(Rust {
                 payload: rust.payload.clone(),
                 input: node.operands[0],
                 arguments: rust
@@ -725,7 +723,6 @@ impl<'a> View<'a> {
                     relation: atom.relation.clone(),
                     bindings: atom.bindings.clone(),
                     constants: atom.constants.clone(),
-                    node: result,
                 },
             );
         }
@@ -749,11 +746,12 @@ impl<'a> View<'a> {
             .map(symbol_name)
             .collect();
         let result = if rust {
-            let prefix = original
-                .correlation
-                .ok_or("a Rust block must keep its prefix")?;
-            let input = self.node(prefix)?;
-            let ordinal = self.result.chain.len();
+            let input = match original.correlation.or(original.domain) {
+                Some(prefix) => self.node(prefix)?,
+                None if origin.free.is_empty() => self.result.unit(),
+                None => return Err("a Rust block must bind its free variables".into()),
+            };
+            let ordinal = self.result.rust_steps.len();
             let mut node = Node {
                 kind: Kind::Rust(format!("block @{path} {}", origin.fallback.is_some())),
                 heading: self.result.nodes[input].heading.clone(),
@@ -774,11 +772,14 @@ impl<'a> View<'a> {
                 .collect();
             for id in &origin.interface {
                 let name = symbol_name(id);
-                let column = Column::Bind(ordinal, name.clone());
+                let column = Column::Bind(
+                    format!("block @{path} {}", origin.fallback.is_some()),
+                    name.clone(),
+                );
                 node.heading.insert(name.clone(), column.clone());
                 node.origins.insert(name, HashSet::from([column]));
             }
-            self.result.chain.push(Rust {
+            self.result.rust_steps.push(Rust {
                 payload: format!("block @{path} {}", origin.fallback.is_some()),
                 input,
                 arguments,

@@ -16,7 +16,7 @@ fn bounded_counter_and_computed_probe_keys() {
         relation Matched(n:i32,v:i32);
         output Count, Matched, Link;
         Count(*n) :- Seed(n);
-        Count(*n + 1) :- Count(n), if *n < 4;
+        Count(*n + 1) :- Count(n), where n < 4;
         Matched(*n,*v) :- Link(n,v), Count(n);
     };
     ascent::ascent! {
@@ -51,7 +51,7 @@ fn guarded_path_lengths_on_a_cycle() {
         relation Path(x:i32,y:i32,length:i32);
         output Path;
         Path(*x,*y,1) :- Edge(x,y);
-        Path(*x,*z,*length + 1) :- Path(x,y,length), Edge(y,z), if *length < 5;
+        Path(*x,*z,*length + 1) :- Path(x,y,length), Edge(y,z), where length < 5;
     };
     ascent::ascent! {
         struct Reference;
@@ -77,7 +77,7 @@ fn fibonacci_and_let_bound_recursive_values() {
         relation Fib(n:u64,a:u64,b:u64);
         output Fib;
         Fib(*n,*a,*b) :- Seed(n,a,b);
-        Fib(next,*b,sum) :- Fib(n,a,b), if *n < 12,
+        Fib(next,*b,sum) :- Fib(n,a,b), where n < 12,
             let next = *n + 1, let sum = *a + *b;
     };
     ascent::ascent! {
@@ -179,7 +179,7 @@ fn finite_generators_match_ascent_in_seed_and_recursive_rules() {
             output Generated, Reach, Matched;
             Generated(y) :- Seed(x), for y in [*x, *x + 1, *x];
             Reach(*x) :- Generated(x);
-            Reach(y) :- Reach(x), if *x < 4, for y in [*x + 1, *x + 1];
+            Reach(y) :- Reach(x), where x < 4, for y in [*x + 1, *x + 1];
             Matched(y,*label) :- Reach(x), for y in [*x + 1, *x + 1], Link(y,label);
         };
         ascent::ascent! {

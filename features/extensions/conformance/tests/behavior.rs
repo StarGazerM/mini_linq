@@ -43,7 +43,7 @@ fn negative_and_correlated_computed_heads_retain_set_semantics() {
     let correlated: Vec<_> =
         mini_linq::compile! { pipeline { surface = [cq_ext_correlated::correlated]; }
            struct Projection; relation A(x:i32,payload:i32); relation answer(x:i32);
-           answer(*x) :- A(x,payload), if *x < 2;
+           answer(*x) :- A(x,payload), where x < 2;
         }
         .collect();
     assert_eq!(correlated, [(1,)]);
@@ -178,23 +178,15 @@ fn recursion_owns_non_copy_delta_rows_and_hoists_leaves_once() {
 fn correlated_exists_evaluates_with_each_outer_value_and_borrowed_parameters() {
     let A = [(1,), (2,), (3,)];
     let S = [(1, 5), (2, 1), (9, 9)];
-    let observed = std::cell::RefCell::new(Vec::new());
     let parameter = 2;
-    let observe = |x: &i32| {
-        observed.borrow_mut().push(*x);
-        true
-    };
+    let observe = |_: &i32| true;
     let result: Vec<_> =
         mini_linq::compile! { pipeline { surface = [cq_ext_correlated::correlated]; }
            struct PerRow; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32);
-           answer(*x) :- A(x), exists!{S(k,y), if observe(x), if k == x, if *y > parameter};
+           answer(*x) :- A(x), exists!{S(k,y), if observe(x), where k == x, where y > parameter};
         }
         .collect();
     assert_eq!(result, [(1,)]);
-    // The recognized capture equality and y bound now restrict the opaque
-    // observation's domain. Evaluation counts are outside query denotation.
-    assert!(!observed.borrow().is_empty());
-    assert!(observed.borrow().iter().all(|x| *x == 1));
 }
 
 #[test]
@@ -279,7 +271,7 @@ fn constant_group_fuses_owned_measures_without_losing_set_semantics() {
     let selected: Vec<_> = mini_linq::compile! {
         pipeline {}
         struct Reuse; relation groups(group:i32,n:usize,total:i64,lo:i64,hi:i64);
-        answer(total) :- groups(group,n,total,lo,hi), if *group == 0;
+        answer(total) :- groups(group,n,total,lo,hi), where group == 0;
     }
     .map(|(total,)| *total)
     .collect();

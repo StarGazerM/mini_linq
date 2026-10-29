@@ -8,10 +8,10 @@ use structures::{Structure, physical::Operator};
 ///
 /// Catalog levels constrain reads, not construction. Structures has no machine
 /// grading; Sequence planning checks each selected type at its actual read levels.
-/// A keyed reader carrying strings also needs a host read level, even when
-/// the provider's own retained layout is entirely numeric.
+/// Keyed readers whose carried columns lack a matching catalog element capability
+/// need a host read level, independently of the provider's retained layout.
 /// Host scan adapters are preserved. Unsupported keyed host reads are retained
-/// through `build_host_reads`; built indexes replace their keyed fallbacks.
+/// through `build_host_reads`; built indexes preserve their membership certificates.
 /// Unlike `plan`, this operation explicitly replaces recorded provider types.
 /// Formal rule PL-Select: Stable-partition catalog order by recorded representation, then select its first eligible token.
 pub fn select_from_catalog(
@@ -26,6 +26,8 @@ pub fn select_from_catalog(
 /// existing provider obligations the caller's target catalog already supports;
 /// the target must still check scheduled read levels after planning.
 /// Native row collections retain their collection ABI in this mode.
+/// Keyed host adapters are retained even when their storage type is already
+/// admitted: a lazy host fallback is not the published storage value itself.
 pub fn select_from_catalog_preserving(
     source: &structures::Program,
     catalog: &Catalog,
@@ -153,35 +155,11 @@ fn select(
             | Structure::Share { .. } => continue,
         };
         let ty = if kind == "canon" {
-            let columns = &analysis.physical.headings[&name];
-            // The declared scalar domains are conservative codec bounds. Setup
-            // may pack fewer bits, but evidence never narrows this obligation.
-            let bits = columns.iter().try_fold(0u32, |sum, column| {
-                let ty = &analysis.physical.rows[&name].types[column];
-                let width = match ty {
-                    syn::Type::Path(path) => {
-                        match path.path.get_ident().map(ToString::to_string).as_deref() {
-                            Some("bool") => 1,
-                            Some("u8" | "i8") => 8,
-                            Some("u16" | "i16") => 16,
-                            Some("u32" | "i32") => 32,
-                            Some("u64" | "i64" | "usize" | "isize") => 64,
-                            _ => return None,
-                        }
-                    }
-                    _ => return None,
-                };
-                sum.checked_add(width)
-            });
+            // Packed bounds are runtime codec facts, never inferred from Rust types.
             catalog
                 .canons
                 .iter()
-                .find(|token| {
-                    !token.levels.is_empty()
-                        && token
-                            .max_packed_bits
-                            .is_none_or(|maximum| bits.is_some_and(|bits| bits <= maximum))
-                })
+                .find(|token| !token.levels.is_empty() && token.max_packed_bits.is_none())
                 .map(|token| &token.ty)
         } else {
             let recorded = |token: &&cq_lang_sequence::ProviderToken| match &entry.structure {
@@ -329,6 +307,7 @@ fn retain_host_index(
         if !stream || analysis.built_on(&name, &keys).is_some() {
             continue;
         }
+        let membership = analysis.membership.contains(&(name.clone(), keys.clone()));
         let mut required = Vec::new();
         for (read, columns, _) in &analysis.physical.keyed_reads[&name] {
             if *columns != keys {
@@ -343,6 +322,7 @@ fn retain_host_index(
                 .map(|definition| &definition.operator)
             {
                 Some(Operator::Semi(..) | Operator::Anti(..)) => Capability::Membership,
+                Some(Operator::Probe(..)) if membership => Capability::Membership,
                 Some(Operator::Merge(..)) => Capability::Ordered,
                 _ => Capability::Range,
             };
@@ -371,7 +351,7 @@ fn retain_host_index(
                                         if matches!(read.choice, Some(structures::physical::Choice::First(_))))
                     })
             })).then(|| needed[&name].iter().cloned().collect::<Vec<_>>());
-        if catalog.providers.iter().any(|token| {
+        let native = catalog.providers.iter().find(|token| {
             crate::catalog::matches_type(&token.ty, &keyed.ty)
                 && !token.levels.is_empty()
                 && accepts_elements(token, &analysis, &name)
@@ -386,15 +366,16 @@ fn retain_host_index(
                 && required
                     .iter()
                     .all(|capability| token.capabilities.contains(capability))
-        }) {
+        });
+        if selected.is_none() && native.is_some() {
             continue;
         }
-        let token = catalog.providers.iter().find(|token| {
+        let token = native.or_else(|| catalog.providers.iter().find(|token| {
             !token.levels.is_empty()
                 && accepts_columns(token, &analysis, &name, projected.as_deref().unwrap_or(&analysis.layouts[&name]))
                 && accepts_read_levels(token, source, &analysis, &name, &keyed.level_names(), &needed)
                 && required.iter().all(|capability| token.capabilities.contains(capability))
-        }).ok_or_else(|| syn::Error::new(
+        })).ok_or_else(|| syn::Error::new(
             entry.name.span(),
             format!("PL-Select: structure `{name}` host adapter `{reader_name:?}` has unmet catalog read obligation {required:?}"),
         ))?;
@@ -407,7 +388,13 @@ fn retain_host_index(
                     })?;
         }
         if indexes.insert((name.clone(), keys.clone())) {
-            let ty = &token.ty;
+            // A retained native representation keeps its original row ABI.
+            let projected = if native.is_some() { None } else { projected };
+            let ty = if native.is_some() {
+                &keyed.ty
+            } else {
+                &token.ty
+            };
             let columns: Vec<_> = keys
                 .iter()
                 .map(|key| syn::Ident::new(key, entry.name.span()))
@@ -419,8 +406,10 @@ fn retain_host_index(
                     .collect();
                 quote!(payload [#(#payload),*] constants {})
             });
+            // Retention changes the provider's ownership, not its read protocol.
+            let membership = membership.then(|| quote!(membership));
             target.structures.entries.push(syn::parse_quote!(
-                #build = #ty [#(#columns),*] #projection;
+                #build = #ty [#(#columns),*] #membership #projection;
             ));
         }
     }
@@ -459,7 +448,7 @@ fn accepts_columns(
 
 // PL-Catalog: element compatibility belongs to the retained provider layout;
 // read-level compatibility also includes the row carried by each keyed reader.
-// A numeric membership index does not consume an unused right-hand payload.
+// A membership index consumes its keys, not an unused right-hand payload.
 pub(crate) fn accepts_read_levels(
     token: &cq_lang_sequence::ProviderToken,
     source: &structures::Program,
@@ -468,35 +457,45 @@ pub(crate) fn accepts_read_levels(
     levels: &[Vec<String>],
     needed: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
 ) -> bool {
-    let string_row = |name: &str| {
-        needed[name].iter().any(|column| {
-            matches!(&analysis.physical.rows[name].types[column], syn::Type::Path(path)
-                if path.path.segments.last().is_some_and(|segment| segment.ident == "String"))
-        })
+    let accepted_row = |name: &str| {
+        accepts_columns(
+            token,
+            analysis,
+            name,
+            &needed[name].iter().cloned().collect::<Vec<_>>(),
+        )
     };
-    let host_read = analysis.physical.keyed_reads.get(name).into_iter().flatten().any(
-        |(reader, columns, _)| {
+    let host_read = analysis
+        .physical
+        .keyed_reads
+        .get(name)
+        .into_iter()
+        .flatten()
+        .any(|(reader, columns, _)| {
             if structures::prefix_depth(levels, columns).is_none() {
                 return false;
             }
-            let Some(definition) = source.physical.program.definitions.iter()
+            let Some(definition) = source
+                .physical
+                .program
+                .definitions
+                .iter()
                 .find(|definition| symbol_name(&definition.name) == *reader)
             else {
                 return false;
             };
-            string_row(reader) || match &definition.operator {
-                Operator::Probe(_, keyed) | Operator::Merge(_, keyed)
-                | Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => {
-                    string_row(&symbol_name(&keyed.left))
-                        || columns.iter().any(|column| {
-                            matches!(&analysis.physical.rows[name].types[column], syn::Type::Path(path)
-                                if path.path.segments.last().is_some_and(|segment| segment.ident == "String"))
-                        })
+            !accepted_row(reader)
+                || match &definition.operator {
+                    Operator::Probe(_, keyed)
+                    | Operator::Merge(_, keyed)
+                    | Operator::Semi(_, keyed)
+                    | Operator::Anti(_, keyed) => {
+                        !accepted_row(&symbol_name(&keyed.left))
+                            || !accepts_columns(token, analysis, name, columns)
+                    }
+                    _ => false,
                 }
-                _ => false,
-            }
-        },
-    );
+        });
     !host_read
         || token
             .levels

@@ -154,9 +154,11 @@ fn routed_exact_provider_retyping_preserves_join_filter_obligations() {
 }
 
 #[test]
-fn routed_filter_requires_an_enumerable_exact_native_family() {
+fn routed_filter_eligibility_uses_recorded_layout_not_type_names() {
     let before = join_filter(&source(), quote!(l)).unwrap();
+    let expected = ir::contract::check(&before).unwrap().join_filters;
     for ty in [
+        quote!(ProviderAlias),
         quote!(::cq_storage::sharded::Sharded<MembershipOnly>),
         quote!(::cq_storage::sharded::Sharded<::cq_storage::HashIndex<'_, _, _>>),
         quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, UnknownRouter>),
@@ -166,7 +168,32 @@ fn routed_filter_requires_an_enumerable_exact_native_family() {
             >
         ),
     ] {
-        assert!(retype(&before, quote!(b => #ty)).is_err(), "{ty}");
+        // These are opaque Rust types. The recorded exact single-level layout
+        // proves eligibility here; rustc checks Keys and the other capabilities.
+        let changed = retype(&before, quote!(b => #ty)).unwrap();
+        let facts = ir::contract::check(&changed).unwrap();
+        assert_eq!(changed.physical, before.physical);
+        assert_eq!(facts.join_filters, expected);
+        assert_eq!(ir::join_filter_candidates(&changed, &facts, "j").len(), 1);
+    }
+}
+
+#[test]
+fn join_filter_requires_a_recorded_single_level_exact_layout() {
+    let before = join_filter(&source(), quote!(l)).unwrap();
+    for replacement in [
+        syn::parse_quote!(b = ProviderAlias [x][z];),
+        syn::parse_quote!(b = ProviderAlias [x] membership;),
+    ] {
+        let mut changed = before.clone();
+        let slot = changed
+            .structures
+            .entries
+            .iter_mut()
+            .find(|entry| entry.name == "b" && matches!(entry.structure, Structure::Built { .. }))
+            .unwrap();
+        *slot = replacement;
+        assert!(ir::contract::check(&changed).is_err());
     }
 }
 

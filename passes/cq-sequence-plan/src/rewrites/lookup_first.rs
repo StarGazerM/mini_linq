@@ -3,6 +3,8 @@
 //! (Qiao et al. §3). Cardinality advice chooses plans, never proof premises.
 //! Retained join leaves replace their keyed fallbacks; live smallest
 //! intersections keep both their candidate and full-key membership adapters.
+//! Raw membership certificates survive only unchanged complete-key read domains;
+//! newly introduced prefix reads use generated exact indexes instead.
 //! Distinct full-row index layouts receive separate identity-projection stores;
 //! their consumers name a provider explicitly while sharing retained source rows.
 use std::collections::{BTreeMap, BTreeSet};
@@ -63,15 +65,6 @@ fn graph(
         .iter()
         .map(|d| (symbol_name(&d.name), d))
         .collect();
-    let barrier = physical
-        .definitions
-        .iter()
-        .rposition(|d| matches!(d.operator, Operator::Bind(_) | Operator::Guard(_)));
-    let frozen: BTreeSet<_> = barrier
-        .into_iter()
-        .flat_map(|i| &physical.definitions[..=i])
-        .map(|d| symbol_name(&d.name))
-        .collect();
     let mut root = physical.returned.clone();
     // These suffixes keep their exact predicates/projection. In particular,
     // opaque Rust is not pulled through a newly filtered or expanded stream.
@@ -82,30 +75,24 @@ fn graph(
             _ => break,
         }
     }
-    if frozen.contains(&symbol_name(&root))
-        || !matches!(
-            definitions[&symbol_name(&root)].operator,
-            Operator::Probe(..) | Operator::Merge(..)
-        )
-    {
+    if !matches!(
+        definitions[&symbol_name(&root)].operator,
+        Operator::Probe(..) | Operator::Merge(..)
+    ) {
         return Ok(None);
     }
     fn collect(
         name: &Ident,
         definitions: &BTreeMap<String, &physical::Definition>,
-        frozen: &BTreeSet<String>,
         leaves: &mut Vec<Ident>,
         joins: &mut BTreeSet<String>,
     ) {
         let key = symbol_name(name);
-        if !frozen.contains(&key) {
-            if let Operator::Probe(_, join) | Operator::Merge(_, join) = &definitions[&key].operator
-            {
-                joins.insert(key);
-                collect(&join.left, definitions, frozen, leaves, joins);
-                collect(&join.right, definitions, frozen, leaves, joins);
-                return;
-            }
+        if let Operator::Probe(_, join) | Operator::Merge(_, join) = &definitions[&key].operator {
+            joins.insert(key);
+            collect(&join.left, definitions, leaves, joins);
+            collect(&join.right, definitions, leaves, joins);
+            return;
         }
         if !leaves.contains(name) {
             leaves.push(name.clone());
@@ -113,7 +100,7 @@ fn graph(
     }
     let mut leaves = Vec::new();
     let mut joins = BTreeSet::new();
-    collect(&root, &definitions, &frozen, &mut leaves, &mut joins);
+    collect(&root, &definitions, &mut leaves, &mut joins);
     if leaves.len() < 2 {
         return Ok(None);
     }
@@ -159,29 +146,27 @@ fn graph(
     // A projected index is not itself enumerable. Its original pure producer
     // can nevertheless become the scan root when replacing this join region
     // removes every consumer of that index. Reuse the producer and its scan
-    // adapters, not the provider's truncated payload. Shared and frozen
-    // providers retain their authored representation.
+    // adapters, not the provider's truncated payload. Shared providers retain
+    // their authored representation.
     let scan_roots: BTreeSet<_> = leaves
         .iter()
         .map(symbol_name)
         .filter(|name| {
             !filtered.contains(name)
-                || (!frozen.contains(name)
-                    && matches!(
-                        definitions[name].operator,
-                        Operator::Rename(_)
-                            | Operator::Select(_)
-                            | Operator::Point(_, _)
-                            | Operator::Range(_, _)
-                    )
-                    && physical.definitions.iter().all(|definition| {
-                        joins.contains(&symbol_name(&definition.name))
-                            || definition
-                                .operator
-                                .operands()
-                                .iter()
-                                .all(|input| symbol_name(input) != *name)
-                    }))
+                || (matches!(
+                    definitions[name].operator,
+                    Operator::Rename(_)
+                        | Operator::Select(_)
+                        | Operator::Point(_, _)
+                        | Operator::Range(_, _)
+                ) && physical.definitions.iter().all(|definition| {
+                    joins.contains(&symbol_name(&definition.name))
+                        || definition
+                            .operator
+                            .operands()
+                            .iter()
+                            .all(|input| symbol_name(input) != *name)
+                }))
         })
         .collect();
     if scan_roots.is_empty() {
@@ -373,7 +358,7 @@ fn plan(source: &Program, graph: &Graph) -> LookupPlan {
 }
 
 /// Extract the maximal terminal join region and its LargestRoot/ATP decisions.
-/// `None` denotes no movable region (including a Rust or shared-result barrier).
+/// `None` denotes no movable region (including a shared-result boundary).
 pub fn lookup_plan(source: &Program) -> syn::Result<Option<LookupPlan>> {
     Ok(graph(&mut Default::default(), source)?
         .as_ref()
@@ -783,7 +768,7 @@ fn separate_provider_layouts(
 /// `using Provider [, order [...]] [, transfer [...]] [, early [...]]`.
 /// The explicit family rejects authored schedules rather than silently erasing
 /// them; automatic callers receive `None` from `lookup_first_advice` instead.
-// Formal rule EXT-SeqLookup: Reexpress natural joins and redundant semijoins under checked support equality, pinning every Rust prefix.
+// Formal rule EXT-SeqLookup: Reexpress relational joins under checked support equality while preserving Rust syntax and input support.
 pub fn lookup_first(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
     lookup_first_in(&mut Default::default(), source, arguments)
 }
@@ -905,6 +890,12 @@ fn lookup_first_with(
         }
     }
     let mut target = source.structures.clone();
+    // Optional scan accelerators carry certificates for the original graph.
+    // Validate their coverage again after changing joins and provider layouts.
+    target
+        .structures
+        .entries
+        .retain(|entry| !matches!(entry.structure, structures::Structure::JoinFilter { .. }));
     let mut used: BTreeSet<_> = target
         .physical
         .program
@@ -1163,6 +1154,25 @@ fn lookup_first_with(
         }
         match &entry.structure {
             structures::Structure::Built { keyed, .. } => {
+                // A raw membership certificate covers the provider's complete
+                // read domain, not just the old full-key consumer. New prefix
+                // lookups require replacement through the normal index builder.
+                if keyed.membership.is_some() && keyed.filtered.is_none() {
+                    let key = keyed.level_names().concat();
+                    if key != physical.headings[&name]
+                        || physical.keyed_reads.get(&name).into_iter().flatten().any(
+                            |(_, columns, supply)| {
+                                *columns != key || *supply != cq_syntax::SupplyKind::Stream
+                            },
+                        )
+                        || physical
+                            .merge_reads
+                            .get(&name)
+                            .is_some_and(|reads| !reads.is_empty())
+                    {
+                        return false;
+                    }
+                }
                 physical.keyed_reads.get(&name).is_some_and(|reads| {
                     reads.iter().any(|(_, keys, supply)| {
                         *supply == cq_syntax::SupplyKind::Stream
@@ -1314,11 +1324,38 @@ fn lookup_first_with(
         keyed.ty = ty;
     }
     separate_provider_layouts(&mut target, &physical, &mut used);
+    if source
+        .structures
+        .structures
+        .entries
+        .iter()
+        .any(|entry| matches!(entry.structure, structures::Structure::JoinFilter { .. }))
+    {
+        let facts = structures::contract::check(&target)?;
+        for entry in &source.structures.structures.entries {
+            let structures::Structure::JoinFilter { filter, .. } = &entry.structure else {
+                continue;
+            };
+            let covering = symbol_name(&filter.covering);
+            let scan = symbol_name(&entry.name);
+            let build = symbol_name(&filter.build);
+            let key = symbol_name(&filter.key.columns[0]);
+            if structures::join_filter_candidates(&target, &facts, &covering)
+                .iter()
+                .any(|candidate| {
+                    candidate.scan == scan && candidate.build == build && candidate.key == key
+                })
+            {
+                target.structures.entries.push(entry.clone());
+            }
+        }
+    }
     // Nonroot forwards and keyed atoms retain rows for their provider reads.
     // The scan root and its forwards remain a single-consumer pipeline;
     // decomposition may introduce a checked publication when resources require it.
     let mut result = cq_sequence_lowering::compile(&target)?;
     result.evidence = source.evidence.clone();
+    result.representation = source.representation.clone();
     result.sequence.output = source.sequence.output.clone();
     result.sequence.optional_filters = optional_filters;
     checker.check_rewrite_in(source, &result)?;

@@ -30,6 +30,7 @@ type CompileResult<T> = std::result::Result<T, Rejected>;
 struct Publication {
     placement: advice::Placement,
     nullable: Vec<bool>,
+    domains: Vec<Option<(String, String)>>,
 }
 
 impl Publication {
@@ -38,15 +39,13 @@ impl Publication {
     }
 }
 
-/// Formal rule DR-Publication: Check explicit placement against recorded semantic validity before generation.
-fn publication(
+fn nullable_inputs(
     program: &cq_lang_cq::Program,
-    pipeline: &advice::Pipeline,
     inputs: Option<&std::collections::BTreeMap<String, Publication>>,
-) -> syn::Result<Publication> {
+) -> std::collections::BTreeSet<String> {
     let mut nullable = std::collections::BTreeSet::new();
     for item in &program.query.body {
-        let cq_lang_cq::BodyItem::Positive { atom } = item else { continue; };
+        let cq_lang_cq::BodyItem::Positive { atom } = item else { continue };
         if let Some(input) = inputs.and_then(|inputs| inputs.get(&atom.relation.to_string())) {
             for (argument, valid) in atom.args.iter().zip(&input.nullable) {
                 if *valid && let syn::Expr::Path(path) = argument {
@@ -55,6 +54,16 @@ fn publication(
             }
         }
     }
+    nullable
+}
+
+/// Formal rule DR-Publication: Check explicit placement against recorded semantic validity before generation.
+fn publication(
+    program: &cq_lang_cq::Program,
+    pipeline: &advice::Pipeline,
+    inputs: Option<&std::collections::BTreeMap<String, Publication>>,
+) -> syn::Result<Publication> {
+    let mut nullable = nullable_inputs(program, inputs);
     if let Some(group) = &program.query.group {
         for aggregate in &group.aggregates {
             if matches!(aggregate.kind, cq_syntax::algebra::AggregateKind::Min | cq_syntax::algebra::AggregateKind::Max) {
@@ -66,13 +75,14 @@ fn publication(
         .map(|argument| matches!(argument, syn::Expr::Path(path)
             if nullable.contains(&path.path.to_token_stream().to_string())))
         .collect();
-    if pipeline.publication == advice::Placement::Device
+    let placement = pipeline.publication.resolve(pipeline.target, nullable.iter().any(|value| *value));
+    if placement == advice::Placement::Device
         && (matches!(pipeline.target, advice::Target::Host) || nullable.iter().any(|value| *value))
     {
         return Err(syn::Error::new_spanned(program,
             "device publication requires a device target and nonnullable columns; select host publication"));
     }
-    Ok(Publication { placement: pipeline.publication, nullable })
+    Ok(Publication { placement, nullable, domains: Vec::new() })
 }
 
 fn checked<T>(
@@ -118,35 +128,10 @@ fn compile_stage(
             });
         }
     };
-    let mut stored_types = std::collections::BTreeMap::new();
+    let mut stored_types = kernel.scalar_codec_types(manifest).map_err(|error| Rejected {
+        phase: "loader representation", error: error.to_string(), term: cpu_source.to_string(),
+    })?;
     let mut domains = std::collections::BTreeMap::new();
-    if publications.is_some() {
-        // Stages exchange authored integer domains, not narrowed manifest
-        // storage lanes. In particular Stock.quantity remains i64 for H11.
-        for relation in &kernel.relations {
-            for (column, logical) in &relation.columns {
-                if logical.to_token_stream().to_string() == "i64" {
-                    stored_types.insert(
-                        (relation.table.to_string(), column.to_string()),
-                        logical.clone(),
-                    );
-                }
-            }
-        }
-    }
-    if pipeline.storage == "tpch_dictionary" {
-        // The manifest dictionaries preserve constant-literal equality,
-        // including Or/In, but never replace opaque String operations.
-        stored_types.extend(
-            kernel
-                .dictionary_types(manifest)
-                .map_err(|error| Rejected {
-                    phase: "loader profile",
-                    error: error.to_string(),
-                    term: cpu_source.to_string(),
-                })?,
-        );
-    }
     if let Some(schema) = &storage_schema {
         for relation in &kernel.relations {
             let columns = schema
@@ -184,6 +169,16 @@ fn compile_stage(
             }
         }
     }
+    // Dictionary IDs are an input representation, independent of the schedule
+    // or whether the authored query contains opaque Rust reads.
+    stored_types.extend(kernel.dictionary_types(manifest).map_err(|error| Rejected {
+        phase: "loader representation",
+        error: error.to_string(),
+        term: cpu_source.to_string(),
+    })?);
+    let setup_bindings = kernel.setup_bindings(manifest).map_err(|error| Rejected {
+        phase: "loader captures", error: error.to_string(), term: cpu_source.to_string(),
+    })?;
     let encoded = kernel
         .encoded_query_with_types(manifest, &stored_types)
         .map_err(|error| Rejected {
@@ -193,11 +188,16 @@ fn compile_stage(
         })?;
     let cq: cq_lang_cq::Program = checked("CQ parse", &encoded, syn::parse2(encoded.clone()))?;
     let normal = checked("CQ normalize", &cq, cq_lang_cq::normal::normalize(&cq))?;
-    let publication = checked("publication contract", &normal, publication(&normal, pipeline, publications))?;
+    let mut publication = checked("publication contract", &normal, publication(&normal, pipeline, publications))?;
+    publication.domains = kernel.answer_columns().map_err(|error| Rejected {
+        phase: "publication domains", error: error.to_string(), term: cpu_source.to_string(),
+    })?.into_iter().map(|origin| origin.filter(|(table, column)|
+        manifest.column(table, column).is_ok_and(|metadata| metadata.encoding == "dictionary")
+    )).collect();
     let reduced = checked(
         "CQ plan advice",
         &normal,
-        advice::valuation(&normal, &pipeline.plan),
+        advice::valuation(&cq, &pipeline.plan),
     )?;
     let ra = checked("CQ elaborate", &reduced, cq_elaborate::compile(&reduced))?;
     checked(
@@ -207,6 +207,7 @@ fn compile_stage(
     )?;
     let ix = checked("index demands", &ra, cq_index_policy::compile(&ra))?;
     let mut pipeline = pipeline.clone();
+    pipeline.publication = publication.placement;
     let physical = checked("Physical lowering", &ix, cq_physical_lowering::compile(&ix))?;
     let recipe = pipeline.recipe.clone();
     for relation in &recipe.filtered_leaves {
@@ -282,6 +283,46 @@ fn compile_stage(
         &structures,
         cq_lang_structures::contract::check(&structures),
     )?;
+    // Nullable publication payloads have no device scalar ABI. A join carrying
+    // one from either side needs a host-readable index, until a later projection
+    // removes that column. Use checked layouts, never Rust type spellings.
+    if !host && publications.is_some_and(|inputs|
+        inputs.values().any(|input| input.nullable.iter().any(|value| *value)))
+    {
+        let nullable = nullable_inputs(&normal, publications);
+        let host_structures = checked(
+            "nullable host provider selection", &selected,
+            cq_sequence_plan::select_from_catalog(&selected, &cq_sequence_pull::catalog()),
+        )?;
+        for index in 0..structures.structures.entries.len() {
+            let entry = &structures.structures.entries[index];
+            let name = entry.name.to_string();
+            let nullable_reader = facts.physical.keyed_reads.get(&name).into_iter().flatten()
+                .map(|(reader, _, _)| reader)
+                .chain(facts.physical.merge_reads.get(&name).into_iter().flatten()
+                    .map(|(reader, _)| reader))
+                .any(|reader| facts.layouts.get(reader).is_some_and(|columns|
+                    columns.iter().any(|column| nullable.contains(column)))
+                    && physical.program.definitions.iter().any(|definition|
+                        definition.name == reader.as_str() && matches!(
+                            definition.operator,
+                            cq_lang_physical::Operator::Probe(..) | cq_lang_physical::Operator::Merge(..)
+                        )));
+            if matches!(entry.structure, cq_lang_structures::Structure::Built { .. })
+                && (nullable_reader || advice::relation_of(&structures.physical, &entry.name)
+                    .and_then(|relation| publications.and_then(|inputs| inputs.get(&relation.to_string())))
+                    .is_some_and(|input| input.nullable.iter().any(|value| *value)))
+            {
+                let cq_lang_structures::Structure::Built { keyed, .. } =
+                    &host_structures.structures.entries[index].structure else {
+                        unreachable!("catalog selection preserves provider entries");
+                    };
+                let ty = &keyed.ty;
+                structures = checked("nullable host provider", &structures,
+                    cq_structure_selection::retype(&structures, quote!(entry(#index) => #ty)))?;
+            }
+        }
+    }
     // The loader, not the planner or translator, owns the input representation.
     // Record its uniform DeviceColumns adapter with the checked retype rewrite.
     for index in 0..structures.structures.entries.len() {
@@ -307,13 +348,6 @@ fn compile_stage(
             {
                 continue;
             }
-            if relation
-                .columns
-                .iter()
-                .any(|column| column.ty.to_token_stream().to_string() == "String")
-            {
-                continue;
-            }
             let types = relation.columns.iter().map(|c| &c.ty);
             structures = checked(
                 "loader host adapter",
@@ -333,11 +367,49 @@ fn compile_stage(
             )?;
         }
     }
-    let sequence = checked(
+    let mut sequence = checked(
         "Sequence lowering",
         &structures,
         cq_sequence_lowering::compile(&structures),
     )?;
+    // Loader/provider facts, never host type spellings, justify device Rust.
+    let origins = kernel.variable_origins().map_err(|error| Rejected {
+        phase: "loader representation", error: error.to_string(), term: cpu_source.to_string(),
+    })?;
+    for (variable, origin) in origins {
+        let metadata = manifest.column(&origin.0, &origin.1).map_err(|error| Rejected {
+            phase: "loader representation", error: error.to_string(), term: cpu_source.to_string(),
+        })?;
+        if domains.contains_key(&origin)
+            || (matches!(metadata.encoding.as_str(), "scaled_integer" | "days_since_epoch")
+                && stored_types.contains_key(&origin))
+        {
+            sequence.representation.encoded.insert(variable);
+        } else {
+            sequence.representation.identity.insert(variable);
+        }
+    }
+    if let Some(publications) = publications {
+        for item in &normal.query.body {
+            let cq_lang_cq::BodyItem::Positive { atom } = item else { continue };
+            if publications.get(&atom.relation.to_string()).is_some_and(Publication::resident) {
+                for argument in &atom.args {
+                    if let syn::Expr::Path(path) = argument
+                        && let Some(name) = path.path.get_ident()
+                    {
+                        sequence.representation.identity.insert(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if !host {
+        sequence = checked(
+            "target representation binding",
+            &sequence,
+            cq_gpu_sequence::record_representation(&sequence),
+        )?;
+    }
     checked(
         "Sequence lowering check",
         &sequence,
@@ -541,12 +613,7 @@ fn compile_stage(
         let table = &tables[index];
         let names = &column_names[index];
         let row = &row_types[index];
-        if host
-            || relation
-                .columns
-                .iter()
-                .any(|column| column.ty.to_token_stream().to_string() == "String")
-        {
+        if host {
             input_types.push(quote!(Vec<#row>));
             let columns: Vec<_> = relation
                 .columns
@@ -554,6 +621,7 @@ fn compile_stage(
                 .enumerate()
                 .map(|(index, _)| format_ident!("column_{index}"))
                 .collect();
+            // DECODE ?: typed host-input loading may reconstruct Date/Decimal/String; actual opaque-Rust demand is required per column.
             let reads = relation.columns.iter().zip(&columns).enumerate().map(|(column_index, (column, variable))| {
                 let name = kernel.relations[index].columns[column_index].0.to_string();
                 let ty = &column.ty;
@@ -574,6 +642,7 @@ fn compile_stage(
             } else {
                 quote!(loader.bind::<#row>(#table, #names)?)
             });
+            // DECODE ?: independent Sequential oracle downloads logical inputs; this diagnostic path is not final GPU answer publication.
             sequential_bindings.push(quote!(let #field = data.#field.to_host()?;));
         }
     }
@@ -584,15 +653,17 @@ fn compile_stage(
             error: error.to_string(),
             term: cpu_source.to_string(),
         })?;
+        let initializer = source::dictionary_initializer(initializer, &kernel.exports).map_err(|error| Rejected {
+            phase: "dictionary input loader",
+            error: error.to_string(),
+            term: cpu_source.to_string(),
+        })?.unwrap_or_else(|| initializer.to_token_stream());
         let host_inputs = dependencies.iter().map(|relation| {
             let input = &relation.name;
-            if host || relation
-                .columns
-                .iter()
-                .any(|(_, ty)| ty.to_token_stream().to_string() == "String")
-            {
+            if host {
                 quote!(let #input = &#input;)
             } else {
+                // DECODE ?: authored derived-input Rust consumes this download, but whole-row reconstruction needs column-level read evidence.
                 quote!(let #input = #input.to_host()?;)
             }
         });
@@ -622,11 +693,11 @@ fn compile_stage(
         if let Some(domain) = column.as_ref().and_then(|column| domains.get(column)) {
             let decoder = format_ident!("domain_{index}");
             decode_bindings.push(quote!(let #decoder = data.catalog.domain(#domain)?;));
+            // DECODE P: final answer formatting inverts dense source-key domains on the host.
             borrowed_outputs.push(quote!(#decoder.value(*row.#output).to_string()));
             owned_outputs.push(quote!(#decoder.value(row.#output).to_string()));
-        } else if kernel.is_standalone()
-            && ty.to_token_stream().to_string() == "String"
-            && answer_types.last().unwrap().to_token_stream().to_string() != "String"
+        } else if column.as_ref().is_some_and(|origin| stored_types.contains_key(origin)
+            && manifest.column(&origin.0, &origin.1).is_ok_and(|metadata| metadata.encoding == "dictionary"))
         {
             let (table, column) = column
                 .as_ref()
@@ -635,6 +706,7 @@ fn compile_stage(
             decode_bindings.push(
                 quote!(let #decoder = manifest.dictionary(manifest.column(#table, #column)?)?;),
             );
+            // DECODE P: final answer formatting resolves source string dictionaries on the host.
             borrowed_outputs.push(quote!(#decoder[*row.#output as usize].clone()));
             owned_outputs.push(quote!(#decoder[row.#output as usize].clone()));
         } else if publication.nullable[index] {
@@ -691,6 +763,7 @@ fn compile_stage(
             });
             quote!((#(#fields,)*))
         };
+        // DECODE V: P6 staged host execution downloads entire logical input tuples before subsequent relational operators; retain codes outside rust_reads.
         let host_inputs: Vec<_> = names
             .iter()
             .filter(|name| publications[&name.to_string()].resident())
@@ -718,6 +791,7 @@ fn compile_stage(
             let publish = if !resident {
                 quote!({
                     let started = ::std::time::Instant::now();
+                    // DECODE ?: nonresident stage output may feed later stages or final publication; terminal-use evidence determines R/P/V.
                     let result = output.to_host()?;
                     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
                     let mut timing =
@@ -758,17 +832,15 @@ fn compile_stage(
                                 syn::Expr::Path(path) if path.path.is_ident(key)
                             )) else { continue; };
                             let name = &atom.relation;
-                            let input = cq.inputs().find(|input| input.name == *name).unwrap();
                             let published = publications.get(&name.to_string());
                             let value = if published.is_some() { quote!(#name) } else { quote!(&data.#name) };
-                            let resident = published.map(Publication::resident).unwrap_or_else(|| !input.columns.iter()
-                                .any(|column| column.ty.to_token_stream().to_string() == "String"));
+                            let resident = published.map(Publication::resident).unwrap_or(true);
                             if resident {
                                 return quote!((#value).storage().bounds[#field]);
                             }
                             let field = syn::Index::from(field);
                             return quote!((#value).iter().fold(cq_gpu_runtime::Bounds::Empty, |bounds, row| {
-                                let value = row.#field as i64;
+                                let value = gpu_datalog_runtime::encode_scalar(&row.#field);
                                 match bounds {
                                     cq_gpu_runtime::Bounds::Empty => cq_gpu_runtime::Bounds::Inclusive { min: value, max: value },
                                     cq_gpu_runtime::Bounds::Inclusive { min, max } => cq_gpu_runtime::Bounds::Inclusive {
@@ -814,6 +886,8 @@ fn compile_stage(
         );
         return Ok((
             quote! {
+                use cq_load::{Date, Load};
+                type Decimal = cq_load::Decimal<2>;
                 pub(super) type Answer = (#(#answer_types,)*);
                 pub(super) type Output = #output_type;
                 pub(super) struct Inputs { #(#fields: #input_types,)* #catalog_field pool: ::std::sync::Arc<cq_gpu_runtime::Pool> }
@@ -823,9 +897,11 @@ fn compile_stage(
                     Ok(Inputs { #(#fields,)* #catalog_init pool })
                 }
                 pub(super) fn execute(data: &Inputs, #(#names: &#inputs),*) -> crate::manifest::Result<Output> {
+                    #setup_bindings
                     #execute
                 }
                 pub(super) fn sequential(data: &Inputs, #(#names: &Vec<#rows>),*) -> crate::manifest::Result<Vec<Answer>> {
+                    #setup_bindings
                     #(#sequential_bindings)*
                     Ok((#cpu).map(|row| #own_row).collect())
                 }
@@ -856,12 +932,15 @@ fn compile_stage(
         quote! {
             #(let #fields = &data.#fields;)*
             let output = #gpu;
+            // DECODE P: standalone query execution downloads its final answer for host formatting and comparison.
             Ok(output.to_host()?)
         }
     };
     Ok((
         quote! {
             type Answer = (#(#answer_types,)*);
+            use cq_load::{Date, Load};
+            type Decimal = cq_load::Decimal<2>;
             struct Inputs { #(#fields: #input_types,)* #catalog_field }
             fn load(manifest: &crate::manifest::Manifest) -> crate::manifest::Result<Inputs> {
                 let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
@@ -870,9 +949,11 @@ fn compile_stage(
                 Ok(Inputs { #(#fields,)* #catalog_init })
             }
             fn gpu(data: &Inputs) -> crate::manifest::Result<Vec<Answer>> {
+                #setup_bindings
                 #execute
             }
             fn sequential(data: &Inputs, manifest: &crate::manifest::Manifest) -> crate::manifest::Result<Vec<Vec<String>>> {
+                #setup_bindings
                 #(#decode_bindings)*
                 #(#sequential_bindings)*
                 Ok((#cpu).map(|row| vec![#(#borrowed_outputs),*]).collect())
@@ -927,11 +1008,17 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
     )?;
     let manifest = Manifest::load(&directory)?;
     let kernel: source::Kernel = syn::parse_str(
-        "$; setup {} relations {
+        "$; setup {
+            let GreenNames = cq_load::dictionary_where(
+                &dictionaries, \"p_name\",
+                |value: &str| value.contains(\"green\"));
+        } relations {
             relation Keys => keys(key: i32);
             relation Part => part(p_partkey: i32, p_name: String);
         }
-        answer(key: i32) :- Keys(key), Part(key, name), if name == \"green part\";",
+        derived { relation GreenNames(code: String); }
+        answer(key: i32, name: String) :-
+            Keys(key), Part(key, name), GreenNames(name), where name == \"green part\";",
     )?;
     let (code, _) = compile(&kernel, &manifest, &advice::Pipeline::baseline())
         .map_err(|error| format!("String guard regression {}: {}", error.phase, error.error))?;
@@ -943,15 +1030,18 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
             use serde_json::Value;
             #code
             #[test]
-            fn synthetic_string_literal_guard_executes_on_host() {
+            fn synthetic_string_literal_guard_preserves_manifest_codes() {
                 let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory)).unwrap();
                 let data = load(&manifest).unwrap();
-                assert_eq!(data.Part, vec![
-                    (1, "green part".to_owned()), (2, "red".to_owned()), (3, "green part".to_owned())
-                ]);
+                // DECODE P: diagnostic fixture publishes typed input rows to the host test oracle while preserving string codes.
+                assert_eq!(data.Part.to_host().unwrap(), vec![(1, 1_u32), (2, 0), (3, 1)]);
+                assert_eq!(data.GreenNames, vec![(1_u32,)]);
                 let mut actual = download(&data, &manifest).unwrap();
                 actual.sort();
-                assert_eq!(actual, vec![vec!["1".to_owned()], vec!["3".to_owned()]]);
+                assert_eq!(actual, vec![
+                    vec!["1".to_owned(), "green part".to_owned()],
+                    vec!["3".to_owned(), "green part".to_owned()],
+                ]);
                 let mut reference = sequential(&data, &manifest).unwrap();
                 reference.sort();
                 assert_eq!(actual, reference);

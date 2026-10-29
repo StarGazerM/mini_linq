@@ -296,11 +296,11 @@ fn check_delta_runs(data: &Data) {
         Reach((*x).clone(),(*y).clone()) :- Edge(x,y,_);
         Reach((*x).clone(),(*z).clone()) :- Reach(x,y), Reach(y,z);
         Reach((*x).clone(),(*z).clone()) :-
-            Edge(x,y,d), if *d != 0, if 8 / *d > 0, Reach(y,z);
+            Edge(x,y,d), where d != 0, if 8 / *d > 0, Reach(y,z);
         Reach((*x).clone(),(*z).clone()) :-
-            Edge(y,z,d), if *d != 0, if 8 / *d > 0, Reach(x,y);
+            Edge(y,z,d), where d != 0, if 8 / *d > 0, Reach(x,y);
         Reach((*x).clone(),(*y).clone()) :- Edge(x,y,_), Reach(x,y);
-        Reach((*x).clone(),(*y).clone()) :- Flag(f), if *f == 7, Reach(x,y);
+        Reach((*x).clone(),(*y).clone()) :- Flag(f), where f == 7, Reach(x,y);
         Flag(*f) :- FlagInput(f), Reach(x,y);
     };
     assert_set(reach, oracle.reach);

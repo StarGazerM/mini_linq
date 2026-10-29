@@ -7,6 +7,82 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Contract 7 (doc/PLANNING-REDESIGN.md): every Rust `if`/`let`/`for` is one
+  opaque, pure, total-by-premise expression placed by its free variables;
+  relational predicates are written `where P` (`where x in lo..hi`,
+  `where x in [..]`, `where x == y` as a join equality). Closed Rust operands
+  print as `@(expr)`. Removed `cq_syntax::{guard, arithmetic}`, CQ-Arith,
+  wrapping/Decimal/widening rewrites, Ord-f32 checks and
+  `AggregateBinding::value_type`: the compiler no longer inspects types for
+  meaning. Sequence records `representation { identity, encoded }`
+  (BE-RustRepresentation); GPU runs verbatim Rust only on identity-represented
+  columns. Type-dependent provider choices use Rust trait dispatch (`build!`,
+  `DenseOrdinal`, `Keys`, `encode_predicate`). Datalog accepts `where`; DOOP
+  sources were regenerated. Expanded Rust of all 29 TPC-H queries and the
+  migrated library was audited against the previous commit: 1,440 hunks, all
+  in recorded classes; paired storage counters identical for 73/79 TPC-H
+  configurations, with the other six classified placement or arithmetic
+  changes.
+- Contract 8 storage design (doc/STORAGE.md): no denotation change; laws for
+  decode, summary enclosure, grouped-run factorization, bounded-error
+  directories and per-codec preserved operations. Two storage roles: scan
+  columns and plain grouped index runs (RadixRun). Dictionary code assignment
+  is treated as a publication decision. Byte layout is shared across targets;
+  memory placement is per target (CUDA vs Metal unified memory).
+- Storage evidence (experiments/storage-bench): CPU/CUDA codec
+  microbenchmarks with exact checks and bootstrap CIs. Results: plain wins
+  for lookup/expand and merges on both targets; CPU scans favor byte
+  truncation over bit-packing (bit-packing pays only at 24 threads); GPU
+  compression pays mainly for PCIe transfer; grouping on dictionary codes is
+  12–16× faster than `String`. TPC-H in load order gives no zone-map or
+  join-filter block skipping.
+- Design anchors: 22 `DESIGN <id>` comments at decision owners, registered in
+  `doc/DESIGN-ANCHORS.tsv`; `doc/formal/check.py` requires each exactly once
+  and rejects unregistered anchors.
+- GPU TPC-H after contract 7: every manifest dictionary column is declared
+  as published `u32` codes; string predicates are authored
+  `dictionary_where` code-set relations evaluated once per dictionary entry
+  (h02, h09, h12, h13, h14, h16, h20, h22); literals translate once (absent →
+  empty match). `Decimal`/`Date` are transparent POD scalars that the device
+  reads unchanged; layouts come from `Scalar`/`ScalarTuple` trait constants.
+  Authored `let` annotations record identity representations for computed
+  bindings. A query-scoped program cache in `sequence-runtime/src/group.rs`
+  removes the ~28 ms per-group module reload: h06 SF1 7.42 → 0.44 ms. All 26
+  queries × 2 modes exact at SF1; no advised regression above 1.15×.
+- Fix: in `operator-timing` builds `CountingHasher` built a fresh
+  `RandomState` per hash, so `DistinctSet` failed to deduplicate equal rows
+  (915/1000 duplicate inserts accepted). It now uses fixed seeds; regression
+  test in `runtime/cq-storage/src/counters.rs`.
+- Decode-site registry: every code→value conversion carries a
+  `// DECODE R|P|V|I|?:` comment registered in `doc/DECODE-SITES.tsv`
+  (audit in `doc/DECODE-AUDIT.md`, widths in `doc/DECODE-COLUMNS.md`);
+  `check.py` enforces the correspondence. Engine-wide rules (strings interned
+  at input, sort-based dedup, decode only for Rust reads and publication)
+  are recorded in `doc/STORAGE.md` §13 with the h01 measurements.
+- Restore dense codecs for sorted runs and positional keysets through Rust
+  build-capability dispatch rather than compiler type-name inspection. An
+  explicit `AutoDense` build request selects `BorrowedI64TupleCodec` for supported
+  borrowed integer tuple keys and `I64Codec` for supported scalar keys; other
+  keys resolve to `NoDense`. Explicit/default `NoDense` providers stay unchanged.
+  Routed builds apply the same dispatch per shard, retaining their recorded
+  routing, parallel construction, and allocation-free singleton source path.
+- Preserve streaming output for captured relational path parameters: borrow the
+  existing value directly instead of treating it as a temporary-producing closed
+  expression and eagerly collecting the answer.
+- Keep staged positional selections as position streams between relational
+  `where` predicates, including conjunctive windows on successive columns.
+  This preserves recorded positional sources when compiling TPC-H Q6.
+- P0 regression gates: document supplementary-filter capability dispatch as
+  public API rather than hiding it. Publication regressions check parsed
+  operations instead of closure-block and tuple-punctuation spelling; fan
+  counters distinguish membership construction from candidate/probe savings.
+- Keep the scalar positional scan inlined into residual iterator chains.
+  This removes repeated scan-state reloads introduced by late positional
+  Decimal filtering without changing predicates or generated query Rust.
+  SF1 default paired timing against `4944b917`: Q6 1.003× (15 quiet-window
+  pairs, 95% CI 0.968–1.053), H6 1.006× (5 pairs, 0.957–1.058), exact against
+  DuckDB. The Q6 confirmation retains both conflicting earlier five-pair
+  datasets in `experiments/gpu/compare/cpu_q06_confirmation_sf1.json`.
 - Recorded-facts cutover (doc/formal/CONFORMANCE.md). Decisions that lowerings,
   printers and drivers previously made from names, syntax or literals are now
   recorded, checked and printable IR facts; each has a formal rule, a unique

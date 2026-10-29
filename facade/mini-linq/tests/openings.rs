@@ -73,7 +73,7 @@ fn reduced_literal_keys_probe_built_indexes() {
     let actual: std::collections::BTreeSet<_> =
         ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_hypergraph; }
             struct ReducedLiteral; relation R(x: i32, tag: i32); relation answer(x: i32);
-            answer(*x) :- R(x, 7), if *x > 0;
+            answer(*x) :- R(x, 7), where x > 0;
         }
         .collect();
     assert_eq!(actual, [(1,), (2,)].into());

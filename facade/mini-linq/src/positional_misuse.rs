@@ -6,7 +6,7 @@
 //! let _: Vec<_> = mini_linq::compile! {
 //!     pipeline { select = mini_linq::passes::select(positional(R)); }
 //!     struct BadHost; relation R(a:i64) = (rows);
-//!     answer(a) :- R(a), if *a == 1;
+//!     answer(a) :- R(a), where a == 1;
 //! }.collect();
 //! ```
 //!

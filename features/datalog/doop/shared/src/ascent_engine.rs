@@ -205,6 +205,8 @@ ascent_program! {
         _method(method, simplename, params, declaringtype, returntype, jvmdescriptor, arity);
 
     // Method_Descriptor computed via cat
+    // DECODE R: Method_Descriptor's authored format! reads returntype text to compute a new string, not a relational key comparison.
+    // DECODE R: Method_Descriptor's authored format! reads params text to compute a new string before sym encodes that result.
     method_descriptor(method, sym(&format!("{}({})", res(*returntype), res(*params)))) <--
         method_returntype(method, returntype),
         method_paramtypes(method, params);

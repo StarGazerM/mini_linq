@@ -39,6 +39,7 @@ fn main() {
                 output count;
             }
         };
+        // DECODE P: diagnostic smoke answer publication exposes host tuples for reference comparison.
         let mut actual = answer.to_host().expect("GPU smoke download");
         let mut expected: Vec<_> = mini_linq::compile! {
             pipeline {}

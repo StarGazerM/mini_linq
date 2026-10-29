@@ -21,57 +21,236 @@ per-route siblings listed below.
    bottom-up pass, not filter-gated), and places every recognized predicate at
    the first point its variables are bound. Written order remains available
    as the explicit reference (`Heuristic::Written`) and through `plan(order(..))`.
-3. **Recognition depends on meaning, not spelling.** A Rust expression that
-   reads no query variable (a bare captured name, a field path such as
-   `constants.c_x`) is a host parameter and takes part in constraint
-   recognition exactly like a bare name.
-4. **Opacity is a recorded property.** A clause that lowering creates for
-   its own purposes (a head column copy `let __cq_k: T = *v`) is marked as a
-   relational rename, never an opaque Rust barrier. Passes consult the
-   recorded classification; they do not re-derive opacity from operator
-   syntax (`Bind`/`Guard` variants).
+3. **Superseded by contract 7.** (Was: a closed Rust expression takes part
+   in constraint recognition. There is no recognition any more.)
+4. **Superseded by contract 7.** (Was: opacity is a recorded property. Every
+   Rust expression is opaque and total; there is no other kind.)
 5. **Datalog hands its order to CQ.** The incremental occurrence permutation
    that storage layouts follow is passed to each hole's CQ `plan` as explicit
    order advice, so layouts and the hole plan agree by construction.
 6. **Docs match code.** `R-Masks` either reduces every inner edge on acyclic
    scopes or stops claiming to be the Yannakakis pass; Plan-Le's composition
    matches the implementation.
+7. **One Rust expression; relational predicates have their own syntax**
+   (decided 2026-10-28).
+   - `if e`, `let p [: T] = e`, `for p in e`: `e` is a Rust expression with
+     free variables `fv(e)` (the whole environment when lexically opaque). It
+     is opaque, pure and **total by premise**: a panic means the plan is
+     wrong, and the compiler does not reason about it. It is placed wherever
+     `fv(e)` is bound; there are no Before sets or written-order chains for
+     Rust. The compiler never splits, recognizes, rewrites or type-checks it,
+     and never prints it differently from how it was written.
+   - `where P` is a relational predicate with its own denotation: selection
+     by the column representation's equality/order (a stated representation
+     law, not a Rust evaluation). `P ::= x == t | x != t | x < t | x <= t |
+     x > t | x >= t | x in [t, ...] | x in t..t | x in t..=t | x == y |
+     P && P | P || P`. Operands `t` are query variables, literals, or closed
+     Rust expressions (`fv ∩ query = ∅`), evaluated once on the host. Only
+     `where` yields point/range/membership reads, filter ranks, Masks
+     supports, derived domains and join equalities.
+   - Atom literals remain occurrence restrictions.
+   - Types exist only in the host language. The compiler never inspects a
+     `syn::Type` for meaning: no integer/`Decimal`/`String`/`Option`/float
+     lists, no wrapping rewrite, no Ord/Eq syntax checks (rustc enforces
+     trait bounds). Sizes and encodings come from recorded representation
+     facts (codecs, providers).
+   - GPU: a row-dependent Rust expression is emitted verbatim and compiled by
+     cuda-oxide. It may run on device iff every column it reads has an
+     identity device representation (no codec) and its other inputs are
+     closed captures; otherwise it runs at host. Codec-encoded columns are
+     compared only through `where` (the closed operand is encoded on the
+     host).
+8. **Storage is one columnar block: encoded payload plus summaries; scans
+   prune, then evaluate in the encoded domain, then materialize late**
+   (decided 2026-10-28). Sources, read for this decision:
+   Data Blocks [Lang et al., SIGMOD 2016, §§3.1–3.4, 4.1;
+   https://db.in.tum.de/downloads/publications/datablocks.pdf];
+   SMA [Moerkotte, VLDB 1998, §§2–3;
+   https://pi3.informatik.uni-mannheim.de/~moer/Publications/MA-98-01.pdf];
+   BtrBlocks [Kuschewski et al., SIGMOD 2023, §§2–3; artifact
+   github.com/maxi-k/btrblocks `btrblocks/compression/SchemePicker.hpp`];
+   FastLanes [Afroozeh & Boncz, PVLDB 16 p.2132, §§1–2.4; artifact
+   github.com/cwida/FastLanes]; PFOR/PDICT [Zukowski et al., ICDE 2006,
+   §3.1]; tile-based GPU compression [Shanbhag et al., SIGMOD 2022;
+   artifact github.com/anilshanbhag/gpu-compression `src/ssb/q11r.cu:70-137`];
+   DuckDB (`/data/codex/duckdb-src`: `storage/table/column_data_checkpointer.cpp`,
+   `row_group.cpp` CheckZonemap, `compression/{bitpacking,rle,dict_fsst}.cpp`,
+   `execution/operator/join/physical_hash_join.cpp` join filters).
+   - **Block = payload + summaries, built together once** (at load or
+     checkpoint) per column: codec id, packed payload, min/max summary (SMA),
+     optionally a positional summary (PSMA). A summary is never computed over
+     a different, decoded copy of the data.
+   - **Codec chosen per column block by measured size** (DuckDB analyze or
+     BtrBlocks sampling), recorded as a representation fact; uncompressed
+     when compression does not pay. No loader-wide fixed codec.
+   - **Scan order is fixed:** (1) prune blocks by summaries before touching
+     payload; (2) evaluate predicates in the encoded domain where the codec
+     allows it (constants translated once into the code domain on the host;
+     FOR residual comparison, dictionary/RLE value-once tests), otherwise
+     decode one vector/tile into cache/registers fused with the predicate;
+     (3) produce positions; (4) materialize only the columns and rows still
+     needed. No whole-column decode, no decode into owned row tuples.
+   - **Decode to the smallest processable type** (FastLanes §1): carriers
+     and lanes follow the representation's width, not a uniform `i64`.
+   - **GPU:** decode cooperatively per tile inside the query kernel (artifact
+     `binpack_kernel.cuh`), never per-row random access in the hot loop;
+     per-vector summaries computed at encode time are kept and used to skip.
+   - **Join filters** (build-side min/max or exact keyset) prune probe blocks
+     through the same summaries on every target.
+   - **Read in place:** scans and index builds borrow block storage; a copy
+     is made only for the reasons recorded in the representation (source
+     not retained, mutable between rounds, crosses a device boundary,
+     computed key).
+   - Every one of these is a recorded representation fact the compiler plans
+     with (contract 7: no type inspection; sizes and encodings come from
+     representation), never a hidden runtime or loader choice.
+   - Detailed design, semantics placement, data structures, compiler support
+     and merging of compressed indexes: `doc/STORAGE.md`.
 
 ## Inventory of mislayered decisions (audit 2026-10-27)
 
 | Layer | Decision made there today | Disposition |
 |---|---|---|
-| `cq-syntax guard::term` | field access ⇒ opaque; bare ident ⇒ parameter | fix (contract 3) |
+| `cq-syntax guard::term` (retired) | Rust recognition and field-path parameters | replaced by explicit `where` and query-closed `Term::Closed(syn::Expr)` (contract 7) |
 | `cq-order Written` | identity sequence, cross products kept | keep as explicit reference; new default (contract 2) |
 | `cq-reduce Masks` | reduce only filter-ranked subtrees, never the root | fix on acyclic scopes (contract 2/6) |
 | `cq-elaborate` | predicate binder choice, branch join topology | record in VO or keep as pure refinement |
-| CQ `normalize` | `*v` head ⇒ `let` ⇒ opaque `Bind` | classify as rename (contract 4) |
+| CQ `normalize` | computed head becomes `Bind` | retain original Rust; placement uses free variables, not expression classification (contract 7) |
 | `cq-physical-lowering` | probe first / eager / point-range / Let vs Pipe | representation only; allowed |
 | `cq-sequence-plan lookup_first` | reorders and deletes joins after lowering; freezes on any Bind/Guard | demote to representation (retained leaves, providers); ordering comes from VO |
 | `cq_planners::order(le)` | Lookup = dropped-column subatom, phase not recorded | fold into the default planner with recorded phases |
 | GPU emitter | tile defaults, virtual-range publication, retry protocol | representation; document |
 | Datalog `fork` | independent CQ plan after incremental permutation | pass order advice (contract 5) |
 
-## Phases
+## Architecture (replanned 2026-10-28)
 
-1. Fixture tests per route (CQ core, planners feature, Datalog hole, GPU).
-2. Recognition: closed host expressions as parameters; constraints at first
-   binding under the written routes.
-3. Default connected order and full acyclic reduction; measure TPC-H SF1
-   default against `experiments/gpu/compare/performance_cpu_sf1.tsv`.
-4. Datalog/GPU boundary: head copies, order advice, `lookup_first` demotion.
-5. Docs: `passes.tex`, `STATUS.md`, `PLANNING-COVERAGE.md`.
+One rule organizes every contract: **each decision lives in exactly one IR
+as a recorded, checked, printable fact; every later stage consumes it; laws
+sit where a representation is introduced.**
 
-Each phase lands only with the fixture green on every route it touches and
-no SF1 default regression beyond noise.
+| Layer | Owns (decisions) | Semantics / laws | Contracts | State |
+|---|---|---|---|---|
+| CQ surface | atoms, `where` relational predicates, opaque total Rust `if/let/for` | set denotation; `where` = selection by representation Eq/Ord; Rust placed by free variables | 7 | implemented; expanded-Rust audit in progress |
+| CQ → VO → RA (planning) | join order, reductions, **Lookup/Expand order and Expand placement** (L&E §4), block placement | VO/RA refinement of the written order | 1, 2, 5 | order + Datalog advice done; L&E still lives in Sequence `lookup_first` (P3) |
+| Structures (representation) | provider role (scan column vs index run), codec, summaries, grouped runs, copy vs read, join filters (exact / min-max / Bloom), positions | α abstraction laws: decode, enclosure, factorization, bounded-error directory, preserved ops | 8 (`doc/STORAGE.md`) | designed; type-blind provider dispatch partly implemented |
+| Sequence + grading (execution shape) | tiles aligned to vectors/blocks, deferred ranges from stored offsets, launch/scan/fold/sync facts, adaptive choose from evidence | positions and sizes; BE-* rules | translator-decides-nothing, 7 (representation facts) | launch facts done; storage-aware shape open |
+| Translators (pull, Rayon, CUDA, Metal) | nothing | per-construct correctness | T-Pull/T-Tasks/T-Gpu | audit violations fixed; anchors pending |
+| Runtime (cq-storage, cq-load, device-columns, MCCL) | implements recorded representations | storage laws, tested | 8 | AdaptiveKeySet/ZoneRows off-design; RadixRun on remote |
+| Datalog maintenance | runs, tail/frozen blocks, merges, ratio, dictionary policy | STR-Run*, DL-DeviceRatio | 5, 8 §5 | runs exist (plain words); compressed/grouped open |
+
+Evidence/advice (counts, keys, selectivities, ratios) never carries
+semantics: it chooses among checked candidates.
+
+## Plan (replanned 2026-10-28)
+
+### Gates
+
+Refactors are gated by code identity, **not a timing tolerance**:
+`python3 tools/expanded_gate.py --baseline <rev> --targets all` compares every
+TPC-H catalog query and the migrated library kernels. The JSON report and table
+in `target/expand-gate/report` distinguish `identical`, `runtime-changed`, and
+`differs`; every changed hunk needs an exact reviewed rule supplied through
+`--classes tools/expanded_gate_classes.json`, otherwise it remains unexplained.
+The ledger separates a–f contract-7 refactors from g–l intended changes and
+explicitly defined additional classes. Intended changes require execution
+evidence, not an identity claim. The module docstring specifies normalization
+and the classes-file format.
+
+Cache keys include normalized Rust, linked runtime sources, toolchain/build
+inputs, and data/oracle manifests. Identical targets reuse verified exactness
+and counter outcomes without compilation/execution; runtime changes require
+fresh evidence. `--verified-results` imports explicit results with hashed
+evidence, or `--verify-command` runs a shell-free verifier. The default gate
+only expands Rust and never runs timed benchmarks.
+`--classify-report <report.json>` updates only the captured snapshot's
+classifications without expansion or execution; it does not validate a later
+working tree. Its table distinguishes identical, refactor-only, intended and
+unexplained changes while retaining runtime-hash and evidence requirements.
+
+Full changes also pass root + feature workspaces, `tools/test_regressions.sh`,
+GPU suites, TPC-H SF1 default (29 exact), H05 GPU SF1/SF10 both modes,
+DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
+
+### Steps
+
+- **P0 Close current work.** Finish the expanded-Rust audit (generated Rust
+  identical to HEAD except recorded classes), full gates, commit.
+- **P1 Governance.** Design anchors in code (hard comments citing the
+  contract, sources and forbidden moves) registered in a table that
+  `check.py` verifies; this file + `doc/STORAGE.md` are the single sources.
+- **P2 Merge remote** `origin/codex/all-answers` (RadixRun, RadixSpline,
+  MCCL, Mac work, provider-contract refactor), reconciling on the type-blind
+  design.
+- **P3 Lookup/Expand at the right layer.** Move L&E decisions (lookup order,
+  expand placement, iterator carrying without re-probe) into planning
+  (Physical operator order produced from VO/RA); replace `transfer` stored
+  semijoins with recorded join filters (exact / min-max / Bloom, built during
+  the build side, as L&E §4.1 and RPT do); delete `lookup_first`'s
+  reordering. Target: H05 automatic approaches plan R.
+  Ordered before P4 (decided 2026-10-28).
+- **P3b Profile the engine gaps** (`doc/STORAGE.md` §12.4): GPU h06
+  reduce/dedup at 16–74× a hand kernel; CPU h01 at ~140× a String-grouping
+  microbenchmark. Profiles (perf, nsys/ncu) decide whether these come before
+  the storage slices.
+- **P3c Engine-wide storage rules** (`doc/STORAGE.md` §13): intern strings
+  at input for the CPU catalog as on GPU; sort-based dedup (self: radix
+  sort + unique; against full: merge with sorted runs) replacing hash `Dedup`
+  sets in CQ printers and DL-InsertNew in CPU Datalog; remove V decode sites
+  (`doc/DECODE-AUDIT.md`), measured per target.
+- **P4 Index runs.** RadixRun as the index-role provider: one order-
+  preserving key law (merge `KeyCodec`, `DenseOrdinal`, `RadixKey`), narrow
+  offsets, columnar items, key predicates as group ranges, membership/count/
+  semijoin without items, retire AdaptiveKeySet staging/`Arc`; Datalog runs
+  become grouped runs merged by merge-path. The dictionary policy is decided
+  here from measurements (`doc/STORAGE.md` §10): code assignment is a
+  publication, aligned with round/load boundaries.
+  Memory placement is a per-target fact (`doc/STORAGE.md` §11): shared byte
+  layout and laws; CUDA and Metal differ in allocation, copy reasons and cost.
+- **P5 Scan columns (CPU).** Measured rules only (§12.4): plain default;
+  byte truncation for scans; bit-packing only for bandwidth-bound parallel
+  scans; encoded execution on dictionary codes first. Block format, codec trait, summaries built with
+  payload, columnar loader; prune → encoded predicate (preserved-op law) →
+  positions → late materialization; STR-Blocks / BE-Blocks rules.
+- **P6 GPU storage** (compression for transfer/capacity first; resident
+  scan codecs only where measured). Device blocks with per-vector summaries, tile decode
+  fused with predicates, narrow carriers, summary skip; GPU Datalog runs as
+  grouped runs.
+- **P7 Join filters and evidence** across targets (exact min/max and
+  membership from runs; published key/row/group statistics for `choose`).
+- **P8 Remaining items.** Key-partition routing projection, placement spine
+  (only when a branching machine appears), Masks as full reducer (a cost
+  question), delta=k SRDatalog plans.
 
 ## Progress
 
+- Contract 7 documentation cutover: finite-set pure-total denotation, explicit
+  `where`, free-variable Rust placement and recorded device representations.
+  New rules are `CQ-Where`, `CQ-Closed`, `WF-VO-Rust` and
+  `BE-RustRepresentation`; the old recognition/partiality rules are retired.
+  Conformance updates are marked unverified; no checks were run for this
+  documentation change.
+- GPU TPC-H representation repair: manifest dictionary inputs declare published
+  symbol codes, never `String` device columns. Explicit authored
+  `dictionary_where` relations evaluate a pure predicate once per dictionary
+  entry and publish immutable membership codes; the compiler does not split
+  opaque Rust. Missing relational literals cannot insert dictionary entries.
+  Decimal and Date retain their transparent scalar identity layouts and
+  authored Rust methods; runtime `Scalar` dispatch supplies lane encoding,
+  reconstruction for Rust reads, and layout widths without inspecting type
+  names. Authored type annotations on computed bindings record result identity;
+  unannotated bindings stay on the host. Nonnullable staged publications retain
+  their recorded device layouts instead of downloading and re-uploading codes.
+  Dictionary decoding belongs at final host answer publication, not relational
+  joins or staging. Acceptance measurements are reported separately.
+- Hoisted CPU sharded-router closures retain the recorded key tuple's declared
+  type tokens and ownership. This supplies inference before the provider-choice
+  match without interpreting types; inline routers retain contextual inference.
 - Phase 1 done: fixtures on the core (`facade/mini-linq/tests/doop_heapalloc.rs`),
   Datalog (`features/datalog/tests/counters.rs`) and GPU
   (`experiments/gpu/datalog/facade/tests/heapalloc.rs`) routes.
-- Phase 2 done: `constraint::Parameter` field paths (contract 3); default
-  order `Prefix(Connected)/Coarse` places constraints at first binding.
+- Historical phase 2 used field-path parameters under superseded contract 3.
+  Contract 7 instead stores arbitrary query-closed Rust expressions; default
+  order remains `Prefix(Connected)/Coarse`.
 - Phase 3 done for ordering; Masks decided docs-side (contract 6): Masks is
   the bottom-up Yannakakis pass restricted to filter-carrying subtrees, not a
   full reducer; `passes.tex`, `STATUS.md` and `cq-reduce` now say so, and

@@ -52,9 +52,9 @@
 //!
 //! Rewrite checks are exported by the languages: Physical preserves RA′ erasure
 //! and admissible demand supplies; Structures preserves Physical and discharges
-//! every read and boundary. RA′ uses the existing tableau/Rust-chain proof. VO
-//! preserves CQ, valuation erasure and existing reductions under its coverage
-//! and Before contract. IX preserves RA′. Contracted CQ rewrites are identity;
+//! every read and boundary. RA′ compares relational facts and opaque total Rust
+//! payloads with their free-variable bindings. VO preserves CQ, valuation erasure,
+//! existing reductions and dependency coverage. IX preserves RA′. Contracted CQ rewrites are identity;
 //! surface expansions operate on raw tokens before that boundary. Known invalid
 //! standard representations fail contracts; rustc checks arbitrary user types
 //! against the generated Build, read and dedup obligations.

@@ -1,4 +1,4 @@
-use cq_syntax::algebra::{Bind, LiteralStep, disjoint_unions};
+use cq_syntax::algebra::{Bind, LiteralStep, Select, disjoint_unions};
 use quote::ToTokens;
 
 #[test]
@@ -28,10 +28,23 @@ fn generator_preserves_input_constants_without_scalar_literal_inference() {
     let b: syn::Ident = syn::parse_quote!(b);
     let union = syn::parse_quote!(union);
     let operands = [a.clone(), b.clone()].into_iter().collect();
-    let left_bind: Bind = syn::parse_quote!(bind root with tag = (0));
-    let right_bind: Bind = syn::parse_quote!(bind root with tag = (1));
+    // Relational equalities provide facts; opaque Rust bindings do not.
+    let left_select: Select = syn::parse_quote!(select root if (tag = 0));
+    let right_select: Select = syn::parse_quote!(select root if (tag = 1));
     let left_generator: Bind = syn::parse_quote!(bind left with for x = (items));
     let right_generator: Bind = syn::parse_quote!(bind right with for x = (items));
+    let result = disjoint_unions([
+        (&root, LiteralStep::Empty),
+        (&left, LiteralStep::Select(&left_select)),
+        (&right, LiteralStep::Select(&right_select)),
+        (&a, LiteralStep::Bind(&left_generator)),
+        (&b, LiteralStep::Bind(&right_generator)),
+        (&union, LiteralStep::Union(&operands, None)),
+    ]);
+    assert!(result.contains("union"));
+
+    let left_bind: Bind = syn::parse_quote!(bind root with tag = (0));
+    let right_bind: Bind = syn::parse_quote!(bind root with tag = (1));
     let result = disjoint_unions([
         (&root, LiteralStep::Empty),
         (&left, LiteralStep::Bind(&left_bind)),
@@ -40,7 +53,7 @@ fn generator_preserves_input_constants_without_scalar_literal_inference() {
         (&b, LiteralStep::Bind(&right_generator)),
         (&union, LiteralStep::Union(&operands, None)),
     ]);
-    assert!(result.contains("union"));
+    assert!(!result.contains("union"));
 
     // Even syntactically literal generator expressions must not be scalar facts;
     // their IntoIterator validity is Rust's responsibility, not this fold's.

@@ -134,6 +134,16 @@ pub fn selection_constants(select: &syntax::algebra::Select) -> BTreeMap<String,
     constants
 }
 
+/// Constants whose reconstructed references can outlive the host evaluation
+/// scope. Closed Rust values remain in the stored payload: unlike literals,
+/// their backing storage may be a temporary created for this query.
+pub fn reconstructible_constants(select: &syntax::algebra::Select) -> BTreeMap<String, Term> {
+    selection_constants(select)
+        .into_iter()
+        .filter(|(_, value)| matches!(value, Term::Literal(_)))
+        .collect()
+}
+
 /// Formal rule STR-Existential: A projected full-key index can replace payload
 /// enumeration with membership when every observed column is a key or constant.
 pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
@@ -215,7 +225,9 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 );
             }
         }
-        let expected = select.map(|s| selection_constants(s)).unwrap_or_default();
+        let expected = select
+            .map(|select| reconstructible_constants(select))
+            .unwrap_or_default();
         let mut constants = BTreeMap::new();
         for binding in &filtered.constants {
             let column = symbol_name(&binding.column);

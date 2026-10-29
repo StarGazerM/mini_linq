@@ -182,9 +182,9 @@ assuming one would let a pass replace the query by a different one, so keys
 are out of scope until a provenance model exists. First-witness consumption is
 a different consumer operation, owned by the lower level's control semantics
 (\code{exists} mode and lawful early stop, \textsc{BK-Dual}); an upper
-compiler requests it by emitting an \code{exists} query. Position independence
-is earned by CQ's recognized comparisons and relational operators, not by
-context facts or an assertion about arbitrary Rust; opaque guards stay pinned.
+compiler requests it by emitting an \code{exists} query. All Rust is pure and
+total by premise, with free-variable placement; only explicit \code{where}
+provides relational predicate facts, never context assertions about Rust.
 A terminal's canonical return is a guarantee the lower level exports
 (\code{unique(returned)} in the Structures contract), the opposite direction
 of a context fact.

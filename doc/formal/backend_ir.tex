@@ -18,12 +18,11 @@ makes nothing else observable, so order, multiplicity before \code{canon},
 evaluation counts, sizes and placement are all the emitter's to choose. A
 parallel runtime makes positions and sizes decisions that change the
 program (which positions form the parallel domain; what must be allocated
-before it runs), and makes placement and partiality constraints on whether
-a term can run at all (where a value is visible; that device code cannot
-unwind). Positions and sizes change the objects: that is the Sequence
-level. Placement and partiality constrain terms without changing their
-values: that is a type-and-effect grading, not a level. Kernels, barriers
-and launch shapes are derived from the grading: not a level, not syntax.
+before it runs), and constrains placement by value visibility and recorded
+representation capabilities. Positions and sizes change the objects: that is
+the Sequence level. Representation and scope constrain terms without changing
+their values: that is a type-and-effect grading, not a level.
+Kernels, barriers and launch shapes are derived from the grading: not a level, not syntax.
 
 This is deliberately not progressive lowering in the MLIR sense. A pass
 takes a whole program at one level to a whole program at the next; no
@@ -43,9 +42,9 @@ forgetful maps are monad morphisms:
  \qquad \alpha\circ\mathsf{flatten}=\mathsf{join}_{\rm Bag}\circ\alpha\circ\mathrm{Seq}(\alpha),
  \quad \alpha\circ\mathsf{map}\,f=\mathrm{Bag}(f)\circ\alpha .
 \]
-The front end computes in $\bot+\mathrm{Set}$; Sequence computes in
-$\bot+\mathrm{Seq}$; the refinement obligation is that the morphism of the
-result equals the front-end value. Parallel admissibility is exactly the
+The front end computes in $\mathrm{Set}$; Sequence computes in
+$\mathrm{Seq}$ under the same pure-total Rust premises; the morphism of the
+result must equal the front-end value. Parallel admissibility is exactly the
 structure $\mathrm{Bag}$ has and $\mathrm{Seq}$ lacks: its monoid is
 commutative, so a fold over it is schedule-independent, and $\alpha$
 forgets the order a schedule imposes.
@@ -61,9 +60,9 @@ column. A \emph{space} is a shape considered on its own: a finite index set
 with lexicographic order and nesting.
 
 \subsection{Terms}
-$f$ ranges over per-position maps built from the total Physical kernels
-(rename, project, relational select, point and range reads, semi and anti
-tests over admissible keys; ST-Total). $b$ ranges over providers.
+$f$ ranges over per-position Physical maps, including unchanged Rust
+expressions under the totality premise; device execution additionally requires
+BE-RustRepresentation. $b$ ranges over providers.
 \begin{lstlisting}
 t ::= rows r                     // the positions of a retained result or host
     | map f t                    // per-position total map
@@ -77,6 +76,18 @@ t ::= rows r                     // the positions of a retained result or host
     | store t                    // materialize
     | choose [ g => t ]*         // size-guarded equal alternatives
 \end{lstlisting}
+An optional trailing packet, after evidence, records column representations:
+\begin{lstlisting}
+representation { identity [x, ...]; encoded [y, ...]; }
+\end{lstlisting}
+\code{Program.representation} and \code{Analysis.representation} contain
+\code{Representation \{ identity, encoded: BTreeSet<String> \}}. The sets
+record facts supplied by binding/codecs, not facts inferred from host types.
+Unlisted columns have unknown device representation and cannot justify
+device Rust evaluation. Rewrites may monotonically refine this packet:
+each source identity fact remains identity and each source encoded fact
+remains encoded, while an unlisted column may acquire either fact.
+The two sets remain disjoint and every listed column must exist.
 \code{tile}, \code{flatten} over known offsets, \code{lookup} over a range
 cursor and the gathers inside $f$ are \emph{views}: bijections on positions
 that change addressing and materialize nothing (Lift's layout patterns,
@@ -138,9 +149,9 @@ only the range obligations of the actual distributed execution context,
 not of unused child levels in the machine.
 A \code{flatten} or \code{fold} graded at a
 leaf level (one sequential executor) is a loop, not a collective; BE-Collective
-constrains only terms graded at a level whose members jointly evaluate them. BE-Partition is the law every schedule relies on; it
-holds for partial $f$ (one undistinguished $\bot$) but licenses no early
-stop and is stated on bags: a lost or duplicated position changes
+constrains only terms graded at a level whose members jointly evaluate them.
+BE-Partition is the law every schedule relies on; it licenses no arbitrary
+early stop and is stated on bags: a lost or duplicated position changes
 $\alpha$. BE-Canon makes per-part canon a sound prefilter that replaces
 the global boundary only when equal rows meet in one part. BE-Choose is
 incremental flattening~\cite{paper-futhark-flatten}: the right
@@ -193,9 +204,14 @@ The case $P=1$ is the identity cover $B_0=B$, with no hash routing.
 Here equalities forget enumeration order but preserve bag multiplicities;
 canon compares complete valuations, never just routing or aggregate columns.
 Provider routing projects the physically stored lookup tuple: constant-bound
-columns omitted by filtered layouts are not routing coordinates. Structures
-rejects covering join filters over provider families lacking exact key
-enumeration, including unsupported routed families.
+columns omitted by filtered layouts are not routing coordinates. Covering join
+filters require exact distinct-key enumeration through \code{Keys}; rustc checks
+this provider obligation, without a shared-compiler type-name whitelist.
+A routed provider type is installed only when its actual constructor consumes
+the recorded cover. Fused-arm providers are constructed inside each prefix-row
+invocation; their flat Sequence stores are deferred, not independent builds.
+The top-level provider rewrite therefore cannot retype these local providers:
+rewriting a deferred store would leave the real constructor unrouted.
 The group law uses the same complete-valuation canonicalization and declared
 monoids as BE-Group. Since $G\to K$, no group crosses a part boundary.
 An unkeyed aggregate uses BE-GroupPartial rather than BE-KeyPartGroup.
@@ -230,11 +246,11 @@ grade checks on every streamed operation.
 Unauthored single-use views on that spine are graded at the pool's producer
 along with the streamed work; moving only the Group would leave illegal
 unstored host references. Authored grades and stored boundaries are preserved.
-An opaque pipeline instead publishes \code{parts = store tile N t} at host,
-then a pool-graded partial Group consumes that ancestor-stored nested cover.
-Every opaque operation remains host-owned, with unchanged expression and
-domain order; no totality assertion is introduced. This is an ordinary explicit
-parts publication, not a claim of bounded-memory or incremental execution.
+A pipeline lacking a descendant representation instead publishes
+\code{parts = store tile N t} at host, then a pool-graded partial Group
+consumes that ancestor-stored nested cover. Rust payloads remain unchanged;
+host ownership follows representation facts, never a partiality distinction.
+This is an explicit parts publication, not bounded-memory execution.
 The provider law concerns exact point buckets (and hence membership), with
 the same routing function and partition count at build and lookup. It does
 not license a range lookup spanning several routing keys to read one part,
@@ -265,6 +281,11 @@ A finite tree of \emph{levels} $\ell$, each labelled: \emph{collaborative}
 at a common ancestor, at a boundary); scheduling static or dynamic; and a
 failure channel to the root. The root is $\mathsf{host}$.
 \end{definition}
+Each \code{LevelNode} also records \code{host\_rust: bool}: true for host and
+CPU task execution, false for GPU device/block/lane execution. At a level
+without host Rust support, a Rust expression requires the recorded identity
+representation of every read column; unknown or encoded reads stay at host.
+This machine capability is separate from separation or collaboration.
 \begin{center}
 \begin{tabular}{@{}p{0.16\linewidth}p{0.4\linewidth}p{0.2\linewidth}p{0.16\linewidth}@{}}
 \toprule
@@ -312,8 +333,14 @@ GPU instance of the grade.
 \Rule{BE-Boundary}{\text{a maximal segment of total terms between stores at a separated level}}
  {\text{is one unit of dispatch (a kernel, a task); its domain is the outer stored space; derived, not written}}
 
-\Rule{BE-Partial}{\text{opaque Rust }e}
- {e\text{ runs at }\mathsf{host}\text{ only: closed }e\text{ once before dispatch (IF-Parameter); row-dependent }e\text{ never below host}}
+\Rule{BE-RustRepresentation}{\fv(e)\cap Q=C\quad
+ \forall c\in C.\ \mathsf{deviceRepresentation}(c)=\mathsf{identity}\\
+ \mathsf{otherInputs}(e)\text{ are closed captures}}
+ {e\text{ may run on device, emitted verbatim and compiled by cuda-oxide}}
+Representation facts enable placement; they do not themselves establish
+codec correctness. Their correctness is the binder's GPU-Representation
+obligation. BE-RustRepresentation admits monotone target refinements of
+these facts, never removal or an identity/encoded flip.
 
 \Rule{BE-Abort}{\bot\text{ raised below }\mathsf{host}}
  {\text{a once-set flag on the failure channel, mapped to }\bot\text{ at the next host boundary; no truncated success}}
@@ -351,9 +378,12 @@ target, not reinterpreted. BE-Boundary derives kernels (GPU) and tasks
 (Rayon) from the grading: the domain of a dispatch is the type of its outer
 stored space, which replaces the current printer's
 \code{driver.len.div\_ceil(1024)}; storing the H05 Customer level as
-offsets makes the next dispatch span every customer. Written order has no
-force below host: nothing partial is there (BE-Partial), so inside a
-dispatch the full set algebra applies.
+offsets makes the next dispatch span every customer. All admitted Rust is
+total by premise. Row-dependent Rust lacking BE-RustRepresentation runs at
+host; closed operands evaluate once at host (IF-Parameter). Codec-encoded
+comparisons use explicit relational predicates and host-encoded operands,
+not a rewritten Rust expression. No type-name whitelist establishes device
+eligibility; sizes and encodings come from recorded provider/codec facts.
 A store at a separated level is publication: a depth-zero producer is one
 part at its unique child. Its outermost tile in dataflow order distributes parts over that
 child; further tiles in the same definition strip-mine jointly at the
@@ -668,18 +698,18 @@ The native Tasks target preserves retained row-buffer types separately:
 replayable rows use the row collection ABI, not a keyed range-provider family.
 Catalog retyping also composes with a subsequent checked join reexpression.
 The endpoint proof compares surviving storage layouts modulo implementation
-types, while separately proving relational support, opaque evaluation order
+types, while separately proving relational support, unchanged Rust payloads
 and exact host-reader syntax. It does not require the composite Physical
 change to fit the narrower mode-only retention certificate.
-Placement propagates opaque evaluation and its unstored feeds to host before
-assigning descendant work. String-literal predicates and operations reading
-or producing String-bearing rows likewise stay host through the projection
-that publishes a numeric-only row. Independent named union arms with distinct stored
+Placement propagates unavailable device representations and their unstored
+feeds to host. A Rust expression may read only identity-represented device
+columns, with other inputs supplied by closed captures; encoded columns use
+relational predicates. Independent named union arms with distinct stored
 domains are published separately, then concatenated at host; neither rule
-weakens BE-Partial or BE-Boundary.
-An already-checked Sequence store cuts opaque Physical provenance, including
-for lookup providers: descendant reads consume the materialized rows rather
-than re-evaluating the host guard. This requires no asserted totality marker.
+weakens BE-RustRepresentation or BE-Boundary.
+An already-checked Sequence store cuts producer provenance, including for
+lookup providers: descendant reads consume materialized rows rather than
+re-evaluating the host expression.
 Guard-result carriers project away columns absent from the checked downstream
 required-column set. The guard still receives its complete required input;
 this representation projection happens after evaluation and does not change
@@ -872,9 +902,9 @@ not asserted to be a join tree. In the acyclic case, tree-connected
 subjoins satisfy the SafeSubjoin criterion
 \cite[Section~3.2]{paper-rpt}. Evidence may prefer early Expand or a
 different Lookup order but is never used to delete a required join.
-Opaque Rust nodes remain pinned to their written Before domains.
+Rust nodes retain their recorded placement, payloads and free-variable bindings.
 A provider requiring another key layout may name a fresh retained identity
-projection after that pinned prefix. Keeping the complete checked input
+projection after that recorded prefix. Keeping the complete checked input
 heading preserves support and positions; the support certificate treats only
 such full-heading projections as transparent aliases. Other projections
 remain opaque certificate nodes. Each provider name then has one recorded
@@ -890,7 +920,7 @@ equal-support alternatives. Applying the decision consumes its provenance.
 \begin{mathpar}
 \Rule{EXT-SeqLookup}{t,t'\text{ checked}\quad
  \text{join/semijoin constructions have equal support}\quad
- \text{Rust Before domains preserved}}
+ \text{recorded Rust placement and free-variable bindings preserved}}
  {t\rightsquigarrow_{\mathsf{lookup\_first}}t'
   \quad\text{(Motion, BE-Offsets, BE-Scope)}}
 
@@ -1150,21 +1180,22 @@ published, so the batch equals the Count protocol's.
 \end{mathpar}
 
 \paragraph{Closed host captures.}
-A Rust subexpression of a guard, binding or selection whose free variables
-include no row column (for example \code{sym("abstract")}) is a closed capture.
-The translator evaluates each closed capture once on the host per invocation,
-before the first dispatch that needs it and only if that dispatch's input is
-nonempty, converts the value to its device encoding (the declared
-\code{SymbolCodec} for symbol types), and passes it as a kernel parameter; the kernel compares
-encodings. Strings therefore never reach the device. This is the closed case of
-\textsc{BE-Partial} realized by \textsc{IF-Parameter}, for any machine; staging
-totality (\textsc{ST-Total}) is unchanged, so host plans are unaffected. The
-host premise is the one already made for Rust predicates: a closed capture is
-deterministic and total, so one evaluation equals the per-row evaluations it
-replaces.
+A query-closed operand of an explicit relational \code{where} predicate is
+evaluated once on the host per invocation and encoded through the column's
+recorded provider/codec. Equality requires an equality-preserving encoding;
+ordered predicates additionally require an order-preserving encoding.
+No type spelling supplies either law. The capture is evaluated before its
+first enabled, nonempty consuming dispatch and cached across capacity retries.
+Rust guards, bindings and iterator expressions remain verbatim: they are not
+split into recognized comparisons or rewritten to operate on dictionary IDs.
+Their row reads must all have recorded identity device representation; their
+other inputs are closed captures. Unknown or codec-encoded row reads require
+host Rust execution, independently of the common pure-total premise.
 \begin{mathpar}
-\Rule{GPU-Capture}{e\text{ closed}\quad e\text{ deterministic and total}\quad
- \mathrm{enc}\text{ injective}\quad C(e)=\text{recorded consuming definitions}\quad
+\Rule{GPU-Capture}{e\text{ query-closed}\quad e\text{ deterministic and total}\quad
+ \phi\text{ a relational predicate}\quad
+ \mathrm{enc}\text{ preserves the predicate's equality/order}\quad
+ C(e)=\text{recorded consuming definitions}\quad
  D(e)=\{(d,b)\mid C(e)\cap\mathrm{definitions}(d,b)\ne\varnothing\}}
  {\sem{\phi[\mathrm{enc}(e)/e]}_{\mathrm{device}}=\sem{\phi}_{\mathrm{host}}
  \quad\mathrm{evaluate}(e)\iff\bigvee_{(d,b)\in D(e)}(|d|>0\land b)}
@@ -1178,6 +1209,15 @@ The invocation-local cache is shared across capacity retries.
 Native ABI constructors are complete catalog identities, with generic arguments
 carrying their declared schemas. An unrelated type with the same last identifier
 does not acquire native residency or an encoding ABI.
+\begin{mathpar}
+\Rule{GPU-Representation}{\rho=\text{recorded provider/codec facts}\quad
+ R=\mathrm{fv}(e)\cap\text{row columns}\quad R\subseteq\rho.\mathrm{identity}\quad
+ \mathrm{fv}(e)\setminus R\text{ are closed captures}}
+ {\mathrm{deviceRust}(e)\text{ emits the authored }e\text{ verbatim}}
+\end{mathpar}
+Binding records identity or encoded columns from the selected provider;
+unrecorded columns are unknown. Encoded or unknown Rust reads execute at host,
+and encoded relational operands follow \textsc{GPU-Capture}.
 \begin{mathpar}
 \Rule{GPU-NativeAbi}{\mathrm{constructor}(T)=\mathrm{identity}(a)\quad a\in\mathrm{nativeCatalog}}
  {\mathrm{abi}(T)=a\quad\mathrm{residency}(T)=\mathrm{residency}(a)}
@@ -1234,8 +1274,8 @@ commutative monoid. Min and max use the option lifting of the declared
 total order, with \code{None} as identity and \code{Some} as injection.
 Thus empty keyed input has no answer, while empty global input has one
 answer containing zero counts/sums and absent extrema. These laws assume
-the declared operations satisfy their monoid premises; an expression
-failure propagates the single $\bot$ before any result is published.
+the declared operations satisfy their monoid premises; Rust expressions are
+total by premise and runtime failures must never publish a partial answer.
 
 Let $S$ be a store of distinct valuations, partitioned by key, and let
 $o_k,o_{k+1}$ be the owner offsets of key $k$ in the grouped store.
@@ -1281,8 +1321,8 @@ Each owner is reduced collaboratively using the declared integer monoid:
 count and sum have zero identity; extrema carry a separate validity bit
 and retain the full-width value, including both signed endpoints.
 Codec widths constrain the result (in particular unsigned 32-bit sums
-cannot silently become signed 64-bit sums). Arithmetic failure is published
-as bottom through the output status, together with ancestor failures.
+cannot silently become signed 64-bit sums). Runtime capacity or offset failure
+is reported through output status, together with ancestor failures.
 Empty keyed input publishes zero owners; an empty global key publishes one
 owner with count/sum zero and invalid extrema. Values, validity, and logical
 output count remain resident until the explicit typed host decode.
@@ -1311,10 +1351,10 @@ decides for itself. Those are the terms a rewrite must record.
 \toprule
  & CQ \ldots\ Structures & Sequence\\
 \midrule
-objects & finite sets, $\bot+\mathrm{Set}$ & nested sequences of codes; $\alpha$ a monad morphism to bags\\
+objects & finite sets & nested sequences of codes; $\alpha$ a monad morphism to bags\\
 composition & Kleisli bind in written order & \code{map} / \code{flatten} / \code{compact} / \code{tile} / \code{fold}; bind is a flatten of lookups\\
-order & meaning only through pinned Rust & causal partial order at host; none below\\
-partiality & one $\bot$ anywhere & total fragment below host; a flag at boundaries\\
+order & free-variable dependencies and ordered fallback & recorded plan and execution dependencies\\
+Rust & opaque, pure and total by premise & verbatim; device eligibility from representations\\
 sizes & outside meaning & lengths in types; capacity an obligation\\
 positions & none & the parallel index; recorded\\
 placement & the emitter's & a grading over a machine parameter; dispatch derived\\

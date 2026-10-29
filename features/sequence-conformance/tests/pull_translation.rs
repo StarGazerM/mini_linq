@@ -46,6 +46,7 @@ fn simple(body: TokenStream) -> Program {
         sequence: syn::parse2(quote!(sequence { #body })).unwrap(),
         graded: None,
         evidence: Default::default(),
+        representation: Default::default(),
     }
 }
 

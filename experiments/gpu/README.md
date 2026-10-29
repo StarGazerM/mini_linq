@@ -24,12 +24,16 @@ finalization, and per-dispatch host synchronization; these are listed as open
 violations in `doc/SEQUENCE-PLAN.md` [6]. Do not add further translator-side
 decisions; record them in grading first.
 
-Computed CQ-Arith bindings in segmented maps are lane-local scalar codes.
-Sibling lanes may read parent-owned codes through their owner index, but map
-assignments never write those shared parent slots.
-Identity bindings preserve inherited codec bounds through publication; arithmetic
-bindings retain their full declared primitive bounds because wrapping can cross
-either endpoint.
+Rust `if`/`let` expressions remain opaque, total Rust. Device execution requires
+identity representation for every column read; codec-backed reads execute on the
+host. Device Rust uses cuda-oxide-specialized callables with query-closed inputs
+captured on the host, without arithmetic recognition or wrapping rewrites.
+Only `where` predicates compare encoded columns: closed operands use the recorded
+column codec once on the host. Provider traits supply scalar widths and bounds.
+Computed bindings are lane-local values; sibling lanes may read parent-owned
+values through their owner index, but maps never write shared parent slots.
+Resident inputs retain their owning pool. A query whose inputs are entirely host
+values acquires the shared device-0 thread pool for its recorded GPU publications.
 
 ## Build and run
 
@@ -124,9 +128,11 @@ not part of the admission path.
 A CQ input whose declared host type is `::gpu_datalog_runtime::DeviceLayout<K, V>`
 (`DeviceLayout::from_runs(pool, packing, runs)`) is bound as packed device runs
 (`GPU-Runs`): scans visit every run, key-prefix lookups binary-search one range
-per run with block-uniform expansion, and membership ORs over runs. Supported
-column types are i8/i16/i32/i64/u8/u16/u32 and codec-declared symbols (u32 on
-device), with no 128-bit tuple cap; keys occupy the leading columns.
+per run with block-uniform expansion, and membership ORs over runs. A recorded
+lookup on nonleading columns obtains a sorted, permuted provider view; it retains
+each original run's rows and cross-run multiplicity. Unused selection fallbacks do
+not construct providers. Scalar widths come from the native `Scalar` provider
+trait; codec-declared symbols use u32 codes, with no 128-bit tuple cap.
 `cq_gpu_sequence::translate_arena(&mut arena)` (`GPU-Arena`) publishes head rows
 packed most-significant-first in head order into a `CandidateArena` and returns
 a `CandidateBatch` (u64 lanes, native low-first for u128 and most-significant
@@ -548,9 +554,11 @@ completion. Automatic is opt-in pending box 11b: build with
 `CQ_GPU_TPCH_AUTOMATIC=1` to also generate `automatic` executors using
 `cq_sequence_plan::plan`. No automatic lookup rewrite is required to compile or
 measure the advised baseline.
-The manifest loader records its integer-only `DeviceColumns` host adapters
-through the checked retype rewrite; relations declaring `String` retain host
-rows. Neither the loader nor translator chooses a plan.
+The manifest loader records provider encoding facts separately from logical Rust
+types. Relational-only columns may use manifest scalar or dictionary codes, with
+closed `where` operands encoded on the host. Rust arithmetic and conditional binds
+are never rewritten into dictionary operations; logical host adapters handle
+expressions reading nonidentity columns. Neither loader nor translator chooses a plan.
 
 The default loader reads only each imported query's declared columns. `String` columns
 are decoded from `.bin` dictionary codes and `.dict.txt` into owned host strings;

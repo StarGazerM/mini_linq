@@ -21,7 +21,7 @@ fn every_surface_forwards_plain_cq_and_parameters() {
     let limit = 1;
     let rows: Rows = mini_linq::compile! {
         pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_correlated::correlated]; }
-        struct Plain; relation A(x:i32); answer(x) :- A(x), if *x > limit;
+        struct Plain; relation A(x:i32); answer(x) :- A(x), where x > limit;
     }.map(|(x,)| vec![*x]).collect();
     assert_eq!(rows, [vec![2], vec![3]].into());
 }

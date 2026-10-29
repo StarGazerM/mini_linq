@@ -405,7 +405,7 @@ macro_rules! srd_doop_engine {
                 // MethodImplemented
                 MethodImplemented: r_methodimplemented(*v_simplename, *v_descriptor, *v_mtype, *v_meth) :- r_method_simplename(v_meth, v_simplename), r_method_descriptor(v_meth, v_descriptor), r_method_declaringtype(v_meth, v_mtype), !r_method_modifier(constants.c_abstract, v_meth);
                 // MainMethodDecl_Base
-                MainMethodDecl_Base: r_mainmethoddeclaration(*v_meth) :- r_mainclass(v_mtype), r_method_declaringtype(v_meth, v_mtype), r_method_simplename(v_meth, constants.c_main), r_method_descriptor(v_meth, constants.c_main_descriptor), r_method_modifier(constants.c_public, v_meth), r_method_modifier(constants.c_static, v_meth), if *v_meth != constants.c_class_init_method && *v_meth != constants.c_register_natives_method && *v_meth != constants.c_desiredassertionstatus_method;
+                MainMethodDecl_Base: r_mainmethoddeclaration(*v_meth) :- r_mainclass(v_mtype), r_method_declaringtype(v_meth, v_mtype), r_method_simplename(v_meth, constants.c_main), r_method_descriptor(v_meth, constants.c_main_descriptor), r_method_modifier(constants.c_public, v_meth), r_method_modifier(constants.c_static, v_meth), where v_meth != constants.c_class_init_method && v_meth != constants.c_register_natives_method && v_meth != constants.c_desiredassertionstatus_method;
                 // MIBase_Virtual
                 MIBase_Virtual: r_methodinvocation_base(*v_inv, *v_base) :- r_virtualmethodinvocation_base(v_inv, v_base);
                 // MIBase_Special
@@ -441,7 +441,7 @@ macro_rules! srd_doop_engine {
                 // SupertypeOf
                 SupertypeOf: r_supertypeof(*v_s, *v_t) :- r_subtypeof(v_t, v_s);
                 // SubtypeOfDiff_Base
-                SubtypeOfDiff_Base: r_subtypeofdifferent(*v_s, *v_t) :- r_subtypeof(v_s, v_t), if *v_s != *v_t;
+                SubtypeOfDiff_Base: r_subtypeofdifferent(*v_s, *v_t) :- r_subtypeof(v_s, v_t), where v_s != v_t;
                 // MethodLookup_Base
                 MethodLookup_Base: r_methodlookup(*v_simplename, *v_descriptor, *v_mtype, *v_meth) :- r_methodimplemented(v_simplename, v_descriptor, v_mtype, v_meth);
                 // MethodLookup_Super
@@ -451,7 +451,7 @@ macro_rules! srd_doop_engine {
                 // ClassInitializer
                 ClassInitializer: r_classinitializer(*v_mtype, *v_meth) :- r_methodimplemented(constants.c_clinit, constants.c_clinit_descriptor, v_mtype, v_meth);
                 // Precompute0
-                Precompute0: r_castto(*v_frm, *v_to, *v_inmeth, *v_heap) :- r_assigncast(v_casttype, v_frm, v_to, v_inmeth), r_supertypeof(v_casttype, v_heaptype), r_heapallocation_type(v_heap, v_heaptype), if *v_heaptype != constants.c_java_lang_string_type;
+                Precompute0: r_castto(*v_frm, *v_to, *v_inmeth, *v_heap) :- r_assigncast(v_casttype, v_frm, v_to, v_inmeth), r_supertypeof(v_casttype, v_heaptype), r_heapallocation_type(v_heap, v_heaptype), where v_heaptype != constants.c_java_lang_string_type;
                 // Precompute0_String
                 Precompute0_String: r_castto(*v_frm, *v_to, *v_inmeth, *v_heap) :- r_assigncast(v_casttype, v_frm, v_to, v_inmeth), r_iscastabletostring(v_casttype), r_isstringheap(v_heap);
                 // Precompute1
@@ -461,7 +461,7 @@ macro_rules! srd_doop_engine {
                 // Precompute2
                 Precompute2: r_virtualmethodinvocation(*v_invocation, *v_base, *v_simplename, *v_descriptor) :- r_virtualmethodinvocation_base(v_invocation, v_base), r_virtualmethodinvocation_simplename(v_invocation, v_simplename), r_virtualmethodinvocation_descriptor(v_invocation, v_descriptor);
                 // HeapAllocHelper
-                HeapAllocHelper: r_nonstringheapallocsupertype(*v_heap, *v_baseheap) :- r_heapallocation_type(v_heap, v_heaptype), r_heapallocation_type(v_baseheap, v_baseheaptype), r_componenttype(v_baseheaptype, v_comptype), r_supertypeof(v_comptype, v_heaptype), if *v_baseheaptype != constants.c_java_lang_object_array && *v_baseheaptype != constants.c_java_lang_string_array;
+                HeapAllocHelper: r_nonstringheapallocsupertype(*v_heap, *v_baseheap) :- r_heapallocation_type(v_heap, v_heaptype), r_heapallocation_type(v_baseheap, v_baseheaptype), r_componenttype(v_baseheaptype, v_comptype), r_supertypeof(v_comptype, v_heaptype), where v_baseheaptype != constants.c_java_lang_object_array && v_baseheaptype != constants.c_java_lang_string_array;
                 // IsStringArrayHeap_rule
                 IsStringArrayHeap_rule: r_isstringarrayheap(*v_baseheap) :- r_heapallocation_type(v_baseheap, constants.c_java_lang_string_array);
                 // EligibleStringArrayHeap_rule

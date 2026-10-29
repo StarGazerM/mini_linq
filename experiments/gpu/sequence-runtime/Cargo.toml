@@ -12,6 +12,7 @@ gpu-compress = { path = "../compress" }
 gpu-compress-host = { path = "../compress-host" }
 gpu-device-columns = { path = "../device-columns" }
 gpu-tiles = { path = "../tiles" }
+gpu-datalog-runtime = { path = "../datalog-runtime" }
 rccl-cub.workspace = true
 rccl-memory.workspace = true
 rccl-thrust.workspace = true

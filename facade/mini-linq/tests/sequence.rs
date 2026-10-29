@@ -74,8 +74,8 @@ fn positional_point_and_range_reads_preserve_their_source_spine() {
             assert_eq!(actual, expected);
         };
     }
-    check!([(&2, &3)]; answer(a,b) :- R(a,b), if *a == cutoff;);
-    check!([(&2, &3), (&3, &2)]; answer(a,b) :- R(a,b), if *a >= cutoff, if *b >= cutoff;);
+    check!([(&2, &3)]; answer(a,b) :- R(a,b), where a == cutoff;);
+    check!([(&2, &3), (&3, &2)]; answer(a,b) :- R(a,b), where a >= cutoff, where b >= cutoff;);
 }
 
 #[test]

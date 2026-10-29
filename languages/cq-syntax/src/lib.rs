@@ -1,42 +1,12 @@
 //! Shared syntax, declarations and Rust free-variable/pattern analysis.
 //!
-//! Compiler programs denote `bottom + Set`: one panic aborts evaluation.
-//! Guard comparisons recognized under the premises below are relational. Other
-//! Rust expressions are opaque partial functions of their free variables;
-//! only relational steps commute or move earlier across the written Rust chain.
-//! Equality in the relational centre is identity in classical Set.
-//!
-//! 1. Leibniz admissibility of a column type: a type may be compared, joined,
-//!    grouped, keyed or deduplicated by the relational centre only if its `==`
-//!    decides Leibniz equality (Rust code cannot distinguish `==`-equal values).
-//!    Holds for integers, bool, char, String/&str, the cq-load Date/Decimal,
-//!    tuples and derived-Eq structs of admissible types; fails for f64/f32
-//!    (0.0 == -0.0) and hand-written lenient Eq.
-//! 2. Functional extensionality of embedded Rust: an embedded expression receives
-//!    query variables as shared references (`&T`, never `&mut`), so its value is
-//!    a function of the values of its free variables; equal (Leibniz) inputs give
-//!    equal results. Interior mutability, globals and I/O are outside the meaning,
-//!    as already documented (evaluation count is not preserved).
-//! 3. A `for p in e` generator evaluates a finite pure `IntoIterator` at its
-//!    written opaque position. It denotes set-valued unnesting: iterator order
-//!    and duplicate multiplicity are unobservable, and panic aborts the query.
-//!
-//! Any surviving representative of `==`-equal values IS the value. Dedup,
-//! canonical projection, and projecting away variables before an opaque Rust step
-//! are sound whenever the Rust step's free variables are retained. `Eq` and the
-//! selected representation's `Hash`/`Ord` bounds are necessary mechanical checks;
-//! rustc cannot prove Leibniz admissibility of a hand-written implementation.
-
-//! Shared syntax records union/anti operands, block origins, numeric occurrence paths and written Rust scopes.
-//!
-//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
-//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
-//! heading and I the common new interface; other binders remain branch-local.
-//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Rust expressions are opaque, pure and total by premise, and depend only on
+//! their free variables. The compiler preserves their syntax and never infers
+//! relational meaning from them. Explicit `where` predicates compare column
+//! representations under their recorded equality and ordering laws; rustc
+//! enforces host trait bounds. Types remain host-language syntax.
+//! Finite pure generators denote set-valued unnesting: order and duplicate
+//! multiplicity are unobservable. Block interfaces delimit lexical scopes.
 //!
 use syn::{Ident, Index, Token, Type, token};
 
@@ -74,9 +44,7 @@ pub fn symbol_name(identifier: &Ident) -> String {
 
 pub mod keyed;
 pub use keyed::SupplyKind;
-pub mod arithmetic;
 pub mod constraint;
-pub mod guard;
 pub use constraint::Constraint;
 pub mod rust;
 
@@ -178,7 +146,7 @@ impl Atom {
     }
 }
 
-/// An opaque embedded Rust condition, pinned to its written position.
+/// An opaque, pure, total Rust condition placed by its free variables.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Filter {
     pub if_token: Token![if],
@@ -239,87 +207,23 @@ pub struct Let {
 }
 
 impl Let {
-    /// Written binding types, including structurally annotated tuple fields.
-    /// Unannotated or nonstructural patterns retain Rust type inference.
+    /// Carry a whole-variable annotation without interpreting Rust types.
+    /// Destructuring field types and binding modes are inferred by rustc.
     pub fn binding_types(&self) -> Vec<(Ident, syn::Type)> {
-        fn assign(pattern: &syn::Pat, ty: &syn::Type, output: &mut [(Ident, syn::Type)]) {
-            let ty = match ty {
-                syn::Type::Paren(group) => &*group.elem,
-                syn::Type::Group(group) => &*group.elem,
-                ty => ty,
-            };
-            if matches!(ty, syn::Type::Paren(_) | syn::Type::Group(_)) {
-                assign(pattern, ty, output);
-                return;
-            }
-            match pattern {
-                syn::Pat::Paren(group) => assign(&group.pat, ty, output),
-                syn::Pat::Ident(binding) => {
-                    if let Some((_, inferred)) = output
-                        .iter_mut()
-                        .find(|(name, _)| symbol_name(name) == symbol_name(&binding.ident))
-                    {
-                        *inferred =
-                            if binding.by_ref.is_some() && !matches!(ty, syn::Type::Infer(_)) {
-                                if binding.mutability.is_some() {
-                                    syn::parse_quote!(&mut #ty)
-                                } else {
-                                    syn::parse_quote!(& #ty)
-                                }
-                            } else {
-                                ty.clone()
-                            };
-                    }
-                    if let Some((_, inner)) = &binding.subpat {
-                        assign(inner, ty, output);
-                    }
-                }
-                syn::Pat::Tuple(pattern) => {
-                    let syn::Type::Tuple(tuple) = ty else {
-                        // Named types and reference match ergonomics require
-                        // Rust type resolution; do not invent field types.
-                        return;
-                    };
-                    let rest = pattern
-                        .elems
-                        .iter()
-                        .position(|p| matches!(p, syn::Pat::Rest(_)));
-                    if let Some(rest) = rest {
-                        if tuple.elems.len() + 1 < pattern.elems.len() {
-                            return;
-                        }
-                        for (pattern, ty) in pattern.elems.iter().take(rest).zip(&tuple.elems) {
-                            assign(pattern, ty, output);
-                        }
-                        let trailing = pattern.elems.len() - rest - 1;
-                        for (pattern, ty) in pattern
-                            .elems
-                            .iter()
-                            .rev()
-                            .take(trailing)
-                            .zip(tuple.elems.iter().rev())
-                        {
-                            assign(pattern, ty, output);
-                        }
-                    } else if pattern.elems.len() == tuple.elems.len() {
-                        for (pattern, ty) in pattern.elems.iter().zip(&tuple.elems) {
-                            assign(pattern, ty, output);
-                        }
-                    }
-                }
-                // Reference and constructor patterns are left to Rust; tuple
-                // propagation never guesses a default binding mode.
-                _ => {}
-            }
-        }
-        let mut vars: Vec<_> = rust::bindings(&self.pattern)
+        rust::bindings(&self.pattern)
             .into_iter()
-            .map(|id| (id, syn::parse_quote!(_)))
-            .collect();
-        if let Some(annotation) = &self.annotation {
-            assign(&self.pattern, &annotation.ty, &mut vars);
-        }
-        vars
+            .map(|id| {
+                let ty = match (&self.pattern, &self.annotation) {
+                    (syn::Pat::Ident(pattern), Some(annotation))
+                        if pattern.by_ref.is_none() && pattern.ident == id =>
+                    {
+                        annotation.ty.clone()
+                    }
+                    _ => syn::parse_quote!(_),
+                };
+                (id, ty)
+            })
+            .collect()
     }
 }
 

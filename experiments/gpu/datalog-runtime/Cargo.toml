@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+cq-load = { path = "../../../runtime/cq-load" }
 cuda-core.workspace = true
 cuda-device.workspace = true
 cuda-host.workspace = true

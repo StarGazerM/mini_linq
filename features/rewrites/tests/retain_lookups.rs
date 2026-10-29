@@ -101,21 +101,32 @@ fn triangle_prefix_shares_reject_wrong_build_key_and_force() {
 }
 
 #[test]
-fn triangle_prefix_witnesses_do_not_escape_or_infer_integral_keys() {
-    let mut nonintegral = triangle_source();
-    nonintegral.physical = syn::parse2(
-        nonintegral
-            .physical
-            .to_token_stream()
-            .to_string()
-            .replace("i32", "bool")
-            .parse()
-            .unwrap(),
-    )
-    .unwrap();
-    // Nonintegral directories are not retained even when the provider type is named.
-    ir::contract::check(&nonintegral).unwrap();
-    assert_eq!(retain_lookups(&nonintegral, quote!()).unwrap(), nonintegral);
+fn triangle_prefix_witnesses_do_not_infer_key_types() {
+    let expected = retain_lookups(&triangle_source(), quote!()).unwrap();
+    let expected_facts = ir::contract::check(&expected).unwrap();
+    let key_types: [syn::Type; 3] = [
+        syn::parse_quote!(bool),
+        syn::parse_quote!(KeyAlias),
+        syn::parse_quote!(keys::UserKey),
+    ];
+    for ty in key_types {
+        let mut source = triangle_source();
+        for declaration in &mut source.physical.program.declarations {
+            for column in &mut declaration.columns {
+                column.ty = ty.clone();
+            }
+        }
+        // Key capabilities are Rust obligations, not inferred from type spelling.
+        let target = retain_lookups(&source, quote!()).unwrap();
+        let facts = ir::contract::check(&target).unwrap();
+        assert_eq!(facts.shares, expected_facts.shares);
+        assert_eq!(facts.witnesses, expected_facts.witnesses);
+        assert_eq!(target.physical, source.physical);
+    }
+}
+
+#[test]
+fn triangle_prefix_witnesses_do_not_escape() {
     let mut escaping = triangle_source();
     escaping.physical.program.definitions[4].canon = Some(Default::default());
     escaping
@@ -223,7 +234,7 @@ fn a_probe_before_the_semi_does_not_share() {
     let source = sorted_runs(&source, quote!()).unwrap();
     assert_eq!(
         ir::contract::check(&source).unwrap().built["r"][0].1,
-        syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>)
+        syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense>)
     );
     assert_eq!(retain_lookups(&source, quote!()).unwrap(), source);
 }
@@ -358,7 +369,7 @@ fn composed_named_pipeline_executes_the_query() {
             struct RetainedQuery;
             relation L(a:i32) = (left);
             relation R(a:i32,b:i32) = (right);
-            answer(a,b) :- L(a), R(a,b), if (*b >= 0);
+            answer(a,b) :- L(a), R(a,b), where b >= 0;
         }
         .map(|(a, b)| (*a, *b))
         .collect();

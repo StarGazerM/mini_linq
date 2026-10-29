@@ -107,13 +107,13 @@ impl Drop for QueryScope {
     }
 }
 
-/// Upload primitive numeric columns emitted by a host Sequence boundary.
+/// Upload scalar numeric lanes emitted by a host Sequence boundary.
 /// The translator supplies one i64 lane per declared field, in layout order.
-/// This avoids re-encoding primitive tuples through a dictionary and scratch
-/// row vector. Scratch capacities are reused, never relation contents, and all
-/// realization and upload work remains inside the provider's build timing.
+/// Scalar codecs retain Decimal coefficients, Date epoch days, and published
+/// symbol codes without staging a tuple vector. Scratch capacities are reused,
+/// and all realization and upload work remains inside the provider's build timing.
 #[doc(hidden)]
-pub fn upload_numeric_columns<Row: cq_gpu_runtime::OwnedRowCodec, F>(
+pub fn upload_numeric_columns<Row: gpu_datalog_runtime::ScalarTuple, F>(
     pool: Arc<Pool>,
     fill: F,
 ) -> Result<DeviceColumns<'static, Row>>
@@ -123,7 +123,7 @@ where
     // Check out the scratch rather than holding a RefCell borrow across host
     // evaluation: an opaque host expression may invoke another query.
     let mut raw = NUMERIC_UPLOAD_SCRATCH.with(|cache| std::mem::take(&mut *cache.borrow_mut()));
-    raw.resize_with(Row::WIDTH, Vec::new);
+    raw.resize_with(Row::COLUMNS.len(), Vec::new);
     let result = (|| {
         fill(&mut raw)?;
         upload_numeric_lanes(pool, &raw)
@@ -135,12 +135,12 @@ where
     result
 }
 
-fn upload_numeric_lanes<Row: cq_gpu_runtime::OwnedRowCodec>(
+fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
     pool: Arc<Pool>,
     raw: &[Vec<i64>],
 ) -> Result<DeviceColumns<'static, Row>> {
     let rows = raw.first().ok_or("numeric upload needs a column")?.len();
-    if raw.len() != Row::WIDTH || raw.iter().any(|column| column.len() != rows) {
+    if raw.len() != Row::COLUMNS.len() || raw.iter().any(|column| column.len() != rows) {
         return Err("numeric upload columns must match the row layout".into());
     }
     if rows > u32::MAX as usize {
@@ -205,7 +205,9 @@ impl<'a> DenseDictionary<'a> {
     pub fn encode(&self, value: i64) -> Option<u32> {
         self.domain.id(value)
     }
+    // DECODE ?: domain ordinal inverse has no local caller read/publication evidence.
     pub fn decode(&self, id: u32) -> Option<i64> {
+        // DECODE ?: checked domain lookup reconstructs a source key for an unspecified consumer.
         ((id as usize) < self.len()).then(|| self.domain.value(id))
     }
     pub fn len(&self) -> usize {
@@ -349,6 +351,7 @@ impl ColumnDescriptor {
     /// Measure a computed publication when its declared scalar range is not
     /// a usable provider domain. Only reduction metadata crosses to the host.
     pub fn measure_bounds(&mut self) -> Result<()> {
+        // DECODE V: measuring a computed packed publication reconstructs values before provider planning; P6 reuse recorded summaries.
         self.bounds = source_bounds(self.pool(), self.source, self.rows)?;
         Ok(())
     }
@@ -360,6 +363,7 @@ impl ColumnDescriptor {
     }
 }
 
+// DECODE ?: source-bound reduction accepts identity and packed sources; caller representation facts decide whether it decodes.
 fn source_bounds(
     pool: &Arc<Pool>,
     source: gpu_device_columns::SourceView,
@@ -374,6 +378,7 @@ fn source_bounds(
     let blocks =
         cq_gpu_runtime::launch_grid_for_kernel(shape.function(), rows.div_ceil(256), 256, 0)?;
     let partial = unsafe { Buffer::<i64>::uninitialized(pool.clone(), blocks as usize * 16)? };
+    // DECODE V: bounds discovery launches source reconstruction before index building; P6 consume recorded summaries instead.
     module.numeric_bounds(
         pool.stream(),
         &module.prepare_numeric_bounds(LaunchConfig1D::new(blocks, 256, 0))?,
@@ -805,6 +810,7 @@ impl<'pool> RangeBuilder<'pool> {
                 let blocks = cq_gpu_runtime::launch_grid_for_kernel(
                     shape.function(), base_rows.div_ceil(256), 256, 0,
                 )?;
+                // DECODE V: index selection launch reconstructs values before range comparison; P6 translate predicates to codes.
                 module.range_flags(
                     stream,
                     &module.prepare_range_flags(LaunchConfig1D::new(blocks, 256, 0))?,
@@ -852,6 +858,7 @@ impl<'pool> RangeBuilder<'pool> {
                 .payload
                 .iter()
                 .map(|payload| unsafe {
+                    // DECODE I: keyless payload publication decodes then FOR-reencodes selected rows; avoidable reorganization, P4 keep index payloads plain.
                     pack_payload(pool, payload, source, rows, row_count.clone())
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -918,6 +925,7 @@ impl<'pool> RangeBuilder<'pool> {
                 .iter()
                 .map(|key| {
                     let out = temporary::<u32>(stream, rows)?;
+                    // DECODE V: multi-key index build launches full column reconstruction before sorting; P6 sort retained encoded fields.
                     module.sequence_decode_column(
                         stream,
                         &decode_prepared,
@@ -956,6 +964,7 @@ impl<'pool> RangeBuilder<'pool> {
                 }
                 None => permutation,
             };
+            // DECODE V: leading-key reconstruction follows tuple sort for directory building; P6 retain encoded key order.
             module.keys_and_rows(
                 stream,
                 &keys_prepared,
@@ -969,6 +978,7 @@ impl<'pool> RangeBuilder<'pool> {
                 release(stream, buffer)?;
             }
         } else {
+            // DECODE V: single-key reconstruction precedes radix sort; P6 sort recorded codes or use plain indexes.
             module.keys_and_rows(
                 stream,
                 &keys_prepared,
@@ -1017,6 +1027,7 @@ impl<'pool> RangeBuilder<'pool> {
             .payload
             .iter()
             .map(|payload| unsafe {
+                // DECODE I: sorted index payload publication decodes then FOR-reencodes rows; avoidable reorganization, P4 keep index runs plain.
                 pack_payload(pool, payload, pointer(&order), rows, row_count.clone())
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1068,6 +1079,7 @@ fn finish(
         len: len as u32,
     })
 }
+// DECODE I: payload packing reconstructs source values then emits new FOR frames; avoidable reorganization, P4 keep index runs plain.
 unsafe fn pack_payload(
     pool: &Arc<Pool>,
     payload: &PayloadDescriptor,
@@ -1078,6 +1090,7 @@ unsafe fn pack_payload(
     let bounds = payload.column.bounds();
     match payload.kind {
         PayloadKind::U32 => unsafe {
+            // DECODE I: u32 payload gather decodes then re-encodes a permutation; avoidable reorganization, P4 prefer plain indexes.
             EncodedColumn::from_gather_source::<_, u32>(
                 pool.clone(),
                 payload.column.view(),
@@ -1089,6 +1102,7 @@ unsafe fn pack_payload(
             )
         },
         PayloadKind::I32 => unsafe {
+            // DECODE I: i32 payload gather decodes then re-encodes a permutation; avoidable reorganization, P4 prefer plain indexes.
             EncodedColumn::from_gather_source::<_, i32>(
                 pool.clone(),
                 payload.column.view(),
@@ -1100,6 +1114,7 @@ unsafe fn pack_payload(
             )
         },
         PayloadKind::I64 => unsafe {
+            // DECODE I: i64 payload gather decodes then re-encodes a permutation; avoidable reorganization, P4 prefer plain indexes.
             EncodedColumn::from_gather_source::<_, i64>(
                 pool.clone(),
                 payload.column.view(),

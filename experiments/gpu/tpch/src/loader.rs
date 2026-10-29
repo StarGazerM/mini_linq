@@ -1,6 +1,6 @@
 use crate::manifest::{Manifest, Result};
 use cq_gpu_runtime::{
-    Buffer, Codec, ColumnView, DeviceColumns, Dictionary, EncodedColumn, For, Pool, RowCodec,
+    Buffer, Codec, ColumnView, DeviceColumns, Dictionary, EncodedColumn, For, Pool,
 };
 use gpu_device_columns::{OutputCount, Table};
 use std::{collections::BTreeMap, sync::Arc};
@@ -26,12 +26,12 @@ impl<'a> Loader<'a> {
         clippy::arc_with_non_send_sync,
         reason = "DeviceColumns/Table require Arc owners for stream-affine allocations; Rc cannot implement that API"
     )]
-    pub fn bind<Row: RowCodec<'static>>(
+    pub fn bind<Row: gpu_datalog_runtime::ScalarTuple>(
         &mut self,
         table: &str,
         names: &[&str],
     ) -> Result<DeviceColumns<'static, Row, For>> {
-        if names.len() != Row::WIDTH {
+        if names.len() != Row::COLUMNS.len() {
             return Err("typed binding width differs from projection".into());
         }
         let relation = self.manifest.relations.get(table).ok_or("missing table")?;
@@ -68,9 +68,9 @@ impl<'a> Loader<'a> {
             bounds,
             statuses: Vec::new(),
         };
-        // SAFETY: generated bindings use the manifest's stored integer types and
-        // column order. All views, columns and count were initialized in this
-        // pool; storage owns every allocation. Text is already integer-coded.
+        // SAFETY: generated bindings use the manifest's scalar lane ABI and
+        // column order, including transparent Decimal/Date values. All views,
+        // columns and count belong to this pool; text is already integer-coded.
         Ok(unsafe {
             DeviceColumns::from_parts(storage, Arc::new(Dictionary::default()), self.pool.clone())
         })

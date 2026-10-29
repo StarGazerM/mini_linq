@@ -61,9 +61,9 @@ fn three_member_two_rules_per_head() {
             A(*x) :- E(x);
             A(*x) :- C(x);
             B(*x) :- A(x);
-            B(*x + 1) :- A(x), if *x < 30;
+            B(*x + 1) :- A(x), where x < 30;
             C(*x) :- B(x);
-            C(*x + 1) :- B(x), if *x < 30;
+            C(*x + 1) :- B(x), where x < 30;
         } };
     }
     let (a, b, c) = run!(print = cq_datalog_test_passes::eval_round;);
@@ -98,7 +98,7 @@ fn lower_stratum_negation_feeds_recursion() {
             output Allowed, R;
             Allowed(*x) :- E(x), !Block(x);
             R(*x) :- Allowed(x);
-            R(*x + 2) :- R(x), if *x < 40;
+            R(*x + 2) :- R(x), where x < 40;
         } };
     }
     let (a, r) = run!(print = cq_datalog_test_passes::eval_round;);

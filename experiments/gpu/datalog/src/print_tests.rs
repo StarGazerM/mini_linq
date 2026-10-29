@@ -134,7 +134,7 @@ fn symbols_cross_only_host_boundaries_and_keep_logical_types() {
     assert_eq!(source.matches(":: code").count(), 2);
     assert_eq!(source.matches(":: decode").count(), 2);
     assert!(source.contains("Symbol < String , TextCodec >"));
-    assert!(source.contains("Column :: U32"));
+    assert!(source.contains("as :: gpu_datalog_runtime :: Scalar > :: COLUMN"));
     assert!(!source.contains("as String"));
     for relation in &program.context.relations {
         assert!(relation.declaration.columns.iter().all(|column| column.ty == syn::parse_quote!(String)));

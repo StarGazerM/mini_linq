@@ -2,9 +2,9 @@
 //! Scale-two price/discount inputs yield exact scale-four revenue coefficients.
 //! The disjunction remains a pinned Rust guard, not a bag-producing rule union.
 //! Named order/line identities retain equal revenues from different lineitems.
-//! Caller preparation interns four columns independently using sorted-distinct
-//! dictionaries; absent query literals use a code no source row can contain.
-use cq_load::{Decimal, StringDictionary};
+//! The common loader interns four columns independently using sorted dictionaries;
+//! absent query literals use a code no source row can contain.
+use cq_load::{Decimal, Dictionaries, StringCode};
 
 pub const NAME: &str = "retail_h19";
 
@@ -31,91 +31,61 @@ FROM (SELECT DISTINCT l.l_orderkey, l.l_linenumber, l.l_partkey, l.l_quantity,
 
 pub type SourceLineitem = (i64, i64, i64, Decimal, Decimal, Decimal, String, String);
 pub type SourcePart = (i64, String, String, i32);
-pub type Lineitem = (i64, i64, i64, Decimal, Decimal, Decimal, u32, u32);
-pub type Part = (i64, u32, u32, i32);
+pub type Lineitem = (
+    i64,
+    i64,
+    i64,
+    Decimal,
+    Decimal,
+    Decimal,
+    StringCode,
+    StringCode,
+);
+pub type Part = (i64, StringCode, StringCode, i32);
 pub type Answer = (i64,);
 pub struct Data {
     pub lineitem: Vec<Lineitem>,
     pub part: Vec<Part>,
-    shipmode: StringDictionary,
-    shipinstruct: StringDictionary,
-    brand: StringDictionary,
-    container: StringDictionary,
+    pub dictionaries: Dictionaries,
+}
+
+mini_linq::interned_relation_loaders! {
+    relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,
+        l_quantity: Decimal, l_extendedprice: Decimal, l_discount: Decimal,
+        l_shipmode: StringCode, l_shipinstruct: StringCode);
+    relation Part(p_partkey: i64, p_brand: StringCode, p_container: StringCode, p_size: i32);
 }
 
 impl Data {
     /// Prepares exact source strings for equality predicates without changing rows.
     pub fn from_strings(lineitem: Vec<SourceLineitem>, part: Vec<SourcePart>) -> Self {
-        let shipmode = StringDictionary::new(lineitem.iter().map(|row| row.6.as_str()));
-        let shipinstruct = StringDictionary::new(lineitem.iter().map(|row| row.7.as_str()));
-        let brand = StringDictionary::new(part.iter().map(|row| row.1.as_str()));
-        let container = StringDictionary::new(part.iter().map(|row| row.2.as_str()));
-        let lineitem = lineitem
-            .into_iter()
-            .map(
-                |(order, line, part, quantity, price, discount, mode, instruction)| {
-                    (
-                        order,
-                        line,
-                        part,
-                        quantity,
-                        price,
-                        discount,
-                        shipmode
-                            .lookup(&mode)
-                            .expect("dictionary contains source value"),
-                        shipinstruct
-                            .lookup(&instruction)
-                            .expect("dictionary contains source value"),
-                    )
-                },
-            )
-            .collect();
-        let part = part
-            .into_iter()
-            .map(|(key, value, packaging, size)| {
-                (
-                    key,
-                    brand
-                        .lookup(&value)
-                        .expect("dictionary contains source value"),
-                    container
-                        .lookup(&packaging)
-                        .expect("dictionary contains source value"),
-                    size,
-                )
-            })
-            .collect();
+        let mut dictionaries = Dictionaries::default();
+        let lineitem = <relation_loader!(Lineitem)>::intern(lineitem, &mut dictionaries);
+        let part = <relation_loader!(Part)>::intern(part, &mut dictionaries);
         Self {
             lineitem,
             part,
-            shipmode,
-            shipinstruct,
-            brand,
-            container,
+            dictionaries,
         }
     }
 }
 
-mini_linq::relation_loaders! {
-    relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,
-        l_quantity: Decimal, l_extendedprice: Decimal, l_discount: Decimal,
-        l_shipmode: String, l_shipinstruct: String);
-    relation Part(p_partkey: i64, p_brand: String, p_container: String, p_size: i32);
-}
-
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
     assert!(CONFIGS.contains(&config), "unknown H19 configuration");
-    Ok(Data::from_strings(
-        <relation_loader!(Lineitem)>::parquet(
+    let mut dictionaries = Dictionaries::default();
+    Ok(Data {
+        lineitem: <relation_loader!(Lineitem)>::parquet_interned(
             root.join("lineitem.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
-        <relation_loader!(Part)>::parquet(
+        part: <relation_loader!(Part)>::parquet_interned(
             root.join("part.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
-    ))
+        dictionaries,
+    })
 }
 
 crate::tpch_runtime::standalone_configs! { $;
@@ -123,45 +93,35 @@ crate::tpch_runtime::standalone_configs! { $;
         assert!(CONFIGS.contains(&config), "unknown H19 configuration");
         let Lineitem = data.lineitem.as_slice();
         let Part = data.part.as_slice();
-        let intern = |table: &str, column: &str, value: &str| -> u32 {
-            let dictionary = match (table, column) {
-                ("lineitem", "l_shipmode") => &data.shipmode,
-                ("lineitem", "l_shipinstruct") => &data.shipinstruct,
-                ("part", "p_brand") => &data.brand,
-                ("part", "p_container") => &data.container,
-                _ => panic!("unknown H19 interned column: {table}.{column}"),
-            };
-            dictionary.lookup(value).unwrap_or(u32::MAX)
-        };
-        let air: u32 = intern("lineitem", "l_shipmode", "AIR");
-        let air_reg: u32 = intern("lineitem", "l_shipmode", "AIR REG");
-        let deliver_in_person: u32 = intern("lineitem", "l_shipinstruct", "DELIVER IN PERSON");
-        let brand12: u32 = intern("part", "p_brand", "Brand#12");
-        let brand23: u32 = intern("part", "p_brand", "Brand#23");
-        let brand34: u32 = intern("part", "p_brand", "Brand#34");
-        let sm_case: u32 = intern("part", "p_container", "SM CASE");
-        let sm_box: u32 = intern("part", "p_container", "SM BOX");
-        let sm_pack: u32 = intern("part", "p_container", "SM PACK");
-        let sm_pkg: u32 = intern("part", "p_container", "SM PKG");
-        let med_bag: u32 = intern("part", "p_container", "MED BAG");
-        let med_box: u32 = intern("part", "p_container", "MED BOX");
-        let med_pkg: u32 = intern("part", "p_container", "MED PKG");
-        let med_pack: u32 = intern("part", "p_container", "MED PACK");
-        let lg_case: u32 = intern("part", "p_container", "LG CASE");
-        let lg_box: u32 = intern("part", "p_container", "LG BOX");
-        let lg_pack: u32 = intern("part", "p_container", "LG PACK");
-        let lg_pkg: u32 = intern("part", "p_container", "LG PKG");
+        let air = data.dictionaries.literal("l_shipmode", "AIR");
+        let air_reg = data.dictionaries.literal("l_shipmode", "AIR REG");
+        let deliver_in_person = data.dictionaries.literal("l_shipinstruct", "DELIVER IN PERSON");
+        let brand12 = data.dictionaries.literal("p_brand", "Brand#12");
+        let brand23 = data.dictionaries.literal("p_brand", "Brand#23");
+        let brand34 = data.dictionaries.literal("p_brand", "Brand#34");
+        let sm_case = data.dictionaries.literal("p_container", "SM CASE");
+        let sm_box = data.dictionaries.literal("p_container", "SM BOX");
+        let sm_pack = data.dictionaries.literal("p_container", "SM PACK");
+        let sm_pkg = data.dictionaries.literal("p_container", "SM PKG");
+        let med_bag = data.dictionaries.literal("p_container", "MED BAG");
+        let med_box = data.dictionaries.literal("p_container", "MED BOX");
+        let med_pkg = data.dictionaries.literal("p_container", "MED PKG");
+        let med_pack = data.dictionaries.literal("p_container", "MED PACK");
+        let lg_case = data.dictionaries.literal("p_container", "LG CASE");
+        let lg_box = data.dictionaries.literal("p_container", "LG BOX");
+        let lg_pack = data.dictionaries.literal("p_container", "LG PACK");
+        let lg_pkg = data.dictionaries.literal("p_container", "LG PKG");
         query! {
             plan(no_reduce, order(Lineitem, Part));
             struct Query;
             relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,
                 l_quantity: Decimal, l_extendedprice: Decimal, l_discount: Decimal,
-                l_shipmode: u32, l_shipinstruct: u32);
-            relation Part(p_partkey: i64, p_brand: u32, p_container: u32, p_size: i32);
+                l_shipmode: StringCode, l_shipinstruct: StringCode);
+            relation Part(p_partkey: i64, p_brand: StringCode, p_container: StringCode, p_size: i32);
             relation answer(revenue: i64);
             answer(sum(revenue_units)) :-
                 Lineitem(order_key, line_number, part_key, quantity, price, discount, ship_mode, ship_instruction),
-                if (*ship_mode == air || *ship_mode == air_reg) && *ship_instruction == deliver_in_person,
+                where (ship_mode == air || ship_mode == air_reg) && ship_instruction == deliver_in_person,
                 Part(part_key, brand, container, size),
                 if (*brand == brand12
                     && (*container == sm_case || *container == sm_box || *container == sm_pack || *container == sm_pkg)

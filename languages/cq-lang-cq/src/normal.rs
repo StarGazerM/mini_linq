@@ -1,14 +1,13 @@
-//! CQ normal form for `T X = bottom + Set X`.
+//! CQ normal form: distinct atom variables/literals and variable-only heads.
+//! Rust expressions remain unchanged and are opaque, pure and total by premise.
+//! Only explicit `where` predicates and atom restrictions are relational.
 //!
-//! Positive atoms contain distinct variables and literals. Negated atoms retain
-//! bound variables, captured parameters, literals and existential wildcards.
-//! Relational equality is Leibniz identity,
-//! decided by an admissible column's `==`. Residual Rust lets and guards are opaque
-//! partial functions under functional extensionality. The reference is
-//! written order. Preserving the Rust chain and including every source
-//! relational predecessor before each Rust step is a sufficient refinement
-//! condition. I/O, mutation, counters and evaluation counts are outside the
-//! meaning; no compiler law depends on those effects.
+//! DESIGN contract7-normal-form
+//! Owns CQ normalization, preserving `Constraint` operands `Term::Closed(syn::Expr)` unchanged.
+//! Contract 7, CQ-Closed/WF-NF; source: doc/PLANNING-REDESIGN.md Contract and Architecture.
+//! Source: doc/formal/CONFORMANCE.md CQ-Where/CQ-Closed; the shared Term lives in cq-syntax.
+//! DO NOT turn closed Rust into recognized arithmetic, relational facts, or type-directed rewrites.
+//! Atom restrictions and explicit `where` are relational; computed Rust remains total by premise.
 
 use super::{Atom, BodyItem, Equality, EqualityValue, Let, Program, rust};
 use crate::symbol_name;
@@ -78,7 +77,7 @@ pub fn check(module: &Program) -> syn::Result<()> {
             "normal form: output variable is not bound by the body",
         ));
     }
-    check_leibniz_types(module)
+    Ok(())
 }
 
 /// Canonicalize at each atom's written position.
@@ -86,6 +85,7 @@ pub fn check(module: &Program) -> syn::Result<()> {
 /// Formal rule A-Repeat: Replace only a variable repeated within one atom and append identity.
 /// Formal rule A-Wildcard: Replace a wildcard with an unused witness variable.
 /// Formal rule A-Prefix: Place an opaque binding immediately before its atom.
+/// Formal rule A-Closed: Keep a query-closed atom operand as a relational restriction.
 /// Formal rule A-Local: Place a dependent binding and relational equality after its atom.
 pub fn normalize(module: &Program) -> syn::Result<Program> {
     super::contract::check(module)?;
@@ -96,7 +96,16 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
     let declarations: BTreeMap<_, _> = module.inputs().map(|d| (symbol_name(&d.name), d)).collect();
     let mut names = reserved(module);
     let mut bound = BTreeSet::new();
-    let mut body = normalize_body(&module.query.body, &declarations, &mut names, &mut bound)?;
+    let logical = super::blocks::bound(&module.query.body)
+        .into_keys()
+        .collect();
+    let mut body = normalize_body(
+        &module.query.body,
+        &declarations,
+        &logical,
+        &mut names,
+        &mut bound,
+    )?;
     let mut normal = module.clone();
     let grouped = module
         .query
@@ -137,7 +146,7 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
             if let Some(expression) = &aggregate.expression {
                 if !rust::variable(expression).is_some_and(|v| bound.contains(&symbol_name(v))) {
                     let value = fresh(&mut names, module.query.body.len(), position);
-                    body.push(binding(&value, aggregate.value_type()?, expression.clone()));
+                    body.push(binding(&value, &syn::parse_quote!(_), expression.clone()));
                     valuation.insert(symbol_name(&value), value.clone());
                     aggregate.expression = Some(path(&value));
                 }
@@ -179,10 +188,10 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
 fn normalize_body(
     source: &super::CommaList<BodyItem>,
     declarations: &BTreeMap<String, &super::RelationDecl>,
+    logical: &BTreeSet<String>,
     names: &mut BTreeSet<String>,
     bound: &mut BTreeSet<String>,
 ) -> syn::Result<Vec<BodyItem>> {
-    let types = super::blocks::types(declarations, source, &BTreeMap::new())?;
     let mut body = Vec::new();
     for (clause, item) in source.iter().enumerate() {
         match item {
@@ -190,9 +199,20 @@ fn normalize_body(
                 let mut block = block.clone();
                 for branch in &mut block.branches {
                     let mut local = bound.clone();
-                    branch.body = normalize_body(&branch.body, declarations, names, &mut local)?
-                        .into_iter()
+                    let branch_logical = logical
+                        .iter()
+                        .cloned()
+                        .chain(super::blocks::bound(&branch.body).into_keys())
                         .collect();
+                    branch.body = normalize_body(
+                        &branch.body,
+                        declarations,
+                        &branch_logical,
+                        names,
+                        &mut local,
+                    )?
+                    .into_iter()
+                    .collect();
                 }
                 bound.extend(block.analyze(bound).interface.into_keys());
                 body.push(BodyItem::Block(block));
@@ -232,6 +252,21 @@ fn normalize_body(
                     if matches!(argument, syn::Expr::Infer(_)) {
                         // A wildcard binds an unconstrained, unused witness.
                     } else if rust::free_variables(argument)
+                        .dependencies(logical)
+                        .is_empty()
+                    {
+                        // This is an atom restriction, not row computation.
+                        // Preserve its Rust expression as a once-bound host operand.
+                        after.push(BodyItem::Constraint(
+                            super::syntax::constraint::Constraint::Compare {
+                                left: super::syntax::constraint::Term::Variable(key.clone()),
+                                comparison: super::syntax::constraint::Comparison::Eq(
+                                    Default::default(),
+                                ),
+                                right: super::syntax::constraint::Term::Closed(argument.clone()),
+                            },
+                        ));
+                    } else if rust::free_variables(argument)
                         .dependencies(&local)
                         .is_empty()
                     {
@@ -254,19 +289,10 @@ fn normalize_body(
                 });
                 body.extend(after);
             }
-            BodyItem::Filter(filter) => {
-                let (arithmetic, residual) =
-                    super::syntax::guard::split_arithmetic(&filter.condition, &types);
-                for condition in arithmetic.into_iter().chain(residual) {
-                    body.push(BodyItem::Filter(super::Filter {
-                        condition,
-                        ..filter.clone()
-                    }));
-                }
-            }
-            BodyItem::Equality(_) | BodyItem::Constraint(_) | BodyItem::Negation(_) => {
-                body.push(item.clone())
-            }
+            BodyItem::Filter(_)
+            | BodyItem::Equality(_)
+            | BodyItem::Constraint(_)
+            | BodyItem::Negation(_) => body.push(item.clone()),
             BodyItem::Let(binding) => {
                 bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
                 body.push(item.clone());
@@ -315,128 +341,6 @@ fn binding(key: &Ident, ty: &syn::Type, expression: syn::Expr) -> BodyItem {
 
 fn path(ident: &Ident) -> syn::Expr {
     syn::parse2(quote!(#ident)).expect("identifier expression")
-}
-
-fn check_leibniz_types(module: &Program) -> syn::Result<()> {
-    let schemas: BTreeMap<_, _> = module.inputs().map(|d| (symbol_name(&d.name), d)).collect();
-    let mut columns: BTreeMap<String, Vec<(&syn::Type, String)>> = BTreeMap::new();
-    let mut required = BTreeSet::new();
-    let mut let_bound = BTreeSet::new();
-    let logical = super::blocks::walk(&module.query.body)
-        .into_iter()
-        .flat_map(|item| match item {
-            BodyItem::Positive { atom } => atom.variables().cloned().collect(),
-            _ => item
-                .rust_step()
-                .map(|step| step.bindings)
-                .unwrap_or_default(),
-        })
-        .map(|id| symbol_name(&id))
-        .collect();
-    for item in super::blocks::walk(&module.query.body) {
-        match item {
-            BodyItem::Positive { atom } => {
-                for (argument, column) in atom
-                    .args
-                    .iter()
-                    .zip(&schemas[&symbol_name(&atom.relation)].columns)
-                {
-                    let Some(variable) = rust::variable(argument) else {
-                        if super::syntax::equality::literal(argument) {
-                            super::syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
-                        }
-                        continue;
-                    };
-                    let name = symbol_name(variable);
-                    let entries = columns.entry(name.clone()).or_default();
-                    if !entries.is_empty() || let_bound.contains(&name) {
-                        required.insert(name);
-                    }
-                    entries.push((&column.ty, format!("{}.{}", atom.relation, column.name)));
-                }
-            }
-            BodyItem::Negation(negation) => {
-                required.extend(negation.variables(&logical).map(symbol_name));
-            }
-            BodyItem::Equality(equality) => required.extend(equality.variables().map(symbol_name)),
-            BodyItem::Constraint(constraint) => {
-                required.extend(constraint.variables().map(symbol_name))
-            }
-            BodyItem::Let(binding) => {
-                let_bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
-            }
-            BodyItem::For(binding) => {
-                let_bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
-            }
-            _ => {}
-        }
-    }
-    let ordered: BTreeSet<_> = module
-        .query
-        .body
-        .iter()
-        .filter_map(|item| match item {
-            BodyItem::Constraint(c) => Some(c.ordered_variables()),
-            _ => None,
-        })
-        .flatten()
-        .map(symbol_name)
-        .collect();
-    for item in super::blocks::walk(&module.query.body) {
-        if let BodyItem::Let(binding) = item {
-            for (name, ty) in binding.binding_types() {
-                if ordered.contains(&symbol_name(&name)) {
-                    super::syntax::algebra::check_ord_type(&ty, &name)?;
-                }
-            }
-        }
-    }
-    if let Some(output) = module.output() {
-        for column in &output.columns {
-            super::syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
-        }
-    }
-    for item in super::blocks::walk(&module.query.body) {
-        if let BodyItem::Let(binding) = item {
-            for (name, ty) in binding.binding_types() {
-                if module
-                    .query
-                    .head
-                    .variables()
-                    .any(|v| symbol_name(v) == symbol_name(&name))
-                    || required.contains(&symbol_name(&name))
-                {
-                    super::syntax::algebra::check_leibniz_type(&ty, &name)?;
-                }
-            }
-        }
-    }
-    required.extend(module.query.head.variables().map(symbol_name));
-    for variable in required {
-        if let Some(entries) = columns.get(&variable) {
-            for (ty, column) in entries {
-                super::syntax::algebra::check_leibniz_type(
-                    ty,
-                    &Ident::new(&variable, Span::call_site()),
-                )
-                .map_err(|error| {
-                    syn::Error::new_spanned(ty, format!("column `{column}`: {error}"))
-                })?;
-            }
-        }
-    }
-    for item in super::blocks::walk(&module.query.body) {
-        if let BodyItem::Constraint(c) = item {
-            for variable in c.ordered_variables() {
-                if let Some(entries) = columns.get(&symbol_name(variable)) {
-                    for (ty, _) in entries {
-                        super::syntax::algebra::check_ord_type(ty, variable)?;
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Every identifier the module mentions, so fresh names never capture.

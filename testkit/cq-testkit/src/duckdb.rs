@@ -3,7 +3,7 @@
 //! Input order determines quoted table names `mini-linq/raw/0`, etc. Raw
 //! duplicates are retained. SQL controls output projection, ordering and
 //! DISTINCT; `evaluate_fuzz` additionally verifies the printer's set output.
-//! Partial Rust expressions have no SQL oracle and are explicitly rejected.
+//! Opaque Rust operations and iterables have no SQL oracle and are rejected.
 
 use crate::{Case, Result, fuzz};
 use ::duckdb::{Connection, appender_params_from_iter};
@@ -39,11 +39,12 @@ pub fn evaluate_case(case: &Case, sql: &str) -> Result<Vec<Vec<i32>>> {
     evaluate_sql(&relations, sql)
 }
 
-/// Evaluate a total abstract fuzz query using its independent SQL printer.
+/// Evaluate the SQL-modeled fragment of a total abstract fuzz query.
 pub fn evaluate_fuzz(case: &fuzz::Case) -> Result<Vec<Vec<i32>>> {
-    if case.has_partial_terms() {
+    if case.requires_rust_oracle() {
         return Err(
-            "partial terms and generators require the compiled written-order reference".into(),
+            "opaque Rust operations and generators require the compiled written-order reference"
+                .into(),
         );
     }
     if case.query.schema.len() != case.data.len() {

@@ -1,8 +1,6 @@
 //! Add only relational semijoin reductions to a valuation plan.
-//! The denotation is `T X = bottom + Set X`; the written Rust chain consists
-//! of opaque partial functions. Relational reductions may move earlier across
-//! it, but Rust steps retain their relative order and written relational
-//! predecessors. I/O, mutation and evaluation counts are outside the meaning.
+//! Rust expressions are opaque, pure and total by premise. Reduction planning
+//! uses only relational facts and preserves the already recorded Rust placement.
 //! Erasure must preserve every non-reduction step exactly. Rust guards and
 //! finite set-valued generators are never pushed onto atom inputs; generators
 //! are neither reduction targets nor supports.
@@ -19,10 +17,8 @@
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Only differing literals on one interface column prove union arms disjoint.
 //!
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -90,7 +86,7 @@ fn scope_graph(
     valuation::cq::hypergraph::Analysis::of_body_excluding(body, context, &excluded)
 }
 
-/// The first scheduled atom or Rust-free block of a scope: its outer stream.
+/// The first scheduled atom or independently hoisted block: its outer stream.
 pub fn outer(steps: &[Step], graph: &valuation::cq::hypergraph::Analysis) -> Option<usize> {
     steps.iter().find_map(|step| match step {
         Step::Atom(a, _) if graph.clauses.contains_key(&a.clause()) => Some(a.clause()),
@@ -231,7 +227,7 @@ fn mask_steps(
 }
 
 /// Insert the reductions `options` ask for, then check the VO contract.
-/// Formal rule R-Guard: Retain every opaque Rust guard in the written chain.
+/// Formal rule R-Guard: Retain every unchanged Rust guard in its recorded placement.
 /// Formal rule R-Tree: Insert the relational tree schedule before the first atom.
 pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<valuation::Program> {
     let analysis = valuation::contract::check(source)?;

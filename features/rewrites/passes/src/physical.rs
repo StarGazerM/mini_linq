@@ -36,16 +36,6 @@ pub fn merge_joins(source: &ir::Program, arguments: TokenStream) -> syn::Result<
                 facts.modes[&name] != ModeKind::Pipe
                     || facts.hosts.contains_key(&name)
                     || ordered.get(&name) == Some(&columns)
-            })
-            && columns.iter().all(|column| {
-                let ident = syn::Ident::new(column, definition.name.span());
-                [&key.left, &key.right].iter().all(|side| {
-                    ir::syntax::algebra::check_ord_type(
-                        &facts.rows[&symbol_name(side)].types[column],
-                        &ident,
-                    )
-                    .is_ok()
-                })
             });
         if admissible {
             let name = symbol_name(&definition.name);
@@ -82,19 +72,9 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
         if selected.includes(&definition.name) {
             if let Operator::Project(p) = &definition.operator {
                 if heading.len() < facts.headings[&symbol_name(&p.input)].len() {
-                    let admissible = inherited.is_some()
-                        || heading.iter().all(|column| {
-                            ir::syntax::algebra::check_leibniz_type(
-                                &facts.rows[&name].types[column],
-                                &facts.rows[&name].bindings[column],
-                            )
-                            .is_ok()
-                        });
-                    if admissible {
-                        matched.insert(name.clone());
-                        if inherited.is_none() {
-                            definition.canon = Some(Default::default());
-                        }
+                    matched.insert(name.clone());
+                    if inherited.is_none() {
+                        definition.canon = Some(Default::default());
                     }
                 }
             }

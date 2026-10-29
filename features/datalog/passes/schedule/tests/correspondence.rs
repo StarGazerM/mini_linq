@@ -13,7 +13,7 @@ macro_rules! mutual {
             A(*x) :- E(x);
             A(*x) :- B(x);
             A(*x) :- A(x);
-            B(*x + 1) :- A(x), if *x < 5;
+            B(*x + 1) :- A(x), where x < 5;
         }
     };
 }

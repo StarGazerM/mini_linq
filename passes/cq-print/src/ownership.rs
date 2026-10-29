@@ -44,172 +44,184 @@ pub fn own_captures(expression: &mut Expr, owned: &[Ident]) {
     Owner(owned).visit_expr_mut(expression);
 }
 
-/// Borrow visible generator captures before fused `move` closures are formed.
-/// Rewriting only free expression paths preserves Rust value types and local
-/// shadowing; generated iterator items themselves are never cloned here.
-pub(super) fn generator_captures(
+/// Keep captured generator Rust intact outside fused `move` closures. Prepare
+/// its computed predecessors too, so rustc can infer their item types before
+/// checking a later callable's body. Type witnesses never evaluate a binding.
+pub(super) fn binding_captures(
     module: &structures::Program,
     analysis: &structures::Analysis,
     statements: &mut Vec<Stmt>,
     used: &mut std::collections::BTreeSet<String>,
-) -> BTreeMap<String, Expr> {
-    use structures::syntax::rust;
-    use syn::visit_mut::{self, VisitMut};
-
-    struct Borrow<'a> {
-        free: std::collections::BTreeSet<String>,
-        statements: &'a mut Vec<Stmt>,
-        used: &'a mut std::collections::BTreeSet<String>,
-    }
-    impl Borrow<'_> {
-        fn bind(&mut self, pattern: &syn::Pat) {
-            for name in rust::bindings(pattern) {
-                self.free.remove(&symbol_name(&name));
-            }
-        }
-        fn scoped(&mut self, visit: impl FnOnce(&mut Self)) {
-            let free = self.free.clone();
-            visit(self);
-            self.free = free;
-        }
-        fn condition(&mut self, expression: &mut Expr) {
-            match expression {
-                Expr::Let(value) => {
-                    self.visit_expr_mut(&mut value.expr);
-                    self.bind(&value.pat);
-                }
-                Expr::Binary(value) if matches!(value.op, syn::BinOp::And(_)) => {
-                    self.condition(&mut value.left);
-                    self.condition(&mut value.right);
-                }
-                _ => self.visit_expr_mut(expression),
-            }
-        }
-    }
-    impl VisitMut for Borrow<'_> {
-        fn visit_expr_mut(&mut self, expression: &mut Expr) {
-            if let Expr::Path(path) = expression {
-                if path.qself.is_none() {
-                    if let Some(name) = path.path.get_ident() {
-                        let key = symbol_name(name);
-                        if self.free.contains(&key) {
-                            // Keep generic function/constructor occurrences
-                            // independently inferred rather than sharing one
-                            // monomorphic alias for their spelling.
-                            let mut n = self.used.len();
-                            while self.used.contains(&format!("__cq_generator_capture_{n}")) {
-                                n += 1;
-                            }
-                            let alias = format_ident!(
-                                "__cq_generator_capture_{n}",
-                                span = proc_macro2::Span::mixed_site()
-                            );
-                            self.used.insert(alias.to_string());
-                            self.statements
-                                .push(syn::parse_quote!(let #alias = &#name;));
-                            let attributes = &path.attrs;
-                            *expression = syn::parse_quote!(#(#attributes)* (*#alias));
-                            return;
-                        }
+) -> BTreeMap<String, (Ident, Vec<Ident>)> {
+    let definitions = &module.physical.program.definitions;
+    let mut origins: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    let mut required = std::collections::BTreeSet::new();
+    for (index, definition) in definitions.iter().enumerate() {
+        let name = symbol_name(&definition.name);
+        let row = &analysis.physical.rows[&name];
+        let mut inherited = BTreeMap::new();
+        for operand in definition.operator.operands() {
+            if let Some(columns) = origins.get(&symbol_name(operand)) {
+                for (column, origin) in columns {
+                    if row.computed.contains(column) {
+                        inherited.entry(column.clone()).or_insert(*origin);
                     }
                 }
             }
-            visit_mut::visit_expr_mut(self, expression);
         }
-        fn visit_block_mut(&mut self, block: &mut syn::Block) {
-            self.scoped(|visitor| {
-                for statement in &mut block.stmts {
-                    match statement {
-                        Stmt::Local(local) => {
-                            if let Some(init) = &mut local.init {
-                                visitor.visit_expr_mut(&mut init.expr);
-                                if let Some((_, diverge)) = &mut init.diverge {
-                                    visitor.visit_expr_mut(diverge);
-                                }
-                            }
-                            visitor.bind(&local.pat);
-                        }
-                        Stmt::Item(_) => {}
-                        _ => visitor.visit_stmt_mut(statement),
-                    }
-                }
-            });
-        }
-        fn visit_expr_closure_mut(&mut self, expression: &mut syn::ExprClosure) {
-            self.scoped(|visitor| {
-                for input in &expression.inputs {
-                    visitor.bind(input);
-                }
-                visitor.visit_expr_mut(&mut expression.body);
-            });
-        }
-        fn visit_expr_for_loop_mut(&mut self, expression: &mut syn::ExprForLoop) {
-            self.visit_expr_mut(&mut expression.expr);
-            self.scoped(|visitor| {
-                visitor.bind(&expression.pat);
-                visitor.visit_block_mut(&mut expression.body);
-            });
-        }
-        fn visit_expr_match_mut(&mut self, expression: &mut syn::ExprMatch) {
-            self.visit_expr_mut(&mut expression.expr);
-            for arm in &mut expression.arms {
-                self.scoped(|visitor| {
-                    visitor.bind(&arm.pat);
-                    if let Some((_, guard)) = &mut arm.guard {
-                        visitor.condition(guard);
-                    }
-                    visitor.visit_expr_mut(&mut arm.body);
-                });
+        if let Operator::Group(group) = &definition.operator {
+            for aggregate in &group.aggregates {
+                inherited.remove(&symbol_name(&aggregate.name));
             }
         }
-        fn visit_expr_if_mut(&mut self, expression: &mut syn::ExprIf) {
-            self.scoped(|visitor| {
-                visitor.condition(&mut expression.cond);
-                visitor.visit_block_mut(&mut expression.then_branch);
-            });
-            if let Some((_, otherwise)) = &mut expression.else_branch {
-                self.visit_expr_mut(otherwise);
+        if let Operator::Bind(bind) = &definition.operator {
+            for binding in structures::syntax::rust::bindings(&bind.pattern) {
+                inherited.insert(symbol_name(&binding), index);
+            }
+            let input = symbol_name(&bind.input);
+            let columns = columns_used_rust(
+                &bind.expression,
+                &analysis.layouts[&input],
+                bind.environment.as_ref(),
+            );
+            let free = structures::syntax::rust::free_variables(&bind.expression);
+            if bind.for_token.is_some() && (free.opaque || !free.names.is_subset(&columns)) {
+                required.insert(index);
             }
         }
-        fn visit_expr_while_mut(&mut self, expression: &mut syn::ExprWhile) {
-            self.scoped(|visitor| {
-                visitor.condition(&mut expression.cond);
-                visitor.visit_block_mut(&mut expression.body);
-            });
-        }
+        origins.insert(name, inherited);
     }
-
-    let mut expressions = BTreeMap::new();
-    for definition in &module.physical.program.definitions {
-        let Operator::Bind(bind) = &definition.operator else {
+    // Definitions are dependency-ordered. Close the preparation set over the
+    // bindings that supply each callable's computed input types.
+    for index in (0..definitions.len()).rev() {
+        if !required.contains(&index) {
             continue;
+        }
+        let Operator::Bind(bind) = &definitions[index].operator else {
+            unreachable!();
         };
-        if bind.for_token.is_none() {
-            continue;
+        let input = symbol_name(&bind.input);
+        for column in columns_used_rust(
+            &bind.expression,
+            &analysis.layouts[&input],
+            bind.environment.as_ref(),
+        ) {
+            if let Some(origin) = origins[&input].get(&column) {
+                required.insert(*origin);
+            }
         }
-        let environment = bind
-            .environment
-            .as_ref()
-            .map(|environment| environment.variables.iter().map(symbol_name).collect())
-            .unwrap_or_else(|| {
-                analysis.layouts[&symbol_name(&bind.input)]
-                    .iter()
-                    .cloned()
-                    .collect()
-            });
-        let free = rust::free_variables(&bind.expression)
-            .names
-            .difference(&environment)
-            .cloned()
-            .collect();
-        let mut expression = bind.expression.clone();
-        Borrow {
-            free,
-            statements,
-            used,
-        }
-        .visit_expr_mut(&mut expression);
-        expressions.insert(symbol_name(&definition.name), expression);
     }
-    expressions
+    let mut functions = BTreeMap::new();
+    let mut witnesses: BTreeMap<(usize, String), Ident> = BTreeMap::new();
+    for index in required {
+        let definition = &definitions[index];
+        let Operator::Bind(bind) = &definition.operator else {
+            unreachable!();
+        };
+        let input = symbol_name(&bind.input);
+        let columns = columns_used_rust(
+            &bind.expression,
+            &analysis.layouts[&input],
+            bind.environment.as_ref(),
+        );
+        let row = &analysis.physical.rows[&input];
+        let arguments: Vec<_> = columns
+            .iter()
+            .map(|column| row.bindings[column].clone())
+            .collect();
+        let types = columns.iter().map(|column| &row.types[column]);
+        let mut n = functions.len();
+        while used.contains(&format!("__cq_binding_{n}")) {
+            n += 1;
+        }
+        let name = format_ident!("__cq_binding_{n}", span = proc_macro2::Span::mixed_site());
+        used.insert(name.to_string());
+        let expression = &bind.expression;
+        let generic_types: Vec<_> = (0..arguments.len())
+            .map(|index| format_ident!("T{index}"))
+            .collect();
+        let inputs: Vec<_> = columns
+            .iter()
+            .zip(&generic_types)
+            .map(|(column, ty)| {
+                if row.computed.contains(column) {
+                    quote!(&#ty)
+                } else {
+                    quote!(&'a #ty)
+                }
+            })
+            .collect();
+        let input_witnesses: Vec<_> = columns
+            .iter()
+            .map(|column| {
+                if let Some(origin) = origins[&input].get(column) {
+                    let witness = &witnesses[&(*origin, column.clone())];
+                    quote!(#witness)
+                } else {
+                    let ty = &row.types[column];
+                    quote!(&::core::marker::PhantomData::<#ty>)
+                }
+            })
+            .collect();
+        let pattern = &bind.pattern;
+        let annotation = &bind.annotation;
+        let bindings = structures::syntax::rust::bindings(pattern);
+        let output_types: Vec<_> = (0..bindings.len())
+            .map(|index| format_ident!("O{index}"))
+            .collect();
+        let output_witnesses: Vec<_> = bindings
+            .iter()
+            .enumerate()
+            .map(|(ordinal, binding)| {
+                let mut suffix = ordinal;
+                while used.contains(&format!("__cq_binding_{n}_type_{suffix}")) {
+                    suffix += 1;
+                }
+                let witness = format_ident!(
+                    "__cq_binding_{n}_type_{suffix}",
+                    span = proc_macro2::Span::mixed_site()
+                );
+                used.insert(witness.to_string());
+                witnesses.insert((index, symbol_name(binding)), witness.clone());
+                witness
+            })
+            .collect();
+        let (result_bound, item) = if bind.for_token.is_some() {
+            (
+                quote!(R: ::core::iter::IntoIterator,),
+                quote!(<R as ::core::iter::IntoIterator>::Item),
+            )
+        } else {
+            (TokenStream::new(), quote!(R))
+        };
+        statements.push(syn::parse_quote!(
+            let (#name, (#(#output_witnesses,)*)) = &{
+                // Host arguments may lend values to the result. Computed
+                // arguments are borrowed independently for each call.
+                fn #name<'a, #(#generic_types: 'a,)* R, F, #(#output_types,)* P>(
+                    _: (#(&::core::marker::PhantomData<#generic_types>,)*),
+                    function: F,
+                    _: P,
+                ) -> (F, (#(::core::marker::PhantomData<#output_types>,)*))
+                where
+                    F: ::core::ops::Fn(#(#inputs),*) -> R,
+                    #result_bound
+                    P: ::core::ops::FnOnce(#item) -> (#(#output_types,)*),
+                {
+                    (function, (#(::core::marker::PhantomData::<#output_types>,)*))
+                }
+                #name(
+                    (#(#input_witnesses,)*),
+                    |#(#arguments: &#types),*| #expression,
+                    |__cq_item| {
+                        #[allow(unused_variables)]
+                        let #pattern #annotation = __cq_item;
+                        (#(#bindings,)*)
+                    },
+                )
+            };
+        ));
+        functions.insert(symbol_name(&definition.name), (name, arguments));
+    }
+    functions
 }

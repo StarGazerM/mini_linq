@@ -2,8 +2,8 @@
 //!
 //! Text is `physical { ... } trace {}`. The empty annotation adds no execution
 //! or representation decision; the base records every operator, mode and key.
-//! Its denotation is the Physical denotation under the core's written-order
-//! refinement and Leibniz equality premises. Embedded Rust remains opaque.
+//! Its denotation is the Physical Set denotation under Leibniz equality and
+//! opaque, pure, total Rust. Rust placement follows free-variable binders only.
 //! The local contract checks Physical; rewrites use Physical correspondence.
 //! This language can be passed to [`cq_stage::pass`] or [`cq_stage::rewrite`].
 pub use cq_lang_physical as physical;

@@ -82,10 +82,10 @@ fn reject_changed_graph(source: &physical::Program, target: &physical::Program) 
 #[test]
 fn relational_hoist_across_rust_preserves_payloads_with_admissible_decisions() {
     let source: physical::Program = syn::parse_str(RUST_SOURCE).unwrap();
-    // Hoist t past g; g and b retain their written relative order and edges.
+    // Hoist t past g without changing payloads or dependency edges.
     let mut target = move_definition(&source, 5, 1);
     physical::check_rewrite(&source, &target).unwrap();
-    assert!(reject_valid_target(&target, &source).contains("Before"));
+    physical::check_rewrite(&target, &source).unwrap();
 
     target.program.definitions[0].mode = syn::parse_quote!(let);
     target.program.definitions[0].canon = Some(Default::default());
@@ -98,33 +98,31 @@ fn relational_hoist_across_rust_preserves_payloads_with_admissible_decisions() {
 }
 
 #[test]
-fn every_source_before_obligation_survives_each_rust_boundary() {
+fn independent_relational_definitions_commute_across_rust() {
     let source: physical::Program = syn::parse_str(RUST_SOURCE).unwrap();
     // Move a projection later across g, or a rename later across b.
     for (from, to) in [(3, 4), (5, 6)] {
         let target = move_definition(&source, from, to);
-        assert!(reject_valid_target(&source, &target).contains("Before"));
+        physical::check_rewrite(&source, &target).unwrap();
     }
-    // A whole dependency-preserving relational branch also cannot move later.
+    // A whole dependency-preserving relational branch can also move later.
     let mut target = source.clone();
     let branch: Vec<_> = target.program.definitions.drain(1..4).collect();
     target.program.definitions.splice(2..2, branch);
-    assert!(reject_valid_target(&source, &target).contains("Before"));
+    physical::check_rewrite(&source, &target).unwrap();
 
-    // Moving g earlier loses the same preceding branch, even though g's input
-    // and the written Rust chain are still accepted by the target contract.
+    // The guard reads only r, not the independent preceding branch.
     let target = move_definition(&source, 4, 1);
-    assert!(reject_valid_target(&source, &target).contains("Before"));
-    let rejected =
+    physical::check_rewrite(&source, &target).unwrap();
+    let continued =
         cq_stage::rewrite::<physical::Program>(quote!(pipeline { finish }; #source), |_, _| {
             Ok(target)
         });
-    assert!(rejected.to_string().contains("compile_error"));
-    assert!(rejected.to_string().contains("Before"));
+    assert!(!continued.to_string().contains("compile_error"));
 }
 
 #[test]
-fn rewritten_rust_chain_order_and_operands_are_rejected() {
+fn rewritten_rust_operands_are_rejected() {
     let source: physical::Program = syn::parse_str(RUST_SOURCE).unwrap();
     let mut target = source.clone();
     target.program.definitions[4] = syn::parse_quote!(b = pipe bind r with c:i32 = (compute(a)););

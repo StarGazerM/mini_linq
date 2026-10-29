@@ -14,16 +14,15 @@ impl Context<'_> {
     /// Bind identity predicates before any source can be eagerly published.
     /// Covering builds shadow these bindings with their constructed filters.
     /// Lazy pipelines emitted earlier resolve the shadow at their eventual use.
+    /// The unbuilt identity has no provider or key type: concrete Rust build
+    /// dispatch may return a different capability implementation when shadowed.
     pub(crate) fn prepare_join_filters(&mut self) {
         for (scan, filters) in &self.analysis.join_filters {
-            for (index, filter) in filters.iter().enumerate() {
+            for index in 0..filters.len() {
                 let id = self.join_filter_ident(scan, index);
-                let ty = &filter.ty;
                 self.statements.push(syn::parse_quote! {
                     #[allow(unused_variables)]
-                    let #id = &::cq_storage::JoinFilterPredicate::<#ty>(
-                        ::core::option::Option::None
-                    );
+                    let #id = &::cq_storage::NoJoinFilter;
                 });
                 self.bound = true;
             }
@@ -53,7 +52,7 @@ impl Context<'_> {
         rest: &[(Ident, syn::Type)],
     ) -> TokenStream {
         rest.iter().fold(ids, |ids, (id, marker)| {
-            quote!(::core::iter::Iterator::filter(#ids, move |&__cq_id| ::cq_storage::ReadPredicate::test(#id, &::cq_storage::Column::key(<#marker>::default(), #host, __cq_id))))
+            quote!(::core::iter::Iterator::filter(#ids, move |&__cq_id| ::cq_storage::test_position(#host, <#marker>::default(), #id, __cq_id)))
         })
     }
     /// Formal rule IF-JoinFilter: Filter scan positions conservatively by every already-built recorded filter and retain each covering exact operator unchanged.
@@ -203,18 +202,20 @@ impl Context<'_> {
                 };
                 let column = structures::condition_column(&self.physical[name].operator)
                     .expect("checked physical read");
-                let string = structures::ungroup_type(&self.infos[name].types[&column])
-                    == &syn::parse_quote!(String);
                 let value = |term: &structures::syntax::constraint::Term| {
                     let reference = expressions::term_reference(term, &self.parameters);
-                    if string {
-                        quote!(::cq_storage::StringValue::string_value(#reference))
+                    let host = Self::positional_host(&symbol_name(&read.origin.base));
+                    let marker = &read.marker;
+                    if term.string_literal() {
+                        // Encoding only: the closed string operand becomes a column key, not a decoded row value.
+                        quote!(::cq_storage::encode_predicate(#host, <#marker>::default(), #reference))
                     } else {
-                        // A correlated parameter may itself be borrowed. Coerce
-                        // to the declared key reference before copying the scalar;
-                        // one syntactic dereference would leave Point<&K>.
                         let ty = &self.infos[name].types[&column];
-                        quote!({ let __cq_value: &#ty = #reference; *__cq_value })
+                        // Encoding only: this closed typed operand is translated before the positional predicate, never decoded.
+                        quote!({
+                            let __cq_value: &#ty = #reference;
+                            ::cq_storage::encode_predicate(#host, <#marker>::default(), __cq_value)
+                        })
                     }
                 };
                 if let Some((_, bounds)) = s.condition.range_bounds() {

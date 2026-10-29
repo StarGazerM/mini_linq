@@ -1,55 +1,23 @@
-//! Complete CQ programs with denotation `T X = bottom + Set X`.
-//! The reference evaluates the desugared body in written order; bottom is one
-//! undistinguished panic aborting the evaluation. Rust lets and guards denote
-//! opaque partial functions of their free variables and host captures. I/O,
-//! mutation, counters and evaluation counts are outside this meaning.
-//! Relational steps commute and may move earlier across a Rust step. Rust
-//! steps keep their relative order and follow every free-variable binder.
-//!
-//! Comparisons inside `if` guards use Rust syntax and trait meaning: `==`/`!=`
-//! call PartialEq and `<`/`<=`/`>`/`>=` call PartialOrd. Under the existing
-//! Leibniz Eq and total, consistent Ord premises, comparisons on query names
-//! (bare, `*x`, or `&x`), literals (including negative numbers), and bare host
-//! parameters are total relational constraints. `&&`, `||`, `!`, and parentheses
-//! over these comparisons are classical connectives. Host parameters are
-//! borrowed once outside query loops. Known inadmissible types are rejected;
-//! Rust checks Eq/Ord for aliases and user types; admissibility is trusted.
-//! A top-level conjunction extracts these relational conjuncts and leaves one
-//! opaque residual guard at the written position, in written order. In `a && f`,
-//! f already runs only where a holds; in `f && a`, moving total a earlier only
-//! shrinks f's domain. Mixed disjunctions and negations stay wholly opaque.
-//! Calls, methods (including string membership), arithmetic, casts, indexing,
-//! blocks, macros and field access remain opaque. Relational negation `!R(args)`
-//! tests absence in a declared input, binds nothing, and is position-independent
-//! once its query variables are bound; wildcards are existential.
-//! Bare comparisons, `between`, and set membership are not CQ syntax.
-//! Normalized internal constraints retain the RA/IX/Physical forms.
-//! Functional extensionality of shared-reference Rust inputs permits canonical
-//! projection whenever free variables remain; see the premises in
-//! `cq-syntax`.
+//! Complete CQ programs. Embedded Rust expressions are opaque, pure and total
+//! by premise. They are preserved verbatim and scheduled by free variables.
+//! Only explicit `where` predicates use relational representation equality and
+//! ordering; Rust `if` conditions are never recognized or split.
 
 //! CQ grammar: Block ::= { Body } ( | { Body } )+ | { Body } ( else { Body } )+.
 //! Branches are nonempty; mixed operators require nesting.
 //! Interface declared types agree; inferred let types are checked by rustc.
 //! Multi-rule heads desugar to a union with a head-only interface.
 //!
-//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
-//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
-//! heading and I the common new interface; other binders remain branch-local.
-//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Core blocks union projected answers or select the first nonempty arm.
+//! Rust expressions in each arm depend only on their free-variable binders.
 //!
 //! A single rule head may use `count()`, `sum(e)`, `min(e)` or `max(e)`.
 //! Other head variables are ordered group keys. Result declarations are
 //! required: count is `usize`, sum is `T`, and extrema are `Option<T>`.
 //! Normalization records `group [valuation] by [keys] { name: Type = fold(e); }`
 //! before the rule terminator and replaces head folds with fresh result names.
-//! The valuation retains every named body binder, not anonymous witnesses;
-//! argument lets remain at the end of the written Rust chain. All folds consume
-//! that same DISTINCT valuation set, preserving equal-valued argument multiplicity.
+//! The valuation retains every named body binder, not anonymous witnesses.
+//! All folds consume that same DISTINCT valuation set.
 //!
 pub mod blocks;
 pub mod group;
@@ -189,7 +157,7 @@ impl syn::parse::Parse for Query {
         // A later query binder is still a query variable and must pass the
         // written-scope check; an enclosing value is a captured parameter.
         let logical = blocks::bound(&query.body).into_keys().collect();
-        blocks::split_guards(&mut query.body, &logical);
+        blocks::resolve_constraints(&mut query.body, &logical);
         Ok(query)
     }
 }
@@ -227,14 +195,12 @@ impl Query {
 
 /// One source-ordered logical body clause.
 ///
-/// After guard recognition, residual Rust expressions retain their syntax as
-/// opaque partial functions. Lets, finite pure generators,
-/// and guards share one written chain; relational steps alone may move earlier
-/// across that chain under the sufficient refinement check.
+/// Rust expressions retain their syntax and are pure and total by premise.
+/// Relational constraints are written explicitly with `where`.
 ///
 /// ```text
-/// BodyItem ::= Atom | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
-///            | "for" RustPat "in" RustExpr
+/// BodyItem ::= Atom | "where" Predicate | "if" RustExpr
+///            | "let" RustPat [":" RustType] "=" RustExpr | "for" RustPat "in" RustExpr
 ///            | Ident "!" "{" TokenTree* "}"
 ///            | "!" Atom | "agg" RustPat "=" Aggregator "(" [Ident ("," Ident)* [","]] ")" "in" Atom
 /// ```
@@ -244,9 +210,9 @@ impl Query {
 #[derive(Clone, Debug)]
 pub enum BodyItem {
     Block(Block),
-    /// Internal relational identity extracted from a Rust guard or atom.
+    /// Relational identity introduced by atom normalization.
     Equality(Equality),
-    /// Internal total predicate extracted from a Rust guard.
+    /// Explicit relational predicate.
     Constraint(Constraint),
     Filter(Filter),
     Let(Box<Let>),
@@ -268,6 +234,9 @@ impl syn::parse::Parse for BodyItem {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let item = if input.peek(token::Brace) {
             Self::Block(input.parse()?)
+        } else if input.peek(Token![where]) {
+            input.parse::<Token![where]>()?;
+            Self::Constraint(cq_syntax::constraint::parse_where(input)?)
         } else if input.peek(Token![if]) || input.peek(Token![#]) {
             Self::Filter(input.parse()?)
         } else if input.peek(Token![let]) {
@@ -294,7 +263,7 @@ impl syn::parse::Parse for BodyItem {
         } else {
             return Err(cq_syntax::constraint::unexpected(
                 input,
-                "an atom, `if` Rust guard, `let` binding, `for` generator, or extension",
+                "an atom, `where` predicate, `if` Rust guard, `let` binding, `for` generator, or extension",
             ));
         };
         if !input.is_empty()
@@ -317,11 +286,11 @@ impl quote::ToTokens for BodyItem {
             Self::Block(x) => x.to_tokens(output),
             Self::Equality(x) => {
                 let expr = Constraint::from_equality(x).cq_tokens();
-                output.extend(quote::quote!(if #expr));
+                output.extend(quote::quote!(where #expr));
             }
             Self::Constraint(x) => {
                 let expr = x.cq_tokens();
-                output.extend(quote::quote!(if #expr));
+                output.extend(quote::quote!(where #expr));
             }
             Self::Filter(x) => x.to_tokens(output),
             Self::Let(x) => x.to_tokens(output),
@@ -340,6 +309,20 @@ impl PartialEq for BodyItem {
             (Self::Block(a), Self::Block(b)) => a == b,
             (Self::Equality(a), Self::Equality(b)) => a == b,
             (Self::Constraint(a), Self::Constraint(b)) => a == b,
+            (Self::Equality(equality), Self::Constraint(constraint))
+            | (Self::Constraint(constraint), Self::Equality(equality)) => {
+                use cq_syntax::constraint::{Comparison, Term};
+                matches!(constraint,
+                Constraint::Compare {
+                    left: Term::Variable(left),
+                    comparison: Comparison::Eq(_),
+                    right,
+                } if left == &equality.left && match (&equality.right, right) {
+                    (EqualityValue::Variable(a), Term::Variable(b)) => a == b,
+                    (EqualityValue::Literal(a), Term::Literal(b)) => a == b.as_ref(),
+                    _ => false,
+                })
+            }
             (Self::Filter(a), Self::Filter(b)) => a == b,
             (Self::Let(a), Self::Let(b)) => a == b,
             (Self::For(a), Self::For(b)) => a == b,
@@ -419,20 +402,6 @@ pub struct RustStep {
 }
 
 impl BodyItem {
-    /// Typed arithmetic is a language expression, not an opaque Rust step.
-    pub fn arithmetic(&self, types: &BTreeMap<String, syn::Type>) -> Option<syn::Expr> {
-        match self {
-            Self::Filter(filter) => cq_syntax::arithmetic::predicate(&filter.condition, types),
-            Self::Let(binding) if matches!(binding.pattern, syn::Pat::Ident(_)) => {
-                cq_syntax::arithmetic::expression(
-                    &binding.expression,
-                    types,
-                    Some(&binding.annotation.as_ref()?.ty),
-                )
-            }
-            _ => None,
-        }
-    }
     pub fn rust_step(&self) -> Option<RustStep> {
         match self {
             Self::Filter(filter) => Some(RustStep {
@@ -677,8 +646,8 @@ fn check_body(
             // Formal rule CQ-Neg: Test a declared input using bound query
             // variables, captured parameters, literals and existential wildcards.
             BodyItem::Negation(negation) => {
-                let input = check_input_atom(schema, &negation.atom)?;
-                for (argument, column) in negation.atom.args.iter().zip(&input.columns) {
+                check_input_atom(schema, &negation.atom)?;
+                for argument in &negation.atom.args {
                     if matches!(argument, syn::Expr::Infer(_)) {
                         continue;
                     }
@@ -700,7 +669,6 @@ fn check_body(
                             "negation arguments must be bound query variables, bare host parameters, literals, or `_`",
                         ));
                     }
-                    cq_syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
                 }
             }
             BodyItem::Equality(equality) => {
@@ -714,7 +682,8 @@ fn check_body(
                     }
                 }
             }
-            // Formal rule CQ-Comparison: Constraint terms use bound query names or captured constants.
+            // Formal rule CQ-Where: Only explicit relational predicates constrain query columns.
+            // Formal rule CQ-Comparison: Relational terms name bound columns or closed operands.
             BodyItem::Constraint(constraint) => {
                 constraint.check()?;
                 for variable in constraint.variables() {
@@ -727,13 +696,16 @@ fn check_body(
                         ));
                     }
                 }
-                if let Some(parameter) = constraint
-                    .parameters()
-                    .find(|p| logical.contains(&symbol_name(&p.root)))
-                {
+                // Formal rule CQ-Closed: A host operand has no query free variables.
+                let names = logical.union(&forbidden).cloned().collect();
+                if let Some(expression) = constraint.parameters().find(|expression| {
+                    !rust::free_variables(expression)
+                        .dependencies(&names)
+                        .is_empty()
+                }) {
                     return Err(syn::Error::new_spanned(
-                        parameter,
-                        "relational parameter names a query variable",
+                        expression,
+                        "relational closed operand depends on a query variable",
                     ));
                 }
             }
@@ -752,15 +724,6 @@ fn check_body(
             }
             // Formal rule IF-Environment: Check logical scope; Rust resolves enclosing values.
             BodyItem::Filter(filter) => {
-                if !cq_syntax::guard::split(&filter.condition, logical)
-                    .constraints
-                    .is_empty()
-                {
-                    return Err(syn::Error::new_spanned(
-                        filter,
-                        "recognizable Rust guard must be split into relational constraints and its opaque residual",
-                    ));
-                }
                 check_uses(&filter.condition, &body_variables, &forbidden)?;
             }
             BodyItem::Let(binding) => {

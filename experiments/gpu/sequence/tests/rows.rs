@@ -45,8 +45,9 @@ fn filtered_probe(condition: proc_macro2::TokenStream) -> Program {
 }
 
 fn translate(program: &Program) -> String {
-    let analysis = check_grading(program, &cq_gpu_sequence::machine()).unwrap();
-    cq_gpu_sequence::translate(program, &analysis)
+    let program = cq_gpu_sequence_core::runs::record_representation(program).unwrap();
+    let analysis = check_grading(&program, &cq_gpu_sequence::machine()).unwrap();
+    cq_gpu_sequence::translate(&program, &analysis)
         .unwrap()
         .to_token_stream()
         .to_string()
@@ -199,6 +200,7 @@ fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
         }
     };
     let machine = cq_gpu_sequence::machine();
+    let source = cq_gpu_sequence_core::runs::record_representation(&source).unwrap();
     let planned = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
     let analysis = check_grading(&planned.program, &machine).unwrap();
     assert_eq!(analysis.levels["index"], ["host", "device"]);
@@ -244,19 +246,22 @@ fn segmented_binding(expression: proc_macro2::TokenStream) -> Program {
             computed_rows at host.device.block;
             output_rows at host.device;
         }
+        // The authored output publishes its computed i32 as a native scalar.
+        representation { identity [doubled]; encoded []; }
     }
 }
 
 #[test]
-fn identity_bindings_preserve_source_codec_bounds_in_publications() {
-    let generated = translate(&segmented_binding(quote!(*value)));
-    assert!(
-        generated.contains("__cq_sequence_host_Provider . storage () . bounds [1usize]"),
-        "{generated}"
-    );
-    assert!(!generated.contains("< i32 > :: MIN"), "{generated}");
-    let arithmetic = translate(&segmented_binding(quote!(*value * 2)));
-    assert!(arithmetic.contains("< i32 > :: MIN"), "{arithmetic}");
+fn rust_bindings_use_recorded_scalar_bounds_without_expression_recognition() {
+    for expression in [quote!(*value), quote!(*value * 2)] {
+        let program = cq_gpu_sequence_core::runs::record_representation(
+            &segmented_binding(expression)).unwrap();
+        assert!(program.representation.identity.contains("doubled"));
+        assert!(!program.representation.encoded.contains("doubled"));
+        let generated = translate(&program);
+        assert!(generated.contains("< i32 as :: gpu_datalog_runtime :: Scalar > :: MIN"), "{generated}");
+        assert!(generated.contains("< i32 as :: gpu_datalog_runtime :: Scalar > :: MAX"), "{generated}");
+    }
 }
 
 #[test]
@@ -265,9 +270,10 @@ fn segmented_arithmetic_bindings_are_lane_local() {
     assert!(generated.contains("__child_position"), "{generated}");
     assert!(generated.contains("let mut __map_code_"), "{generated}");
     assert!(
-        generated.contains("wrapping_mul (* value , 2)"),
+        generated.contains("* value * 2"),
         "{generated}"
     );
+    assert!(!generated.contains("wrapping_mul"), "{generated}");
     // Parent slots can be read by sibling lanes, never assigned by a map.
     for statement in generated.split(';') {
         if let Some((left, _)) = statement.split_once(" = ") {

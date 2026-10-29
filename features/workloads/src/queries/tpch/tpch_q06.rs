@@ -60,9 +60,9 @@ macro_rules! query_body {
                 );
                 rows(group, orderkey, linenumber, amount) :-
                     lineitem(orderkey, linenumber, quantity, price, discount, shipdate),
-                    if *shipdate >= first && *shipdate < after,
-                    if *discount >= discount_low && *discount <= discount_high,
-                    if *quantity < quantity_limit,
+                    where shipdate >= first && shipdate < after,
+                    where discount >= discount_low && discount <= discount_high,
+                    where quantity < quantity_limit,
                     let group: i32 = 0,
                     let amount: i128 = i128::from(price.scaled()) * i128::from(discount.scaled());
             }};

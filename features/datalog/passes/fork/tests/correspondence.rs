@@ -463,7 +463,7 @@ fn owned_negative_constants_are_post_scan_filters_not_owned_prefixes() {
     };
     assert_eq!(atom.variables().count(), 2);
     let variable = &atom.args[0];
-    let expected: BodyItem = syn::parse_quote!(if *#variable == (String::from("static")));
+    let expected: BodyItem = syn::parse_quote!(where #variable == (String::from("static")));
     assert_eq!(hole.query.body[1], expected);
     assert!(
         !hole
@@ -563,7 +563,7 @@ fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
         struct #name;
         #(#declarations)*
         #name(*heap,*to) :- #assign_scan(to,from),
-            if *to != 0, if 10 / *to > 0,
+            where to != 0, if 10 / *to > 0,
             #probe_name(from,heap), #all_delta(heap,to);
     })
     .unwrap();
@@ -595,7 +595,7 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
         relation R(x:i32);
         output R;
         R(*x) :- E(x,x,7), E(_,x,(1 + 2));
-        R(*y) :- E(y,7,_), if *y != 0, R(x), E(x,x,7);
+        R(*y) :- E(y,7,_), where y != 0, R(x), E(x,x,7);
         strata { component [R]; }
         incremental { scheme seminaive_covering;
 
@@ -607,7 +607,7 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
 
 
             variant 0 seed { R(*x) :- E(x,x,7), E(_,x,(1 + 2)); }
-            variant 1 delta 2 { R(*y) :- E(y,7,_), if *y != 0, D(x), E(x,x,7); }
+            variant 1 delta 2 { R(*y) :- E(y,7,_), where y != 0, D(x), E(x,x,7); }
         }
     })
     .unwrap();
@@ -628,7 +628,7 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
         ),
         (
             stratum.steps[0].hole,
-            quote!(#third(7,y,_), if *y != 0, #delta(x), #fourth(x,x,7)),
+            quote!(#third(7,y,_), where y != 0, #delta(x), #fourth(x,x,7)),
         ),
     ] {
         let hole = &target.holes[index].cq;
@@ -674,7 +674,7 @@ fn delta_hosts_are_shared_only_by_exact_demand_and_keep_written_bodies() {
         quote!(#recent(x, y, z)),
         quote!(#constant(7,x,y)),
         quote!(#scan2(_,y,_), #keyed(y,x,z)),
-        quote!(#scan3(_,y,_), if *y != 0, if 10 / *y > 0, #keyed(y,x,z)),
+        quote!(#scan3(_,y,_), where y != 0, if 10 / *y > 0, #keyed(y,x,z)),
         quote!(#scan4(a,b,c), #zero(x,y,z)),
         quote!(#scan5(x,y,_), #pair(x,y,z)),
         quote!(#constant(7,x,x)),
@@ -781,7 +781,7 @@ fn fork_preserves_generators_and_generated_join_values() {
         relation Reach(x:i32);
         output Reach;
         Reach(y) :- Seed(x), for y in [*x, *x];
-        Reach(*z) :- Reach(x), if *x < 3, for y in [*x + 1], Link(y,z);
+        Reach(*z) :- Reach(x), where x < 3, for y in [*x + 1], Link(y,z);
         strata { component [Reach]; }
         incremental { scheme seminaive_covering;
 
@@ -791,7 +791,7 @@ fn fork_preserves_generators_and_generated_join_values() {
 
             variant 0 seed { Reach(y) :- Seed(x), for y in [*x, *x]; }
             variant 1 delta 0 {
-                Reach(*z) :- Recent(x), if *x < 3, for y in [*x + 1], Link(y,z);
+                Reach(*z) :- Recent(x), where x < 3, for y in [*x + 1], Link(y,z);
             }
         }
     })

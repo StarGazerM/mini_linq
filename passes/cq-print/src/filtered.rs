@@ -3,8 +3,7 @@ use super::*;
 use structures::syntax::constraint::Term;
 
 fn literal_reference(ty: &syn::Type, value: &Expr) -> TokenStream {
-    // A literal's references outlive every input lifetime. Nested string
-    // references need their own static cells as well as the String value.
+    // Reconstructed literals outlive every query input lifetime.
     struct Static;
     impl syn::visit_mut::VisitMut for Static {
         fn visit_lifetime_mut(&mut self, lifetime: &mut syn::Lifetime) {
@@ -20,21 +19,11 @@ fn literal_reference(ty: &syn::Type, value: &Expr) -> TokenStream {
             ..
         })
     ) {
-        if let syn::Type::Reference(reference) = &ty {
-            if matches!(&*reference.elem, syn::Type::Path(p) if p.path.is_ident("str")) {
-                return quote!({ const __CQ_CONSTANT: #ty = #value; &__CQ_CONSTANT });
-            }
-            let inner = literal_reference(&reference.elem, value);
-            return quote!({
-                static __CQ_CONSTANT: ::std::sync::LazyLock<#ty> =
-                    ::std::sync::LazyLock::new(|| #inner);
-                &*__CQ_CONSTANT
-            });
-        }
         quote!({
-            static __CQ_CONSTANT: ::std::sync::LazyLock<#ty> =
-                ::std::sync::LazyLock::new(|| ::core::convert::From::from(#value));
-            &*__CQ_CONSTANT
+            static __CQ_CONSTANT: ::std::sync::LazyLock<
+                <#ty as ::cq_storage::StringLiteral>::Storage
+            > = ::std::sync::LazyLock::new(|| <#ty as ::cq_storage::StringLiteral>::storage(#value));
+            <#ty as ::cq_storage::StringLiteral>::reference(&*__CQ_CONSTANT)
         })
     } else {
         quote!({ const __CQ_CONSTANT: #ty = #value; &__CQ_CONSTANT })
@@ -71,7 +60,7 @@ impl Context<'_> {
         let ty = &self.infos[result].types[column];
         let reference = match &binding.value {
             Term::Literal(value) => literal_reference(ty, value),
-            Term::Parameter(_) => expressions::term_reference(&binding.value, &self.parameters),
+            Term::Closed(_) => expressions::term_reference(&binding.value, &self.parameters),
             Term::Variable(_) => unreachable!("checked constant binding"),
         };
         Some(if self.infos[result].computed.contains(column) {

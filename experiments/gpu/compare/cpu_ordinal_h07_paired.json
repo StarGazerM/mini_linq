@@ -1,0 +1,168 @@
+{
+  "pairs": [
+    {
+      "head": {
+        "answer_rows": 5501,
+        "instrumented": false,
+        "load_ms": 284.05780400000003,
+        "median_ms": 34.064655,
+        "peak_rss_kib": 188712,
+        "samples_ms": [
+          33.807582000000004,
+          34.064655,
+          38.703481
+        ],
+        "zone_build_ms": 0.0,
+        "zone_metadata_bytes": 0
+      },
+      "new": {
+        "answer_rows": 5501,
+        "instrumented": false,
+        "load_ms": 277.390462,
+        "median_ms": 40.003982,
+        "peak_rss_kib": 188708,
+        "samples_ms": [
+          36.216646999999995,
+          40.003982,
+          43.489158
+        ],
+        "zone_build_ms": 0.0,
+        "zone_metadata_bytes": 0
+      }
+    },
+    {
+      "new": {
+        "answer_rows": 5501,
+        "instrumented": false,
+        "load_ms": 276.31528199999997,
+        "median_ms": 37.082015000000006,
+        "peak_rss_kib": 188704,
+        "samples_ms": [
+          35.764841,
+          37.082015000000006,
+          43.275268
+        ],
+        "zone_build_ms": 0.0,
+        "zone_metadata_bytes": 0
+      },
+      "head": {
+        "answer_rows": 5501,
+        "instrumented": false,
+        "load_ms": 277.893395,
+        "median_ms": 36.781048,
+        "peak_rss_kib": 188716,
+        "samples_ms": [
+          34.767461,
+          36.781048,
+          37.522168
+        ],
+        "zone_build_ms": 0.0,
+        "zone_metadata_bytes": 0
+      }
+    },
+    {
+      "head": {
+        "answer_rows": 5501,
+        "instrumented": false,
+        "load_ms": 278.975808,
+        "median_ms": 35.054862,
+        "peak_rss_kib": 188708,
+        "samples_ms": [
+          33.289079,
+          35.054862,
+          40.07063
+        ],
+        "zone_build_ms": 0.0,
+        "zone_metadata_bytes": 0
+      },
+      "new": {
+        "answer_rows": 5501,
+        "instrumented": false,
+        "load_ms": 276.24773200000004,
+        "median_ms": 41.274035,
+        "peak_rss_kib": 188708,
+        "samples_ms": [
+          38.082159999999995,
+          41.274035,
+          43.404586
+        ],
+        "zone_build_ms": 0.0,
+        "zone_metadata_bytes": 0
+      }
+    },
+    {
+      "new": {
+        "answer_rows": 5501,
+        "instrumented": false,
+        "load_ms": 275.854829,
+        "median_ms": 35.758199,
+        "peak_rss_kib": 188896,
+        "samples_ms": [
+          35.717701,
+          35.758199,
+          38.858167
+        ],
+        "zone_build_ms": 0.0,
+        "zone_metadata_bytes": 0
+      },
+      "head": {
+        "answer_rows": 5501,
+        "instrumented": false,
+        "load_ms": 277.498839,
+        "median_ms": 37.652748,
+        "peak_rss_kib": 188712,
+        "samples_ms": [
+          35.440711,
+          37.652748,
+          41.358416000000005
+        ],
+        "zone_build_ms": 0.0,
+        "zone_metadata_bytes": 0
+      }
+    },
+    {
+      "head": {
+        "answer_rows": 5501,
+        "instrumented": false,
+        "load_ms": 277.504209,
+        "median_ms": 38.991262,
+        "peak_rss_kib": 188708,
+        "samples_ms": [
+          34.032863,
+          38.991262,
+          40.755322
+        ],
+        "zone_build_ms": 0.0,
+        "zone_metadata_bytes": 0
+      },
+      "new": {
+        "answer_rows": 5501,
+        "instrumented": false,
+        "load_ms": 276.65912,
+        "median_ms": 40.920097000000005,
+        "peak_rss_kib": 188644,
+        "samples_ms": [
+          39.627,
+          40.920097000000005,
+          42.394852
+        ],
+        "zone_build_ms": 0.0,
+        "zone_metadata_bytes": 0
+      }
+    }
+  ],
+  "summary": {
+    "head_ms": 36.781048,
+    "new_ms": 40.003982,
+    "ratio": 1.0876248550612262,
+    "ci95": [
+      0.9496836459320311,
+      1.1774125654809309
+    ]
+  },
+  "runs_per_process": 3,
+  "binaries": {
+    "head": "585306789e9428b8ddb743e37b52407d4ea977b384e6110692b1c43a8ad8a8ee",
+    "new": "382656ac4183838216356f1e46f93e539c15ed895ede633c6fbe36960c97a600"
+  }
+}

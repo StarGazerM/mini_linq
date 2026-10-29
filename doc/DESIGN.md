@@ -7,20 +7,29 @@ Grammars and precise contracts live in crate `//!` documentation;
 
 ## Meaning
 
-Queries compose in the Kleisli category for `T X = bottom + Set X`: one panic
-aborts the whole evaluation. Embedded Rust binds and guards are opaque partial
-functions of shared-reference inputs and host captures. I/O, mutation, and
-evaluation counts are outside this meaning.
+Queries compose in the finite-set monad. Every embedded `if`, `let` or `for`
+expression is opaque, pure and total by premise: a panic means the plan is
+wrong. The compiler preserves the expression unchanged and places it where
+its free variables are bound (the whole environment for lexically opaque
+syntax). There is no Rust recognition, splitting, arithmetic rewriting, type
+classification or written-order dependency beyond those free variables.
+I/O, mutation and evaluation counts are outside the meaning.
 
-The reference evaluates the desugared body in written order. Whenever it
-returns, a target must return the same set without panic, under the premises
-below; guard motion additionally rests on the totality of the moved predicate,
-which only the language's relational vocabulary supplies (comparisons and
-`&& || !` under the Eq/Ord premises; negation as an anti-join). Relational steps may
-move earlier across Rust steps; Rust steps keep their relative order, binders,
-and source-before relational requirements. Relational equality assumes Leibniz
-identity; ordered comparisons assume a total, consistent order. Rust trait
-bounds cannot prove these semantic premises for arbitrary implementations.
+Only explicit `where P` has relational predicate semantics: representation
+equality/order, membership, ranges, conjunction and disjunction over query
+variables, literals and closed Rust operands. Closed operands are stored as
+`Term::Closed(syn::Expr)` and evaluated once on the host. Only `where` supplies
+predicate-derived reads, filter ranks, reduction supports, domains and join
+equalities; atom literals remain occurrence restrictions. Rust trait bounds
+enforce operations, not representation laws. Types belong to rustc; sizes and
+encodings come from recorded provider and codec facts.
+
+The written reference and planned query return the same set under these
+premises. CQ → VO owns placement and join decisions; downstream passes refine
+representations without moving predicates or changing joins. Device Rust is
+emitted verbatim for cuda-oxide only when its read columns have identity device
+representations and other inputs are closed captures; otherwise it runs at
+host. Codec-encoded comparisons use `where` with host-encoded closed operands.
 
 `{ B1 } | { B2 }` is union; `{ B1 } else { B2 }` is ordered fallback. Union
 combines both sets and permits sibling reordering as refinement. Fallback uses
@@ -36,8 +45,8 @@ hoist to a derived relation over F ∪ I when no branch contains Rust; a finite
 prefix domain supplies free columns without branch generators. If those columns
 come from prefix lets, reductions wait for that context and filter its retained
 prefix; the positions are recorded in VO. Other blocks use
-per-row arms with one prefix stream. Rust Before sets extend into arms and include
-fallback anti steps. Union siblings are unordered; fallback siblings are ordered.
+per-row arms with one prefix stream. Free-variable bindings extend into arms;
+union siblings are unordered and fallback siblings are ordered.
 Rust environment packets record lexical names and written source paths, so
 a positive context semijoin can reference prefix Rust without making it arm Rust.
 Positive semijoins distribute into arms while negative operands remain the
@@ -91,13 +100,14 @@ The back end separates representation **R**, evaluation unit **E**, and control
 **C** ([formal model](formal/backend.tex)). R records tuples or base-occurrence
 positions with owned computed columns; its contract checks lineage coverage,
 while storage laws require every operation to commute with its bag abstraction.
-E records scalar or batched demand on total, indexable pipe segments, with a
-selection boundary before partial Rust. Absent R/E entries mean tuples/scalar;
-the default staging pass records the former fixed 128-row probe lookahead.
+E records scalar or batched demand on representable, indexable pipe segments.
+Absent R/E entries mean tuples/scalar; the default staging pass records the
+former fixed 128-row probe lookahead. Unsupported batch representations may
+end a stage without making Rust partial.
 C is the emitter's pull/unfold or push/fold realization of one stream algebra:
-exhaustion preserves the bag and lawful early stopping may only remove panics.
-Canonical boundaries still establish sets, and pinned Rust Before sets remain
-obligations in all three layers.
+exhaustion preserves the bag and answer-determined stopping preserves answers.
+Canonical boundaries establish sets; every layer retains the recorded plan,
+original Rust payloads and free-variable bindings.
 
 A point or range `let` used only by keyed probes and semijoins on one shared
 key records one index, for example `filtered = HashIndex [b] payload [b,c]
@@ -186,7 +196,7 @@ The public API gate compares reviewed rustdoc-derived signatures.
 
 External printers preserve recorded operators and representations or reject
 unsupported choices. Their emitted Rust must refine written-order answers,
-retain opaque Rust ancestry and borrowed columns, respect pipe consumption and
+retain original Rust expressions and their free-variable bindings, respect pipe consumption and
 ordered-read requirements, and keep hosts immutable for a run. External
 surface extensions compose checked queries in ordinary Rust.
 

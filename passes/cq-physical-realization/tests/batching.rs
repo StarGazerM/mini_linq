@@ -1,4 +1,4 @@
-//! Bounded probe lookahead must never force an unvisited opaque guard.
+//! Bounded probe lookahead follows recorded adapter capabilities.
 use quote::ToTokens;
 
 fn source_tokens(module: &cq_lang_structures::Program) -> syn::Result<proc_macro2::TokenStream> {
@@ -14,11 +14,7 @@ fn source_tokens(module: &cq_lang_structures::Program) -> syn::Result<proc_macro
 fn only_coarse_total_scans_use_lookahead() {
     for (outer, guard, expected) in [
         ("l", "", true),
-        (
-            "g",
-            "g = pipe guard l if ({ assert!(*k != 2); true });",
-            false,
-        ),
+        ("g", "g = pipe guard l if (*k != 2);", false),
         ("g", "g = pipe semi eager [k] l,r;", false),
     ] {
         let physical = syn::parse_str(&format!(
@@ -43,7 +39,7 @@ fn only_coarse_total_scans_use_lookahead() {
 }
 
 #[test]
-fn recorded_scan_selections_use_chunk_masks_before_partial_rust() {
+fn recorded_scan_selections_use_chunk_masks_before_rust() {
     let physical = syn::parse_quote! {
         physical {
             relation L(k:i32);

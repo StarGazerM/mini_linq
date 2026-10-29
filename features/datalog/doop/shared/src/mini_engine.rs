@@ -353,9 +353,9 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
     mainmethoddeclaration(*method) :-
             mainclass(type_),
             method_declaringtype(method, type_),
-            if *method != sym("<java.util.prefs.Base64: void main(java.lang.String[])>"),
-            if *method != sym("<sun.java2d.loops.GraphicsPrimitiveMgr: void main(java.lang.String[])>"),
-            if *method != sym("<sun.security.provider.PolicyParser: void main(java.lang.String[])>"),
+            where method != sym("<java.util.prefs.Base64: void main(java.lang.String[])>"),
+            where method != sym("<sun.java2d.loops.GraphicsPrimitiveMgr: void main(java.lang.String[])>"),
+            where method != sym("<sun.security.provider.PolicyParser: void main(java.lang.String[])>"),
             method_simplename(method, sym("main")),
             method_descriptor(method, sym("void(java.lang.String[])")),
             method_modifier(sym("public"), method),
@@ -385,11 +385,11 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
     subtypeof(*s, *t) :-
             isinterfacetype(s),
             istype(t),
-            if *t == sym("java.lang.Object");
+            where t == sym("java.lang.Object");
     subtypeof(*s, *t) :-
             isarraytype(s),
             istype(t),
-            if *t == sym("java.lang.Object");
+            where t == sym("java.lang.Object");
     subtypeof(*s, *t) :-
             isinterfacetype(s),
             superinterface(t, s);
@@ -403,17 +403,17 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             isarraytype(s),
             isinterfacetype(t),
             istype(t),
-            if *t == sym("java.lang.Cloneable");
+            where t == sym("java.lang.Cloneable");
     subtypeof(*s, *t) :-
             isarraytype(s),
             isinterfacetype(t),
             istype(t),
-            if *t == sym("java.io.Serializable");
+            where t == sym("java.io.Serializable");
 
     supertypeof(*s, *t) :- subtypeof(t, s);
     subtypeofdifferent(*s, *t) :-
             subtypeof(s, t),
-            if s != t;
+            where s != t;
 
         // class initialization
     classinitializer(*type_, *method) :-

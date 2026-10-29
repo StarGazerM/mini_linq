@@ -10,6 +10,7 @@ use cq_lang_sequence::{Program, check_grading, check_rewrite};
 fn planned(authored: &Program) -> Program {
     let machine = cq_gpu_sequence::machine();
     let source = cq_sequence_lowering::compile(&authored.structures).unwrap();
+    let source = cq_gpu_sequence_core::runs::record_representation(&source).unwrap();
     let result = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
     let repeated = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
     assert_eq!(
@@ -57,6 +58,7 @@ fn planned_a_retains_its_real_authored_traversal_choices() {
 
 fn assert_cost_acceptance(name: &str, authored: Program) {
     let machine = cq_gpu_sequence::machine();
+    let authored = cq_gpu_sequence_core::runs::record_representation(&authored).unwrap();
     check_grading(&authored, &machine).unwrap();
     let generated = planned(&authored);
     let authored_cost = cq_sequence_plan::cost(&authored, &machine).unwrap();

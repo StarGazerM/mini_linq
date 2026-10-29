@@ -63,6 +63,7 @@ fn canonical_projection() {
         expected.dedup();
         let answer: cq_gpu_runtime::DeviceColumns<'_, (i64,)> = projection!(&resident);
         assert_eq!(answer.checked_len().unwrap(), expected.len());
+        // DECODE P: diagnostic projection answer publication feeds the exact host oracle assertion.
         let mut actual = answer.to_host().expect("resident projection download");
         actual.sort_unstable();
         assert_eq!(
@@ -106,6 +107,7 @@ fn repeated_head_projection() {
             output count;
         }
     };
+    // DECODE P: diagnostic repeated-head answer publication checks lossy projection deduplication.
     let mut actual = answer.to_host().expect("repeated lossy head");
     actual.sort_unstable();
     assert_eq!(actual, [(1, 1), (2, 2)]);

@@ -1090,6 +1090,7 @@ mod tests {
             root: LevelNode {
                 shared_bytes: None,
                 name: syn::parse_quote!(host),
+                host_rust: true,
                 collaborative: false,
                 dynamic: false,
                 width: None,
@@ -1343,18 +1344,21 @@ mod tests {
         machine.root.children.push(LevelNode {
             shared_bytes: None,
             name: syn::parse_quote!(device),
+            host_rust: false,
             collaborative: false,
             dynamic: true,
             width: None,
             children: vec![LevelNode {
                 shared_bytes: None,
                 name: syn::parse_quote!(block),
+                host_rust: false,
                 collaborative: true,
                 dynamic: false,
                 width: Some(8),
                 children: vec![LevelNode {
                     shared_bytes: None,
                     name: syn::parse_quote!(lane),
+                    host_rust: false,
                     collaborative: false,
                     dynamic: false,
                     width: None,

@@ -3,7 +3,8 @@
 //! customer/order join; CQ's same-head rule union is not a derived-relation DAG.
 //! Quantity and total price are exact scale-two coefficients. Ordering and the
 //! top-100 limit are omitted. Named order/line identities preserve equal amounts.
-use cq_load::{Date, Decimal};
+//! Customer names remain dictionary codes until answer publication.
+use cq_load::{Date, Decimal, StringCode};
 
 pub const NAME: &str = "retail_h18";
 
@@ -25,35 +26,41 @@ JOIN customer c ON o.o_custkey = c.c_custkey"#;
 
 pub type Lineitem = (i64, i64, Decimal);
 pub type Orders = (i64, i64, Date, Decimal);
-pub type Customer = (i64, String);
+pub type Customer = (i64, StringCode);
 pub type Answer = (String, i64, i64, Date, i64, i64);
 pub struct Data {
     pub lineitem: Vec<Lineitem>,
     pub orders: Vec<Orders>,
     pub customer: Vec<Customer>,
+    pub dictionaries: cq_load::Dictionaries,
 }
 
-mini_linq::relation_loaders! {
+mini_linq::interned_relation_loaders! {
     relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_quantity: Decimal);
     relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date, o_totalprice: Decimal);
-    relation Customer(c_custkey: i64, c_name: String);
+    relation Customer(c_custkey: i64, c_name: StringCode);
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
     assert!(CONFIGS.contains(&config), "unknown H18 configuration");
+    let mut dictionaries = cq_load::Dictionaries::default();
     Ok(Data {
-        lineitem: <relation_loader!(Lineitem)>::parquet(
+        lineitem: <relation_loader!(Lineitem)>::parquet_interned(
             root.join("lineitem.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
-        orders: <relation_loader!(Orders)>::parquet(
+        orders: <relation_loader!(Orders)>::parquet_interned(
             root.join("orders.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
-        customer: <relation_loader!(Customer)>::parquet(
+        customer: <relation_loader!(Customer)>::parquet_interned(
             root.join("customer.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
+        dictionaries,
     })
 }
 
@@ -80,17 +87,18 @@ crate::tpch_runtime::standalone_configs! { $;
             struct Query;
             relation Quantity(order_key: i64, sum_quantity: i64);
             relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date, o_totalprice: Decimal);
-            relation Customer(c_custkey: i64, c_name: String);
-            relation answer(customer_name: String, customer_key: i64, order_key: i64,
+            relation Customer(c_custkey: i64, c_name: StringCode);
+            relation answer(customer_name: StringCode, customer_key: i64, order_key: i64,
                 order_date: Date, total_price: i64, sum_quantity: i64);
             answer(customer_name, customer_key, order_key, order_date, price_units, sum_quantity) :-
-                Quantity(order_key, sum_quantity), if *sum_quantity > 30000,
+                Quantity(order_key, sum_quantity), where sum_quantity > 30000,
                 Orders(order_key, customer_key, order_date, total_price),
                 Customer(customer_key, customer_name),
                 let price_units: i64 = total_price.scaled();
         }
         .map(|(name, customer, order, date, price, quantity)| {
-            (name.clone(), *customer, *order, *date, price, *quantity)
+            // DECODE P: publish the customer name in the final answer.
+            (data.dictionaries.publish("c_name", *name), *customer, *order, *date, price, *quantity)
         })
         .collect()
     }

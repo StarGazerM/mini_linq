@@ -19,6 +19,7 @@ fn accept(source: &cq_lang_structures::Program) -> Program {
             root: LevelNode {
                 shared_bytes: None,
                 name: syn::parse_quote!(host),
+                host_rust: true,
                 collaborative: false,
                 dynamic: false,
                 width: None,

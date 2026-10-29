@@ -171,16 +171,20 @@
 //! Literals in positive atoms use CQ's filtered-relation occurrences, including
 //! string literals against `String` columns. All heads, including recursive
 //! heads, accept Rust expressions and body `let` bindings (for example
-//! `Path(*x, *z, *length + 1)` with a preceding `if *length < 10` guard).
+//! `Path(*x, *z, *length + 1)` with a preceding `where length < 10` predicate).
 //! A `String` head constant is written `"java.lang.String".to_owned()`, while
 //! an `&'static str` column can return a literal directly.
+//! Relational selections use `where` with bare query variables, for example
+//! `where x == y`, `where x >= 2`, or `where x != constants.excluded`.
+//! Closed Rust operands are evaluated once on the host. Row-dependent calls,
+//! arithmetic, and string methods remain opaque Rust `if` expressions.
 //! Bodies also accept `for pattern in expression`, using an irrefutable Rust
 //! pattern and a pure finite `IntoIterator`, for example
-//! `Reach(next) :- Reach(x), if *x < 4, for next in [*x + 1, *x + 1];`.
+//! `Reach(next) :- Reach(x), where x < 4, for next in [*x + 1, *x + 1];`.
 //! Generated bindings are available to later clauses and heads, as with `let`;
-//! duplicates collapse at Boolean insertion. Generator clauses preserve the
-//! written opaque Rust clause order. A panic while constructing or advancing
-//! an iterator produces no denoted result.
+//! duplicates collapse at Boolean insertion. Rust expressions are pure and
+//! total by premise and are placed wherever their free variables are bound;
+//! they do not impose a written-order chain.
 //! Refutable patterns use `if let pattern = expression`, for example
 //! `Value(x) :- Optional(o), if let Some(x) = *o;`. A failed match drops the
 //! valuation; a successful match makes every pattern binding available to
@@ -189,8 +193,8 @@
 //! This is Datalog-only sugar for `for (bindings, ...) in match expression {
 //! pattern => Some((bindings, ...)), _ => None }` (using qualified `Option`
 //! variants); no bindings use `Some(())` and `for ()`. It inherits generators'
-//! written-order and placement constraints. A panic in the expression is
-//! bottom, not a failed match. The default surface pass lowers it before the
+//! purity, totality, and free-variable placement premises. The default surface
+//! pass lowers it before the
 //! Source contract; Source and every subsequent checked IR contain only the
 //! ordinary `for` form.
 //! Termination is the caller's responsibility: copying positive-atom columns

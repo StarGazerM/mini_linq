@@ -4,7 +4,7 @@
 //! as an SQL scalar subquery errors. Inner occurrences of outer variables are
 //! fresh binders constrained by equality guards in the closing environment.
 //!
-//! Surface: Caller values in guards, `exists!{ S(x,y), if *y > limit }`, or `scalar!{ v:i32=(0); select(*y); S(x,y) }`
+//! Surface: Caller values in predicates, `exists!{ S(x,y), where y > limit }`, or `scalar!{ v:i32=(0); select(*y); S(x,y) }`
 //!
 //! Result and openings: Iterator; inner holes evaluated per outer row through the environment interface
 //!
@@ -12,7 +12,8 @@
 //! binders plus equality guards, retaining relational correlation rather than
 //! shadowing. Parameters from Rust follow normal borrowing/ownership rules. In
 //! embedded expressions logical values have type `&T`, including scalar results:
-//! use `if *v > limit`. A scalar uses its default only when empty and rejects more
+//! use `if predicate(v)` for opaque Rust or `where v > limit` for relational
+//! comparisons. A scalar uses its default only when empty and rejects more
 //! than one distinct row by a runtime assertion, matching SQL scalar cardinality.
 //! Its selected answers are collected through `Answers` before checking cardinality.
 //! Correlated results use a concrete HashSet boundary over answer values,

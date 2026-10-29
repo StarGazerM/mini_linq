@@ -2,23 +2,20 @@
 //!
 //! Choices and unions retain every recorded chain. This is an allocation
 //! contract, not a schedule transformation or a scratch-reuse policy.
+//!
+//! DESIGN contract8-sequence-layout
+//! Owns ABI realization of recorded allocation demands (contract 8 §11, T-Gpu/STR-Repr).
+//! Sources: doc/STORAGE.md §§4,9,11,12; FastLanes §§1-2.4; remote MAC-IMPLEMENTATION.md memory evidence.
+//! Shared byte layout does not choose residency, copy reasons or synchronization: those are target facts.
+//! DO NOT infer widths from Rust types, reuse scratch by replanning, or equate CUDA PCIe with Metal sharing.
+//! Known deviation: parent lanes remain uniform i64; recorded narrow carriers belong to Plan P6.
+//! Grouped offsets/columnar payloads remain Plan P4; choose widths/roles only with per-target measurements.
 
 use cq_lang_sequence::{DispatchShape, ResourceAllocation};
 use proc_macro2::Span;
 
 const LANES: usize = 256;
 
-pub(crate) fn code_bytes(ty: &syn::Type, coded: bool) -> usize {
-    if coded
-        && matches!(ty, syn::Type::Path(path)
-            if path.qself.is_none() && path.path.segments.len() == 1
-                && ["u32", "u16", "u8", "bool"].iter().any(|name| path.path.segments[0].ident == *name))
-    {
-        4
-    } else {
-        8
-    }
-}
 
 /// The same cursor places actual kernel buffers and sizes the machine premise.
 pub(crate) struct SharedLayout {
@@ -68,15 +65,10 @@ pub fn shared_bytes(shape: &DispatchShape) -> syn::Result<usize> {
             match allocation {
                 ResourceAllocation::Payload { parents } => {
                     layout.payload()?;
-                    for column in parents {
-                        let width = if column.coded
-                            && column.types.iter().all(|ty| code_bytes(ty, true) == 4)
-                        {
-                            4
-                        } else {
-                            8
-                        };
-                        layout.parent(width)?;
+                    for _column in parents {
+                        // The GPU row carrier is i64, independently of the
+                        // logical type or the source codec's storage width.
+                        layout.parent(8)?;
                     }
                 }
                 ResourceAllocation::Fold => {

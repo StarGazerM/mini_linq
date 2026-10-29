@@ -1,9 +1,7 @@
 //! Reusable row layouts, host and built access, and expression printing helpers.
 //!
-//! Queries denote `bottom + Set`: one panic aborts evaluation. Opaque Rust
-//! binds and guards keep their written chain; relational steps may move only
-//! earlier across them. Their free variables determine their partial-function
-//! meaning; I/O, mutation and evaluation counts are outside that meaning.
+//! Rust expressions are opaque and total by premise. Their free variables
+//! determine placement; expression syntax is emitted unchanged.
 //! Relational `==` decides Leibniz identity. `Eq` and the selected storage's
 //! `Hash` or `Ord` bounds are necessary checks, not a proof of admissibility.
 //!
@@ -16,6 +14,8 @@
 //! use [`Context::bind_columns`], [`Context::carrier`] and [`Context::forward`].
 //! Legacy `pattern`, `row`, and `borrowed_pattern` names remain equivalent
 //! carrier helpers for external printers; [`Context::heading`] is logical metadata.
+//! Explicit provider builds use `cq_storage::build!` so Rust selects capabilities
+//! at the concrete callsite; bare generic provider paths keep associated builds.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -25,14 +25,11 @@
 //! Public printer helpers preserve recorded union/anti representations, scoped Rust bindings and dedup state.
 //! Shared source preparation exposes a fused stream for terminal pull and push consumers.
 //!
-//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
-//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
-//! heading and I the common new interface; other binders remain branch-local.
+//! Core blocks denote sets: `{ B1 } | { B2 }` unions projected answers;
+//! `{ B1 } else { B2 }` selects the first nonempty arm. F is the free heading
+//! and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Only explicit relational predicates introduce comparisons and constraints.
 //!
 use cq_lang_structures as structures;
 use proc_macro2::TokenStream;
@@ -100,8 +97,10 @@ pub struct Context<'a> {
     pub physical: BTreeMap<String, &'a physical::Definition>,
     pub hosts: BTreeMap<String, Host>,
     pub parameters: BTreeMap<String, Ident>,
-    /// Generator Rust with external captures borrowed outside fused closures.
-    pub generator_expressions: BTreeMap<String, Expr>,
+    /// Whether generator item types can require host key annotations.
+    pub has_generators: bool,
+    /// Shared binding callables and their unchanged query input names.
+    pub binding_functions: BTreeMap<String, (Ident, Vec<Ident>)>,
     /// The identifier every result binds each of its columns to.
     pub idents: BTreeMap<String, BTreeMap<String, Ident>>,
     /// Consumer-demanded adapter layouts, computed once from the Physical DAG.
@@ -288,7 +287,7 @@ impl<'a> Context<'a> {
                 .iter()
                 .flat_map(cq_lang_structures::syntax::Constraint::parameters)
             {
-                let name = parameter.name();
+                let name = parameter.to_token_stream().to_string();
                 if parameters.contains_key(&name) {
                     continue;
                 }
@@ -299,12 +298,29 @@ impl<'a> Context<'a> {
                 let id =
                     format_ident!("__cq_parameter_{n}", span = proc_macro2::Span::mixed_site());
                 used.insert(id.to_string());
-                statements.push(syn::parse_quote!(let #id = &#parameter;));
+                // DESIGN contract7-closed-printing
+                // Owns host-once capture of unchanged closed Rust operands (contract 7, CQ-Closed).
+                // Source: doc/PLANNING-REDESIGN.md Contract 7; doc/formal/CONFORMANCE.md CQ-Closed.
+                // DO NOT recognize arithmetic, rewrite evaluation, or inspect operand types.
+                // Path borrowing versus parenthesized temporary borrowing is Rust syntax, not planning.
+                // Preserve temporary lifetime through all borrowing adapters; never evaluate per row.
+                if matches!(parameter, syn::Expr::Path(_)) {
+                    statements.push(syn::parse_quote!(let #id = &#parameter;));
+                } else {
+                    statements.push(syn::parse_quote!(let #id = &(#parameter);));
+                    // A closed expression may produce a temporary. Consume any
+                    // borrowing adapters before the enclosing host scope ends.
+                    bound = true;
+                }
                 parameters.insert(name, id);
             }
         }
-        let generator_expressions =
-            ownership::generator_captures(module, analysis, &mut statements, &mut used);
+        let binding_functions =
+            ownership::binding_captures(module, analysis, &mut statements, &mut used);
+        bound |= !binding_functions.is_empty();
+        let has_generators = module.physical.program.definitions.iter().any(|definition| {
+            matches!(&definition.operator, Operator::Bind(bind) if bind.for_token.is_some())
+        });
         let mut candidate_reads: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
         for candidate in physical::candidate_prefixes(&module.physical, &analysis.physical) {
             for (name, prefix) in candidate.sides {
@@ -325,7 +341,8 @@ impl<'a> Context<'a> {
                 .collect(),
             hosts,
             parameters,
-            generator_expressions,
+            has_generators,
+            binding_functions,
             idents: BTreeMap::new(),
             carried_columns: columns::carried_columns(module, analysis),
             carried_witnesses: columns::carried_witnesses(module, analysis),
@@ -669,13 +686,16 @@ impl<'a> Context<'a> {
             };
             let pairs = self.profile_inserting(&build_name, pairs);
             // A bare path lets Rust infer the type's generics from the pairs;
-            // written arguments (or holes) select the qualified form.
+            // explicit providers dispatch Rust capabilities at this concrete site.
             let bare = matches!(ty, syn::Type::Path(path)
                 if path.qself.is_none() && path.path.segments.iter().all(|s| s.arguments.is_none()));
             let routed = parts
                 .as_ref()
                 .and_then(|(_, _, providers, _)| providers.get(&ordinal));
             let build = if let Some(inner) = routed {
+                // Each shard selects the same capabilities as a serial build.
+                // Infer the outer provider from that concrete output, while
+                // retaining the recorded routing and parallel build protocol.
                 let (parts, routing, _, borrowed_singleton) =
                     parts.as_ref().expect("checked partition publication");
                 let stored_key = self.stored_key(name, &levels[0]);
@@ -695,10 +715,25 @@ impl<'a> Context<'a> {
                     &build_name,
                     quote!(__cq_part.iter().cloned().map(|#pattern| #nested)),
                 );
+                let part_build = quote!({
+                    let __cq_build_source = #part_rows;
+                    ::cq_storage::build!(#inner, __cq_build_source)
+                });
                 let router = quote!(|__cq_key: &(#(#key_types,)*), __cq_count| {
                     ::cq_storage::sharded::route_index(&(#(&__cq_key.#fields,)*), __cq_count)
                 });
                 if *borrowed_singleton {
+                    // A hoisted router lacks constructor argument inference.
+                    // Its key layout is already recorded: retain the opaque
+                    // column types and the same ownership used to build keys.
+                    let owned = self.owned_key(name, &levels[0]);
+                    let key_types = stored_key.iter().map(|column| {
+                        let ty = &self.infos[name].types[column];
+                        if owned { quote!(#ty) } else { quote!(&#ty) }
+                    });
+                    let router = quote!(|__cq_key: &(#(#key_types,)*), __cq_count| {
+                        ::cq_storage::sharded::route_index(&(#(&__cq_key.#fields,)*), __cq_count)
+                    });
                     let singleton_rows = self.profile_inserting(
                         &build_name,
                         quote!((#parts).source().map(|#pattern| #nested)),
@@ -707,38 +742,37 @@ impl<'a> Context<'a> {
                         let __cq_router = #router;
                         match (#parts).routed() {
                             ::core::option::Option::None =>
-                                ::cq_storage::sharded::Sharded::<#inner, _>::from_parts_with_router(
-                                    ::std::vec![<#inner as ::cq_storage::Build<_>>::build(#singleton_rows)],
+                                ::cq_storage::sharded::Sharded::<_, _>::from_parts_with_router(
+                                    ::std::vec![{
+                                        let __cq_build_source = #singleton_rows;
+                                        ::cq_storage::build!(#inner, __cq_build_source)
+                                    }],
                                     __cq_router,
                                 ),
                             ::core::option::Option::Some(__cq_parts) =>
-                                ::cq_storage::sharded::Sharded::<#inner, _>::build_from_parts_with_router(
+                                ::cq_storage::sharded::Sharded::<_, _>::build_from_parts_with_router(
                                     __cq_parts,
-                                    |__cq_part| <#inner as ::cq_storage::Build<_>>::build(#part_rows),
+                                    |__cq_part| #part_build,
                                     __cq_router,
                                 ),
                         }
                     })
                 } else {
-                    quote!(::cq_storage::sharded::Sharded::<#inner, _>::build_from_parts_with_router(
+                    quote!(::cq_storage::sharded::Sharded::<_, _>::build_from_parts_with_router(
                         &(#parts),
-                        |__cq_part| <#inner as ::cq_storage::Build<_>>::build(#part_rows),
+                        |__cq_part| #part_build,
                         #router,
                     ))
                 }
-            } else if let Some(selection) = selection.as_ref().filter(|_| !bare) {
-                let host_pattern = self.positional_pattern(name);
-                let nested = if let Some(i) = self.profile_index(&build_name) {
-                    let profile = self.profile_handle();
-                    quote!({ #profile.rows(#i, 1, 0, 1); #nested })
-                } else {
-                    nested
-                };
-                quote!(#selection.build::<_, _, _, #ty>(|#host_pattern| #nested))
             } else if bare {
                 quote!({ use ::cq_storage::Build as _; #ty::build(#pairs) })
             } else {
-                quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
+                // Keep generated iterator captures visible to ownership rewriting;
+                // macro token bodies are deliberately opaque to its Rust AST walk.
+                quote!({
+                    let __cq_build_source = #pairs;
+                    ::cq_storage::build!(#ty, __cq_build_source)
+                })
             };
             let build = self.profile_build(&build_name, build);
             statements.push(syn::parse_quote! { let #structure = &#build; });
@@ -771,7 +805,7 @@ impl<'a> Context<'a> {
                 );
                 let id = self.join_filter_ident(scan, index);
                 let pairs = quote!(::core::iter::Iterator::map(
-                    #structure.keys(), |__cq_key| (*__cq_key.#component, ())
+                    ::cq_storage::Keys::distinct_keys(#structure), |__cq_key| (*__cq_key.#component, ())
                 ));
                 let filter_name = format!("{name}.filter.{scan}.{key}.{index}");
                 self.profile_label(
@@ -787,19 +821,78 @@ impl<'a> Context<'a> {
                 let value = if bare {
                     quote!({ use ::cq_storage::Build as _; #ty::build(#pairs) })
                 } else {
-                    quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
+                    quote!({
+                        let __cq_build_source = #pairs;
+                        ::cq_storage::build!(#ty, __cq_build_source)
+                    })
                 };
                 let value = self.profile_build(&filter_name, value);
                 // Formal rule IF-JoinFilterAbandon: Construct no filter from a build keeping more than 35% of its source occurrence.
                 let population = match self.analysis.lineage.get(name) {
                     Some(origin) if positional_bases(self.analysis).contains(&origin.base) => {
                         let host = Self::positional_host(&origin.base);
-                        quote!(::core::option::Option::Some(::cq_storage::PositionalRows::len(#host)))
+                        let independent = self
+                            .analysis
+                            .reads
+                            .values()
+                            .any(|read| symbol_name(&read.origin.base) == origin.base)
+                            || self.analysis.selections.values().any(|selection| {
+                                symbol_name(&selection.origin.base) == origin.base
+                            })
+                            || self
+                                .analysis
+                                .keysets
+                                .values()
+                                .any(|keys| symbol_name(&keys.origin.base) == origin.base)
+                            || self.analysis.repr.values().any(|repr| {
+                                matches!(repr, structures::Repr::Positions { bases, .. }
+                                if bases.iter().any(|base| symbol_name(&base.base) == origin.base))
+                            });
+                        if independent {
+                            quote!(::core::option::Option::Some(::cq_storage::PositionalRows::len(#host)))
+                        } else {
+                            // A disabled supplementary filter must not make an
+                            // otherwise unknown build population newly known.
+                            let policies = self
+                                .analysis
+                                .join_filters
+                                .iter()
+                                .filter(|(scan, _)| {
+                                    self.analysis.lineage[*scan].base == origin.base
+                                })
+                                .flat_map(|(_, filters)| filters)
+                                .map(|filter| {
+                                    let build = symbol_name(&filter.build);
+                                    let key = symbol_name(
+                                        filter.key.columns.first().expect("checked key"),
+                                    );
+                                    let ty = &self.infos[&build].types[&key];
+                                    quote!((&&::cq_storage::JoinFilterKey::<#ty>::new()).eligible())
+                                });
+                            quote!({
+                                use ::cq_storage::JoinFilterEligibility as _;
+                                if false #(|| #policies)* {
+                                    ::core::option::Option::Some(::cq_storage::PositionalRows::len(#host))
+                                } else {
+                                    ::core::option::Option::None
+                                }
+                            })
+                        }
                     }
                     _ => quote!(::core::option::Option::None),
                 };
-                statements.push(syn::parse_quote!(let #id = ::cq_storage::selective_build(#structure.len(), #population).then(|| #value);));
-                statements.push(syn::parse_quote!(if let ::core::option::Option::Some(__cq_filter) = &#id { ::cq_storage::require::conservative::<i64, _>(__cq_filter); }));
+                let key_ty = &self.infos[name].types[&key];
+                statements.push(syn::parse_quote! {
+                    let #id = {
+                        use ::cq_storage::JoinFilterEligibility as _;
+                        let __cq_filter_key = ::cq_storage::JoinFilterKey::<#key_ty>::new();
+                        ((&&__cq_filter_key).eligible()
+                            && ::cq_storage::selective_build(
+                                ::cq_storage::Keys::key_count(#structure), #population
+                            )).then(|| #value)
+                    };
+                });
+                statements.push(syn::parse_quote!(if let ::core::option::Option::Some(__cq_filter) = &#id { ::cq_storage::require::conservative::<#key_ty, _>(__cq_filter); }));
                 statements.push(
                     syn::parse_quote!(let #id = &::cq_storage::JoinFilterPredicate(#id.as_ref());),
                 );
@@ -832,6 +925,27 @@ impl<'a> Context<'a> {
             }
             built.push((levels.clone(), structure));
         }
+        self.bound |= !statements.is_empty();
+        self.statements.extend(statements);
+        self.materialize_keysets(name, source);
+        if let Some(selection) = selection {
+            Repr::Selection {
+                selection,
+                structures: built,
+            }
+        } else {
+            Repr::Let {
+                rows,
+                structures: built,
+            }
+        }
+    }
+
+    /// Publish the recorded supplementary keysets without retaining source rows.
+    /// Borrowed host publications need these before positional membership reads,
+    /// just as tuple-backed and partitioned publications do.
+    pub fn materialize_keysets(&mut self, name: &str, source: TokenStream) {
+        let mut statements = Vec::new();
         let keysets = self.analysis.keysets.clone();
         for ((result, key), set) in &keysets {
             if result != name {
@@ -858,7 +972,10 @@ impl<'a> Context<'a> {
             let pairs = self.profile_inserting(&build_name, pairs);
             let build = self.profile_build(
                 &build_name,
-                quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs)),
+                quote!({
+                    let __cq_build_source = #pairs;
+                    ::cq_storage::build!(#ty, __cq_build_source)
+                }),
             );
             statements.push(syn::parse_quote!(let #id = &#build;));
             let types = key
@@ -879,17 +996,6 @@ impl<'a> Context<'a> {
         }
         self.bound |= !statements.is_empty();
         self.statements.extend(statements);
-        if let Some(selection) = selection {
-            Repr::Selection {
-                selection,
-                structures: built,
-            }
-        } else {
-            Repr::Let {
-                rows,
-                structures: built,
-            }
-        }
     }
 
     /// Runtime trait checks required for reads through a particular key.

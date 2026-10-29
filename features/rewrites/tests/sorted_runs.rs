@@ -9,7 +9,7 @@ macro_rules! triangle {
             relation R(a:i32,b:i32) = ($r);
             relation S(b:i32,c:i32) = ($s);
             relation T(a:i32,c:i32) = ($t);
-            answer(a,b,c) :- R(a,b), S(b,c), if (*c >= 0), T(a,c);
+            answer(a,b,c) :- R(a,b), S(b,c), where c >= 0, T(a,c);
         }
     };
 }
@@ -28,6 +28,8 @@ fn public_pipeline_records_sorted_runs_and_executes_default_answers() {
     ))
     .unwrap();
     ir::check_rewrite(&baseline, &rewritten).unwrap();
+    // A relational predicate exposes the filtered build to storage selection;
+    // an opaque Rust `if` carries no relational planning information.
     assert!(
         rewritten.structures.entries.iter().any(|entry| {
             matches!(&entry.structure, Structure::Built { keyed, .. }

@@ -31,6 +31,7 @@ impl Representation for DictionaryCodec {
 pub trait RowCodec<'data>: Sized {
     const WIDTH: usize;
     fn encode(&'data self, dictionary: &mut Dictionary<'data>, output: &mut [i64]) -> Result<()>;
+    // DECODE ?: row inverse contract has no enforced caller read boundary.
     fn decode(values: &[i64], dictionary: &Dictionary<'data>) -> Result<Self>;
 }
 impl RowCodec<'_> for () {
@@ -38,6 +39,7 @@ impl RowCodec<'_> for () {
     fn encode(&self, _: &mut Dictionary<'_>, _: &mut [i64]) -> Result<()> {
         Ok(())
     }
+    // DECODE ?: zero-column row inverse is vacuous but inherits the generic caller boundary.
     fn decode(_: &[i64], _: &Dictionary<'_>) -> Result<Self> {
         Ok(())
     }
@@ -50,7 +52,9 @@ macro_rules! tuple_codec {
             fn encode(&'data self, dictionary: &mut Dictionary<'data>, output: &mut [i64]) -> Result<()> {
                 $(output[$i] = encode_value(&self.$i, dictionary)?;)+ Ok(())
             }
+            // DECODE ?: tuple reconstruction is shared by publication and diagnostic callers.
             fn decode(values: &[i64], dictionary: &Dictionary<'data>) -> Result<Self> {
+                // DECODE ?: per-field typed inversion inherits the generic row consumer boundary.
                 Ok(($(decode_value::<$T>(values[$i], dictionary)?,)+))
             }
         }
@@ -308,6 +312,7 @@ impl<'data, Row, C> DeviceColumns<'data, Row, C> {
     }
     /// Download on explicit demand, checking this result and all ancestor
     /// statuses first. No query binding or chaining operation calls this.
+    // DECODE P: explicit DeviceColumns host answer publication is not called by query binding or chaining.
     pub fn to_host(&self) -> Result<Vec<Row>>
     where
         Row: RowCodec<'data>,
@@ -317,6 +322,7 @@ impl<'data, Row, C> DeviceColumns<'data, Row, C> {
             .table
             .columns
             .iter()
+            // DECODE P: final host row publication expands only the live answer columns before transfer.
             .map(|column| column.decoded()?.to_host_prefix(count))
             .collect::<Result<Vec<_>>>()?;
         let mut values = vec![0; columns.len()];
@@ -325,6 +331,7 @@ impl<'data, Row, C> DeviceColumns<'data, Row, C> {
             for (index, column) in columns.iter().enumerate() {
                 values[index] = column[row];
             }
+            // DECODE P: final host answer rows resolve scalar and dictionary representations.
             rows.push(Row::decode(&values, &self.dictionary)?);
         }
         Ok(rows)
@@ -391,6 +398,7 @@ mod tests {
         row.encode_owned(&mut Dictionary::default(), &mut values).unwrap();
         assert_eq!(values, expected);
         let dictionary = Dictionary::default();
+        // DECODE I: diagnostic inverse is immediately re-encoded for round-trip checking; the reorganization is avoidable.
         let decoded = <Row as RowCodec<'_>>::decode(&values, &dictionary).unwrap();
         let mut encoded = vec![0; expected.len()];
         decoded.encode_owned(&mut Dictionary::default(), &mut encoded).unwrap();

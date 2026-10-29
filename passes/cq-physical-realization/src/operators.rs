@@ -464,11 +464,7 @@ impl<'a> Printer<'a> {
                     &guard.condition,
                     guard.environment.as_ref(),
                 );
-                let arithmetic = cq::arithmetic::predicate(
-                    &guard.condition,
-                    &self.infos[&symbol_name(&guard.input)].types,
-                );
-                let condition = arithmetic.as_ref().unwrap_or(&guard.condition);
+                let condition = &guard.condition;
                 Ok(quote! {
                     ::core::iter::Iterator::filter(#input, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition))
                 })
@@ -506,11 +502,10 @@ impl<'a> Printer<'a> {
                     self.rust_aliases(&input_name, &bind.expression, bind.environment.as_ref());
                 let binding = &bind.pattern;
                 let annotation = &bind.annotation;
-                let arithmetic = cq::arithmetic::binding(bind, &self.infos[&input_name].types);
-                let value = self
-                    .generator_expressions
-                    .get(name)
-                    .unwrap_or_else(|| arithmetic.as_ref().unwrap_or(&bind.expression));
+                let value = match self.binding_functions.get(name) {
+                    Some((function, arguments)) => quote!(#function(#(#arguments),*)),
+                    None => bind.expression.to_token_stream(),
+                };
                 // Fan out each prefix through its finite iterator,
                 // moving generated values and retaining the prefix for subsequent items.
                 let generator = bind.for_token.is_some();
@@ -548,7 +543,7 @@ impl<'a> Printer<'a> {
                 } else {
                     quote! {
                         ::core::iter::Iterator::map(#input, move |#pattern| {
-                            // A dead output still evaluates its potentially partial Rust expression.
+                            // Preserve the recorded binding even when its output is dead.
                             #[allow(unused_variables)]
                             let #binding #annotation = { #(#shadows)* #value };
                             #row
@@ -591,7 +586,7 @@ impl<'a> Printer<'a> {
         self.analysis.stages.get(name).copied().unwrap_or(1)
     }
     /// For every outer row, enter the right side at the join key and append
-    /// the payload of every match.
+    /// the payload of every match, cloning retained owned columns for scalar fan-out.
     pub(super) fn probe(
         &mut self,
         name: &str,
@@ -687,7 +682,14 @@ impl<'a> Printer<'a> {
                 None => self
                     .constant_value(&right, c)
                     .filter(|_| !columns.iter().any(|key| key == c))
-                    .unwrap_or_else(|| self.access(&left, c)),
+                    .unwrap_or_else(|| {
+                        let value = self.access(&left, c);
+                        if !expand && self.infos[&left].computed.contains(c) {
+                            quote!(::core::clone::Clone::clone(&#value))
+                        } else {
+                            value
+                        }
+                    }),
             }
         });
         if expand {

@@ -27,6 +27,7 @@ fn translates_grouped_canonical_publication() {
         }
         graded gpu {source at host; feed at device.block; valuations at host; result at host;}
     };
+    let program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
     let analysis = check_grading(&program, &cq_gpu_sequence::machine()).unwrap();
     let code = cq_gpu_sequence::translate(&program, &analysis)
         .unwrap()
@@ -72,6 +73,7 @@ fn gpu_grouped_counts_sums_extrema_and_canonical_valuations() -> Result<()> {
             }
             graded gpu {source at host; feed at device.block; valuations at host; result at host;}
         };
+        // DECODE P: publish grouped nullable answers to the host correctness oracle.
         let actual: Vec<(u32, usize, i64, Option<i64>, Option<i64>)> = result.to_host()?;
         if raw.is_empty() {
             assert!(actual.is_empty());
@@ -125,6 +127,7 @@ fn gpu_keyed_group_reads_resident_columns_and_filters_before_folding() -> Result
             graded gpu {source at host; feed at host; result at host;}
             evidence { R(k,id) key; }
         };
+        // DECODE P: publish filtered grouped answers to the host correctness oracle.
         let actual: Vec<(u32, usize, i64, Option<i64>, Option<i64>)> = result.to_host()?;
         assert_eq!(
             actual,
@@ -164,6 +167,7 @@ fn whole_input_fold_combines_block_partials_including_empty_identity() -> Result
             }
             graded gpu { input at host; result at device.block; }
         };
+        // DECODE P: publish the final scalar fold answer to the host correctness oracle.
         let actual: Vec<(i64,)> = result.to_host()?;
         assert_eq!(actual, vec![(expected,)]);
     }

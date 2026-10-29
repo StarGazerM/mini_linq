@@ -1,9 +1,8 @@
 //! IX → Physical: choose operators and retention using plan reads only.
 //! Unfiltered host renames are reusable pipe reads. Literal occurrences build
 //! filtered retained rows or keyed storage from a base scan.
-//! Meaning is bottom + Set. Opaque partial Rust bind/guard nodes retain their
-//! ancestry chain; relational steps may move earlier, never later across them.
-//! I/O, mutation and evaluation counts are outside the denotation.
+//! Opaque, total Rust bind/guard expressions retain their recorded placement.
+//! Lowering chooses representations without reinterpreting Rust syntax.
 //! Canonicality follows from plan operators, checked host_set facts, and canon boundaries.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
@@ -18,10 +17,8 @@
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Only differing literals on one interface column prove union arms disjoint.
 //!
 use std::collections::{BTreeMap, BTreeSet};
 

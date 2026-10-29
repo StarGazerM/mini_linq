@@ -40,6 +40,12 @@ impl<K: ?Sized, F: Fn(&K, usize) -> usize> Router<K> for F {
 }
 
 /// A plan-sized family of immutable indexes with deterministic key routing.
+///
+/// Routing uniqueness law: all occurrences of an equal lookup key belong to
+/// exactly one shard, selected by the retained router (or the sole shard).
+/// Constructors accept already partitioned input and rely on this law. Thus
+/// `Keys` concatenates shard directories and sums their counts without
+/// deduplicating keys, routing again, or enumerating payloads.
 #[derive(Debug)]
 pub struct Sharded<I, F = FullKey> {
     shards: Vec<I>,
@@ -261,6 +267,7 @@ fn release_parallel<I: Send>(shards: &mut Vec<I>) {
 }
 
 impl<K, V, F> Sharded<Index<K, V>, F> {
+    // Retained inherent accessors share the same routing uniqueness premise.
     pub fn keys(&self) -> impl Iterator<Item = &K> {
         self.shards.iter().flat_map(Index::keys)
     }
@@ -281,6 +288,44 @@ impl<K: Ord + Copy, V: Copy, C: crate::KeyCodec<K>, F> Sharded<crate::SortedRun<
     }
     pub fn is_empty(&self) -> bool {
         self.shards.iter().all(crate::SortedRun::is_empty)
+    }
+}
+
+/// Borrowed shard directories, traversed without allocating or copying keys.
+pub struct ShardKeys<'a, I: crate::Keys + 'a> {
+    shards: std::slice::Iter<'a, I>,
+    current: Option<I::Iter<'a>>,
+}
+
+impl<'a, I: crate::Keys + 'a> Iterator for ShardKeys<'a, I> {
+    type Item = &'a I::Key;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(key) = self.current.as_mut().and_then(Iterator::next) {
+                return Some(key);
+            }
+            self.current = Some(self.shards.next()?.distinct_keys());
+        }
+    }
+}
+
+impl<I: crate::Keys, F> crate::Keys for Sharded<I, F> {
+    type Key = I::Key;
+    type Iter<'a>
+        = ShardKeys<'a, I>
+    where
+        Self: 'a;
+
+    fn key_count(&self) -> usize {
+        self.shards.iter().map(crate::Keys::key_count).sum()
+    }
+
+    fn distinct_keys(&self) -> Self::Iter<'_> {
+        ShardKeys {
+            shards: self.shards.iter(),
+            current: None,
+        }
     }
 }
 
@@ -367,6 +412,41 @@ impl<K, V> Index<K, V> {
     }
 }
 
+/// Borrowed hash-directory keys; bucket payloads are never traversed.
+pub struct IndexKeys<'a, K, V> {
+    source: crate::instrument::Cursor<std::collections::hash_map::Keys<'a, K, Bucket<V>>>,
+}
+
+impl<'a, K, V> Iterator for IndexKeys<'a, K, V> {
+    type Item = &'a K;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.source.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.source.size_hint()
+    }
+}
+
+impl<K, V> crate::Keys for Index<K, V> {
+    type Key = K;
+    type Iter<'a>
+        = IndexKeys<'a, K, V>
+    where
+        Self: 'a;
+
+    fn key_count(&self) -> usize {
+        self.buckets.len()
+    }
+
+    fn distinct_keys(&self) -> Self::Iter<'_> {
+        IndexKeys {
+            source: crate::instrument::cursor!(self.buckets.keys()),
+        }
+    }
+}
+
 impl<K: Eq + Hash, V, S: Iterator<Item = (K, V)>> Build<S> for Index<K, V> {
     fn build(source: S) -> Self {
         crate::count!(index_builds);
@@ -437,6 +517,59 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_distinct_keys<I: crate::Keys<Key = u64>>(index: &I, expected: &[u64]) {
+        let mut keys = crate::Keys::distinct_keys(index)
+            .copied()
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(keys, expected);
+        assert_eq!(crate::Keys::key_count(index), keys.len());
+    }
+
+    #[test]
+    fn key_directories_ignore_duplicate_payloads_and_empty_shards() {
+        for count in [1, 7, 32] {
+            for rows in [vec![], vec![(1u64, 2u64), (1, 2), (1, 3), (9, 4)]] {
+                let expected: &[u64] = if rows.is_empty() { &[] } else { &[1, 9] };
+                let native = Index::build(rows.iter().copied());
+                assert_distinct_keys(&native, expected);
+                let mut parts: Vec<_> = (0..count).map(|_| vec![]).collect();
+                for &pair in &rows {
+                    parts[route_index(&pair.0, count)].push(pair);
+                }
+                let hash = Sharded::from_parts(
+                    parts
+                        .iter()
+                        .map(|part| Index::build(part.iter().copied()))
+                        .collect(),
+                );
+                let sorted = Sharded::from_parts(
+                    parts
+                        .iter()
+                        .map(|part| crate::SortedRun::<_, _>::build(part.iter().copied()))
+                        .collect(),
+                );
+                // Exercise the generic capability with a provider that has
+                // no specialized Sharded inherent key accessors.
+                let trees = Sharded::from_parts(
+                    parts
+                        .iter()
+                        .map(|part| {
+                            let mut tree = std::collections::BTreeMap::<_, Vec<_>>::new();
+                            for &(key, value) in part {
+                                tree.entry(key).or_default().push(value);
+                            }
+                            tree
+                        })
+                        .collect(),
+                );
+                assert_distinct_keys(&hash, expected);
+                assert_distinct_keys(&sorted, expected);
+                assert_distinct_keys(&trees, expected);
+            }
+        }
+    }
 
     #[test]
     fn owned_build_preserves_non_clone_non_sync_rows_and_releases_once() {
@@ -576,6 +709,12 @@ mod tests {
                             Sharded::<crate::HashSet<(u64, u64)>, _>::build_parts_with_router(
                                 parts, router,
                             );
+                        let mut keys = crate::Keys::distinct_keys(&index)
+                            .copied()
+                            .collect::<Vec<_>>();
+                        keys.sort_unstable();
+                        assert_eq!(keys, [(2, 7), (2, 8), (9, 7)]);
+                        assert_eq!(crate::Keys::key_count(&index), keys.len());
                         for key in [(2, 7), (2, 8), (9, 7), (9, 8), (0, 0)] {
                             let expected: Vec<_> =
                                 rows.iter().filter(|r| r.0 == key).map(|r| r.1).collect();

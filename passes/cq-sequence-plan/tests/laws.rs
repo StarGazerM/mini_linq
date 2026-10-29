@@ -18,6 +18,7 @@ fn node(
     LevelNode {
         shared_bytes: None,
         name: syn::parse_str(name).unwrap(),
+        host_rust: matches!(name, "host" | "pool" | "task"),
         collaborative,
         dynamic,
         width,
@@ -203,6 +204,47 @@ fn reorderable_multi_join() -> Program {
         }
     };
     cq_sequence_lowering::compile(&structures).unwrap()
+}
+
+#[test]
+fn lookup_rechecks_optional_join_filter_covering_certificates() {
+    let structures = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32); relation S(a:i32);
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a};
+            s = let rename S@2 {a -> a};
+            jr = pipe probe first [a] l,r;
+            result = pipe canon probe first [a] jr,s;
+            return result as answer(a);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
+            r = ::cq_storage::HashIndex<'_, _, _> [a];
+            s = ::cq_storage::HashIndex<'_, _, _> [a];
+            l join_filter = ::cq_storage::AdaptiveKeySet<i32, ::cq_storage::NoDense, 64>
+                build r [a] covering jr marker ::cq_load::ColumnAt<0>;
+            result canon = Canonical;
+        }
+    };
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let rewritten = cq_sequence_plan::rewrites::lookup_first(
+        &source,
+        quote!(using ::cq_storage::HashIndex<'_, _, _>, order [s,r,l]),
+    )
+    .unwrap();
+    assert_ne!(rewritten.structures.physical, source.structures.physical);
+    cq_lang_sequence::contract::check(&rewritten).unwrap();
+    assert!(
+        rewritten.structures.structures.entries.iter().all(|entry| {
+            !matches!(
+                entry.structure,
+                cq_lang_sequence::structures::Structure::JoinFilter { .. }
+            )
+        }),
+        "a removed covering join cannot certify an optional scan filter"
+    );
+    check_rewrite(&source, &rewritten).unwrap();
 }
 
 fn replay(source: &Program, machine: &Machine, planned: &Planned) -> Analysis {
@@ -743,7 +785,7 @@ fn distinct_union_drivers_publish_in_deterministic_separate_dispatches() {
 }
 
 #[test]
-fn opaque_predicate_and_feeds_stay_host_before_total_lookup_dispatch() {
+fn rust_without_identity_facts_and_its_feeds_stay_host() {
     let source: Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32,c:i32);
@@ -770,6 +812,11 @@ fn opaque_predicate_and_feeds_stay_host_before_total_lookup_dispatch() {
             result = store canon map answer after;
         }
     };
+    assert!(
+        cq_sequence_plan::rewrites::lookup_plan(&source)
+            .unwrap()
+            .is_some()
+    );
     let machine = machines().pop().unwrap();
     let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
     let analysis = replay(&source, &machine, &planned);
@@ -791,7 +838,7 @@ fn opaque_predicate_and_feeds_stay_host_before_total_lookup_dispatch() {
 }
 
 #[test]
-fn string_predicate_and_numeric_projection_publish_at_host() {
+fn relational_string_predicates_do_not_imply_host_placement() {
     let source: Program = syn::parse_quote! {
         physical {
             relation R(a:i32,s:String);
@@ -812,15 +859,8 @@ fn string_predicate_and_numeric_projection_publish_at_host() {
     let machine = machines().pop().unwrap();
     let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
     let analysis = replay(&source, &machine, &planned);
-    for name in ["input", "selected", "numeric"] {
-        assert_eq!(analysis.levels[name], ["host"], "{name}");
-    }
-    assert!(
-        analysis
-            .dispatches
-            .iter()
-            .any(|dispatch| dispatch.outer_store == "numeric")
-    );
+    assert!(analysis.levels["selected"].len() > 1);
+    assert!(analysis.levels["numeric"].len() > 1);
 }
 
 #[test]
@@ -844,7 +884,10 @@ fn host_string_filter_uploads_projected_index_before_device_lookups() {
     let structures = cq_sequence_plan::select_from_catalog(&structures, &available).unwrap();
     let facts = cq_lang_sequence::structures::contract::check(&structures).unwrap();
     assert_eq!(facts.layouts["selected"], ["a"]);
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let mut source = cq_sequence_lowering::compile(&structures).unwrap();
+    // The target records the projected key's device representation; the
+    // unrepresented string payload remains available only to the host guard.
+    source.representation.identity.insert("a".into());
     let planned = decompose(&source, &machine, &available).unwrap();
     let analysis = replay(&source, &machine, &planned);
     assert_eq!(analysis.levels["__sequence_host_selected"], ["host"]);

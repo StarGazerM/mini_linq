@@ -85,7 +85,7 @@ fn positional_predicate_does_not_shadow_an_opaque_guard_capture() {
                 pipeline { print_input = $endpoint; print = $($printer)::+; select = mini_linq::passes::select(positional(r)); }
                 struct GuardHygiene;
                 relation r(x:i64) = (rows);
-                answer(x) :- r(x), if *x >= 1, if keep(x, __cq_r1_predicate), if keep(x, __push_position_r1);
+                answer(x) :- r(x), where x >= 1, if keep(x, __cq_r1_predicate), if keep(x, __push_position_r1);
             }
             .map(|(x,)| *x)
             .collect()
@@ -158,7 +158,7 @@ fn borrowed_scalar_point_and_range_parameters_agree() {
                 }
                 struct BorrowedParameter;
                 relation R(x:i64) = (rows);
-                answer(x) :- R(x), if *x $comparison cutoff;
+                answer(x) :- R(x), where x $comparison cutoff;
             }
             .map(|(x,)| *x)
             .collect::<Vec<_>>()

@@ -33,6 +33,7 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
         }
         graded gpu { Edges at host; ByB at host; ByA at host; result at device; }
     };
+    let program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
     let analysis = check_grading(&program, &cq_gpu_sequence::machine()).unwrap();
     assert_eq!(analysis.dispatches.len(), 1);
     let translated = cq_gpu_sequence::translate(&program, &analysis).unwrap();
@@ -42,7 +43,7 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
         generated.contains("device :: decode ("),
         "i64 range payloads must use the full-width decoder: {generated}"
     );
-    assert!(!generated.contains("PayloadKind :: I32"));
-    assert!(!generated.contains("PayloadKind :: U32"));
+    assert!(generated.contains("< i64 as :: gpu_datalog_runtime :: Scalar > :: COLUMN"),
+        "payload width must come from the recorded scalar provider: {generated}");
     assert_eq!(analysis.results["result"], "checked");
 }

@@ -23,9 +23,6 @@ impl syn::parse::Parse for Symbols {
             if symbols.codec(&ty).is_some() {
                 return Err(syn::Error::new_spanned(ty, "duplicate symbol type"));
             }
-            if scalar(&ty).is_ok() {
-                return Err(syn::Error::new_spanned(ty, "native device scalars cannot have symbol codecs"));
-            }
             symbols.0.push((ty, codec));
             if content.is_empty() { break; }
             content.parse::<syn::Token![,]>()?;
@@ -97,8 +94,8 @@ impl Symbols {
             syn::Error::new_spanned(program, "missing device storage advice"))?;
         let symbols = Self(advice.symbols.clone());
         for (index, (ty, _)) in symbols.0.iter().enumerate() {
-            if scalar(ty).is_ok() || symbols.0[..index].iter().any(|(previous, _)| previous == ty) {
-                return Err(syn::Error::new_spanned(ty, "symbol declarations require unique nonnative logical types"));
+            if symbols.0[..index].iter().any(|(previous, _)| previous == ty) {
+                return Err(syn::Error::new_spanned(ty, "symbol declarations require unique logical types"));
             }
         }
         symbols.validate(program)?;
@@ -106,68 +103,18 @@ impl Symbols {
     }
 }
 
-fn symbol_parts(ty: &Type) -> Option<(&Type, &Type)> {
-    let Type::Path(path) = ty else { return None };
-    if path.qself.is_some() || path.path.segments.len() != 2
-        || path.path.segments[0].ident != "gpu_datalog_runtime"
-        || path.path.segments[1].ident != "Symbol" { return None; }
-    let syn::PathArguments::AngleBracketed(arguments) = &path.path.segments[1].arguments else { return None };
-    let mut arguments = arguments.args.iter();
-    let (Some(syn::GenericArgument::Type(logical)), Some(syn::GenericArgument::Type(codec)), None) =
-        (arguments.next(), arguments.next(), arguments.next()) else { return None };
-    Some((logical, codec))
-}
-
-/// Return the native packed width and the runtime column descriptor.
-/// The runtime also packs u64, but GPU CQ expressions cannot represent its full domain.
-pub fn scalar(ty: &Type) -> syn::Result<(u32, TokenStream)> {
-    if symbol_parts(ty).is_some() {
-        return Ok((32, quote!(::gpu_datalog_runtime::Column::U32)));
-    }
-    if let Type::Path(path) = ty {
-        if path.qself.is_none() && path.path.segments.len() == 1 {
-            let segment = &path.path.segments[0];
-            if matches!(segment.arguments, syn::PathArguments::None) {
-                let (bits, variant) = match segment.ident.to_string().as_str() {
-                    "u8" => (8, quote!(U8)),
-                    "i8" => (8, quote!(I8)),
-                    "u16" => (16, quote!(U16)),
-                    "i16" => (16, quote!(I16)),
-                    "u32" => (32, quote!(U32)),
-                    "i32" => (32, quote!(I32)),
-                    "i64" => (64, quote!(I64)),
-                    _ => return Err(unsupported_scalar(ty)),
-                };
-                return Ok((bits, quote!(::gpu_datalog_runtime::Column::#variant)));
-            }
-        }
-    }
-    Err(unsupported_scalar(ty))
-}
-
-fn unsupported_scalar(ty: &Type) -> syn::Error {
-    syn::Error::new_spanned(
-        ty,
-        "device storage supports only u8/i8/u16/i16/u32/i32/i64 scalar columns; u64 is outside the GPU CQ expression domain",
-    )
-}
-
-/// Choose the minimal runtime word, including u64 for the empty tuple.
+/// Emit the native packed word from recorded scalar metadata. Rustc resolves
+/// aliases and selects the arena's scalar or most-significant-first lane ABI.
 pub fn word_type<'a>(types: impl IntoIterator<Item = &'a Type>) -> syn::Result<Type> {
-    let mut bits = 0_usize;
-    for ty in types {
-        let (width, _) = scalar(ty)?;
-        bits = bits.checked_add(width as usize)
-            .ok_or_else(|| syn::Error::new_spanned(ty, "device storage tuple width overflow"))?;
-    }
-    Ok(if bits <= 64 {
-        syn::parse_quote!(u64)
-    } else if bits <= 128 {
-        syn::parse_quote!(u128)
-    } else {
-        let lanes = syn::Index::from(bits.div_ceil(64));
-        syn::parse_quote!([u64; #lanes])
-    })
+    let types: Vec<_> = types.into_iter().collect();
+    let lanes = quote!({
+        let bits = 0usize #(+ <#types as ::gpu_datalog_runtime::Scalar>::COLUMN.bits() as usize)*;
+        let lanes = bits.div_ceil(64);
+        if lanes == 0 { 1 } else { lanes }
+    });
+    syn::parse2(quote!(<::gpu_datalog_runtime::pack::WordWidth<
+        #lanes, { (#lanes) <= 2 }
+    > as ::gpu_datalog_runtime::pack::NativeWord>::Word))
 }
 
 /// Build a CQ binding in its recorded physical order; callers supply a checked key.
@@ -342,7 +289,7 @@ mod tests {
         assert_eq!(symbols.codec(&syn::parse_quote!(String)), Some(&syn::parse_quote!(TextCodec)));
         assert_eq!(symbols.codec(&syn::parse_quote!(SymbolId)), Some(&syn::parse_quote!(ids::Codec)));
         assert!(syn::parse2::<Symbols>(quote!(symbols(String => A, String => B))).is_err());
-        assert!(syn::parse2::<Symbols>(quote!(symbols(u32 => A))).is_err());
+        assert!(syn::parse2::<Symbols>(quote!(symbols(u32 => A))).is_ok());
         assert!(syn::parse2::<Symbols>(quote!(symbols(String))).is_err());
         assert!(syn::parse2::<Symbols>(quote!(symbols(String => A) extra)).is_err());
         assert!(syn::parse2::<Symbols>(quote!(codecs(String => A))).is_err());
@@ -359,15 +306,19 @@ mod tests {
         let source = cq_datalog_storage::compile(&incremental).unwrap();
         let target = compile_with(&source, quote!(symbols(String => TextCodec))).unwrap();
         assert_eq!(source.incremental, target.incremental);
+        let ty: Type = syn::parse_quote!(::gpu_datalog_runtime::Symbol<String, TextCodec>);
+        let word = word_type([&ty, &ty]).unwrap();
         assert_eq!(target.providers[0].canonical_set, syn::parse_quote!(
-            ::gpu_datalog_runtime::DeviceRuns<u64>
+            ::gpu_datalog_runtime::DeviceRuns<#word>
         ));
         assert_eq!(Symbols::from_program(&target).unwrap().codec(&syn::parse_quote!(String)), Some(&syn::parse_quote!(TextCodec)));
         check(&source, &target).unwrap();
         check_device(&target).unwrap();
         let roundtrip: Program = syn::parse2(quote!(#target)).unwrap();
         assert_eq!(roundtrip, target);
-        assert!(compile(&source).is_err());
+        // Unmapped logical types are checked by rustc's Scalar bound, not by
+        // recognizing the spelling of String in the query compiler.
+        assert!(compile(&source).is_ok());
         assert!(compile_with(&source, quote!(symbols(other::String => TextCodec))).is_err());
         let mut changed = target.clone();
         changed.device.as_mut().unwrap().symbols[0].1 = syn::parse_quote!(WrongCodec);
@@ -379,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn wide_symbol_schema_uses_three_lanes_without_changing_host_types() {
+    fn wide_symbol_schema_records_each_column_without_changing_host_types() {
         let source = cq_datalog_storage::compile(&syn::parse_quote! {
             struct Wide;
             relation E(a:String,b:String,c:String,d:String,e:String) = (input);
@@ -397,7 +348,8 @@ mod tests {
         let schema = Symbols::from_program(&target).unwrap();
         let types = source.incremental.strata.source.declarations[0].columns.iter()
             .map(|column| schema.device_type(&column.ty)).collect::<Vec<_>>();
-        assert_eq!(word_type(&types).unwrap(), syn::parse_quote!([u64; 3]));
+        let word = word_type(&types).unwrap();
+        assert_eq!(quote!(#word).to_string().matches("Scalar").count(), 10);
         check_device(&target).unwrap();
     }
 
@@ -425,35 +377,18 @@ mod tests {
     }
 
     #[test]
-    fn scalar_domains_match_runtime_and_gpu_expressions() {
-        for (name, bits, variant) in [
-            ("u8", 8, "U8"), ("i8", 8, "I8"),
-            ("u16", 16, "U16"), ("i16", 16, "I16"),
-            ("u32", 32, "U32"), ("i32", 32, "I32"), ("i64", 64, "I64"),
-        ] {
-            let (actual_bits, descriptor) = scalar(&syn::parse_str(name).unwrap()).unwrap();
-            assert_eq!(actual_bits, bits);
-            let expected: syn::Path = syn::parse_str(&format!("::gpu_datalog_runtime::Column::{variant}")).unwrap();
-            assert_eq!(syn::parse2::<syn::Path>(descriptor).unwrap(), expected);
-        }
-        for name in ["u64", "u128", "i128", "usize", "isize", "bool", "char", "f32", "f64", "String", "&i32", "(i32,)", "[u8; 4]", "MyScalar", "u8<u16>"] {
-            assert!(scalar(&syn::parse_str(name).unwrap()).is_err(), "{name}");
-        }
+    fn scalar_aliases_are_resolved_by_rustc() {
+        let ty: Type = syn::parse_quote!(MyScalar);
+        let word = word_type([&ty]).unwrap();
+        let text = quote!(#word).to_string();
+        assert!(text.contains("< MyScalar as :: gpu_datalog_runtime :: Scalar > :: COLUMN"));
+        assert!(text.contains("NativeWord"));
     }
 
     #[test]
     fn packing_boundaries_and_layout_keys() {
-        for (types, expected) in [
-            (vec![], syn::parse_quote!(u64)),
-            (vec![syn::parse_quote!(i64)], syn::parse_quote!(u64)),
-            (vec![syn::parse_quote!(i64), syn::parse_quote!(u8)], syn::parse_quote!(u128)),
-            (vec![syn::parse_quote!(i64), syn::parse_quote!(i64)], syn::parse_quote!(u128)),
-            (vec![syn::parse_quote!(u8); 16], syn::parse_quote!(u128)),
-            (vec![syn::parse_quote!(i64), syn::parse_quote!(i64), syn::parse_quote!(u8)], syn::parse_quote!([u64; 3])),
-            (vec![syn::parse_quote!(i64); 4], syn::parse_quote!([u64; 4])),
-        ] {
-            assert_eq!(word_type(&types).unwrap(), expected);
-        }
+        let empty = word_type(std::iter::empty::<&Type>()).unwrap();
+        assert!(matches!(empty, Type::Path(_)));
         let types: Vec<Type> = vec![syn::parse_quote!(i16), syn::parse_quote!(u32)];
         let types: Vec<_> = types.iter().collect();
         assert_eq!(layout_type(&types, 0), syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(), (i16, u32,)>));
@@ -473,11 +408,13 @@ mod tests {
         assert_eq!(target.negations, source.negations);
         assert_eq!(target.certificates, source.certificates);
         assert_eq!(target.policy, source.policy);
-        assert_eq!(target.providers[0].canonical_set, syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<u64>));
+        let ty: Type = syn::parse_quote!(i32);
+        let word = word_type([&ty, &ty]).unwrap();
+        assert_eq!(target.providers[0].canonical_set, syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>));
         let mut edb = target.providers[0].clone();
         edb.canonical_set = source.providers[0].canonical_set.clone();
         assert_eq!(edb, source.providers[0]);
-        assert_eq!(target.providers[2].all, syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<u64>));
+        assert_eq!(target.providers[2].all, syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>));
         assert_eq!(target.providers[2].canonical_set, source.providers[2].canonical_set);
         assert_eq!(target.providers[2].canonical_name, source.providers[2].canonical_name);
         for (before, after) in source.layouts.iter().zip(&target.layouts)
@@ -568,12 +505,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_relation_schemas() {
-        for (name, message) in [
-            ("bool", "supports only"),
-            ("u64", "supports only"),
-            ("String", "supports only"),
-        ] {
+    fn scalar_trait_eligibility_is_deferred_to_rustc() {
+        for name in ["bool", "u64", "String", "Alias"] {
             let ty: Type = syn::parse_str(name).unwrap();
             let source = cq_datalog_storage::compile(&syn::parse_quote! {
                 struct Schema;
@@ -587,13 +520,13 @@ mod tests {
                     variant 0 seed { R(*x,*y,*z) :- E(x,y,z); }
                 }
             }).unwrap();
-            assert!(compile(&source).unwrap_err().to_string().contains(message), "{name}");
-            assert!(check(&source, &source).unwrap_err().to_string().contains(message), "{name}");
+            let target = compile(&source).unwrap();
+            check(&source, &target).unwrap();
         }
     }
 
     #[test]
-    fn wide_relations_use_u128_without_changing_scalar_layout_types() {
+    fn wide_relations_use_recorded_widths_without_changing_scalar_layout_types() {
         let mut incremental = source().incremental;
         for declaration in &mut incremental.strata.source.declarations {
             for column in &mut declaration.columns {
@@ -602,8 +535,10 @@ mod tests {
         }
         let source = cq_datalog_storage::compile(&incremental).unwrap();
         let target = compile(&source).unwrap();
-        assert_eq!(target.providers[0].canonical_set, syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<u128>));
-        assert_eq!(target.providers[2].all, syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<u128>));
+        let ty: Type = syn::parse_quote!(i64);
+        let word = word_type([&ty, &ty]).unwrap();
+        assert_eq!(target.providers[0].canonical_set, syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>));
+        assert_eq!(target.providers[2].all, syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>));
         assert_eq!(target.layouts[0].provider, syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(), (i64, i64,)>));
         check(&source, &target).unwrap();
     }

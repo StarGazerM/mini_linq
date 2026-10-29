@@ -14,7 +14,7 @@ pub fn check(scenario: Scenario) {
         struct SurfaceLetSum;
         relation R(x: i32, y: i32);
         relation answer(c0: i32, c1: i32);
-        answer(*x, *total) :- R(x, y), let total: i32 = *x + *y, if *total > 0;
+        answer(*x, *total) :- R(x, y), let total: i32 = *x + *y, where total > 0;
     };
     let actual = result
         .map(|(column_0, column_1)| vec![column_0, column_1])

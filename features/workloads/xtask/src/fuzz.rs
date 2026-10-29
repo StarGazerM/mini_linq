@@ -1,9 +1,7 @@
-//! Total scalar queries use independently printed DuckDB SQL. Opaque partial
-//! terms and all Rust generators use a second compiled query in written order
-//! with reordering disabled, including panics during iterator advancement.
-//! The denotation is `bottom + Set`: a target must return the same set without
-//! panic whenever the written reference succeeds; a reference panic permits
-//! either outcome. I/O, mutation and evaluation count are outside this meaning.
+//! Relational scalar queries use independently printed DuckDB SQL. Opaque Rust
+//! terms and generators use a second compiled query in written order with
+//! reordering disabled. Rust is pure and total by premise: a panic in either
+//! execution fails comparison. Successful executions must return equal sets.
 //! `xtask fuzz` writes a disposable Cargo consumer under target/fuzz. Its small
 //! proc macro runs the selected logical passes, then calls the public facade
 //! for physical lowering and realization. Each batch is compiled once; runtime
@@ -238,8 +236,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
     let mut execute_time = Duration::ZERO;
     let mut oracle_time = Duration::ZERO;
     let mut nonempty = 0;
-    let mut partial_cases = 0;
-    let mut reference_panics = 0;
+    let mut rust_cases = 0;
     for (batch_index, batch) in cases.chunks(BATCH).enumerate() {
         let offset = batch_index * BATCH;
         let started = Instant::now();
@@ -329,7 +326,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
                         shrink_rows(&mut minimal, |candidate| {
                             runner.reference(id, candidate).is_err()
                         });
-                        if !minimal.has_partial_terms() {
+                        if !minimal.requires_rust_oracle() {
                             shrink_atoms(&mut minimal, |candidate| reference(candidate).is_err());
                         }
                         if size(&minimal) == before {
@@ -347,9 +344,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
             };
             oracle_time += started.elapsed();
             nonempty += usize::from(expected.as_ref().is_ok_and(|rows| !rows.is_empty()));
-            partial_cases += usize::from(case.has_partial_terms());
-            reference_panics +=
-                usize::from(expected.as_ref().is_err_and(|reason| reason == "PANIC"));
+            rust_cases += usize::from(case.requires_rust_oracle());
             let got = &actual[id];
             if !refines(got, &expected) {
                 let mut minimal = case.clone();
@@ -394,7 +389,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
     println!("query distribution: {coverage}");
     println!("configuration distribution: {distribution:?}");
     println!(
-        "fuzz: passed {count}; {nonempty} nonempty reference answers; {partial_cases} partial cases, {reference_panics} written reference panics; {rejected} unavailable native-merge configurations resampled; total {:.2}s (compile {:.2}s, execute {:.2}s, references {:.2}s)",
+        "fuzz: passed {count}; {nonempty} nonempty reference answers; {rust_cases} Rust oracle cases; {rejected} unavailable native-merge configurations resampled; total {:.2}s (compile {:.2}s, execute {:.2}s, references {:.2}s)",
         started.elapsed().as_secs_f64(),
         compile_time.as_secs_f64(),
         execute_time.as_secs_f64(),
@@ -404,9 +399,9 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
 }
 
 fn reference(case: &Case) -> Result<Vec<Vec<i32>>> {
-    if case.has_partial_terms() {
+    if case.requires_rust_oracle() {
         return Err(
-            "partial terms and generators require the compiled written-order reference".into(),
+            "opaque Rust terms and generators require the compiled written-order reference".into(),
         );
     }
     cq_testkit::duckdb::evaluate_fuzz(case).map_err(crate::testkit_error)
@@ -415,9 +410,6 @@ fn reference(case: &Case) -> Result<Vec<Vec<i32>>> {
 fn refines(target: &ConsumerResult, written: &ConsumerResult) -> bool {
     match written {
         Ok(expected) => target.as_ref().ok() == Some(expected),
-        Err(reason) if reason == "PANIC" => {
-            target.is_ok() || target.as_ref().is_err_and(|reason| reason == "PANIC")
-        }
         Err(_) => false,
     }
 }
@@ -592,14 +584,14 @@ impl Runner {
         source.push_str("\nfn dispatch(id: usize, data: &Data) -> Vec<Vec<i32>> { match id {\n");
         for (id, (case, _)) in cases.iter().enumerate() {
             writeln!(source, "{id} => case_{id}::run(data),").unwrap();
-            if case.has_partial_terms() {
+            if case.requires_rust_oracle() {
                 writeln!(source, "{} => case_{}::run(data),", id + BATCH, id + BATCH).unwrap();
             }
         }
         source.push_str("_ => panic!(\"unknown case {id}\"), } }\n");
         for (id, (case, config)) in cases.iter().enumerate() {
             source.push_str(&consumer_case(id, case, *config));
-            if case.has_partial_terms() {
+            if case.requires_rust_oracle() {
                 source.push_str(&consumer_case(
                     id + BATCH,
                     case,
@@ -709,7 +701,7 @@ impl Runner {
     }
 
     fn reference(&self, id: usize, case: &Case) -> Result<ConsumerResult> {
-        if case.has_partial_terms() {
+        if case.requires_rust_oracle() {
             Ok(self.execute(std::iter::once((id + BATCH, case)))?.remove(0))
         } else {
             reference(case).map(Ok)
@@ -777,14 +769,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn refinement_keeps_abort_direction_and_set_equality() {
+    fn refinement_requires_total_execution_and_set_equality() {
         let rows = Ok(vec![vec![1]]);
         let empty = Ok(Vec::new());
         let panic = Err("PANIC".into());
         let duplicates = Err("DUPLICATES".into());
         assert!(refines(&rows, &rows));
-        assert!(refines(&rows, &panic));
-        assert!(refines(&panic, &panic));
+        assert!(!refines(&rows, &panic));
+        assert!(!refines(&panic, &panic));
         assert!(!refines(&panic, &rows));
         assert!(!refines(&empty, &rows));
         assert!(!refines(&duplicates, &panic));
@@ -792,7 +784,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_reference_uses_written_order_and_disables_every_reordering_option() {
+    fn rust_reference_uses_written_order_and_disables_every_reordering_option() {
         let config = Config::written_reference();
         assert_eq!(config.planner, 0);
         assert!(config.reference);
@@ -800,7 +792,7 @@ mod tests {
         assert_eq!(pipeline.plan, 0);
         assert!(!pipeline.merge && !pipeline.canon && !pipeline.smallest);
         let case = model::generate(0);
-        assert!(case.has_partial_terms());
+        assert!(case.requires_rust_oracle());
         let source = consumer_case(BATCH, &case, config);
         assert!(source.contains("cq_fuzz_planner::written_reference"));
         assert!(
@@ -816,7 +808,7 @@ mod tests {
         let mut case = model::generate(60);
         assert!(case.query.bindings[0].generator.is_some());
         case.query.bindings[0].expression = model::Expr::Constant(2);
-        assert!(case.has_partial_terms());
+        assert!(case.requires_rust_oracle());
         assert!(
             reference(&case)
                 .unwrap_err()

@@ -144,16 +144,18 @@ fn returning_reference_requires_equal_answers_without_target_panic() {
 }
 
 #[test]
-fn panicking_reference_permits_either_target_outcome() {
-    let returned = check_refinement(|| -> Rows { panic!("reference") }, Rows::new).unwrap();
-    assert!(matches!(returned.reference, Outcome::Panicked(_)));
-    assert_eq!(returned.target, Outcome::Returned(Rows::new()));
-    let panicked = check_refinement(
-        || -> Rows { panic!("reference") },
-        || panic!("different target panic"),
-    )
-    .unwrap();
-    assert!(matches!(panicked.target, Outcome::Panicked(_)));
+fn panicking_reference_violates_totality_regardless_of_target_outcome() {
+    assert!(matches!(
+        check_refinement(|| -> Rows { panic!("reference") }, Rows::new),
+        Err(RefinementFailure::ReferencePanicked { .. })
+    ));
+    assert!(matches!(
+        check_refinement(
+            || -> Rows { panic!("reference") },
+            || panic!("different target panic"),
+        ),
+        Err(RefinementFailure::ReferencePanicked { .. })
+    ));
 }
 
 #[test]

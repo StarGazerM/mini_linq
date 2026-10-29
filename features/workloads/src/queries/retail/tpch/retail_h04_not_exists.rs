@@ -22,6 +22,6 @@ AND l.l_commitdate < l.l_receiptdate)"#;
     }
     derived { relation LateLineitem(order_key: i64); }
     answer(order_key: i64) :-
-        Orders(order_key, order_date), if *order_date >= start && *order_date < end,
+        Orders(order_key, order_date), where order_date >= start && order_date < end,
         !LateLineitem(order_key);
 }

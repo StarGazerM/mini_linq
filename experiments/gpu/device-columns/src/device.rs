@@ -87,6 +87,7 @@ impl From<ColumnView> for SourceView {
 
 #[device]
 #[inline(always)]
+// DECODE ?: source inverse serves gather re-encoding and relational index builds; classify the consuming call.
 pub unsafe fn decode_source(source: SourceView, row: u64) -> i64 {
     if source.packed != 0 {
         let offset = if source.mask == 0 {
@@ -100,18 +101,23 @@ pub unsafe fn decode_source(source: SourceView, row: u64) -> i64 {
             }
             value & source.mask
         };
+        // DECODE ?: packed base-plus-offset reconstruction inherits the source caller boundary.
         source.base.wrapping_add(offset as i64)
     } else {
+        // DECODE ?: column delegation serves mixed source consumers without a local read fact.
         unsafe { decode(source.column, row * source.stride) }
     }
 }
 
 #[device]
 #[inline(always)]
+// DECODE V: narrowed source reconstruction feeds Sequence sorting/indexing; P6 retain encoded keys.
 pub unsafe fn decode_source_u32(source: SourceView, row: u64) -> u32 {
     if source.packed == 0 {
+        // DECODE V: ordinary source decode precedes key sorting; P6 avoid pre-sort expansion.
         unsafe { decode_u32(source.column, row * source.stride) }
     } else {
+        // DECODE V: packed source decode precedes key sorting; P6 compare recorded packed fields.
         unsafe { decode_source(source, row) as u32 }
     }
 }
@@ -176,6 +182,7 @@ pub unsafe fn unpack(data: *const u64, width: u32, original: usize) -> u64 {
 /// sequences, including all-equal vectors) needs no prefix loop or payload.
 #[device]
 #[inline(always)]
+// DECODE ?: random-access FOR/delta inverse has mixed callers; no local opaque-read/publication fact.
 pub unsafe fn decode(view: ColumnView, row: u64) -> i64 {
     if view.headers.is_null() && view.codec == Codec::Plain as u32 {
         return (unsafe { view.data.add(row as usize).read() }) as i64;
@@ -188,11 +195,13 @@ pub unsafe fn decode(view: ColumnView, row: u64) -> i64 {
         let position = local % 64;
         let mut value = unsafe { data.add(lane).read() };
         if header.width == 0 {
+            // DECODE ?: regular delta base reconstruction needs the consuming row-read fact.
             return value.wrapping_add((header.base as u64).wrapping_mul(position as u64)) as i64;
         }
         let packed = unsafe { data.add(16) };
         let mut i = 1;
         while i <= position {
+            // DECODE ?: delta prefix reconstruction adds base and residuals for an unspecified caller.
             value = value
                 .wrapping_add(header.base as u64)
                 .wrapping_add(unsafe { unpack(packed, header.width, lane * 64 + i) });
@@ -200,6 +209,7 @@ pub unsafe fn decode(view: ColumnView, row: u64) -> i64 {
         }
         value as i64
     } else {
+        // DECODE ?: FOR base restoration is logical decoding even when the result is another domain code.
         (header.base as u64).wrapping_add(unsafe { unpack(data, header.width, local) }) as i64
     }
 }
@@ -209,15 +219,19 @@ pub unsafe fn decode(view: ColumnView, row: u64) -> i64 {
 /// Plain storage use the general path.
 #[device]
 #[inline(always)]
+// DECODE ?: u32 FOR inverse is shared by selection, lookup and diagnostic consumers.
 pub unsafe fn decode_u32(view: ColumnView, row: u64) -> u32 {
     if view.headers.is_null() {
+        // DECODE ?: native u32 fallback inherits its caller consumption boundary.
         return unsafe { decode(view, row) } as u32;
     }
     let header = unsafe { view.headers.add((row / 1024) as usize).read() };
     if header.codec == Codec::Delta as u32 {
+        // DECODE ?: delta u32 fallback inherits its caller consumption boundary.
         return unsafe { decode(view, row) } as u32;
     }
     let data = unsafe { view.data.add(header.offset as usize) };
+    // DECODE ?: narrowed FOR base addition reconstructs a value for an unspecified consumer.
     (header.base as u32)
         .wrapping_add(unsafe { unpack(data, header.width, (row % 1024) as usize) } as u32)
 }
@@ -237,6 +251,7 @@ unsafe fn decode_native(data: *const u64, row: u64, len: u64) -> i64 {
 /// `stripe` is 0..4. Invalid rows are zero, including a partial final warp.
 #[device]
 #[inline(always)]
+// DECODE ?: stripe reconstruction serves generated consumers without a local logical-read fact.
 pub unsafe fn decode_stripe(view: ColumnView, vector: u64, lane: u32, stripe: usize) -> i64 {
     let len = unsafe { logical_len(view) };
     if vector * 1024 >= len {
@@ -253,6 +268,7 @@ pub unsafe fn decode_stripe(view: ColumnView, vector: u64, lane: u32, stripe: us
     }
     let header = unsafe { view.headers.add(vector as usize).read() };
     let data = unsafe { view.data.add(header.offset as usize) };
+    // DECODE ?: packed stripe delegation inherits the generated caller boundary.
     unsafe { decode_packed_stripe(header, data, len, vector, lane, stripe) }
 }
 
@@ -302,6 +318,7 @@ unsafe fn narrow_delta_prefix(
 
 #[device]
 #[inline(always)]
+// DECODE ?: packed stripe reconstruction requires caller opaque-read or publication evidence.
 unsafe fn decode_packed_stripe(
     header: VectorHeader,
     data: *const u64,
@@ -317,8 +334,10 @@ unsafe fn decode_packed_stripe(
         let position = local % 64;
         let base = unsafe { data.add(sequence).read() };
         let value = if header.width == 0 {
+            // DECODE ?: regular delta stripe restores restart/base before an unspecified consumer.
             base.wrapping_add((header.base as u64).wrapping_mul(position as u64))
         } else if header.width <= 26 {
+            // DECODE ?: narrow delta stripe restores frame plus prefix without caller evidence.
             base.wrapping_add((header.base as u64).wrapping_mul(position as u64))
                 .wrapping_add(unsafe {
                     narrow_delta_prefix(data.add(16), header.width, local, vector, len, lane)
@@ -353,6 +372,7 @@ unsafe fn decode_packed_stripe(
                 }
                 prefix = prefix.wrapping_add(lower);
             }
+            // DECODE ?: wide delta stripe restores base plus prefix without caller evidence.
             base.wrapping_add((header.base as u64).wrapping_mul(position as u64))
                 .wrapping_add(prefix)
         };
@@ -362,6 +382,7 @@ unsafe fn decode_packed_stripe(
             0
         }
     } else if row < len {
+        // DECODE ?: FOR stripe base addition reconstructs a logical value before an unspecified consumer.
         (header.base as u64).wrapping_add(unsafe { unpack(data, header.width, local) }) as i64
     } else {
         0
@@ -373,6 +394,7 @@ unsafe fn decode_packed_stripe(
 /// first row. This avoids decoding/reducing the lower half a second time.
 #[device]
 #[inline(always)]
+// DECODE ?: pair reconstruction serves both publication and generated relational kernels.
 unsafe fn decode_pair(
     header: VectorHeader,
     data: *const u64,
@@ -384,11 +406,13 @@ unsafe fn decode_pair(
     let row = vector * 1024 + local as u64;
     if header.codec != Codec::Delta as u32 {
         let first = if row < len {
+            // DECODE ?: first FOR pair restores its base without a consumer fact.
             (header.base as u64).wrapping_add(unsafe { unpack(data, header.width, local) }) as i64
         } else {
             0
         };
         let second = if row + 1 < len {
+            // DECODE ?: second FOR pair restores its base without a consumer fact.
             (header.base as u64).wrapping_add(unsafe { unpack(data, header.width, local + 1) })
                 as i64
         } else {
@@ -398,6 +422,7 @@ unsafe fn decode_pair(
     }
     let position = local % 64;
     let base = unsafe { data.add(local / 64).read() };
+    // DECODE ?: paired delta restart/base reconstruction has no local read boundary.
     let mut first = base.wrapping_add((header.base as u64).wrapping_mul(position as u64));
     let mut second = first.wrapping_add(header.base as u64);
     if header.width != 0 {
@@ -436,6 +461,7 @@ unsafe fn decode_pair(
             }
             sum
         };
+        // DECODE ?: paired delta residual inversion completes values for an unspecified tile caller.
         first = first.wrapping_add(prefix.wrapping_sub(b));
         second = second.wrapping_add(prefix);
     }
@@ -450,6 +476,7 @@ unsafe fn decode_pair(
 /// `vector*1024 + (lane/32)*128 + (lane%32)*2 + [0, 1, 64, 65]`.
 #[device]
 #[inline(always)]
+// DECODE ?: tile decoder serves whole-column publication and generated kernels with different boundaries.
 pub unsafe fn decode_tile(view: ColumnView, vector: u64, lane: u32) -> [i64; 4] {
     let len = unsafe { logical_len(view) };
     let local = (lane as usize / 32) * 128 + (lane as usize % 32) * 2;
@@ -469,7 +496,9 @@ pub unsafe fn decode_tile(view: ColumnView, vector: u64, lane: u32) -> [i64; 4] 
     }
     let header = unsafe { view.headers.add(vector as usize).read() };
     let data = unsafe { view.data.add(header.offset as usize) };
+    // DECODE ?: first tile-pair delegation cannot establish the eventual logical consumer.
     let (a, b) = unsafe { decode_pair(header, data, len, vector, local, lane) };
+    // DECODE ?: second tile-pair delegation cannot establish final-answer publication.
     let (c, d) = unsafe { decode_pair(header, data, len, vector, local + 64, lane) };
     [a, b, c, d]
 }
@@ -479,6 +508,7 @@ pub unsafe fn decode_tile(view: ColumnView, vector: u64, lane: u32) -> [i64; 4] 
 /// 0 or 1, selecting offsets [0, 1] or [64, 65] from the lane's first row.
 #[device]
 #[inline(always)]
+// DECODE ?: tile-pair decoder permits consumers with further joins; require caller evidence.
 pub unsafe fn decode_tile_pair(view: ColumnView, vector: u64, lane: u32, pair: usize) -> [i64; 2] {
     let len = unsafe { logical_len(view) };
     if vector * 1024 >= len {
@@ -496,6 +526,7 @@ pub unsafe fn decode_tile_pair(view: ColumnView, vector: u64, lane: u32, pair: u
     }
     let header = unsafe { view.headers.add(vector as usize).read() };
     let data = unsafe { view.data.add(header.offset as usize) };
+    // DECODE ?: requested tile-pair reconstruction inherits the generated consumer boundary.
     let (a, b) = unsafe { decode_pair(header, data, len, vector, local, lane) };
     [a, b]
 }

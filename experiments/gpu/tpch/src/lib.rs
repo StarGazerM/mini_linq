@@ -232,6 +232,29 @@ mod stages;
 mod tests {
     use super::*;
 
+    #[test]
+    fn automatic_stages_retain_nonnullable_device_publications() -> Result<()> {
+        for report in plans()?.iter().filter(|report|
+            report["mode"] == "automatic" && report["status"] == "accepted")
+        {
+            let Some(stages) = report["stages"].as_array() else { continue };
+            for stage in stages {
+                let nullable = stage["publication_facts"]["nullable"].as_array().unwrap()
+                    .iter().any(|value| value.as_bool().unwrap());
+                let expected = if stage["pipeline"]["target"] == "device" && !nullable {
+                    "device"
+                } else {
+                    "host"
+                };
+                assert_eq!(stage["publication"], expected,
+                    "{} stage {}: publication must follow target and validity facts",
+                    report["query"], stage["stage"]);
+                assert_eq!(stage["pipeline"]["publication"], expected);
+            }
+        }
+        Ok(())
+    }
+
     fn assert_conformant(query: &str) -> Result<()> {
         let reports = plans()?;
         for report in reports

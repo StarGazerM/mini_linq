@@ -304,10 +304,6 @@ fn defer_single_consumer_rows(
                 break;
             }
             if let Some(operator) = physical.get(&name) {
-                if analysis.structures.physical.opaque(operator) {
-                    safe = false;
-                    break;
-                }
                 pending.extend(operator.operands().into_iter().map(symbol_name));
             } else if !analysis.structures.host_layouts.contains_key(&name) {
                 safe = false;

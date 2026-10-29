@@ -217,7 +217,7 @@ fn membership_and_parameters_are_const_but_disjunction_and_variable_bounds_are_f
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32);
         r = rename R@0 {a -> x,b -> y};
-        points = select r if (x = @captured, y in {1,2,3});
+        points = select r if (x = @(captured), y in {1,2,3});
         alternatives = select points if ((x < 0 and y = 2) or (x > 5 and y = 3));
         variables = select alternatives if (x < y);
         output variables as answer(x,y);

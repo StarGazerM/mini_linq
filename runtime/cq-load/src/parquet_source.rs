@@ -114,6 +114,7 @@ impl<S: Relation> Iterator for Parquet<S> {
             mapping: &self.mapping,
             data: BatchData::Parquet(&batch, self.next_row),
         };
+        // DECODE V: zone_tpch feeds these owned decoded tuples to membership scans; P5 must retain columnar payloads and materialize late.
         let decoded = S::decode(&source);
         self.next_row += batch.num_rows() as u64;
         if decoded.is_err() {
@@ -125,10 +126,12 @@ impl<S: Relation> Iterator for Parquet<S> {
 
 impl<S: Relation> std::iter::FusedIterator for Parquet<S> {}
 
+// DECODE ?: read_parquet collects logical rows for arbitrary hosts without a caller publication or opaque-read fact.
 pub fn read_parquet<S: Relation>(
     path: impl AsRef<Path>,
     options: ParquetOptions,
 ) -> Result<Vec<S::Row>> {
+    // DECODE ?: this fold drives Parquet::next reconstruction before the generic caller's downstream use is known.
     Parquet::<S>::open(path, options)?.try_fold(Vec::new(), |mut rows, batch| {
         rows.extend(batch?);
         Ok(rows)
@@ -144,6 +147,7 @@ pub(crate) fn native_values<T>(
         .collect()
 }
 
+// DECODE ?: string_values invokes caller parsing over Arrow strings without a recorded logical consumer.
 pub(crate) fn string_values<T>(
     column: &dyn Array,
     parse: impl Fn(&str) -> std::result::Result<T, String>,
@@ -156,6 +160,7 @@ pub(crate) fn string_values<T>(
                     .enumerate()
                     .map(|(row, value)| {
                         let value = value.ok_or_else(|| ColumnError::null(row))?;
+                        // DECODE ?: this Arrow string entry is converted by an arbitrary parser; publication or Rust-read evidence is absent.
                         parse(value).map_err(|message| ColumnError {
                             row,
                             value: value.into(),
@@ -169,16 +174,20 @@ pub(crate) fn string_values<T>(
     string_column!(StringArray);
     string_column!(LargeStringArray);
     string_column!(StringViewArray);
+    // DECODE ?: nonstring Arrow fallback delegates reconstruction with the same unknown consumer as string_values.
     parse_arrow_nonstring(column, parse)
 }
 
+// DECODE ?: parse_arrow is a generic logical reconstruction adapter, not an established publication boundary.
 pub(crate) fn parse_arrow<T>(
     column: &dyn Array,
     parse: impl Fn(&str) -> std::result::Result<T, String>,
 ) -> std::result::Result<Vec<T>, ColumnError> {
+    // DECODE ?: parse_arrow forwards to string_values without adding caller-use evidence.
     string_values(column, parse)
 }
 
+// DECODE ?: parse_arrow_nonstring reconstructs logical values for arbitrary Load implementations.
 fn parse_arrow_nonstring<T>(
     column: &dyn Array,
     parse: impl Fn(&str) -> std::result::Result<T, String>,
@@ -188,6 +197,7 @@ fn parse_arrow_nonstring<T>(
             if let Some(array) = column.as_any().downcast_ref::<arrow_array::$array>() {
                 return array.iter().enumerate().map(|(row, value)| {
                     let value = value.ok_or_else(|| ColumnError::null(row))?.to_string();
+                    // DECODE ?: primitive Arrow text is parsed into caller T before its runtime use is known.
                     parse(&value).map_err(|message| ColumnError { row, value, message })
                 }).collect();
             }
@@ -211,8 +221,10 @@ fn parse_arrow_nonstring<T>(
             .iter()
             .enumerate()
             .map(|(row, value)| {
+                // DECODE ?: Arrow epoch days become Date for fallback rendering, with no opaque-read or answer fact.
                 let value =
                     Date::from_days(value.ok_or_else(|| ColumnError::null(row))?).to_string();
+                // DECODE ?: the rendered Date is parsed into arbitrary T whose subsequent consumer is unrecorded.
                 parse(&value).map_err(|message| ColumnError {
                     row,
                     value,
@@ -231,7 +243,9 @@ fn parse_arrow_nonstring<T>(
             .iter()
             .enumerate()
             .map(|(row, value)| {
+                // DECODE ?: Decimal128 coefficient and scale become logical decimal text for generic fallback loading.
                 let value = decimal_text(value.ok_or_else(|| ColumnError::null(row))?, *scale);
+                // DECODE ?: decimal text is reconstructed as caller T with no recorded final consumer.
                 parse(&value).map_err(|message| ColumnError {
                     row,
                     value,
@@ -248,6 +262,7 @@ fn parse_arrow_nonstring<T>(
     })
 }
 
+// DECODE ?: decimal_text reconstructs scaled decimal text for both fallback loading and error diagnostics.
 pub(crate) fn decimal_text(value: i128, scale: i8) -> String {
     let sign = if value < 0 { "-" } else { "" };
     let digits = value.unsigned_abs().to_string();

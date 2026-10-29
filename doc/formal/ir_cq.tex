@@ -9,10 +9,10 @@ token trees~\cite{host-synmacro}.
 Program ::= struct Name; Decl* Rule+
 Decl    ::= relation R(c: Type, ...) [= (Expr)];
 Rule    ::= h(Expr, ...) :- Clause, ... ;
-Clause  ::= R(Arg, ...) | !R(NegArg, ...) | Guard | let Pat [: Type] = Expr
-          | for Pat in Expr | Block
+Clause  ::= R(Arg, ...) | !R(NegArg, ...) | Guard | where P
+          | let Pat [: Type] = Expr | for Pat in Expr | Block
 Guard   ::= "if" Expr
-NegArg  ::= bound-variable | literal | parameter | _
+NegArg  ::= bound-variable | literal | closed-expression | _
 Arg     ::= x | _ | Expr
 Block   ::= { Body } ( | { Body } )+  |  { Body } ( else { Body } )+
 \end{lstlisting}
@@ -104,67 +104,55 @@ semantic premises, not properties established by the structural scope check.
 An atom using a generator-supplied name requires that name already bound.
 
 
-\paragraph{Recognized comparisons.}
-Let $Q$ be the query binders, $B$ the written bound names and $P$ the closing
-host parameters. Over the Syn AST (no separate grammar):
+\paragraph{Explicit relational predicates.}
+Let $Q$ contain every query binder and $B$ the names bound at this clause.
+Unlike Rust guards, \code{where} has its own grammar and denotation:
 \begin{lstlisting}
-t ::= x | *x | &x | literal | -numeric-literal | bare-host-identifier
-a ::= integer-name | *integer-name | integer-literal | -integer-literal
-    | decimal-name.scaled() | a + a | a - a | a * a | a / nonzero-integer-literal | (a)
-    | if C { a } else { a } | lossless-integer-type::from(a)
-t ::= ... | a
-C ::= t == t | t != t | t < t | t <= t | t > t | t >= t
-    | C && C | C || C | !C | (C)
+t ::= query-variable | literal | closed-Rust-expression
+P ::= x == t | x != t | x < t | x <= t | x > t | x >= t
+    | x in [t, ...] | x in t..t | x in t..=t | x == y
+    | P && P | P || P | (P)
 \end{lstlisting}
-Rust desugars these to \code{PartialEq}/\code{PartialOrd} calls; we recognize
-them only under the premises.
+The left-hand $x$ is a bound query variable. Closed Rust operands are stored
+as \code{Term::Closed(syn::Expr)}, not identifier/field-path parameters.
+They are evaluated once on the host, outside row loops; internal languages
+print them as \code{@(Expr)}. A query-dependent Rust expression is not a term.
+The same CQ-Closed judgment applies to atom operands: a query-closed expression
+restricts that occurrence exactly as a literal does. Normalization introduces
+a fresh atom column and a relational equality to the unchanged closed operand,
+not an opaque row binding (A-Closed). Row-dependent atom expressions retain
+their A-Prefix/A-Local binding placement.
 \begin{mathpar}
-\Rule{ORD-Admissible}{\tau:\code{Ord}\quad
- \leq_\tau\text{ total, terminating and consistent with identity}}
- {\tau\text{ admits relational order}}
+\Rule{ORD-Admissible}{\leq_{\mathcal R}\text{ total, terminating and consistent with identity}}
+ {\mathcal R\text{ admits relational order}}
 
-\Rule{CQ-Comparison}{\vars(t_1,t_2)\subseteq B\quad
- t_1,t_2\text{ admissible}\quad op\in\{==,\ne,<,\leq,>,\geq\}}
- {\Sigma;B;P\vdash t_1\ op\ t_2\Rightarrow B}
+\Rule{CQ-Closed}{\fv(e)\cap Q=\emptyset}
+ {Q\vdash e:\mathsf{Closed}}
 
-\Rule{CQ-GuardRecognize}{e\text{ has only recognized comparisons and boolean nodes}\\
- \text{comparison operands satisfy CQ-Arith or the Eq/Ord premises}}
- {\mathsf{recognize}_{Q,P}(e)=\theta\quad\sem e=\sem\theta}
+\Rule{CQ-Comparison}{x\in B\quad\vars(t)\subseteq B\quad
+ t\text{ a variable, literal or CQ-Closed operand}\\
+ op\in\{==,\ne,<,\leq,>,\geq\}}
+ {\Sigma;B;Q\vdash x\ op\ t:\mathsf{Predicate}}
 
-\Rule{CQ-GuardSplit}{e=e_1\mathbin{\&\&}\cdots\mathbin{\&\&}e_n\\
- A=\text{recognized leaves}\quad F=\text{remaining leaves in written order}}
- {\mathsf{if}\ e\rightsquigarrow \mathsf{select}_{\bigwedge A};
-   \mathsf{guard}_{\bigwedge F}\quad
-   \sem{\mathsf{select}_{\bigwedge A};\mathsf{guard}_{\bigwedge F}}
-   \sqsupseteq\sem{\mathsf{if}\ e}}
+\Rule{CQ-Where}{\vars(P)\subseteq B\quad
+ P\text{ follows the relational grammar; each closed operand satisfies CQ-Closed}}
+ {\Sigma;B\vdash\mathsf{where}\ P\Rightarrow B}
 \end{mathpar}
-Recognized comparisons are total, so short-circuit \code{\&\&}, \code{||} and
-\code{!} mean classical connectives on them.
-Arithmetic outside CQ-Arith (Section~\ref{sec:guards-design}), arbitrary calls,
-methods, casts, indexing, blocks, macros, qualified value paths and field
-access are opaque; a mixed \code{||} or \code{!} is one opaque leaf.
-Only the top-level conjunction splits. Typed arithmetic predicates retain
-Guard syntax, with totality rederived from their declared inputs rather than
-an author assertion.
-Parameters print as \code{@name} in later languages and are borrowed once outside
-query loops.
-\begin{proof}[Proof of CQ-GuardSplit]
-In \code{a \&\& f(x)} Rust evaluates $f$ exactly where $a$ holds, so selecting
-the total $a$ earlier gives that domain; in \code{f(x) \&\& a} it evaluates $f$
-on a superset, so selecting $a$ earlier only shrinks it. Iterating over the
-conjunction keeps the opaque leaves in written order: on a returning input,
-either a relational leaf rejects first or all hold and the residual evaluates
-the same opaque leaves in the same order. A disjunction or negation lacks this
-argument and is never split.
-\end{proof}
+Membership denotes a disjunction of representation equalities; ranges use
+representation order with the written open or closed upper endpoint.
+Conjunction and disjunction are classical connectives, not Rust evaluation.
+The representation laws are premises, and rustc checks required trait bounds;
+no \code{syn::Type} spelling establishes or refutes them.
 
-\paragraph{Opaque Rust predicates.}
-Arithmetic, calls and methods, including \code{contains}, \code{starts_with}
-and \code{ends_with}, remain opaque regardless of declared type names.
-They retain their lexical bindings and the written Rust chain and Before
-facts. There is no guard attribute that asserts position independence.
-Only recognized relational comparisons and relational operators can move
-independently of that chain (Section~\ref{sec:guards-design}).
+\paragraph{One Rust expression.}
+Every \code{if}, \code{let} and \code{for} expression is opaque, pure and total
+by premise. It is never split, recognized, rewritten or type-checked by this
+compiler, including arithmetic and comparison syntax. Its original expression
+and lexical bindings survive printing unchanged. Only its conservative free
+variables govern placement; lexical opacity requires the whole environment.
+Only explicit \code{where} produces relational constraints, join equalities,
+point/range/membership reads, filter ranks, reduction supports and derived
+domains. Atom literals and normalization identities remain occurrence facts.
 
 \paragraph{Normal form.}
 CQ$_{\rm NF}$ restricts the same \code{cq::Program}: every positive atom argument is a
@@ -186,16 +174,16 @@ without it, head arguments are bound bare variables of known type;
 (5)~blocks have equal interface types and no escaped local names;
 (6)~negated atoms obey CQ-Neg (Section~\ref{sec:guards-design}); aggregation
 and unexpanded \code{name!\{..\}} clauses are rejected;
-(7)~comparison terms are bound names, literals or captured identifiers; known
-Eq/Ord failures are rejected; a recognizable unsplit guard is rejected.
+(7)~relational predicates follow the \code{where} grammar, use bound query
+names and have query-closed Rust operands; types are checked only by rustc.
 \begin{mathpar}
 \Rule{WF-CQ}{\mathsf{CQScope}(s)}{\mathsf{WF}_{CQ}(s)\Downarrow\ok}
 
 \Rule{WF-NF}{\mathsf{WF}_{CQ}(s)\quad\text{every nested positive atom has distinct variables or literals}\\
- \text{head arguments are bound variables; known inadmissible types rejected}}
+ \text{head arguments are bound variables}}
  {\mathsf{WF}_{NF}(s)\Downarrow\ok}
 \end{mathpar}
-These checks do not establish admissibility, which remains a premise.
+Representation admissibility and Rust totality remain semantic premises.
 
 \paragraph{Meaning and rewrite check.}
 The meaning is Section~\ref{sec:denotation}: compose the desugared body in

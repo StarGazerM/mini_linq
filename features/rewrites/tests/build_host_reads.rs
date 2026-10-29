@@ -4,7 +4,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 #[test]
-fn retains_integral_host_without_changing_graph_or_keys() {
+fn retains_host_without_changing_graph_or_keys() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
         l = pipe rename L@0 {a -> x};
@@ -50,25 +50,27 @@ fn retains_an_empty_key_cartesian_provider_without_changing_the_join() {
 }
 
 #[test]
-fn skips_non_integral_and_lazy_membership() {
-    for source in [
-        syn::parse_quote! { physical {
-            relation L(a:String); relation R(a:String);
-            l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
-            s = pipe semi eager [x] l,r; return s as answer(x);
-        }},
-        syn::parse_quote! { physical {
-            relation L(a:i64); relation R(a:i64);
-            l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
-            s = pipe semi lazy [x] l,r; return s as answer(x);
-        }},
-    ] {
-        assert_eq!(
-            build_host_reads(&source, TokenStream::new()).unwrap(),
-            source
-        );
-        assert!(build_host_reads(&source, quote!(r)).is_err());
-    }
+fn retains_nonintegral_hosts_but_skips_lazy_membership() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:String); relation R(a:String);
+        l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
+        s = pipe semi eager [x] l,r; return s as answer(x);
+    }};
+    let mut expected = source.clone();
+    expected.program.definitions[1].mode = ir::Mode::Let(Default::default());
+    assert_eq!(
+        build_host_reads(&source, TokenStream::new()).unwrap(),
+        expected
+    );
+    assert_eq!(build_host_reads(&source, quote!(r)).unwrap(), expected);
+
+    let lazy: ir::Program = syn::parse_quote! { physical {
+        relation L(a:i64); relation R(a:i64);
+        l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
+        s = pipe semi lazy [x] l,r; return s as answer(x);
+    }};
+    assert_eq!(build_host_reads(&lazy, TokenStream::new()).unwrap(), lazy);
+    assert!(build_host_reads(&lazy, quote!(r)).is_err());
 }
 
 #[test]

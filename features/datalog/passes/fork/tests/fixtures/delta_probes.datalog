@@ -6,7 +6,7 @@ R(*x,*y,*z) :- E(x,y,z);
 R(*x,*y,*z) :- R(x,y,z);
 R(*x,*y,*x) :- R(x,y,7);
 R(*x,*y,*z) :- E(_,y,_), R(x,y,z);
-R(*x,*y,*z) :- E(_,y,_), if *y != 0, if 10 / *y > 0, R(x,y,z);
+R(*x,*y,*z) :- E(_,y,_), where y != 0, if 10 / *y > 0, R(x,y,z);
 R(*x,*y,*z) :- E(a,b,c), R(x,y,z);
 R(*x,*y,*z) :- E(x,y,_), R(x,y,z);
 R(*x,*x,*x) :- R(x,x,7);
@@ -24,7 +24,7 @@ incremental { scheme seminaive_covering;
     variant 1 delta 0 { R(*x,*y,*z) :- Recent(x,y,z); }
     variant 2 delta 0 { R(*x,*y,*x) :- Recent(x,y,7); }
     variant 3 delta 1 { R(*x,*y,*z) :- E(_,y,_), Recent(x,y,z); }
-    variant 4 delta 3 { R(*x,*y,*z) :- E(_,y,_), if *y != 0, if 10 / *y > 0, Recent(x,y,z); }
+    variant 4 delta 3 { R(*x,*y,*z) :- E(_,y,_), where y != 0, if 10 / *y > 0, Recent(x,y,z); }
     variant 5 delta 1 { R(*x,*y,*z) :- E(a,b,c), Recent(x,y,z); }
     variant 6 delta 1 { R(*x,*y,*z) :- E(x,y,_), Recent(x,y,z); }
     variant 7 delta 0 { R(*x,*x,*x) :- Recent(x,x,7); }

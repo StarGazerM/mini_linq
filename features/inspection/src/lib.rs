@@ -10,8 +10,9 @@
 //! Free-variable names are syntactic observations. `dependencies(environment)`
 //! retains the whole logical environment for opaque expressions such as macros.
 //! Rust resolves host captures, name resolution, and pattern refutability.
-//! Tests use public cq-testkit oracles and executable bottom + Set refinement;
-//! no check licenses moving Rust steps or replacing Leibniz equality.
+//! Tests use public cq-testkit oracles and compare total answer sets. Opaque Rust
+//! is assumed pure and total, and may move after its free-variable binders.
+//! Written order imposes no dependency; relational predicates use `where`.
 //!
 //! This workspace uses version plus path dependencies for local development.
 //! The external gate replaces the core dependencies with packaged public crates.

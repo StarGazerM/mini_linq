@@ -224,3 +224,29 @@ fn immutable_adaptive_forms_support_shared_task_reads() {
         }
     });
 }
+
+#[test]
+fn literal_backing_and_predicate_encoding_follow_representation_traits() {
+    use cq_storage::{PredicateValue, StringLiteral};
+    type HostString = String;
+    static OWNED: std::sync::LazyLock<<HostString as StringLiteral>::Storage> =
+        std::sync::LazyLock::new(|| HostString::storage("green"));
+    static BORROWED: std::sync::LazyLock<<str as StringLiteral>::Storage> =
+        std::sync::LazyLock::new(|| str::storage("green"));
+    type Nested = &'static &'static HostString;
+    static NESTED: std::sync::LazyLock<<Nested as StringLiteral>::Storage> =
+        std::sync::LazyLock::new(|| Nested::storage("green"));
+    let owned = HostString::reference(&OWNED);
+    let borrowed = str::reference(&BORROWED);
+    assert_eq!(owned.as_str(), borrowed);
+    assert!(std::ptr::eq(owned, HostString::reference(&OWNED)));
+    assert_eq!(***Nested::reference(&NESTED), *owned);
+    assert!(std::ptr::eq(
+        Nested::reference(&NESTED),
+        Nested::reference(&NESTED)
+    ));
+    let encoded: &str = owned.predicate_value();
+    assert_eq!(encoded, borrowed);
+    let scalar: i32 = 7i32.predicate_value();
+    assert_eq!(scalar, 7);
+}

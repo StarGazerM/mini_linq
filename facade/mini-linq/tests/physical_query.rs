@@ -260,7 +260,7 @@ mod windowed {
         ::core::iter::Iterator::collect(::mini_linq::compile! { pipeline {  }
             struct Windowed;
             relation R(a: i32, b: i32);
-            answer(a, b) :- R(a, b), if *a >= 2 && *a < 9 && *b != 5;
+            answer(a, b) :- R(a, b), where a >= 2 && a < 9 && b != 5;
         })
     }
 }
@@ -310,18 +310,17 @@ fn computed_columns_follow_the_head_order() {
     );
 }
 
-/// Relational prefix canonicalization preserves the final set. The opaque
-/// guard stays after the complete written join; evaluation counts are outside
-/// the denotation.
+/// Relational prefix canonicalization preserves the final set. Total opaque
+/// guards may run wherever their free variables are available; their evaluation
+/// counts and placement relative to unrelated joins are outside the denotation.
 mod generic_canon {
     use std::cell::Cell;
 
     fn observe(a: &i32, visits: &Cell<usize>) -> bool {
-        // a=4 has an R prefix but no complete triangle. Evaluating this Rust
-        // step on that prefix would move it before a written relational step.
-        assert_ne!(*a, 4, "guard evaluated before the complete written prefix");
+        // This predicate is total even for a=4, which has an R prefix but no
+        // complete triangle. Reject a=2 to exercise the guard's set semantics.
         visits.set(visits.get() + 1);
-        true
+        *a != 2
     }
 
     #[allow(non_snake_case)]
@@ -344,7 +343,7 @@ mod generic_canon {
 }
 
 #[test]
-fn generic_prefix_canonicalization_preserves_the_written_guard_domain() {
+fn generic_prefix_canonicalization_preserves_total_guard_answers() {
     let r = [(1, 2), (1, 3), (1, 3), (2, 3), (4, 5)];
     let s = [(2, 3), (3, 4), (3, 1), (5, 6)];
     let t = [(1, 3), (1, 4), (2, 1), (4, 7)];
@@ -353,7 +352,7 @@ fn generic_prefix_canonicalization_preserves_the_written_guard_domain() {
     let mut expected = HashSet::new();
     for (a, b) in &r {
         for (sb, c) in &s {
-            if sb == b && t.iter().any(|(ta, tc)| ta == a && tc == c) {
+            if sb == b && t.iter().any(|(ta, tc)| ta == a && tc == c) && *a != 2 {
                 expected.insert((a, b, c));
             }
         }
@@ -362,7 +361,7 @@ fn generic_prefix_canonicalization_preserves_the_written_guard_domain() {
     assert_eq!(actual.into_iter().collect::<HashSet<_>>(), expected);
     assert!(
         visits.get() > 0,
-        "the surviving tuples reach the final guard"
+        "the total guard participates in evaluating the query"
     );
 }
 

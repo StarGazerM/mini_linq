@@ -45,6 +45,8 @@ fn provider_type(structure: &Structure) -> Option<&syn::Type> {
 fn gpu_catalog_selects_h05_authored_provider_types_from_defaults() {
     let authored = h05();
     let defaults = cq_structure_selection::compile(&authored.physical).unwrap();
+    // No codec bounds accompany this Structures fixture: scalar type syntax
+    // cannot justify PackedCanon, so the authored fixture records WideCanon.
     let selected = select_from_catalog(&defaults, &gpu_catalog()).unwrap();
     structures::check_rewrite(&defaults, &selected).unwrap();
     assert_eq!(selected.physical, defaults.physical);
@@ -338,8 +340,8 @@ fn unused_string_payload_is_projected_from_renamed_provider() {
 }
 
 #[test]
-fn canon_selection_uses_complete_heading_width() {
-    for (third, expected) in [(false, "PackedCanon"), (true, "WideCanon")] {
+fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
+    for (third, expected) in [(false, "WideCanon"), (true, "WideCanon")] {
         let mut source: structures::Program = syn::parse_quote! {
             physical {
                 relation R(a:i64,b:i64,c:i64);

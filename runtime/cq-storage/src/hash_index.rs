@@ -59,6 +59,13 @@ impl<T: IndexRead> IndexRead for &T {
     }
 }
 
+// DESIGN contract8-build-copies
+// Owns the construction protocol and its abstraction law (contract 8, STR-Repr).
+// Sources: doc/STORAGE.md §§2,8,9,11; Data Blocks §3.3; DuckDB row_group.cpp:1035-1088.
+// Known deviation: one-shot Build consumes/copies pairs rather than re-reading borrowed blocks (Plan P4).
+// DO NOT make copying implicit policy: record retention, mutation, computed-key, sort/group or target reasons.
+// Index runs factor keys/offsets/items and stay byte-addressable; scan codecs are a separate role.
+// CUDA PCIe and Metal buffer ownership differ; shared byte layout never implies shared copy cost.
 /// The one construction protocol for compiled structures: a value built from
 /// `(key, item)` pairs, with `α(build(I)) = bag(I)` projected to whatever the
 /// structure represents (a key set keeps only the keys). Any type with this

@@ -19,8 +19,10 @@
 //! checks both contracts and requires an identical Physical AST, including every
 //! declaration, operator, mode, key, canonical boundary and Rust payload. Checkers
 //! never re-run compilation. The passes clone identifiers with their spans and
-//! preserve Rust's chain, order and binders. Meaning remains the core's Kleisli
-//! denotation over bottom + Set, written-order refinement, and Leibniz equality.
+//! preserve Rust payloads and their free-variable binders. Meaning remains the
+//! core's Set denotation with Leibniz equality and opaque, pure, total Rust.
+//! Rust placement follows free-variable dependencies, not written clause order;
+//! relational predicates use `where`.
 //!
 //! ## Composition
 //!
@@ -116,10 +118,10 @@
 //! `target/expansions/{reference,stacked}/`. It requires `cargo-expand`.
 //!
 //! The public `cq-testkit` supplies all 30 Physical corpus fixtures, independent
-//! integer Set oracles, the pass mutation harness, and executable written-order
-//! refinement. Tests check exact embedding/erasure, changed decisions and opaque
-//! Rust payloads, malformed programs, queue forwarding, both explicit stage
-//! entry points, repeated composites, and returning/empty/bottom inputs. The
+//! integer Set oracles and the pass mutation harness. Tests compare total answer
+//! sets and check exact embedding/erasure, changed decisions and opaque Rust
+//! payloads, malformed programs, queue forwarding, both explicit stage entry
+//! points, repeated composites, and nonempty/empty inputs. The
 //! corpus's selected/printed Rust ASTs and token texts are also unchanged.
 //! Fixture evidence is finite; it does not establish arbitrary Rust effect or
 //! evaluation-count equivalence.
@@ -141,8 +143,8 @@
 //! Core blocks preserve union and ordered fallback through this consumer.
 //! Their laws are join distribution over union and `B1 else B2 = B1 union
 //! (B2 anti_F B1)`. Common interface bindings escape; locals do not. The complete
-//! IR retains union/anti, nested occurrence paths and branch Before ancestry.
-//! Rust-free blocks hoist; Rust arms run from one prefix row with ordered else.
+//! IR retains union/anti, nested occurrence paths and branch-local bindings.
+//! Rust placement follows free-variable dependencies in each branch.
 //!
 pub use cq_lang_trace as trace;
 pub use physical_to_trace;

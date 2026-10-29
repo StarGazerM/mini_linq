@@ -46,6 +46,8 @@ fn h14_components_preserve_identity_dates_and_empty_global_group() {
     ];
     let parts = vec![vec![1, 1], vec![1, 1], vec![2, 2], vec![3, 3]];
     for rows in [rows.clone(), rows.into_iter().rev().collect(), Vec::new()] {
+        let mut dictionaries = cq_load::Dictionaries::default();
+        dictionaries.insert("p_type", ["PROMO BRASS", "STANDARD BRASS", "promo BRASS"]);
         let data = h14::Data {
             lineitem: rows
                 .iter()
@@ -72,16 +74,24 @@ fn h14_components_preserve_identity_dates_and_empty_global_group() {
                 .map(|r| {
                     (
                         r[0].into(),
-                        match r[1] {
-                            1 => "PROMO BRASS",
-                            2 => "STANDARD BRASS",
-                            3 => "promo BRASS",
-                            _ => unreachable!(),
-                        }
-                        .into(),
+                        dictionaries.literal(
+                            "p_type",
+                            match r[1] {
+                                1 => "PROMO BRASS",
+                                2 => "STANDARD BRASS",
+                                3 => "promo BRASS",
+                                _ => unreachable!(),
+                            },
+                        ),
                     )
                 })
                 .collect(),
+            promo_types: h14::PromoTypes::from_dense_keys(
+                cq_load::dictionary_where(&dictionaries, "p_type",
+                    |value| value.starts_with("PROMO"))
+                    .into_iter().map(|(code,)| code),
+            ),
+            dictionaries,
         };
         let sql = format!(
             r#"WITH lineitem AS (
@@ -131,6 +141,8 @@ fn h18_threshold_is_strict_and_joins_follow_identity_preserving_sum() {
     ];
     let customers = vec![vec![10, 65], vec![10, 65], vec![20, 66]];
     for rows in [rows.clone(), rows.into_iter().rev().collect(), Vec::new()] {
+        let mut dictionaries = cq_load::Dictionaries::default();
+        dictionaries.insert("c_name", ["A", "B"]);
         let data = h18::Data {
             lineitem: rows
                 .iter()
@@ -157,10 +169,12 @@ fn h18_threshold_is_strict_and_joins_follow_identity_preserving_sum() {
                 .map(|r| {
                     (
                         r[0].into(),
-                        char::from_u32(r[1] as u32).unwrap().to_string(),
+                        dictionaries
+                            .literal("c_name", &char::from_u32(r[1] as u32).unwrap().to_string()),
                     )
                 })
                 .collect(),
+            dictionaries,
         };
         let sql = format!(
             r#"WITH lineitem AS (

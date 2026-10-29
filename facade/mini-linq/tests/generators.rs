@@ -108,6 +108,50 @@ fn nested_generators_keep_owned_prefixes_and_move_tuple_items() {
 }
 
 #[test]
+fn captured_generators_borrow_computed_inputs_only_for_each_call() {
+    let rows = [(vec![String::from("a"), String::from("bb")],)];
+    let captured = vec![String::from("z")];
+    let actual: BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q; relation rows(values:Vec<String>);
+        relation answer(limit:usize,value:&String,length:usize);
+        answer(limit,value,length) :- rows(values),
+            for limit in 0..=values.len(),
+            for value in values.iter().take(*limit).chain(captured.iter()),
+            for length in Some(value.len());
+    }
+    .collect();
+    assert_eq!(
+        actual,
+        BTreeSet::from([
+            (0, &captured[0], 1),
+            (1, &rows[0].0[0], 1),
+            (1, &captured[0], 1),
+            (2, &rows[0].0[0], 1),
+            (2, &rows[0].0[1], 2),
+            (2, &captured[0], 1),
+        ])
+    );
+    assert_eq!(captured.len(), 1);
+}
+
+#[test]
+fn captured_generators_infer_destructured_items_and_unannotated_scalar_inputs() {
+    let seed = [(0_i32,)];
+    let captured = vec![String::from("a"), String::from("bb")];
+    let actual: BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q; relation seed(x:i32);
+        relation answer(index:usize,length:usize);
+        answer(index,length) :- seed(_),
+            for (index,label) in captured.iter().enumerate(),
+            let owned = label.to_string(),
+            for length in Some(owned.len());
+    }
+    .collect();
+    assert_eq!(actual, BTreeSet::from([(0, 1), (1, 2)]));
+    assert_eq!(captured.len(), 2);
+}
+
+#[test]
 fn empty_and_dead_generators_still_obey_iteration_semantics() {
     let seed = [(0_i32,)];
     let empty: Vec<_> = mini_linq::mini_linq! {
@@ -131,36 +175,26 @@ fn empty_and_dead_generators_still_obey_iteration_semantics() {
 }
 
 #[test]
-fn generator_expression_and_iteration_panics_are_not_suppressed() {
+fn total_generator_expressions_and_iteration_preserve_values() {
     let seed = [(0_i32,)];
-    fn partial_expression() -> std::ops::Range<i32> {
-        panic!("generator expression");
+    fn expression() -> std::ops::Range<i32> {
+        0..2
     }
-    fn partial_iteration() -> impl Iterator<Item = i32> {
-        (0..2).inspect(|&value| {
-            assert_eq!(value, 0, "generator iteration");
-        })
+    fn iteration() -> impl Iterator<Item = i32> {
+        (0..2).map(|value| value + 1)
     }
-    assert!(
-        std::panic::catch_unwind(|| {
-            mini_linq::mini_linq! {
-                struct Q; relation seed(x:i32); relation answer(value:i32);
-                answer(value) :- seed(_), for value in partial_expression();
-            }
-            .collect::<Vec<_>>()
-        })
-        .is_err()
-    );
-    assert!(
-        std::panic::catch_unwind(|| {
-            mini_linq::mini_linq! {
-                struct Q; relation seed(x:i32); relation answer(value:i32);
-                answer(value) :- seed(_), for value in partial_iteration();
-            }
-            .collect::<Vec<_>>()
-        })
-        .is_err()
-    );
+    let direct: BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q; relation seed(x:i32); relation answer(value:i32);
+        answer(value) :- seed(_), for value in expression();
+    }
+    .collect();
+    assert_eq!(direct, [(0,), (1,)].into());
+    let mapped: BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q; relation seed(x:i32); relation answer(value:i32);
+        answer(value) :- seed(_), for value in iteration();
+    }
+    .collect();
+    assert_eq!(mapped, [(1,), (2,)].into());
 }
 
 #[test]

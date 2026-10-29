@@ -1,3 +1,11 @@
+//! DESIGN contract7-placement
+//! Owns execution-level placement from checked dependencies and representation, not Rust meaning.
+//! Contract 7, BE-RustRepresentation; source: doc/PLANNING-REDESIGN.md Contract and Architecture.
+//! Logical Rust placement follows free variables (whole environment when lexically opaque).
+//! DO NOT add Before sets/written-order chains, recognize `if` comparisons, or inspect syn::Type.
+//! Device Rust requires identity read columns and closed captures; otherwise retain host execution.
+//! DO NOT reorder joins here; remaining Lookup/Expand planning relocation is Plan P3.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::structures::physical::Operator;
@@ -62,7 +70,17 @@ pub(crate) fn boundaries(
         let Some(result) = facts.results.get(&symbol_name(&definition.name)) else {
             continue;
         };
-        if string_row(facts, result) {
+        // A row crosses below host only when every column has a recorded
+        // device representation; machines whose child level runs host Rust
+        // need none (BE-RustRepresentation).
+        if !child.host_rust
+            && !facts.structures.layouts.get(result).is_some_and(|columns| {
+                columns.iter().all(|column| {
+                    facts.representation.identity.contains(column)
+                        || facts.representation.encoded.contains(column)
+                })
+            })
+        {
             continue;
         }
         let physical = program
@@ -230,7 +248,17 @@ pub(crate) fn advise(
         .flat_map(|graded| &graded.grades)
         .map(|grade| symbol_name(&grade.name))
         .collect();
-    let opaque = host_operations(program, facts);
+    let producer_model = producer.iter().skip(1).fold(&machine.root, |node, name| {
+        node.children
+            .iter()
+            .find(|child| child.name == *name)
+            .expect("selected machine path")
+    });
+    let opaque = if producer_model.host_rust {
+        BTreeSet::new()
+    } else {
+        host_operations(program, facts)
+    };
     let row_predicates: BTreeSet<_> = program
         .structures
         .physical
@@ -288,7 +316,6 @@ pub(crate) fn advise(
                 let definition = &definitions[source];
                 let result = facts.results.get(&symbol_name(name)).map(String::as_str);
                 if !requires_host(&definition.term, &opaque)
-                    && result.is_some_and(|result| !string_row(facts, result))
                     && !reads_at(&definition.term, result, facts, catalog, &host, &host)
                     && (reads_at(
                         &definition.term,
@@ -608,6 +635,11 @@ fn reads_at(
             provider, inner, ..
         } => {
             let provider = symbol_name(provider);
+            // A Host entry describes an unretained adapter, including its lazy
+            // fallback, not a published instance of the catalog storage type.
+            if facts.structures.host_read(&provider) && level.len() > 1 {
+                return false;
+            }
             facts.obligations.iter().all(|obligation| {
                 let Obligation::Provider {
                     provider: name,
@@ -812,43 +844,6 @@ fn row_predicate(operator: &Operator) -> bool {
     }
 }
 
-fn host_predicate(operator: &Operator) -> bool {
-    use cq_syntax::constraint::{Constraint, Term as Scalar};
-    fn string(expression: &syn::Expr) -> bool {
-        matches!(expression, syn::Expr::Lit(literal) if matches!(literal.lit, syn::Lit::Str(_)))
-    }
-    fn scalar(term: &Scalar) -> bool {
-        matches!(term, Scalar::Literal(expression) if string(expression))
-    }
-    fn constraint(predicate: &Constraint) -> bool {
-        match predicate {
-            Constraint::Compare { left, right, .. } => scalar(left) || scalar(right),
-            Constraint::Between { term, low, high } => scalar(term) || scalar(low) || scalar(high),
-            Constraint::In { term, literals } => scalar(term) || literals.iter().any(string),
-            Constraint::Or(arms) => arms.iter().flatten().any(constraint),
-        }
-    }
-    match operator {
-        Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
-            select.condition.constraints.iter().any(constraint)
-        }
-        _ => false,
-    }
-}
-
-fn string_type(ty: &syn::Type) -> bool {
-    matches!(ty, syn::Type::Path(path) if path.path.segments.last()
-        .is_some_and(|segment| segment.ident == "String"))
-}
-
-fn string_row(facts: &cq_lang_sequence::Analysis, name: &str) -> bool {
-    facts.structures.layouts.get(name).is_some_and(|columns| {
-        columns
-            .iter()
-            .any(|column| string_type(&facts.structures.physical.rows[name].types[column]))
-    })
-}
-
 fn host_operations(program: &Program, facts: &cq_lang_sequence::Analysis) -> BTreeSet<String> {
     program
         .structures
@@ -856,30 +851,7 @@ fn host_operations(program: &Program, facts: &cq_lang_sequence::Analysis) -> BTr
         .program
         .definitions
         .iter()
-        .filter(|definition| {
-            (facts.structures.physical.opaque(&definition.operator)
-                && !facts.structures.physical.capturable(&definition.operator))
-                || host_predicate(&definition.operator)
-                || string_row(facts, &symbol_name(&definition.name))
-                || match &definition.operator {
-                    // Membership consumes only right-hand keys, not its opaque
-                    // payload. Projected integer indexes may therefore execute
-                    // below host even when their original relation has strings.
-                    Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => {
-                        string_row(facts, &symbol_name(&keyed.left))
-                            || keyed.columns.iter().any(|column| {
-                                string_type(
-                                    &facts.structures.physical.rows[&symbol_name(&keyed.right)]
-                                        .types[&symbol_name(column)],
-                                )
-                            })
-                    }
-                    operator => operator
-                        .operands()
-                        .iter()
-                        .any(|input| string_row(facts, &symbol_name(input))),
-                }
-        })
+        .filter(|definition| facts.rust_requires_host(&definition.operator))
         .map(|definition| symbol_name(&definition.name))
         .collect()
 }
@@ -893,6 +865,7 @@ mod tests {
         fn node(name: &str, children: Vec<LevelNode>) -> LevelNode {
             LevelNode {
                 name: syn::parse_str(name).unwrap(),
+                host_rust: name == "host",
                 collaborative: name == "block",
                 dynamic: name == "device",
                 width: (name == "block").then_some(32),
@@ -971,10 +944,10 @@ mod tests {
     }
 
     #[test]
-    fn closed_partial_fragments_are_parameters_but_row_calls_remain_host_only() {
+    fn rust_placement_uses_identity_facts_not_expression_recognition() {
         for (condition, host_only) in [
             (quote::quote!(*a == threshold()), false),
-            (quote::quote!(opaque(a)), true),
+            (quote::quote!(opaque(a)), false),
         ] {
             let source: Program = syn::parse_quote! {
                 physical {
@@ -989,12 +962,18 @@ mod tests {
                     input = store rows r;
                     result = store canon map answer input;
                 }
+                representation { identity [a]; }
             };
             let facts = cq_lang_sequence::contract::check(&source).unwrap();
             assert_eq!(
                 host_operations(&source, &facts).contains("selected"),
                 host_only
             );
+            let mut encoded = source.clone();
+            encoded.representation.identity.clear();
+            encoded.representation.encoded.insert("a".into());
+            let encoded_facts = cq_lang_sequence::contract::check(&encoded).unwrap();
+            assert!(host_operations(&encoded, &encoded_facts).contains("selected"));
         }
     }
 
@@ -1006,8 +985,6 @@ mod tests {
         ] {
             let source = filtered_codes(quote::quote!(i32), condition);
             let facts = cq_lang_sequence::contract::check(&source).unwrap();
-            let selected = &source.structures.physical.program.definitions[1].operator;
-            assert!(!host_predicate(selected));
             assert!(!host_operations(&source, &facts).contains("selected"));
             let advice = advise(
                 &source,
@@ -1025,16 +1002,14 @@ mod tests {
     }
 
     #[test]
-    fn string_or_and_in_predicates_remain_host() {
+    fn string_relational_predicates_use_the_same_device_placement_rules() {
         for condition in [
             quote::quote!((s = "green") or (s = "blue")),
             quote::quote!(s in {"green", "blue"}),
         ] {
             let source = filtered_codes(quote::quote!(String), condition);
             let facts = cq_lang_sequence::contract::check(&source).unwrap();
-            let selected = &source.structures.physical.program.definitions[1].operator;
-            assert!(host_predicate(selected));
-            assert!(host_operations(&source, &facts).contains("selected"));
+            assert!(!host_operations(&source, &facts).contains("selected"));
             let advice = advise(
                 &source,
                 &machine(),
@@ -1046,7 +1021,7 @@ mod tests {
             assert!(advice.iter().any(|advice| matches!(advice,
                 Advice::Grade { name, level, .. }
                     if name == "selected" && level.iter().map(symbol_name).collect::<Vec<_>>()
-                        == ["host"])));
+                        == ["host", "device", "block"])));
         }
     }
 
@@ -1056,7 +1031,7 @@ mod tests {
             quote::quote!((s = 1i32) or (s = 2i32)),
             quote::quote!(s in {1i32, 2i32}),
             quote::quote!(s != 1i32),
-            quote::quote!(s != @constants.c_object_array, s != @constants.c_string_array),
+            quote::quote!(s != @(constants.c_object_array), s != @(constants.c_string_array)),
         ] {
             let source = filtered_codes(quote::quote!(i32), condition);
             let source = Advice::Store(syn::parse_quote!(selected))
@@ -1081,7 +1056,7 @@ mod tests {
     }
 
     #[test]
-    fn membership_uses_keys_not_opaque_right_payload_for_host_placement() {
+    fn membership_placement_does_not_infer_host_from_right_payload_type() {
         let source = membership();
         let facts = cq_lang_sequence::contract::check(&source).unwrap();
         let target = machine();
@@ -1090,7 +1065,9 @@ mod tests {
             vec!["host".into(), "device".into(), "block".into()],
         ]);
         assert!(!host_operations(&source, &facts).contains("answer"));
-        assert!(host_operations(&source, &facts).contains("r"));
+        // A structural rename does not evaluate Rust on its payload. Neither
+        // the payload's spelling nor its absence from the key requires host Rust.
+        assert!(!host_operations(&source, &facts).contains("r"));
         assert!(
             !boundaries(&source, &target, &facts, &available)
                 .iter()

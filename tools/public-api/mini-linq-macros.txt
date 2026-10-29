@@ -1,5 +1,6 @@
 mini_linq_macros::compile	{"proc_macro":{"helpers":[],"kind":"bang"}}
 mini_linq_macros::index_demands	{"proc_macro":{"helpers":[],"kind":"bang"}}
+mini_linq_macros::interned_relation_loaders	{"proc_macro":{"helpers":[],"kind":"bang"}}
 mini_linq_macros::lower	{"proc_macro":{"helpers":[],"kind":"bang"}}
 mini_linq_macros::mini_linq	{"proc_macro":{"helpers":[],"kind":"bang"}}
 mini_linq_macros::observe_cq	{"proc_macro":{"helpers":[],"kind":"bang"}}

@@ -108,7 +108,7 @@ fn delta_first_does_not_cross_rust_or_negation() {
         relation Reach(x:i32,y:i32);
         output Reach;
         Reach(*x,*y) :- Edge(x,y);
-        Reach(*x,*z) :- Edge(x,y), if *x != *y, Reach(y,z);
+        Reach(*x,*z) :- Edge(x,y), where x != y, Reach(y,z);
         Reach(*x,*z) :- Edge(x,y), !Blocked(x), Reach(y,z);
     };
     let strata = stratify::compile(&source).unwrap();
@@ -157,7 +157,7 @@ fn labelled() -> source::Program {
         relation Edge(x:i32,y:i32) = (edges);
         relation Compat(h:i32,b:i32); relation Reach(x:i32,y:i32);
         output Compat, Reach;
-        Helper: Compat(*h,*b) :- Alloc(h,t), Alloc(b,a), Component(a,c), Super(c,t), if *a != 0;
+        Helper: Compat(*h,*b) :- Alloc(h,t), Alloc(b,a), Component(a,c), Super(c,t), where a != 0;
         Reach(*x,*y) :- Edge(x,y);
         Step: Reach(*x,*z) :- Edge(x,y), Reach(y,z), Edge(z,x);
     }
@@ -313,7 +313,7 @@ fn negative_dependencies_force_completed_lower_components() {
         relation E(x:i32) = (edges); relation A(x:i32); relation B(x:i32);
         output B;
         B(*x) :- E(x), !A(x);
-        A(*x) :- E(x), if *x == 1;
+        A(*x) :- E(x), where x == 1;
     };
     let strata = stratify::compile(&source).unwrap();
     let expected: Vec<Vec<syn::Ident>> =

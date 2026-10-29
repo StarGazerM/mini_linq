@@ -1,4 +1,5 @@
 mini_linq::compile	{"use":{"id":"mini_linq_macros::compile","is_glob":false,"name":"compile","source":"mini_linq_macros::compile"}}
+mini_linq::interned_relation_loaders	{"use":{"id":"mini_linq_macros::interned_relation_loaders","is_glob":false,"name":"interned_relation_loaders","source":"mini_linq_macros::interned_relation_loaders"}}
 mini_linq::mini_linq	{"use":{"id":"mini_linq_macros::mini_linq","is_glob":false,"name":"mini_linq","source":"mini_linq_macros::mini_linq"}}
 mini_linq::passes::index_demands	{"use":{"id":"mini_linq_macros::index_demands","is_glob":false,"name":"index_demands","source":"mini_linq_macros::index_demands"}}
 mini_linq::passes::lower	{"use":{"id":"mini_linq_macros::lower","is_glob":false,"name":"lower","source":"mini_linq_macros::lower"}}

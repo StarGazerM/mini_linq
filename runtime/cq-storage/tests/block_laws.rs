@@ -513,3 +513,175 @@ fn sparse_narrowing_visits_bitmap_survivors_not_base_positions() {
         }
     }
 }
+
+#[test]
+fn identity_reads_do_not_extract_keys_evaluate_predicates_or_read_bounds() {
+    #[derive(Clone, Copy)]
+    struct NeverRead;
+    impl Column<Host<'_>> for NeverRead {
+        type Key = i64;
+        fn key(self, _: Host<'_>, _: RowId) -> i64 {
+            panic!("identity reads must not extract keys")
+        }
+    }
+    impl BlockRead<NeverRead> for Host<'_> {
+        fn bounds(self, _: NeverRead, _: BlockId) -> Option<(i64, i64)> {
+            panic!("identity reads must not fetch bounds")
+        }
+    }
+    struct Identity;
+    impl ReadPredicate<i64> for Identity {
+        fn is_identity(&self) -> bool {
+            true
+        }
+        fn test(&self, _: &i64) -> bool {
+            panic!("identity reads must not evaluate predicates")
+        }
+        fn any_in(&self, _: &i64, _: &i64) -> bool {
+            panic!("identity reads must not evaluate interval predicates")
+        }
+    }
+    fn check<P: ReadPredicate<i64>>(host: Host<'_>, predicate: P) {
+        let expected: Vec<_> = host.positions().collect();
+        assert_eq!(
+            host.read(NeverRead, &predicate).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            host.read_owned(NeverRead, &predicate)
+                .fold(Vec::new(), |mut ids, id| {
+                    ids.push(id);
+                    ids
+                }),
+            expected
+        );
+        let mut partial = host.read_owned(NeverRead, &predicate);
+        assert_eq!(partial.next(), expected.first().copied());
+        assert_eq!(
+            partial.fold(Vec::new(), |mut ids, id| {
+                ids.push(id);
+                ids
+            }),
+            expected.iter().skip(1).copied().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            host.read_chunked(NeverRead, &predicate).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            read_with_filter(host, NeverRead, &predicate, NeverRead, &Identity).collect::<Vec<_>>(),
+            expected
+        );
+        for id in expected {
+            assert!(test_position(host, NeverRead, &predicate, id));
+        }
+    }
+    let source = [(0,), (1,), (1,), (3,), (4,)];
+    let reads = Cell::new(0);
+    for len in [0, 1, source.len()] {
+        let host = Host {
+            rows: &source[..len],
+            reads: &reads,
+            unknown: false,
+        };
+        check(host, Identity);
+        check(host, NoJoinFilter);
+        check(
+            host,
+            JoinFilterPredicate::<std::collections::HashSet<i64>>(None),
+        );
+        let expected: Vec<_> = host.read(Col, &Point(1)).collect();
+        assert_eq!(
+            read_with_filter(host, Col, Point(1), NeverRead, &Identity).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            read_with_filter(host, NeverRead, Identity, Col, &Point(1)).collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn combined_read_caches_identity_modes_and_filters_static_survivors_only() {
+    use std::cell::RefCell;
+
+    struct Predicate<'a> {
+        identity: bool,
+        identity_calls: &'a Cell<usize>,
+        visits: &'a RefCell<Vec<i64>>,
+        keep: fn(i64) -> bool,
+    }
+    impl ReadPredicate<i64> for Predicate<'_> {
+        fn is_identity(&self) -> bool {
+            self.identity_calls.set(self.identity_calls.get() + 1);
+            self.identity
+        }
+        fn test(&self, key: &i64) -> bool {
+            self.visits.borrow_mut().push(*key);
+            self.identity || (self.keep)(*key)
+        }
+    }
+
+    let source = [(0,), (1,), (2,), (2,), (3,), (4,)];
+    for len in [0, 1, source.len()] {
+        for predicate_identity in [false, true] {
+            for filter_identity in [false, true] {
+                let reads = Cell::new(0);
+                let predicate_calls = Cell::new(0);
+                let filter_calls = Cell::new(0);
+                let predicate_visits = RefCell::new(Vec::new());
+                let filter_visits = RefCell::new(Vec::new());
+                let host = Host {
+                    rows: &source[..len],
+                    reads: &reads,
+                    unknown: false,
+                };
+                let predicate = Predicate {
+                    identity: predicate_identity,
+                    identity_calls: &predicate_calls,
+                    visits: &predicate_visits,
+                    keep: |key| key >= 2,
+                };
+                let filter = Predicate {
+                    identity: filter_identity,
+                    identity_calls: &filter_calls,
+                    visits: &filter_visits,
+                    keep: |key| key % 2 == 0,
+                };
+                let actual = read_with_filter(host, Col, predicate, Col, &filter)
+                    .map(RowId::offset)
+                    .collect::<Vec<_>>();
+                let expected = (0..len)
+                    .filter(|&i| {
+                        (predicate_identity || source[i].0 >= 2)
+                            && (filter_identity || source[i].0 % 2 == 0)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(actual, expected);
+                assert_eq!(predicate_calls.get(), 1);
+                assert_eq!(filter_calls.get(), 1);
+                assert_eq!(
+                    *predicate_visits.borrow(),
+                    source[..len]
+                        .iter()
+                        .filter(|_| !predicate_identity)
+                        .map(|row| row.0)
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    *filter_visits.borrow(),
+                    source[..len]
+                        .iter()
+                        .filter(|row| !filter_identity && (predicate_identity || row.0 >= 2))
+                        .map(|row| row.0)
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    reads.get(),
+                    predicate_visits.borrow().len() + filter_visits.borrow().len()
+                );
+            }
+        }
+    }
+}

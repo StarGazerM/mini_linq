@@ -451,9 +451,7 @@ fn opaque<'a>(
         .collect()
 }
 
-/// Preserve opaque operators and their inputs, and forbid motion across Rust.
-/// The operator prefix through the last Rust node is pinned. Retention modes
-/// may change, but neither evaluation order nor any Rust input may change.
+/// Preserve Rust syntax and input support without pinning a written-order prefix.
 pub(super) fn reexpression(
     source: &physical::Program,
     source_analysis: &physical::Analysis,
@@ -469,23 +467,6 @@ pub(super) fn reexpression(
         || a.head != b.head
         || source_analysis.discharged_host_sets != target_analysis.discharged_host_sets
         || source_analysis.consumer_canonical != target_analysis.consumer_canonical
-    {
-        return false;
-    }
-    let prefix = a
-        .definitions
-        .iter()
-        .rposition(|d| matches!(d.operator, Operator::Guard(_) | Operator::Bind(_)))
-        .map_or(0, |i| i + 1);
-    if b.definitions.len() < prefix
-        || a.definitions[..prefix]
-            .iter()
-            .zip(&b.definitions[..prefix])
-            .any(|(old, new)| {
-                let mut retained = old.clone();
-                retained.mode = new.mode.clone();
-                retained != *new
-            })
     {
         return false;
     }

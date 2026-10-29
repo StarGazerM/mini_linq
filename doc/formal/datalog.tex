@@ -19,9 +19,9 @@ set-valued source meaning or the core CQ compiler.
 Each relation declares a model slot $M$; the base accepts only \code{set}.
 EDB hosts denote sets even when their physical traversal contains duplicates.
 Outputs denote sets, not their iteration order. Rust expressions are opaque,
-pure partial functions, with panic represented by $\bot$; purity and lawful
-provider operations are premises, not syntactic checks. A terminating,
-successful source denotes the stratified least fixpoint. Divergence has no
+pure and total by premise; a panic violates that premise. Purity, totality and
+lawful provider operations are not syntactic checks. A terminating
+source denotes the stratified least fixpoint. Divergence has no
 completed result. Computed heads and finite generators do not by themselves
 guarantee a finite reachable domain. Refinement requires that a successful
 reference yield the same sets without a new panic; it does not require equal
@@ -43,8 +43,10 @@ expansion, including its binders and evaluation position.
 \subsection{DL-Source}
 \paragraph{Grammar.} Declarations (EDB bindings or IDB declarations, each with
 model \code{set}), ordered rules, outputs, and an optional observer. Bodies
-contain positive atoms, safe negative atoms, and written-order CQ Rust steps
-including \code{let}, \code{for}, and guards; heads may be computed.
+contain positive atoms, safe negative atoms, relational \code{where} predicates,
+and opaque total CQ Rust steps including \code{let}, \code{for}, and \code{if};
+heads may be computed. Rust steps require only their free-variable binders,
+using the whole lexical environment when free-variable analysis is opaque.
 \paragraph{Contract.} Declared names, arities, types and outputs are consistent;
 head and negative variables are safely bound; negative variables must occur
 in an earlier positive atom, not only a scalar \code{let} or generator.
@@ -60,16 +62,15 @@ inflationary least fixpoint of their immediate consequences, with lower
 components fixed. The executable \code{eval\_source} reference implements this
 synchronous transition with written-order native Rust rule evaluation, independently
 of production stratification and incrementalization.
-The total finite theorem in the incremental section applies under its premises;
-partial execution additionally has the obligations below.
+The total finite theorem in the incremental section applies under its premises.
 \paragraph{Recorded decisions.} Relation model, EDB bindings, written rule and
 Rust-step order, outputs and observer. No schedule or physical choices.
 \paragraph{Rewrite check.} Check both Source contracts and preserve the declared
 interface: program name, relation declarations and models, EDB bindings, outputs
 and observer.
 Rules may change, including opaque Rust payloads. Preservation of relational
-meaning and partial-execution refinement is a semantic premise of such a rewrite,
-validated by executable refinement cases, not decided by the structural gate.
+meaning is a semantic premise of such a rewrite, validated by executable
+refinement cases, not decided by the structural gate.
 
 \subsection{DL-Strata}
 \paragraph{Grammar.} DL-Source plus an ordered list of components.
@@ -101,8 +102,9 @@ identity, variant erasure and changing-position coverage directly. Each rule
 with no positive occurrence in its current component has at least one seed;
 otherwise each changing positive occurrence is selected by at least one step
 variant reading its delta, while other changing occurrences read the accumulated
-relation. Preserve head, written body order, Rust steps and fixed inputs under
-erasure. Repeated seed and step variants are allowed: covering is not a disjoint
+relation. Preserve the head, body occurrences, Rust payloads and fixed inputs
+under erasure and restoration of source order. Repeated seed and step variants
+are allowed: covering is not a disjoint
 or exactly-once derivation partition. Variant order and fresh names need not equal
 the default producer's choices.
 \begin{mathpar}
@@ -148,16 +150,15 @@ These completed sets are built once per stratum; each emitted \code{!K(args)}
 has distinct named arguments, or one wildcard for the unit-key emptiness case.
 No rule above permits negation of a changing current-component relation.
 
-\paragraph{Partial Rust across rounds.}
-Erasure, body-order preservation and full-valuation coverage do not prove
-prefix safety: a partial expression can run on a prefix whose later atom is
-empty. The additional obligation is that every prefix evaluated by every
-generated variant is safe whenever the written-order reference succeeds,
-including seed execution and cross-round repetition. Per-hole CQ checks and
-Before facts constrain each call but do not discharge this multi-round
-obligation. The total finite fixpoint theorem is not claimed for arbitrary
-partial Rust. Executable panic/refinement cases provide evidence, not a proof
-for all opaque expressions.
+\paragraph{Total Rust across rounds.}
+Opaque Rust expressions are pure and total by premise, including on prefixes
+reached by seed execution and repeated rounds. Their placement requires their
+free variables to be bound; there are no written-order Rust chains or
+\code{Before} sets. Positive atoms may cross Rust steps when binder dependencies
+permit it. Negative atoms and relational \code{where} predicates are placed
+when their variables are bound, with negative safety retained. The compiler
+does not split, recognize or rewrite Rust payloads. Panics violate the totality
+premise rather than imposing an additional ordering restriction.
 
 \subsection{DL-Storage}
 \paragraph{Grammar.} DL-Incremental plus a declaration-ordered
@@ -371,7 +372,7 @@ With $\Gamma$ the recorded registry and $\mathrm{last}(Q)$ the terminal:
 \paragraph{Meaning.} A state machine over storage: evaluations see the
 committed snapshot; admission rejects known and duplicate candidate heads;
 publication extends full structures and replaces every delta layout, including
-empty ones, before subsequent evaluation. Under provider and partial-Rust
+empty ones, before subsequent evaluation. Under provider and pure-total Rust
 premises its $\alpha$-image refines the Incremental transition system.
 The executable \code{eval\_round} reference consumes the supplied checked round
 program and evaluates its holes with native Rust, interpreting the recorded
@@ -614,8 +615,7 @@ candidate, and by (3) it is committed unless already present; (4) ensures no
 pending work is lost. Synchronous rounds are one admissible relational
 schedule (each round's cut is the committed snapshot, and every delta reader
 runs on each batch), so a printer realizing only synchronous rounds also
-realizes \code{relational}. Partial Rust remains subject to the prefix-safety
-premise of the preceding paragraph.
+realizes \code{relational}. The common pure-total Rust premise remains required.
 \begin{mathpar}
 \Rule{WF-DL-Progress}{\mathrm{progress}\in\{\code{synchronous},\code{relational}\}\quad
  \mathrm{progress}=\code{relational}\Rightarrow
@@ -723,23 +723,25 @@ the default producer's chosen IR, nor use the production Datalog printer to
 obtain the reference answer. Only \code{seminaive\_covering} is admitted.
 
 Native Rust hole evaluation is deliberate: guards, bindings, finite generators,
-computed heads and user row types are opaque Rust, including partial expressions
-whose panic behavior depends on the reached written-order prefix.
+computed heads and user row types are opaque Rust. Expressions are pure and
+total by premise, not interpreted or recognized by the compiler.
 The separate \code{cq\_testkit::cq\_semantics} evaluator enumerates an integer
 fragment with variable-only positive atoms and supported total comparisons.
 It supplies independent relational evidence for that fragment, not an interpreter
 for arbitrary Rust holes. Replacing native holes with that scalar evaluator would
-either exclude supported programs or erase the partial-execution obligation.
+exclude supported programs.
 
 The drivers propagate panics; the re-exported \code{check\_refinement} harness
 evaluates each side once and catches panic as the bottom outcome.
 A successful reference requires equal output sets and no target panic; a reference
 panic imposes no successful-result obligation and does not require a target panic.
+A caught panic diagnoses behavior outside the pure-total premise; this harness
+convention does not admit partial Rust into the language contract.
 Comparisons of Source, Incremental, Round and generated execution are per-instance
-evidence for pass and rewrite premises, not proofs of equivalence, prefix safety,
+evidence for pass and rewrite premises, not proofs of equivalence, totality,
 termination, or provider laws. Structural acceptance alone provides none of these
-semantic proofs. Purity, lawful equality, hashing and cloning, finite generators
-and termination remain assumptions; observers are excluded from relational
+semantic proofs. Purity, totality, lawful equality, hashing and cloning, finite
+generators and termination remain assumptions; observers are excluded from relational
 denotation. Divergence has no timeout-based denotation.
 
 \section{Datalog passes and crate organization}
@@ -785,23 +787,24 @@ do not compare target names or variant order with a regenerated expansion.
 \Rule{CK-DL-Incremental}{\mathrm{WF}_{\mathrm{Incremental}}(t)\quad
  \mathrm{strata}(t)=s}{\mathrm{check}_{\mathrm{incremental}}(s,t)}
 \end{mathpar}
-The total finite refinement uses DL-Delta and DL-FrozenNegation; partial Rust
-requires the additional prefix-safety obligation, not merely this check.
+The total finite refinement uses DL-Delta and DL-FrozenNegation under the common
+pure-total Rust and provider premises.
 
 \paragraph{Recorded occurrence order.}
 Each variant records a permutation $\pi$ of its source rule's body positions;
 $\pi(k)$ is the source occurrence executed at position $k$.  Omitted textual
 \code{order} denotes the identity permutation.  The delta occurrence $d$ remains
-an index in the source body, not in the permuted body.  Let $[a,b)$ be the first
-maximal contiguous interval of positive relational atoms, or the empty interval
-when no positive atom occurs.  A permitted order fixes every position outside
-$[a,b)$ and permutes only this interval.  In particular, it does not move any
-atom across an opaque Rust clause or a negative occurrence.
+an index in the source body, not in the permuted body. A permitted order may
+permute positive atoms across opaque total Rust clauses, negative occurrences
+and relational \code{where} predicates. Every clause must have its required
+variables bound at its execution position; Rust has no additional ordering
+barrier. Let $\mathrm{Bound}_V(k)$ be the variables supplied before position $k$
+and $\mathrm{Req}_Q(i)$ the free-variable binder dependencies of source clause
+$i$ (including the variables of negative atoms and \code{where} predicates).
 \begin{mathpar}
 \Rule{DL-OccurrenceOrder}{
  \pi\in\mathrm{Sym}(\{0,\ldots,n-1\})\quad
- \forall k\notin[a,b).\ \pi(k)=k\quad
- \forall k\in[a,b).\ \pi(k)\in[a,b)\quad
+ \forall k.\ \mathrm{Req}_Q(\pi(k))\subseteq\mathrm{Bound}_V(k)\quad
  \mathrm{WF}_{\mathrm{CQ}}(V)\quad
  \pi^{-1}(\mathrm{erase}_{\Delta_d}(V))=Q
 }{\mathrm{ValidVariantOrder}(Q,d,\pi,V)}
@@ -812,25 +815,30 @@ source body order before comparing the entire rule, including its head and
 opaque Rust.  Seeds have no delta substitution.  The Incremental contract also
 retains its independent changing-position coverage and fresh-schema checks.
 The checker validates the supplied permutation and never reruns a planner.
-Under the existing relational laws, permuting positive atoms preserves their
-joined valuation set; because the entire prefix precedes the same subsequent
-Rust and negative clauses, the reached valuations at those barriers are
-unchanged.  The existing purity, lawful equality and partial-Rust premises
-continue to apply.
+Under the relational laws, positive atoms preserve their joined valuation set.
+Pure total Rust steps preserve meaning when moved subject to their free-variable
+binder dependencies; negative atoms and \code{where} predicates filter when
+their variables are available. Negative safety and lawful representation
+equality/order remain premises. No written-order Rust chain is required.
 
 \paragraph{Delta-first planning advice.}
-The target-independent \code{driver(delta\_first)} advice selects the changing
-occurrence first when $d\in[a,b)$, then selects the remaining prefix occurrences
+The optional conservative \code{driver(delta\_first)} producer policy uses
+$[a,b)$, the first maximal contiguous interval of positive relational atoms
+(empty if there are none). It selects the changing occurrence first when
+$d\in[a,b)$, then selects the remaining prefix occurrences
 by connectivity to already bound relational variables, breaking ties by source
 position.  It records the resulting complete permutation.  Seeds and variants
 whose changing occurrence is outside that prefix retain identity order.
 This heuristic is not part of the validity rule and is not chosen by a printer.
+The prefix restriction belongs only to this producer policy, not to
+DL-OccurrenceOrder: supplied permutations may cross that interval's boundaries
+when the variant's variable dependencies are satisfied.
 
 \paragraph{Authored rule orders.}
 A labelled rule's \code{plan(Label, [delta(R@k),] order(..))} advice resolves
 to the same permutation form and marks the variant \code{authored}.  The mark
 is denoted advice, not a validity premise: DL-OccurrenceOrder checks the
-permutation alone. Fork passes an authored variant's order to its hole's
+permutation and dependencies. Fork passes an authored variant's order to its hole's
 recorded planning invocation as explicit \code{order(..)} advice over the
 hole's normalized clause positions. Named configuration resolution records
 that invocation's ordinal; a custom flat queue declares it explicitly.
@@ -875,7 +883,7 @@ publication permutations or loop forms need not equal Fork's default output.
 \Rule{CK-DL-Fork}{\mathrm{WF}_{\mathrm{Round}}(t)\quad
  \mathrm{storage}(t)=s}{\mathrm{check}_{\mathrm{fork}}(s,t)}
 \end{mathpar}
-Refinement is a storage-state simulation with the same partial-Rust premises.
+Refinement is a storage-state simulation with the same pure-total Rust premises.
 
 \subsection{Print rounds: Round to Rust}
 The sequential terminal printer interprets recorded bindings, provider types,
@@ -1338,7 +1346,7 @@ for the subsequent snapshot. Optional \code{per\_task} execution deduplication
 is only a candidate-volume optimization, not a CQ-owned canonical boundary.
 Sequential holes remain free of local dedup state, and neither execution mode
 weakens the exact context-envelope requirement.
-Purity, lawful hashing/equality/cloning and the partial-Rust prefix premises
+Purity, totality and lawful hashing/equality/cloning
 remain required. Neither ownership checking nor the counters regression is a
 general Rust equivalence proof.
 The base printing library exports generic \code{full\_insert},

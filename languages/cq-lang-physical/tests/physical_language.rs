@@ -158,25 +158,19 @@ fn point_reads_require_literal_keys_and_canon_host_pipes_require_linear_reads() 
 }
 
 #[test]
-fn rust_chain_must_be_ancestral_and_known_float_keys_are_rejected() {
+fn rust_branches_are_independent_and_types_are_host_obligations() {
     let p: physical::Program = syn::parse_quote!(physical {
         relation R(a:i32); r = pipe rename R@0 {a -> x};
         g = pipe guard r if (*x != 0);
-        b = pipe bind r with y:i32 = (10 / *x);
+        b = let bind r with y:i32 = (10 / *x);
         j = pipe probe first [x] g,b; return j as answer(x,y);
     });
-    assert!(
-        physical::contract::check(&p)
-            .unwrap_err()
-            .to_string()
-            .contains("ancestry")
-    );
+    physical::contract::check(&p).unwrap();
     let p: physical::Program = syn::parse_quote!(physical {
         relation R(price:f64); r = pipe rename R@0 {price -> price};
         p = pipe canon point select r if (price = 0.0); return p as answer(price);
     });
-    let e = physical::contract::check(&p).unwrap_err().to_string();
-    assert!(e.contains("price") && e.contains("Eq"), "{e}");
+    physical::contract::check(&p).unwrap();
     assert!(
         syn::parse_str::<physical::Program>(
             "physical { e = pipe extend u with {x:i32} value (1); return e as answer(x); }"

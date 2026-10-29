@@ -153,6 +153,7 @@ fn build_index(
         None => (base_rows, None),
         Some(selection) => {
             let flags = temporary::<u32>(stream, base_rows)?;
+            // DECODE V: reference selection launches decode-before-range filtering; P6 translate predicates to the encoded domain.
             module.range_flags(
                 stream,
                 &module.prepare_range_flags(strided(base_rows))?,
@@ -186,7 +187,9 @@ fn build_index(
     // row permutation (`source[i]`), as RCCL's pair sort input.
     let fill = |column: &str, source: Option<*const u32>| -> Result<()> {
         match source {
+            // DECODE V: full index key reconstruction precedes sorting; P6 retain encoded keys.
             None => module.keys_and_rows(stream, &module.prepare_keys_and_rows(launch_keys)?, base.view(column), rows as u32, key_ptr, order_ptr)?,
+            // DECODE V: selected index key reconstruction precedes sorting; P6 compare recorded codes.
             Some(source) => module.selected_keys_and_rows(
                 stream,
                 &module.prepare_selected_keys_and_rows(launch_keys)?,
@@ -211,6 +214,7 @@ fn build_index(
             .iter()
             .map(|(column, _)| {
                 let out = temporary::<u32>(stream, rows)?;
+                // DECODE V: index builder launches whole-key decode before lexicographic sort; P6 retain encoded keys.
                 module.decode_column(
                     stream,
                     &module.prepare_decode_column(launch_keys)?,
@@ -257,6 +261,7 @@ fn build_index(
         spec.payload
             .iter()
             .map(|(column, bounds)| unsafe {
+                // DECODE I: sorted payload gather decodes and immediately FOR-reencodes; avoidable reorganization, P4 keep index runs plain.
                 EncodedColumn::from_gather::<_, u32>(pool.clone(), base.view(column), sorted, rows, row_count.clone(), 0, *bounds)
             })
             .collect::<Result<Vec<_>>>()?
@@ -588,8 +593,11 @@ fn main() -> Result<()> {
                 .iter()
                 .map(|&key| {
                     (
+                        // DECODE P: diagnostic final H05 answer unpacks order bits and inverts the order domain for exact comparison.
                         orders.value((key >> order_shift) as u32),
+                        // DECODE P: diagnostic final H05 answer unpacks supplier bits and inverts the supplier domain.
                         suppliers.value(((key >> nation_bits) & supplier_mask) as u32),
+                        // DECODE P: diagnostic final H05 answer unpacks nation bits and inverts the nation domain.
                         nations.value((key & nation_mask) as u32),
                     )
                 })

@@ -202,13 +202,62 @@ fn suffix_rust_cannot_move_into_just_one_arm() {
 }
 
 #[test]
-fn source_rewrite_cannot_swap_a_prefix_rust_step_with_a_rust_block() {
+fn cq_rewrite_is_identity_but_vo_can_swap_independent_rust_with_a_rust_block() {
     let source: cq::Program = syn::parse_quote! { struct Q; relation R(x:i32); answer(x) :- R(x), if prefix(x), {if arm(x)} | {if other(x)}; };
     let mut target = source.clone();
     let mut items: Vec<_> = target.query.body.iter().cloned().collect();
     items.swap(1, 2);
     target.query.body = items.into_iter().collect();
     assert!(cq::check_rewrite(&source, &target).is_err());
+
+    let written = cq_order::compile(&source, &Default::default()).unwrap();
+    let mut reordered = written.clone();
+    reordered.valuation.steps.swap(1, 2);
+    cq_lang_vo::contract::check(&reordered).unwrap();
+    let target = compile(&reordered).unwrap();
+    check(&reordered, &target).unwrap();
+    check(&written, &target).unwrap();
+}
+
+#[test]
+fn moved_rust_blocks_record_only_their_free_variable_scope() {
+    for body in [
+        "{ if accept(x) } | { if other(x) }",
+        "{ let z:i32 = *x } | { let z:i32 = *x + 1 }",
+        "{ for z in values(x) } | { for z in other(x) }",
+    ] {
+        let source: cq::Program = syn::parse_str(&format!(
+            "struct Q; relation R(x:i32); relation S(y:i32); \
+             answer(x,y) :- R(x), S(y), {body};"
+        ))
+        .unwrap();
+        let mut moved = cq_order::compile(&source, &Default::default()).unwrap();
+        moved.valuation.steps.swap(1, 2);
+        cq_lang_vo::contract::check(&moved).unwrap();
+        let target = compile(&moved).unwrap();
+        check(&moved, &target).unwrap();
+        let environments: Vec<_> = target
+            .plan
+            .definitions
+            .iter()
+            .filter_map(|definition| match &definition.operator {
+                cq_lang_ra::Operator::Guard(guard) => guard.environment.as_ref(),
+                cq_lang_ra::Operator::Bind(binding) => binding.environment.as_ref(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(environments.len(), 2);
+        for environment in environments {
+            assert_eq!(
+                environment
+                    .variables
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                ["x"],
+            );
+        }
+    }
 }
 
 #[test]
@@ -291,9 +340,9 @@ fn nested_and_sibling_scopes_keep_their_own_relational_predicates() {
     for choice in ["|", "else"] {
         let text = format!(
             "struct Q; relation R(x:i32); relation S(x:i32); answer(x) :- \
-             R(x), if *x >= 1, \
-             {{ S(x), if *x <= 2, {{ R(x), if *x != 0 }} | {{ S(x), if *x >= 2 }} }} \
-             {choice} {{ S(x), if *x <= 3 }}, if *x <= 4;"
+             R(x), where x >= 1, \
+             {{ S(x), where x <= 2, {{ R(x), where x != 0 }} | {{ S(x), where x >= 2 }} }} \
+             {choice} {{ S(x), where x <= 3 }}, where x <= 4;"
         );
         let (vo, target) = plan(&text);
         let selects: Vec<_> = target
@@ -353,8 +402,8 @@ fn suffix_constraints_preserve_finite_branch_domains() {
         ] {
             let (vo, target) = plan(&format!(
                 "struct Q; relation R(x:i32); relation S(x:i32); \
-                 answer(x) :- R(x), if *x >= 0, {rust_prefix} \
-                 {{ if *x == 1 }} {choice} {{ S(x) }}, if *x <= 2;"
+                 answer(x) :- R(x), where x >= 0, {rust_prefix} \
+                 {{ where x == 1 }} {choice} {{ S(x) }}, where x <= 2;"
             ));
             if rust_prefix.is_empty() {
                 for seed in 0..8 {
@@ -591,7 +640,7 @@ fn block_placement_is_required_and_checked_before_elaboration() {
 }
 
 #[test]
-fn typed_arithmetic_is_movable_but_remains_before_partial_blocks() {
+fn rust_expressions_and_blocks_move_by_free_variables() {
     let source: cq::Program = syn::parse_str(
         "struct Q; relation R(x:i32); answer(y) :-
          R(x), if accept(x), let y:i32 = x + 1;",
@@ -612,10 +661,5 @@ fn typed_arithmetic_is_movable_but_remains_before_partial_blocks() {
     let normal = cq::normal::normalize(&source).unwrap();
     let mut late = cq_order::compile(&normal, &Default::default()).unwrap();
     late.valuation.steps.swap(1, 2);
-    assert!(
-        cq_lang_vo::contract::check(&late)
-            .unwrap_err()
-            .to_string()
-            .contains("Before")
-    );
+    cq_lang_vo::contract::check(&late).unwrap();
 }

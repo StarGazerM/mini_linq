@@ -24,11 +24,11 @@ fn public_generator_and_printers_are_seeded_and_cover_all_tags_in_2048_seeds() {
 }
 
 #[test]
-fn large_seeds_preserve_determinism_and_partial_lane() {
+fn large_seeds_preserve_determinism_and_rust_oracle_lane() {
     for seed in [u32::MAX as u64 + 1, 1 << 63, u64::MAX - 1, u64::MAX] {
         let case = generate(seed);
         assert_eq!(case, generate(seed));
-        assert_eq!(case.has_partial_terms(), seed & 1 == 0);
+        assert_eq!(case.requires_rust_oracle(), seed & 1 == 0);
     }
 }
 
@@ -73,29 +73,29 @@ fn generator_case(generator: cq_testkit::fuzz::Generator) -> cq_testkit::fuzz::C
 }
 
 #[test]
-fn every_generator_and_partial_expression_routes_away_from_sql() {
-    use cq_testkit::fuzz::{Expr, Generator, PartialOp};
+fn every_generator_and_opaque_rust_operation_routes_away_from_sql() {
+    use cq_testkit::fuzz::{Expr, Generator, RustOp};
     for generator in [
         Generator::Range,
         Generator::InclusiveRange,
         Generator::Duplicates,
         Generator::Empty,
-        Generator::IteratorPanic,
+        Generator::Mapped,
     ] {
-        for partial in [
+        for operation in [
             None,
-            Some(PartialOp::Divide),
-            Some(PartialOp::Remainder),
-            Some(PartialOp::Add),
-            Some(PartialOp::Subtract),
-            Some(PartialOp::Multiply),
-            Some(PartialOp::Unwrap),
+            Some(RustOp::Divide),
+            Some(RustOp::Remainder),
+            Some(RustOp::Add),
+            Some(RustOp::Subtract),
+            Some(RustOp::Multiply),
+            Some(RustOp::Unwrap),
         ] {
             let mut case = generator_case(generator);
-            if let Some(operator) = partial {
-                case.query.bindings[0].expression = Expr::Partial(operator, Box::new(Expr::Var(0)));
+            if let Some(operator) = operation {
+                case.query.bindings[0].expression = Expr::Rust(operator, Box::new(Expr::Var(0)));
             }
-            assert!(case.has_partial_terms());
+            assert!(case.requires_rust_oracle());
             assert!(case.sql().starts_with("-- "));
             assert!(case.sql().contains("compiled written-order"));
             for source in [case.cq(), case.written_cq()] {
@@ -133,7 +133,7 @@ fn generator_minimization_keeps_captures_and_nested_binding_scope() {
     );
     let program: cq_testkit::cq::Program = syn::parse_str(&smaller.cq()).unwrap();
     cq_testkit::cq::contract::check(&program).unwrap();
-    assert!(smaller.has_partial_terms());
+    assert!(smaller.requires_rust_oracle());
 }
 
 #[test]
@@ -189,8 +189,8 @@ fn literal_atoms_keep_source_positions_and_resolve_local_dependencies() {
 }
 
 #[test]
-fn partial_generator_samples_literal_excluded_local_zero_rows() {
-    use cq_testkit::fuzz::{Expr, PartialOp, Term};
+fn rust_generator_samples_literal_excluded_local_zero_rows() {
+    use cq_testkit::fuzz::{Expr, RustOp, Term};
     let mut found = false;
     for seed in 0..2048 {
         let case = generate(seed);
@@ -198,7 +198,7 @@ fn partial_generator_samples_literal_excluded_local_zero_rows() {
             if matches!(
                 atom.terms.as_slice(),
                 [
-                    Term::Expression(Expr::Partial(PartialOp::Divide, _)),
+                    Term::Expression(Expr::Rust(RustOp::Divide, _)),
                     Term::Var(_),
                     Term::Constant(5)
                 ]
@@ -209,5 +209,64 @@ fn partial_generator_samples_literal_excluded_local_zero_rows() {
             }
         }
     }
-    assert!(found, "sample the literal filter before a local division");
+    assert!(
+        found,
+        "sample an occurrence literal alongside local total division"
+    );
+}
+
+#[test]
+fn relational_source_uses_where_and_rust_boolean_guards_stay_opaque() {
+    use cq_testkit::fuzz::{Comparison, Expr, Generator, Guard, RelTerm, Relational, Step};
+    let mut case = generator_case(Generator::Range);
+    case.query.bindings.clear();
+    case.query.head = vec![Expr::Var(0)];
+    case.query.constraints = vec![Relational::Or(vec![
+        vec![
+            Relational::Between(RelTerm::Var(0), RelTerm::Literal(-2), RelTerm::Parameter(3)),
+            Relational::Compare(Comparison::NotEqual, RelTerm::Var(0), RelTerm::Literal(0)),
+        ],
+        vec![Relational::In(RelTerm::Var(0), vec![5, 7])],
+    ])];
+    case.query.guards = vec![Guard::Or(
+        Box::new(Guard::Compare(
+            Comparison::Equal,
+            Expr::Var(0),
+            Expr::Constant(1),
+        )),
+        Box::new(Guard::Compare(
+            Comparison::Greater,
+            Expr::OpaqueCall(Box::new(Expr::Var(0))),
+            Expr::Constant(2),
+        )),
+    )];
+    case.query.order = vec![
+        Step::Atom(0),
+        Step::Constraint(0),
+        Step::Guard(0),
+        Step::Atom(1),
+    ];
+    let source = case.cq();
+    assert!(
+        source.contains("where (v0 in -2..=parameter_positive_3 && v0 != 0) || (v0 in [5, 7])")
+    );
+    assert!(
+        source.contains("if ((v0.to_owned() == 1) || (std::convert::identity(v0.to_owned()) > 2))")
+    );
+    let program: cq_testkit::cq::Program = syn::parse_str(&source).unwrap();
+    cq_testkit::cq::contract::check(&program).unwrap();
+    assert_eq!(program.query.body.len(), 4);
+    assert!(matches!(
+        &program.query.body[1],
+        cq_testkit::cq::BodyItem::Constraint(_)
+    ));
+    let cq_testkit::cq::BodyItem::Filter(filter) = &program.query.body[2] else {
+        panic!("Rust guard must remain one opaque filter");
+    };
+    let expected: syn::Expr =
+        syn::parse_str("((v0.to_owned() == 1) || (std::convert::identity(v0.to_owned()) > 2))")
+            .unwrap();
+    assert_eq!(filter.condition, expected);
+    assert!(case.sql().contains("BETWEEN -2 AND 3"));
+    assert!(case.sql().contains("IN (5, 7)"));
 }

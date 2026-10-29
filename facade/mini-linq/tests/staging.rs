@@ -1,12 +1,12 @@
 #[test]
-fn chunked_scan_range_preserves_answers_and_partial_boundary() {
+fn chunked_scan_range_preserves_answers_with_total_rust_bindings() {
     let rows: Vec<_> = (0_i32..257).map(|x| (x,)).collect();
     let answer: Vec<_> = mini_linq::compile! {
         pipeline { stage = mini_linq::passes::stage(batch(64)); }
         struct StagedRange;
         relation R(x:i32) = (rows);
-        answer(x,y) :- R(x), if *x >= 60, if *x <= 130,
-            let y:i32 = { assert!(*x >= 60 && *x <= 130); *x * 2 };
+        answer(x,y) :- R(x), where x >= 60, where x <= 130,
+            let y:i32 = *x * 2;
     }
     .map(|(x, y)| (*x, y))
     .collect();
@@ -37,7 +37,7 @@ fn staged_positional_range_keeps_the_same_survivors() {
         }
         struct StagedPositional;
         relation R(x:i64) = (rows);
-        answer(x) :- R(x), if *x >= 4, if *x < 12;
+        answer(x) :- R(x), where x >= 4, where x < 12;
     }
     .map(|(x,)| *x)
     .collect();
@@ -54,9 +54,35 @@ fn represented_and_staged_scan_composes_before_bind() {
         }
         struct StagedPositions;
         relation R(x:i32) = (rows);
-        answer(x,y) :- R(x), if *x >= 4, let y:i32 = *x + 1;
+        answer(x,y) :- R(x), where x >= 4, let y:i32 = *x + 1;
     }
     .map(|(x, y)| (*x, y))
     .collect();
     assert_eq!(actual, vec![(4, 5), (7, 8)]);
+}
+
+#[test]
+fn staged_positional_conjunctions_feed_later_column_reads() {
+    let rows: Vec<_> = (0_i32..257).map(|x| (x, x % 7, x % 11)).collect();
+    let actual: Vec<_> = mini_linq::compile! {
+        pipeline {
+            select = mini_linq::passes::select(positional(R));
+            represent = mini_linq::passes::represent(positions);
+            stage = mini_linq::passes::stage(batch(16));
+        }
+        struct StagedConjunctions;
+        relation R(x:i32, y:i32, z:i32) = (rows);
+        answer(x,amount) :- R(x,y,z),
+            where x >= 30 && x < 220,
+            where y >= 2 && y <= 5,
+            where z < 4,
+            let amount:i32 = *y * *z;
+    }
+    .map(|(x, amount)| (*x, amount))
+    .collect();
+    let expected: Vec<_> = (30..220)
+        .filter(|x| (2..=5).contains(&(x % 7)) && x % 11 < 4)
+        .map(|x| (x, (x % 7) * (x % 11)))
+        .collect();
+    assert_eq!(actual, expected);
 }

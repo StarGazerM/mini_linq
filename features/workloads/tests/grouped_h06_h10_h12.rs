@@ -100,17 +100,24 @@ fn h10_customer_revenue_matches_duckdb_without_limit() {
         vec![5, 1, 100, 6, 0, 78],
     ];
     for rows in [rows.clone(), rows.into_iter().rev().collect(), vec![]] {
+        let mut dictionaries = cq_load::Dictionaries::default();
+        dictionaries.insert("c_name", ["C"].into_iter());
+        dictionaries.insert("c_address", ["A"].into_iter());
+        dictionaries.insert("c_phone", ["P"].into_iter());
+        dictionaries.insert("c_comment", ["X"].into_iter());
+        dictionaries.insert("n_name", ["N"].into_iter());
+        dictionaries.insert("l_returnflag", ["N", "R"].into_iter());
         let data = h10::Data {
             customer: vec![(
                 1,
-                "C".into(),
+                dictionaries.literal("c_name", "C"),
                 decimal(12345),
                 1,
-                "A".into(),
-                "P".into(),
-                "X".into(),
+                dictionaries.literal("c_address", "A"),
+                dictionaries.literal("c_phone", "P"),
+                dictionaries.literal("c_comment", "X"),
             )],
-            nation: vec![(1, "N".into())],
+            nation: vec![(1, dictionaries.literal("n_name", "N"))],
             orders: rows
                 .iter()
                 .map(|r| {
@@ -134,10 +141,14 @@ fn h10_customer_revenue_matches_duckdb_without_limit() {
                         i64::from(r[1]),
                         decimal(r[2]),
                         decimal(r[3]),
-                        char::from_u32(r[5] as u32).unwrap().to_string(),
+                        dictionaries.literal(
+                            "l_returnflag",
+                            &char::from_u32(r[5] as u32).unwrap().to_string(),
+                        ),
                     )
                 })
                 .collect(),
+            dictionaries,
         };
         let sql = format!(
             r#"WITH customer AS (SELECT 1 AS c_custkey, 'C' AS c_name,
@@ -204,10 +215,21 @@ fn h12_priority_counts_match_duckdb_and_date_guards() {
         })
     };
     for rows in [rows.clone(), rows.into_iter().rev().collect(), vec![]] {
+        let mut dictionaries = cq_load::Dictionaries::default();
+        dictionaries.insert("l_shipmode", ["MAIL", "SHIP", "AIR"].into_iter());
+        dictionaries.insert(
+            "o_orderpriority",
+            ["1-URGENT", "2-HIGH", "3-MEDIUM"].into_iter(),
+        );
         let data = h12::Data {
             orders: rows
                 .iter()
-                .map(|r| (i64::from(r[0]), priorities[r[6] as usize].into()))
+                .map(|r| {
+                    (
+                        i64::from(r[0]),
+                        dictionaries.literal("o_orderpriority", priorities[r[6] as usize]),
+                    )
+                })
                 .collect(),
             lineitem: rows
                 .iter()
@@ -215,13 +237,19 @@ fn h12_priority_counts_match_duckdb_and_date_guards() {
                     (
                         i64::from(r[0]),
                         i64::from(r[1]),
-                        modes[r[2] as usize].into(),
+                        dictionaries.literal("l_shipmode", modes[r[2] as usize]),
                         day(r[3]),
                         day(r[4]),
                         day(r[5]),
                     )
                 })
                 .collect(),
+            high_priorities: cq_load::dictionary_where(
+                &dictionaries,
+                "o_orderpriority",
+                |value| value == "1-URGENT" || value == "2-HIGH",
+            ),
+            dictionaries,
         };
         let sql = format!(
             r#"WITH orders AS (SELECT DISTINCT c0 AS o_orderkey,
@@ -248,7 +276,7 @@ fn h12_priority_counts_match_duckdb_and_date_guards() {
 
 #[test]
 #[allow(non_snake_case)]
-fn integer_arithmetic_wraps_in_debug_queries_and_range_guards() {
+fn authored_wrapping_arithmetic_is_preserved_in_queries_and_guards() {
     let Input = &[(i64::MAX, 2_i64), (i64::MIN, -1), (10, 3)];
     let actual: Vec<(i64, i64, i64, i64)> = mini_linq::compile! {
         pipeline {}
@@ -256,11 +284,11 @@ fn integer_arithmetic_wraps_in_debug_queries_and_range_guards() {
         relation Input(x: i64, y: i64);
         relation answer(a: i64, b: i64, c: i64, d: i64);
         answer(a, b, c, d) :- Input(x, y),
-            let a: i64 = *x + *y,
-            let b: i64 = *x - *y,
-            let c: i64 = *x * *y,
-            let d: i64 = *x / -1,
-            if *x + *y == *a;
+            let a: i64 = x.wrapping_add(*y),
+            let b: i64 = x.wrapping_sub(*y),
+            let c: i64 = x.wrapping_mul(*y),
+            let d: i64 = x.wrapping_div(-1),
+            if x.wrapping_add(*y) == *a;
     }
     .collect();
     let expected = Input
@@ -299,9 +327,9 @@ fn h06_integer_coefficient_query_is_exact() {
         relation Lineitem(id: i64, price: i64, discount: i64, quantity: i64, date: i32);
         relation answer(revenue: i64);
         answer(sum(*price * *discount)) :- Lineitem(id, price, discount, quantity, date),
-            if *date >= 365 && *date < 730,
-            if *discount >= 5 && *discount <= 7,
-            if *quantity < 24;
+            where date >= 365 && date < 730,
+            where discount >= 5 && discount <= 7,
+            where quantity < 24;
     }
     .collect();
     assert_eq!(actual, vec![(3477,)]);

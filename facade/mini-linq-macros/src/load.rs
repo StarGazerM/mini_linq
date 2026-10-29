@@ -19,14 +19,17 @@ impl Parse for Declarations {
     }
 }
 
-pub(crate) fn expand(input: TokenStream) -> TokenStream {
+pub(crate) fn expand(input: TokenStream, interned: bool) -> TokenStream {
     syn::parse(input)
-        .and_then(generate)
+        .and_then(|declarations| generate(declarations, interned))
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
-fn generate(Declarations(declarations): Declarations) -> syn::Result<proc_macro2::TokenStream> {
+fn generate(
+    Declarations(declarations): Declarations,
+    interned: bool,
+) -> syn::Result<proc_macro2::TokenStream> {
     cq_lang_cq::check_input_declarations(&declarations)?;
     let mut output = proc_macro2::TokenStream::new();
     let mut selectors = Vec::new();
@@ -57,6 +60,40 @@ fn generate(Declarations(declarations): Declarations) -> syn::Result<proc_macro2
         let generic_types = (!types.is_empty()).then(|| quote!(<#(#types),*>));
         let generic_bounds =
             (!parameters.is_empty()).then(|| quote!(<#(#parameters: ::cq_load::Load),*>));
+        let interned_impl = interned.then(|| {
+            let interned_bounds = (!parameters.is_empty())
+                .then(|| quote!(<#(#parameters: ::cq_load::InternedField),*>));
+            let source_types = (!parameters.is_empty())
+                .then(|| quote!(<#(<#parameters as ::cq_load::InternedField>::Source),*>));
+            let tuple_indices: Vec<_> = indices.iter().map(|&i| syn::Index::from(i)).collect();
+            quote! {
+                impl #interned_bounds ::cq_load::InternedRelation for #marker #generic_parameters {
+                    type Row = (#(#parameters,)*);
+                    type Source = #marker #source_types;
+
+                    fn intern(
+                        rows: ::std::vec::Vec<<Self::Source as ::cq_load::Relation>::Row>,
+                        dictionaries: &mut ::cq_load::Dictionaries,
+                    ) -> ::std::vec::Vec<Self::Row> {
+                        #(
+                            <#parameters as ::cq_load::InternedField>::prepare(
+                                #names,
+                                rows.iter().map(|row| &row.#tuple_indices),
+                                dictionaries,
+                            );
+                        )*
+                        #(let #fields = dictionaries.get(#names);)*
+                        rows.into_iter().map(|row| (
+                            #(
+                                <#parameters as ::cq_load::InternedField>::intern(
+                                    row.#tuple_indices, #fields,
+                                ),
+                            )*
+                        )).collect()
+                    }
+                }
+            }
+        });
         let decode = if let Some(first) = fields.first() {
             let mut zipped = quote!(#first);
             let mut pattern = quote!(#first);
@@ -96,6 +133,7 @@ fn generate(Declarations(declarations): Declarations) -> syn::Result<proc_macro2
                 }
             }
             #(#groups)*
+            #interned_impl
             #[doc = "Typed CSV and Parquet readers generated from the authored relation."]
             #[allow(non_camel_case_types, private_interfaces)]
             pub type #loader = ::cq_load::Loader<#marker #generic_types>;
@@ -120,8 +158,34 @@ mod tests {
             "relation R(a: i32, a: i64);",
             "relation R(a: i32); relation R(a: i32);",
         ] {
-            let declarations = syn::parse_str::<Declarations>(source).unwrap();
-            assert!(generate(declarations).is_err(), "{source}");
+            for interned in [false, true] {
+                let declarations = syn::parse_str::<Declarations>(source).unwrap();
+                assert!(generate(declarations, interned).is_err(), "{source}");
+            }
         }
+    }
+
+    #[test]
+    fn interned_schema_implementation_requires_explicit_opt_in() {
+        let source = "relation R(id: i64, text: String);";
+        let plain = generate(syn::parse_str::<Declarations>(source).unwrap(), false).unwrap();
+        let interned = generate(syn::parse_str::<Declarations>(source).unwrap(), true).unwrap();
+        let plain: syn::File = syn::parse2(plain).unwrap();
+        let mut interned: syn::File = syn::parse2(interned).unwrap();
+        let before = interned.items.len();
+        interned.items.retain(|item| {
+            !matches!(
+                item,
+                syn::Item::Impl(implementation)
+                    if implementation.trait_.as_ref().is_some_and(|(_, path, _)|
+                        path.segments.last().is_some_and(|segment|
+                            segment.ident == "InternedRelation"))
+            )
+        });
+        assert_eq!(before, interned.items.len() + 1);
+        assert_eq!(
+            quote::quote!(#plain).to_string(),
+            quote::quote!(#interned).to_string()
+        );
     }
 }

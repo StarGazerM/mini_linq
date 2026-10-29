@@ -129,6 +129,7 @@ fn h01_gpu_matches_duckdb(scale: u32) -> Result<()> {
             graded gpu {source at host;feed at device.block;valuations at host;result at host;}
         };
         let gpu_ms = start.elapsed().as_secs_f64() * 1000.0;
+        // DECODE P: publish final H01 groups for exact host comparison with DuckDB.
         let mut actual: Vec<Answer> = result.to_host()?;
         actual.sort();
         expected.sort();

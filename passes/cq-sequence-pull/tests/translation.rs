@@ -105,6 +105,96 @@ fn cq_pipeline_answers_equal_independent_expected_sets() {
     run(quote!(fn main() { #(#checks)* }));
 }
 
+#[test]
+fn closed_relational_operands_run_once_and_rust_stays_verbatim() {
+    let structures = pipeline(quote! {
+        struct Query;
+        relation R(a:i32);
+        answer(a) :- R(a), where a >= minimum(), if (*a + 1) > 2;
+    });
+    let program = cq_sequence_lowering::compile(&structures).unwrap();
+    let expression =
+        cq_sequence_pull::translate(&program, &contract::check(&program).unwrap()).unwrap();
+    let printed = expression.to_token_stream().to_string();
+    assert!(printed.contains("(* a + 1) > 2"), "{printed}");
+    assert!(!printed.contains("wrapping_"), "{printed}");
+    assert_eq!(printed.matches("minimum ()").count(), 1, "{printed}");
+    run(quote! {
+        fn main() {
+            let calls = ::std::cell::Cell::new(0);
+            let minimum = || { calls.set(calls.get() + 1); 2i32 };
+            let R = [(1i32,), (2,), (3,)];
+            let actual: ::std::collections::BTreeSet<_> = (#expression).into_iter().collect();
+            assert_eq!(actual, [(&2i32,), (&3,)].into_iter().collect());
+            assert_eq!(calls.get(), 1);
+        }
+    });
+}
+
+#[test]
+fn closed_path_parameters_preserve_streaming() {
+    let structures = pipeline(quote! {
+        struct Query;
+        relation R(a:i32);
+        answer(a) :- R(a), where a >= minimum;
+    });
+    let program = cq_sequence_lowering::compile(&structures).unwrap();
+    let expression =
+        cq_sequence_pull::translate(&program, &contract::check(&program).unwrap()).unwrap();
+    let printed = expression.to_token_stream().to_string();
+    assert!(printed.contains("= & minimum ;"), "{printed}");
+    assert!(
+        !printed.contains("collect :: < :: std :: vec :: Vec"),
+        "{printed}"
+    );
+    run(quote! {
+        fn main() {
+            let minimum = 2i32;
+            let R = [(1i32,), (2,), (3,)];
+            let actual: ::std::collections::BTreeSet<_> = (#expression).into_iter().collect();
+            assert_eq!(actual, [(&2i32,), (&3,)].into_iter().collect());
+        }
+    });
+}
+
+#[test]
+fn generators_preserve_capture_types_and_row_borrowing() {
+    let scalar = assert_answers(
+        pipeline(quote! {
+            struct Query;
+            relation R(k:i32);
+            relation answer(y:i32);
+            answer(y) :- R(k), for y in 0..limit;
+        }),
+        quote! { let limit = 2i32; let R = [(1i32,), (2,)]; },
+        quote!([(0i32,), (1,)]),
+    );
+    let row = assert_answers(
+        pipeline(quote! {
+            struct Query;
+            relation R(values:Vec<i32>);
+            relation answer(y:&i32);
+            answer(y) :- R(x), for y in x.iter();
+        }),
+        quote! { let R = [(vec![1i32, 2],), (vec![3],)]; },
+        quote!([(&1i32,), (&2,), (&3,)]),
+    );
+    let mixed = assert_answers(
+        pipeline(quote! {
+            struct Query;
+            relation R(values:Vec<i32>);
+            relation answer(y:&i32);
+            answer(y) :- R(x), for y in x.iter().chain(extra.iter());
+        }),
+        quote! {
+            let R = [(vec![1i32, 2],), (vec![3],)];
+            let extra = vec![4i32];
+        },
+        quote!([(&1i32,), (&2,), (&3,), (&4,)]),
+    );
+    run(quote!(fn main() { #scalar #row #mixed }));
+}
+
 fn run(source: TokenStream) {
     let source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../runtime/cq-storage/src/lib.rs");
@@ -168,6 +258,7 @@ fn simple(body: TokenStream) -> Program {
         sequence: syn::parse2(quote!(sequence { #body })).unwrap(),
         graded: None,
         evidence: Default::default(),
+        representation: Default::default(),
     }
 }
 
@@ -263,6 +354,7 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
         }),
         graded: None,
         evidence: Default::default(),
+        representation: Default::default(),
     };
     let analysis = contract::check(&program).unwrap();
     assert_eq!(

@@ -52,7 +52,7 @@ crate::tpch_runtime::standalone_configs! { $;
             relation answer(revenue: i64);
             answer(sum(revenue_units)) :-
                 Lineitem(order_key, line_number, price, discount, quantity, shipdate),
-                if *shipdate >= start && *shipdate < end,
+                where shipdate >= start && shipdate < end,
                 if discount.scaled() >= 5 && discount.scaled() <= 7,
                 if quantity.scaled() < 2400,
                 let revenue_units: i64 = price.scaled() * discount.scaled();

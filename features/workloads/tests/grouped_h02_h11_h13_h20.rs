@@ -51,12 +51,41 @@ fn h02_minimum_preserves_ties_and_restricts_the_minimum_to_europe() {
         vec![4, 3, 1],
     ];
     for rows in [rows.clone(), rows.into_iter().rev().collect(), vec![]] {
+        let mut dictionaries = cq_load::Dictionaries::default();
+        dictionaries.insert("p_mfgr", ["M"].into_iter());
+        dictionaries.insert("p_type", ["BRASS", "BRASSX"].into_iter());
+        dictionaries.insert("s_name", ["A", "B", "C"].into_iter());
+        dictionaries.insert("s_address", ["X", "Y", "Z"].into_iter());
+        dictionaries.insert("s_phone", ["P"].into_iter());
+        dictionaries.insert("s_comment", ["C"].into_iter());
+        dictionaries.insert("n_name", ["N", "O"].into_iter());
+        dictionaries.insert("r_name", ["EUROPE", "ASIA"].into_iter());
         let data = h02::Data {
             part: vec![
-                (1, "M".into(), 15, "BRASS".into()),
-                (2, "M".into(), 14, "BRASS".into()),
-                (3, "M".into(), 15, "BRASSX".into()),
-                (4, "M".into(), 15, "BRASS".into()),
+                (
+                    1,
+                    dictionaries.literal("p_mfgr", "M"),
+                    15,
+                    dictionaries.literal("p_type", "BRASS"),
+                ),
+                (
+                    2,
+                    dictionaries.literal("p_mfgr", "M"),
+                    14,
+                    dictionaries.literal("p_type", "BRASS"),
+                ),
+                (
+                    3,
+                    dictionaries.literal("p_mfgr", "M"),
+                    15,
+                    dictionaries.literal("p_type", "BRASSX"),
+                ),
+                (
+                    4,
+                    dictionaries.literal("p_mfgr", "M"),
+                    15,
+                    dictionaries.literal("p_type", "BRASS"),
+                ),
             ],
             partsupp: rows
                 .iter()
@@ -67,32 +96,42 @@ fn h02_minimum_preserves_ties_and_restricts_the_minimum_to_europe() {
                     1,
                     1,
                     decimal(123),
-                    "A".into(),
-                    "X".into(),
-                    "P".into(),
-                    "C".into(),
+                    dictionaries.literal("s_name", "A"),
+                    dictionaries.literal("s_address", "X"),
+                    dictionaries.literal("s_phone", "P"),
+                    dictionaries.literal("s_comment", "C"),
                 ),
                 (
                     2,
                     1,
                     decimal(456),
-                    "B".into(),
-                    "Y".into(),
-                    "P".into(),
-                    "C".into(),
+                    dictionaries.literal("s_name", "B"),
+                    dictionaries.literal("s_address", "Y"),
+                    dictionaries.literal("s_phone", "P"),
+                    dictionaries.literal("s_comment", "C"),
                 ),
                 (
                     3,
                     2,
                     decimal(789),
-                    "C".into(),
-                    "Z".into(),
-                    "P".into(),
-                    "C".into(),
+                    dictionaries.literal("s_name", "C"),
+                    dictionaries.literal("s_address", "Z"),
+                    dictionaries.literal("s_phone", "P"),
+                    dictionaries.literal("s_comment", "C"),
                 ),
             ],
-            nation: vec![(1, 1, "N".into()), (2, 2, "O".into())],
-            region: vec![(1, "EUROPE".into()), (2, "ASIA".into())],
+            nation: vec![
+                (1, 1, dictionaries.literal("n_name", "N")),
+                (2, 2, dictionaries.literal("n_name", "O")),
+            ],
+            region: vec![
+                (1, dictionaries.literal("r_name", "EUROPE")),
+                (2, dictionaries.literal("r_name", "ASIA")),
+            ],
+            brass_types: cq_load::dictionary_where(&dictionaries, "p_type", |value| {
+                value.ends_with("BRASS")
+            }),
+            dictionaries,
         };
         let sql = format!(
             r#"WITH
@@ -146,6 +185,8 @@ fn h11_threshold_is_strict_and_both_sums_preserve_supplier_identity() {
         vec![4, 3, 1, 999999],
     ];
     for rows in [rows.clone(), rows.into_iter().rev().collect(), vec![]] {
+        let mut dictionaries = cq_load::Dictionaries::default();
+        dictionaries.insert("n_name", ["GERMANY", "FRANCE"].into_iter());
         let data = h11::Data {
             partsupp: rows
                 .iter()
@@ -159,7 +200,11 @@ fn h11_threshold_is_strict_and_both_sums_preserve_supplier_identity() {
                 })
                 .collect(),
             supplier: vec![(1, 1), (2, 1), (3, 2)],
-            nation: vec![(1, "GERMANY".into()), (2, "FRANCE".into())],
+            nation: vec![
+                (1, dictionaries.literal("n_name", "GERMANY")),
+                (2, dictionaries.literal("n_name", "FRANCE")),
+            ],
+            dictionaries,
         };
         let sql = format!(
             r#"WITH partsupp AS (SELECT c0 AS ps_partkey,c1 AS ps_suppkey,
@@ -188,9 +233,12 @@ fn h13_counts_zero_and_obeys_ordered_comment_pattern() {
         "requests special",
         "specialspecialrequests",
     ];
-    // Match the authored dbgen key premises, retaining two orders per customer.
+    // Neither order/customer pairs nor comments are assumed unique.
     let rows = vec![
         vec![1, 1, 0],
+        vec![2, 1, 0],
+        vec![1, 1, 2],
+        vec![1, 1, 1],
         vec![2, 1, 0],
         vec![3, 2, 1],
         vec![4, 3, 2],
@@ -198,6 +246,17 @@ fn h13_counts_zero_and_obeys_ordered_comment_pattern() {
         vec![6, 99, 0],
     ];
     for rows in [rows.clone(), rows.into_iter().rev().collect(), vec![]] {
+        let mut dictionaries = cq_load::Dictionaries::default();
+        dictionaries.insert(
+            "o_comment",
+            [
+                "ordinary",
+                "special requests",
+                "requests special",
+                "specialspecialrequests",
+            ]
+            .into_iter(),
+        );
         let data = h13::Data {
             customer: vec![(1,), (2,), (3,), (4,), (5,)],
             orders: rows
@@ -206,10 +265,20 @@ fn h13_counts_zero_and_obeys_ordered_comment_pattern() {
                     (
                         i64::from(r[0]),
                         i64::from(r[1]),
-                        comments[r[2] as usize].into(),
+                        dictionaries.literal("o_comment", comments[r[2] as usize]),
                     )
                 })
                 .collect(),
+            qualified_comments: cq_storage::DenseMembership::from_dense_keys(
+                cq_load::dictionary_where(&dictionaries, "o_comment", |value| {
+                    !value
+                        .split_once("special")
+                        .is_some_and(|(_, rest)| rest.contains("requests"))
+                })
+                .into_iter()
+                .map(|(code,)| code),
+            ),
+            dictionaries,
         };
         let sql = format!(
             r#"WITH customer(c_custkey) AS (VALUES (1),(2),(3),(4),(5)),
@@ -231,6 +300,8 @@ fn h13_counts_zero_and_obeys_ordered_comment_pattern() {
     let empty = h13::Data {
         customer: vec![],
         orders: vec![],
+        qualified_comments: cq_storage::DenseMembership::from_dense_keys([]),
+        dictionaries: cq_load::Dictionaries::default(),
     };
     for config in ["default", "transfer"] {
         assert!(h13::run(&empty, config).is_empty(), "{config}");
@@ -251,19 +322,42 @@ fn h20_preserves_line_identity_date_bounds_and_absent_group_null_semantics() {
         vec![6, 1, 1, 2, 9999, 365],
     ];
     for rows in [rows.clone(), rows.into_iter().rev().collect(), vec![]] {
+        let mut dictionaries = cq_load::Dictionaries::default();
+        dictionaries.insert("p_name", ["forest green", "xforest", "forest"].into_iter());
+        dictionaries.insert("s_name", ["A", "B", "C"].into_iter());
+        dictionaries.insert("s_address", ["X", "Y", "Z"].into_iter());
+        dictionaries.insert("n_name", ["CANADA", "FRANCE"].into_iter());
         let data = h20::Data {
             part: vec![
-                (1, "forest green".into()),
-                (2, "xforest".into()),
-                (3, "forest".into()),
+                (1, dictionaries.literal("p_name", "forest green")),
+                (2, dictionaries.literal("p_name", "xforest")),
+                (3, dictionaries.literal("p_name", "forest")),
             ],
             partsupp: vec![(1, 1, 2), (1, 2, 3), (1, 3, 5), (2, 1, 100), (3, 1, 5)],
             supplier: vec![
-                (1, 1, "A".into(), "X".into()),
-                (2, 1, "B".into(), "Y".into()),
-                (3, 2, "C".into(), "Z".into()),
+                (
+                    1,
+                    1,
+                    dictionaries.literal("s_name", "A"),
+                    dictionaries.literal("s_address", "X"),
+                ),
+                (
+                    2,
+                    1,
+                    dictionaries.literal("s_name", "B"),
+                    dictionaries.literal("s_address", "Y"),
+                ),
+                (
+                    3,
+                    2,
+                    dictionaries.literal("s_name", "C"),
+                    dictionaries.literal("s_address", "Z"),
+                ),
             ],
-            nation: vec![(1, "CANADA".into()), (2, "FRANCE".into())],
+            nation: vec![
+                (1, dictionaries.literal("n_name", "CANADA")),
+                (2, dictionaries.literal("n_name", "FRANCE")),
+            ],
             lineitem: rows
                 .iter()
                 .map(|r| {
@@ -283,6 +377,10 @@ fn h20_preserves_line_identity_date_bounds_and_absent_group_null_semantics() {
                     )
                 })
                 .collect(),
+            forest_names: cq_load::dictionary_where(&dictionaries, "p_name", |value| {
+                value.starts_with("forest")
+            }),
+            dictionaries,
         };
         let sql = format!(
             r#"WITH part(p_partkey,p_name) AS (VALUES
@@ -336,12 +434,36 @@ fn h15_grouped_max_preserves_all_maximum_ties_and_quarter_boundaries() {
         zeros,
         vec![],
     ] {
+        let mut dictionaries = cq_load::Dictionaries::default();
+        dictionaries.insert("s_name", ["A", "B", "C", "D"].into_iter());
+        dictionaries.insert("s_address", ["X", "Y", "Z", "W"].into_iter());
+        dictionaries.insert("s_phone", ["P", "Q", "R", "S"].into_iter());
         let data = h15::Data {
             supplier: vec![
-                (1, "A".into(), "X".into(), "P".into()),
-                (2, "B".into(), "Y".into(), "Q".into()),
-                (3, "C".into(), "Z".into(), "R".into()),
-                (4, "D".into(), "W".into(), "S".into()),
+                (
+                    1,
+                    dictionaries.literal("s_name", "A"),
+                    dictionaries.literal("s_address", "X"),
+                    dictionaries.literal("s_phone", "P"),
+                ),
+                (
+                    2,
+                    dictionaries.literal("s_name", "B"),
+                    dictionaries.literal("s_address", "Y"),
+                    dictionaries.literal("s_phone", "Q"),
+                ),
+                (
+                    3,
+                    dictionaries.literal("s_name", "C"),
+                    dictionaries.literal("s_address", "Z"),
+                    dictionaries.literal("s_phone", "R"),
+                ),
+                (
+                    4,
+                    dictionaries.literal("s_name", "D"),
+                    dictionaries.literal("s_address", "W"),
+                    dictionaries.literal("s_phone", "S"),
+                ),
             ],
             lineitem: rows
                 .iter()
@@ -363,6 +485,7 @@ fn h15_grouped_max_preserves_all_maximum_ties_and_quarter_boundaries() {
                     )
                 })
                 .collect(),
+            dictionaries,
         };
         let sql = format!(
             r#"WITH

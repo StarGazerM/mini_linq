@@ -312,15 +312,16 @@ fn delta_driver_is_recorded_and_independently_checked() {
 }
 
 #[test]
-fn delta_driver_never_crosses_before_constraints() {
+fn delta_driver_can_cross_clauses_when_their_inputs_are_bound() {
     for clause in [
+        "where x > 0",
         "if *x > 0",
         "!Blocked(x)",
         "let copied = *x",
         "for copied in [*x]",
     ] {
         let source: source::Program = syn::parse_str(&format!(
-            "struct Barriers;
+            "struct Dependencies;
              relation E(x:i32) = (e);
              relation Blocked(x:i32) = (blocked);
              relation R(x:i32);
@@ -336,13 +337,24 @@ fn delta_driver_never_crosses_before_constraints() {
         )
         .unwrap();
         assert_eq!(target.variants[1].order, [0, 1, 2]);
-        let mut wrong = target.clone();
-        wrong.variants[1].order = vec![2, 1, 0];
+        let mut reordered = target.clone();
+        let body = &target.variants[1].query.body;
+        reordered.variants[1].order = vec![2, 1, 0];
+        reordered.variants[1].query.body = [body[2].clone(), body[1].clone(), body[0].clone()]
+            .into_iter()
+            .collect();
+        incremental::contract::check(&reordered).unwrap();
+        let storage = cq_datalog_storage::compile(&reordered).unwrap();
+        check(&reordered, &storage).unwrap();
+
+        let mut unbound = target.clone();
+        unbound.variants[1].order = vec![1, 2, 0];
+        unbound.variants[1].query.body = [body[1].clone(), body[2].clone(), body[0].clone()]
+            .into_iter()
+            .collect();
         assert!(
-            incremental::contract::check(&wrong)
-                .unwrap_err()
-                .to_string()
-                .contains("Before")
+            incremental::contract::check(&unbound).is_err(),
+            "clause must not precede every binder of x: {clause}"
         );
     }
 }

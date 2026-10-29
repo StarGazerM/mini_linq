@@ -12,8 +12,8 @@ pub fn run(source: Source) {
 
         line_filter(orderkey, price, shipdate, comment) :-
             Lineitem(orderkey, linenumber, price, shipdate, comment),
-            Limits(minimum, earliest), if price >= minimum, if shipdate >= earliest,
-            if *linenumber > 1;
+            Limits(minimum, earliest), where price >= minimum, where shipdate >= earliest,
+            where linenumber > 1;
     }.map(|(a,b,c,d)| vec![a.to_string(), b.to_string(), c.to_string(), d.to_string()]).collect();
     typed::check("typed_line_filter", rows);
 }

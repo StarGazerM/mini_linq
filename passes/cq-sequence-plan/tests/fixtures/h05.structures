@@ -39,5 +39,5 @@ structures {
     lineitem_index = ::cq_gpu_sequence_runtime::RangeProvider [order];
     supplier_index = ::cq_gpu_sequence_runtime::RangeProvider [nation][supplier];
     rnc rows = ::cq_gpu_sequence_runtime::RangeProvider;
-    answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+    answer canon = ::cq_gpu_sequence_runtime::canon::WideCanon;
 }

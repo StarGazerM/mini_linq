@@ -16,6 +16,32 @@ executed. `doc/formal/check.py` verifies that every rule named here exists in
 
 **Scope and interpretation.** This enumerates the rules in `doc/formal/datalog.tex`, the Datalog rules and supporting run laws in `doc/formal/incremental.tex`, and their inventory entries in `doc/formal/rules.tsv:161-219`. `I<n>` below identifies the exact inventory row. **Exact** means the inspected implementation matches the structural check or operational construction, conditional on the explicitly opaque Rust/provider premises; it is not a claim of mechanically proved Rust equivalence. **Unimplemented** on an `abstract` inventory entry means no implementation/checker is assigned to that rule—not that the documented abstract law is necessarily violated.
 
+### Regression observation boundary
+
+Opaque rule expressions are pure and total by premise. Their placement follows
+free-variable availability, not written order: a computed head field may run
+before a later join, and a closed `if` may run before any row is bound. Counting
+side effects inside either expression therefore does not measure joined
+candidates or delta-row visits. Relational predicates belong in `where`;
+neither syntax establishes an opaque-Rust evaluation-count guarantee.
+
+The execution regressions in `features/datalog/tests/execution.rs` instead
+instrument the original host's `Rows` traversal to check single-scan EDB
+canonicalization, compare output sets, and use the synchronous `observe` callback
+to check published delta lengths. The alternating-recursion case expects one
+fresh row per publication even while the other member publishes an empty delta.
+These are concrete host/observer guarantees, not part of rule-expression meaning.
+
+Layout replacement is checked independently of query evaluation in
+`features/datalog/print/tests/realization.rs`
+(`delta_layout_runs_are_built_once_per_publication_outside_all_holes`).
+The printer's `delta_swap` moves the next batch even when empty;
+`delta_rebuild` unconditionally resets a `GroupedMap` layout with `Default`, or
+clears a `Bulk` layout, before filling it from that batch. The recorded
+`LayoutProtocol`, not provider spelling or Rust-step order, chooses those
+operations. The same realization suite checks that canonicalization precedes
+and supplies layouts, frozen keys, and outputs.
+
 ### Non-exact conformance and decisions without a governing rule
 
 | Rule / inventory | TeX file:line | Opened code anchor | Premises as written | What the code checks/does | Status | Invariant maintained |

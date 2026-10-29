@@ -34,17 +34,29 @@ not a subsequent guard; dependent argument binds see only its matching rows.
 
 
 \subsection{The written-order denotation}
-Let $T X=\{\bot\}+\operatorname{Set}_{\rm fin}(X)$, $\eta(x)=\{x\}$, and for
-$f:X\to TY$
+Let $T X=\operatorname{Set}_{\rm fin}(X)$, $\eta(x)=\{x\}$ and
+$A\bind f=\bigcup_{x\in A}f(x)$ for $f:X\to TY$.
+Atoms and relational identities return their matching extensions.
+For fixed host captures $h$, write $v_h(t,\rho)$ for a query value $\rho(t)$,
+a literal value, or the once-host-evaluated value of a closed operand.
+With representation equality $=_{\mathcal R}$ and order $\leq_{\mathcal R}$:
 \[
- \bot\bind f=\bot,\qquad
- A\bind f=\begin{cases}\bot&\exists x\in A.\ f(x)=\bot,\\
- \bigcup_{x\in A}f(x)&\text{otherwise}.\end{cases}
+\begin{aligned}
+ \sem{\mathsf{where}\ P}_h(\rho)
+   &=\{\rho\mid\sem P_h(\rho)\},\\
+ \sem{x==t}_h(\rho)&=(\rho(x)=_{\mathcal R}v_h(t,\rho)),\\
+ \sem{x<t}_h(\rho)&=(\rho(x)<_{\mathcal R}v_h(t,\rho)),\\
+ \sem{x\ \mathsf{in}\ [t_1,\ldots,t_n]}_h(\rho)
+   &=\bigvee_i(\rho(x)=_{\mathcal R}v_h(t_i,\rho)),\\
+ \sem{x\ \mathsf{in}\ a..b}_h(\rho)
+   &=(v_h(a,\rho)\leq_{\mathcal R}\rho(x)<_{\mathcal R}v_h(b,\rho)).
+\end{aligned}
 \]
-$\bot$ is one undistinguished panic that aborts the whole evaluation. An atom,
-relational identity or recognized comparison returns its matching extensions
-of the incoming valuation. A Rust guard returns $\{\rho\}$, $\emptyset$ or
-$\bot$; a scalar Rust bind returns one extended valuation or $\bot$.
+Inclusive ranges replace the last $<$ by $\leq$; the remaining comparisons
+use the same equality/order, and $\sem{P\mathbin{\&\&}Q}=\sem P\land\sem Q$,
+$\sem{P\mathbin{||}Q}=\sem P\lor\sem Q$.
+A Rust guard returns $\{\rho\}$ or $\emptyset$ by its unchanged Rust
+expression; a scalar Rust bind returns one extended valuation.
 Starting at $\{\langle\rangle\}$, compose the desugared body in written order, then the
 head. This is the reference meaning. The executable reference is Written/Coarse
 VO from \code{cq_order::compile_written}, with recorded correlated blocks,
@@ -52,77 +64,67 @@ elaborated by \code{cq_elaborate::compile_written}, which forbids reductions,
 splitting, reordering, hoisted blocks, predicate pushdown and alias solving.
 
 For a generator, evaluate $e$ in the incoming environment $\rho$, convert it
-with \code{IntoIterator::into_iter}, and exhaust it. Write $G_{p,e}(\rho)=\bot$
-if expression evaluation, iterator conversion or any iteration step panics;
-otherwise, for the finite yielded sequence $v_1,\ldots,v_n$,
+with \code{IntoIterator::into_iter}, and exhaust its finite yielded sequence
+$v_1,\ldots,v_n$. All these operations are pure and total by premise:
 \[
  G_{p,e}(\rho)=\{\rho[p\mapsto v_i]\mid 1\le i\le n\},\qquad
  \sem{\mathsf{for}\ p\ \mathsf{in}\ e}(A)=A\bind G_{p,e}.
 \]
 The pattern is irrefutable and its names are fresh. Empty iteration removes
 the incoming row; yielded order and duplicate witnesses are unobservable.
-A panic after some yielded items still denotes $\bot$, not a partial answer.
-Scalar \code{let} remains the singleton special case: its successful
-extension is $\eta(\rho[p\mapsto v])$, not iteration over $v$.
+Scalar \code{let} is the singleton special case
+$\eta(\rho[p\mapsto v])$, not iteration over $v$.
 This is correlated unnest (the nested relational calculus's collection bind),
 not aggregate nest: it neither groups rows nor collects an aggregate value.
 
 \begin{definition}[Refinement]
-$\bot\sqsubseteq A$ for every $A$, and successful sets are related only when
-equal. A target refines a source when $\sem S_I\sqsubseteq\sem T_I$ for every
-input $I$: if the source returns $A$, the target returns $A$.
+A target refines a source when $\sem S_I=\sem T_I$ for every input $I$
+satisfying the premises. We retain $\sqsubseteq$ as notation for this
+answer-preservation obligation.
 \end{definition}
-A target may remove a panic but cannot introduce one or change a returned set.
-Partial polling, I/O, mutation, addresses, destructor traces, evaluation counts,
-divergence and resource exhaustion are outside the meaning. Runtime streams may
-repeat witnesses; explicit canonical boundaries establish sets.
+Panics violate the totality premise rather than defining successful
+optimization opportunities. Runtime allocation/device failures may still abort
+execution, but must never produce truncated success. I/O, mutation, addresses,
+destructor traces, evaluation counts, divergence and resource exhaustion are
+outside the meaning. Runtime streams may repeat witnesses; explicit canonical
+boundaries establish sets.
 
 \subsection{Premises}
 \label{sec:premises}
 \begin{enumerate}
-\item \textbf{Leibniz admissibility.} A column type may be compared, joined,
-keyed, grouped or deduplicated relationally only if its \code{==} decides
-identity. Holds for integers, bool, char, \code{String}/\code{\&str},
-\code{cq_load::Date}/\code{Decimal}, tuples and derived-Eq structs of such
-types; fails for floats (\code{0.0 == -0.0}) and lenient hand-written Eq.
-\item \textbf{Order.} When comparisons use order, \code{Ord} terminates and
-decides a total order consistent with identity. Rust checks the bound, not the laws.
-\item \textbf{Functional extensionality.} Embedded Rust receives query values as
-\code{\&T}; its partial-function meaning depends only on the values of its free
-variables and fixed host captures. Shared borrowing does not prove this.
-\item \textbf{Finite pure generators.} Each reached generator expression and
-its iterator conversion and polling terminate normally or panic; successful
-iteration is finite. Their partial set-valued meaning depends only on free
-query values and fixed host captures, with no observable mutation or I/O.
-Purity covers the iterator implementation, not just its construction.
-Rust's \code{IntoIterator} bound proves none of these semantic premises.
-\item \textbf{Pinned Rust.} Rust guards, scalar binds and generators are opaque.
-They keep their
-written relative order (a tree under blocks, Section~\ref{sec:blocks}), their
-free-variable binders and every relational fact written before them
-(their \emph{Before} set). Relational steps commute among themselves and may
-move earlier across Rust, never later.
+\item \textbf{Leibniz admissibility.} Representation equality decides value
+identity for every column compared, joined, keyed, grouped or deduplicated.
+The compiler does not classify host types to prove or reject this law.
+\item \textbf{Order.} Representation order terminates and is a total order
+consistent with identity. Rust checks required trait bounds, not these laws.
+\item \textbf{Total functional Rust.} Every embedded Rust expression is pure,
+total and depends only on its free query values and fixed host captures.
+Query values are supplied as \code{\&T}; borrowing alone proves none of
+these premises. A panic means the plan violates the contract.
+\item \textbf{Finite pure generators.} Construction, iterator conversion and
+polling terminate normally and yield finitely many values. Their set-valued
+meaning depends only on free query values and fixed captures.
+\item \textbf{Free-variable preservation.} Rust syntax and lexical bindings
+are unchanged. Placement requires its free variables, conservatively the
+whole lexical environment for opaque syntax, and imposes no relative order
+between independent Rust expressions.
 \end{enumerate}
 \begin{lemma}[Motion]
-Let a pure predicate $g$ be evaluated on rows $D$ by a reference plan and on
-$D'\supseteq D$ by a target with the same later steps. The target returns the
-reference's answer whenever the reference returns iff $g(\rho)\ne\bot$ for
-every $\rho\in D'\setminus D$.
+A pure total Rust expression or relational predicate may be placed at any
+point where all its free variables are bound, provided its outputs remain
+available to every consumer and branch correlation is preserved.
 \end{lemma}
-\begin{proof}On $D'\setminus D$ a defined $g$ only filters rows that later
-steps intersect away; a single $\rho$ with $g(\rho)=\bot$ makes the target
-$\bot$ while the reference may return a set (the counterexample below).
+\begin{proof}
+Evaluation depends only on the retained free values. Moving across an
+independent relational operation changes the intermediate evaluation domain
+but not any complete witness or its computed values. Totality ensures every
+such intermediate evaluation is defined; set union and join then give the
+same result. The argument also applies to finite set-valued generators.
 \end{proof}
-Shrinking an evaluation domain is therefore always legal, which is why
-relational steps may move earlier across opaque Rust; growing it requires
-definedness on the growth region, which totality on all declared values
-supplies independently of the plan.
-
-Consequently any surviving representative of \code{==}-equal values is the
-value, and dedup, canonical projection, and projection before opaque Rust that
-keeps its free variables are sound. Moving a relational step earlier only
-shrinks the domain on which later Rust runs, so it can remove but not add
-panics. The host boundary is
+Consequently any representative of representation-equal values is the value;
+deduplication and canonical projection retaining all free variables are sound.
+Planning records the chosen placement, and downstream refinements preserve it.
+The host boundary is
 \[
 \Rule{H-Eval}
  {\Gamma_H;\Gamma_Q\vdash_H e:\tau\quad \rho\approx_{\Gamma_Q}\nu\quad
@@ -131,9 +133,9 @@ panics. The host boundary is
 \]
 where $\Gamma_Q$ gives logical types and representation modes, $\Gamma_H$ host
 bindings and $\rho\approx\nu$ that Rust bindings represent $\nu$; rustc checks
-the elaborated context. Totality only on tuples reached by the original plan is
-insufficient: with $A=\{x=0\}$, $B=\emptyset$ and $e=1/x$, moving a bind of $e$
-from $A\bowtie B$ onto $A$ adds a panic, and is rejected by the Before rule.
+the elaborated context. Totality is a premise on all admissible input values,
+not just rows reached by one written-order plan; the compiler does not prove
+it by analyzing arithmetic, types or expressions.
 
 \subsection{Disjunctive blocks}
 \label{sec:blocks}
@@ -141,18 +143,18 @@ A block runs at a prefix row $\rho$. Let $F$ be the prefix names used inside it
 and $I$ the names bound in every branch; other branch bindings are local. Write
 $L_j(\rho)=\pi_{F\cup I}\sem{B_j}(\rho)$.
 \begin{mathpar}
-\Rule{Block-Union}{\forall j,\ \sem{B_j}(\rho)\ne\bot}
+\Rule{Block-Union}{\forall j,\ \sem{B_j}(\rho)\text{ is finite}}
  {\sem{\{B_1\}\mid\cdots\mid\{B_n\}}(\rho)=\bigcup_j L_j(\rho)}
 
 \Rule{Block-Else}{\forall j<k,\ \sem{B_j}(\rho)=\emptyset\quad
- \sem{B_k}(\rho)\notin\{\bot,\emptyset\}}
+ \sem{B_k}(\rho)\ne\emptyset}
  {\sem{\{B_1\}\ \mathsf{else}\ \cdots\ \mathsf{else}\ \{B_n\}}(\rho)=L_k(\rho)}
 \end{mathpar}
-Union is $\bot$ if any branch is $\bot$; its branch order is not meaning, so
-any permutation or witness short circuit is a refinement. Fallback order is
-meaning: a later branch runs only where all earlier ones are empty; if all are
-empty the result is empty. Neither operator assumes disjoint branches or any
-key or data property. Rust \code{||} inside a guard keeps Rust's meaning. Laws:
+Union branch order is not meaning, so any permutation or answer-determined
+witness short circuit preserves the result. Fallback order is meaning: a
+later branch contributes only where earlier ones are empty; if all are empty
+the result is empty. Neither operator assumes disjoint branches or any key or
+data property. Rust \code{||} inside a guard keeps Rust's meaning. Laws:
 \[
  C\bowtie(L\cup M)=(C\bowtie L)\cup(C\bowtie M),\qquad
  B_1\ \mathsf{else}\ B_2=B_1\cup(B_2\triangleright_F B_1).

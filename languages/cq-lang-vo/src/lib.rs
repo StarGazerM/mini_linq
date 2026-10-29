@@ -1,11 +1,7 @@
-//! Valuation plans for `T X = bottom + Set X`.
-//! Relational subatoms, negations, equalities and semijoin reductions commute. They may
-//! move earlier across opaque Rust lets/guards; the Rust chain retains written
-//! order and all its written relational predecessors. This chain/Before check
-//! is a sufficient refinement condition: a target may panic only on an input
-//! where the written reference panics. I/O, mutation and evaluation counts are
-//! outside this denotation. A split atom is a predecessor only once its full
-//! correlated row has been checked. Rust guards are never reductions.
+//! Valuation plans for set-valued comprehensions.
+//! Rust lets, generators and guards are opaque, pure and total by premise.
+//! Their expressions remain unchanged and may be placed wherever their free
+//! variables are bound. Only explicit relational constraints support reductions.
 //!
 //! ```text
 //! Step ::= Subatom ";" | "!" Atom ";" | Constraint ";"
@@ -19,16 +15,15 @@
 //! `cq-syntax`.
 
 //! VO records block @path(columns) hoisted/correlated { steps } | { steps }; or else arms, retaining recursive branch steps and reduction occurrence paths R@c.j.k.
-//! Its contract checks coverage, interface scope and Before sets recursively.
+//! Its contract checks coverage and interface scope recursively.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Rust expressions are never recognized as relational predicates. Only differing
+//! literals on one interface column prove union arms disjoint.
 //!
 pub use cq_lang_cq as cq;
 
@@ -72,7 +67,7 @@ fn parse_steps(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Step>> {
 
 // Syntax-tree enum, like syn's AST; boxing would change public construction.
 #[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Step {
     Block(blocks::Block, Token![;]),
     Equality(cq::Equality, Token![;]),
@@ -85,12 +80,36 @@ pub enum Step {
     Atom(Subatom, Token![;]),
 }
 
+impl quote::ToTokens for Step {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        tokens.extend(match self {
+            Self::Block(value, semi) => quote::quote!(#value #semi),
+            Self::Equality(value, semi) => quote::quote!(#value #semi),
+            Self::Constraint(value, semi) => quote::quote!(where #value #semi),
+            Self::Negation(value, semi) => quote::quote!(#value #semi),
+            Self::Guard(value, semi) => quote::quote!(#value #semi),
+            Self::Let(value, semi) => quote::quote!(#value #semi),
+            Self::For(value, semi) => quote::quote!(#value #semi),
+            Self::Reduce(value, semi) => quote::quote!(#value #semi),
+            Self::Atom(value, semi) => quote::quote!(#value #semi),
+        });
+    }
+}
+
 impl syn::parse::Parse for Step {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         Ok(if input.peek(kw::block) {
             Self::Block(input.parse()?, input.parse()?)
         } else if input.peek(Token![!]) {
             Self::Negation(input.parse()?, input.parse()?)
+        } else if input.peek(Token![where]) {
+            input.parse::<Token![where]>()?;
+            let constraint: cq::Constraint = input.parse()?;
+            let semi = input.parse()?;
+            match constraint.equality() {
+                Some(equality) => Self::Equality(equality, semi),
+                None => Self::Constraint(constraint, semi),
+            }
         } else if input.peek(Token![if]) {
             Self::Guard(input.parse()?, input.parse()?)
         } else if input.peek(Token![let]) {
@@ -102,11 +121,7 @@ impl syn::parse::Parse for Step {
         } else if input.peek(Ident) && input.peek2(Token![@]) {
             Self::Atom(input.parse()?, input.parse()?)
         } else {
-            let c: cq::Constraint = input.parse()?;
-            match c.equality() {
-                Some(e) => Self::Equality(e, input.parse()?),
-                None => Self::Constraint(c, input.parse()?),
-            }
+            Self::Equality(input.parse()?, input.parse()?)
         })
     }
 }
@@ -221,7 +236,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     )
 }
 
-/// Formal rule WF-VO-Arithmetic: Typed CQ-Arith clauses leave the partial Rust chain but remain Before facts for later partial steps.
+/// Formal rule WF-VO-Rust: Place each unchanged Rust expression exactly once where its free variables are bound.
 /// Formal rule WF-BlockPlacement: Hoisted arms are Rust-free; correlated arms require their free prefix, and repeated reads preserve placement.
 fn analyze_steps(
     body: &cq_syntax::CommaList<cq::BodyItem>,
@@ -232,12 +247,6 @@ fn analyze_steps(
     inherited_types: &BTreeMap<String, syn::Type>,
 ) -> syn::Result<Analysis> {
     let types = cq::blocks::types(schema, body, inherited_types)?;
-    let arithmetic: BTreeSet<_> = body
-        .iter()
-        .enumerate()
-        .filter(|(_, item)| item.arithmetic(&types).is_some())
-        .map(|(clause, _)| clause)
-        .collect();
     for step in steps {
         match step {
             Step::Atom(a, _) => a.clause.check()?,
@@ -254,7 +263,6 @@ fn analyze_steps(
     let mut analysis = Analysis::default();
     let mut written_bound: BTreeSet<_> = context.iter().cloned().collect();
     let mut block_facts = BTreeMap::new();
-    let mut rust_chain = Vec::new();
     let mut dependencies = BTreeMap::new();
     let mut equalities = BTreeMap::new();
     let mut constraints = BTreeMap::new();
@@ -315,7 +323,6 @@ fn analyze_steps(
                 }
                 if facts.rust {
                     let_bound.extend(facts.interface.keys().cloned());
-                    rust_chain.push(clause);
                 }
                 written_bound.extend(facts.interface.keys().cloned());
                 block_facts.insert(clause, facts);
@@ -338,9 +345,6 @@ fn analyze_steps(
                 dependencies.insert(clause, step.free_variables.dependencies(&written_bound));
                 written_bound.extend(step.bindings.iter().map(symbol_name));
                 let_bound.extend(step.bindings.iter().map(symbol_name));
-                if !arithmetic.contains(&clause) {
-                    rust_chain.push(clause);
-                }
             }
             _ => unreachable!("normal form checked"),
         }
@@ -374,7 +378,6 @@ fn analyze_steps(
     let mut placed_equalities = BTreeSet::new();
     let mut placed_constraints = BTreeSet::new();
     let mut placed_negations = BTreeSet::new();
-    let mut next_rust = 0;
     for step in steps {
         analysis.bound_before.push(bound.clone());
         match step {
@@ -402,45 +405,13 @@ fn analyze_steps(
                     return error(block, "hoisted blocks cannot contain Rust steps");
                 }
                 let correlated = block.placement == blocks::Placement::Correlated;
-                if facts.rust {
-                    if rust_chain.get(next_rust) != Some(&clause) {
-                        return error(
-                            block,
-                            "Rust blocks must retain their written position in the parent chain tree",
-                        );
-                    }
-                    next_rust += 1;
-                }
-                if facts.rust
-                    && (0..clause).any(|earlier| {
-                        !complete.contains(&earlier)
-                            && (arithmetic.contains(&earlier)
-                                || matches!(
-                                    &body[earlier],
-                                    cq::BodyItem::Positive { .. }
-                                        | cq::BodyItem::Equality(_)
-                                        | cq::BodyItem::Constraint(_)
-                                        | cq::BodyItem::Negation(_)
-                                        | cq::BodyItem::Block(_)
-                                ))
-                    })
-                {
-                    return error(
-                        block,
-                        "Before condition: a Rust branch must follow every written prefix clause",
-                    );
-                }
                 if correlated && !facts.free.keys().all(|name| bound.contains(name)) {
                     return error(
                         block,
                         "correlated block requires every free prefix variable",
                     );
                 }
-                let branch_context: Vec<_> = if correlated {
-                    bound.clone()
-                } else {
-                    facts.free.keys().cloned().collect()
-                };
+                let branch_context: Vec<_> = facts.free.keys().cloned().collect();
                 let mut branches = Vec::new();
                 for (j, (branch, source_branch)) in
                     block.branches.iter().zip(&written.branches).enumerate()
@@ -490,6 +461,12 @@ fn analyze_steps(
                 }
                 if facts.rust && block.source.variables().count() != variables.len() {
                     return error(block, "a Rust block cannot split its row across reads");
+                }
+                if facts.rust && seen_atoms.contains(&clause) {
+                    return error(
+                        block,
+                        "each block containing Rust expressions must be placed exactly once",
+                    );
                 }
                 seen_atoms.insert(clause);
                 if block.source.variables().count() == variables.len() {
@@ -550,9 +527,22 @@ fn analyze_steps(
                 analysis.introduces.push(introduced);
             }
             Step::Equality(equality, _) => {
-                let Some((&clause, _)) = equalities.iter().find(|(clause, expected)| {
-                    !placed_equalities.contains(*clause) && ***expected == *equality
-                }) else {
+                let clause = equalities
+                    .iter()
+                    .find(|(clause, expected)| {
+                        !complete.contains(*clause) && ***expected == *equality
+                    })
+                    .map(|(&clause, _)| clause)
+                    .or_else(|| {
+                        constraints
+                            .iter()
+                            .find(|(clause, expected)| {
+                                !complete.contains(*clause)
+                                    && expected.equality().as_ref() == Some(equality)
+                            })
+                            .map(|(&clause, _)| clause)
+                    });
+                let Some(clause) = clause else {
                     return error(
                         equality,
                         "every relational equality must appear exactly once from the query",
@@ -568,13 +558,27 @@ fn analyze_steps(
                     );
                 }
                 placed_equalities.insert(clause);
+                placed_constraints.insert(clause);
                 complete.insert(clause);
                 analysis.introduces.push(Vec::new());
             }
             Step::Constraint(constraint, _) => {
-                let Some((&clause, _)) = constraints.iter().find(|(clause, expected)| {
-                    !placed_constraints.contains(*clause) && ***expected == *constraint
-                }) else {
+                let clause = constraints
+                    .iter()
+                    .find(|(clause, expected)| {
+                        !complete.contains(*clause) && ***expected == *constraint
+                    })
+                    .map(|(&clause, _)| clause)
+                    .or_else(|| {
+                        let equality = constraint.equality()?;
+                        equalities
+                            .iter()
+                            .find(|(clause, expected)| {
+                                !complete.contains(*clause) && ***expected == equality
+                            })
+                            .map(|(&clause, _)| clause)
+                    });
+                let Some(clause) = clause else {
                     return error(
                         constraint,
                         "every relational constraint must appear exactly once from the query",
@@ -590,6 +594,7 @@ fn analyze_steps(
                     );
                 }
                 placed_constraints.insert(clause);
+                placed_equalities.insert(clause);
                 complete.insert(clause);
                 analysis.introduces.push(Vec::new());
             }
@@ -623,45 +628,21 @@ fn analyze_steps(
                     (Step::For(a, _), cq::BodyItem::For(b)) => a == b,
                     _ => false,
                 };
-                let total = arithmetic
-                    .iter()
+                let Some(clause) = dependencies
+                    .keys()
                     .copied()
-                    .find(|clause| !complete.contains(clause) && identical(*clause));
-                let Some(clause) = total.or_else(|| rust_chain.get(next_rust).copied()) else {
-                    return error(step, "more Rust steps than the query has");
-                };
-                let identical = identical(clause);
-                if !identical {
+                    .find(|clause| !complete.contains(clause) && identical(*clause))
+                else {
                     return error(
                         step,
-                        "Rust lets, generators and guards must keep their written relative order (chain)",
+                        "Rust steps must preserve each source expression exactly once",
                     );
-                }
+                };
                 if let Some(missing) = dependencies[&clause].iter().find(|v| !bound.contains(*v)) {
                     return error(
                         step,
                         format!("Rust step uses `{missing}` before it is bound"),
                     );
-                }
-                for earlier in (0..clause).filter(|_| total.is_none()) {
-                    if (arithmetic.contains(&earlier)
-                        || matches!(
-                            &body[earlier],
-                            cq::BodyItem::Positive { .. }
-                                | cq::BodyItem::Equality(_)
-                                | cq::BodyItem::Constraint(_)
-                                | cq::BodyItem::Negation(_)
-                                | cq::BodyItem::Block(_)
-                        ))
-                        && !complete.contains(&earlier)
-                    {
-                        return error(
-                            step,
-                            format!(
-                                "Before condition: relational clause #{earlier} must be completed before Rust clause #{clause}"
-                            ),
-                        );
-                    }
                 }
                 let introduced = body[clause]
                     .rust_step()
@@ -672,11 +653,7 @@ fn analyze_steps(
                     .collect::<Vec<_>>();
                 bound.extend(introduced.iter().cloned());
                 analysis.introduces.push(introduced);
-                if total.is_none() {
-                    next_rust += 1;
-                } else {
-                    complete.insert(clause);
-                }
+                complete.insert(clause);
             }
             Step::Reduce(reduce, _) => {
                 let clause = reduce.clause();
@@ -779,12 +756,12 @@ fn analyze_steps(
     {
         return error(*missing, "every relational negation must be placed");
     }
-    if let Some(&missing) = arithmetic.iter().find(|clause| !complete.contains(clause)) {
-        return error(&body[missing], "every arithmetic clause must be placed");
-    }
-    if next_rust != rust_chain.len() {
+    if let Some(&missing) = dependencies
+        .keys()
+        .find(|clause| !complete.contains(clause))
+    {
         return error(
-            &body[rust_chain[next_rust]],
+            &body[missing],
             "every Rust guard and binding must be placed",
         );
     }

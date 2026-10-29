@@ -43,8 +43,8 @@ $\mathsf{reads}(r)$ the operand and return uses of $r$:
  {\mathsf{PModeOK}(r)}
 
 \Rule{PH-Block}{\text{branch scopes derived from union origins and fixed operands}\\
- \text{ancestor/local source-before definitions remain before each Rust node}}
- {\mathsf{blockBeforeOK}(source,target)}
+ \text{Rust payloads and free-variable binding identities preserved}}
+ {\mathsf{blockBindingsOK}(source,target)}
 
 \Rule{WF-Physical}{\mathsf{PHeading}(t,A)\quad\mathsf{PMode}(t,A)}
  {\mathsf{WF}_{Physical}(t)\Downarrow A}
@@ -66,7 +66,7 @@ keys and Rust steps are unchanged.
 \Rule{EXT-RetainStream}{\mathsf{mode}(r)=pipe\quad r\text{ is not a host rename}}
  {\mathsf{mode}(r):=let\text{ preserves erasure and the exhaustive bag of }r}
 \end{mathpar}
-Under exhaustive evaluation the retained rows, and any panic, are those of the
+Under exhaustive pure-total evaluation the retained rows equal those of the
 stream, so the rewrite is a refinement checked by \code{check_rewrite}. It is a
 decomposition decision: a back end may start a new kernel or task at the
 retained rows, so the consumer's parallel domain becomes those rows instead of
@@ -120,6 +120,6 @@ not silently commute operands or invent demands.
 \paragraph{Rewrite check (\code{cq_lang_physical::check_rewrite}).} Both programs
 pass the contract; declarations, head, returned result and the definition graph
 of named logical operators and operands are preserved; execution choices and
-modes may change; relational definitions may move earlier; branch-scoped Before
-facts are kept (PH-Block). It has no IX source and does not establish final
+modes may change; recorded join and predicate placement decisions and
+branch-scoped free-variable bindings are kept (PH-Block). It has no IX source and does not establish final
 canonicality.

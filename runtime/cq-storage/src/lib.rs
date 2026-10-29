@@ -1,9 +1,8 @@
 //! Physical access traits and concrete data structures for generated programs.
 //!
-//! Queries denote `bottom + Set`: one panic aborts evaluation. Opaque Rust
-//! binds and guards keep their written chain; relational steps may move only
-//! earlier across them. Their free variables determine their partial-function
-//! meaning; I/O, mutation and evaluation counts are outside that meaning.
+//! Embedded Rust expressions are opaque, pure and total by premise. Their free
+//! variables determine placement; no written-order chain restricts relational
+//! work. I/O, mutation and evaluation counts are outside the query meaning.
 //! Relational `==` decides Leibniz identity. `Eq` and the selected storage's
 //! `Hash` or `Ord` bounds are necessary checks, not a proof of admissibility.
 //!
@@ -12,6 +11,11 @@
 //! is available only through the operation traits; a user type implementing
 //! [`Build`] plus the access traits a plan uses is a first-class structure,
 //! and the compiler names it without inspecting it.
+//! [`build!`] preserves this protocol while selecting optional representation
+//! capabilities through ordinary Rust bounds at the concrete callsite.
+//! [`AdaptiveMembership`] factories return [`DenseMembership`] for
+//! [`DenseOrdinal`] keys and exact hash membership for all other `Eq + Hash`
+//! keys, without an `Ord` bound.
 //!
 //! [`Answers`], [`GroupedAnswers`] and allocation-free [`SingleGroup`] compose
 //! query outputs as inputs. Grouped keys occupy the leading declared columns.
@@ -40,7 +44,7 @@
 //!   retain the block. Reads preserve base order and exact predicate results.
 //!   [`Fetch`] reconstructs a named column from the same live occurrence.
 //!   Chunked reads AND exact predicate masks and preserve scalar-read order;
-//!   [`stage`] selections expose survivors before a partial operation executes.
+//!   [`stage`] selections expose survivors before downstream row operations.
 //! - `α(selection)` is the selected occurrence bag. Narrowing is intersection;
 //!   immutable snapshots and their projected builds preserve source order and
 //!   multiplicity. Selection does not confer OrderedRead.
@@ -88,10 +92,13 @@ pub(crate) use count;
 #[cfg(any(feature = "counters", feature = "operator-timing"))]
 pub mod counters;
 pub mod dispatch;
+pub use dispatch::AutoDense;
 mod hash_index;
 mod hash_state;
 mod join_filter;
-pub use join_filter::{JoinFilterPredicate, selective_build};
+pub use join_filter::{
+    JoinFilterEligibility, JoinFilterKey, JoinFilterPredicate, NoJoinFilter, selective_build,
+};
 mod host;
 mod instrument;
 mod membership;
@@ -200,6 +207,80 @@ pub fn relational_str_cmp<L: Ord + StringValue + ?Sized, R: Ord + StringValue + 
     left.string_value().cmp(right.string_value())
 }
 
+/// Backing storage for a literal's string representation. Generated static
+/// cells own the storage; references are borrowed, never leaked or cloned.
+pub trait StringLiteral {
+    type Storage: Send + Sync + 'static;
+    fn storage(value: &'static str) -> Self::Storage;
+    fn reference(storage: &'static Self::Storage) -> &'static Self;
+}
+impl StringLiteral for String {
+    type Storage = String;
+    fn storage(value: &'static str) -> Self::Storage {
+        value.to_owned()
+    }
+    fn reference(storage: &'static Self::Storage) -> &'static Self {
+        storage
+    }
+}
+impl StringLiteral for str {
+    type Storage = &'static str;
+    fn storage(value: &'static str) -> Self::Storage {
+        value
+    }
+    fn reference(storage: &'static Self::Storage) -> &'static Self {
+        storage
+    }
+}
+impl<T: StringLiteral + Sync + ?Sized + 'static> StringLiteral for &'static T {
+    type Storage = (T::Storage, std::sync::OnceLock<&'static T>);
+    fn storage(value: &'static str) -> Self::Storage {
+        (T::storage(value), std::sync::OnceLock::new())
+    }
+    fn reference(storage: &'static Self::Storage) -> &'static Self {
+        storage.1.get_or_init(|| T::reference(&storage.0))
+    }
+}
+
+/// Encode a host operand into a recorded column key representation.
+///
+/// The representation law requires this conversion to preserve the equality
+/// and ordering used by `Column::key`. Identity keys clone their value; string
+/// views borrow their contents. Providers may implement additional codecs.
+pub trait PredicateValue<'a, K> {
+    fn predicate_value(&'a self) -> K;
+}
+impl<'a, K: Clone> PredicateValue<'a, K> for K {
+    fn predicate_value(&'a self) -> K {
+        self.clone()
+    }
+}
+impl<'a> PredicateValue<'a, &'a str> for String {
+    fn predicate_value(&'a self) -> &'a str {
+        self.as_str()
+    }
+}
+impl<'a> PredicateValue<'a, &'a str> for str {
+    fn predicate_value(&'a self) -> &'a str {
+        self
+    }
+}
+impl<'a> PredicateValue<'a, &'a str> for &String {
+    fn predicate_value(&'a self) -> &'a str {
+        self.as_str()
+    }
+}
+
+// Encoding only: cq-print supplies closed host operands; PredicateValue's identity/string-view adapters do not decode row values.
+pub fn encode_predicate<'a, H, C, T>(_: H, _: C, value: &'a T) -> C::Key
+where
+    H: PositionalRows,
+    C: Column<H>,
+    T: PredicateValue<'a, C::Key> + ?Sized,
+{
+    value.predicate_value()
+}
+
 pub fn intersect_lower<Q: Ord>(a: std::ops::Bound<Q>, b: std::ops::Bound<Q>) -> std::ops::Bound<Q> {
     use std::ops::Bound::*;
     match (&a, &b) {
@@ -238,11 +319,14 @@ pub mod fetch;
 pub mod positional;
 pub mod selection;
 pub mod stage;
-pub use adaptive::{AdaptiveKeySet, BorrowedI64TupleCodec, I64Codec, KeyCodec, NoDense};
+pub use adaptive::{
+    AdaptiveKeySet, AdaptiveMembership, BorrowedI64TupleCodec, DenseMembership, DenseOrdinal,
+    I64Codec, KeyCodec, NoDense, OrdinalWord,
+};
 pub use fetch::Fetch;
 pub use positional::{
     BlockId, BlockRead, Column, ExactIntervalMembership, Membership, Point, PositionalRows,
-    ReadPredicate, RowId, RowPredicate, Window, read_with_filter,
+    ReadPredicate, RowId, RowPredicate, Window, read_with_filter, test_position,
 };
 pub use selection::{Selection, SelectionRows, SelectionSummary};
 pub use stage::{Chunk, for_chunks};
@@ -254,6 +338,28 @@ mod misuse;
 
 pub mod retention;
 pub use retention::{Retention, residual, retain_keys, retain_rows};
+
+/// Build a provider using capabilities available at this concrete Rust callsite.
+///
+/// Providers without a supported specialization delegate to `S: Build<I>`.
+/// [`AdaptiveMembership`] returns [`DenseMembership`] when its key implements
+/// [`DenseOrdinal`], keeping ordinal dispatch static in the probe loop.
+/// [`SortedRun`] and [`AdaptiveKeySet`] with [`AutoDense`] select
+/// [`BorrowedI64TupleCodec`] and [`I64Codec`], respectively, when those codecs
+/// implement [`KeyCodec`] for their keys, otherwise returning [`NoDense`]
+/// providers. Explicit codecs, including default `NoDense`, are unchanged.
+/// Dense-capable outputs retain their ordinary sparse/span-budget fallbacks.
+/// In generic code only capabilities present in the generic bounds participate.
+/// The iterator expression is evaluated exactly once.
+#[macro_export]
+macro_rules! build {
+    ($provider:ty, $source:expr $(,)?) => {{
+        use $crate::dispatch::BuildProvider as _;
+        let source = $source;
+        let target = $crate::dispatch::BuildTarget::<$provider, _>::new(&source);
+        (&&&target).build_provider(source)
+    }};
+}
 
 /// Select printer output using the runtime's counters feature. The unselected
 /// tokens are discarded before type checking; the plain branch expands verbatim.

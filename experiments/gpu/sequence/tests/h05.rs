@@ -8,6 +8,7 @@ use syn::visit::{self, Visit};
 
 fn checked() -> (cq_lang_sequence::Program, cq_lang_sequence::Analysis) {
     let program = h05_program::program();
+    let program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
     let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())
         .expect("the written H05 program must be graded without planner decisions");
     (program, analysis)
@@ -285,8 +286,9 @@ impl<'ast> Visit<'ast> for NoQueryConstants {
 }
 
 fn check_generated(program: &cq_lang_sequence::Program) {
-    let analysis = cq_lang_sequence::check_grading(program, &cq_gpu_sequence::machine()).unwrap();
-    let expression = cq_gpu_sequence::translate(program, &analysis).unwrap();
+    let program = cq_gpu_sequence_core::runs::record_representation(program).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine()).unwrap();
+    let expression = cq_gpu_sequence::translate(&program, &analysis).unwrap();
     let mut functions = Functions::default();
     functions.visit_expr(&expression);
     assert_eq!(
@@ -363,7 +365,8 @@ fn expansion_uses_live_code_columns_and_one_reservation_per_item_batch() {
     let query = functions.queries[1].to_token_stream().to_string();
     assert!(!query.contains("__row"));
     assert!(!query.contains("__stored"));
-    assert!(query.contains("decode_u32"));
+    assert!(query.contains("device :: decode ("));
+    assert!(!query.contains("decode_u32"), "parent carriers use the recorded i64 ABI");
     assert!(query.contains("__parent_"));
     assert!(query.contains("__found_count"));
 
@@ -447,6 +450,7 @@ fn semijoin_device_store_builds_provider_after_publication() {
         .expect("lookup r2 must have an earlier authored Sequence store");
     assert_eq!(contract.results["R2"], "r2");
     assert!(contract.stores.contains_key("R2"));
+    let program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
     let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())
         .expect("the semijoin store and its provider capability are explicitly recorded");
     assert_eq!(analysis.results["R2"], "r2");

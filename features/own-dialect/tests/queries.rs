@@ -166,8 +166,8 @@ macro_rules! partial {
             struct Partial;
             relation R(x: i32);
             relation S(w: i32);
-            answer(x, z) :- R(x), S(w), if *x != 0 && *w > 1,
-                let y: i32 = 10 / *x, if *y > 1, let z: i32 = *y + 1;
+            answer(x, z) :- R(x), S(w), where x != 0 && w > 1,
+                let y: i32 = 10 / *x, where y > 1, let z: i32 = *y + 1;
         }
         .map(|(x, z)| vec![*x, z])
         .collect::<cq_testkit::Rows>()
@@ -310,10 +310,9 @@ fn computed_head_deduplicates_its_image_with_the_recorded_type() {
 }
 
 #[test]
-fn exists_consumes_the_full_source_and_retains_only_nonemptiness() {
+fn exists_retains_only_nonemptiness_under_total_rust() {
     fn checked(x: &i32) -> bool {
-        assert_ne!(*x, 0);
-        true
+        *x != 0
     }
     macro_rules! exists {
         ($([$($passes:path),*])? $($printer:ident)::+, $rows:expr) => {{
@@ -337,8 +336,8 @@ fn exists_consumes_the_full_source_and_retains_only_nonemptiness() {
             .collect::<BTreeSet<_>>()
         }};
     }
-    for rows in [vec![], vec![(1,), (2,)], vec![(1,), (0,)]] {
-        let comparison = cq_testkit::harness::check_refinement(
+    for rows in [vec![], vec![(1,), (2,)], vec![(1,), (0,)], vec![(0,)]] {
+        cq_testkit::harness::check_refinement(
             || {
                 let mut nonempty = false;
                 for (x,) in &rows {
@@ -355,12 +354,6 @@ fn exists_consumes_the_full_source_and_retains_only_nonemptiness() {
             || exists!(own_push::push, rows.as_slice()),
         )
         .unwrap();
-        if rows.iter().any(|&(x,)| x == 0) {
-            assert!(matches!(
-                comparison.target,
-                cq_testkit::harness::Outcome::Panicked(_)
-            ));
-        }
         cq_testkit::harness::check_refinement(
             || exists!([mini_linq::passes::sequential, mini_linq::passes::translate_pull] mini_linq::passes::sequence, rows.as_slice()),
             || exists!(own_push::push, rows.as_slice()),
@@ -381,7 +374,7 @@ fn native_and_fallback_point_range_reads_agree_with_pull() {
                 pipeline { print_input = $endpoint; print = $printer; }
                 struct Window;
                 relation R(x: i32,y: i32);
-                answer(x,y) :- R(x,y), if *x >= low && *x < high, if *y == 7;
+                answer(x,y) :- R(x,y), where x >= low && x < high, where y == 7;
             }
             .map(|(x, y)| (*x, *y))
             .collect::<BTreeSet<_>>()
@@ -426,7 +419,7 @@ fn native_and_fallback_point_range_reads_agree_with_pull() {
                 pipeline { print_input = $endpoint; print = $printer; }
                 struct Point;
                 relation R(x: i32,y: i32);
-                answer(x,y) :- R(x,y), if *x == 2;
+                answer(x,y) :- R(x,y), where x == 2;
             }
             .map(|(x, y)| (*x, *y))
             .collect::<BTreeSet<_>>()
@@ -634,7 +627,7 @@ fn literal_point_selection_narrows_the_scan_carrier() {
         pipeline { print_input = structures; print = ::own_push::push; }
         struct Seed29;
         relation r0(c0: i32, c1: i32);
-        answer(v0) :- r0(v0, -2), if (*v0 == -1 || *v0 == 0);
+        answer(v0) :- r0(v0, -2), where v0 == -1 || v0 == 0;
     }
     .map(|row| *row.0)
     .collect();

@@ -50,7 +50,7 @@ fn borrowed_filtered_keys_preserve_native_owned_rust_and_push_interfaces() {
         output Allowed;
         Allowed(owned.clone(), n) :- Name(name), !Blocked("blocked",name),
             let owned = name.to_uppercase(), for n in 0_i32..2;
-        Allowed(name.clone(), *n + 1) :- Allowed(name,n), if *n < 3;
+        Allowed(name.clone(), *n + 1) :- Allowed(name,n), where n < 3;
     };
     assert_eq!(
         result,
@@ -79,7 +79,7 @@ fn component_publication_retains_mutual_deltas_and_empty_negation_keys() {
             relation Allowed(n:i32);
             output A, B, Allowed;
             A(*n) :- Seed(n);
-            B(*n + 1) :- A(n), if *n < 3;
+            B(*n + 1) :- A(n), where n < 3;
             A(*n) :- B(n);
             Allowed(*n) :- A(n), !Blocked(_);
         };
@@ -130,7 +130,7 @@ fn surface_if_let_reaches_recorded_native_generators() {
         relation Input(value:Option<i32>) = (&values);
         relation Out(value:i32);
         output Out;
-        Out(n) :- Input(value), if let Some(n) = *value, if n > 2;
+        Out(n) :- Input(value), if let Some(n) = *value, where n > 2;
     };
     assert_eq!(result, HashSet::from([(5,)]));
 }

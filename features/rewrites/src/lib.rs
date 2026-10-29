@@ -22,8 +22,10 @@
 //!
 //! `retain_lookups` takes no arguments and records a `share` decision and a
 //! `repr` witness for each eligible eager semijoin followed by a probe of the
-//! same SortedRun build and preserved keys, or either singleton integral
-//! PrefixRun directory prefix of a recorded binary Smallest intersection.
+//! same SortedRun build and preserved keys, or either recorded
+//! PrefixRun directory prefix of a binary Smallest intersection. Column type
+//! spellings do not establish integral-key capabilities; rustc checks the
+//! selected provider's key obligations.
 //! Both prefix witnesses force at the introducing probe. The cursor is
 //! `::cq_storage::RunCursor<'_, _>`; an existing positions representation is
 //! preserved. The Structures contract rejects witness escape across retained
@@ -127,6 +129,9 @@
 //! a positional host. Apply `retype` afterwards to choose another type. The
 //! Structures contract rejects missing covers, anti joins and opaque Rust in
 //! the intervening spine. Neither advice changes the exact covering probe.
+//! Exact build eligibility follows the recorded single-level key layout, not
+//! provider type names (including routed providers and aliases). Key enumeration
+//! is the build provider's `cq_storage::Keys` obligation, checked by rustc.
 //!
 //! Keyset budget changes are explicit type rewrites. A read with an exact
 //! interval summary cannot silently lose that trait: rewrite its summary to

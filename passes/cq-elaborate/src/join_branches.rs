@@ -136,7 +136,7 @@ impl State<'_> {
     }
 }
 
-/// Formal rule CK-JoinBranch: Require an exact projected branch DAG for every VO atom group in addition to global occurrence, predicate, and Before correspondence.
+/// Formal rule CK-JoinBranch: Require an exact projected branch DAG for every VO atom group in addition to global occurrence, predicate and free-variable correspondence.
 pub(super) fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
     let Some(groups) = &source.valuation.join_branches else {
         return Ok(());

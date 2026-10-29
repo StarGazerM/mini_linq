@@ -6,7 +6,7 @@ sets and bags, insertions only, and totally ordered rounds. It does not
 parameterize the existing compiler by a general semiring. Signed changes,
 partially ordered time and recursive aggregates are outside this scope.
 
-\subsection{One call: collections, iterators and partiality}
+\subsection{One call: collections and iterators}
 For notation, let $\mathrm{Rel}_K(X)=X\to_{fin}K$, with
 $K\in\{\mathbb B,\mathbb N\}$. These are finite sets and finite bags,
 respectively. Each has a monad $M_K$: unit assigns weight one to a value;
@@ -17,26 +17,22 @@ bind and union. Write $\iota$ for the characteristic-bag embedding of a set
 and $\mathsf{canon}=\iota\circ\mathrm{supp}$. Canonicalization is idempotent;
 $\iota$ itself is not a homomorphism for overlapping unions.
 
-The written-order denotation remains exactly that of
-\S\ref{sec:denotation}: $\bot+M_{\mathbb B}$, with strict propagation of a
-panic from any reached valuation. A relational atom extends a valuation, a
-guard retains or discards it, and the head projects or maps it.
-Commutativity of the \emph{total} set/bag fragment does not establish
-commutativity of arbitrary partial computations: an empty earlier relation
-can prevent a later panic. Recognized comparisons and negated atoms still
-require their binders and pure value-based behavior; given those, they move
-like relational selections (CQ-GuardRecognize, CQ-Neg, C-Ready, E-Constraint,
-E-Neg). Their definedness justifies motion (Motion lemma,
-Section~\ref{sec:premises}); opaque guards keep the Rust chain.
+The written-order denotation is that of Section~\ref{sec:denotation}:
+$M_{\mathbb B}$ under the pure-total Rust premise. A relational atom extends
+a valuation, a Rust guard retains or discards it, and the head projects or
+maps it. Explicit \code{where} predicates have representation-based equality
+and order; no Rust expression is recognized as a relational predicate.
+All operations retain their free-variable bindings (CQ-Where, CQ-Neg,
+C-Ready, E-Constraint, E-Neg). The Motion lemma applies without a
+written-order Rust chain.
 
 An iterator supplies an ordered, demand-driven operational sequence, not a
 bag by definition. For a finite successful exhaustive traversal, forgetting
 order yields a bag and taking support yields a set. Push and pull are
-possible realizations of that traversal; arbitrary Rust iterators are not
-assumed to satisfy pure list-monad laws. Partial polling, effects, divergence
-and resource exhaustion stay outside the observation model, as before.
-Let $\mathsf{obs}$ take the support of a successful traversal and map an
-observed panic to $\bot$.
+possible realizations of that traversal. Embedded generators and all their
+polling are pure, total and finite by premise; Rust does not prove that premise.
+Effects, divergence and resource exhaustion remain outside the observation
+model. Let $\mathsf{obs}$ take the support of an exhaustive traversal.
 \begin{mathpar}
 \Rule{INC-Adequacy}{\text{host premises and checked lowering}\quad
  \text{exhaustive observation in the existing model}}
@@ -47,12 +43,11 @@ observed panic to $\bot$.
    =E_{\mathbb B}(\mathrm{supp}(b))
    =\mathrm{supp}(E_{\mathbb N}(\mathsf{canon}(b)))}
 \end{mathpar}
-Adequacy is refinement, not equality of panics: successful source results
-must agree; a target may remove a source panic. \textsc{INC-Supp} applies to
-positive bind, projection, union and value-based filtering. Extensions to
-partial code must separately discharge the existing extensionality and
-Before obligations. This is not a blanket rewrite through negation,
-first-nonempty fallback, aggregates or effectful consumers.
+Adequacy preserves the answer set under the premises; a panic violates the
+contract rather than supplying an alternative denotation.
+\textsc{INC-Supp} applies to positive bind, projection, union and value-based
+filtering. This is not a blanket rewrite through negation, first-nonempty
+fallback, aggregates or effectful consumers.
 
 A consumer may own the final canonical boundary only if its contract states
 that multiplicity is unobservable there. Canonicalizing $N$ removes repeated
@@ -301,23 +296,17 @@ borrowed key set without rebuilding it per call. Wildcards are omitted from
 the key. Negated atoms introduce no bindings and do not turn a negative
 dependency into a positive recursive edge.
 
-\paragraph{Partial Rust is a separate obligation.}
-Final-valuation coverage does not prove equality of panics: a guard may
-panic on a prefix that a later empty atom prevents from producing any answer.
-For partial code the required claim remains successful-source refinement,
-with written chains and Before facts preserved for each generated call.
-A multi-round proof must establish that every reached guard prefix is safe
-whenever the reference evaluation succeeds. Neither the total fixpoint proof
-nor a delta-renaming check alone supplies that argument. Interior mutation
-through shared references is also not ruled out by borrowing; the existing
-extensionality premise is still needed.
+\paragraph{Rust across rounds.}
+Every generated variant uses the same unchanged Rust expressions with the
+same logical free-variable bindings. Purity and totality apply to every
+admissible prefix across all rounds, not just the written reference's reached
+rows. Finite-valuation coverage and the fixpoint argument therefore do not
+need a separate partial-expression ordering condition. Borrowing does not
+prove extensionality or totality; these remain host premises.
 The executable Source, Incremental and Round references described in
-Section~\ref{sec:datalog-languages} retain native Rust evaluation of these
-written-order prefixes. The independent CQ integer-fragment evaluator cannot
-interpret arbitrary opaque Rust or substitute for this panic-sensitive reference.
-Successful-reference refinement checks compare output sets and reject new target
-panics on each exercised instance; they do not prove the multi-round obligation
-for all inputs or all partial Rust expressions.
+Section~\ref{sec:datalog-languages} evaluate native Rust; a panic violates
+the contract. The independent CQ evaluator cannot interpret arbitrary Rust
+and does not substitute for native expression evaluation.
 
 \subsection{Ownership, comparison and remaining obligations}
 \begin{center}

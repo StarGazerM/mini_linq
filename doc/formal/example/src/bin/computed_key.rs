@@ -11,7 +11,7 @@ fn main() {
         relation R(a:i32,b:i32);
         relation S(a:i32,b:i32);
         relation answer(a:i32,b:i32);
-        answer(x,*y+1) :- R(x,k), let next:i32 = *k+1, S(next,y), if y > 0;
+        answer(x,*y+1) :- R(x,k), let next:i32 = *k+1, S(next,y), where y > 0;
     };
     let written = boundaries(&directory, "written", &source, false);
     boundaries(&directory, "planned", &source, true);
@@ -19,7 +19,7 @@ fn main() {
     let normal = &written.normal;
     let expected_vo: valuation::Program = syn::parse_quote! {
         #normal valuation {
-            R@0(x,k); let next:i32 = *k+1; S@2(next,y); y > 0;
+            R@0(x,k); let next:i32 = *k+1; S@2(next,y); where y > 0;
             let __cq_4_1:i32 = *y+1;
         }
     };

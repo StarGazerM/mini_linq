@@ -8,10 +8,110 @@ use std::collections::BTreeMap;
 use std::ops::Bound;
 use std::rc::Rc;
 
+/// Build-only request for a supported dense codec, otherwise [`crate::NoDense`].
+/// Unlike `NoDense`, this marker opts into type-directed codec selection.
+pub struct AutoDense;
+
+/// A type-directed build target used by `build!`. Keeping the iterator type on
+/// the receiver fixes its key type before autoref capability selection at the
+/// macro callsite.
+pub struct BuildTarget<S, I>(std::marker::PhantomData<fn(I) -> S>);
+
+impl<S, I> BuildTarget<S, I> {
+    pub fn new(_: &I) -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+/// Autoref-ranked build capability behind `build!`: the most specific
+/// implementation (dense codec, then generic `Build`) wins at the callsite.
+pub trait BuildProvider<I: Iterator> {
+    type Output;
+    fn build_provider(self, source: I) -> Self::Output;
+}
+
+impl<S: crate::Build<I>, I: Iterator> BuildProvider<I> for &BuildTarget<S, I> {
+    type Output = S;
+    #[inline]
+    fn build_provider(self, source: I) -> S {
+        S::build(source)
+    }
+}
+
+impl<K, V, I, const B: usize> BuildProvider<I> for &&BuildTarget<crate::AdaptiveMembership<K, B>, I>
+where
+    K: crate::DenseOrdinal + std::hash::Hash,
+    I: Iterator<Item = (K, V)>,
+{
+    type Output = crate::DenseMembership<K, B>;
+    #[inline]
+    fn build_provider(self, source: I) -> Self::Output {
+        crate::count!(index_builds);
+        crate::DenseMembership::from_dense_keys(source.map(|(key, _)| key))
+    }
+}
+
+impl<K, V, I> BuildProvider<I> for &&BuildTarget<crate::SortedRun<K, V, AutoDense>, I>
+where
+    K: Ord + Copy,
+    V: Copy,
+    I: Iterator<Item = (K, V)>,
+{
+    type Output = crate::SortedRun<K, V, crate::NoDense>;
+    #[inline]
+    fn build_provider(self, source: I) -> Self::Output {
+        <Self::Output as crate::Build<I>>::build(source)
+    }
+}
+
+impl<K, V, I> BuildProvider<I> for &&&BuildTarget<crate::SortedRun<K, V, AutoDense>, I>
+where
+    K: Ord + Copy,
+    V: Copy,
+    I: Iterator<Item = (K, V)>,
+    crate::BorrowedI64TupleCodec: crate::KeyCodec<K>,
+{
+    type Output = crate::SortedRun<K, V, crate::BorrowedI64TupleCodec>;
+    #[inline]
+    fn build_provider(self, source: I) -> Self::Output {
+        <Self::Output as crate::Build<I>>::build(source)
+    }
+}
+
+impl<K, V, I, const B: usize> BuildProvider<I>
+    for &&BuildTarget<crate::AdaptiveKeySet<K, AutoDense, B>, I>
+where
+    K: Ord + std::hash::Hash,
+    I: Iterator<Item = (K, V)>,
+{
+    type Output = crate::AdaptiveKeySet<K, crate::NoDense, B>;
+    #[inline]
+    fn build_provider(self, source: I) -> Self::Output {
+        <Self::Output as crate::Build<I>>::build(source)
+    }
+}
+
+impl<K, V, I, const B: usize> BuildProvider<I>
+    for &&&BuildTarget<crate::AdaptiveKeySet<K, AutoDense, B>, I>
+where
+    K: Ord + std::hash::Hash,
+    I: Iterator<Item = (K, V)>,
+    crate::I64Codec: crate::KeyCodec<K>,
+{
+    type Output = crate::AdaptiveKeySet<K, crate::I64Codec, B>;
+    #[inline]
+    fn build_provider(self, source: I) -> Self::Output {
+        <Self::Output as crate::Build<I>>::build(source)
+    }
+}
+
 /// A one-probe host read. Its fallback enumerates rows without building an index.
-pub struct PointHost<H, K, F>(H, F, std::marker::PhantomData<fn() -> K>);
-impl<H, K, F> PointHost<H, K, F> {
-    pub fn new(host: H, fallback: F) -> Self {
+/// A differently represented literal key may use that fallback; native dispatch
+/// requires the declared key representation exactly. Callers retain the predicate
+/// to filter fallback rows through the representation's comparison law.
+pub struct PointHost<H, K, Q, F>(H, F, std::marker::PhantomData<fn() -> (K, Q)>);
+impl<H, K, Q, F> PointHost<H, K, Q, F> {
+    pub fn new(host: H, _: &Q, fallback: F) -> Self {
         Self(host, fallback, std::marker::PhantomData)
     }
 }
@@ -21,14 +121,14 @@ pub trait PointRead<K> {
     type Cursor: Iterator<Item = Self::Item>;
     fn point(self, key: &K) -> Self::Cursor;
 }
-impl<H, K: Eq, F: Fn() -> I, I: Iterator> PointRead<K> for &PointHost<H, K, F> {
+impl<H, K, Q: Eq, F: Fn() -> I, I: Iterator> PointRead<Q> for &PointHost<H, K, Q, F> {
     type Item = I::Item;
     type Cursor = I;
-    fn point(self, _: &K) -> I {
+    fn point(self, _: &Q) -> I {
         (self.1)()
     }
 }
-impl<H: crate::PointLookup<Key = K>, K: Eq, F> PointRead<K> for &&PointHost<H, K, F> {
+impl<H: crate::PointLookup<Key = K>, K: Eq, F> PointRead<K> for &&PointHost<H, K, K, F> {
     type Item = H::Row;
     type Cursor = H::Cursor;
     fn point(self, key: &K) -> Self::Cursor {

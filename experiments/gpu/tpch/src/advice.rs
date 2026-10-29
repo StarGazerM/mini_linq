@@ -43,6 +43,18 @@ pub enum Placement {
     #[default]
     Host,
     Device,
+    /// Keep scalar stage results resident; nullable or host-target results stay host.
+    Automatic,
+}
+
+impl Placement {
+    pub fn resolve(self, target: Target, nullable: bool) -> Self {
+        match self {
+            Self::Automatic if matches!(target, Target::Device) && !nullable => Self::Device,
+            Self::Automatic => Self::Host,
+            explicit => explicit,
+        }
+    }
 }
 
 /// Explicit catalog facts; query labels never reach recipe execution.
@@ -119,54 +131,56 @@ impl Pipeline {
         })
     }
 
-    /// Stage-local orders measured with DuckDB; see the Box 14b tables in
+    /// Semantic publication keys shared by automatic and advised schedules.
+    pub fn staged_keys(query: &str, stage: usize) -> Vec<cq_lang_sequence::EvidenceFact> {
+        let keys: &[(&str, &[&str])] = match (query, stage) {
+            ("h02", 1) => &[("MinimumCost", &["part_key"])],
+            ("h11", 1 | 2) => &[("Stock", &["part_key", "supplier_key"])],
+            ("h11", 3) => &[("PartValue", &["part_key"])],
+            ("h12", 1) => &[("MatchingLines", &["order_key", "line_number"])],
+            ("h12", 2) => &[
+                ("MatchingLines", &["order_key", "line_number"]),
+                ("HighPriorities", &["name"]),
+            ],
+            ("h12", 3 | 4) => &[("Totals", &["shipmode"]), ("HighCounts", &["shipmode"])],
+            ("h15", 1 | 2) => &[("Revenue", &["supplier_key"])],
+            ("h18", 1) => &[("Quantity", &["order_key"])],
+            ("h20", 1) => &[("Shipped", &["part_key", "supplier_key"])],
+            _ => &[],
+        };
+        // Groups publish one row per key. MatchingLines retains the Lineitem
+        // identity through a unique Orders join; dictionary code sets are unique.
+        keys.iter().map(|(relation, columns)| cq_lang_sequence::EvidenceFact::Key {
+            subject: quote::format_ident!("{relation}"),
+            columns: columns.iter().map(|column| quote::format_ident!("{column}")).collect(),
+        }).collect()
+    }
+
+    /// Stage-local authored or measured orders; historical measurements are in
     /// compare/tpch_statistics.md. Publications are ordinary relation inputs.
     pub fn staged(query: &str, stage: usize) -> Self {
         let order = match (query, stage) {
             ("h02", 0) => "Region, Nation, Supplier, Partsupp",
-            ("h02", 1) => "Part, Partsupp, MinimumCost, Supplier, Nation, Region",
+            ("h02", 1) => "Part, BrassTypes, Partsupp, MinimumCost, Supplier, Nation, Region",
             ("h11", 0) => "Nation, Supplier, Partsupp",
             ("h11", 1 | 2) => "Stock",
             ("h11", 3) => "TotalValue, PartValue",
+            ("h12", 0) => "Lineitem, Orders",
+            ("h12", 1) => "MatchingLines",
+            ("h12", 2) => "MatchingLines, HighPriorities",
+            ("h12", 3) => "Totals, HighCounts",
+            ("h12", 4) => "Totals",
             ("h13", 0) => "Customer, QualifiedOrders",
             ("h13", 1) => "Customer",
+            ("h16", 0) => "Supplier, BadComments",
+            ("h16", 1) => "Part, AllowedKinds, Partsupp",
             ("h15", 0) | ("h18", 0) | ("h20", 0) => "Lineitem",
             ("h15", 1) => "Revenue",
             ("h15", 2) => "Maximum, Revenue, Supplier",
             ("h18", 1) => "Quantity, Orders, Customer",
-            ("h20", 1) => "Part, Partsupp, Shipped, Supplier, Nation",
+            ("h20", 1) => "Part, ForestNames, Partsupp, Shipped, Supplier, Nation",
             _ => unreachable!("unregistered staged query"),
         };
-        // These are semantic keys: grouped publications have one row per
-        // group; Stock preserves dbgen's Partsupp key, and QualifiedOrders
-        // filters/project the declared Orders key. Counts are not key proofs.
-        let key: Option<(&str, &[&str])> = match (query, stage) {
-            ("h02", 1) => Some(("MinimumCost", &["part_key"])),
-            ("h11", 1 | 2) => Some(("Stock", &["part_key", "supplier_key"])),
-            ("h11", 3) => Some(("PartValue", &["part_key"])),
-            ("h13", _) => Some(("QualifiedOrders", &["order_key"])),
-            ("h15", 1 | 2) => Some(("Revenue", &["supplier_key"])),
-            ("h18", 1) => Some(("Quantity", &["order_key"])),
-            ("h20", 1) => Some(("Shipped", &["part_key", "supplier_key"])),
-            _ => None,
-        };
-        let sequence = key
-            .into_iter()
-            .map(|(relation, columns)| {
-                let evidence = cq_lang_sequence::Evidence {
-                    facts: vec![cq_lang_sequence::EvidenceFact::Key {
-                        subject: quote::format_ident!("{relation}"),
-                        columns: columns
-                            .iter()
-                            .map(|column| quote::format_ident!("{column}"))
-                            .collect(),
-                    }],
-                };
-                cq_sequence_plan::Advice::Evidence(evidence)
-                    .to_token_stream()
-                    .to_string()
-            })
-            .collect();
         Self {
             plan: format!("no_reduce, order({order})"),
             storage: if matches!(query, "h11" | "h15" | "h18") {
@@ -174,7 +188,6 @@ impl Pipeline {
             } else {
                 String::new()
             },
-            sequence,
             recipe: catalog_recipe(&format!("{query}.{stage}")),
             ..Self::baseline()
         }
@@ -207,8 +220,6 @@ impl Pipeline {
             "h01" => "Lineitem",
             // Date+discount+quantity: 114,160 / 1,139,264 -> one exact sum.
             "h06" => "Lineitem",
-            // 30,988 / 310,803 qualifying lines; Orders is a unique lookup.
-            "h12" => "Lineitem, Orders",
             // Shipping guard: 214,377 / 2,141,904 lines -> unique Part probes
             // -> 121 / 1,134 aggregate inputs. Keep the mixed branch guard
             // intact; Part-first needs a larger Lineitem adjacency provider.
@@ -250,18 +261,12 @@ impl Pipeline {
             "h04" => "Lineitem, Orders",
             // Same quarter root, anti membership leaves 4,695 / 47,631 keys.
             "h04_not_exists" => "Orders",
-            // Filtered Part -> exactly four Partsupp rows, then anti membership;
-            // only 4 / 56 bad supplier keys. Anti keys cannot seed the domain.
-            "h16" => "Part, Partsupp",
             // Phone-filtered customer is the only positive root; Orders is an
             // anti lookup by customer, yielding 14,086 / 140,489 keys.
-            "h22" => "Customer",
-            // Green Part: 10,664 / 108,782. PartSupp-first minimizes prefix
-            // positions (777,440 / 7,937,392), but builds the entire composite
-            // Lineitem index. Its selective forward-provider attempt is rejected
-            // at opaque Part publication. Keep the accepted single-key baseline;
-            // the report records both the smaller-prefix candidate and its cost.
-            "h09" => "Part, Lineitem, PartSupp, Orders, Supplier, Nation",
+            "h22" => "Customer, QualifyingPhones",
+            // The authored dictionary predicate publishes qualifying Part codes
+            // before the same single-key join baseline.
+            "h09" => "Part, GreenNames, Lineitem, PartSupp, Orders, Supplier, Nation",
             // Type Part 1,451 / 13,452 -> lines 43,693 / 403,487 ->
             // dated orders 13,389 / 122,404 -> America 2,603 / 24,254.
             // Part-root sum 93,120 / 856,913 beats region-root 494,037 / 4,921,493.
@@ -278,8 +283,7 @@ impl Pipeline {
             _ => return None,
         };
         Some(Self {
-            // Only constant equality/unused string columns are dictionary-coded.
-            // H09 substring, H16 string methods and H22 phone methods stay host.
+            // Dictionary representation is shared by every loader profile.
             storage: if matches!(
                 query,
                 "h03" | "h07" | "h07_block" | "h08" | "h21_positive" | "d19" | "d27" | "d85"
@@ -299,7 +303,7 @@ impl Pipeline {
                 ),
                 _ => format!("no_reduce, order({order})"),
             },
-            physical: if matches!(query, "h01" | "h06" | "h12" | "h19" | "h04") {
+            physical: if matches!(query, "h01" | "h06" | "h19" | "h04") {
                 Vec::new()
             } else {
                 vec!["build_host_reads()".into()]
@@ -313,8 +317,9 @@ impl Pipeline {
 /// Catalog registration resolves workload labels to printable input facts.
 /// Formal rule DR-Recipe: Execute only explicit recipe facts, never query labels.
 fn catalog_recipe(query: &str) -> Recipe {
-    let simple = matches!(query, "h01" | "h06" | "h12" | "h19" | "h04"
-        | "h02.0" | "h13.0" | "h11.1" | "h11.2" | "h15.0"
+    let simple = matches!(query, "h01" | "h06" | "h19" | "h04"
+        | "h02.0" | "h12.0" | "h12.1" | "h12.2" | "h12.3" | "h12.4"
+        | "h13.0" | "h13.1" | "h16.0" | "h11.1" | "h11.2" | "h15.0"
         | "h15.1" | "h18.0" | "h20.0");
     let expansions: &[&str] = match query {
         "h05" => &["Orders", "Lineitem"],
@@ -331,7 +336,7 @@ fn catalog_recipe(query: &str) -> Recipe {
     };
     Recipe {
         retained_prefixes: prefixes.iter().map(|s| (*s).into()).collect(),
-        filtered_leaves: if query == "h09" { vec!["Part".into()] } else { Vec::new() },
+        filtered_leaves: Vec::new(),
         retained_probe: (query == "h21_positive").then(|| ("Lineitem".into(), "waiting_supplier".into())),
         hoist_inputs: matches!(query, "h05" | "h08" | "h21_positive" | "d72_inner" | "h04_not_exists"),
         membership: query != "h04" && query != "h05",
@@ -398,7 +403,7 @@ pub fn provider_layout(program: &cq_lang_physical::Program, relation: &str) -> s
 
 /// Resolve a semantic relation selector to its existing lowered producer. This
 /// follows unary projections/filters, never creates or duplicates an operator.
-fn relation_of<'a>(program: &'a cq_lang_physical::Program, name: &Ident) -> Option<&'a Ident> {
+pub(crate) fn relation_of<'a>(program: &'a cq_lang_physical::Program, name: &Ident) -> Option<&'a Ident> {
     let definition = program
         .program
         .definitions
@@ -728,7 +733,9 @@ pub fn hand_schedule(
             continue;
         }
         let name = &definition.name;
-        if source
+        // Decomposition may extract a probe into a provider, consuming its
+        // named flatten. Segment only boundaries retained in the current plan.
+        if planned.program
             .sequence
             .definitions
             .iter()

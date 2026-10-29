@@ -202,13 +202,9 @@ impl Body<'_, '_> {
                                 }
                                 cq::BodyItem::Constraint(c) => {
                                     if let Some(left) = input {
-                                        input = Some(self.schedule.select(
-                                            left,
-                                            &ra::Theta {
-                                                equalities: Default::default(),
-                                                constraints: [c.clone()].into_iter().collect(),
-                                            },
-                                        ));
+                                        let mut theta = ra::Theta::default();
+                                        theta.push_constraint(c.clone());
+                                        input = Some(self.schedule.select(left, &theta));
                                     }
                                 }
                                 _ => (),
@@ -358,7 +354,12 @@ impl Body<'_, '_> {
             .map(|(c, _)| c)
             .expect("VO Rust source slot");
         self.placed_rust.insert(clause);
-        let names = cq::blocks::bound_before(self.body, clause, &self.context);
+        let scope = cq::blocks::bound_before(self.body, clause, &self.context);
+        let names = self.body[clause]
+            .rust_step()
+            .expect("VO Rust source slot")
+            .free_variables
+            .dependencies(&scope);
         ra::Environment {
             path: Some(self.path(clause)),
             scope_token: Default::default(),
@@ -396,13 +397,9 @@ impl Body<'_, '_> {
                 }
                 vo::Step::Constraint(c, _) => {
                     let input = self.seed();
-                    self.prefix = Some(self.schedule.select(
-                        input,
-                        &ra::Theta {
-                            equalities: Default::default(),
-                            constraints: std::iter::once(c.clone()).collect(),
-                        },
-                    ));
+                    let mut theta = ra::Theta::default();
+                    theta.push_constraint(c.clone());
+                    self.prefix = Some(self.schedule.select(input, &theta));
                 }
                 vo::Step::Negation(negation, _) => {
                     let clause = self

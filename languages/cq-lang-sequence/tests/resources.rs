@@ -7,6 +7,7 @@ fn machine() -> Machine {
     fn node(name: &str, children: Vec<LevelNode>) -> LevelNode {
         LevelNode {
             name: syn::parse_str(name).unwrap(),
+            host_rust: name == "host",
             collaborative: name == "team",
             dynamic: name == "engine",
             width: (name == "team").then_some(8),

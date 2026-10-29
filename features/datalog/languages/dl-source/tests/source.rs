@@ -19,6 +19,35 @@ fn declaration_rule_and_output_obligations_are_checked() {
 }
 
 #[test]
+fn relational_predicates_share_cq_parsing_checking_and_printing() {
+    use quote::ToTokens;
+    for predicate in [
+        "x == 1",
+        "x != constants.excluded",
+        "x < limit",
+        "x <= 10",
+        "x > 0",
+        "x >= 0",
+        "x in [1, 2, 3]",
+        "x in 0..10",
+        "x in 0..=10",
+        "x == y",
+        "x >= 0 && x < 10",
+        "x == 1 || x == 3",
+        "x == closed_host_value()",
+    ] {
+        let source = format!(
+            "struct P; relation E(x:i32,y:i32) = (e); relation A(x:i32); output A; A(*x) :- E(x,y), where {predicate};"
+        );
+        let program: Program = syn::parse_str(&source).unwrap();
+        contract::check(&program).unwrap();
+        let printed = program.to_token_stream();
+        assert!(printed.to_string().contains("where"), "{predicate}");
+        assert_eq!(program, syn::parse2(printed).unwrap());
+    }
+}
+
+#[test]
 fn aggregates_and_nested_blocks_are_rejected_at_the_source_boundary() {
     for body in [
         "E(x), agg n = count(y) in E(y)",
@@ -39,7 +68,7 @@ fn aggregates_and_nested_blocks_are_rejected_at_the_source_boundary() {
 fn recursive_heads_accept_computations_and_let_bindings_in_seeds_and_steps() {
     for head in ["*x + 1", "42", "owned", "*x"] {
         let source = format!(
-            "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A({head}) :- E(x), let owned = *x + 1; A({head}) :- A(x), if *x < 10, let owned = *x + 1;"
+            "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A({head}) :- E(x), let owned = *x + 1; A({head}) :- A(x), where x < 10, let owned = *x + 1;"
         );
         let program: Program = syn::parse_str(&source).unwrap();
         contract::check(&program).unwrap();
@@ -240,9 +269,9 @@ fn reusable_query_context_preserves_full_schema_projection() {
         relation A(x:i32);
         relation __cq_datalog_checked_head_0(x:i32);
         output A;
-        A(*x) :- E(x), if *x > 0;
+        A(*x) :- E(x), where x > 0;
         A(1) :- Text(s), if s.starts_with("a");
-        A(*x) :- A(x), if *x < 10;
+        A(*x) :- A(x), where x < 10;
     };
     let mut checker = QueryChecker::new(&program, &program.declarations);
     for rule in &program.rules {

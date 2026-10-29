@@ -1,8 +1,11 @@
+//! String columns use load-time sorted dictionary codes throughout query execution.
 //! TPC-H Q11 German stock values above 0.0001 of the German total, unordered.
 //! Per-part and global sums independently consume the same non-aggregate matches;
 //! the final CQ joins their results and applies the original threshold exactly.
 //! Supply costs and output values are scale-two integer coefficients.
 use cq_load::Decimal;
+
+use cq_load::StringCode;
 
 pub const NAME: &str = "retail_h11";
 
@@ -25,41 +28,48 @@ HAVING SUM(ps_supplycost * ps_availqty) >
 
 pub type Partsupp = (i64, i64, i64, Decimal);
 pub type Supplier = (i64, i32);
-pub type Nation = (i32, String);
+pub type Nation = (i32, StringCode);
 pub type Answer = (i64, i64);
 pub struct Data {
     pub partsupp: Vec<Partsupp>,
     pub supplier: Vec<Supplier>,
     pub nation: Vec<Nation>,
+    pub dictionaries: cq_load::Dictionaries,
 }
 
-mini_linq::relation_loaders! {
+mini_linq::interned_relation_loaders! {
     relation Partsupp(ps_partkey: i64, ps_suppkey: i64, ps_availqty: i64, ps_supplycost: Decimal);
     relation Supplier(s_suppkey: i64, s_nationkey: i32);
-    relation Nation(n_nationkey: i32, n_name: String);
+    relation Nation(n_nationkey: i32, n_name: StringCode);
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
     assert!(CONFIGS.contains(&config), "unknown H11 configuration");
+    let mut dictionaries = cq_load::Dictionaries::default();
     Ok(Data {
-        partsupp: <relation_loader!(Partsupp)>::parquet(
+        partsupp: <relation_loader!(Partsupp)>::parquet_interned(
             root.join("partsupp.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
-        supplier: <relation_loader!(Supplier)>::parquet(
+        supplier: <relation_loader!(Supplier)>::parquet_interned(
             root.join("supplier.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
-        nation: <relation_loader!(Nation)>::parquet(
+        nation: <relation_loader!(Nation)>::parquet_interned(
             root.join("nation.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
+        dictionaries,
     })
 }
 
 crate::tpch_runtime::standalone_configs! { $;
     pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
         assert!(CONFIGS.contains(&config), "unknown H11 configuration");
+        let germany = data.dictionaries.literal("n_name", "GERMANY");
         let Partsupp = data.partsupp.as_slice();
         let Supplier = data.supplier.as_slice();
         let Nation = data.nation.as_slice();
@@ -68,12 +78,12 @@ crate::tpch_runtime::standalone_configs! { $;
             struct Matches;
             relation Partsupp(ps_partkey: i64, ps_suppkey: i64, ps_availqty: i64, ps_supplycost: Decimal);
             relation Supplier(s_suppkey: i64, s_nationkey: i32);
-            relation Nation(n_nationkey: i32, n_name: String);
+            relation Nation(n_nationkey: i32, n_name: StringCode);
             relation answer(part_key: i64, supplier_key: i64, quantity: i64, cost_units: i64);
             answer(*part_key, *supplier_key, *quantity, *cost_units) :-
                 Partsupp(part_key, supplier_key, quantity, cost),
                 Supplier(supplier_key, nation_key), Nation(nation_key, nation_name),
-                if nation_name == "GERMANY",
+                where nation_name == germany,
                 let cost_units: i64 = cost.scaled();
         }.collect();
         let Stock = Stock.as_slice();

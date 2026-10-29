@@ -1,0 +1,2393 @@
+{
+  "queries": {
+    "retail_h15": {
+      "samples": [
+        {
+          "head": {
+            "0": {
+              "events": {
+                "instructions": 5347087628.0,
+                "cycles": 2690710438.0,
+                "branch-misses": 26126081.0,
+                "cache-misses": 21429690.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 6904711198.0,
+                "cycles": 4549803510.0,
+                "branch-misses": 39396568.0,
+                "cache-misses": 50946314.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 521.798214,
+                "median_ms": 36.643236,
+                "peak_rss_kib": 321988,
+                "samples_ms": [
+                  36.184256999999995,
+                  36.44194,
+                  36.493871,
+                  36.508018,
+                  36.560237,
+                  36.643236,
+                  36.661962,
+                  36.67128,
+                  36.774518,
+                  37.21935,
+                  45.609786
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 141602142.72727272,
+              "cycles": 169008461.0909091,
+              "branch-misses": 1206407.9090909092,
+              "cache-misses": 2683329.4545454546
+            }
+          },
+          "new": {
+            "0": {
+              "events": {
+                "instructions": 5421704877.0,
+                "cycles": 2799547118.0,
+                "branch-misses": 26289481.0,
+                "cache-misses": 22461527.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 7121891809.0,
+                "cycles": 4869307914.0,
+                "branch-misses": 39589865.0,
+                "cache-misses": 50278882.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 543.474845,
+                "median_ms": 40.077917,
+                "peak_rss_kib": 322752,
+                "samples_ms": [
+                  39.279406,
+                  39.338901,
+                  39.551148,
+                  39.565966,
+                  39.584121,
+                  40.077917,
+                  40.297847999999995,
+                  40.399302999999996,
+                  40.819548,
+                  43.233834,
+                  52.15718
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 154562448.36363637,
+              "cycles": 188160072.36363637,
+              "branch-misses": 1209125.8181818181,
+              "cache-misses": 2528850.4545454546
+            }
+          }
+        },
+        {
+          "head": {
+            "11": {
+              "events": {
+                "instructions": 6902700341.0,
+                "cycles": 4536208206.0,
+                "branch-misses": 39519190.0,
+                "cache-misses": 50526131.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 518.489735,
+                "median_ms": 36.279409,
+                "peak_rss_kib": 321912,
+                "samples_ms": [
+                  35.884803,
+                  35.971339,
+                  36.156704,
+                  36.24319,
+                  36.266645,
+                  36.279409,
+                  36.312132,
+                  36.521263,
+                  37.057950999999996,
+                  37.144216,
+                  48.211781
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 5348276040.0,
+                "cycles": 2675384214.0,
+                "branch-misses": 26171763.0,
+                "cache-misses": 22260433.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 141311300.0909091,
+              "cycles": 169165817.45454547,
+              "branch-misses": 1213402.4545454546,
+              "cache-misses": 2569608.909090909
+            }
+          },
+          "new": {
+            "11": {
+              "events": {
+                "instructions": 7122516861.0,
+                "cycles": 4801095316.0,
+                "branch-misses": 39522665.0,
+                "cache-misses": 49769405.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 542.869655,
+                "median_ms": 39.331157,
+                "peak_rss_kib": 322720,
+                "samples_ms": [
+                  38.803696,
+                  38.89502,
+                  39.032683999999996,
+                  39.203561,
+                  39.270781,
+                  39.331157,
+                  39.341736000000004,
+                  39.358068,
+                  39.532813,
+                  40.392860000000006,
+                  51.932098
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 5418324934.0,
+                "cycles": 2762407446.0,
+                "branch-misses": 26314863.0,
+                "cache-misses": 23214258.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 154926538.8181818,
+              "cycles": 185335260.9090909,
+              "branch-misses": 1200709.2727272727,
+              "cache-misses": 2414104.272727273
+            }
+          }
+        },
+        {
+          "head": {
+            "0": {
+              "events": {
+                "instructions": 5343427508.0,
+                "cycles": 2674540207.0,
+                "branch-misses": 26088075.0,
+                "cache-misses": 22268695.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 6909063654.0,
+                "cycles": 4488937427.0,
+                "branch-misses": 39597182.0,
+                "cache-misses": 48427237.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 516.990412,
+                "median_ms": 35.979344000000005,
+                "peak_rss_kib": 321952,
+                "samples_ms": [
+                  35.647348,
+                  35.852572,
+                  35.859324,
+                  35.892568,
+                  35.91965,
+                  35.979344000000005,
+                  36.288908,
+                  36.407795,
+                  36.958179,
+                  36.963128999999995,
+                  47.304282
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 142330558.72727272,
+              "cycles": 164945201.8181818,
+              "branch-misses": 1228100.6363636365,
+              "cache-misses": 2378049.272727273
+            }
+          },
+          "new": {
+            "0": {
+              "events": {
+                "instructions": 5424128159.0,
+                "cycles": 2759675877.0,
+                "branch-misses": 26343074.0,
+                "cache-misses": 22089661.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 7124658363.0,
+                "cycles": 4782190946.0,
+                "branch-misses": 39641076.0,
+                "cache-misses": 49385934.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 534.5834990000001,
+                "median_ms": 39.832676,
+                "peak_rss_kib": 322672,
+                "samples_ms": [
+                  39.247837000000004,
+                  39.301500000000004,
+                  39.358679,
+                  39.510309,
+                  39.688411,
+                  39.832676,
+                  39.869277000000004,
+                  39.916748,
+                  41.35838,
+                  42.975598,
+                  47.827835
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 154593654.9090909,
+              "cycles": 183865006.27272728,
+              "branch-misses": 1208909.2727272727,
+              "cache-misses": 2481479.3636363638
+            }
+          }
+        },
+        {
+          "head": {
+            "11": {
+              "events": {
+                "instructions": 6903976524.0,
+                "cycles": 4539378998.0,
+                "branch-misses": 39372228.0,
+                "cache-misses": 50547567.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 520.9024559999999,
+                "median_ms": 36.470324999999995,
+                "peak_rss_kib": 321988,
+                "samples_ms": [
+                  36.088363,
+                  36.173035999999996,
+                  36.238872,
+                  36.255523999999994,
+                  36.336288,
+                  36.470324999999995,
+                  36.501214,
+                  36.53044,
+                  36.846035,
+                  37.117565,
+                  45.65395
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 5344969908.0,
+                "cycles": 2664964690.0,
+                "branch-misses": 26184331.0,
+                "cache-misses": 22315315.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 141727874.1818182,
+              "cycles": 170401300.72727272,
+              "branch-misses": 1198899.7272727273,
+              "cache-misses": 2566568.3636363638
+            }
+          },
+          "new": {
+            "11": {
+              "events": {
+                "instructions": 7118320852.0,
+                "cycles": 4804803596.0,
+                "branch-misses": 39551905.0,
+                "cache-misses": 50062462.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 535.8921760000001,
+                "median_ms": 39.905947,
+                "peak_rss_kib": 322668,
+                "samples_ms": [
+                  39.284416,
+                  39.471014,
+                  39.51071099999999,
+                  39.581696,
+                  39.743165,
+                  39.905947,
+                  39.938921,
+                  40.151016999999996,
+                  40.517739,
+                  41.045611,
+                  48.873489
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 5423242827.0,
+                "cycles": 2743449883.0,
+                "branch-misses": 26310922.0,
+                "cache-misses": 21059719.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 154098002.27272728,
+              "cycles": 187395792.0909091,
+              "branch-misses": 1203725.7272727273,
+              "cache-misses": 2636613.0
+            }
+          }
+        },
+        {
+          "head": {
+            "0": {
+              "events": {
+                "instructions": 5344249278.0,
+                "cycles": 2655221993.0,
+                "branch-misses": 26157363.0,
+                "cache-misses": 22451091.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 6903378319.0,
+                "cycles": 4543103926.0,
+                "branch-misses": 39395152.0,
+                "cache-misses": 50388937.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 522.403783,
+                "median_ms": 36.448232999999995,
+                "peak_rss_kib": 321916,
+                "samples_ms": [
+                  35.953284000000004,
+                  36.089405,
+                  36.179277000000006,
+                  36.201099,
+                  36.377507,
+                  36.448232999999995,
+                  36.56167,
+                  36.658015,
+                  36.68983600000001,
+                  37.595861,
+                  46.153257
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 141739003.72727272,
+              "cycles": 171625630.27272728,
+              "branch-misses": 1203435.3636363635,
+              "cache-misses": 2539804.1818181816
+            }
+          },
+          "new": {
+            "0": {
+              "events": {
+                "instructions": 5418016734.0,
+                "cycles": 2739681501.0,
+                "branch-misses": 26338545.0,
+                "cache-misses": 20563315.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 7117672624.0,
+                "cycles": 4765381131.0,
+                "branch-misses": 39567010.0,
+                "cache-misses": 48362102.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 537.369196,
+                "median_ms": 39.480703,
+                "peak_rss_kib": 322684,
+                "samples_ms": [
+                  38.701049000000005,
+                  39.117627,
+                  39.171521,
+                  39.423162,
+                  39.47947,
+                  39.480703,
+                  39.521701,
+                  39.850361,
+                  40.009225,
+                  40.646276,
+                  47.680082
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 154514171.8181818,
+              "cycles": 184154511.8181818,
+              "branch-misses": 1202587.7272727273,
+              "cache-misses": 2527162.4545454546
+            }
+          }
+        },
+        {
+          "head": {
+            "11": {
+              "events": {
+                "instructions": 6908908411.0,
+                "cycles": 4513668723.0,
+                "branch-misses": 39370119.0,
+                "cache-misses": 50042295.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 519.4649019999999,
+                "median_ms": 36.344404,
+                "peak_rss_kib": 322020,
+                "samples_ms": [
+                  36.000605,
+                  36.213733,
+                  36.27992,
+                  36.297804000000006,
+                  36.342439999999996,
+                  36.344404,
+                  36.410841,
+                  36.458071000000004,
+                  36.531592,
+                  36.826266000000004,
+                  46.970011
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 5344497828.0,
+                "cycles": 2646724184.0,
+                "branch-misses": 26202077.0,
+                "cache-misses": 20935098.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 142219143.9090909,
+              "cycles": 169722230.8181818,
+              "branch-misses": 1197094.7272727273,
+              "cache-misses": 2646108.8181818184
+            }
+          },
+          "new": {
+            "11": {
+              "events": {
+                "instructions": 7119111902.0,
+                "cycles": 4784019742.0,
+                "branch-misses": 39522481.0,
+                "cache-misses": 49142017.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 538.9162,
+                "median_ms": 39.439704,
+                "peak_rss_kib": 322728,
+                "samples_ms": [
+                  39.085024000000004,
+                  39.209934000000004,
+                  39.360451999999995,
+                  39.377525,
+                  39.438973000000004,
+                  39.439704,
+                  39.581144,
+                  39.617224,
+                  39.901699,
+                  40.214949,
+                  48.396424
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 5417180567.0,
+                "cycles": 2765832041.0,
+                "branch-misses": 26305978.0,
+                "cache-misses": 22200927.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 154721030.45454547,
+              "cycles": 183471609.1818182,
+              "branch-misses": 1201500.2727272727,
+              "cache-misses": 2449190.0
+            }
+          }
+        },
+        {
+          "head": {
+            "0": {
+              "events": {
+                "instructions": 5345118286.0,
+                "cycles": 2662307195.0,
+                "branch-misses": 26124971.0,
+                "cache-misses": 22399722.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 6903146979.0,
+                "cycles": 4564471191.0,
+                "branch-misses": 39365082.0,
+                "cache-misses": 50577049.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 518.208625,
+                "median_ms": 36.874479,
+                "peak_rss_kib": 321928,
+                "samples_ms": [
+                  36.395752,
+                  36.532444,
+                  36.541621000000006,
+                  36.672852,
+                  36.760551,
+                  36.874479,
+                  36.901090999999994,
+                  36.990251,
+                  37.145398,
+                  37.942105,
+                  49.435485
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 141638972.0909091,
+              "cycles": 172923999.63636363,
+              "branch-misses": 1203646.4545454546,
+              "cache-misses": 2561575.1818181816
+            }
+          },
+          "new": {
+            "0": {
+              "events": {
+                "instructions": 5416119888.0,
+                "cycles": 2763738775.0,
+                "branch-misses": 26381842.0,
+                "cache-misses": 22823230.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 7119068526.0,
+                "cycles": 4727923763.0,
+                "branch-misses": 39565095.0,
+                "cache-misses": 48796333.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 534.573568,
+                "median_ms": 38.810207,
+                "peak_rss_kib": 322668,
+                "samples_ms": [
+                  38.550329,
+                  38.588232,
+                  38.637978000000004,
+                  38.642837,
+                  38.645272,
+                  38.810207,
+                  38.836918999999995,
+                  39.065277,
+                  39.342296999999995,
+                  39.414115,
+                  50.484545
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 154813512.54545453,
+              "cycles": 178562271.63636363,
+              "branch-misses": 1198477.5454545454,
+              "cache-misses": 2361191.1818181816
+            }
+          }
+        },
+        {
+          "head": {
+            "11": {
+              "events": {
+                "instructions": 6904558013.0,
+                "cycles": 4522892245.0,
+                "branch-misses": 39481642.0,
+                "cache-misses": 50384644.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 520.7986070000001,
+                "median_ms": 36.274299000000006,
+                "peak_rss_kib": 321928,
+                "samples_ms": [
+                  35.789951,
+                  36.177434,
+                  36.216428,
+                  36.254992,
+                  36.255722999999996,
+                  36.274299000000006,
+                  36.333743,
+                  36.402935,
+                  36.538635,
+                  37.06818,
+                  46.070217
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 5345411743.0,
+                "cycles": 2664383650.0,
+                "branch-misses": 26297139.0,
+                "cache-misses": 22182861.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 141740570.0,
+              "cycles": 168955326.8181818,
+              "branch-misses": 1198591.1818181819,
+              "cache-misses": 2563798.4545454546
+            }
+          },
+          "new": {
+            "11": {
+              "events": {
+                "instructions": 7120463920.0,
+                "cycles": 4782610633.0,
+                "branch-misses": 39537812.0,
+                "cache-misses": 48273071.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 535.143641,
+                "median_ms": 39.702928,
+                "peak_rss_kib": 322656,
+                "samples_ms": [
+                  39.430997000000005,
+                  39.495671,
+                  39.521681,
+                  39.528374,
+                  39.698949999999996,
+                  39.702928,
+                  39.705312,
+                  39.729669,
+                  39.738487000000006,
+                  40.517639,
+                  50.535022
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 5418288402.0,
+                "cycles": 2749607424.0,
+                "branch-misses": 26271593.0,
+                "cache-misses": 22348227.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 154743228.9090909,
+              "cycles": 184818473.54545453,
+              "branch-misses": 1206019.9090909092,
+              "cache-misses": 2356804.0
+            }
+          }
+        },
+        {
+          "head": {
+            "0": {
+              "events": {
+                "instructions": 5345496444.0,
+                "cycles": 2638500543.0,
+                "branch-misses": 26060843.0,
+                "cache-misses": 20362405.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 6905384405.0,
+                "cycles": 4551047782.0,
+                "branch-misses": 39478886.0,
+                "cache-misses": 49173323.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 520.7822359999999,
+                "median_ms": 37.139607,
+                "peak_rss_kib": 321896,
+                "samples_ms": [
+                  36.559516,
+                  36.602067000000005,
+                  36.65542,
+                  36.804966,
+                  36.921589,
+                  37.139607,
+                  37.148714,
+                  37.172841,
+                  37.462806,
+                  37.656338,
+                  46.726355
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 141807996.45454547,
+              "cycles": 173867930.8181818,
+              "branch-misses": 1219822.0909090908,
+              "cache-misses": 2619174.3636363638
+            }
+          },
+          "new": {
+            "0": {
+              "events": {
+                "instructions": 5418104842.0,
+                "cycles": 2758796429.0,
+                "branch-misses": 26387627.0,
+                "cache-misses": 22143711.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 7119916861.0,
+                "cycles": 4740159450.0,
+                "branch-misses": 39616670.0,
+                "cache-misses": 48446896.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 535.683315,
+                "median_ms": 39.385269,
+                "peak_rss_kib": 322700,
+                "samples_ms": [
+                  38.840827000000004,
+                  39.066409,
+                  39.190636,
+                  39.227998,
+                  39.341786,
+                  39.385269,
+                  39.644016,
+                  39.660767,
+                  39.666078,
+                  39.894996,
+                  47.753012
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 154710183.54545453,
+              "cycles": 180123911.0,
+              "branch-misses": 1202640.2727272727,
+              "cache-misses": 2391198.6363636362
+            }
+          }
+        },
+        {
+          "head": {
+            "11": {
+              "events": {
+                "instructions": 6905334605.0,
+                "cycles": 4536225187.0,
+                "branch-misses": 39348597.0,
+                "cache-misses": 50295477.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 518.758147,
+                "median_ms": 36.622146,
+                "peak_rss_kib": 321928,
+                "samples_ms": [
+                  36.0187,
+                  36.254801,
+                  36.318824,
+                  36.398016999999996,
+                  36.432984000000005,
+                  36.622146,
+                  36.913264,
+                  36.920466999999995,
+                  37.263936,
+                  38.131487,
+                  46.474312
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 5343815300.0,
+                "cycles": 2674760265.0,
+                "branch-misses": 26191425.0,
+                "cache-misses": 21473001.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 141956300.45454547,
+              "cycles": 169224083.8181818,
+              "branch-misses": 1196106.5454545454,
+              "cache-misses": 2620225.090909091
+            }
+          },
+          "new": {
+            "11": {
+              "events": {
+                "instructions": 7119536318.0,
+                "cycles": 4811324461.0,
+                "branch-misses": 39580170.0,
+                "cache-misses": 48460528.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "load_ms": 536.254108,
+                "median_ms": 39.888443,
+                "peak_rss_kib": 322700,
+                "samples_ms": [
+                  39.445876,
+                  39.587987999999996,
+                  39.788732,
+                  39.791909,
+                  39.825323000000004,
+                  39.888443,
+                  40.284212,
+                  41.492527,
+                  41.826988,
+                  42.216885000000005,
+                  48.921521000000006
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 5416946251.0,
+                "cycles": 2762939442.0,
+                "branch-misses": 26321133.0,
+                "cache-misses": 22733104.0
+              },
+              "metrics": {
+                "answer_rows": 1,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 154780915.1818182,
+              "cycles": 186216819.9090909,
+              "branch-misses": 1205367.0,
+              "cache-misses": 2338856.727272727
+            }
+          }
+        }
+      ],
+      "binaries": {
+        "head": "6a443fe7445642f8e5e2d80af5ad401a22276cb23800a9a9af5a557811ecff96",
+        "new": "e3bdaee44033a8543cd577017bd016143afe098920ec20950bebfb4b5e87f691"
+      },
+      "summary": {
+        "instructions": {
+          "head_mean": 141807386.23636365,
+          "new_mean": 154646368.6818182,
+          "head_stdev": 297672.8411026702,
+          "new_stdev": 228902.41707670136,
+          "ratio_new_head": 1.0905381784842618,
+          "delta_percent": 9.053817848426181,
+          "ratio_ci95": [
+            1.0888295914964352,
+            1.0923343675257224
+          ]
+        },
+        "cycles": {
+          "head_mean": 169983998.3272727,
+          "new_mean": 184210372.87272727,
+          "head_stdev": 2479075.914134843,
+          "new_stdev": 2994001.3999586618,
+          "ratio_new_head": 1.0836924339081866,
+          "delta_percent": 8.36924339081866,
+          "ratio_ci95": [
+            1.0656214227586447,
+            1.099698252591983
+          ]
+        },
+        "branch-misses": {
+          "head_mean": 1206550.709090909,
+          "new_mean": 1203906.2818181817,
+          "head_stdev": 10677.20085873531,
+          "new_stdev": 3459.7605275626847,
+          "ratio_new_head": 0.9978082750664332,
+          "delta_percent": -0.21917249335667854,
+          "ratio_ci95": [
+            0.9926697662959343,
+            1.0025837385705942
+          ]
+        },
+        "cache-misses": {
+          "head_mean": 2574824.209090909,
+          "new_mean": 2448545.0090909093,
+          "head_stdev": 82477.13506636192,
+          "new_stdev": 95241.04978031814,
+          "ratio_new_head": 0.9509561858420676,
+          "delta_percent": -4.904381415793235,
+          "ratio_ci95": [
+            0.9238153839857808,
+            0.9830736626140755
+          ]
+        }
+      },
+      "annotation_evidence": {
+        "dedup_insert_equal_after_relocation_normalization": true,
+        "dedup_insert_instructions": 181,
+        "group_hash_old": {
+          "symbol": "_RINvYNtNtNtCs2AWtUsOyxgP_3std4hash6random11RandomStateNtNtCs4NRVxsYgnAr_4core4hash11BuildHasher8hash_oneRTRxEECshy2E8w908Ah_23tpch_derived_retail_h15",
+          "annotation": " Percent |\tSource code & Disassembly of timing-worker for instructions:u (65 samples, percent: local period)\n-----------------------------------------------------------------------------------------------------------------\n         :\n         :\n         :\n         : 3      Disassembly of section .text:\n         :\n         : 5      000000000027fe80 <<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&(&i64,)>>:\n    7.69 :   27fe80: mov    (%rdi),%rax\n    0.00 :   27fe83: mov    0x8(%rdi),%r9\n    0.00 :   27fe87: movabs $0x736f6d6570736575,%rdx\n    0.00 :   27fe91: xor    %rax,%rdx\n    0.00 :   27fe94: movabs $0x646f72616e646f6d,%rcx\n    0.00 :   27fe9e: xor    %r9,%rcx\n    3.08 :   27fea1: movabs $0x6c7967656e657261,%r8\n    4.62 :   27feab: xor    %rax,%r8\n    0.00 :   27feae: mov    (%rsi),%rax\n    1.54 :   27feb1: mov    (%rax),%rax\n    0.00 :   27feb4: movabs $0x7465646279746573,%rdi\n    0.00 :   27febe: xor    %r9,%rdi\n    0.00 :   27fec1: xor    %rax,%rdi\n    0.00 :   27fec4: add    %rdi,%r8\n    3.08 :   27fec7: rol    $0x10,%rdi\n    7.69 :   27fecb: xor    %r8,%rdi\n    0.00 :   27fece: add    %rcx,%rdx\n    1.54 :   27fed1: rol    $0xd,%rcx\n    0.00 :   27fed5: xor    %rdx,%rcx\n    0.00 :   27fed8: rol    $0x20,%rdx\n    0.00 :   27fedc: add    %rdi,%rdx\n    0.00 :   27fedf: xor    %rdx,%rax\n    3.08 :   27fee2: add    %rcx,%r8\n    4.62 :   27fee5: rol    $0x11,%rcx\n    0.00 :   27fee9: xor    %r8,%rcx\n    1.54 :   27feec: mov    %r8,%rsi\n    0.00 :   27feef: rol    $0x20,%rsi\n    0.00 :   27fef3: rol    $0x15,%rdi\n    0.00 :   27fef7: movabs $0x800000000000000,%r8\n    0.00 :   27ff01: xor    %r8,%rdx\n    1.54 :   27ff04: xor    %rdi,%rdx\n    9.23 :   27ff07: add    %rcx,%rax\n    0.00 :   27ff0a: rol    $0xd,%rcx\n    0.00 :   27ff0e: add    %rdx,%rsi\n    0.00 :   27ff11: xor    %rax,%rcx\n    0.00 :   27ff14: rol    $0x10,%rdx\n    0.00 :   27ff18: xor    %rsi,%rdx\n    0.00 :   27ff1b: rol    $0x20,%rax\n    1.54 :   27ff1f: add    %rcx,%rsi\n    4.62 :   27ff22: add    %rdx,%rax\n    0.00 :   27ff25: rol    $0x11,%rcx\n    0.00 :   27ff29: xor    %rsi,%rcx\n    0.00 :   27ff2c: rol    $0x15,%rdx\n    0.00 :   27ff30: rol    $0x20,%rsi\n    0.00 :   27ff34: xor    %rax,%rdx\n    0.00 :   27ff37: xor    %r8,%rax\n    0.00 :   27ff3a: xor    $0xff,%rsi\n    7.69 :   27ff41: add    %rcx,%rax\n    0.00 :   27ff44: add    %rdx,%rsi\n    0.00 :   27ff47: rol    $0xd,%rcx\n    0.00 :   27ff4b: xor    %rax,%rcx\n    0.00 :   27ff4e: rol    $0x10,%rdx\n    0.00 :   27ff52: rol    $0x20,%rax\n    0.00 :   27ff56: xor    %rsi,%rdx\n    0.00 :   27ff59: add    %rcx,%rsi\n    1.54 :   27ff5c: rol    $0x11,%rcx\n    0.00 :   27ff60: add    %rdx,%rax\n    4.62 :   27ff63: xor    %rsi,%rcx\n    0.00 :   27ff66: rol    $0x15,%rdx\n    0.00 :   27ff6a: xor    %rax,%rdx\n    0.00 :   27ff6d: rol    $0x20,%rsi\n    0.00 :   27ff71: add    %rcx,%rax\n    0.00 :   27ff74: add    %rdx,%rsi\n    9.23 :   27ff77: rol    $0xd,%rcx\n    0.00 :   27ff7b: xor    %rax,%rcx\n    0.00 :   27ff7e: rol    $0x10,%rdx\n    0.00 :   27ff82: rol    $0x20,%rax\n    0.00 :   27ff86: xor    %rsi,%rdx\n    0.00 :   27ff89: add    %rcx,%rsi\n    0.00 :   27ff8c: rol    $0x11,%rcx\n    0.00 :   27ff90: add    %rdx,%rax\n    3.08 :   27ff93: xor    %rsi,%rcx\n    0.00 :   27ff96: rol    $0x15,%rdx\n    1.54 :   27ff9a: xor    %rax,%rdx\n    0.00 :   27ff9d: rol    $0x20,%rsi\n    0.00 :   27ffa1: add    %rcx,%rax\n    0.00 :   27ffa4: add    %rdx,%rsi\n    0.00 :   27ffa7: rol    $0xd,%rcx\n    4.62 :   27ffab: xor    %rax,%rcx\n    4.62 :   27ffae: rol    $0x10,%rdx\n    0.00 :   27ffb2: xor    %rsi,%rdx\n    0.00 :   27ffb5: add    %rcx,%rsi\n    0.00 :   27ffb8: rol    $0x11,%rcx\n    0.00 :   27ffbc: rol    $0x15,%rdx\n    0.00 :   27ffc0: mov    %rsi,%rax\n    0.00 :   27ffc3: rol    $0x20,%rax\n    0.00 :   27ffc7: xor    %rcx,%rax\n    7.69 :   27ffca: xor    %rdx,%rax\n    0.00 :   27ffcd: xor    %rsi,%rax\n    0.00 :   27ffd0: ret\n",
+          "path": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/head/group_hash.annotate.txt"
+        },
+        "group_hash_new": {
+          "symbol": "_RINvYNtNtNtCs2AWtUsOyxgP_3std4hash6random11RandomStateNtNtCs4NRVxsYgnAr_4core4hash11BuildHasher8hash_oneRTRxEECsdWf8kMoEf8F_23tpch_derived_retail_h15",
+          "annotation": " Percent |\tSource code & Disassembly of timing-worker for instructions:u (108 samples, percent: local period)\n------------------------------------------------------------------------------------------------------------------\n         :\n         :\n         :\n         : 3      Disassembly of section .text:\n         :\n         : 5      0000000000256d50 <<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&(&i64,)>>:\n    2.78 :   256d50: sub    $0x58,%rsp\n    0.00 :   256d54: movdqu (%rdi),%xmm0\n    0.93 :   256d58: pshufd $0x44,%xmm0,%xmm1\n    0.00 :   256d5d: pxor   -0xdb4e5(%rip),%xmm1        # 17b880 <anon.6a9493e90e23c738bd19aa0c93eeb36f.161.llvm.6405242637333620871+0x2c0>\n    0.00 :   256d65: movdqa %xmm1,0x10(%rsp)\n    1.85 :   256d6b: pshufd $0xee,%xmm0,%xmm1\n    3.70 :   256d70: pxor   -0xdb988(%rip),%xmm1        # 17b3f0 <anon.2ecf1e25af912d92e504dd3f6c73a9b0.14.llvm.8169313744136071729+0x500>\n    0.00 :   256d78: movdqa %xmm1,0x20(%rsp)\n    0.00 :   256d7e: movdqa %xmm0,0x30(%rsp)\n    0.00 :   256d84: pxor   %xmm0,%xmm0\n    0.00 :   256d88: movdqa %xmm0,0x40(%rsp)\n    0.00 :   256d8e: movq   $0x0,0x50(%rsp)\n    0.00 :   256d97: mov    (%rsi),%rax\n    3.70 :   256d9a: mov    (%rax),%rax\n   20.37 :   256d9d: mov    %rax,0x8(%rsp)\n    0.00 :   256da2: lea    0x10(%rsp),%rdi\n    0.93 :   256da7: lea    0x8(%rsp),%rsi\n    0.00 :   256dac: mov    $0x8,%edx\n    0.00 :   256db1: call   25a270 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280>\n    0.00 :   256db6: mov    0x40(%rsp),%rdi\n    2.78 :   256dbb: shl    $0x38,%rdi\n    0.00 :   256dbf: or     0x48(%rsp),%rdi\n    0.00 :   256dc4: mov    0x20(%rsp),%rdx\n    0.00 :   256dc9: mov    0x28(%rsp),%rcx\n    0.00 :   256dce: xor    %rdi,%rcx\n    2.78 :   256dd1: mov    0x10(%rsp),%rax\n    1.85 :   256dd6: add    %rdx,%rax\n    0.00 :   256dd9: mov    0x18(%rsp),%rsi\n    0.00 :   256dde: rol    $0xd,%rdx\n    0.00 :   256de2: add    %rcx,%rsi\n    1.85 :   256de5: xor    %rax,%rdx\n    0.00 :   256de8: rol    $0x10,%rcx\n    0.00 :   256dec: xor    %rsi,%rcx\n    3.70 :   256def: rol    $0x20,%rax\n    1.85 :   256df3: add    %rdx,%rsi\n    0.93 :   256df6: add    %rcx,%rax\n    0.00 :   256df9: rol    $0x11,%rdx\n    0.00 :   256dfd: xor    %rsi,%rdx\n    1.85 :   256e00: rol    $0x15,%rcx\n    0.00 :   256e04: rol    $0x20,%rsi\n    0.00 :   256e08: xor    %rax,%rcx\n    0.93 :   256e0b: xor    %rdi,%rax\n    4.63 :   256e0e: xor    $0xff,%rsi\n    1.85 :   256e15: add    %rdx,%rax\n    0.00 :   256e18: add    %rcx,%rsi\n    0.00 :   256e1b: rol    $0xd,%rdx\n    0.00 :   256e1f: xor    %rax,%rdx\n    0.00 :   256e22: rol    $0x10,%rcx\n    0.00 :   256e26: rol    $0x20,%rax\n    0.00 :   256e2a: xor    %rsi,%rcx\n    4.63 :   256e2d: add    %rdx,%rsi\n    0.00 :   256e30: rol    $0x11,%rdx\n    0.00 :   256e34: add    %rcx,%rax\n    4.63 :   256e37: xor    %rsi,%rdx\n    0.00 :   256e3a: rol    $0x15,%rcx\n    0.00 :   256e3e: xor    %rax,%rcx\n    0.93 :   256e41: rol    $0x20,%rsi\n    0.00 :   256e45: add    %rdx,%rax\n    2.78 :   256e48: add    %rcx,%rsi\n    3.70 :   256e4b: rol    $0xd,%rdx\n    0.00 :   256e4f: xor    %rax,%rdx\n    0.93 :   256e52: rol    $0x10,%rcx\n    0.00 :   256e56: rol    $0x20,%rax\n    0.00 :   256e5a: xor    %rsi,%rcx\n    0.00 :   256e5d: add    %rdx,%rsi\n    2.78 :   256e60: rol    $0x11,%rdx\n    0.93 :   256e64: add    %rcx,%rax\n    0.00 :   256e67: xor    %rsi,%rdx\n    0.93 :   256e6a: rol    $0x15,%rcx\n    0.00 :   256e6e: xor    %rax,%rcx\n    3.70 :   256e71: rol    $0x20,%rsi\n    0.00 :   256e75: add    %rdx,%rax\n    0.00 :   256e78: add    %rcx,%rsi\n    1.85 :   256e7b: rol    $0xd,%rdx\n    0.93 :   256e7f: xor    %rax,%rdx\n    0.00 :   256e82: rol    $0x10,%rcx\n    0.00 :   256e86: xor    %rsi,%rcx\n    1.85 :   256e89: add    %rdx,%rsi\n    0.00 :   256e8c: rol    $0x11,%rdx\n    0.00 :   256e90: rol    $0x15,%rcx\n    2.78 :   256e94: mov    %rsi,%rax\n    0.00 :   256e97: rol    $0x20,%rax\n    0.00 :   256e9b: xor    %rdx,%rax\n    2.78 :   256e9e: xor    %rcx,%rax\n    2.78 :   256ea1: xor    %rsi,%rax\n    1.85 :   256ea4: add    $0x58,%rsp\n    0.00 :   256ea8: ret\n",
+          "path": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/new/group_hash.annotate.txt"
+        },
+        "outlined_writer_new": {
+          "symbol": "_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280",
+          "annotation": " Percent |\tSource code & Disassembly of timing-worker for instructions:u (44 samples, percent: local period)\n-----------------------------------------------------------------------------------------------------------------\n         :\n         :\n         :\n         : 3      Disassembly of section .text:\n         :\n         : 5      000000000025a270 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280>:\n    0.00 :   25a270: push   %rbx\n    9.09 :   25a271: add    %rdx,0x30(%rdi)\n    4.55 :   25a275: mov    0x40(%rdi),%r9\n    0.00 :   25a279: test   %r9,%r9\n    0.00 :   25a27c: je     25a2ad <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x3d>\n    0.00 :   25a27e: mov    $0x8,%r8d\n    0.00 :   25a284: sub    %r9,%r8\n    0.00 :   25a287: cmp    %rdx,%r8\n    0.00 :   25a28a: mov    %rdx,%r11\n    0.00 :   25a28d: cmovb  %r8,%r11\n    0.00 :   25a291: cmp    $0x4,%r11\n    0.00 :   25a295: jb     25a2b5 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x45>\n    0.00 :   25a297: mov    (%rsi),%r10d\n    0.00 :   25a29a: mov    $0x4,%eax\n    0.00 :   25a29f: mov    %rax,%rcx\n    0.00 :   25a2a2: or     $0x1,%rcx\n    0.00 :   25a2a6: cmp    %r11,%rcx\n    0.00 :   25a2a9: jb     25a2c6 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x56>\n    0.00 :   25a2ab: jmp    25a2db <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x6b>\n    0.00 :   25a2ad: xor    %r8d,%r8d\n    0.00 :   25a2b0: jmp    25a365 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0xf5>\n    0.00 :   25a2b5: xor    %eax,%eax\n    0.00 :   25a2b7: xor    %r10d,%r10d\n    0.00 :   25a2ba: mov    %rax,%rcx\n    0.00 :   25a2bd: or     $0x1,%rcx\n    0.00 :   25a2c1: cmp    %r11,%rcx\n    0.00 :   25a2c4: jae    25a2db <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x6b>\n    0.00 :   25a2c6: movzwl (%rsi,%rax,1),%ebx\n    0.00 :   25a2ca: lea    0x0(,%rax,8),%ecx\n    0.00 :   25a2d1: shl    %cl,%rbx\n    0.00 :   25a2d4: or     %rbx,%r10\n    0.00 :   25a2d7: or     $0x2,%rax\n    0.00 :   25a2db: cmp    %r11,%rax\n    0.00 :   25a2de: jae    25a2f0 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x80>\n    0.00 :   25a2e0: movzbl (%rsi,%rax,1),%r11d\n    0.00 :   25a2e5: shl    $0x3,%eax\n    0.00 :   25a2e8: mov    %eax,%ecx\n    0.00 :   25a2ea: shl    %cl,%r11\n    0.00 :   25a2ed: or     %r11,%r10\n    0.00 :   25a2f0: lea    0x0(,%r9,8),%ecx\n    0.00 :   25a2f8: shl    %cl,%r10\n    0.00 :   25a2fb: or     0x38(%rdi),%r10\n    0.00 :   25a2ff: mov    %r10,0x38(%rdi)\n    0.00 :   25a303: cmp    %r8,%rdx\n    0.00 :   25a306: jae    25a311 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0xa1>\n    0.00 :   25a308: add    %rdx,%r9\n    0.00 :   25a30b: mov    %r9,0x40(%rdi)\n    0.00 :   25a30f: pop    %rbx\n    0.00 :   25a310: ret\n    0.00 :   25a311: mov    0x18(%rdi),%rax\n    0.00 :   25a315: xor    %r10,%rax\n    0.00 :   25a318: mov    0x10(%rdi),%r11\n    0.00 :   25a31c: mov    (%rdi),%rcx\n    0.00 :   25a31f: add    %r11,%rcx\n    0.00 :   25a322: mov    0x8(%rdi),%r9\n    0.00 :   25a326: add    %rax,%r9\n    0.00 :   25a329: rol    $0xd,%r11\n    0.00 :   25a32d: xor    %rcx,%r11\n    0.00 :   25a330: rol    $0x10,%rax\n    0.00 :   25a334: rol    $0x20,%rcx\n    0.00 :   25a338: xor    %r9,%rax\n    0.00 :   25a33b: add    %r11,%r9\n    0.00 :   25a33e: rol    $0x11,%r11\n    0.00 :   25a342: add    %rax,%rcx\n    0.00 :   25a345: xor    %r9,%r11\n    0.00 :   25a348: rol    $0x15,%rax\n    0.00 :   25a34c: mov    %r11,0x10(%rdi)\n    0.00 :   25a350: xor    %rcx,%rax\n    0.00 :   25a353: rol    $0x20,%r9\n    0.00 :   25a357: mov    %rax,0x18(%rdi)\n    0.00 :   25a35b: mov    %r9,0x8(%rdi)\n    0.00 :   25a35f: xor    %r10,%rcx\n    0.00 :   25a362: mov    %rcx,(%rdi)\n    0.00 :   25a365: sub    %r8,%rdx\n    0.00 :   25a368: mov    %edx,%r9d\n    0.00 :   25a36b: and    $0x7,%r9d\n    4.55 :   25a36f: and    $0xfffffffffffffff8,%rdx\n   11.36 :   25a373: cmp    %rdx,%r8\n    0.00 :   25a376: jae    25a3e2 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x172>\n    0.00 :   25a378: mov    (%rdi),%rax\n    0.00 :   25a37b: mov    0x8(%rdi),%rcx\n    0.00 :   25a37f: mov    0x18(%rdi),%r11\n    0.00 :   25a383: mov    0x10(%rdi),%r10\n    0.00 :   25a387: nopw   0x0(%rax,%rax,1)\n    0.00 :   25a390: mov    (%rsi,%r8,1),%rbx\n    4.55 :   25a394: xor    %rbx,%r11\n   11.36 :   25a397: add    %r10,%rax\n    0.00 :   25a39a: rol    $0xd,%r10\n    6.82 :   25a39e: add    %r11,%rcx\n    0.00 :   25a3a1: xor    %rax,%r10\n    0.00 :   25a3a4: rol    $0x10,%r11\n    0.00 :   25a3a8: xor    %rcx,%r11\n    0.00 :   25a3ab: rol    $0x20,%rax\n    6.82 :   25a3af: add    %r10,%rcx\n    9.09 :   25a3b2: add    %r11,%rax\n    2.27 :   25a3b5: rol    $0x11,%r10\n    0.00 :   25a3b9: xor    %rcx,%r10\n    0.00 :   25a3bc: rol    $0x15,%r11\n    0.00 :   25a3c0: rol    $0x20,%rcx\n    0.00 :   25a3c4: xor    %rax,%r11\n    0.00 :   25a3c7: xor    %rbx,%rax\n    2.27 :   25a3ca: add    $0x8,%r8\n   11.36 :   25a3ce: cmp    %rdx,%r8\n    0.00 :   25a3d1: jb     25a390 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x120>\n    0.00 :   25a3d3: mov    %r11,0x18(%rdi)\n    4.55 :   25a3d7: mov    %r10,0x10(%rdi)\n    0.00 :   25a3db: mov    %rcx,0x8(%rdi)\n    0.00 :   25a3df: mov    %rax,(%rdi)\n    0.00 :   25a3e2: cmp    $0x4,%r9d\n    0.00 :   25a3e6: jb     25a3fd <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x18d>\n    0.00 :   25a3e8: mov    (%rsi,%r8,1),%edx\n    0.00 :   25a3ec: mov    $0x4,%eax\n    0.00 :   25a3f1: mov    %eax,%ecx\n    0.00 :   25a3f3: or     $0x1,%ecx\n    0.00 :   25a3f6: cmp    %r9d,%ecx\n    0.00 :   25a3f9: jb     25a40b <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x19b>\n    0.00 :   25a3fb: jmp    25a425 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x1b5>\n    0.00 :   25a3fd: xor    %eax,%eax\n    2.27 :   25a3ff: xor    %edx,%edx\n    2.27 :   25a401: mov    %eax,%ecx\n    0.00 :   25a403: or     $0x1,%ecx\n    0.00 :   25a406: cmp    %r9d,%ecx\n    0.00 :   25a409: jae    25a425 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x1b5>\n    0.00 :   25a40b: lea    (%rsi,%r8,1),%rcx\n    0.00 :   25a40f: movzwl (%rax,%rcx,1),%r10d\n    0.00 :   25a414: lea    0x0(,%rax,8),%ecx\n    0.00 :   25a41b: shl    %cl,%r10\n    0.00 :   25a41e: or     %r10,%rdx\n    0.00 :   25a421: or     $0x2,%rax\n    0.00 :   25a425: cmp    %r9d,%eax\n    0.00 :   25a428: jae    25a43d <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsdWf8kMoEf8F_23tpch_derived_retail_h15.llvm.17876581381067533280+0x1cd>\n    0.00 :   25a42a: add    %rax,%r8\n    0.00 :   25a42d: movzbl (%rsi,%r8,1),%esi\n    0.00 :   25a432: shl    $0x3,%eax\n    0.00 :   25a435: mov    %eax,%ecx\n    0.00 :   25a437: shl    %cl,%rsi\n    0.00 :   25a43a: or     %rsi,%rdx\n    0.00 :   25a43d: mov    %rdx,0x38(%rdi)\n    0.00 :   25a441: mov    %r9,0x40(%rdi)\n    0.00 :   25a445: pop    %rbx\n    6.82 :   25a446: ret\n",
+          "path": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/new/sip_write.annotate.txt"
+        },
+        "annotation_paths": {
+          "head": {
+            "query": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/head/query.annotate.txt",
+            "dedup_insert": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/head/dedup_insert.annotate.txt",
+            "group_hash": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/head/group_hash.annotate.txt",
+            "group_rehash": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/head/group_rehash.annotate.txt"
+          },
+          "new": {
+            "query": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/new/query.annotate.txt",
+            "dedup_insert": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/new/dedup_insert.annotate.txt",
+            "group_hash": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/new/group_hash.annotate.txt",
+            "sip_write": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/new/sip_write.annotate.txt"
+          }
+        }
+      }
+    },
+    "retail_h18": {
+      "samples": [
+        {
+          "head": {
+            "0": {
+              "events": {
+                "instructions": 7024622104.0,
+                "cycles": 7805400216.0,
+                "branch-misses": 47394796.0,
+                "cache-misses": 70990067.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 45678763319.0,
+                "cycles": 73190465943.0,
+                "branch-misses": 355418447.0,
+                "cache-misses": 733979833.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 350.50938199999996,
+                "median_ms": 1312.351136,
+                "peak_rss_kib": 643176,
+                "samples_ms": [
+                  1299.512499,
+                  1308.647862,
+                  1309.957059,
+                  1310.5174339999999,
+                  1310.530577,
+                  1312.351136,
+                  1313.095181,
+                  1314.445467,
+                  1315.160999,
+                  1317.451338,
+                  1322.7647670000001
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3514012837.7272725,
+              "cycles": 5944096884.272727,
+              "branch-misses": 28002150.09090909,
+              "cache-misses": 60271796.90909091
+            }
+          },
+          "new": {
+            "0": {
+              "events": {
+                "instructions": 7724197319.0,
+                "cycles": 8306745604.0,
+                "branch-misses": 49378396.0,
+                "cache-misses": 71838043.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 51437375183.0,
+                "cycles": 80197301688.0,
+                "branch-misses": 367968507.0,
+                "cache-misses": 739799264.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 383.813931,
+                "median_ms": 1435.767619,
+                "peak_rss_kib": 650568,
+                "samples_ms": [
+                  1427.2114550000001,
+                  1431.7466160000001,
+                  1433.8478590000002,
+                  1434.005954,
+                  1434.765059,
+                  1435.767619,
+                  1435.9156639999999,
+                  1436.077452,
+                  1437.5686,
+                  1437.893914,
+                  1447.557619
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3973925260.3636365,
+              "cycles": 6535505098.545455,
+              "branch-misses": 28962737.363636363,
+              "cache-misses": 60723747.36363637
+            }
+          }
+        },
+        {
+          "head": {
+            "11": {
+              "events": {
+                "instructions": 45658576114.0,
+                "cycles": 73448006301.0,
+                "branch-misses": 355189671.0,
+                "cache-misses": 735654534.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 356.544984,
+                "median_ms": 1313.938457,
+                "peak_rss_kib": 643176,
+                "samples_ms": [
+                  1308.3744159999999,
+                  1311.532515,
+                  1311.6112979999998,
+                  1312.565916,
+                  1313.248566,
+                  1313.938457,
+                  1314.300911,
+                  1314.3620870000002,
+                  1314.493248,
+                  1319.173956,
+                  1321.865305
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 7027938271.0,
+                "cycles": 7752351540.0,
+                "branch-misses": 47316000.0,
+                "cache-misses": 71549187.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3511876167.5454545,
+              "cycles": 5972332251.0,
+              "branch-misses": 27988515.545454547,
+              "cache-misses": 60373213.36363637
+            }
+          },
+          "new": {
+            "11": {
+              "events": {
+                "instructions": 51445328035.0,
+                "cycles": 80097853420.0,
+                "branch-misses": 367897726.0,
+                "cache-misses": 741683276.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 381.263714,
+                "median_ms": 1434.091044,
+                "peak_rss_kib": 650568,
+                "samples_ms": [
+                  1423.4330129999998,
+                  1423.717226,
+                  1427.675241,
+                  1427.879811,
+                  1429.463749,
+                  1434.091044,
+                  1435.275391,
+                  1438.983886,
+                  1440.1958989999998,
+                  1448.229142,
+                  1450.308635
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 7720388887.0,
+                "cycles": 8526513321.0,
+                "branch-misses": 49342231.0,
+                "cache-misses": 72750543.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3974994468.0,
+              "cycles": 6506485463.545455,
+              "branch-misses": 28959590.454545453,
+              "cache-misses": 60812066.63636363
+            }
+          }
+        },
+        {
+          "head": {
+            "0": {
+              "events": {
+                "instructions": 7025533068.0,
+                "cycles": 7765458214.0,
+                "branch-misses": 47445026.0,
+                "cache-misses": 71346095.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 45677406864.0,
+                "cycles": 73884172120.0,
+                "branch-misses": 355366438.0,
+                "cache-misses": 736735929.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 358.974467,
+                "median_ms": 1322.7305760000002,
+                "peak_rss_kib": 643176,
+                "samples_ms": [
+                  1313.8033639999999,
+                  1318.1632359999999,
+                  1319.199731,
+                  1319.5380599999999,
+                  1320.8776850000002,
+                  1322.7305760000002,
+                  1323.606365,
+                  1324.299683,
+                  1326.8709410000001,
+                  1327.895393,
+                  1342.593111
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3513806708.7272725,
+              "cycles": 6010792173.272727,
+              "branch-misses": 27992855.636363637,
+              "cache-misses": 60489984.90909091
+            }
+          },
+          "new": {
+            "0": {
+              "events": {
+                "instructions": 7724110522.0,
+                "cycles": 8481665901.0,
+                "branch-misses": 49533097.0,
+                "cache-misses": 72262323.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 51448890283.0,
+                "cycles": 80160533819.0,
+                "branch-misses": 367816604.0,
+                "cache-misses": 737024901.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 387.261552,
+                "median_ms": 1435.3240819999999,
+                "peak_rss_kib": 650568,
+                "samples_ms": [
+                  1421.105001,
+                  1424.7558250000002,
+                  1429.29429,
+                  1430.961084,
+                  1431.155526,
+                  1435.3240819999999,
+                  1439.1024439999999,
+                  1439.2892210000002,
+                  1442.893156,
+                  1442.9357069999999,
+                  1451.592414
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3974979978.2727275,
+              "cycles": 6516260719.818182,
+              "branch-misses": 28934864.272727273,
+              "cache-misses": 60432961.63636363
+            }
+          }
+        },
+        {
+          "head": {
+            "11": {
+              "events": {
+                "instructions": 45661684125.0,
+                "cycles": 74020683633.0,
+                "branch-misses": 355185789.0,
+                "cache-misses": 733532745.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 356.767626,
+                "median_ms": 1323.0356510000001,
+                "peak_rss_kib": 643172,
+                "samples_ms": [
+                  1317.473916,
+                  1319.243819,
+                  1321.179466,
+                  1321.846133,
+                  1323.020012,
+                  1323.0356510000001,
+                  1323.049449,
+                  1323.284147,
+                  1327.0177,
+                  1331.017506,
+                  1348.157764
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 7025581528.0,
+                "cycles": 7779784607.0,
+                "branch-misses": 47358969.0,
+                "cache-misses": 72644627.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3512372963.3636365,
+              "cycles": 6021899911.454545,
+              "branch-misses": 27984256.363636363,
+              "cache-misses": 60080738.0
+            }
+          },
+          "new": {
+            "11": {
+              "events": {
+                "instructions": 51600513961.0,
+                "cycles": 79010470833.0,
+                "branch-misses": 370897972.0,
+                "cache-misses": 739154085.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 384.88827399999997,
+                "median_ms": 1410.945312,
+                "peak_rss_kib": 650264,
+                "samples_ms": [
+                  1376.297441,
+                  1399.1853110000002,
+                  1407.422504,
+                  1407.894366,
+                  1409.662765,
+                  1410.945312,
+                  1414.947459,
+                  1416.335809,
+                  1419.027425,
+                  1420.558892,
+                  1467.264917
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 7717187818.0,
+                "cycles": 8467917372.0,
+                "branch-misses": 49372907.0,
+                "cache-misses": 72972808.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3989393285.7272725,
+              "cycles": 6412959405.545455,
+              "branch-misses": 29229551.363636363,
+              "cache-misses": 60561934.27272727
+            }
+          }
+        },
+        {
+          "head": {
+            "0": {
+              "events": {
+                "instructions": 7021592158.0,
+                "cycles": 7759344461.0,
+                "branch-misses": 47405397.0,
+                "cache-misses": 72686779.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 45664042239.0,
+                "cycles": 73811240902.0,
+                "branch-misses": 355445941.0,
+                "cache-misses": 735623967.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 356.890701,
+                "median_ms": 1321.421124,
+                "peak_rss_kib": 643172,
+                "samples_ms": [
+                  1315.316589,
+                  1319.437934,
+                  1319.651814,
+                  1320.407484,
+                  1320.9229,
+                  1321.421124,
+                  1321.487222,
+                  1324.0219180000001,
+                  1324.214827,
+                  1327.872446,
+                  1332.7124489999999
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3512950007.3636365,
+              "cycles": 6004717858.272727,
+              "branch-misses": 28003685.818181816,
+              "cache-misses": 60267017.09090909
+            }
+          },
+          "new": {
+            "0": {
+              "events": {
+                "instructions": 7717837923.0,
+                "cycles": 8431844444.0,
+                "branch-misses": 49499316.0,
+                "cache-misses": 73098928.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 51436514025.0,
+                "cycles": 79657521445.0,
+                "branch-misses": 367980409.0,
+                "cache-misses": 739961695.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 381.46215700000005,
+                "median_ms": 1427.130141,
+                "peak_rss_kib": 650568,
+                "samples_ms": [
+                  1412.346178,
+                  1419.467369,
+                  1422.827979,
+                  1424.0612910000002,
+                  1426.454807,
+                  1427.130141,
+                  1427.274337,
+                  1427.656628,
+                  1429.825855,
+                  1432.362556,
+                  1436.1230620000001
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3974425100.181818,
+              "cycles": 6475061545.545455,
+              "branch-misses": 28952826.636363637,
+              "cache-misses": 60623887.90909091
+            }
+          }
+        },
+        {
+          "head": {
+            "11": {
+              "events": {
+                "instructions": 45658970306.0,
+                "cycles": 73981512364.0,
+                "branch-misses": 355199979.0,
+                "cache-misses": 734889358.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 356.841314,
+                "median_ms": 1324.077827,
+                "peak_rss_kib": 643176,
+                "samples_ms": [
+                  1318.628054,
+                  1320.008702,
+                  1321.221134,
+                  1322.3950929999999,
+                  1322.6878239999999,
+                  1324.077827,
+                  1324.41382,
+                  1326.437928,
+                  1328.0631819999999,
+                  1329.208758,
+                  1330.366405
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 7027548863.0,
+                "cycles": 7799633020.0,
+                "branch-misses": 47336711.0,
+                "cache-misses": 72007342.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3511947403.909091,
+              "cycles": 6016534485.818182,
+              "branch-misses": 27987569.818181816,
+              "cache-misses": 60262001.45454545
+            }
+          },
+          "new": {
+            "11": {
+              "events": {
+                "instructions": 51429482082.0,
+                "cycles": 80012846778.0,
+                "branch-misses": 367863591.0,
+                "cache-misses": 736880261.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 381.804112,
+                "median_ms": 1430.361378,
+                "peak_rss_kib": 650572,
+                "samples_ms": [
+                  1422.772479,
+                  1425.0901000000001,
+                  1425.978532,
+                  1428.397727,
+                  1428.6590079999999,
+                  1430.361378,
+                  1430.451801,
+                  1432.381038,
+                  1435.417145,
+                  1445.583445,
+                  1452.884661
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 7722081331.0,
+                "cycles": 8512223254.0,
+                "branch-misses": 49402960.0,
+                "cache-misses": 72479958.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3973400068.2727275,
+              "cycles": 6500056684.0,
+              "branch-misses": 28950966.454545453,
+              "cache-misses": 60400027.54545455
+            }
+          }
+        },
+        {
+          "head": {
+            "0": {
+              "events": {
+                "instructions": 7039774813.0,
+                "cycles": 7786477779.0,
+                "branch-misses": 47556451.0,
+                "cache-misses": 71806874.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 45693912965.0,
+                "cycles": 73089138920.0,
+                "branch-misses": 355597595.0,
+                "cache-misses": 733066970.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 353.286382,
+                "median_ms": 1306.7341059999999,
+                "peak_rss_kib": 643176,
+                "samples_ms": [
+                  1297.1309660000002,
+                  1299.670922,
+                  1301.413972,
+                  1303.148696,
+                  1303.639505,
+                  1306.7341059999999,
+                  1307.5466410000001,
+                  1308.100213,
+                  1310.710542,
+                  1318.510748,
+                  1348.407596
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3514012559.2727275,
+              "cycles": 5936605558.272727,
+              "branch-misses": 28003740.363636363,
+              "cache-misses": 60114554.18181818
+            }
+          },
+          "new": {
+            "0": {
+              "events": {
+                "instructions": 7723859736.0,
+                "cycles": 8293061273.0,
+                "branch-misses": 49428989.0,
+                "cache-misses": 71996880.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 51447252054.0,
+                "cycles": 80447872727.0,
+                "branch-misses": 367866161.0,
+                "cache-misses": 738399399.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 380.978137,
+                "median_ms": 1437.733915,
+                "peak_rss_kib": 650568,
+                "samples_ms": [
+                  1435.988582,
+                  1436.820715,
+                  1437.063371,
+                  1437.3603500000002,
+                  1437.411748,
+                  1437.733915,
+                  1440.167446,
+                  1441.1823209999998,
+                  1441.626082,
+                  1442.247111,
+                  1453.002609
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3974853847.090909,
+              "cycles": 6559528314.0,
+              "branch-misses": 28948833.818181816,
+              "cache-misses": 60582047.18181818
+            }
+          }
+        },
+        {
+          "head": {
+            "11": {
+              "events": {
+                "instructions": 45656044766.0,
+                "cycles": 72976800746.0,
+                "branch-misses": 355146001.0,
+                "cache-misses": 734408332.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 356.151871,
+                "median_ms": 1303.045711,
+                "peak_rss_kib": 642980,
+                "samples_ms": [
+                  1290.183047,
+                  1297.673889,
+                  1299.7702259999999,
+                  1301.096095,
+                  1301.1106940000002,
+                  1303.045711,
+                  1305.513479,
+                  1306.0521010000002,
+                  1307.71113,
+                  1317.820118,
+                  1324.592183
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 7028132270.0,
+                "cycles": 7742977642.0,
+                "branch-misses": 47319204.0,
+                "cache-misses": 71814122.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3511628408.7272725,
+              "cycles": 5930347554.909091,
+              "branch-misses": 27984254.272727273,
+              "cache-misses": 60235837.27272727
+            }
+          },
+          "new": {
+            "11": {
+              "events": {
+                "instructions": 51447794573.0,
+                "cycles": 80274238433.0,
+                "branch-misses": 367900093.0,
+                "cache-misses": 739770604.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 385.741472,
+                "median_ms": 1429.600349,
+                "peak_rss_kib": 650572,
+                "samples_ms": [
+                  1422.176827,
+                  1423.0395090000002,
+                  1425.5609410000002,
+                  1425.71758,
+                  1429.5183920000002,
+                  1429.600349,
+                  1443.9727360000002,
+                  1450.517654,
+                  1452.882846,
+                  1454.2863539999998,
+                  1455.219673
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 7719081809.0,
+                "cycles": 8478238792.0,
+                "branch-misses": 49398740.0,
+                "cache-misses": 74245382.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3975337524.0,
+              "cycles": 6526909058.272727,
+              "branch-misses": 28954668.454545453,
+              "cache-misses": 60502292.90909091
+            }
+          }
+        },
+        {
+          "head": {
+            "0": {
+              "events": {
+                "instructions": 7021812469.0,
+                "cycles": 7809103097.0,
+                "branch-misses": 47414401.0,
+                "cache-misses": 71573288.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 45669804338.0,
+                "cycles": 72615578046.0,
+                "branch-misses": 355163876.0,
+                "cache-misses": 737054456.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 351.275867,
+                "median_ms": 1302.3127539999998,
+                "peak_rss_kib": 642980,
+                "samples_ms": [
+                  1291.017875,
+                  1295.282555,
+                  1299.10007,
+                  1300.082341,
+                  1300.887033,
+                  1302.3127539999998,
+                  1303.617844,
+                  1303.712035,
+                  1304.856288,
+                  1307.3937680000001,
+                  1309.469716
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3513453806.2727275,
+              "cycles": 5891497722.636364,
+              "branch-misses": 27977225.0,
+              "cache-misses": 60498288.0
+            }
+          },
+          "new": {
+            "0": {
+              "events": {
+                "instructions": 7726030130.0,
+                "cycles": 8335911285.0,
+                "branch-misses": 49389499.0,
+                "cache-misses": 70669458.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "11": {
+              "events": {
+                "instructions": 51468664005.0,
+                "cycles": 80412875446.0,
+                "branch-misses": 368584500.0,
+                "cache-misses": 742431429.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 382.58381,
+                "median_ms": 1429.1943840000001,
+                "peak_rss_kib": 650564,
+                "samples_ms": [
+                  1419.840463,
+                  1423.93565,
+                  1424.424616,
+                  1427.395266,
+                  1427.698078,
+                  1429.1943840000001,
+                  1429.8586970000001,
+                  1432.824439,
+                  1438.712239,
+                  1490.586904,
+                  1509.017506
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3976603079.5454545,
+              "cycles": 6552451287.363636,
+              "branch-misses": 29017727.363636363,
+              "cache-misses": 61069270.09090909
+            }
+          }
+        },
+        {
+          "head": {
+            "11": {
+              "events": {
+                "instructions": 45657446852.0,
+                "cycles": 72963518204.0,
+                "branch-misses": 355117195.0,
+                "cache-misses": 737144868.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 355.37023,
+                "median_ms": 1305.805992,
+                "peak_rss_kib": 642984,
+                "samples_ms": [
+                  1300.239656,
+                  1300.8500960000001,
+                  1303.159191,
+                  1303.531073,
+                  1305.026648,
+                  1305.805992,
+                  1305.917916,
+                  1307.102916,
+                  1308.132148,
+                  1310.0986560000001,
+                  1311.930384
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 7036454475.0,
+                "cycles": 7793701420.0,
+                "branch-misses": 47622869.0,
+                "cache-misses": 73305105.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3510999307.0,
+              "cycles": 5924528798.545455,
+              "branch-misses": 27954029.636363637,
+              "cache-misses": 60349069.36363637
+            }
+          },
+          "new": {
+            "11": {
+              "events": {
+                "instructions": 51472435393.0,
+                "cycles": 81658692514.0,
+                "branch-misses": 368140206.0,
+                "cache-misses": 743889054.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "load_ms": 379.55189099999996,
+                "median_ms": 1474.513206,
+                "peak_rss_kib": 650532,
+                "samples_ms": [
+                  1428.7253039999998,
+                  1429.379497,
+                  1463.1311819999999,
+                  1469.3341950000001,
+                  1471.7631199999998,
+                  1474.513206,
+                  1476.993209,
+                  1478.30868,
+                  1478.437606,
+                  1483.70116,
+                  1483.8334639999998
+                ],
+                "zone_build_ms": 0.0,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "0": {
+              "events": {
+                "instructions": 7721275753.0,
+                "cycles": 8536794336.0,
+                "branch-misses": 49429743.0,
+                "cache-misses": 72815530.0
+              },
+              "metrics": {
+                "answer_rows": 57,
+                "instrumented": false,
+                "verified": true,
+                "zone_metadata_bytes": 0
+              }
+            },
+            "adjusted_per_query": {
+              "instructions": 3977378149.090909,
+              "cycles": 6647445288.909091,
+              "branch-misses": 28973678.454545453,
+              "cache-misses": 61006684.0
+            }
+          }
+        }
+      ],
+      "binaries": {
+        "head": "ab7d9a9756cc9c7054f613a84f97cf3af8b07453699b5adff96a32405bc3e471",
+        "new": "09448eee3563bb8df2771c6e436e45b6aea80b5ac8f843821de19c82892f7c0f"
+      },
+      "summary": {
+        "instructions": {
+          "head_mean": 3512706016.990909,
+          "new_mean": 3976529076.0545454,
+          "head_stdev": 1090068.4368549495,
+          "new_stdev": 4668957.373065903,
+          "ratio_new_head": 1.1320415249155866,
+          "delta_percent": 13.204152491558663,
+          "ratio_ci95": [
+            1.1313697396182723,
+            1.133000409834876
+          ]
+        },
+        "cycles": {
+          "head_mean": 5965335319.845454,
+          "new_mean": 6523266286.554545,
+          "head_stdev": 46073554.12253056,
+          "new_stdev": 60654620.166424,
+          "ratio_new_head": 1.0935288524105207,
+          "delta_percent": 9.352885241052068,
+          "ratio_ci95": [
+            1.0833845381447424,
+            1.103900173039816
+          ]
+        },
+        "branch-misses": {
+          "head_mean": 27987828.254545454,
+          "new_mean": 28988544.46363636,
+          "head_stdev": 14966.23463289468,
+          "new_stdev": 87531.11128295335,
+          "ratio_new_head": 1.035755407671847,
+          "delta_percent": 3.575540767184693,
+          "ratio_ci95": [
+            1.0342548934399007,
+            1.0379283194389382
+          ]
+        },
+        "cache-misses": {
+          "head_mean": 60294250.054545455,
+          "new_mean": 60671491.95454545,
+          "head_stdev": 138547.9398553248,
+          "new_stdev": 229627.80882875226,
+          "ratio_new_head": 1.0062566811869909,
+          "delta_percent": 0.6256681186990853,
+          "ratio_ci95": [
+            1.0040404394787643,
+            1.0081856686773172
+          ]
+        }
+      },
+      "annotation_evidence": {
+        "dedup_insert_equal_after_relocation_normalization": true,
+        "dedup_insert_instructions": 147,
+        "group_hash_old": {
+          "symbol": "_RINvYNtNtNtCs2AWtUsOyxgP_3std4hash6random11RandomStateNtNtCs4NRVxsYgnAr_4core4hash11BuildHasher8hash_oneRTRxEECs34K0pd66Gn3_23tpch_derived_retail_h18",
+          "annotation": " Percent |\tSource code & Disassembly of timing-worker for instructions:u (248 samples, percent: local period)\n------------------------------------------------------------------------------------------------------------------\n         :\n         :\n         :\n         : 3      Disassembly of section .text:\n         :\n         : 5      0000000000259430 <<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&(&i64,)>>:\n    7.66 :   259430: mov    (%rdi),%rax\n    1.61 :   259433: mov    0x8(%rdi),%r9\n    0.00 :   259437: movabs $0x736f6d6570736575,%rdx\n    0.00 :   259441: xor    %rax,%rdx\n    0.40 :   259444: movabs $0x646f72616e646f6d,%rcx\n    0.00 :   25944e: xor    %r9,%rcx\n    0.00 :   259451: movabs $0x6c7967656e657261,%r8\n    8.47 :   25945b: xor    %rax,%r8\n    0.00 :   25945e: mov    (%rsi),%rax\n    0.81 :   259461: mov    (%rax),%rax\n    0.81 :   259464: movabs $0x7465646279746573,%rdi\n    0.00 :   25946e: xor    %r9,%rdi\n    0.00 :   259471: xor    %rax,%rdi\n    0.40 :   259474: add    %rdi,%r8\n    0.00 :   259477: rol    $0x10,%rdi\n    5.65 :   25947b: xor    %r8,%rdi\n    0.00 :   25947e: add    %rcx,%rdx\n    0.00 :   259481: rol    $0xd,%rcx\n    0.00 :   259485: xor    %rdx,%rcx\n    0.00 :   259488: rol    $0x20,%rdx\n    0.00 :   25948c: add    %rdi,%rdx\n    0.00 :   25948f: xor    %rdx,%rax\n    0.00 :   259492: add    %rcx,%r8\n    8.47 :   259495: rol    $0x11,%rcx\n    0.00 :   259499: xor    %r8,%rcx\n    0.40 :   25949c: mov    %r8,%rsi\n    0.00 :   25949f: rol    $0x20,%rsi\n    0.40 :   2594a3: rol    $0x15,%rdi\n    0.00 :   2594a7: movabs $0x800000000000000,%r8\n    0.00 :   2594b1: xor    %r8,%rdx\n    0.00 :   2594b4: xor    %rdi,%rdx\n    7.26 :   2594b7: add    %rcx,%rax\n    0.00 :   2594ba: rol    $0xd,%rcx\n    0.40 :   2594be: add    %rdx,%rsi\n    0.00 :   2594c1: xor    %rax,%rcx\n    0.00 :   2594c4: rol    $0x10,%rdx\n    0.00 :   2594c8: xor    %rsi,%rdx\n    0.40 :   2594cb: rol    $0x20,%rax\n    0.00 :   2594cf: add    %rcx,%rsi\n    6.05 :   2594d2: add    %rdx,%rax\n    0.00 :   2594d5: rol    $0x11,%rcx\n    0.00 :   2594d9: xor    %rsi,%rcx\n    0.00 :   2594dc: rol    $0x15,%rdx\n    0.00 :   2594e0: rol    $0x20,%rsi\n    0.40 :   2594e4: xor    %rax,%rdx\n    0.00 :   2594e7: xor    %r8,%rax\n    0.00 :   2594ea: xor    $0xff,%rsi\n    9.27 :   2594f1: add    %rcx,%rax\n    0.40 :   2594f4: add    %rdx,%rsi\n    1.21 :   2594f7: rol    $0xd,%rcx\n    0.00 :   2594fb: xor    %rax,%rcx\n    0.81 :   2594fe: rol    $0x10,%rdx\n    0.00 :   259502: rol    $0x20,%rax\n    0.00 :   259506: xor    %rsi,%rdx\n    0.00 :   259509: add    %rcx,%rsi\n    6.45 :   25950c: rol    $0x11,%rcx\n    0.00 :   259510: add    %rdx,%rax\n    1.61 :   259513: xor    %rsi,%rcx\n    0.00 :   259516: rol    $0x15,%rdx\n    0.00 :   25951a: xor    %rax,%rdx\n    0.00 :   25951d: rol    $0x20,%rsi\n    0.40 :   259521: add    %rcx,%rax\n    0.00 :   259524: add    %rdx,%rsi\n    6.05 :   259527: rol    $0xd,%rcx\n    0.00 :   25952b: xor    %rax,%rcx\n    0.40 :   25952e: rol    $0x10,%rdx\n    0.00 :   259532: rol    $0x20,%rax\n    0.00 :   259536: xor    %rsi,%rdx\n    0.00 :   259539: add    %rcx,%rsi\n    0.00 :   25953c: rol    $0x11,%rcx\n    0.00 :   259540: add    %rdx,%rax\n    8.06 :   259543: xor    %rsi,%rcx\n    0.00 :   259546: rol    $0x15,%rdx\n    0.00 :   25954a: xor    %rax,%rdx\n    0.00 :   25954d: rol    $0x20,%rsi\n    0.00 :   259551: add    %rcx,%rax\n    0.40 :   259554: add    %rdx,%rsi\n    0.00 :   259557: rol    $0xd,%rcx\n    0.00 :   25955b: xor    %rax,%rcx\n    4.84 :   25955e: rol    $0x10,%rdx\n    0.00 :   259562: xor    %rsi,%rdx\n    0.00 :   259565: add    %rcx,%rsi\n    0.00 :   259568: rol    $0x11,%rcx\n    0.00 :   25956c: rol    $0x15,%rdx\n    0.40 :   259570: mov    %rsi,%rax\n    0.00 :   259573: rol    $0x20,%rax\n    0.00 :   259577: xor    %rcx,%rax\n    8.47 :   25957a: xor    %rdx,%rax\n    1.21 :   25957d: xor    %rsi,%rax\n    0.40 :   259580: ret\n",
+          "path": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/head/group_hash.annotate.txt"
+        },
+        "group_hash_new": {
+          "symbol": "_RINvYNtNtNtCs2AWtUsOyxgP_3std4hash6random11RandomStateNtNtCs4NRVxsYgnAr_4core4hash11BuildHasher8hash_oneRTRxEECs95tg4Iefi7_23tpch_derived_retail_h18",
+          "annotation": " Percent |\tSource code & Disassembly of timing-worker for instructions:u (1833 samples, percent: local period)\n-------------------------------------------------------------------------------------------------------------------\n         :\n         :\n         :\n         : 3      Disassembly of section .text:\n         :\n         : 5      0000000000251d10 <<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&(&i64,)>>:\n    0.93 :   251d10: sub    $0x58,%rsp\n    0.27 :   251d14: movdqu (%rdi),%xmm0\n    0.11 :   251d18: pshufd $0x44,%xmm0,%xmm1\n    0.05 :   251d1d: pxor   -0xd5ab5(%rip),%xmm1        # 17c270 <anon.6a9493e90e23c738bd19aa0c93eeb36f.161.llvm.6405242637333620871+0x2b0>\n    0.11 :   251d25: movdqa %xmm1,0x10(%rsp)\n    0.00 :   251d2b: pshufd $0xee,%xmm0,%xmm1\n    1.15 :   251d30: pxor   -0xd5f58(%rip),%xmm1        # 17bde0 <anon.2ecf1e25af912d92e504dd3f6c73a9b0.14.llvm.8169313744136071729+0x510>\n    0.00 :   251d38: movdqa %xmm1,0x20(%rsp)\n    0.27 :   251d3e: movdqa %xmm0,0x30(%rsp)\n    0.05 :   251d44: pxor   %xmm0,%xmm0\n    0.00 :   251d48: movdqa %xmm0,0x40(%rsp)\n    0.00 :   251d4e: movq   $0x0,0x50(%rsp)\n    0.00 :   251d57: mov    (%rsi),%rax\n    0.05 :   251d5a: mov    (%rax),%rax\n   78.56 :   251d5d: mov    %rax,0x8(%rsp)\n    0.00 :   251d62: lea    0x10(%rsp),%rdi\n    0.00 :   251d67: lea    0x8(%rsp),%rsi\n    0.00 :   251d6c: mov    $0x8,%edx\n    0.00 :   251d71: call   255340 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933>\n    0.87 :   251d76: mov    0x40(%rsp),%rdi\n    0.27 :   251d7b: shl    $0x38,%rdi\n    0.00 :   251d7f: or     0x48(%rsp),%rdi\n    0.16 :   251d84: mov    0x20(%rsp),%rdx\n    0.71 :   251d89: mov    0x28(%rsp),%rcx\n    0.27 :   251d8e: xor    %rdi,%rcx\n    0.22 :   251d91: mov    0x10(%rsp),%rax\n    1.31 :   251d96: add    %rdx,%rax\n    0.11 :   251d99: mov    0x18(%rsp),%rsi\n    0.00 :   251d9e: rol    $0xd,%rdx\n    0.00 :   251da2: add    %rcx,%rsi\n    0.00 :   251da5: xor    %rax,%rdx\n    0.16 :   251da8: rol    $0x10,%rcx\n    0.05 :   251dac: xor    %rsi,%rcx\n    0.11 :   251daf: rol    $0x20,%rax\n    1.04 :   251db3: add    %rdx,%rsi\n    0.22 :   251db6: add    %rcx,%rax\n    0.11 :   251db9: rol    $0x11,%rdx\n    0.00 :   251dbd: xor    %rsi,%rdx\n    0.22 :   251dc0: rol    $0x15,%rcx\n    0.00 :   251dc4: rol    $0x20,%rsi\n    0.05 :   251dc8: xor    %rax,%rcx\n    0.16 :   251dcb: xor    %rdi,%rax\n    0.93 :   251dce: xor    $0xff,%rsi\n    0.22 :   251dd5: add    %rdx,%rax\n    0.16 :   251dd8: add    %rcx,%rsi\n    0.11 :   251ddb: rol    $0xd,%rdx\n    0.00 :   251ddf: xor    %rax,%rdx\n    0.16 :   251de2: rol    $0x10,%rcx\n    0.22 :   251de6: rol    $0x20,%rax\n    0.00 :   251dea: xor    %rsi,%rcx\n    0.98 :   251ded: add    %rdx,%rsi\n    0.00 :   251df0: rol    $0x11,%rdx\n    0.00 :   251df4: add    %rcx,%rax\n    0.27 :   251df7: xor    %rsi,%rdx\n    0.00 :   251dfa: rol    $0x15,%rcx\n    0.00 :   251dfe: xor    %rax,%rcx\n    0.27 :   251e01: rol    $0x20,%rsi\n    0.00 :   251e05: add    %rdx,%rax\n    1.04 :   251e08: add    %rcx,%rsi\n    0.44 :   251e0b: rol    $0xd,%rdx\n    0.00 :   251e0f: xor    %rax,%rdx\n    0.33 :   251e12: rol    $0x10,%rcx\n    0.00 :   251e16: rol    $0x20,%rax\n    0.00 :   251e1a: xor    %rsi,%rcx\n    0.05 :   251e1d: add    %rdx,%rsi\n    0.33 :   251e20: rol    $0x11,%rdx\n    0.98 :   251e24: add    %rcx,%rax\n    0.11 :   251e27: xor    %rsi,%rdx\n    0.27 :   251e2a: rol    $0x15,%rcx\n    0.00 :   251e2e: xor    %rax,%rcx\n    0.38 :   251e31: rol    $0x20,%rsi\n    0.00 :   251e35: add    %rdx,%rax\n    0.00 :   251e38: add    %rcx,%rsi\n    0.38 :   251e3b: rol    $0xd,%rdx\n    0.98 :   251e3f: xor    %rax,%rdx\n    0.00 :   251e42: rol    $0x10,%rcx\n    0.05 :   251e46: xor    %rsi,%rcx\n    0.22 :   251e49: add    %rdx,%rsi\n    0.05 :   251e4c: rol    $0x11,%rdx\n    0.00 :   251e50: rol    $0x15,%rcx\n    0.27 :   251e54: mov    %rsi,%rax\n    0.00 :   251e57: rol    $0x20,%rax\n    1.25 :   251e5b: xor    %rdx,%rax\n    0.60 :   251e5e: xor    %rcx,%rax\n    0.55 :   251e61: xor    %rsi,%rax\n    0.71 :   251e64: add    $0x58,%rsp\n    0.05 :   251e68: ret\n",
+          "path": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/new/group_hash.annotate.txt"
+        },
+        "outlined_writer_new": {
+          "symbol": "_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933",
+          "annotation": " Percent |\tSource code & Disassembly of timing-worker for instructions:u (207 samples, percent: local period)\n------------------------------------------------------------------------------------------------------------------\n         :\n         :\n         :\n         : 3      Disassembly of section .text:\n         :\n         : 5      0000000000255340 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933>:\n    0.00 :   255340: push   %rbx\n    0.00 :   255341: add    %rdx,0x30(%rdi)\n   11.59 :   255345: mov    0x40(%rdi),%r9\n    0.97 :   255349: test   %r9,%r9\n    1.93 :   25534c: je     25537d <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x3d>\n    0.00 :   25534e: mov    $0x8,%r8d\n    0.00 :   255354: sub    %r9,%r8\n    0.00 :   255357: cmp    %rdx,%r8\n    0.00 :   25535a: mov    %rdx,%r11\n    0.00 :   25535d: cmovb  %r8,%r11\n    0.00 :   255361: cmp    $0x4,%r11\n    0.00 :   255365: jb     255385 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x45>\n    0.00 :   255367: mov    (%rsi),%r10d\n    0.00 :   25536a: mov    $0x4,%eax\n    0.00 :   25536f: mov    %rax,%rcx\n    0.00 :   255372: or     $0x1,%rcx\n    0.00 :   255376: cmp    %r11,%rcx\n    0.00 :   255379: jb     255396 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x56>\n    0.00 :   25537b: jmp    2553ab <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x6b>\n    0.00 :   25537d: xor    %r8d,%r8d\n    0.00 :   255380: jmp    255435 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0xf5>\n    0.00 :   255385: xor    %eax,%eax\n    0.00 :   255387: xor    %r10d,%r10d\n    0.00 :   25538a: mov    %rax,%rcx\n    0.00 :   25538d: or     $0x1,%rcx\n    0.00 :   255391: cmp    %r11,%rcx\n    0.00 :   255394: jae    2553ab <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x6b>\n    0.00 :   255396: movzwl (%rsi,%rax,1),%ebx\n    0.00 :   25539a: lea    0x0(,%rax,8),%ecx\n    0.00 :   2553a1: shl    %cl,%rbx\n    0.00 :   2553a4: or     %rbx,%r10\n    0.00 :   2553a7: or     $0x2,%rax\n    0.00 :   2553ab: cmp    %r11,%rax\n    0.00 :   2553ae: jae    2553c0 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x80>\n    0.00 :   2553b0: movzbl (%rsi,%rax,1),%r11d\n    0.00 :   2553b5: shl    $0x3,%eax\n    0.00 :   2553b8: mov    %eax,%ecx\n    0.00 :   2553ba: shl    %cl,%r11\n    0.00 :   2553bd: or     %r11,%r10\n    0.00 :   2553c0: lea    0x0(,%r9,8),%ecx\n    0.00 :   2553c8: shl    %cl,%r10\n    0.00 :   2553cb: or     0x38(%rdi),%r10\n    0.00 :   2553cf: mov    %r10,0x38(%rdi)\n    0.00 :   2553d3: cmp    %r8,%rdx\n    0.00 :   2553d6: jae    2553e1 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0xa1>\n    0.00 :   2553d8: add    %rdx,%r9\n    0.00 :   2553db: mov    %r9,0x40(%rdi)\n    0.00 :   2553df: pop    %rbx\n    0.00 :   2553e0: ret\n    0.00 :   2553e1: mov    0x18(%rdi),%rax\n    0.00 :   2553e5: xor    %r10,%rax\n    0.00 :   2553e8: mov    0x10(%rdi),%r11\n    0.00 :   2553ec: mov    (%rdi),%rcx\n    0.00 :   2553ef: add    %r11,%rcx\n    0.00 :   2553f2: mov    0x8(%rdi),%r9\n    0.00 :   2553f6: add    %rax,%r9\n    0.00 :   2553f9: rol    $0xd,%r11\n    0.00 :   2553fd: xor    %rcx,%r11\n    0.00 :   255400: rol    $0x10,%rax\n    0.00 :   255404: rol    $0x20,%rcx\n    0.00 :   255408: xor    %r9,%rax\n    0.00 :   25540b: add    %r11,%r9\n    0.00 :   25540e: rol    $0x11,%r11\n    0.00 :   255412: add    %rax,%rcx\n    0.00 :   255415: xor    %r9,%r11\n    0.00 :   255418: rol    $0x15,%rax\n    0.00 :   25541c: mov    %r11,0x10(%rdi)\n    0.00 :   255420: xor    %rcx,%rax\n    0.00 :   255423: rol    $0x20,%r9\n    0.00 :   255427: mov    %rax,0x18(%rdi)\n    0.00 :   25542b: mov    %r9,0x8(%rdi)\n    0.00 :   25542f: xor    %r10,%rcx\n    0.00 :   255432: mov    %rcx,(%rdi)\n    0.00 :   255435: sub    %r8,%rdx\n    0.00 :   255438: mov    %edx,%r9d\n    0.00 :   25543b: and    $0x7,%r9d\n    0.00 :   25543f: and    $0xfffffffffffffff8,%rdx\n   13.04 :   255443: cmp    %rdx,%r8\n    0.48 :   255446: jae    2554b2 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x172>\n    0.48 :   255448: mov    (%rdi),%rax\n    0.00 :   25544b: mov    0x8(%rdi),%rcx\n    0.48 :   25544f: mov    0x18(%rdi),%r11\n    0.97 :   255453: mov    0x10(%rdi),%r10\n    0.48 :   255457: nopw   0x0(%rax,%rax,1)\n    0.00 :   255460: mov    (%rsi,%r8,1),%rbx\n    8.21 :   255464: xor    %rbx,%r11\n   13.53 :   255467: add    %r10,%rax\n    0.48 :   25546a: rol    $0xd,%r10\n    0.00 :   25546e: add    %r11,%rcx\n    3.38 :   255471: xor    %rax,%r10\n    0.00 :   255474: rol    $0x10,%r11\n    0.00 :   255478: xor    %rcx,%r11\n    1.45 :   25547b: rol    $0x20,%rax\n    0.00 :   25547f: add    %r10,%rcx\n   14.49 :   255482: add    %r11,%rax\n    0.97 :   255485: rol    $0x11,%r10\n    1.45 :   255489: xor    %rcx,%r10\n    0.00 :   25548c: rol    $0x15,%r11\n    0.00 :   255490: rol    $0x20,%rcx\n    0.00 :   255494: xor    %rax,%r11\n    2.90 :   255497: xor    %rbx,%rax\n    0.00 :   25549a: add    $0x8,%r8\n    7.25 :   25549e: cmp    %rdx,%r8\n    0.00 :   2554a1: jb     255460 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x120>\n    0.00 :   2554a3: mov    %r11,0x18(%rdi)\n    0.00 :   2554a7: mov    %r10,0x10(%rdi)\n    0.00 :   2554ab: mov    %rcx,0x8(%rdi)\n    0.48 :   2554af: mov    %rax,(%rdi)\n    0.97 :   2554b2: cmp    $0x4,%r9d\n    1.93 :   2554b6: jb     2554cd <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x18d>\n    0.00 :   2554b8: mov    (%rsi,%r8,1),%edx\n    0.00 :   2554bc: mov    $0x4,%eax\n    0.00 :   2554c1: mov    %eax,%ecx\n    0.00 :   2554c3: or     $0x1,%ecx\n    0.00 :   2554c6: cmp    %r9d,%ecx\n    0.00 :   2554c9: jb     2554db <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x19b>\n    0.00 :   2554cb: jmp    2554f5 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x1b5>\n    0.00 :   2554cd: xor    %eax,%eax\n    0.00 :   2554cf: xor    %edx,%edx\n    8.70 :   2554d1: mov    %eax,%ecx\n    0.00 :   2554d3: or     $0x1,%ecx\n    0.48 :   2554d6: cmp    %r9d,%ecx\n    0.00 :   2554d9: jae    2554f5 <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x1b5>\n    0.00 :   2554db: lea    (%rsi,%r8,1),%rcx\n    0.00 :   2554df: movzwl (%rax,%rcx,1),%r10d\n    0.00 :   2554e4: lea    0x0(,%rax,8),%ecx\n    0.00 :   2554eb: shl    %cl,%r10\n    0.00 :   2554ee: or     %r10,%rdx\n    0.00 :   2554f1: or     $0x2,%rax\n    0.00 :   2554f5: cmp    %r9d,%eax\n    0.00 :   2554f8: jae    25550d <_RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs95tg4Iefi7_23tpch_derived_retail_h18.llvm.3296767645892078933+0x1cd>\n    0.00 :   2554fa: add    %rax,%r8\n    0.00 :   2554fd: movzbl (%rsi,%r8,1),%esi\n    0.00 :   255502: shl    $0x3,%eax\n    0.00 :   255505: mov    %eax,%ecx\n    0.00 :   255507: shl    %cl,%rsi\n    0.00 :   25550a: or     %rsi,%rdx\n    0.00 :   25550d: mov    %rdx,0x38(%rdi)\n    1.45 :   255511: mov    %r9,0x40(%rdi)\n    1.45 :   255515: pop    %rbx\n    0.00 :   255516: ret\n",
+          "path": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/new/sip_write.annotate.txt"
+        },
+        "annotation_paths": {
+          "head": {
+            "query": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/head/query.annotate.txt",
+            "dedup_insert": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/head/dedup_insert.annotate.txt",
+            "group_hash": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/head/group_hash.annotate.txt",
+            "group_rehash": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/head/group_rehash.annotate.txt"
+          },
+          "new": {
+            "query": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/new/query.annotate.txt",
+            "dedup_insert": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/new/dedup_insert.annotate.txt",
+            "group_hash": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/new/group_hash.annotate.txt",
+            "group_rehash": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/new/group_rehash.annotate.txt",
+            "sip_write": "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/new/sip_write.annotate.txt"
+          }
+        }
+      }
+    }
+  },
+  "method": "10 interleaved HEAD/new pairs per query; each pair contains runs=11 and runs=0 fresh processes, alternating both variant and run-count order. Each process has one exact warm execution. Adjusted event count per query = (runs11 - runs0)/11, removing input, exact warm execution and publication overhead shared by the two processes. perf stat -r 1 is invoked ten times rather than one -r 10 invocation to interleave variants. Both raw and adjusted values retained.",
+  "events": [
+    "instructions",
+    "cycles",
+    "branch-misses",
+    "cache-misses"
+  ],
+  "samples": 10,
+  "timed_runs": 11,
+  "loadavg_before": "0.17 0.22 0.73 1/2017 445917",
+  "loadavg_after": "1.17 0.94 0.91 2/2000 450201",
+  "record_commands": [
+    [
+      "perf",
+      "record",
+      "-e",
+      "instructions:u",
+      "-c",
+      "1000000",
+      "-o",
+      "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/head/perf.data",
+      "--",
+      "/data/mini_linq/target/head-intern-workloads/bench/crates/retail_h15/timing-worker",
+      "/data/mini_linq/features/workloads/target/bench/data/tpch-1/retail_h15",
+      "default",
+      "31",
+      "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/head/answers.json",
+      "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/head/metrics.json",
+      "/data/mini_linq/target/head-intern-workloads/bench/verification/sf-1/retail_h15/default/oracle.json"
+    ],
+    [
+      "perf",
+      "record",
+      "-e",
+      "instructions:u",
+      "-c",
+      "1000000",
+      "-o",
+      "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/new/perf.data",
+      "--",
+      "/data/mini_linq/features/workloads/target/bench/crates/retail_h15/timing-worker",
+      "/data/mini_linq/features/workloads/target/bench/data/tpch-1/retail_h15",
+      "default",
+      "31",
+      "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/new/answers.json",
+      "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h15/new/metrics.json",
+      "/data/mini_linq/target/head-intern-workloads/bench/verification/sf-1/retail_h15/default/oracle.json"
+    ],
+    [
+      "perf",
+      "record",
+      "-e",
+      "instructions:u",
+      "-c",
+      "1000000",
+      "-o",
+      "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/head/perf.data",
+      "--",
+      "/data/mini_linq/target/head-intern-workloads/bench/crates/retail_h18/timing-worker",
+      "/data/mini_linq/features/workloads/target/bench/data/tpch-1/retail_h18",
+      "default",
+      "5",
+      "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/head/answers.json",
+      "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/head/metrics.json",
+      "/data/mini_linq/target/head-intern-workloads/bench/verification/sf-1/retail_h18/default/oracle.json"
+    ],
+    [
+      "perf",
+      "record",
+      "-e",
+      "instructions:u",
+      "-c",
+      "1000000",
+      "-o",
+      "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/new/perf.data",
+      "--",
+      "/data/mini_linq/features/workloads/target/bench/crates/retail_h18/timing-worker",
+      "/data/mini_linq/features/workloads/target/bench/data/tpch-1/retail_h18",
+      "default",
+      "5",
+      "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/new/answers.json",
+      "/data/mini_linq/features/workloads/target/bench/cpu-intern-perf-hot/retail_h18/new/metrics.json",
+      "/data/mini_linq/target/head-intern-workloads/bench/verification/sf-1/retail_h18/default/oracle.json"
+    ]
+  ],
+  "hot_path_finding": "Retired instructions are not equal: this is not explained by seed/layout variance alone. Both queries retain the same numeric valuation keys and dedup insert machine instructions (apart from relocations). The GROUP accumulator RandomState::hash_one::<&(&i64,)> changes from a register-only specialized SipHash body to an 88-byte stack frame plus an outlined Sip13Rounds::write call; H18 group-table reserve_rehash also calls that helper instead of its previous inlined hash. No hasher algorithm or key type changed, but rustc/LLVM generated extra machine instructions."
+}

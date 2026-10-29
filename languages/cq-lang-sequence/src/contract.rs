@@ -64,6 +64,7 @@ struct CheckedProof {
     prefix: std::rc::Rc<StructuresProof>,
     sequence: crate::Sequence,
     evidence: crate::Evidence,
+    representation: crate::Representation,
     analysis: std::rc::Rc<Analysis>,
     facts: std::rc::Rc<BTreeMap<String, Fact>>,
 }
@@ -200,16 +201,45 @@ fn analyze_in(
             std::rc::Rc::ptr_eq(&proof.prefix, &prefix)
                 && proof.sequence == program.sequence
                 && proof.evidence == program.evidence
+                && proof.representation == program.representation
         })
         .cloned();
     if let Some(proof) = previous {
         return Ok(proof);
+    }
+    let representation = &program.representation;
+    if !representation.identity.is_disjoint(&representation.encoded) {
+        return fail(
+            program,
+            "BE-RustRepresentation",
+            "a column cannot be both identity and encoded",
+        );
+    }
+    for column in representation
+        .identity
+        .iter()
+        .chain(&representation.encoded)
+    {
+        if !prefix
+            .analysis
+            .physical
+            .rows
+            .values()
+            .any(|row| row.types.contains_key(column))
+        {
+            return fail(
+                program,
+                "BE-RustRepresentation",
+                "unknown representation column",
+            );
+        }
     }
     let mut checker = Checked {
         program,
         analysis: Analysis {
             structures: prefix.analysis.clone(),
             evidence: program.evidence.clone(),
+            representation: program.representation.clone(),
             results: BTreeMap::new(),
             lengths: BTreeMap::new(),
             shapes: BTreeMap::new(),
@@ -351,6 +381,7 @@ fn analyze_in(
         prefix: prefix.clone(),
         sequence: program.sequence.clone(),
         evidence: program.evidence.clone(),
+        representation: program.representation.clone(),
         analysis: std::rc::Rc::new(checker.analysis),
         facts: std::rc::Rc::new(checker.facts),
     }))
@@ -699,8 +730,8 @@ impl Checked<'_> {
                             )
                         })?;
                     let operator = &definition.operator;
-                    // Opaque Rust is legal here; BE-Partial confines its
-                    // evaluation to host when a target grading is checked.
+                    // Opaque total Rust is legal here; BE-RustRepresentation
+                    // checks device identity representations during grading.
                     if matches!(operator, Operator::Union(_)) {
                         return fail(name, "BE-Alpha", "union requires explicit Sequence arms");
                     }
@@ -1386,6 +1417,21 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
 }
 
 fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> syn::Result<()> {
+    if !source
+        .representation
+        .identity
+        .is_subset(&target.representation.identity)
+        || !source
+            .representation
+            .encoded
+            .is_subset(&target.representation.encoded)
+    {
+        return fail(
+            target,
+            "BE-RustRepresentation",
+            "rewrites may add but must preserve representation facts",
+        );
+    }
     // Resolve complete Structures syntax once per distinct endpoint. All
     // subsequent proof comparisons use the interned prefix identity rather
     // than revisiting opaque Rust tokens for each candidate Sequence proof.
@@ -1397,7 +1443,11 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
     };
     let unchanged = std::rc::Rc::ptr_eq(&source_prefix, &target_prefix);
     let source_facts = analyze_in(source, context, source_prefix)?;
-    if unchanged && source.sequence == target.sequence && source.evidence == target.evidence {
+    if unchanged
+        && source.sequence == target.sequence
+        && source.evidence == target.evidence
+        && source.representation == target.representation
+    {
         return Ok(());
     }
     if (!unchanged || source.sequence != target.sequence)
@@ -1416,7 +1466,13 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
     let preserves_adapters = unchanged
         || source.structures.structures.entries.iter().all(|entry| {
             use cq_lang_structures::Structure;
-            if matches!(entry.structure, Structure::Built { .. }) {
+            // Join filters are optional conservative accelerators. Each endpoint
+            // independently proves its covering operator, so a rewritten graph
+            // need not retain an obsolete scan-filter certificate.
+            if matches!(
+                entry.structure,
+                Structure::Built { .. } | Structure::JoinFilter { .. }
+            ) {
                 return true;
             }
             let definitions = &target.structures.physical.program.definitions;

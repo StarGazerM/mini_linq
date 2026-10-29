@@ -29,6 +29,7 @@ struct Checker<'a> {
     definitions: BTreeMap<String, usize>,
     physical: BTreeMap<String, &'a cq_lang_structures::physical::Definition>,
     physical_facts: &'a cq_lang_structures::physical::Analysis,
+    identity: &'a BTreeSet<String>,
     roots: Vec<usize>,
     nodes: Vec<Node<'a>>,
     collectives: Vec<(String, Monoid, Vec<String>)>,
@@ -161,6 +162,7 @@ pub(crate) fn check_grading_in(
     let mut checker = Checker {
         program,
         physical_facts: &analysis.structures.physical,
+        identity: &analysis.representation.identity,
         levels,
         grades,
         definitions,
@@ -455,12 +457,12 @@ impl<'a> Checker<'a> {
                 inputs.push(source);
             }
             Term::Rows(name) => {
-                if level != 0 {
+                if !self.levels[level].model.host_rust {
                     self.total_physical(name, None)?;
                 }
             }
             Term::Map(name, inner) | Term::Compact(name, inner) => {
-                if level != 0 {
+                if !self.levels[level].model.host_rust {
                     self.total_physical(name, self.physical_result(inner).as_deref())?;
                 }
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
@@ -468,7 +470,7 @@ impl<'a> Checker<'a> {
             Term::Lookup {
                 provider, inner, ..
             } => {
-                if level != 0 {
+                if !self.levels[level].model.host_rust {
                     self.total_physical(provider, None)?;
                 }
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
@@ -838,10 +840,8 @@ impl<'a> Checker<'a> {
     }
 
     fn total_physical(&self, result: &Ident, stop: Option<&str>) -> syn::Result<()> {
-        // Formal rule BE-Partial: opaque Bind/Guard code is host-only.
-        // IF-Parameter discharges closed fragments once before dispatch.
-        // Stop at explicit map inputs and checked Sequence stores, whose
-        // opaque results have already been evaluated.
+        // Formal rule BE-RustRepresentation: Rust reads identity row columns.
+        // Stop at explicit map inputs and checked Sequence stores.
         let mut pending = vec![symbol_name(result)];
         let mut visited = BTreeSet::new();
         while let Some(name) = pending.pop() {
@@ -858,12 +858,14 @@ impl<'a> Checker<'a> {
             let Some(definition) = self.physical.get(&name) else {
                 continue;
             };
-            if self.physical_facts.opaque(&definition.operator)
-                && !self.physical_facts.capturable(&definition.operator)
+            if self
+                .physical_facts
+                .rust_reads(&definition.operator)
+                .is_some_and(|reads| !reads.is_subset(self.identity))
             {
                 return Err(syn::Error::new(
                     result.span(),
-                    "BE-Partial: opaque Physical Rust must be evaluated at host before dispatch",
+                    "BE-RustRepresentation: Rust reading encoded columns must run at host",
                 ));
             }
             pending.extend(definition.operator.operands().into_iter().map(symbol_name));

@@ -28,7 +28,7 @@ macro_rules! engine {
                 HeapAllocHelper: Compat(*heap, *baseheap) :-
                     Alloc(heap, heaptype), Alloc(baseheap, baseheaptype),
                     Component(baseheaptype, comptype), Super(comptype, heaptype),
-                    if *baseheaptype != constants.c_object_array && *baseheaptype != constants.c_string_array;
+                    where baseheaptype != constants.c_object_array && baseheaptype != constants.c_string_array;
             };
             answer.collect()
         }

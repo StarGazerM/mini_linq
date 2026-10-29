@@ -269,33 +269,97 @@ mod tests {
         let mut layout = layout(provider, syn::parse_quote!(sharded));
         layout.protocol = cq_lang_datalog_round::storage::LayoutProtocol::Bulk;
         layout.key = 3;
-        assert_eq!(
-            cq_datalog_print::delta_rebuild(&layout, &syn::parse_quote!(delta)).to_string(),
-            quote!({
-                sharded.clear();
-                sharded.extend_from(
-                    &delta,
-                    |row| {
-                        (
-                            ::core::clone::Clone::clone(&row.1),
-                            ::core::clone::Clone::clone(&row.0),
-                            ::core::clone::Clone::clone(&row.2),
-                        )
-                    },
-                    |row| (),
-                );
-            })
-            .to_string(),
-        );
-        assert_eq!(
-            cq_datalog_print::insert_layout(&layout, false).to_string(),
-            quote!(
-                sharded.push(
-                    (::core::clone::Clone::clone(&row.1), ::core::clone::Clone::clone(&row.0), ::core::clone::Clone::clone(&row.2),),
-                    ()
-                );
-            ).to_string(),
-        );
+        let rebuilt: syn::Block = syn::parse2(cq_datalog_print::delta_rebuild(
+            &layout,
+            &syn::parse_quote!(delta),
+        ))
+        .unwrap();
+        // Statement order is significant: stale rows must be removed before filling.
+        let [syn::Stmt::Expr(syn::Expr::MethodCall(clear), Some(_)), syn::Stmt::Expr(syn::Expr::MethodCall(extend), Some(_))] =
+            rebuilt.stmts.as_slice()
+        else {
+            panic!("expected clear followed by extend_from");
+        };
+        assert_bulk_receiver(&clear.receiver);
+        assert_eq!(clear.method, "clear");
+        assert!(clear.args.is_empty());
+        assert_bulk_receiver(&extend.receiver);
+        assert_eq!(extend.method, "extend_from");
+        assert_eq!(extend.args.len(), 3);
+        let syn::Expr::Reference(rows) = &extend.args[0] else {
+            panic!("expected borrowed delta rows");
+        };
+        assert!(rows.mutability.is_none());
+        assert!(matches!(&*rows.expr, syn::Expr::Path(path) if path.path.is_ident("delta")));
+        for (projection, columns) in [
+            (&extend.args[1], &[1, 0, 2][..]),
+            (&extend.args[2], &[][..]),
+        ] {
+            let syn::Expr::Closure(closure) = projection else {
+                panic!("expected row projection closure");
+            };
+            assert_eq!(closure.inputs.len(), 1);
+            assert!(matches!(&closure.inputs[0], syn::Pat::Ident(row)
+                if row.ident == "row" && row.by_ref.is_none()
+                    && row.mutability.is_none() && row.subpat.is_none()));
+            assert_bulk_projection(&closure.body, columns);
+        }
+
+        let inserted: syn::Stmt =
+            syn::parse2(cq_datalog_print::insert_layout(&layout, false)).unwrap();
+        let syn::Stmt::Expr(syn::Expr::MethodCall(push), Some(_)) = inserted else {
+            panic!("expected one push statement");
+        };
+        assert_bulk_receiver(&push.receiver);
+        assert_eq!(push.method, "push");
+        assert_eq!(push.args.len(), 2);
+        assert_bulk_projection(&push.args[0], &[1, 0, 2]);
+        assert_bulk_projection(&push.args[1], &[]);
+    }
+
+    fn assert_bulk_receiver(receiver: &syn::Expr) {
+        assert!(matches!(receiver, syn::Expr::Path(path) if path.path.is_ident("sharded")));
+    }
+
+    fn assert_bulk_projection(mut projection: &syn::Expr, columns: &[u32]) {
+        // A single tail-expression block and tuple trailing commas do not change
+        // the projection. Do not discard statements or reorder tuple elements.
+        while let syn::Expr::Block(block) = projection {
+            assert!(block.label.is_none());
+            let [syn::Stmt::Expr(tail, None)] = block.block.stmts.as_slice() else {
+                panic!("expected a trivial projection block");
+            };
+            projection = tail;
+        }
+        let syn::Expr::Tuple(tuple) = projection else {
+            panic!("expected a tuple projection (including unit for empty payload)");
+        };
+        assert_eq!(tuple.elems.len(), columns.len());
+        for (element, column) in tuple.elems.iter().zip(columns) {
+            let syn::Expr::Call(clone) = element else {
+                panic!("expected cloned column");
+            };
+            let syn::Expr::Path(function) = &*clone.func else {
+                panic!("expected Clone::clone");
+            };
+            assert!(function.qself.is_none());
+            assert!(function.path.leading_colon.is_some());
+            assert_eq!(function.path.segments.len(), 4);
+            for (segment, expected) in function.path.segments.iter().zip(["core", "clone", "Clone", "clone"]) {
+                assert_eq!(segment.ident, expected);
+                assert!(matches!(segment.arguments, syn::PathArguments::None));
+            }
+            assert_eq!(clone.args.len(), 1);
+            let syn::Expr::Reference(borrow) = &clone.args[0] else {
+                panic!("expected borrowed column");
+            };
+            assert!(borrow.mutability.is_none());
+            let syn::Expr::Field(field) = &*borrow.expr else {
+                panic!("expected positional row field");
+            };
+            assert!(matches!(&*field.base, syn::Expr::Path(path) if path.path.is_ident("row")));
+            assert!(matches!(&field.member, syn::Member::Unnamed(index) if index.index == *column));
+        }
     }
 
     #[test]

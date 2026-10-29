@@ -24,7 +24,7 @@ fn fold_at_noncollaborative_device_is_rejected() {
 }
 
 #[test]
-fn opaque_rust_below_host_is_rejected() {
+fn rust_below_host_requires_identity_representation() {
     let mut program: Program = syn::parse_quote! {
         physical {
             relation R(a:i32) = (&data.r);
@@ -41,12 +41,39 @@ fn opaque_rust_below_host_is_rejected() {
         graded gpu { result at device; }
     };
     let error = check_grading(&program, &machine()).unwrap_err().to_string();
-    assert!(error.contains("BE-Partial"), "{error}");
+    assert!(error.contains("BE-RustRepresentation"), "{error}");
+    program.representation.encoded.insert("a".into());
+    let error = check_grading(&program, &machine()).unwrap_err().to_string();
+    assert!(error.contains("BE-RustRepresentation"), "{error}");
+    program.representation.encoded.clear();
+    program.representation.identity.insert("a".into());
+    assert!(check_grading(&program, &machine()).is_ok(),
+        "arbitrary total Rust is legal on identity device columns");
+    program.representation.identity.clear();
     program.graded = Some(syn::parse_quote!(graded gpu { result at host; }));
     assert!(
         check_grading(&program, &machine()).is_ok(),
         "opaque Rust remains legal at host"
     );
+    let unknown = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
+    assert!(!unknown.representation.identity.contains("a"));
+    assert!(unknown.representation.identity.contains("n"),
+        "the authored result annotation records identity without admitting unknown inputs");
+    assert!(unknown.representation.encoded.is_empty());
+    program.structures.structures.entries[0] = syn::parse_quote!(
+        r host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,), ()> [];
+    );
+    let native = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
+    assert!(native.representation.identity.contains("a"));
+    assert!(!native.representation.encoded.contains("a"));
+    program.structures.structures.entries[0] = syn::parse_quote!(
+        r host scan = ::gpu_datalog_runtime::DeviceLayout<
+            (::gpu_datalog_runtime::Symbol<i32, TestCodec>,), ()
+        > [];
+    );
+    let encoded = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
+    assert!(encoded.representation.encoded.contains("a"));
+    assert!(!encoded.representation.identity.contains("a"));
 }
 
 #[test]
@@ -128,6 +155,10 @@ fn host_choice_of_expanded_rows_preserves_upstream_range_translation() {
             result at device;
         }
     };
+    let program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
+    for column in ["a", "b", "c"] {
+        assert!(program.representation.identity.contains(column));
+    }
     let analysis = check_grading(&program, &machine()).unwrap();
     cq_gpu_sequence::translate(&program, &analysis).unwrap();
 }

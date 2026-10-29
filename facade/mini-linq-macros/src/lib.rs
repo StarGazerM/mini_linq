@@ -397,7 +397,18 @@ pub fn translate_pull(input: TokenStream) -> TokenStream {
 /// Generate typed source readers from relation declarations or a CQ callback.
 #[proc_macro]
 pub fn relation_loaders(input: TokenStream) -> TokenStream {
-    load::expand(input)
+    load::expand(input, false)
+}
+
+/// Generate typed readers with explicit load-time string interning support.
+///
+/// Accepts the same relation declarations or CQ callback as `relation_loaders`.
+/// Adds an `InternedRelation` implementation selected through `InternedField`
+/// traits, enabling `Loader::intern` and `Loader::parquet_interned`. It does not
+/// change query syntax or inspect Rust field type spellings.
+#[proc_macro]
+pub fn interned_relation_loaders(input: TokenStream) -> TokenStream {
+    load::expand(input, true)
 }
 
 /// Capture authored CQ and export a callback invoking a public consumer macro.

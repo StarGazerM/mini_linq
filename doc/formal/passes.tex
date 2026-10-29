@@ -12,7 +12,8 @@ no equivalence.
 For an atom at clause $i$, walk its arguments left to right against the declared
 types $\tau_j$. $B$ holds names bound by earlier clauses, $L$ names already seen in
 this occurrence (reset per occurrence), $A$ bare names this atom supplies that
-are not in $B$. Literals remain in the atom and bind no name. For other
+are not in $B$, and $Q$ is the complete logical scope (including the current
+branch's binders). Literals remain in the atom and bind no name. For other
 arguments, fresh $k$ starts at \code{__cq_i_j}; cases are tried in order:
 \begin{mathpar}
 \Rule{A-Variable}{a_j=x\quad x\notin L}
@@ -24,8 +25,11 @@ arguments, fresh $k$ starts at \code{__cq_i_j}; cases are tried in order:
 \Rule{A-Wildcard}{a_j=\_\quad k\text{ fresh}}
  {a_j\leadsto_{NF}k\quad[\text{unconstrained witness}]}
 
+\Rule{A-Closed}{a_j=e\quad\fv(e)\cap Q=\emptyset\quad k\text{ fresh}}
+ {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[\mathsf{where}\ k==\mathsf{Closed}(e)]]}
+
 \Rule{A-Prefix}{a_j=e\text{ is a remaining expression}\quad
- \uses(e,A)=\emptyset\quad k\text{ fresh}}
+ \fv(e)\cap Q\ne\emptyset\quad\uses(e,A)=\emptyset\quad k\text{ fresh}}
  {a_j\leadsto_{NF}k\quad[\mathit{before}:=\mathit{before}\concat[\mathsf{let}\ k:\tau_j=e]]}
 
 \Rule{A-Local}{a_j=e\text{ is a remaining expression}\quad
@@ -33,11 +37,12 @@ arguments, fresh $k$ starts at \code{__cq_i_j}; cases are tried in order:
  {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[\mathsf{let}\ v:\tau_j=e,\ k=v]]}
 \end{mathpar}
 Replace the atom by $\mathit{before}\concat[R(\bar a')]\concat\mathit{after}$.
-Identities are relational clauses, not guards. Constraints, residual guards and
+Identities are relational clauses, not guards. Constraints, Rust guards and
 lets and generators are copied; branch bodies normalize recursively with fresh names; a
-computed head becomes a final typed bind. In \code{R(x,f(x),g())}, the closed
-\code{g()} bind precedes the atom and the dependent \code{f(x)} bind follows it;
-these positions, not Rust argument order, define the written reference.
+computed head becomes a final typed bind. In \code{R(x,f(x),g())}, closed
+\code{g()} remains a once-bound host operand of an occurrence restriction;
+the dependent \code{f(x)} bind follows the atom. No closed atom operand creates
+a row binding or a Rust block dependency.
 \emph{Check:} the NF contract only; there is no separate correspondence check.
 \emph{Refinement:} each rewrite replaces an argument by an equivalent
 identity or a bind at the position Rust would evaluate it, so meanings are equal.
@@ -59,20 +64,16 @@ $\bar O_i$ and requires $R_i$:
 \Rule{D-For}{\bar N=\binds(p)\quad R=\uses(e,B_w)}
  {B_w;T\vdash\mathsf{for}\ p\ \mathsf{in}\ e\triangleright(\bar N,R)}
 
-\Rule{C-Ready}{i\in U\quad R_i\subseteq B\\
- \neg\mathsf{Rust}(c_i)\ \lor\
- (i=\min\{j\in U\mid\mathsf{Rust}(c_j)\}\land
-  \operatorname{Before}(i)\cap U=\emptyset)}
+\Rule{C-Ready}{i\in U\quad R_i\subseteq B}
  {U;B\vdash i:\mathsf{ready}}
 \end{mathpar}
-Generators are Rust nodes for C-Ready, not atom occurrences or relational
-facts. They share scalar lets' opaque placement: dependencies must be bound,
-all earlier Rust nodes must execute first, and every source Before fact must
-already hold. Later atoms mentioning their outputs are input-dependent access
-patterns, not alternative binders. Incomplete atom checks remain Before
-requirements. Generators cannot be reduction targets, reduction supports or
-independent build targets; a block containing one is not Rust-free.
-This remains true for a closed expression or a generator yielding no names.
+Generators require their RHS free variables, just as scalar lets and guards
+do. They are not atom occurrences or relational predicate facts. Later atoms
+mentioning their outputs require those bindings rather than supplying them.
+There is no written-order chain or predecessor-set condition. Generators
+cannot be reduction targets, reduction supports or independent build targets;
+a block containing one is not Rust-free. This remains true for a closed
+expression or a generator yielding no names.
 Identities and constraints require their variables and provide none
 (D-Constraint). A Rust-free block provides its free/interface heading; a Rust
 block requires its free names and is Rust. Heuristics repeatedly place the
@@ -116,8 +117,8 @@ GreedyWidth; Elimination uses reverse maximum-cardinality search on the primal
 graph. Written/Fine splits atoms in place. $\mathsf{flush}$ emits ready waiting
 steps (constraints first); a variable is eligible if no Rust step supplies it or
 it is bound; $\mathsf{introduce}$ emits a subatom of its first holding atom and
-then the others' checks. Incomplete atoms count toward Before until their full
-row is checked. Literal-only occurrences have an empty variable heading and
+then the others' checks. Every atom's full correlated row must eventually be
+checked. Literal-only occurrences have an empty variable heading and
 are placed as complete zero-column reads before the fine variable loop.
 The production facade uses Prefix(Connected)/Coarse: the written root, then
 at each step a ready atom sharing a bound equality class before a disconnected
@@ -127,12 +128,12 @@ executable reference; ordinary Written/Coarse retains O-BlockPlacement and is
 the `plan(order(..))` fallback. Filtered/Coarse serves external planners
 and R-Masks' sibling order. Under H-FilterRank, $f_i$ is
 $0$ for an occurrence containing a literal or a local constant equality, $1$ for a local constant range,
-$2$ for a derived domain, total predicate or finite relational block, and
-$3$ otherwise. Equality classes determine locality; opaque Rust guards
-never improve a rank. This is a syntax-only priority, not a cardinality
+$2$ for a derived domain, relational predicate or finite relational block,
+and $3$ otherwise. Equality classes determine locality; Rust guards never
+improve a rank, regardless of their syntax or types. This is a syntax-only priority, not a cardinality
 estimate. Written remains available to explicit planner clients.
 \[
-\Rule{H-FilterRank}{P_i=\text{local total predicates on }\kappa(O_i)\quad
+\Rule{H-FilterRank}{P_i=\text{local explicit relational predicates on }\kappa(O_i)\quad
  L_i=\{0\mid O_i\text{ has a literal argument}\}}
  {f_i=\min(\{3\}\cup L_i\cup\{\mathsf{strength}(p)\mid p\in P_i\})}
 \]
@@ -146,8 +147,8 @@ subatom; Coarse has one full subatom per atom; Fine introduces at most one
 variable per subatom; Written keeps NF order. Filtered/Coarse independently
 checks that no ready occurrence outranks the recorded choice and discharges
 CK-OrderBranches for the recorded groups. Other rankings remain construction
-choices. \emph{Refinement:} by the VO contract (relational
-steps earlier, Rust order and Before kept, full rows checked).
+choices. \emph{Refinement:} by the VO contract (free-variable dependencies,
+unchanged total Rust expressions, relational predicates and full rows checked).
 
 \subsection{Hypergraph analysis and GYO}
 \label{sec:graph-extraction}\label{sec:gyo-construction}
@@ -361,16 +362,15 @@ fixed occurrence paths.
  p_0=\mathsf{unitize}(p)\quad(D',r)=\emit(D,\pi_Wp_0)}
  {(D,M,p,B)\Downarrow(D',\mathsf{output}\ r\ \mathsf{as}\ h(\bar e))}
 
-\Rule{E-Constraint}{\vars(C)\subseteq\vars(R)\text{ for a complete earlier binder}\\
- \text{optimizing elaboration; no scalar-let- or generator-supplied column}}
- {C\text{ may select }R\text{ before joining};\quad
-  \text{otherwise select the bound prefix}}
+\Rule{E-Constraint}{\mathsf{step}=\mathsf{Constraint}(P)\quad
+ \vars(P)\subseteq B\quad p_0=\mathsf{unitize}(p)}
+ {\mathsf{elaborate}(P,p)=\sigma_Pp_0\text{ at its recorded VO placement}}
 
 \Rule{E-Domain}{C=\bigvee_i\bigwedge_j C_{ij}\quad
- D_{ix}=\{C_{ij}\mid C_{ij}\text{ restricts only }x\text{ against literals}\}\\
+ D_{ix}=\{C_{ij}\mid C_{ij}\text{ restricts only }x\text{ against literals or CQ-Closed operands}\}\\
  \forall i.\ D_{ix}\ne\varnothing}
  {C\Longrightarrow D_x=\bigvee_i\bigwedge D_{ix}\quad
-  \text{push }D_x\text{ onto }x\text{'s complete binder; retain }C}
+  \text{record }D_x\text{ at planning time; retain the exact }C}
 
 \Rule{CT-Constraint}{\vars(C)=\bar x\quad\mathsf{columns}(\bar x)=\bar t\\
  \mathsf{closure}(C)=\{C\}\cup\{D_x\mid\text{E-Domain derives }D_x\}}
@@ -397,29 +397,36 @@ A full subatom always joins; a partial check uses the whole clause relation.
 $\mathsf{unitize}$ emits Unit when no prefix exists; binds copy pattern,
 annotation and expression. In E-ReduceWith, $\ltimes_\equiv$ matches every
 support column with the target's class; when protected Rust or head names block
-renaming it is realized as join/select/project. Optimizing elaboration pushes
-literal equalities and constraints onto the occurrence supplying all their
-columns (E-Constraint), in queries with and without blocks; alias solving is
-applied only to block-free queries. Recorded hoisted blocks form a derived
-relation over $F\cup I$, using a named finite prefix domain for missing
-generators; recorded correlated blocks run per row over the prefix.
-Elaboration never chooses this alternative. The written-reference ordering
-entry \code{cq_order::compile_written} records correlated placement recursively;
-\code{cq_elaborate::compile_written} requires those choices and disables
-predicate pushdown and alias solving, rather than overriding block placement.
+renaming it is realized as join/select/project. Elaboration consumes recorded
+constraint placement (E-Constraint); it does not independently push predicates
+or choose joins. Alias representation must preserve logical binding identities.
+Recorded hoisted blocks form a derived relation over $F\cup I$, using a named
+finite prefix domain for missing generators; recorded correlated blocks run
+per row over the prefix. Elaboration never chooses this alternative. The
+written-reference ordering entry \code{cq_order::compile_written} records
+correlated placement recursively; \code{cq_elaborate::compile_written}
+consumes those choices and the written predicate positions.
+Structural block views replace every recorded origin of a prefix variable by
+the same context column, including equal origins contributed by different
+joined atoms. Replacing only the heading representative would leave references
+to prefix atoms outside the view.
+Query-closed operands are fixed for the invocation just like literal operands.
+E-Domain copies their unchanged expression payloads; it does not evaluate or
+compare them during compilation. Operand representation therefore cannot remove
+necessary per-column domains or their admissible reductions.
 The E-Domain closure is recomputed independently while checking both schedules;
 unjustified added selections and removal of the original disjunction are
-rejected. Recognized relational predicates are selections with exact expression and
-binding payloads; an opaque source guard cannot be replaced by one because
-the Rust-chain obligation would fail. Domain derivation uses only literal
-equalities, comparisons, inclusive ranges and literal membership, never
-database statistics or foreign-key assumptions.
+rejected. Explicit relational predicates retain exact constraint and binding
+payloads; an opaque source guard cannot be replaced by one because unchanged
+Rust expression identity is required. Domain derivation uses only equalities,
+comparisons, inclusive ranges and membership over literal or CQ-Closed operands,
+never database statistics or foreign-key assumptions.
 \[
 \Rule{CK-Elaborate}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{RA}(t)\\
  t.declarations=s.cq.declarations\quad t.head=s.cq.head\\
- \mathsf{FixedFacts}(s,t)\quad\mathsf{RustTree}(s,t)\quad
- \mathsf{BlockPlacements}(s,t)\Downarrow\ok\\
- \forall i.\ \operatorname{Before}_s(i)\subseteq\operatorname{Before}_t(i)\\
+ \mathsf{FixedFacts}(s,t)\quad\mathsf{RustPayloadsAndBindings}(s,t)\quad
+ \mathsf{BlockPlacements}(s,t)\Downarrow\ok\quad
+ \mathsf{RecordedPlacement}(s,t)\\
  \mathsf{OutputBindings}(s)=\mathsf{OutputBindings}(t)}
  {\mathsf{check}_{elaborate}(s,t,())\Downarrow\ok}
 \]
@@ -427,9 +434,9 @@ The checker builds a schedule from the supplied VO and compares fixed occurrence
 paths and column bindings, equality closure, predicate shapes, named reduction
 support, Rust payloads and bindings, output heading and head. Union siblings
 match by occurrence footprint, fallback siblings in order, negated references by
-original branch. \emph{Refinement:} occurrences, constraints and Rust chain are
-those of the source with relational facts no later, so by the premises the
-target refines the source.
+original branch. \emph{Refinement:} occurrences, constraints, Rust expressions
+and their recorded placements are those of the source; totality and the
+representation laws establish equal answers.
 For pure positive targets produced by \code{simplify_expansions},
 CK-Elaborate also permits an inverse dead-expansion certificate. Starting
 only from the supplied RA target, it tentatively replaces a semijoin by a
@@ -478,7 +485,7 @@ a Cartesian product between independent children such as Part and Nation.
 No uniqueness or foreign-key premise
 is used. \textsc{CK-JoinBranch} independently requires the projected DAG for
 each VO group in addition to the unchanged global occurrence, predicate,
-reduction and Before proof. Reduction erasure preserves branch metadata.
+reduction and Rust-binding proof. Reduction erasure preserves branch metadata.
 For recorded independent branches, the optional Hypergraph policy emits no
 semijoin reducer: a branch must not depend on scanning the fact side merely
 to build its support. The checker forbids those optional reductions rather
@@ -501,19 +508,19 @@ The subsequent RA simplifier retains its existing relational rewrite proof.
   \pi_I\sigma_{P_b}(R_{a_1}\bowtie\cdots\bowtie R_{a_k})}
 
 \Rule{CK-JoinBranch}{\mathsf{WF}_{VO}(s)\quad
- \mathsf{FixedFacts}(s,t)\quad\mathsf{RustTree}(s,t)\\
+ \mathsf{FixedFacts}(s,t)\quad\mathsf{RustPayloadsAndBindings}(s,t)\\
  \forall b\in s.branches.\ \mathsf{LiveExactProjectedDAG}(t,b,I_b)}
  {\mathsf{checkBranches}(s,t)\Downarrow\ok}
 \end{mathpar}
 
 
-\paragraph{Example: computed arguments pin placement.}
+\paragraph{Example: free variables determine eligibility.}
 In \code{answer(a,w) :- R(a,x), S(a,y), T(y,z), let k = combine(*x,*y), let
-p = left_key(k,*y), let q = right_key(*x,*z), U(p,q,w), if *x > 0, if
-permitted(k,*z), V(w);} the comparison \code{*x > 0} may select $R$ early, but
-\code{combine} cannot move before $T$ and \code{permitted} cannot swap with an
-earlier bind; $V$ may move earlier. The \code{constraint_planning} and
-\code{argument_placement} drivers check these placements structurally.
+p = left_key(k,*y), let q = right_key(*x,*z), U(p,q,w), where x > 0, if
+permitted(k,*z), V(w);} the relational predicate may select $R$ early.
+\code{combine} requires only $x,y$, not $T$; \code{permitted} requires $k,z$,
+not the preceding independent binding of $q$. Both Rust expressions remain
+unchanged. A Rust spelling \code{if *x > 0} would not produce a range read.
 
 \paragraph{Abstract laws.} A ghost join tree witnesses coarse assembly, and
 retention justifies projection before a join:
@@ -745,7 +752,7 @@ destructuring item $v$ and extending the row with the fresh pattern columns.
 The same checked Bind node has the following two realizations:
 \begin{mathpar}
 \Rule{P-For}{\mathsf{Bind}(r,p,e)\text{ carries the \code{for} token}\\
- \mathsf{scopeOK}\quad\mathsf{preserveBefore}\quad\mathsf{finitePure}(e)}
+ \mathsf{scopeOK}\quad\mathsf{unchangedExpression}\quad\mathsf{finitePureTotal}(e)}
  {\mathsf{pull}:
  I_r.\mathsf{flat\_map}(\rho\mapsto
  \mathsf{into\_iter}(e(\rho)).\mathsf{map}(v\mapsto\mathsf{extend}_p(\rho,v)))\\
@@ -759,11 +766,19 @@ iteration stays inside that step's row scope. Generated item columns have
 the same owned-computed representation as scalar bind columns, while existing
 host references retain their origins. No collector, sorting or deduplication
 is inserted at the generator itself; existing canonical boundaries suffice.
+Shared generator callables retain host-column lifetimes for iterators borrowing
+their inputs, but quantify computed-column borrows independently for every
+call. A row-local computed value must not borrow for the enclosing callable's
+lifetime merely because the unchanged expression also captures host state.
+Zero-sized type witnesses connect prepared scalar results and generator item
+patterns to later callable inputs. Rust infers unannotated computed columns
+from these connections; preparing a witness evaluates neither the original
+expression nor its pattern-extractor closure.
 Absent the token, the scalar printer remains a one-row extension and must not
-call \code{IntoIterator}. A generator is a partial stage boundary, never a
-total kernel merely because its RHS is closed. Rust checks the iterator/item
-and lifetime obligations; the checker preserves the tag, dependencies and
-Before facts, while finite purity remains the host premise.
+call \code{IntoIterator}. Generator iteration is pure and total by premise;
+stage eligibility depends on its representation. Rust checks iterator/item
+and lifetime obligations; the checker preserves the tag, original expression
+and free-variable bindings; finite pure total iteration remains a host premise.
 
 \subsection{Shared planning compositions}
 With $N$ normalization, $O_{h,s}$ ordering, $R_{g,r}$ reduction, $E$ elaboration,
@@ -774,8 +789,13 @@ Its \code{PlanOptions} parser is shared by macro and programmatic callers:
 \code{order(...)} and \code{no_reduce} occur at most once, reduction and skip
 packets may repeat, and a trailing options comma is rejected. The checked
 \code{prefix_valuation} API exposes $w$ before elaboration.
+Qualified \code{PlanOptions} selectors name clauses of the authored input $q$.
+Normalization preserves top-level atom/block order, so its inserted bindings
+and restrictions induce a positional map $\rho$ from those source clauses
+to $N(q)$. Apply $\rho$ to qualified order, reduction and skip selectors before
+passing them to the normal-IR ordering API; unqualified selectors are unchanged.
 \begin{mathpar}
-\Rule{Plan-Prefix}{p=\mathsf{parsePlanOptions}(args)\quad n=N(q)\\
+\Rule{Plan-Prefix}{p=\rho(\mathsf{parsePlanOptions}(args))\quad n=N(q)\\
  v=\begin{cases}O_{explicit(p.order),Coarse}(n)&p.order\text{ present}\\
  O_{Prefix(Connected),Coarse}(n)&\text{otherwise}\end{cases}\\
  r=\text{None if }p.no\_reduce,\text{ otherwise Masks}\\
@@ -809,7 +829,7 @@ packets may repeat, and a trailing options comma is rejected. The checked
  \text{for each inner occurrence }R\text{ in GYO ear order:}\\
  \mathsf{lookup}(R)=R(\bar b,\_)\ \text{at the first point its bound key }\bar b\text{ is available}\\
  \mathsf{expand}(R)=R(\bar b,\bar y)\ \text{at the latest point before }
- \mathsf{firstUse}(\bar y)\lor\mathsf{Before}\text{ boundary}\lor\text{scope exit}}
+ \mathsf{firstUse}(\bar y)\lor\text{scope exit}}
  {\code{cq_planners::order(le)}(q)=E(\mathsf{le}(w))}
 
 \Rule{CK-Le}{\mathsf{erase}(t)=n\quad
@@ -848,8 +868,8 @@ correspondence check rejects some sound transfer schedules.
 Neumann (VLDB'24) as a VO construction: a lookup is a partial subatom that
 introduces no names (a semijoin of the stream prefix), an expansion is the
 later full subatom of the same occurrence. Lookups are placed in GYO ear order
-as soon as their bound key is available, expansions as late as demand, Rust
-Before boundaries or scope exit permit, so acyclic scopes form two-phase plans.
+as soon as their bound key is available, expansions as late as column demand
+or scope exit permits, so acyclic scopes form two-phase plans.
 Expansions are coarse full rows under an explicit CK-Le obligation, not Fine
 subatoms. Whether a later probe reuses the lookup's cursor is a Structures
 representation decision, not part of this plan.
@@ -919,10 +939,14 @@ ordering policy.
 \paragraph{Join-filter selection and realization.}
 \textsc{SEL-JoinFilter} records a scalar filter for every admissible
 (\textsc{STR-JoinFilter}) covering probe or semijoin into a statically filtered,
-total hash build, one per \code{i64} column of its key, at the scan its
+total single-level build, one per scalar column of its key, at the scan its
 exclusive spine reaches; this is the bitmap a build side pushes to the deepest
 probe-side scan. A scan may therefore carry filters from several builds.
-Every eligible build selects an exact \code{AdaptiveKeySet}.
+Every eligible payload-index build selects an exact
+\code{AdaptiveMembership<K,67108864>}. A membership-only build already answers
+the same exact key test and receives no redundant supplementary filter.
+Rust's \code{DenseOrdinal} capability selects the dense representation under
+\textsc{STR-AdaptiveMembership}; other keys keep exact hash membership.
 Selection does not sample cardinalities or assume keys or foreign keys.
 Approximate structures live in an external feature and require explicit
 \code{cq_rewrites::retype} advice; the printer has no algorithm-specific branch.
@@ -932,8 +956,8 @@ layout, filter type and column marker; covering-operator identity alone does not
 require another filter. First-witness order supplies scan-local identities, also
 used to distinguish profile labels.
 \textsc{IF-JoinFilter} constructs each distinct checked provider from the existing
-index's distinct keys, projected to the filtered key column, through
-\code{Build} on $(k,())$ pairs, emits \code{require::conservative::<K,T>}, then
+index's \code{Keys::distinct_keys}, projected to the filtered key column, through
+\code{cq_storage::build!} on $(k,())$ pairs, emits \code{require::conservative::<K,T>}, then
 filters positions before fetching payloads: the first filter through the
 block-skipping read, the others on its surviving positions, in decision order.
 Host block bounds use the provider's conservative \code{any_in}; an absent bound
@@ -944,7 +968,7 @@ host publication ordered ahead of that build) applies only the filters already
 built: an omitted filter is the trivial conservative filter that passes every
 key, so the covering exact operators still decide membership.
 \textsc{IF-JoinFilterAbandon} decides at runtime whether to construct the
-filters of a build at all: a build whose distinct keys exceed 35\% of the rows
+filters of a build at all: a build whose \code{Keys::key_count} exceeds 35\% of the rows
 of its positional source occurrence constructs none (the creation threshold of
 dynamic predicate transfer, RPT+), and its abandoned filters pass every key,
 which the one-sided conservative law permits. A build without a single
@@ -953,9 +977,9 @@ exact operators decide membership either way.
 \begin{mathpar}
 \Rule{SEL-JoinFilter}{
  \mathsf{eligibleCoveredScan}(s,b,k,j)\quad
- \mathsf{filteredBuild}(b)\quad
+ \mathsf{filteredBuild}(b)\quad\neg\mathsf{membershipOnly}(b)\quad
  \mathsf{positionalHost}(s)\\
- T=\code{AdaptiveKeySet<i64,I64Codec,67108864>}
+ T=\code{AdaptiveMembership<K,67108864>}
 }{
  \mathsf{select}(s,b,k,j)=
  \mathsf{joinFilter}(T,b,k,j,\mathsf{marker}(s,k))

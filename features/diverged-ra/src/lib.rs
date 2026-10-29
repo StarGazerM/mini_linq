@@ -5,11 +5,11 @@
 //! in selection and printing. The second route inserts a checked Physical
 //! rewrite that records `merge [k]`; its hosts are ordinary ordered maps.
 //! Each core dependency is declared with a version and a local development path.
-//! Tests use the public cq-testkit oracle and executable refinement harness.
+//! Tests use the public cq-testkit oracle and compare answer sets on total inputs.
 //!
-//! The meaning is `T X = bottom + Set X`, with one abort and an opaque partial
-//! Rust guard after the relational join. Other effects and evaluation counts
-//! are outside this meaning.
+//! Rust guards are opaque, pure, total functions placed after the binders of
+//! their free variables. Written clause order and evaluation counts are not
+//! semantic constraints; relational predicates belong in `where`.
 //! From the repository root, run `python3 features/diverged-ra/check.py` to
 //! validate both routes, or `cargo test --manifest-path
 //! features/diverged-ra/Cargo.toml --locked` for the workspace tests.
@@ -18,7 +18,7 @@ include!(concat!(env!("OUT_DIR"), "/query.rs"));
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cq_testkit::{Database, Rows, harness, semantics};
+    use cq_testkit::{Database, Rows, semantics};
     use std::collections::BTreeSet;
     fn oracle(left: &[(i32, i32)], right: &[(i32, i32)]) -> BTreeSet<(i32, i32)> {
         left.iter()
@@ -96,9 +96,8 @@ mod tests {
     }
 
     #[test]
-    fn opaque_partial_guard_refines_written_order() {
-        fn partial(x: &i32, y: &i32) -> bool {
-            assert_ne!(*x, 9, "one undistinguished bottom");
+    fn opaque_total_guard_preserves_answers_after_its_free_variable_binders() {
+        fn guard(x: &i32, y: &i32) -> bool {
             x < y
         }
         type Input<'a> = &'a [(i32, i32)];
@@ -110,26 +109,13 @@ mod tests {
             (&[(1, 9)], &[]),
         ];
         for &(left, right) in cases {
-            for run in [run_partial_probe, run_partial_merge] {
-                harness::check_refinement(
-                    || {
-                        let mut answer = BTreeSet::new();
-                        for &(k, x) in left {
-                            for &(l, y) in right {
-                                if k == l && partial(&x, &y) {
-                                    answer.insert((x, y));
-                                }
-                            }
-                        }
-                        answer
-                    },
-                    || {
-                        run(left, right, partial)
-                            .into_iter()
-                            .collect::<BTreeSet<_>>()
-                    },
-                )
-                .unwrap();
+            for run in [run_total_probe, run_total_merge] {
+                // Both inputs of the opaque guard must be bound. No order
+                // relative to unrelated relational work is required.
+                assert_eq!(
+                    run(left, right, guard).into_iter().collect::<BTreeSet<_>>(),
+                    oracle(left, right),
+                );
             }
         }
     }

@@ -1,4 +1,5 @@
 //! Replayable preparation of raw/filter alternatives from Lookup & Expand.
+//! Cloned consumers retain their keyed host adapters and membership certificates.
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::{Program, Term, structures};
@@ -500,15 +501,20 @@ fn prepare(
         prepared.structures.physical.program.returned = joined.clone();
     }
     for (old, new) in copied_names {
-        for entry in source
-            .structures
-            .structures
-            .entries
-            .iter()
-            .filter(|entry| entry.name == old)
-        {
+        for entry in source.structures.structures.entries.iter().filter(|entry| {
+            entry.name == old
+                || matches!(&entry.structure, structures::Structure::Host { reader, .. }
+                        if reader.result() == Some(&old))
+        }) {
             let mut copy = entry.clone();
-            copy.name = new.clone();
+            if copy.name == old {
+                copy.name = new.clone();
+            }
+            if let structures::Structure::Host { reader, .. } = &mut copy.structure
+                && reader.result() == Some(&old)
+            {
+                *reader = structures::ReaderRef::Result(new.clone());
+            }
             prepared.structures.structures.entries.push(copy);
         }
     }

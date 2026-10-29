@@ -1,7 +1,8 @@
 //! TPC-H Q15's maximum-revenue suppliers, without final ordering.
 //! Per-supplier revenue feeds a global maximum; equality retains every tie.
 //! Revenue is an exact scale-four coefficient, with line identities preserved.
-use cq_load::{Date, Decimal, Load};
+//! Supplier text stays dictionary-coded until final answer publication.
+use cq_load::{Date, Decimal, Dictionaries, Load, StringCode};
 
 pub const NAME: &str = "retail_h15";
 
@@ -23,31 +24,36 @@ SELECT DISTINCT s.s_suppkey, s.s_name, s.s_address, s.s_phone, r.total_revenue
 FROM supplier s JOIN revenue r ON s.s_suppkey = r.supplier_key
 WHERE r.total_revenue = (SELECT MAX(total_revenue) FROM revenue)"#;
 
-pub type Supplier = (i64, String, String, String);
+pub type Supplier = (i64, StringCode, StringCode, StringCode);
 pub type Lineitem = (i64, i64, i64, Decimal, Decimal, Date);
 pub type Answer = (i64, String, String, String, i64);
 pub struct Data {
     pub supplier: Vec<Supplier>,
     pub lineitem: Vec<Lineitem>,
+    pub dictionaries: Dictionaries,
 }
 
-mini_linq::relation_loaders! {
-    relation Supplier(s_suppkey: i64, s_name: String, s_address: String, s_phone: String);
+mini_linq::interned_relation_loaders! {
+    relation Supplier(s_suppkey: i64, s_name: StringCode, s_address: StringCode, s_phone: StringCode);
     relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_suppkey: i64,
         l_extendedprice: Decimal, l_discount: Decimal, l_shipdate: Date);
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
     assert!(CONFIGS.contains(&config), "unknown H15 configuration");
+    let mut dictionaries = Dictionaries::default();
     Ok(Data {
-        supplier: <relation_loader!(Supplier)>::parquet(
+        supplier: <relation_loader!(Supplier)>::parquet_interned(
             root.join("supplier.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
-        lineitem: <relation_loader!(Lineitem)>::parquet(
+        lineitem: <relation_loader!(Lineitem)>::parquet_interned(
             root.join("lineitem.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
+        dictionaries,
     })
 }
 
@@ -66,7 +72,7 @@ crate::tpch_runtime::standalone_configs! { $;
             relation answer(supplier_key: i64, revenue: i64);
             answer(supplier_key, sum(revenue_units)) :-
                 Lineitem(order_key, line_number, supplier_key, price, discount, shipdate),
-                if *shipdate >= start && *shipdate < end,
+                where shipdate >= start && shipdate < end,
                 let revenue_units: i64 = price.scaled() * (100 - discount.scaled());
         }.map(|(supplier, revenue)| (*supplier, revenue)).collect();
         let Revenue = Revenue.as_slice();
@@ -82,16 +88,19 @@ crate::tpch_runtime::standalone_configs! { $;
         query! {
             plan(no_reduce, order(Maximum, Revenue, Supplier));
             struct Query;
-            relation Supplier(s_suppkey: i64, s_name: String, s_address: String, s_phone: String);
+            relation Supplier(s_suppkey: i64, s_name: StringCode, s_address: StringCode, s_phone: StringCode);
             relation Revenue(supplier_key: i64, revenue: i64);
             relation Maximum(maximum: Option<i64>);
-            relation answer(supplier_key: i64, name: String, address: String, phone: String, revenue: i64);
+            relation answer(supplier_key: i64, name: StringCode, address: StringCode, phone: StringCode, revenue: i64);
             answer(supplier_key, name, address, phone, revenue) :-
                 Revenue(supplier_key, revenue), Maximum(maximum),
                 if Some(*revenue) == *maximum,
                 Supplier(supplier_key, name, address, phone);
         }.map(|(supplier, name, address, phone, revenue)| {
-            (*supplier, name.clone(), address.clone(), phone.clone(), *revenue)
+            // DECODE P: Supplier text is materialized only when publishing answers.
+            (*supplier, data.dictionaries.publish("s_name", *name),
+                data.dictionaries.publish("s_address", *address),
+                data.dictionaries.publish("s_phone", *phone), *revenue)
         }).collect()
     }
 }

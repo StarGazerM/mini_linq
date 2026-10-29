@@ -1,7 +1,7 @@
 //! Executable alternatives plus independent typed Source, Incremental, and Round references.
 //! Rewritten Round executes coarser strata, alternate layouts, and recorded choices;
 //! the ordinary compiler defaults remain untouched.
-use cq_datalog_testkit::{Outcome, check_refinement};
+use cq_datalog_testkit::{RefinementFailure, check_refinement};
 use std::collections::HashSet;
 
 macro_rules! reference {
@@ -151,10 +151,10 @@ macro_rules! computed {
             relation Result(label:String,n:i32);
             relation Independent(n:i32);
             output Result;
-            Result(label.clone(), next) :- Input(label,n), if *n < 3,
+            Result(label.clone(), next) :- Input(label,n), where n < 3,
                 let prefix = label.to_uppercase(), for extra in 0..2,
                 let next = *n + extra, if !prefix.is_empty();
-            Result(label.clone(), *n + 1) :- Result(label,n), if *n < 4;
+            Result(label.clone(), *n + 1) :- Result(label,n), where n < 4;
             Independent(*n) :- Input(_,n);
         }
     };
@@ -189,7 +189,7 @@ fn opaque_rust_strings_generators_and_computed_recursive_heads() {
 }
 
 #[test]
-fn panic_is_bottom_not_an_empty_answer() {
+fn panic_violates_totality_instead_of_denoting_an_empty_answer() {
     fn partial(n: &i32) -> bool {
         assert_ne!(*n, 0, "partial guard");
         true
@@ -203,14 +203,16 @@ fn panic_is_bottom_not_an_empty_answer() {
             }
         },
         HashSet::<(i32,)>::new,
-    )
-    .unwrap();
-    assert!(matches!(result.reference, Outcome::Panicked(_)));
+    );
+    assert!(matches!(
+        result,
+        Err(RefinementFailure::ReferencePanicked { .. })
+    ));
     assert!(
         check_refinement(
             || reference! {
                 struct Q; relation E(x:i32) = (&rows); relation R(x:i32); output R;
-                R(x) :- E(x), if *x != 0, if partial(x);
+                R(x) :- E(x), where x != 0, if partial(x);
             },
             || panic!("new target panic"),
         )
@@ -230,7 +232,7 @@ fn typed_multiple_outputs_and_edb_canonicalization() {
 }
 
 #[test]
-fn normalized_guards_compare_borrowed_columns_and_owned_bindings() {
+fn relational_predicates_compare_borrowed_columns_and_owned_bindings() {
     let rows = [(1_i32, 1_i32), (2, 2), (3, 3), (3, 4)];
     let low = 1;
     let high = 3;
@@ -241,10 +243,10 @@ fn normalized_guards_compare_borrowed_columns_and_owned_bindings() {
                 relation E(x:i32,y:i32) = (&rows);
                 relation R(x:i32);
                 output R;
-                R(*x) :- E(x,y), if *x == *y,
-                    if *x >= low && *x <= high,
-                    if *x == 1 || *x == 3,
-                    let next = *x + 1, if next > 1;
+                R(*x) :- E(x,y), where x == y,
+                    where x >= low && x <= high,
+                    where x == 1 || x == 3,
+                    let next = *x + 1, where next > 1;
             }
         };
     }

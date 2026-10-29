@@ -132,6 +132,7 @@ impl<S: Relation> Iterator for Csv<S> {
             mapping: &self.mapping,
             data: BatchData::Csv(&records),
         };
+        // DECODE V: Loader::csv_hash/csv_btree group these decoded rows; P4 keeps index keys encoded and P5 builds scan columns directly.
         let decoded = S::decode(&batch);
         if decoded.is_err() {
             self.finished = true;
@@ -142,7 +143,9 @@ impl<S: Relation> Iterator for Csv<S> {
 
 impl<S: Relation> std::iter::FusedIterator for Csv<S> {}
 
+// DECODE ?: read_csv collects the logical batch decoder for arbitrary callers without a recorded final-use boundary.
 pub fn read_csv<S: Relation>(path: impl AsRef<Path>, options: CsvOptions) -> Result<Vec<S::Row>> {
+    // DECODE ?: try_fold drives Csv::next reconstruction; caller-specific relational and diagnostic uses are classified at their sites.
     Csv::<S>::open(path, options)?.try_fold(Vec::new(), |mut rows, batch| {
         rows.extend(batch?);
         Ok(rows)

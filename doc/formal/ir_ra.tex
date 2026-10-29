@@ -1,4 +1,4 @@
-\section{RA prime: named relational algebra with a Rust chain}
+\section{RA prime: named relational algebra with Rust expressions}
 \label{sec:ra}
 
 \paragraph{Grammar.} A standalone named DAG; declarations and output are part of it.
@@ -74,17 +74,17 @@ names, operands defined earlier, every definition reachable from the output;
 visible names, or an explicit Environment lists names available in the input
 heading at a valid path; (4)~union operands have equal headings and a valid
 block origin; (5)~an all-bare output has exactly its input heading, a computed
-output may use a subset; (6)~the Rust ancestry is a compatible chain, combined
-as a tree at unions. Types merge by restriction, preferring the left spelling;
-Rust establishes concrete type compatibility.
+output may use a subset; (6)~Rust expressions retain their lexical
+free-variable identities. Types are opaque host syntax; merging transports
+annotations and Rust establishes concrete type compatibility.
 Generator outputs are computed columns with item-derived types. A generator
 does not inherit a scalar literal value or a scalar-bind uniqueness proof:
 one input row may produce many distinct extensions (or none).
 
-\paragraph{Meaning.} Section~\ref{sec:denotation}'s partial operators over the
+\paragraph{Meaning.} Section~\ref{sec:denotation}'s total operators over the
 DAG; a name denotes an immutable set and promises neither materialization nor
-a reusable iterator. Ordered fallback evaluates only selected arms. Guards and
-binds are Kleisli steps that may return $\bot$.
+a reusable iterator. Ordered fallback chooses its first nonempty arm.
+Guards, scalar binds and generators are pure-total Kleisli steps.
 
 \paragraph{Recorded decisions.} Join shape and association, where each relational
 selection and semijoin sits, projections, and the block form (hoisted derived
@@ -98,14 +98,16 @@ unchanged;
 (3)~relational constraints and projection correlations are equal after
 union-find closure of equalities, and every source semijoin reduction survives
 with its column matches;
-(4)~the Rust chain has equal nodes, payloads, input bindings and order
-(unordered only among union siblings), and every relational fact, reduction and
-occurrence before a node in the source is before it in the target;
+(4)~the Rust payload multiset and each payload's free-variable input equality
+classes are equal; binding origins are identified by payload rather than
+written ordinal. There is no temporal relational-predecessor obligation;
 (5)~union operand $j$ contains exactly branch $j$'s occurrences; a fallback
 operand antijoins the earlier original operands by reference; a negated operand
 contains exactly its branch, with no semijoin pushed into it.
 The scalar/generator tag is part of the Rust node payload in every structural
 certificate; changing only that tag is not a permitted rewrite.
-Admitted rewrites: join reordering and reassociation, selections and semijoins
-moved earlier, renamed results. The check is linear plus union-find and rejects
-any rewrite that adds or removes occurrences (no query minimization).
+This support certificate can establish equality independently of intermediate
+evaluation domains. Pipeline refinements additionally preserve the recorded
+VO join and predicate placement decisions; semantic equivalence alone does
+not grant a later pass planning authority. No occurrence may be added or
+removed (no query minimization).

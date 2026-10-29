@@ -15,7 +15,7 @@ pub fn check(scenario: Scenario) {
             by (d); n = count(); s = sum(a); lo = min(a); hi = max(a);
             struct AggregateStats;
             relation Sale(d: i32, id: i32, a: i32);
-            rows(d, id, a) :- Sale(d, id, a), if *d > 0;
+            rows(d, id, a) :- Sale(d, id, a), where d > 0;
         }
     };
     let actual = result

@@ -16,8 +16,8 @@ pub fn check(scenario: Scenario) {
         relation A(x: i32);
         relation B(x: i32);
         relation answer(x: i32);
-        answer(*x) :- A(x), if *x >= 0;
-        answer(*x) :- B(x), if *x >= 0;
+        answer(*x) :- A(x), where x >= 0;
+        answer(*x) :- B(x), where x >= 0;
     };
     let actual = result.map(|(column_0,)| vec![column_0]).collect();
     case.check(scenario, actual);

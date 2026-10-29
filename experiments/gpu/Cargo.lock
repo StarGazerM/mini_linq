@@ -431,6 +431,7 @@ dependencies = [
  "cuda-host",
  "gpu-compress",
  "gpu-compress-host",
+ "gpu-datalog-runtime",
  "gpu-device-columns",
  "gpu-tiles",
  "rccl-cub",
@@ -486,6 +487,7 @@ dependencies = [
  "cuda-host",
  "gpu-compress",
  "gpu-compress-host",
+ "gpu-datalog-runtime",
  "gpu-device-columns",
  "prettyplease",
  "proc-macro2",
@@ -1194,6 +1196,7 @@ name = "gpu-datalog-runtime"
 version = "0.1.0"
 dependencies = [
  "cq-gpu-runtime",
+ "cq-load",
  "cuda-core",
  "cuda-device",
  "cuda-host",
@@ -1206,6 +1209,7 @@ dependencies = [
 name = "gpu-device-columns"
 version = "0.1.0"
 dependencies = [
+ "cq-load",
  "cuda-core",
  "cuda-device",
  "cuda-host",
@@ -1235,6 +1239,7 @@ dependencies = [
  "cuda-host",
  "gpu-compress",
  "gpu-compress-host",
+ "gpu-datalog-runtime",
  "mini-linq",
  "serde_json",
  "trybuild",

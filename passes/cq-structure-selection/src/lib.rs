@@ -2,6 +2,8 @@
 //! Compatible membership prefixes share trie levels; ordered reads retain their own structure.
 //! Smallest intersections select candidate levels independently for each retained
 //! side; reusable hosts retain their candidate and membership fallbacks.
+//! Membership-only projections use Rust's dense-ordinal capability at construction;
+//! ordinary key providers retain enumeration for scan filters. Rust key types are opaque.
 //! The denotation is `bottom + Set`: Rust chain positions are preserved. A
 //! const supply is one fixed key, answered directly or by scan and filter;
 //! only stream supplies can justify building reusable keyed storage.
@@ -16,9 +18,8 @@
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
 //! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! branch arms retain their explicit relational predicates. Rust expressions
+//! remain opaque and total; only `where` supplies relational constraints.
 //!
 pub mod arguments;
 mod host_reads;
@@ -97,24 +98,6 @@ fn chain(reads: &[(&Vec<String>, &BTreeSet<Need>)]) -> Option<Vec<Vec<String>>> 
     Some(levels)
 }
 
-fn payload_provider(ty: &mut syn::Type) {
-    if *ty == syn::parse_quote!(::cq_storage::HashSet<_>) {
-        *ty = Need::Seek.default_type();
-        return;
-    }
-    if let syn::Type::Path(path) = ty {
-        if let Some(segment) = path.path.segments.last_mut() {
-            if segment.ident == "Trie" {
-                if let syn::PathArguments::AngleBracketed(args) = &mut segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.last_mut() {
-                        payload_provider(inner);
-                    }
-                }
-            }
-        }
-    }
-}
-
 pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     let analysis = physical::contract::check(source)?;
     let program = &source.program;
@@ -134,6 +117,12 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         })
         .collect();
     let mut needs: BTreeMap<(String, Vec<String>), BTreeSet<Need>> = BTreeMap::new();
+    let mut full_key_probes = BTreeSet::new();
+    let candidates = physical::candidate_prefixes(source, &analysis);
+    let candidate_sources: BTreeSet<_> = candidates
+        .iter()
+        .flat_map(|candidate| candidate.sides.iter().map(|(name, _)| name.clone()))
+        .collect();
     let mut require = |result: &str, columns: &[String], need: Need| {
         if analysis.modes[result] == ModeKind::Pipe {
             return;
@@ -154,9 +143,25 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             {
                 continue;
             }
-            let need = match operators[reader] {
-                Operator::Semi(..) | Operator::Anti(..) => Need::Contains,
-                _ => Need::Seek,
+            let full_key_probe = matches!(operators[reader], Operator::Probe(..))
+                && !candidate_sources.contains(result)
+                && columns == &analysis.headings[result]
+                && reads.iter().all(|(reader, key, supply)| {
+                    key == columns && *supply == SupplyKind::Stream
+                        // A shared smallest-intersection adapter also enumerates
+                        // candidates; retain its existing seek-provider policy.
+                        && !matches!(operators[reader], Operator::Probe(_, k)
+                            if matches!(k.choice, Some(physical::Choice::Smallest(_))))
+                })
+                && analysis.merge_reads.get(result).is_none_or(Vec::is_empty);
+            let need = if full_key_probe {
+                full_key_probes.insert((result.clone(), columns.clone()));
+                Need::Contains
+            } else {
+                match operators[reader] {
+                    Operator::Semi(..) | Operator::Anti(..) => Need::Contains,
+                    _ => Need::Seek,
+                }
             };
             require(result, columns, need);
         }
@@ -175,7 +180,6 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     // The binary smallest-candidate rewrite also reads each relation at
     // prefix + new-column for membership. Keep these two-level demands
     // local: host reads, other keys and ordered reads retain their paths.
-    let candidates = physical::candidate_prefixes(source, &analysis);
     let candidate_keys: BTreeSet<_> = candidates
         .iter()
         .flat_map(|c| c.sides.iter().cloned())
@@ -201,15 +205,15 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             // The inner value enumerates the new column and checks full-key
             // membership. A full-key payload probe may share it too; ordered
             // reads keep their separate structure.
-            let inner = needs
+            let need = needs
                 .get(&(name.clone(), full.clone()))
                 .into_iter()
                 .flatten()
                 .filter(|need| **need != Need::Ordered)
                 .max()
                 .copied()
-                .unwrap_or(Need::Contains)
-                .default_type();
+                .unwrap_or(Need::Contains);
+            let inner = need.default_type();
             entries.extend(
                 quote! { #ident = ::cq_storage::Trie<'_, _, #inner> [#(#columns),*][#(#tail),*]; },
             );
@@ -257,11 +261,20 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             }
         }
         for (columns, needs) in reads {
-            let ty = needs.iter().max().expect("nonempty").default_type();
+            // Formal rule STR-FullKey: a complete set-row key needs only an
+            // existence witness; preserve that decision for every consumer.
+            let membership = needs.iter().max() == Some(&Need::Contains)
+                && full_key_probes.contains(&(name.clone(), columns.to_vec()));
+            let ty: syn::Type = if membership {
+                syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>)
+            } else {
+                needs.iter().max().expect("nonempty").default_type()
+            };
+            let marker = membership.then(|| quote!(membership));
             let columns = columns
                 .iter()
                 .map(|c| analysis.rows[&name].bindings[c].clone());
-            entries.extend(quote! { #ident = #ty [#(#columns),*]; });
+            entries.extend(quote! { #ident = #ty [#(#columns),*] #marker; });
         }
     }
     for definition in &program.definitions {
@@ -294,9 +307,13 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                     .find(|d| symbol_name(&d.name) == *reader)
                     .expect("checked reader")
                     .name;
+                let membership = full_key_probes.contains(&(name.clone(), columns.clone()));
                 let ty: syn::Type = match supply {
                     SupplyKind::Const | SupplyKind::Range => {
                         syn::parse_quote!(::core::iter::Map<_, _>)
+                    }
+                    SupplyKind::Stream if membership => {
+                        syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>)
                     }
                     SupplyKind::Stream if matches!(operators[reader], Operator::Merge(..)) => {
                         Need::Ordered.default_type()
@@ -316,8 +333,9 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                         }
                     }
                 };
+                let marker = membership.then(|| quote!(membership));
                 let columns = columns.iter().map(|c| &analysis.rows[&name].bindings[c]);
-                entries.extend(quote!(#ident host result(#rd) = #ty [#(#columns),*];));
+                entries.extend(quote!(#ident host result(#rd) = #ty [#(#columns),*] #marker;));
             }
         }
     }
@@ -421,7 +439,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             });
             if supported {
                 let constants = select
-                    .map(|select| structures::selection_constants(select))
+                    .map(|select| structures::reconstructible_constants(select))
                     .unwrap_or_default();
                 let payload = required[&name]
                     .iter()
@@ -448,47 +466,36 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                             .iter()
                             .any(|column| !key.iter().flatten().any(|key| key == column))
                     {
-                        payload_provider(&mut keyed.ty);
+                        // This generated provider must reconstruct rows, not just
+                        // answer membership. Rebuild its recorded trie levels
+                        // without interpreting the provider's Rust type.
+                        let mut ty = Need::Seek.default_type();
+                        for _ in 1..key.len() {
+                            ty = syn::parse_quote!(::cq_storage::Trie<'_, _, #ty>);
+                        }
+                        keyed.ty = ty;
                     }
                     keyed.filtered = Some(projection.clone());
-                    // The recorded projection contains no witness-dependent
-                    // payload. Integral borrowed keys have an exact dense codec.
-                    let stored = key
-                        .concat()
-                        .into_iter()
-                        .filter(|column| !constants.contains_key(column))
-                        .collect::<Vec<_>>();
+                    // Preserve the singleton stored-key policy without inspecting
+                    // Rust types. Reconstructed constants do not occupy key storage.
                     if key.len() == 1
-                        && stored.len() == 1
+                        && key[0]
+                            .iter()
+                            .filter(|column| !constants.contains_key(*column))
+                            .count()
+                            == 1
                         && required[&name]
                             .iter()
                             .all(|column| key[0].contains(column) || constants.contains_key(column))
-                        && analysis.rows[&name].computed.is_empty()
-                        && matches!(structures::ungroup_type(&analysis.rows[&name].types[&stored[0]]), syn::Type::Path(p) if p.path.is_ident("i64") || p.path.is_ident("i32"))
                         && analysis
                             .keyed_reads
                             .get(&name)
                             .into_iter()
                             .flatten()
                             .all(|(_, columns, _)| columns == &key[0])
-                        && analysis
-                            .key_reads
-                            .get(&name)
-                            .into_iter()
-                            .flatten()
-                            .all(|(reader, _)| match operators[reader] {
-                                Operator::Probe(_, read)
-                                | Operator::Semi(_, read)
-                                | Operator::Anti(_, read) => !analysis.rows
-                                    [&symbol_name(&read.left)]
-                                    .computed
-                                    .iter()
-                                    .any(|column| key[0].contains(column)),
-                                _ => false,
-                            })
                     {
                         keyed.membership = Some(Default::default());
-                        keyed.ty = syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 16777216>);
+                        keyed.ty = syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>);
                     }
                 }
             }
@@ -513,7 +520,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
 /// Formal rule SEL-Group: Record the keyed aggregate table and accumulator tuple types.
 fn group_accumulator(name: &syn::Ident, group: &physical::syntax::algebra::Group) -> TokenStream {
     let types = group.aggregates.iter().map(|aggregate| &aggregate.ty);
-    quote!(#name group = ::std::collections::HashMap<_, (#(#types,)*)>;)
+    quote!(#name group = ::std::collections::HashMap<_, (#(#types,)*), ::cq_storage::HashState>;)
 }
 
 mod correspondence;

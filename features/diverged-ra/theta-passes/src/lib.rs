@@ -46,7 +46,7 @@ fn compile_merge(source: &physical::Program) -> syn::Result<physical::Program> {
     Ok(target)
 }
 
-/// Record merge decisions in Physical, preserving RA erasure and Rust order.
+/// Record merge decisions in Physical, preserving RA erasure and Rust dependencies.
 #[proc_macro]
 pub fn merge(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<physical::Program>(input.into(), |source, arguments| {

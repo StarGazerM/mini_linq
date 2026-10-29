@@ -444,7 +444,7 @@ fn filtered_reducer_omits_unfiltered_dangling_checks_without_assuming_keys() {
 fn filtered_supports_run_point_before_domain_and_propagate_to_unfiltered_parents() {
     let query = "struct Star; relation Domain(a:i32,x:i32); relation Point(b:i32,y:i32);
         relation Empty(c:i32,z:i32); relation Fact(a:i32,b:i32,c:i32);
-        answer(a,b,c) :- Domain(a,x), if *x != 4, Point(b,y), if *y == 7, Empty(c,z), Fact(a,b,c);";
+        answer(a,b,c) :- Domain(a,x), where x != 4, Point(b,y), where y == 7, Empty(c,z), Fact(a,b,c);";
     let mut source = schedule(
         query,
         "Domain@0(a,x); Point@2(b,y); Empty@4(c,z); Fact@5(a,b,c);",
@@ -494,7 +494,7 @@ fn filtered_supports_run_point_before_domain_and_propagate_to_unfiltered_parents
 #[test]
 fn leaf_only_filter_never_flows_back_into_its_own_subtree() {
     let query = "struct Leaf; relation L(a:i32,x:i32); relation R(a:i32,b:i32);
-        relation S(b:i32,c:i32); answer(a,c) :- L(a,x), if *x == 1, R(a,b), S(b,c);";
+        relation S(b:i32,c:i32); answer(a,c) :- L(a,x), where x == 1, R(a,b), S(b,c);";
     let mut source = schedule(query, "L@0(a,x); R@2(a,b); S@3(b,c);");
     source.cq = cq::normal::normalize(&source.cq).unwrap();
     let step = match &source.cq.query.body[1] {
@@ -518,7 +518,7 @@ fn leaf_only_filter_never_flows_back_into_its_own_subtree() {
 #[test]
 fn range_side_streams_against_point_driving_component_without_reverse_index() {
     let query = "struct PointRange; relation P(k:i32,x:i32); relation R(k:i32,y:i32);
-        answer(k) :- P(k,x), if *x == 1, R(k,y), if *y > 4;";
+        answer(k) :- P(k,x), where x == 1, R(k,y), where y > 4;";
     let mut source = schedule(query, "P@0(k,x); R@2(k,y);");
     source.cq = cq::normal::normalize(&source.cq).unwrap();
     for clause in [1, 3] {

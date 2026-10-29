@@ -95,7 +95,7 @@ fn leaves_drivers_unfiltered_atoms_opaque_clauses_and_expanding_joins_alone() {
         "Reach(*x,*z) :- Edge(y,z), !Block(z), Reach(x,y);",
         "Reach(*x,*z) :- Reach(x,y), Edge(y,z);",
         "Reach(*x,*z) :- Reach(x,y), Edge(y,z), Edge(z,w), !Block(w);",
-        "Reach(*x,*z) :- Reach(x,y), Edge(y,z), if *z > 0, !Block(z);",
+        "Reach(*x,*z) :- Reach(x,y), Edge(y,z), where z > 0, !Block(z);",
         "Reach(*x,*z) :- Reach(x,y), Edge(y,z), !Block(x);",
     ] {
         let mut p = source();

@@ -1,5 +1,5 @@
 //! RA prime correspondence: fixed occurrences and relational constraints,
-//! with exact opaque Rust chains and retained source-before obligations.
+//! with unchanged opaque, total Rust expressions and free-variable dependencies.
 use cq_testkit::{corpus as scenarios, cq_semantics as cq_oracle, databases, semantics as oracle};
 
 use cq_elaborate::check;
@@ -38,11 +38,40 @@ fn coarse(source: &cq::Program) -> valuation::Program {
             cq::BodyItem::Let(binding) => quote!(#binding;),
             cq::BodyItem::For(binding) => quote!(#binding;),
             cq::BodyItem::Equality(equality) => quote!(#equality;),
-            cq::BodyItem::Constraint(c) => quote!(#c;),
+            cq::BodyItem::Constraint(c) => quote!(where #c;),
             cq::BodyItem::Negation(n) => quote!(#n;),
             _ => unreachable!("normal form"),
         });
     vo(source, quote!(#(#steps)*))
+}
+
+// The VO contract admits equivalent equality nodes constructed through either IR variant.
+fn equality_forms(source: &valuation::Program) -> Vec<valuation::Program> {
+    let mut forms = Vec::new();
+    for source_constraints in [false, true] {
+        for step_constraints in [false, true] {
+            let mut form = source.clone();
+            if source_constraints {
+                for item in &mut form.cq.query.body {
+                    if let cq::BodyItem::Equality(equality) = item {
+                        *item = cq::BodyItem::Constraint(cq::Constraint::from_equality(equality));
+                    }
+                }
+            }
+            if step_constraints {
+                for step in &mut form.valuation.steps {
+                    if let valuation::Step::Equality(equality, semi) = step {
+                        *step = valuation::Step::Constraint(
+                            cq::Constraint::from_equality(equality),
+                            *semi,
+                        );
+                    }
+                }
+            }
+            forms.push(form);
+        }
+    }
+    forms
 }
 fn assert_plan(target: &ra::Program, plan: TokenStream) {
     let declarations = &target.plan.declarations;
@@ -804,7 +833,7 @@ fn reduced_prefix_guards_keep_independent_support_witnesses() {
     let source = cq(quote! {
         struct PrefixTuple;
         relation R(x:i32); relation Other(y:i32); relation T(x:i32,y:i32,z:i32);
-        answer(z) :- R(x), Other(y), if *x > *y, if 10 / (*x - *y) > 0, T(x,y,z);
+        answer(z) :- R(x), Other(y), where x > y, if 10 / (*x - *y) > 0, T(x,y,z);
     });
     let written = coarse(&source);
     let steps = &written.valuation.steps;
@@ -882,13 +911,16 @@ fn seed_997_reductions_match_equality_classes_before_rust() {
             let ra::Operator::Select(select) = &mut changed.plan.definitions[i].operator else {
                 unreachable!()
             };
-            // The written equality still occurs after the guards, so output
-            // equality alone cannot detect this lost reducer input constraint.
+            // Output equality alone cannot replace a reduction's own support
+            // column match.
             select.condition.equalities[j].right =
                 ra::EqualityValue::Variable(equality.left.clone());
             ra::contract::check(&changed).unwrap();
             let error = check(&reduced, &changed).unwrap_err();
-            assert!(error.to_string().contains("source-before"), "{error}");
+            assert!(
+                error.to_string().contains("support column matches"),
+                "{error}"
+            );
             mutations += 1;
         }
     }
@@ -900,22 +932,33 @@ fn reductions_match_every_protected_column_in_an_equality_class() {
     let source = cq(quote! {
         struct Q; relation R(a:i32,b:i32); relation S(c:i32);
         answer(x,z,y) :- R(x,z), S(y), if accept(x,z,y),
-            if *x == *y, if *z == *y;
+            where x == y, where z == y;
     });
-    let target = compile(&vo(
+    let plan = vo(
         &source,
         quote! {
             reduce R@0 with S@1(y); reduce S@1 with R@0(x,z);
-            R@0(x,z); S@1(y); if accept(x,z,y); x = y; z = y;
+            R@0(x,z); S@1(y); if accept(x,z,y); where x = y; where z = y;
         },
-    ))
-    .unwrap();
+    );
+    assert_eq!(
+        plan.valuation
+            .steps
+            .iter()
+            .filter(|step| { matches!(step, valuation::Step::Equality(..)) })
+            .count(),
+        2
+    );
+    let target = compile(&plan).unwrap();
+    for form in equality_forms(&plan) {
+        assert_eq!(compile(&form).unwrap(), target);
+    }
     let reference = cq_elaborate::compile_written(&coarse(&source)).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
 }
 
 #[test]
-fn relational_hoisting_is_accepted_but_moving_a_relation_later_is_rejected() {
+fn independent_relations_commute_across_rust() {
     let source = cq(quote! {
         struct Q; relation R(a: i32); relation S(b: i32);
         answer(x, w) :- R(x), if 10 / *x > 0, S(w);
@@ -938,16 +981,11 @@ fn relational_hoisting_is_accepted_but_moving_a_relation_later_is_rejected() {
         output j as answer(x,w);
     }};
     ra::contract::check(&late).unwrap();
-    assert!(
-        check(&coarse(&later_source), &late)
-            .unwrap_err()
-            .to_string()
-            .contains("source-before")
-    );
+    check(&coarse(&later_source), &late).unwrap();
 }
 
 #[test]
-fn opaque_chain_reorder_and_payload_mutations_are_rejected() {
+fn rust_reordering_is_accepted_but_payload_mutations_are_rejected() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); answer(x,y) :- R(x), if { *x != 0 }, let y:i32 = 10 / *x;
     });
@@ -957,12 +995,7 @@ fn opaque_chain_reorder_and_payload_mutations_are_rejected() {
         output g as answer(x,y);
     }};
     ra::contract::check(&target).unwrap();
-    assert!(
-        check(&coarse(&source), &target)
-            .unwrap_err()
-            .to_string()
-            .contains("Rust chain")
-    );
+    check(&coarse(&source), &target).unwrap();
     let mut changed = compile(&coarse(&source)).unwrap();
     let node = changed
         .plan
@@ -978,7 +1011,7 @@ fn opaque_chain_reorder_and_payload_mutations_are_rejected() {
 }
 
 #[test]
-fn guard_and_division_chain_keeps_the_complete_written_prefix() {
+fn elaboration_retains_the_recorded_rust_placement() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); relation S(b:i32);
         answer(x,y) :- R(x), S(w), if { *x != 0 && *w > 1 }, let y:i32 = 10 / *x;
@@ -1019,9 +1052,9 @@ fn projection_cannot_discard_a_join_correlation() {
 }
 
 #[test]
-fn source_before_equality_cannot_move_after_rust() {
+fn relational_equality_commutes_with_total_rust() {
     let source = cq(quote! {
-        struct Q; relation R(a:i32); answer(x) :- R(x), if * x == 1, if 10 / *x > 0;
+        struct Q; relation R(a:i32); answer(x) :- R(x), where x == 1, if 10 / *x > 0;
     });
     let broken: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); r = rename R@0 {a -> x};
@@ -1029,18 +1062,13 @@ fn source_before_equality_cannot_move_after_rust() {
         output s as answer(x);
     }};
     ra::contract::check(&broken).unwrap();
-    assert!(
-        check(&coarse(&source), &broken)
-            .unwrap_err()
-            .to_string()
-            .contains("source-before")
-    );
+    check(&coarse(&source), &broken).unwrap();
 }
 
 #[test]
 fn differing_literal_spellings_are_not_assumed_unequal() {
     let source = cq(quote! {
-        struct Q; relation R(a:i32); answer(x) :- R(x), if * x == 1, if * x == 0x1;
+        struct Q; relation R(a:i32); answer(x) :- R(x), where x == 1, where x == 0x1;
     });
     let target = compile(&coarse(&source)).unwrap();
     let mut changed = target.clone();
@@ -1129,7 +1157,7 @@ fn written_reference_rejects_a_reordered_valuation() {
 }
 
 #[test]
-fn correspondence_preserves_the_supplied_vo_before_constraints() {
+fn correspondence_accepts_independent_relational_placement() {
     let source = cq(quote! {
         struct Q; relation R(x:i32); relation S(w:i32);
         answer(x,w) :- R(x), if 10 / *x > 1, S(w);
@@ -1138,15 +1166,9 @@ fn correspondence_preserves_the_supplied_vo_before_constraints() {
     let hoisted = vo(&source, quote! { R@0(x); S@2(w); if 10 / *x > 1; });
     valuation::contract::check(&hoisted).unwrap();
     let later = cq_elaborate::compile_written(&written).unwrap();
-    // R={0}, S={} makes the supplied hoisted VO nonpanicking, while this
-    // otherwise source-CQ-correct target would panic by delaying S again.
+    // Total Rust has no written relational predecessor obligations.
     check(&written, &later).unwrap();
-    assert!(
-        check(&hoisted, &later)
-            .unwrap_err()
-            .to_string()
-            .contains("source-before")
-    );
+    check(&hoisted, &later).unwrap();
     check(&written, &compile(&hoisted).unwrap()).unwrap();
 }
 
@@ -1225,7 +1247,7 @@ fn named_vo_reductions_cannot_be_erased_by_the_final_join() {
 }
 
 #[test]
-fn vo_clause_identity_and_partial_subatom_columns_are_checked() {
+fn vo_clause_identity_is_checked_but_redundant_partial_columns_can_change() {
     let source = cq(quote! {
         struct Q; relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32,c:i32);
         answer(a,c) :- L(a), if opaque(a), R(a,b), S(b,c);
@@ -1268,14 +1290,78 @@ fn vo_clause_identity_and_partial_subatom_columns_are_checked() {
         .unwrap();
     projection.attributes[0] = syn::parse_quote!(b);
     ra::contract::check(&changed).unwrap();
-    assert!(check(&valuation, &changed).is_err());
+    // The later full R witness supplies both columns. The earlier projection
+    // only restricts a domain, and opaque total Rust does not observe it.
+    check(&valuation, &changed).unwrap();
+}
+
+#[test]
+fn relational_conjuncts_keep_their_independent_selection_domains() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32,b:i32,c:i32);
+        answer(x,y,z) :- R(x,y,z), where x < y && y < z;
+    });
+    let vo = coarse(&source);
+    let target = compile(&vo).unwrap();
+    let conditions: Vec<_> = target
+        .plan
+        .definitions
+        .iter()
+        .filter_map(|definition| match &definition.operator {
+            ra::Operator::Select(selection) => Some(&selection.condition),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(conditions.len(), 2);
+    assert_eq!(conditions[0].constraints.len(), 1);
+    assert_eq!(conditions[1].constraints.len(), 1);
+    assert_eq!(conditions[0].constraints[0], syn::parse_quote!(x < y));
+    assert_eq!(conditions[1].constraints[0], syn::parse_quote!(y < z));
+    check(&vo, &target).unwrap();
+}
+
+#[test]
+fn literal_points_precede_membership_filters_without_type_classification() {
+    for ty in ["String", "StringAlias"] {
+        let ty: syn::Type = syn::parse_str(ty).unwrap();
+        let source = cq(quote! {
+            struct Q; relation Lineitem(mode:#ty,instruction:#ty);
+            answer(mode,instruction) :- Lineitem(mode,instruction),
+                where (mode == "AIR" || mode == "AIR REG")
+                    && instruction == "DELIVER IN PERSON";
+        });
+        let vo = coarse(&source);
+        let target = compile(&vo).unwrap();
+        let selections: Vec<_> = target
+            .plan
+            .definitions
+            .iter()
+            .filter_map(|definition| match &definition.operator {
+                ra::Operator::Select(selection) => Some(selection),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(selections.len(), 2);
+        let point = selections[0].condition.constant_keys().unwrap();
+        assert_eq!(point.len(), 1);
+        assert_eq!(point["instruction"], syn::parse_quote!("DELIVER IN PERSON"));
+        assert!(target.plan.definitions.iter().any(|definition| {
+            definition.result == selections[0].input
+                && matches!(definition.operator, ra::Operator::Rename(_))
+        }));
+        assert!(matches!(
+            selections[1].condition.constraints[0],
+            cq::Constraint::In { .. }
+        ));
+        check(&vo, &target).unwrap();
+    }
 }
 
 #[test]
 fn derived_domains_filter_binders_but_preserve_the_exact_disjunction() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); relation S(b:i32);
-        answer(x,y) :- R(x), S(y), if (x == 1 && y >= 2) || (x == 3 && y <= 4);
+        answer(x,y) :- R(x), S(y), where (x == 1 && y >= 2) || (x == 3 && y <= 4);
     });
     let vo = coarse(&source);
     let target = compile(&vo).unwrap();
@@ -1411,7 +1497,7 @@ fn opaque_method_and_function_guards_keep_their_written_prefix() {
 }
 
 #[test]
-fn opaque_multi_atom_guard_retains_every_written_relational_predecessor() {
+fn opaque_multi_atom_guard_runs_once_its_free_variables_are_available() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); relation S(b:i32); relation T(c:i32);
         answer(x,y,z) :- R(x), S(y), T(z), if compatible(x,y);
@@ -1430,9 +1516,9 @@ fn opaque_multi_atom_guard_retains_every_written_relational_predecessor() {
         .iter()
         .position(|step| matches!(step, valuation::Step::Guard(..)))
         .unwrap();
-    assert_eq!(position, 3);
+    assert_eq!(position, 2);
     assert!(
-        matches!(&planned.valuation.steps[2], valuation::Step::Atom(atom, _) if atom.relation == "T")
+        matches!(&planned.valuation.steps[3], valuation::Step::Atom(atom, _) if atom.relation == "T")
     );
     let target = compile(&planned).unwrap();
     let select = target
@@ -1453,15 +1539,22 @@ fn independent_branch_is_exact_projected_and_checked() {
         struct Q;
         relation L(o:i32,p:i32,s:i32); relation S(s:i32,n:i32);
         relation N(n:i32,label:i32);
-        answer(o,p,s) :- L(o,p,s), S(s,n), N(n,label), if *label == 7;
+        answer(o,p,s) :- L(o,p,s), S(s,n), N(n,label), where label == 7;
     });
     let grouped: valuation::Program = syn::parse2(quote! {
         #source valuation branches { branch [1,2] (s); } {
-            L@0(o,p,s); S@1(s,n); N@2(n,label); label = 7;
+            L@0(o,p,s); S@1(s,n); N@2(n,label); where label = 7;
         }
     })
     .unwrap();
+    assert!(matches!(
+        grouped.valuation.steps.last(),
+        Some(valuation::Step::Equality(..))
+    ));
     let target = compile(&grouped).unwrap();
+    for form in equality_forms(&grouped) {
+        assert_eq!(compile(&form).unwrap(), target);
+    }
     assert!(target.plan.definitions.iter().any(|d| matches!(&d.operator, ra::Operator::Project(p) if p.attributes.iter().map(ToString::to_string).collect::<Vec<_>>() == ["s"])));
     let flat = compile(&coarse(&source)).unwrap();
     assert!(check(&grouped, &flat).is_err());
@@ -1481,11 +1574,11 @@ fn grouped_branch_preserves_multi_atom_predicates_and_duplicate_witnesses() {
         struct Q;
         relation L(o:i32,p:i32,s:i32); relation S(s:i32,n:i32);
         relation N(n:i32,k:i32);
-        answer(o,p,s) :- L(o,p,s), S(s,n), N(n,k), if *n < *k;
+        answer(o,p,s) :- L(o,p,s), S(s,n), N(n,k), where n < k;
     });
     let grouped: valuation::Program = syn::parse2(quote! {
         #source valuation branches { branch [1,2] (s); } {
-            L@0(o,p,s); S@1(s,n); N@2(n,k); n < k;
+            L@0(o,p,s); S@1(s,n); N@2(n,k); where n < k;
         }
     })
     .unwrap();
@@ -1786,7 +1879,7 @@ fn parameter_negation_selects_a_capture_without_binding_it() {
         .unwrap();
     assert_eq!(
         selection.condition.constraints[0],
-        syn::parse_quote!(__cq_neg_1 = @cutoff)
+        syn::parse_quote!(__cq_neg_1 = @(cutoff))
     );
 }
 
@@ -1852,7 +1945,8 @@ fn native_anti_obligations_reject_changed_keys_inputs_filters_and_polarity() {
                         _ => None,
                     })
                     .unwrap();
-                selection.condition.constraints[0] = syn::parse_quote!(__cq_neg_1 = 2);
+                selection.condition.equalities[0].right =
+                    ra::EqualityValue::Literal(syn::parse_quote!(2));
             }
             _ => {
                 let step = changed
@@ -1897,7 +1991,7 @@ fn native_anti_obligations_reject_changed_keys_inputs_filters_and_polarity() {
 }
 
 #[test]
-fn native_anti_proof_allows_positive_join_reordering_but_preserves_before() {
+fn native_anti_proof_allows_positive_join_and_total_rust_reordering() {
     let source = cq(quote! {
         struct Negative; relation R(a:i32); relation S(b:i32); relation K(a:i32);
         answer(x,y) :- R(x), S(y), !K(x), if opaque(x);
@@ -1938,5 +2032,5 @@ fn native_anti_proof_allows_positive_join_reordering_but_preserves_before() {
     delayed.plan.definitions[guard_position].operator =
         syn::parse_quote!(anti [#keys] #earlier, #right);
     ra::contract::check(&delayed).unwrap();
-    assert!(check(&written, &delayed).is_err());
+    check(&written, &delayed).unwrap();
 }

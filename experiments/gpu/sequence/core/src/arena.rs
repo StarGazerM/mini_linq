@@ -2,7 +2,7 @@
 
 use cq_lang_sequence::{Analysis, Program};
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 
 /// Translate a raw candidate terminal into caller-owned arena storage.
 ///
@@ -19,43 +19,15 @@ pub fn translate_arena(
 }
 
 pub(crate) struct Packing {
-    pub types: Vec<syn::Type>,
-    widths: Vec<u32>,
-    signed: Vec<bool>,
-    columns: Vec<syn::Ident>,
-    pub bits: u32,
+    columns: Vec<TokenStream>,
+    pub bits: TokenStream,
 }
 
 impl Packing {
     pub fn new(types: Vec<syn::Type>) -> syn::Result<Self> {
-        let mut widths = Vec::with_capacity(types.len());
-        let mut signed = Vec::with_capacity(types.len());
-        let mut columns = Vec::with_capacity(types.len());
-        let mut bits = 0u32;
-        for ty in &types {
-            let name = match ty {
-                syn::Type::Path(path) if path.qself.is_none() => path.path.get_ident().map(ToString::to_string),
-                _ => None,
-            };
-            let (width, sign, column) = match name.as_deref() {
-                Some("u8") => (8, false, "U8"),
-                Some("i8") => (8, true, "I8"),
-                Some("u16") => (16, false, "U16"),
-                Some("i16") => (16, true, "I16"),
-                Some("u32") => (32, false, "U32"),
-                Some("i32") => (32, true, "I32"),
-                Some("i64") => (64, true, "I64"),
-                _ => return Err(syn::Error::new_spanned(ty,
-                    "GPU arena output requires declared i8/i16/i32/i64 or u8/u16/u32 scalar columns")),
-            };
-            bits = bits.checked_add(width).ok_or_else(|| {
-                syn::Error::new_spanned(ty, "GPU arena head packing width exceeds u32")
-            })?;
-            widths.push(width);
-            signed.push(sign);
-            columns.push(format_ident!("{column}"));
-        }
-        Ok(Self { types, widths, signed, columns, bits })
+        let columns: Vec<_> = types.iter().map(crate::runs::scalar).collect();
+        let bits = quote!((0u32 #(+ #columns.bits())*));
+        Ok(Self { columns, bits })
     }
 
     pub fn setup(&self, arena: &syn::Expr) -> TokenStream {
@@ -66,35 +38,35 @@ impl Packing {
                 return Err("GPU arena and inputs must share a pool and stream".into());
             }
             let __cq_arena_packing = ::gpu_datalog_runtime::Packing::with_columns(
-                &[#(::gpu_datalog_runtime::Column::#columns),*])?;
+                &[#(#columns),*])?;
         }
     }
 
     pub fn write(&self, slots: &[usize]) -> TokenStream {
-        let lanes = self.bits.div_ceil(64).max(1) as usize;
-        let physical_lane = |lane: usize| if lanes <= 2 { lane } else { lanes - 1 - lane };
-        let mut shift = self.bits;
-        let parts = slots.iter().zip(&self.types).zip(&self.widths).zip(&self.signed)
-            .map(|(((slot, ty), width), signed)| {
-                shift -= width;
-                let lane = physical_lane((shift / 64) as usize);
-                let local = shift % 64;
-                let mask = u64::MAX >> (64 - width);
-                let sign = if *signed { 1u64 << (width - 1) } else { 0 };
-                let spill = if local != 0 && local + width > 64 {
-                    let next = physical_lane((shift / 64) as usize + 1);
-                    let right = 64 - local;
-                    quote!(*__packed.add(#next) |= value >> #right;)
-                } else { TokenStream::new() };
+        let bits = &self.bits;
+        let parts = slots.iter().zip(&self.columns)
+            .map(|(slot, column)| {
                 quote! {
-                    let value = ((__row[#slot] as #ty as u64) & #mask) ^ #sign;
-                    *__packed.add(#lane) |= value << #local;
-                    #spill
+                    let width = #column.bits();
+                    __shift -= width;
+                    let logical_lane = (__shift / 64) as usize;
+                    let lane = if __lanes <= 2 { logical_lane } else { __lanes - 1 - logical_lane };
+                    let local = __shift % 64;
+                    let mask = u64::MAX >> (64 - width);
+                    let sign = if #column.is_signed() { 1u64 << (width - 1) } else { 0 };
+                    let value = (__row[#slot] as u64 & mask) ^ sign;
+                    *__packed.add(lane) |= value << local;
+                    if local != 0 && local + width > 64 {
+                        let next = if __lanes <= 2 { logical_lane + 1 } else { __lanes - 2 - logical_lane };
+                        *__packed.add(next) |= value >> (64 - local);
+                    }
                 }
             }).collect::<Vec<_>>();
         quote! {
-            let __packed = __output_keys.add(__destination as usize * #lanes);
-            for lane in 0..#lanes { *__packed.add(lane) = 0; }
+            let __lanes = (#bits).div_ceil(64).max(1) as usize;
+            let mut __shift = #bits;
+            let __packed = __output_keys.add(__destination as usize * __lanes);
+            for lane in 0..__lanes { *__packed.add(lane) = 0; }
             #(#parts)*
         }
     }

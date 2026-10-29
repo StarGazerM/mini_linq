@@ -1,0 +1,261 @@
+{
+  "binary_sha256": "00f71a200f96b4fc75e9f9f5e7e549e07ee0976f2a0d954c70118b578b2089bb",
+  "scope": "coverage fixture; typed query uses CSV fixture",
+  "results": [
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 5,
+          "hash_computations": 0,
+          "index_builds": 0,
+          "lookups": 0,
+          "rows_tested": 6
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "aggregate_stats"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 5,
+          "hash_computations": 0,
+          "index_builds": 0,
+          "lookups": 0,
+          "rows_tested": 5
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "aggregate_two_keys"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 8,
+          "hash_computations": 8,
+          "index_builds": 4,
+          "lookups": 4,
+          "rows_tested": 40
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "correlated_exists"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 4,
+          "hash_computations": 0,
+          "index_builds": 0,
+          "lookups": 0,
+          "rows_tested": 5
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "correlated_parameter"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 10,
+          "hash_computations": 0,
+          "index_builds": 0,
+          "lookups": 0,
+          "rows_tested": 24
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "correlated_scalar"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 15,
+          "hash_computations": 37,
+          "index_builds": 3,
+          "lookups": 10,
+          "rows_tested": 6
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "recursion_closure"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 3,
+          "hash_computations": 0,
+          "index_builds": 0,
+          "lookups": 0,
+          "rows_tested": 6
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "surface_boolean_guard"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 3,
+          "hash_computations": 0,
+          "index_builds": 0,
+          "lookups": 0,
+          "rows_tested": 9
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "surface_compare"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 3,
+          "hash_computations": 0,
+          "index_builds": 0,
+          "lookups": 0,
+          "rows_tested": 4
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "surface_computed_head"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 10,
+          "hash_computations": 8,
+          "index_builds": 1,
+          "lookups": 4,
+          "rows_tested": 16
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "surface_disconnected"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 4,
+          "hash_computations": 0,
+          "index_builds": 0,
+          "lookups": 0,
+          "rows_tested": 5
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "surface_let_chain"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 4,
+          "hash_computations": 0,
+          "index_builds": 0,
+          "lookups": 0,
+          "rows_tested": 5
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "surface_let_sum"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 4,
+          "hash_computations": 13,
+          "index_builds": 1,
+          "lookups": 5,
+          "rows_tested": 7
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "surface_self_join"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 3,
+          "hash_computations": 0,
+          "index_builds": 0,
+          "lookups": 0,
+          "rows_tested": 4
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "surface_wildcards"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 5,
+          "hash_computations": 8,
+          "index_builds": 1,
+          "lookups": 7,
+          "rows_tested": 21
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "typed_line_filter"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 5,
+          "hash_computations": 7,
+          "index_builds": 2,
+          "lookups": 2,
+          "rows_tested": 6
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "union_project"
+    },
+    {
+      "counters": {
+        "passed": true,
+        "values": {
+          "distinct_insertions": 6,
+          "hash_computations": 8,
+          "index_builds": 2,
+          "lookups": 2,
+          "rows_tested": 8
+        }
+      },
+      "exact": true,
+      "scope": "coverage fixture (typed target uses CSV fixture)",
+      "target": "union_two"
+    }
+  ]
+}

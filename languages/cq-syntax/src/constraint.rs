@@ -1,11 +1,14 @@
-//! Normalized total predicates shared by RA/IX/Physical, not CQ source syntax.
-//! The internal wire format keeps the existing comparison, paired inclusive
-//! bounds, literal equality disjunction and boolean branch representations.
-//! CQ accepts only Rust guards and constructs these forms through `guard`.
-//! Nested branches represent arbitrary boolean structure without DNF expansion.
-//! Parameters use `@name` or `@name.field` internally; CQ Rust guards use bare
-//! host names and field paths rooted at a host name. A parameter is a host
-//! value read once per evaluation: it names no query variable.
+//! Relational predicates shared by CQ and its lower representations.
+//! Only explicit `where` clauses construct these predicates from source.
+//! Closed Rust operands are evaluated once on the host. Their internal wire
+//! spelling is `@(expression)`; CQ spells them as ordinary Rust expressions.
+//!
+//! DESIGN contract7-surface
+//! Owns explicit `where` syntax and query-closed Rust operands (contract 7, CQ-Where/CQ-Closed).
+//! Source: doc/PLANNING-REDESIGN.md Contract 7 and Architecture; doc/formal/CONFORMANCE.md.
+//! Rust `if/let/for` remains opaque and total by premise; only `where` supplies relational facts.
+//! DO NOT recognize comparisons inside `if`, split Rust, inspect types, or infer Eq/Ord from spelling.
+//! Closed operands are host-once values; their query closedness is checked after scope resolution.
 
 use crate::{CommaList, Equality, EqualityValue, symbol_name};
 use proc_macro2::TokenStream;
@@ -19,60 +22,295 @@ mod kw {
     syn::custom_keyword!(or);
 }
 
-/// A host value: a captured name with an optional field path, such as
-/// `start` or `constants.c_x`. Only the root is a name; it must not be a
-/// query variable. `name()` is the stable key `root.field...`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Parameter {
-    pub root: Ident,
-    pub members: Vec<syn::Member>,
+/// Parse the relational language after CQ's `where` keyword. Rust operands are
+/// syntax only: query closedness is checked once the complete scope is known.
+pub fn parse_where(input: ParseStream<'_>) -> syn::Result<Constraint> {
+    let mut tokens = TokenStream::new();
+    while !input.is_empty()
+        && !input.peek(Token![;])
+        && !(input.peek(crate::algebra::kw::group) && input.peek2(syn::token::Bracket))
+    {
+        if input.peek(Token![,]) {
+            if let Ok(constraint) = predicate(tokens.clone()) {
+                return Ok(constraint);
+            }
+        }
+        tokens.extend([input.parse::<proc_macro2::TokenTree>()?]);
+    }
+    predicate(tokens)
 }
 
-impl Parameter {
-    pub fn name(&self) -> String {
-        let mut name = symbol_name(&self.root);
-        for member in &self.members {
-            name.push('.');
-            name.push_str(&member.to_token_stream().to_string());
+fn predicate(tokens: TokenStream) -> syn::Result<Constraint> {
+    use proc_macro2::{Delimiter, TokenTree};
+    if let Ok(expression) = syn::parse2::<syn::Expr>(tokens.clone()) {
+        return predicate_expression(expression);
+    }
+    let trees: Vec<_> = tokens.clone().into_iter().collect();
+    // Boolean syntax belongs to the relational language, not to Rust guards.
+    for operator in ['|', '&'] {
+        if let Some(index) = trees.windows(2).position(|pair| {
+            matches!(&pair[0], TokenTree::Punct(p) if p.as_char() == operator
+                && p.spacing() == proc_macro2::Spacing::Joint)
+                && matches!(&pair[1], TokenTree::Punct(p) if p.as_char() == operator)
+        }) {
+            let left = predicate(trees[..index].iter().cloned().collect())?;
+            let right = predicate(trees[index + 2..].iter().cloned().collect())?;
+            return Ok(boolean(left, right, operator == '|'));
         }
-        name
+    }
+    if let [TokenTree::Group(group)] = trees.as_slice() {
+        if group.delimiter() == Delimiter::Parenthesis {
+            return predicate(group.stream());
+        }
+    }
+    if let Some(index) = trees
+        .iter()
+        .position(|tree| matches!(tree, TokenTree::Ident(id) if id == "in"))
+    {
+        let term = source_term(syn::parse2(trees[..index].iter().cloned().collect())?);
+        require_variable(&term)?;
+        let values: syn::Expr = syn::parse2(trees[index + 1..].iter().cloned().collect())?;
+        return match values {
+            syn::Expr::Array(array) => {
+                let mut values: Vec<_> = array.elems.into_iter().map(source_term).collect();
+                if values.is_empty() {
+                    return Ok(Constraint::Compare {
+                        left: term.clone(),
+                        comparison: Comparison::Ne(Default::default()),
+                        right: term,
+                    });
+                }
+                if values.iter().all(|value| matches!(value, Term::Literal(_))) {
+                    return Ok(Constraint::In {
+                        term,
+                        literals: values
+                            .into_iter()
+                            .map(|value| {
+                                let Term::Literal(value) = value else {
+                                    unreachable!()
+                                };
+                                *value
+                            })
+                            .collect(),
+                    });
+                }
+                if values.len() == 1 {
+                    return Ok(Constraint::Compare {
+                        left: term,
+                        comparison: Comparison::Eq(Default::default()),
+                        right: values.remove(0),
+                    });
+                }
+                Ok(Constraint::Or(
+                    values
+                        .into_iter()
+                        .map(|right| {
+                            vec![Constraint::Compare {
+                                left: term.clone(),
+                                comparison: Comparison::Eq(Default::default()),
+                                right,
+                            }]
+                        })
+                        .collect(),
+                ))
+            }
+            syn::Expr::Range(range) => {
+                let (Some(low), Some(high)) = (range.start, range.end) else {
+                    return Err(syn::Error::new_spanned(
+                        tokens,
+                        "membership requires both range bounds",
+                    ));
+                };
+                let (low, high) = (source_term(*low), source_term(*high));
+                if matches!(range.limits, syn::RangeLimits::Closed(_)) {
+                    Ok(Constraint::Between { term, low, high })
+                } else {
+                    Ok(Constraint::Or(vec![vec![
+                        Constraint::Compare {
+                            left: term.clone(),
+                            comparison: Comparison::Ge(Default::default()),
+                            right: low,
+                        },
+                        Constraint::Compare {
+                            left: term,
+                            comparison: Comparison::Lt(Default::default()),
+                            right: high,
+                        },
+                    ]]))
+                }
+            }
+            _ => Err(syn::Error::new_spanned(
+                values,
+                "expected `[terms]`, `low..high`, or `low..=high`",
+            )),
+        };
+    }
+    predicate_expression(syn::parse2(tokens)?)
+}
+
+fn predicate_expression(expression: syn::Expr) -> syn::Result<Constraint> {
+    let expression = match expression {
+        syn::Expr::Paren(paren) => return predicate_expression(*paren.expr),
+        syn::Expr::Group(group) => return predicate_expression(*group.expr),
+        expression => expression,
+    };
+    let syn::Expr::Binary(binary) = expression else {
+        return Err(syn::Error::new_spanned(
+            expression,
+            "expected a relational comparison",
+        ));
+    };
+    if matches!(binary.op, syn::BinOp::And(_) | syn::BinOp::Or(_)) {
+        let disjunction = matches!(binary.op, syn::BinOp::Or(_));
+        return Ok(boolean(
+            predicate_expression(*binary.left)?,
+            predicate_expression(*binary.right)?,
+            disjunction,
+        ));
+    }
+    let comparison = match binary.op {
+        syn::BinOp::Eq(_) => Comparison::Eq(Default::default()),
+        syn::BinOp::Ne(op) => Comparison::Ne(op),
+        syn::BinOp::Lt(op) => Comparison::Lt(op),
+        syn::BinOp::Le(op) => Comparison::Le(op),
+        syn::BinOp::Gt(op) => Comparison::Gt(op),
+        syn::BinOp::Ge(op) => Comparison::Ge(op),
+        _ => {
+            return Err(syn::Error::new_spanned(
+                binary.op,
+                "expected a relational comparison operator",
+            ));
+        }
+    };
+    let left = source_term(*binary.left);
+    require_variable(&left)?;
+    Ok(Constraint::Compare {
+        left,
+        comparison,
+        right: source_term(*binary.right),
+    })
+}
+
+fn boolean(left: Constraint, right: Constraint, disjunction: bool) -> Constraint {
+    if disjunction {
+        let branches = |value| match value {
+            Constraint::Or(branches) => branches,
+            value => vec![vec![value]],
+        };
+        let mut result = branches(left);
+        result.extend(branches(right));
+        literal_membership(result)
+    } else {
+        let conjunction = |value| match value {
+            Constraint::Or(mut branches) if branches.len() == 1 => branches.remove(0),
+            value => vec![value],
+        };
+        let mut result = conjunction(left);
+        result.extend(conjunction(right));
+        Constraint::Or(vec![compact_bounds(result)])
     }
 }
 
-impl From<Ident> for Parameter {
-    fn from(root: Ident) -> Self {
-        Self {
-            root,
-            members: Vec::new(),
+// These are relational normalizations only. Rust guards never enter this path.
+fn compact_bounds(constraints: Vec<Constraint>) -> Vec<Constraint> {
+    let mut result = Vec::new();
+    let mut constraints = constraints.into_iter().peekable();
+    while let Some(constraint) = constraints.next() {
+        if let Constraint::Compare {
+            left,
+            comparison: Comparison::Ge(_),
+            right: low,
+        } = &constraint
+        {
+            if let Some(Constraint::Compare {
+                left: other,
+                comparison: Comparison::Le(_),
+                right: high,
+            }) = constraints.peek()
+            {
+                if left == other {
+                    result.push(Constraint::Between {
+                        term: left.clone(),
+                        low: low.clone(),
+                        high: high.clone(),
+                    });
+                    constraints.next();
+                    continue;
+                }
+            }
         }
+        result.push(constraint);
+    }
+    result
+}
+
+fn literal_membership(branches: Vec<Vec<Constraint>>) -> Constraint {
+    let mut membership = None;
+    let mut literals = CommaList::new();
+    for branch in &branches {
+        let term = match branch.as_slice() {
+            [
+                Constraint::Compare {
+                    left,
+                    comparison: Comparison::Eq(_),
+                    right: Term::Literal(literal),
+                },
+            ] => {
+                literals.push((**literal).clone());
+                left
+            }
+            [
+                Constraint::In {
+                    term,
+                    literals: values,
+                },
+            ] => {
+                literals.extend(values.iter().cloned());
+                term
+            }
+            _ => return Constraint::Or(branches),
+        };
+        if membership.as_ref().is_some_and(|previous| previous != term) {
+            return Constraint::Or(branches);
+        }
+        membership = Some(term.clone());
+    }
+    Constraint::In {
+        term: membership.expect("a disjunction has operands"),
+        literals,
     }
 }
 
-impl syn::parse::Parse for Parameter {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let root = input.parse()?;
-        let mut members = Vec::new();
-        while input.peek(Token![.]) {
-            input.parse::<Token![.]>()?;
-            members.push(input.parse()?);
-        }
-        Ok(Self { root, members })
+fn require_variable(term: &Term) -> syn::Result<()> {
+    if matches!(term, Term::Variable(_)) {
+        Ok(())
+    } else {
+        Err(syn::Error::new_spanned(
+            term,
+            "the left operand of `where` must be a query variable",
+        ))
     }
 }
 
-impl ToTokens for Parameter {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        self.root.to_tokens(tokens);
-        for member in &self.members {
-            tokens.extend(quote!(.#member));
+fn source_term(expression: syn::Expr) -> Term {
+    match expression {
+        syn::Expr::Paren(paren) => source_term(*paren.expr),
+        syn::Expr::Group(group) => source_term(*group.expr),
+        expression => {
+            if let Some(variable) = crate::rust::variable(&expression) {
+                Term::Variable(variable.clone())
+            } else if crate::equality::literal(&expression) {
+                Term::Literal(Box::new(expression))
+            } else {
+                Term::Closed(expression)
+            }
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Term {
     Variable(Ident),
-    Parameter(Parameter),
+    Closed(syn::Expr),
     Literal(Box<syn::Expr>),
 }
 
@@ -80,7 +318,9 @@ impl syn::parse::Parse for Term {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         if input.peek(Token![@]) {
             input.parse::<Token![@]>()?;
-            return Ok(Self::Parameter(input.parse()?));
+            let body;
+            syn::parenthesized!(body in input);
+            return Ok(Self::Closed(body.parse()?));
         }
         if input.peek(Ident) {
             return Ok(Self::Variable(input.parse()?));
@@ -113,7 +353,7 @@ impl ToTokens for Term {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
             Self::Variable(v) => v.to_tokens(tokens),
-            Self::Parameter(v) => tokens.extend(quote!(@#v)),
+            Self::Closed(v) => tokens.extend(quote!(@(#v))),
             Self::Literal(v) => v.to_tokens(tokens),
         }
     }
@@ -124,9 +364,9 @@ impl Term {
     pub fn reference(&self, parameters: &BTreeMap<String, Ident>) -> TokenStream {
         match self {
             Self::Variable(v) => quote!(#v),
-            Self::Parameter(v) => match parameters.get(&v.name()) {
+            Self::Closed(v) => match parameters.get(&v.to_token_stream().to_string()) {
                 Some(p) => quote!(#p),
-                None => quote!(&#v),
+                None => quote!(&(#v)),
             },
             Self::Literal(v) => quote!(&(#v)),
         }
@@ -140,7 +380,7 @@ impl Term {
     pub fn resolve(&mut self, logical: &BTreeSet<String>) {
         if let Self::Variable(v) = self {
             if !logical.contains(&symbol_name(v)) {
-                *self = Self::Parameter(Parameter::from(v.clone()));
+                *self = Self::Closed(syn::parse_quote!(#v));
             }
         }
     }
@@ -251,7 +491,7 @@ impl syn::parse::Parse for Constraint {
         // IR branches serialize conjunctions, including nested boolean predicates.
         let mut branches = vec![conjunction(input)?];
         if !input.peek(kw::or) {
-            return Err(unexpected(input, "`or` after a parenthesized conjunction"));
+            return Ok(Self::Or(branches));
         }
         while input.peek(kw::or) {
             input.parse::<kw::or>()?;
@@ -379,7 +619,7 @@ impl ToTokens for Constraint {
 }
 
 impl Constraint {
-    /// Formal rule E-Domain: Project every disjunct's literal restrictions onto a common variable, retaining the exact predicate.
+    /// Formal rule E-Domain: Project every disjunct's query-constant restrictions onto a common variable, retaining the exact predicate.
     pub fn implied_domains(&self) -> Vec<Self> {
         let Self::Or(branches) = self else {
             return Vec::new();
@@ -396,26 +636,29 @@ impl Constraint {
                     let conjuncts: Vec<_> = branch
                         .iter()
                         .filter(|c| {
-                            let literal_domain = matches!(
-                                c,
+                            let constant_domain = match c {
                                 Self::Compare {
                                     left: Term::Variable(_),
-                                    right: Term::Literal(_),
+                                    right,
                                     ..
-                                } | Self::Compare {
-                                    left: Term::Literal(_),
+                                } => right.constant(),
+                                Self::Compare {
+                                    left,
                                     right: Term::Variable(_),
                                     ..
-                                } | Self::Between {
+                                } => left.constant(),
+                                Self::Between {
                                     term: Term::Variable(_),
-                                    low: Term::Literal(_),
-                                    high: Term::Literal(_),
-                                } | Self::In {
+                                    low,
+                                    high,
+                                } => low.constant() && high.constant(),
+                                Self::In {
                                     term: Term::Variable(_),
                                     ..
-                                }
-                            );
-                            literal_domain && c.variables().all(|v| symbol_name(v) == name)
+                                } => true,
+                                _ => false,
+                            };
+                            constant_domain && c.variables().all(|v| symbol_name(v) == name)
                         })
                         .cloned()
                         .collect();
@@ -445,9 +688,9 @@ impl Constraint {
         })
     }
 
-    pub fn parameters(&self) -> impl Iterator<Item = &Parameter> {
+    pub fn parameters(&self) -> impl Iterator<Item = &syn::Expr> {
         self.terms().into_iter().filter_map(|t| match t {
-            Term::Parameter(v) => Some(v),
+            Term::Closed(v) => Some(v),
             _ => None,
         })
     }
@@ -481,8 +724,22 @@ impl Constraint {
         }
     }
 
+    /// Resolve source operands; the predicate's left column must stay a query
+    /// variable so the CQ scope checker diagnoses an unbound column.
     pub fn resolve(&mut self, logical: &BTreeSet<String>) {
-        self.map_terms(&mut |t| t.resolve(logical));
+        match self {
+            Self::Compare { right, .. } => right.resolve(logical),
+            Self::Between { low, high, .. } => {
+                low.resolve(logical);
+                high.resolve(logical);
+            }
+            Self::In { .. } => {}
+            Self::Or(branches) => {
+                for constraint in branches.iter_mut().flatten() {
+                    constraint.resolve(logical);
+                }
+            }
+        }
     }
 
     pub fn equality(&self) -> Option<Equality> {
@@ -497,13 +754,23 @@ impl Constraint {
         let right = match right {
             Term::Variable(v) => EqualityValue::Variable(v.clone()),
             Term::Literal(v) => EqualityValue::Literal((**v).clone()),
-            Term::Parameter(_) => return None,
+            Term::Closed(_) => return None,
         };
         Some(Equality {
             left: left.clone(),
             eq_token: *eq_token,
             right,
         })
+    }
+
+    /// Equalities required by this predicate, excluding alternatives.
+    pub fn equalities(&self) -> Vec<Equality> {
+        match self {
+            Self::Or(branches) if branches.len() == 1 => {
+                branches[0].iter().flat_map(Self::equalities).collect()
+            }
+            _ => self.equality().into_iter().collect(),
+        }
     }
 
     pub fn from_equality(e: &Equality) -> Self {
@@ -517,11 +784,11 @@ impl Constraint {
         }
     }
 
-    /// Rust guard spelling for normalized constraints; captures are bare names.
+    /// Source `where` spelling for normalized relational predicates.
     pub fn cq_tokens(&self) -> TokenStream {
         let term = |t: &Term| match t {
             Term::Variable(v) => quote!(#v),
-            Term::Parameter(p) => quote!(#p),
+            Term::Closed(p) => quote!((#p)),
             Term::Literal(l) => quote!(#l),
         };
         match self {
@@ -540,12 +807,11 @@ impl Constraint {
             }
             Self::Between { term: t, low, high } => {
                 let (t, low, high) = (term(t), term(low), term(high));
-                quote!((#t >= #low && #t <= #high))
+                quote!(#t in #low..=#high)
             }
             Self::In { term: t, literals } => {
                 let t = term(t);
-                let tests: Vec<_> = literals.iter().map(|l| quote!(#t == #l)).collect();
-                quote!((#(#tests)||*))
+                quote!(#t in [#literals])
             }
             Self::Or(branches) => {
                 let branches = branches.iter().map(|branch| {
@@ -578,10 +844,10 @@ impl Constraint {
                 ));
             }
             Self::Or(branches) => {
-                if branches.len() < 2 || branches.iter().any(Vec::is_empty) {
+                if branches.is_empty() || branches.iter().any(Vec::is_empty) {
                     return Err(syn::Error::new_spanned(
                         self,
-                        "disjunction requires at least two nonempty parenthesized conjunctions",
+                        "predicate requires nonempty conjunctions",
                     ));
                 }
                 for c in branches.iter().flatten() {

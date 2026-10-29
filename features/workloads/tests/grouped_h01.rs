@@ -20,6 +20,9 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
         vec![3, 1, 65, 70, 900, 9900, 1],
     ];
     for rows in [raw.clone(), raw.into_iter().rev().collect(), Vec::new()] {
+        let mut dictionaries = cq_load::Dictionaries::default();
+        dictionaries.insert("l_returnflag", ["A", "N"]);
+        dictionaries.insert("l_linestatus", ["F", "O"]);
         let data = h01::Data {
             lineitem: rows
                 .iter()
@@ -27,8 +30,14 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
                     (
                         i64::from(r[0]),
                         i64::from(r[1]),
-                        char::from_u32(r[2] as u32).unwrap().to_string(),
-                        char::from_u32(r[3] as u32).unwrap().to_string(),
+                        dictionaries.literal(
+                            "l_returnflag",
+                            &char::from_u32(r[2] as u32).unwrap().to_string(),
+                        ),
+                        dictionaries.literal(
+                            "l_linestatus",
+                            &char::from_u32(r[3] as u32).unwrap().to_string(),
+                        ),
                         Decimal::from_scaled(i64::from(r[4])).unwrap(),
                         Decimal::from_scaled(i64::from(r[5])).unwrap(),
                         Date::load(if r[6] == 0 {
@@ -40,6 +49,7 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
                     )
                 })
                 .collect(),
+            dictionaries,
         };
         let sql = format!(
             r#"WITH lineitem AS (

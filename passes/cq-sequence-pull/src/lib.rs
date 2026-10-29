@@ -24,6 +24,7 @@ pub fn machine() -> cq_lang_sequence::Machine {
         root: cq_lang_sequence::LevelNode {
             shared_bytes: None,
             name: syn::parse_quote!(host),
+            host_rust: true,
             collaborative: false,
             dynamic: false,
             width: None,
@@ -110,6 +111,10 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, _, _>),
             vec![Membership],
         ),
+        (
+            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, _>),
+            vec![Membership],
+        ),
     ]
     .into_iter()
     .map(|(ty, capabilities)| ProviderToken {
@@ -121,6 +126,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     .collect();
     Catalog {
         providers,
+        // Codec registration only: these tokens authorize representations; this catalog does not execute logical decoding.
         codecs: [
             syn::parse_quote!(::cq_storage::sequence::Identity),
             syn::parse_quote!(::cq_storage::sequence::Dense<_>),
@@ -792,6 +798,8 @@ impl<'a> Emitter<'a> {
             }
         };
         let pattern = context.pattern(left);
+        // Each lookup can match multiple rows. Borrowed prefix columns copy;
+        // owned computed columns must remain available for every payload.
         let row = context.carrier(&result, |column| {
             if let Some(position) = payload
                 .iter()
@@ -803,7 +811,14 @@ impl<'a> Emitter<'a> {
                 context
                     .constant_value(&right, column)
                     .filter(|_| !columns.iter().any(|key| key == column))
-                    .unwrap_or_else(|| context.access(left, column))
+                    .unwrap_or_else(|| {
+                        let value = context.access(left, column);
+                        if context.infos[left].computed.contains(column) {
+                            quote!(::core::clone::Clone::clone(&#value))
+                        } else {
+                            value
+                        }
+                    })
             }
         });
         let rows = context.profile_input(&result, input.rows);
@@ -1137,6 +1152,11 @@ impl<'a> Emitter<'a> {
     }
 }
 
+// DESIGN translator-pull
+// Owns host interpretation of checked Sequence (translator-decides-nothing, T-Pull).
+// Source: doc/PLANNING-REDESIGN.md Architecture; doc/formal/CONFORMANCE.md Pull/Rayon rows.
+// Consume recorded choice, store and carrier-publication facts without changing support.
+// DO NOT choose join order, move predicates, or buffer/replay rows without a recorded publication.
 /// Emit a host-only checked Sequence iterator. Analysis belongs to this program.
 /// Formal rule T-Pull: interpret host rows and recorded choice/publication modes without changing support.
 pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {

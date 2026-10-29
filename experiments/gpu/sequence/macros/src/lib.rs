@@ -18,8 +18,9 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
 pub fn plan(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, arguments| {
         no_arguments(arguments)?;
+        let source = cq_gpu_sequence_core::runs::record_representation(source)?;
         Ok(cq_sequence_plan::plan(
-            source,
+            &source,
             &cq_gpu_sequence_core::machine(),
             &cq_gpu_sequence_core::catalog(),
         )?
@@ -33,8 +34,9 @@ pub fn plan(input: TokenStream) -> TokenStream {
 pub fn machine_grade(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, arguments| {
         no_arguments(arguments)?;
-        cq_lang_sequence::check_grading(source, &cq_gpu_sequence_core::machine())?;
-        Ok(source.clone())
+        let source = cq_gpu_sequence_core::runs::record_representation(source)?;
+        cq_lang_sequence::check_grading(&source, &cq_gpu_sequence_core::machine())?;
+        Ok(source)
     })
     .into()
 }
@@ -44,8 +46,9 @@ pub fn machine_grade(input: TokenStream) -> TokenStream {
 pub fn translate(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, arguments| {
         no_arguments(arguments)?;
-        let analysis = cq_lang_sequence::check_grading(source, &cq_gpu_sequence_core::machine())?;
-        cq_gpu_sequence_core::translate(source, &analysis)
+        let source = cq_gpu_sequence_core::runs::record_representation(source)?;
+        let analysis = cq_lang_sequence::check_grading(&source, &cq_gpu_sequence_core::machine())?;
+        cq_gpu_sequence_core::translate(&source, &analysis)
     })
     .into()
 }
@@ -62,8 +65,9 @@ pub fn translate_arena(input: TokenStream) -> TokenStream {
                 "GPU Sequence translate_arena requires an explicit arena expression"));
         }
         let arena = syn::parse2::<syn::Expr>(arguments)?;
-        let analysis = cq_lang_sequence::check_grading(source, &cq_gpu_sequence_core::machine())?;
-        cq_gpu_sequence_core::translate_arena(source, &analysis, &arena)
+        let source = cq_gpu_sequence_core::runs::record_representation(source)?;
+        let analysis = cq_lang_sequence::check_grading(&source, &cq_gpu_sequence_core::machine())?;
+        cq_gpu_sequence_core::translate_arena(&source, &analysis, &arena)
     })
     .into()
 }

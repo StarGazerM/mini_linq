@@ -9,6 +9,7 @@ cq-planners = { path = "../../../features/planners" }
 cq-rewrites = { path = "../../../features/rewrites" }
 cq-gpu-sequence = { path = "../sequence" }
 cq-gpu-sequence-runtime = { path = "../sequence-runtime" }
+gpu-datalog-runtime = { path = "../datalog-runtime" }
 cq-sequence-rewrites = { path = "../../../features/sequence-rewrites" }
 cq-gpu-runtime = { path = "../printer-runtime" }
 cq-storage = { path = "../../../runtime/cq-storage" }

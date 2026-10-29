@@ -1,7 +1,11 @@
+//! String columns use load-time sorted dictionary codes throughout query execution.
+//! Text is decoded only when publishing the final answer.
 //! TPC-H Q10 customer revenue core, without ordering or limit.
 //! Revenue is an exact scale-four coefficient; account balance is scale two.
 //! Order/line identities remain named witnesses in the grouped fold.
 use cq_load::{Date, Decimal, Load};
+
+use cq_load::StringCode;
 
 pub const NAME: &str = "retail_h10";
 
@@ -30,52 +34,68 @@ FROM (SELECT DISTINCT c.c_custkey, c.c_name, c.c_acctbal, c.c_nationkey,
       AND l.l_returnflag = 'R') AS matches
 GROUP BY c_custkey, c_name, c_acctbal, n_name, c_address, c_phone, c_comment"#;
 
-pub type Customer = (i64, String, Decimal, i32, String, String, String);
+pub type Customer = (
+    i64,
+    StringCode,
+    Decimal,
+    i32,
+    StringCode,
+    StringCode,
+    StringCode,
+);
 pub type Orders = (i64, i64, Date);
-pub type Lineitem = (i64, i64, Decimal, Decimal, String);
-pub type Nation = (i32, String);
+pub type Lineitem = (i64, i64, Decimal, Decimal, StringCode);
+pub type Nation = (i32, StringCode);
 pub type Answer = (i64, String, i64, i64, String, String, String, String);
 pub struct Data {
     pub customer: Vec<Customer>,
     pub orders: Vec<Orders>,
     pub lineitem: Vec<Lineitem>,
     pub nation: Vec<Nation>,
+    pub dictionaries: cq_load::Dictionaries,
 }
 
-mini_linq::relation_loaders! {
-    relation Customer(c_custkey: i64, c_name: String, c_acctbal: Decimal,
-        c_nationkey: i32, c_address: String, c_phone: String, c_comment: String);
+mini_linq::interned_relation_loaders! {
+    relation Customer(c_custkey: i64, c_name: StringCode, c_acctbal: Decimal,
+        c_nationkey: i32, c_address: StringCode, c_phone: StringCode, c_comment: StringCode);
     relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date);
     relation Lineitem(l_orderkey: i64, l_linenumber: i64,
-        l_extendedprice: Decimal, l_discount: Decimal, l_returnflag: String);
-    relation Nation(n_nationkey: i32, n_name: String);
+        l_extendedprice: Decimal, l_discount: Decimal, l_returnflag: StringCode);
+    relation Nation(n_nationkey: i32, n_name: StringCode);
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
     assert!(CONFIGS.contains(&config), "unknown H10 configuration");
+    let mut dictionaries = cq_load::Dictionaries::default();
     Ok(Data {
-        customer: <relation_loader!(Customer)>::parquet(
+        customer: <relation_loader!(Customer)>::parquet_interned(
             root.join("customer.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
-        orders: <relation_loader!(Orders)>::parquet(
+        orders: <relation_loader!(Orders)>::parquet_interned(
             root.join("orders.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
-        lineitem: <relation_loader!(Lineitem)>::parquet(
+        lineitem: <relation_loader!(Lineitem)>::parquet_interned(
             root.join("lineitem.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
-        nation: <relation_loader!(Nation)>::parquet(
+        nation: <relation_loader!(Nation)>::parquet_interned(
             root.join("nation.parquet"),
             cq_load::ParquetOptions::default(),
+            &mut dictionaries,
         )?,
+        dictionaries,
     })
 }
 
 crate::tpch_runtime::standalone_configs! { $;
     pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
         assert!(CONFIGS.contains(&config), "unknown H10 configuration");
+        let returned = data.dictionaries.literal("l_returnflag", "R");
         let Customer = data.customer.as_slice();
         let Orders = data.orders.as_slice();
         let Lineitem = data.lineitem.as_slice();
@@ -85,25 +105,38 @@ crate::tpch_runtime::standalone_configs! { $;
         query! {
             plan(no_reduce, order(Orders, Lineitem, Customer, Nation));
             struct Query;
-            relation Customer(c_custkey: i64, c_name: String, c_acctbal: Decimal,
-                c_nationkey: i32, c_address: String, c_phone: String, c_comment: String);
+            relation Customer(c_custkey: i64, c_name: StringCode, c_acctbal: Decimal,
+                c_nationkey: i32, c_address: StringCode, c_phone: StringCode, c_comment: StringCode);
             relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date);
             relation Lineitem(l_orderkey: i64, l_linenumber: i64,
-                l_extendedprice: Decimal, l_discount: Decimal, l_returnflag: String);
-            relation Nation(n_nationkey: i32, n_name: String);
-            relation answer(customer_key: i64, name: String, revenue: i64,
-                account_balance: i64, nation: String, address: String, phone: String, comment: String);
+                l_extendedprice: Decimal, l_discount: Decimal, l_returnflag: StringCode);
+            relation Nation(n_nationkey: i32, n_name: StringCode);
+            relation answer(customer_key: i64, name: StringCode, revenue: i64,
+                account_balance: i64, nation: StringCode, address: StringCode, phone: StringCode, comment: StringCode);
             answer(customer_key, name, sum(revenue_units), balance_units, nation, address, phone, comment) :-
                 Orders(order_key, customer_key, order_date),
-                if *order_date >= start && *order_date < end,
-                Lineitem(order_key, line_number, price, discount, "R"),
+                where order_date >= start && order_date < end,
+                Lineitem(order_key, line_number, price, discount, returnflag),
+                where returnflag == returned,
                 Customer(customer_key, name, balance, nation_key, address, phone, comment),
                 Nation(nation_key, nation),
                 let revenue_units: i64 = price.scaled() * (100 - discount.scaled()),
                 let balance_units: i64 = balance.scaled();
         }
         .map(|(key, name, revenue, balance, nation, address, phone, comment)| {
-            (*key, name.clone(), revenue, balance, nation.clone(), address.clone(), phone.clone(), comment.clone())
+            (*key,
+                // DECODE P: publish c_name in H10 answer.
+                data.dictionaries.publish("c_name", *name),
+                revenue, balance,
+                // DECODE P: publish n_name in H10 answer.
+                data.dictionaries.publish("n_name", *nation),
+                // DECODE P: publish c_address in H10 answer.
+                data.dictionaries.publish("c_address", *address),
+                // DECODE P: publish c_phone in H10 answer.
+                data.dictionaries.publish("c_phone", *phone),
+                // DECODE P: publish c_comment in H10 answer.
+                data.dictionaries.publish("c_comment", *comment),
+            )
         })
         .collect()
     }

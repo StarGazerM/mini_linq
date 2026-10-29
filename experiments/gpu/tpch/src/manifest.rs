@@ -39,6 +39,37 @@ pub struct Manifest {
     pub root: PathBuf,
 }
 
+/// Closed relational operands may already be published codes (including an
+/// imported `dictionaries.literal(column, text)` capture). Rust selects this
+/// codec without inspecting authored type spellings.
+pub trait DictionaryLiteral {
+    fn dictionary_code(&self, dictionary: &[&str]) -> u32;
+}
+
+impl DictionaryLiteral for u32 {
+    fn dictionary_code(&self, _: &[&str]) -> u32 { *self }
+}
+
+impl DictionaryLiteral for str {
+    fn dictionary_code(&self, dictionary: &[&str]) -> u32 {
+        dictionary.iter().position(|entry| *entry == self)
+            .map(|index| u32::try_from(index).expect("validated dictionary size"))
+            .unwrap_or(u32::MAX)
+    }
+}
+
+impl DictionaryLiteral for String {
+    fn dictionary_code(&self, dictionary: &[&str]) -> u32 {
+        self.as_str().dictionary_code(dictionary)
+    }
+}
+
+impl<T: DictionaryLiteral + ?Sized> DictionaryLiteral for &T {
+    fn dictionary_code(&self, dictionary: &[&str]) -> u32 {
+        (**self).dictionary_code(dictionary)
+    }
+}
+
 /// Host values follow the query declaration, not the on-disk representation.
 pub trait HostValue: Sized {
     fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>>;
@@ -70,12 +101,42 @@ impl HostValue for u32 {
     }
 }
 
+impl HostValue for cq_load::StringCode {
+    fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
+        manifest.read_column(table, column)?.into_iter()
+            .map(|value| u32::try_from(value).map(Self).map_err(Into::into))
+            .collect()
+    }
+}
+
+impl HostValue for cq_load::Date {
+    fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
+        // DECODE ?: Date HostValue reconstruction serves typed host inputs; caller rust_reads versus reference-only use determines necessity.
+        manifest.read_column(table, column)?.into_iter()
+            .map(|value| Ok(Self::from_days(i32::try_from(value)?)))
+            .collect()
+    }
+}
+
+impl<const SCALE: u32> HostValue for cq_load::Decimal<SCALE> {
+    fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
+        if manifest.column(table, column)?.scale != Some(SCALE) {
+            return Err(format!("{table}.{column}: decimal scale differs from loader contract").into());
+        }
+        // DECODE ?: Decimal HostValue reconstructs a whole typed input column; requires caller rust_reads evidence, not its type alone.
+        manifest.read_column(table, column)?.into_iter()
+            .map(|value| Self::from_scaled(value).map_err(Into::into))
+            .collect()
+    }
+}
+
 impl HostValue for String {
     fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
         let dictionary = manifest.dictionary(manifest.column(table, column)?)?;
         manifest
             .read_stored_column(table, column)?
             .into_iter()
+            // DECODE ?: String HostValue resolves dictionary entries for typed host inputs; classify each caller as opaque Rust or premature relational decode.
             .map(|code| {
                 usize::try_from(code)
                     .ok()
@@ -202,5 +263,20 @@ impl Manifest {
             }
         }
         Ok(values)
+    }
+}
+
+#[cfg(test)]
+mod dictionary_literal_tests {
+    use super::DictionaryLiteral;
+
+    #[test]
+    fn closed_codes_and_text_preserve_published_dictionary_order() {
+        let dictionary = ["red", "green part"];
+        assert_eq!(1_u32.dictionary_code(&dictionary), 1);
+        assert_eq!(u32::MAX.dictionary_code(&dictionary), u32::MAX);
+        assert_eq!("green part".dictionary_code(&dictionary), 1);
+        assert_eq!("red".to_owned().dictionary_code(&dictionary), 0);
+        assert_eq!("absent".dictionary_code(&dictionary), u32::MAX);
     }
 }

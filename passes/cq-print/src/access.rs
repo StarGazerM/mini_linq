@@ -8,6 +8,8 @@ pub struct HostAccess {
     pub value: Ident,
     pub prefix: bool,
     pub fallback: Ident,
+    /// Checked full-row-key probes observe existence, not witness payloads.
+    pub membership: bool,
     /// Computed prefix keys cannot borrow for the lifetime of host rows.
     pub owned_key: bool,
     /// Key columns in declaration order for an eligible prefix.
@@ -74,6 +76,10 @@ impl<'a> Context<'a> {
         HostAccess {
             value: host.value.clone(),
             prefix,
+            membership: self
+                .analysis
+                .membership
+                .contains(&(result.to_owned(), columns.to_vec())),
             key,
             key_types,
             payload,
@@ -150,18 +156,17 @@ impl<'a> Context<'a> {
                     .iter()
                     .take_while(|column| literals.contains_key(*column))
                     .count();
-                let native_key = source.is_none() && prefix > 0 && (0..prefix).all(|i| {
-                    !matches!(literals[&host.layout[i]], Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. }))
-                        || matches!(&host.types[i], syn::Type::Reference(reference)
-                            if matches!(&*reference.elem, syn::Type::Path(path) if path.path.is_ident("str")))
-                });
+                // Native capability dispatch checks the actual key representation;
+                // differently represented literals fall back to the residual scan.
+                let native_key = source.is_none() && prefix > 0;
                 let rows = if native_key {
                     let types = &host.types[..prefix];
                     let values = host.layout[..prefix].iter().map(|column| literals[column]);
                     quote!({
                         use ::cq_storage::dispatch::PointRead as _;
-                        (&&::cq_storage::dispatch::PointHost::<_, (#(#types,)*), _>::new(
-                            #value,
+                        let __cq_key = (#(#values,)*);
+                        (&&::cq_storage::dispatch::PointHost::<_, (#(#types,)*), _, _>::new(
+                            #value, &__cq_key,
                             move || {
                                 let __cq_scan: #ty = ::core::iter::Iterator::map(
                                     ::cq_storage::rows::Rows::rows(#value),
@@ -169,7 +174,7 @@ impl<'a> Context<'a> {
                                 );
                                 __cq_scan
                             }
-                        )).point(&(#(#values,)*))
+                        )).point(&__cq_key)
                     })
                 } else {
                     source
@@ -280,12 +285,22 @@ impl<'a> Context<'a> {
                 vec![result.into()],
             );
             let pairs = self.profile_inserting(&build_name, pairs);
-            let build = self.profile_build(
-                &build_name,
-                quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs)),
-            );
+            let construct = if a.membership {
+                quote!({
+                    let __cq_build_source = #pairs;
+                    ::cq_storage::build!(#ty, __cq_build_source)
+                })
+            } else {
+                quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
+            };
+            let declared_type: syn::Type = if a.membership {
+                syn::parse_quote!(_)
+            } else {
+                ty
+            };
+            let build = self.profile_build(&build_name, construct);
             self.statements.push(syn::parse_quote! {
-                let #fallback: ::cq_storage::dispatch::Lazy<#ty, _> = ::cq_storage::dispatch::Lazy::new(move || #build);
+                let #fallback: ::cq_storage::dispatch::Lazy<#declared_type, _> = ::cq_storage::dispatch::Lazy::new(move || #build);
             });
             self.owned.push(fallback);
         }
@@ -411,7 +426,7 @@ impl<'a> Context<'a> {
         access: &'b HostAccess,
     ) -> impl Iterator<Item = &'b syn::Type> {
         let types = &self.infos[left].types;
-        let generated = !self.generator_expressions.is_empty();
+        let generated = self.has_generators;
         access
             .key
             .iter()
@@ -473,8 +488,14 @@ impl<'a> Context<'a> {
         } else {
             quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
         };
-        if contains {
-            quote!({ use ::cq_storage::dispatch::Contains as _; (#receiver).contains(#key) })
+        if contains || access.membership {
+            let test =
+                quote!({ use ::cq_storage::dispatch::Contains as _; (#receiver).contains(#key) });
+            if contains {
+                test
+            } else {
+                quote!(::core::iter::IntoIterator::into_iter((#test).then_some(())))
+            }
         } else {
             quote!({ use ::cq_storage::dispatch::Seek as _; (#receiver).seek(#key) })
         }

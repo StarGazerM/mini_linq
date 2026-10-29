@@ -1,5 +1,13 @@
 //! Typed summaries over immutable decoded tuples. No Parquet statistics enter
 //! this path: block boundaries are independent of source batches/row groups.
+//!
+//! DESIGN contract8-zone-rows
+//! Contract 8, STR-Repr: scan payload and enclosing summaries belong to one stored block.
+//! Sources: doc/STORAGE.md §§2,3,6,12; Data Blocks §§3.1-3.4; DuckDB row_group.cpp CheckZonemap.
+//! Known deviation: ZoneRows decodes into owned row tuples, not columnar blocks (Plan P5).
+//! DO NOT treat this decoded copy or Parquet metadata as summaries of a future encoded payload.
+//! DO NOT promise pruning on TPC-H load order: §12 measured almost none; selection needs evidence.
+//! The planned pipeline is prune, preserved-op predicate, positions, late materialization.
 use crate::{Date, Decimal};
 use cq_storage::rows::{Columns, Rows};
 use cq_storage::{BlockId, BlockRead, Column, PositionalRows, RowId};
@@ -87,7 +95,7 @@ macro_rules! scalar {
 }
 scalar!([] i8, [] i16, [] i32, [] i64, [] i128, [] isize,
         [] u8, [] u16, [] u32, [] u64, [] u128, [] usize,
-        [] bool, [] Date, [const SCALE: u32] Decimal<SCALE>);
+        [] bool, [] Date, [] crate::StringCode, [const SCALE: u32] Decimal<SCALE>);
 
 impl ZoneMetadata for MinMax<String> {
     fn heap_bytes(&self) -> usize {
@@ -203,6 +211,7 @@ impl<T, M: ZoneMetadata> ZoneRows<T, M> {
             block_rows,
         };
         let mut summarized = 0;
+        // DECODE V: consuming Csv/Parquet batches drives eager tuple decoding before summary scans; P5 must build encoded columns and materialize survivors.
         for batch in batches {
             host.rows.extend(batch?);
             while host.rows.len() - summarized >= block_rows.get() {

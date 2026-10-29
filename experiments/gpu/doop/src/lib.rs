@@ -9,7 +9,9 @@ impl gpu_datalog_runtime::SymbolCodec<doop_shared::IStr> for DoopSymbols {
         value.code()
     }
 
+    // DECODE P: datalog output printer invokes DoopSymbols only for final host answer symbols.
     fn decode(code: u32) -> doop_shared::IStr {
+        // DECODE P: process-global symbol code inversion restores the final DOOP host answer handle.
         doop_shared::IStr::from_code(code)
     }
 }

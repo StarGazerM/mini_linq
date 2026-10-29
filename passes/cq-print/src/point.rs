@@ -30,12 +30,6 @@ impl Context<'_> {
         if !access.prefix {
             return Some(filtered);
         }
-        // A Rust string literal is borrowed str, not an owned String key.
-        // Unsupported exact key types scan without converting or cloning it.
-        if access.key.iter().any(|c| matches!(&keys[c], syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. }))
-            && !matches!(&self.infos[&input_name].types[c], syn::Type::Reference(r) if matches!(&*r.elem, syn::Type::Path(p) if p.path.is_ident("str")))) {
-            return Some(filtered);
-        }
         let host = &access.value;
         let fallback_ty = self.fallback_type(
             &input_name,
@@ -54,10 +48,11 @@ impl Context<'_> {
         let row = self.carrier(&input_name, |c| self.access(&input_name, c));
         let looked_up = quote!({
             use ::cq_storage::dispatch::PointRead as _;
+            let __cq_key = (#(#values,)*);
             ::core::iter::Iterator::map(
-                (&&::cq_storage::dispatch::PointHost::<_, (#(#types,)*), _>::new(
-                    #host, move || { let __cq_scan: #fallback_ty = ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(#host), ::core::convert::identity); __cq_scan }
-                )).point(&(#(#values,)*)),
+                (&&::cq_storage::dispatch::PointHost::<_, (#(#types,)*), _, _>::new(
+                    #host, &__cq_key, move || { let __cq_scan: #fallback_ty = ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(#host), ::core::convert::identity); __cq_scan }
+                )).point(&__cq_key),
                 move |(#(#fields,)*)| #row
             )
         });

@@ -554,6 +554,7 @@ impl CanonicalKeys {
     /// Field values must use the supplied dictionary's encoding for any
     /// dictionary-valued columns. `statuses` must include all consumed ancestor
     /// failures; they are preserved for DeviceColumns' normal host validation.
+    // DECODE V: packed answers expand into resident columns usable by chained queries; P6 retain packed fields until an allowed read.
     pub fn into_columns<'data, Row: RowCodec<'data>>(
         self,
         fields: &[PackedField],
@@ -561,6 +562,7 @@ impl CanonicalKeys {
         statuses: Vec<Arc<Buffer<OutputCount>>>,
     ) -> Result<DeviceColumns<'data, Row>> {
         PackedColumnsAdapter::new(self.keys.pool().clone(), fields.len())?
+            // DECODE V: into_columns invokes device expansion before host publication; P6 preserve the packed view.
             .unpack_columns(self, fields, dictionary, statuses)
     }
 }
@@ -570,6 +572,7 @@ impl CanonicalKeys {
 /// or distinctness claim. The initialized prefix must be ready on the keys'
 /// pool stream. Field values and ancestor statuses follow the same contracts
 /// as `CanonicalKeys::into_columns`.
+// DECODE V: packed_rows wrapper eagerly expands into device columns before consumers; P6 retain packed resident fields.
 pub fn packed_columns<'data, Row: RowCodec<'data>>(
     keys: Buffer<u64>,
     rows: usize,
@@ -578,6 +581,7 @@ pub fn packed_columns<'data, Row: RowCodec<'data>>(
     statuses: Vec<Arc<Buffer<OutputCount>>>,
 ) -> Result<DeviceColumns<'data, Row>> {
     PackedColumnsAdapter::new(keys.pool().clone(), fields.len())?
+        // DECODE V: packed_rows wrapper dispatches device expansion before publication; P6 defer logical inversion.
         .packed_columns(keys, rows, fields, dictionary, statuses)
 }
 
@@ -616,6 +620,7 @@ impl PackedColumnsAdapter {
 
     /// Adapt a live prefix without changing its order or multiplicity.
     /// Fields and ancestor statuses follow `CanonicalKeys::into_columns`.
+    // DECODE V: packed adapter expands the live prefix before possible chained relations; P6 keep its encoded view.
     pub fn packed_columns<'data, Row: RowCodec<'data>>(
         &mut self,
         keys: Buffer<u64>,
@@ -639,6 +644,7 @@ impl PackedColumnsAdapter {
                 padding: 0,
             }],
         )?;
+        // DECODE V: packed_columns expands every field into device buffers; P6 defer inversion until logical reads.
         self.decode_columns(
             &keys,
             lanes,
@@ -652,6 +658,7 @@ impl PackedColumnsAdapter {
 
     /// Unpack canonical keys without downloading their device-resident count.
     /// The result owns its columns and retains the original count and statuses.
+    // DECODE V: canonical output adapter expands packed values before possible chained relations; P6 retain encoded fields.
     pub fn unpack_columns<'data, Row: RowCodec<'data>>(
         &mut self,
         keys: CanonicalKeys,
@@ -660,6 +667,7 @@ impl PackedColumnsAdapter {
         statuses: Vec<Arc<Buffer<OutputCount>>>,
     ) -> Result<DeviceColumns<'data, Row>> {
         let capacity = keys.capacity();
+        // DECODE V: canonical unpack delegates eager device expansion; P6 publish a packed resident view.
         self.decode_columns(
             &keys.keys,
             keys.lanes,
@@ -671,6 +679,7 @@ impl PackedColumnsAdapter {
         )
     }
 
+    // DECODE V: output adapter materializes full i64 columns before their consumers; P6 keep packed values resident.
     fn decode_columns<'data, Row: RowCodec<'data>>(
         &mut self,
         keys: &Buffer<u64>,
@@ -712,6 +721,7 @@ impl PackedColumnsAdapter {
         for (field, &bound) in fields.iter().zip(&bounds) {
             let column = unsafe { Buffer::<i64>::uninitialized(self.pool.clone(), capacity)? };
             if let Some(prepared) = &prepared {
+                // DECODE V: per-field unpack launch expands all live rows before chaining; P6 decode only at the allowed consumer.
                 self.module.unpack_field(
                     self.pool.stream(),
                     prepared,
@@ -794,6 +804,7 @@ mod canon_kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
+    // DECODE V: unpack_field constructs device logical columns before possible relational consumers; P6 preserve packed fields.
     pub fn unpack_field(
         keys: *const u64,
         lanes: u32,
@@ -826,6 +837,7 @@ mod canon_kernels {
             };
             // Host validation proves base + offset fits i64. Wrapping also
             // handles a full-width unsigned offset above i64::MAX correctly.
+            // DECODE V: packed FOR base-plus-offset inversion precedes host publication and may feed chaining; P6 delay reconstruction.
             unsafe { *output.add(row as usize) = base.wrapping_add(offset as i64) };
             row += stride;
         }

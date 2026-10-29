@@ -311,15 +311,15 @@ pub(crate) fn body(
     }
 }
 
-// Query parsing recognizes relational guards and strips reference syntax from their
-// relational terms. Restore a uniform borrowed comparison here, rather than
-// treating cq_tokens() (the logical wire spelling) as executable Rust.
+// Relational predicates compare column representations. Restore a uniform
+// borrowed comparison here, rather than treating cq_tokens() (the logical
+// wire spelling) as executable Rust.
 fn constraint(value: &cq_syntax::Constraint, scope: &BTreeMap<String, bool>) -> TokenStream {
     use cq_syntax::constraint::{Comparison, Constraint, Term};
     let term = |value: &Term| match value {
         Term::Variable(name) if scope.get(&symbol_name(name)) == Some(&true) => quote!(#name),
         Term::Variable(name) => quote!(&#name),
-        Term::Parameter(parameter) => quote!(&#parameter),
+        Term::Closed(expression) => quote!(&(#expression)),
         Term::Literal(value) => quote!(&(#value)),
     };
     match value {

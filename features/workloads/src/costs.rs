@@ -57,7 +57,7 @@ configuration!(keep, {
             pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Range;
             relation r(a:i32,b:i32);
-            answer(a,b) :- r(a,b), if * a >= 2, if * a < 6;
+            answer(a,b) :- r(a,b), where a >= 2, where a < 6;
         }
         .map(|(a, b)| vec![*a, *b])
         .collect()
@@ -67,7 +67,7 @@ configuration!(keep, {
             pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Range;
             relation r(a:i32,b:i32);
-            answer(a,b) :- r(a,b), if * a >= 2, if * a < 6;
+            answer(a,b) :- r(a,b), where a >= 2, where a < 6;
         }
         .map(|(a, b)| vec![*a, *b])
         .collect()

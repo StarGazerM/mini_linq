@@ -68,7 +68,7 @@ Output   ::= "output" ("count" | "reserve" | "bounded") ";"
 Public API:
 
 ```rust
-pub struct Program { pub structures: cq_lang_structures::Program, pub sequence: Sequence, pub graded: Option<Graded>, pub evidence: Evidence }
+pub struct Program { pub structures: cq_lang_structures::Program, pub sequence: Sequence, pub graded: Option<Graded>, pub evidence: Evidence, pub representation: Representation }
 pub enum Term { Rows(Ident), Map(Ident, Box<Term>), Flatten(Box<Term>), Compact(Ident, Box<Term>),
                 Tile{n: usize, items: Option<usize>, inner: Box<Term>}, Lookup{provider: Ident, keys: Vec<Ident>, inner: Box<Term>},
                 Fold(Monoid, Box<Term>), Group(Ident, Box<Term>), Canon(Box<Term>), Store{capacity: Option<usize>, inner: Box<Term>},
@@ -76,7 +76,7 @@ pub enum Term { Rows(Ident), Map(Ident, Box<Term>), Flatten(Box<Term>), Compact(
 
 /// Machine model: a tree of levels with labels. Data, not code; each target exports one.
 pub struct Machine { pub name: Ident, pub items: usize, pub key_partition_threshold: usize, pub key_partition_cache_threshold: usize, pub root: LevelNode }
-pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bool, pub width: Option<usize>, pub children: Vec<LevelNode> }
+pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bool, pub host_rust: bool, pub width: Option<usize>, pub children: Vec<LevelNode> }
 
 /// Target catalogs are ordered syntax/capability data, with no target dependency here.
 pub struct Catalog { pub providers: Vec<ProviderToken>, pub codecs: Vec<CodecToken>, pub canons: Vec<CanonToken> }
@@ -104,12 +104,26 @@ pub struct Analysis {
     pub output: Option<(String, OutputProtocol)>,       // the final store and how it is filled
     pub obligations: Vec<Obligation>,                  // provider/codec/canon traits and dispatch failure paths
     pub evidence: Evidence,                           // estimates and author-asserted key premises
+    pub representation: Representation,               // recorded identity/encoded column sets
 }
 pub mod contract { pub fn check(p: &Program) -> syn::Result<Analysis>; }   // BE-Alpha…BE-Choose structurally
 pub fn check_grading(p: &Program, m: &Machine) -> syn::Result<Analysis>;   // BE-Scope…BE-Abort against m
-pub fn check_rewrite(s: &Program, t: &Program) -> syn::Result<()>;         // checked equal support; join motion preserves pinned Rust domains
+pub fn check_rewrite(s: &Program, t: &Program) -> syn::Result<()>;         // equal support, unchanged Rust payloads and free-variable bindings
 impl cq_stage::Language for Program { … }
 ```
+`Representation { identity: BTreeSet<String>, encoded: BTreeSet<String> }`
+prints as optional trailing `representation { identity [...]; encoded [...]; }`
+after evidence. Unknown columns do not justify device Rust. `LevelNode.host_rust`
+is true for host and CPU task execution, false for device/block/lane execution.
+Every Rust expression is pure-total by premise and emitted unchanged; device
+evaluation additionally requires identity representations for all read columns
+and closed captures for other inputs. Encoded comparisons use `where`.
+Publishing a host-filtered row below host requires a recorded identity or encoded
+representation for every retained column, unless the receiving level executes
+host Rust. A projected key can therefore cross without carrying its host-only
+payload. Structural renames and membership reads do not infer host execution from
+the spelling of a payload type.
+
 `BE-Publication` derives named Store ownership once for both PL-Cost and Tasks.
 Borrowed host stores and aliases do not allocate rows. Owned flat staging and
 key-part publication do; their lengths contribute a retained-row traffic
@@ -129,9 +143,9 @@ no retained-row requirement, no direct part-row replay or alias, and is not the
 final output publication. Original input and consumer carriers must agree;
 support-equal reheading alone is insufficient. Pure named producer views and
 previously published `BorrowHost` sources are followed; prior owned or nested
-Stores remain pinned. The checker traverses Physical dependencies using
-`Analysis::opaque`, rejects scan dependencies with shadowable
-join-filter bindings, and rejects intervening publications of source dependencies.
+Stores remain retained. The checker traverses Physical dependencies using
+free-variable and representation facts, rejects scan dependencies with
+shadowable join-filter bindings and intervening publications of dependencies.
 Everything failing these premises retains its original ownership record.
 
 On a recorded worker-singleton leaf reached without counting the staged input,
@@ -163,10 +177,10 @@ Checks (each a named `// Formal rule BE-…:` marker):
 - BE-Offsets / BE-Length: lengths computed for every Def; a `store` at a separated level whose Len is `Unknown` must carry a capacity; host (and ungraded) stores need none.
 - BE-Collective: applies to `fold`/`scan`/`flatten` graded at a level with members; at a leaf level they are sequential loops.
 - BE-Group: `group result input` names a Physical Group and consumes exactly its complete, flat, distinct valuation heading. Grouping executes at host, never per tile or at a separated pool/task. Global grouping has length one, including empty input; keyed grouping has data-dependent length and no empty groups.
-- `union [d, ...]` is a view with α = ⊎ and summed Len; opaque Guard/Bind are `map` Defs that must be graded at host (BE-Partial).
+- `union [d, ...]` is a view with α = ⊎ and summed Len; Rust Guard/Bind maps use BE-RustRepresentation, not a partial-expression classification.
 - BE-Code: codec premises are deferred to traits (recorded as obligations in Analysis, like Leibniz).
 - BE-Choose: guards exhaustive; all alternatives have equal `supp∘α` by construction (the same result or independently checked equivalent join/semijoin support). `workers < N` requires a positive bound and observes the target-wide available worker count, a uniform scheduling parameter that neither changes support nor supplies size evidence; a final `else` covers its remaining cases.
-- Grading: BE-Scope (reads inside extent, inner level), BE-Collective (fold/scan at collaborative level, whole level), BE-Separate (siblings exchange only via a store at an ancestor), BE-Boundary (derive `dispatches`), BE-Partial (no opaque Rust below host), BE-Abort (every dispatch has a failure channel).
+- Grading: BE-Scope (extent/level), BE-Collective (whole-level participation), BE-Separate (ancestor publication), BE-Boundary (dispatches), BE-RustRepresentation (host-Rust capability or identity device inputs), BE-Abort (failure channel).
 
 Acceptance: round-trip of every form; one rejection test per rule; `rules.tsv` rows switch to `implementation`; `tools/public-api/cq-lang-sequence.txt`.
 
@@ -205,7 +219,7 @@ failure channels are paths back to host, with their runtime flag behavior
 recorded as obligations. The structural rewrite checker compares construction
 normal forms under support. A changed Structures prefix additionally requires
 an evidence-independent join/semijoin equivalence certificate with unchanged
-opaque Rust domains; it does not prove arbitrary Rust or runtime trait laws.
+Rust payloads and free-variable identities; it does not prove arbitrary Rust or runtime laws.
 The flat definition list defines lexical extents: a store is visible from its
 definition onward, at its level and descendants. Cross-level views require
 an explicit ancestor store. A distributed publication tile needs a unique
@@ -214,8 +228,8 @@ without descending, so block scans inside them retain whole-block
 participation. Nonhost collectives require a collaborative grade and
 uniform guards. Each separated store must be named by a definition so that dispatch
 domains and publications have unambiguous names. Host and collaborative
-stores may remain nested. Opaque Physical dependencies require a host
-Sequence store before their values enter descendant execution.
+stores may remain nested. Physical dependencies without an eligible descendant
+representation require a host publication before descendant reads.
 
 `BE-Code` stays abstract: there is no static rejection test for a runtime
 trait law. Its analysis-obligation tests replace such a test; all thirteen
@@ -738,9 +752,9 @@ the suite and authored path use the same domain-coded input storage.
 
 For complete Sequence input, the facade's named `plan = path` phase operates
 on that Sequence program; for CQ input, the existing phase continues to
-select relational order before lowering. Opaque guards keep their written
-Before sets in either mode. To author a predicate-bearing leaf, put its atom
-and guard first, as H09 does for Part; this is query syntax, not guard motion.
+select relational order before lowering. Rust placement uses only free-variable
+dependencies at CQ-to-VO; Sequence refinements preserve that recorded placement.
+Predicate-bearing relational leaves use explicit `where`, never recognized Rust.
 
 Swappable planner: `cq_sequence_plan::Planner` trait,
 `plan(program, machine, catalog, evidence) -> Planned { program, trace }`;
@@ -839,7 +853,7 @@ columns directly, evaluating group arguments without materializing complete
 named valuations. With no key advice the existing canonical path is unchanged.
 
 Measured SF10 acceptance (advised suite, one warmup and five measured runs;
-before: baseline suite, after: key-aware grouping plus CQ-Arith):
+before: baseline suite, after: historical key-aware grouping and retired arithmetic recognition):
 
 | Query | Before total ms | After total ms | Speedup | After wall ms | Exact rows |
 |---|---:|---:|---:|---:|---:|
@@ -1327,19 +1341,20 @@ and scoped formatting/clippy/API/formal checks.
 
 ### Box 12c arbitrary-width GPU canon
 
-`WideCanon` follows `PackedCanon` in the target catalog. Selection compares the
-complete declared scalar domains against each provider's maximum-bit
-capability; no data evidence establishes a codec premise. Runtime packing uses
-the recorded actual codec bounds to allocate N low-first u64 lanes. Stable
-least-significant-lane radix passes carry row indices, then adjacent complete-row
-equality retains one row in deterministic ascending packed-key order.
+`WideCanon` follows `PackedCanon` in the target catalog. A bounded canon requires
+recorded codec bounds, not widths inferred from Rust scalar type syntax or data
+estimates. Structures-only selection has no such bounds and selects an unbounded
+canon. Runtime packing uses the recorded actual codec bounds to allocate N
+low-first u64 lanes. Stable least-significant-lane radix passes carry row indices,
+then adjacent complete-row equality retains one row in deterministic ascending
+packed-key order.
 
 Both providers publish the same device count and decode through the same
 column adapter. Intermediate providers, host downloads, grouped inputs and
 union consumers all decode arbitrary-width fields, including lane crossings.
 The formal `GPU-WideCanon` instance cites `BE-Canon`; runtime tests cover
-three-lane duplicates, repeated calls and empty input, and catalog tests cover
-the 128/192-bit boundary and rejection without a sufficiently wide provider.
+three-lane duplicates, repeated calls and empty input. Catalog tests require
+unbounded selection without codec bounds and rejection when none is available.
 
 Acceptance on the release sm_89 build: all eight runtime provider tests and
 all ten catalog-selection tests passed. The formal inventory check passed
@@ -1356,56 +1371,48 @@ DuckDB is the exported t24 median (not a new CPU measurement).
 Evidence: `/tmp/canon-h10.json`. The final-publication phase label is the
 suite's `dedup_ms`; intermediate canonicalization runs inside the kernel
 interval, so that column is not an isolated canon benchmark.
-## [15] CQ-Arith: earned arithmetic position independence
+## [15] One Rust expression and explicit relational predicates
 
-CQ defines `+`, `-`, `*`, and integer `/` by a nonzero literal as wrapping
-operations over declared integer types. Decimal arithmetic operates on the
-signed 64-bit coefficient (`Decimal::scaled`); integer-encoded dates retain
-their declared width. Total numeric `if` expressions and explicit lossless
-primitive `T::from` widening close the grammar. Arbitrary calls, lossy casts,
-mixed-width operands and nonliteral divisors remain opaque.
+Contract 7 supersedes arithmetic recognition. Every `if`, `let` and `for`
+expression is opaque, pure and total by premise, including calls, casts,
+conditionals and arithmetic. Its original Rust expression is emitted unchanged;
+there is no modular-arithmetic rewrite, type-name classifier or separate
+totality flag. Placement requires its free variables (the full environment
+when lexical analysis is opaque), not a written-order chain.
 
-The shared syntax recognizer returns the canonical wrapping expression.
-CQ-GuardRecognize extracts typed total conjuncts without splitting through
-opaque disjunctions or negations. CQ ordering and its independent VO checker
-admit arithmetic clauses when their inputs are available, while preserving
-opaque clauses' written Before domains. Bind/Guard syntax is retained in
-later IRs; Physical type facts rederive totality for planner placement and
-BE-Partial instead of trusting an annotation. Host and GPU row interpreters
-emit the same primitive wrapping operations, with no target placement choices
-inside translators.
+Only `where` supplies relational predicates. Query variables, literals and
+closed Rust operands are compared by representation equality/order; closed
+operands evaluate once at host. Device Rust requires recorded identity
+representations for all read columns and closed captures for other inputs;
+otherwise it executes at host. Encoded relational comparisons encode the
+closed operand at host. `host_rust` distinguishes CPU tasks from device levels.
 
-Acceptance: recognition/rejection (especially variable or zero divisors),
-overflow and signed-minimum division laws in debug CPU execution, arithmetic
-Motion with opaque-domain rejection, BE-Partial device acceptance/rejection,
-H06 DISTINCT-valuation exactness against DuckDB, and advised H06/H12 SF10
-device exactness with before/after timings.
+The following measurements are historical evidence from the superseded
+arithmetic-recognition implementation, not verification or performance claims
+for contract 7. The historical syntax/VO/order/planner, Sequence, GPU and CPU
+tests exercised that retired implementation's overflow rules; those rules are
+not the current expression contract.
 
-Observed acceptance: 124 syntax/VO/order/planner tests, 55 Sequence language
-tests, 13 GPU row/core tests, and all five H06/H10/H12 CPU tests passed.
-The CPU cases include debug-overflow laws, signed-minimum division by -1 and
-H06's independent DuckDB DISTINCT-valuation oracle. Scoped library clippy
-passed; the three changed public API snapshots were regenerated.
+The historical generic arithmetic-recognition + WideCanon path and combined
+key-covered grouping path used one warmup and five exact SF10 runs:
 
-Both the generic CQ-Arith + WideCanon path and the combined key-covered GPU
-grouping path were measured with one warmup and five exact runs at SF10:
 
-| Query | Exact answer rows | Baseline median ms | CQ-Arith + WideCanon ms | With key-covered grouping ms |
+| Query | Exact answer rows | Baseline median ms | Historical generic + WideCanon ms | With key-covered grouping ms |
 |---|---:|---:|---:|---:|
 | H06 | 1 | 3310.908 | 16.893 | 11.776 |
 | H12 | 2 | 44.427 | 30.955 | 25.930 |
 
-The generic path grades H06's range guards and multiplication (`r1`--`r4`)
-at `host.device.block`; H12's guards, join and numeric conditionals
-(`r1`--`r4`, `r6`--`r8`) likewise run there. The final column includes the
-separate grouped-input optimization, not just arithmetic recognition.
+The historical generic path graded H06's guards/multiplication and H12's
+guards, join and numeric conditionals at `host.device.block`. The final
+column additionally included grouped-input optimization. These placements
+are not a type-recognition license under the current contract.
 Baseline evidence is `/tmp/sweep3.json`; generic-path evidence is
 `/tmp/arith-h06-sf10.json` and `/tmp/arith-h12-sf10.json`; combined evidence
 is `/tmp/groupkeys-h06-sf10.json` and `/tmp/groupkeys-h12-sf10.json`.
-The generic canonical-publication path additionally needs declared primitive
-bounds for computed columns: wrapping expressions may cross either endpoint,
-so source codec bounds cannot be reused. WideCanon supplies complete keys when
-those full declared ranges exceed 128 bits.
+Current computed-column bounds must come from recorded representations;
+neither a Rust type spelling nor a source-column codec establishes the range
+of an arbitrary expression. WideCanon handles recorded complete keys wider
+than 128 bits.
 ## [14] Staged programs in the GPU suite
 
 The importer retains the authored compile! graph, not merely its final rule:
@@ -1431,7 +1438,7 @@ of stage times, including inter-stage host publication when required.
 | H18 | 57 | 624 | 493.079 / 87 | 5,393.855 / 771 | yes |
 | H20 | 186 | 1,804 | 399.399 / 21 | 4,219.653 / 128 | yes |
 
-These measurements include WideCanon but precede CQ-Arith/GroupKeys integration;
+These measurements include WideCanon but precede historical arithmetic/GroupKeys integration;
 they are not claims of fully device execution or performance acceptance. H02
 publishes its GPU minimum on the host because it is nullable; its final stage,
 all H11 stages, H15's anti-dominance stage and H18's final stage are host-planned.

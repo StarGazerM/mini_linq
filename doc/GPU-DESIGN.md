@@ -11,6 +11,21 @@ have been removed. Maintained frozen/leveled indexes have no Sequence term.
 See the [Sequence workspace](../experiments/gpu/README.md) for the active
 backend's supported contracts and commands.
 
+## Rust and relational predicates
+
+Every `if`, `let` and `for` expression is opaque, pure and total by premise.
+The compiler emits it unchanged for cuda-oxide; a row-dependent expression
+may run on device only when all columns it reads have recorded identity
+representations and its other inputs are closed captures. Unknown or
+codec-encoded row inputs require host Rust execution. CPU task levels support
+host Rust through the machine's `host_rust` capability.
+
+Only `where` has relational comparison, membership and range semantics.
+Closed operands are evaluated once on the host and encoded with the compared
+column's recorded codec. No arithmetic recognition, wrapping rewrite or host
+type-name whitelist determines meaning or placement.
+
+
 ## Measurements and provenance
 
 Performance is workload-, plan-, representation- and tuning-specific. Exact

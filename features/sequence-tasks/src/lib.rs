@@ -93,18 +93,21 @@ pub fn machine_with_width(parts: usize) -> Machine {
         root: LevelNode {
             shared_bytes: None,
             name: syn::parse_quote!(host),
+            host_rust: true,
             collaborative: false,
             dynamic: false,
             width: None,
             children: vec![LevelNode {
                 shared_bytes: None,
                 name: syn::parse_quote!(pool),
+                host_rust: true,
                 collaborative: false,
                 dynamic: true,
                 width: Some(parts),
                 children: vec![LevelNode {
                     shared_bytes: None,
                     name: syn::parse_quote!(task),
+                    host_rust: true,
                     collaborative: false,
                     dynamic: false,
                     width: None,
@@ -118,6 +121,9 @@ pub fn machine_with_width(parts: usize) -> Machine {
 /// Native runtime tokens are valid at host, pool publication and task levels.
 ///
 /// Task chunks own their native values; no device codec or provider is implied.
+/// Type-directed membership builds retain the same routed publication protocol
+/// as explicit-codec keysets; their concrete dense representation is selected
+/// by `cq_storage::build!`, independently of the planner's key-partition choice.
 pub fn catalog() -> cq_lang_sequence::Catalog {
     let mut catalog = cq_sequence_pull::catalog();
     let levels = vec![
@@ -159,6 +165,12 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         (
             syn::parse_quote!(
                 ::cq_storage::sharded::Sharded<::cq_storage::AdaptiveKeySet<_, _, _>>
+            ),
+            vec![Capability::Membership],
+        ),
+        (
+            syn::parse_quote!(
+                ::cq_storage::sharded::Sharded<::cq_storage::AdaptiveMembership<_, _>>
             ),
             vec![Capability::Membership],
         ),
@@ -222,6 +234,8 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
 }
 
 /// Select native shareable representations through checked Structures rewrites.
+/// Host fallbacks must be retained and published before shared readers capture
+/// them, even when their underlying storage type already supports task reads.
 pub fn select_providers(
     source: &Program,
     catalog: &cq_lang_sequence::Catalog,
@@ -341,6 +355,11 @@ pub fn select_providers(
     Ok(target)
 }
 
+// DESIGN translator-tasks
+// Owns interpretation of checked Tasks facts (translator-decides-nothing, T-Tasks/BE-TaskProducer).
+// Source: doc/PLANNING-REDESIGN.md Architecture; doc/formal/CONFORMANCE.md Rayon/Pull rows.
+// Consume recorded producer identities, worker-local lifetimes and carrier publications.
+// DO NOT recover ownership from generated tokens, replan joins, or insert unrecorded stores/choices.
 /// Translate checked partitions into joined, owned output.
 // Formal rule T-Tasks: shared indexed task dispatch publishes ordered task-local
 // buffers before monoidal reductions and local then global canonicalization.
@@ -719,6 +738,9 @@ fn translate_mode(
                 // An immutable base relation is already resident storage. The
                 // checked Store publishes that borrow; it need not clone rows.
                 output.rows = child.expect("checked base store").rows.clone();
+                // Borrowing resident rows does not discharge the recorded
+                // keysets used by downstream positional membership reads.
+                emitter.context_mut().materialize_keysets(result, output.rows.clone());
                 immutable_sources.insert(owner.to_owned());
                 let scan = emitter.context().host_scan(result);
                 emitter.publish_length(

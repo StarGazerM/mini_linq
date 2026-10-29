@@ -1,4 +1,4 @@
-use cq_lang_structures::{self as ir, Structure, physical::Operator, symbol_name};
+use cq_lang_structures::{self as ir, Structure, symbol_name};
 use proc_macro2::TokenStream;
 use syn::{Ident, Type};
 
@@ -120,7 +120,7 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
 }
 
 /// Formal rule EXT-SortedRuns:
-/// Retype one-level HashIndex payload builds with one integral key.
+/// Retype one-level HashIndex payload builds with one generic ordered key.
 /// Host fallbacks and smallest-intersection candidates retain their providers.
 pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
@@ -164,47 +164,10 @@ pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
                 })
             })
             .collect();
-        let computed = |result: &str| {
-            analysis.physical.rows[result]
-                .computed
-                .iter()
-                .any(|c| columns.contains(c))
-        };
-        let owned = computed(&name)
-            || analysis
-                .physical
-                .key_reads
-                .get(&name)
-                .into_iter()
-                .flatten()
-                .any(|(reader, _)| {
-                    source
-                        .physical
-                        .program
-                        .definitions
-                        .iter()
-                        .any(|definition| {
-                            if symbol_name(&definition.name) != *reader {
-                                return false;
-                            }
-                            match &definition.operator {
-                                Operator::Probe(_, read)
-                                | Operator::Semi(_, read)
-                                | Operator::Anti(_, read) => computed(&symbol_name(&read.left)),
-                                _ => false,
-                            }
-                        })
-                });
-        if stored.len() == 1
-            && cq_structure_selection::arguments::sorted_key(
-                &analysis.physical.rows[&name].types[stored[0]],
-            )
-        {
-            keyed.ty = if owned {
-                syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::NoDense>)
-            } else {
-                syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>)
-            };
+        // Request codec selection at the concrete Rust build callsite without
+        // inspecting column types. Unsupported keys retain NoDense storage.
+        if stored.len() == 1 {
+            keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense>);
         }
     }
     ir::check_rewrite(source, &target)?;

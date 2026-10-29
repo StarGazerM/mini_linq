@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.85.1"
 license = "MIT OR Apache-2.0"
 publish = false
-description = "Compiled partial Rust refinement tests for external planners"
+description = "Compiled opaque Rust refinement tests for external planners"
 
 [dev-dependencies]
 cq-planners = { version = "0.1.0", path = ".." }

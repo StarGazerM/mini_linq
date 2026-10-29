@@ -159,15 +159,18 @@ mod decode_kernel {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
+    // DECODE P: diagnostic layout decoder exposes fields and lookup ranges for host exactness assertions.
     pub fn decode_datalog_test_layout(view: RunsView, rows: u32, output: *mut i64, ranges: *mut u32) {
         let row = thread::index_1d().get() as u32;
         if row >= rows { return; }
         unsafe {
             let (run, position) = device::locate(view, row);
             for column in 0..view.field_count {
+                // DECODE P: diagnostic device field inverse publishes reconstructed values to the oracle output.
                 let value = device::decode(view, run, position, column);
                 *output.add((row * view.field_count + column) as usize) = value;
             }
+            // DECODE V: diagnostic prefix inversion precedes relational lookup; P6 compare the encoded prefix instead.
             let prefix = [device::decode(view, run, position, 0)];
             let (begin, end) = device::prefix_range(view, run, prefix.as_ptr(), 1);
             *ranges.add(row as usize * 2) = begin;
@@ -191,10 +194,48 @@ fn wide_layout_erased_device_decode_and_lookup() -> Result<()> {
     let output = Buffer::<i64>::zeroed(pool.clone(), rows.len() * 4)?;
     let ranges = Buffer::<u32>::zeroed(pool.clone(), rows.len() * 2)?;
     let module = unsafe { decode_kernel::load(pool.context())? };
+    // DECODE P: diagnostic wide-layout launch reconstructs values for host exactness checking.
     module.decode_datalog_test_layout(pool.stream(),
         &module.prepare_decode_datalog_test_layout(cuda_core::LaunchConfig1D::new(1, 256, 0))?,
         layout.view(), rows.len() as u32, output.ptr(), ranges.ptr())?;
     assert_eq!(output.to_host()?, rows.into_iter().flatten().map(|value| value as i64).collect::<Vec<_>>());
     assert_eq!(ranges.to_host()?, vec![0, 2, 0, 2, 2, 3]);
+    Ok(())
+}
+
+#[test]
+fn permuted_provider_preserves_rows_and_searches_new_leading_key() -> Result<()> {
+    let pool = Pool::new(0, 0, 0)?;
+    type Layout = DeviceLayout<(i32,), (u32,)>;
+    let packing = Layout::derive_packing()?;
+    let rows = [[-3, 7], [9, 2], [10, 7]];
+    let words = rows.iter().map(|row| packing.pack::<u64>(row))
+        .collect::<Result<Vec<_>>>()?;
+    // SAFETY: the initialized rows are sorted and unique within each run.
+    let run = unsafe { Run::from_sorted(Buffer::from_host(pool.clone(), &words)?, words.len())? };
+    let empty = unsafe { Run::from_sorted(Buffer::<u64>::from_host(pool.clone(), &[])?, 0)? };
+    // Repeated runs deliberately preserve bag multiplicity across runs.
+    let layout = Layout::from_runs(pool.clone(), packing, vec![run.clone(), empty, run])?;
+    // DECODE P: diagnostic original layout unpack exposes the pre-permutation host answer.
+    let before = layout.to_host_codes()?;
+    let provider = layout.permuted_provider(&[1, 0])?;
+    // DECODE P: diagnostic retained layout unpack exposes the unchanged post-permutation answer.
+    assert_eq!(layout.to_host_codes()?, before, "permutation leaves source storage unchanged");
+    assert!(layout.permuted_provider(&[0, 0]).is_err());
+    assert_eq!(provider.view().run_count, 3);
+    let output = Buffer::<i64>::zeroed(pool.clone(), 12)?;
+    let ranges = Buffer::<u32>::zeroed(pool.clone(), 12)?;
+    let view = provider.view();
+    let owner = provider.owner();
+    drop(provider);
+    drop(layout);
+    let module = unsafe { decode_kernel::load(pool.context())? };
+    // DECODE P: diagnostic permuted-layout launch reconstructs values for host equality checking.
+    module.decode_datalog_test_layout(pool.stream(),
+        &module.prepare_decode_datalog_test_layout(cuda_core::LaunchConfig1D::new(1, 256, 0))?,
+        view, 6, output.ptr(), ranges.ptr())?;
+    assert_eq!(output.to_host()?, vec![2, 9, 7, -3, 7, 10, 2, 9, 7, -3, 7, 10]);
+    assert_eq!(ranges.to_host()?, vec![0, 1, 1, 3, 1, 3, 0, 1, 1, 3, 1, 3]);
+    drop(owner);
     Ok(())
 }

@@ -103,14 +103,14 @@ fn point_fallback_types_use_logical_keys_while_native_reads_keep_declaration_ord
     let rows = [(1, 2), (3, 4), (1, 2)];
     let answer: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation rows(first:i32, second:i32);
-        answer(z,a) :- rows(z,a), if *z == 1 && *a == 2;
+        answer(z,a) :- rows(z,a), where z == 1 && a == 2;
     }
     .collect();
     assert_eq!(answer, [(&1, &2)]);
     let grouped = std::collections::BTreeMap::from([((1, 2), vec![(), ()]), ((3, 4), vec![()])]);
     let answer: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation grouped(first:i32, second:i32);
-        answer(z,a) :- grouped(z,a), if *z == 1 && *a == 2;
+        answer(z,a) :- grouped(z,a), where z == 1 && a == 2;
     }
     .collect();
     assert_eq!(answer, [(&1, &2)]);
@@ -133,19 +133,21 @@ fn a_shared_host_point_read_cannot_supply_the_stream_fallback_type() {
 }
 
 #[test]
-fn ordered_host_fallback_records_must_be_ordered_admissible() {
+fn ordered_host_fallback_capabilities_are_rustc_obligations() {
     let source: cq_lang_physical::Program = syn::parse_quote!(physical {
         relation L(x:i32); relation R(x:i32);
         l = pipe rename L@0 {x -> x}; r = pipe rename R@1 {x -> x};
         out = pipe canon merge[x] l,r; return out as answer(x);
     });
     let structured = cq_structure_selection::compile(&source).unwrap();
-    let mut invalid = structured.clone();
-    let entry = invalid.structures.entries.iter_mut().find(|e| matches!(&e.structure, cq_lang_structures::Structure::Host { reader, .. } if reader.result().is_some_and(|name| name == "out"))).unwrap();
+    let mut alternate_provider = structured.clone();
+    let entry = alternate_provider.structures.entries.iter_mut().find(|e| matches!(&e.structure, cq_lang_structures::Structure::Host { reader, .. } if reader.result().is_some_and(|name| name == "out"))).unwrap();
     if let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure {
         keyed.ty = syn::parse_quote!(::std::collections::HashSet<_>);
     }
-    assert!(cq_lang_structures::check_rewrite(&structured, &invalid).is_err());
+    // The record preserves the ordered read and key. Rust, not syn::Type
+    // inspection, checks whether the chosen provider implements that access.
+    cq_lang_structures::check_rewrite(&structured, &alternate_provider).unwrap();
 }
 
 macro_rules! capture_plan {
@@ -393,7 +395,7 @@ fn opaque_string_filters_and_derived_country_domains_execute_exactly() {
     let pairs: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
         struct Q; relation countries(key:i32,name:String); relation links(a:i32,b:i32);
         answer(a,b) :- links(a,b), countries(a,left), countries(b,right),
-            if (left == "FRANCE" && right == "GERMANY") || (left == "GERMANY" && right == "FRANCE");
+            where (left == "FRANCE" && right == "GERMANY") || (left == "GERMANY" && right == "FRANCE");
     }
     .map(|(a, b)| (*a, *b))
     .collect();
@@ -401,12 +403,12 @@ fn opaque_string_filters_and_derived_country_domains_execute_exactly() {
 }
 
 #[test]
-fn unrecognized_partial_string_guard_does_not_run_on_dangling_parts() {
+fn opaque_total_string_guard_handles_dangling_parts() {
     let parts = [(1, "g".to_owned()), (2, String::new())];
     let lines = [(1,)];
     let actual: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation parts(key:i32,name:String); relation lines(part:i32);
-        answer(key) :- lines(key), parts(key,name), if name.as_bytes()[0] == b'g';
+        answer(key) :- lines(key), parts(key,name), if name.as_bytes().first() == Some(&b'g');
     }
     .map(|(key,)| *key)
     .collect();
@@ -434,7 +436,7 @@ fn total_identifier_remains_available_in_let_bindings_and_guards() {
     let rows = [(2, 3), (-2, 1)];
     let actual: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation rows(x:i32,y:i32);
-        answer(total) :- rows(x,y), let total:i32 = *x + *y, if *total > 0;
+        answer(total) :- rows(x,y), let total:i32 = *x + *y, where total > 0;
     }
     .map(|(total,)| total)
     .collect();

@@ -6,6 +6,7 @@ struct TestSymbol(u32);
 struct TestCodec;
 impl gpu_datalog_runtime::SymbolCodec<TestSymbol> for TestCodec {
     fn code(value: &TestSymbol) -> u32 { value.0 }
+    // DECODE P: diagnostic final datalog answers reconstruct TestSymbol handles for host assertions.
     fn decode(code: u32) -> TestSymbol { TestSymbol(code) }
 }
 
@@ -31,7 +32,7 @@ macro_rules! engine {
                 relation Selected(value: TestSymbol);
                 relation Copied(a: TestSymbol, b: TestSymbol, c: TestSymbol, d: TestSymbol, e: TestSymbol);
                 output Guarded, Selected, Copied;
-                Guarded(*value) :- Label(t, value), if *t == sym("x");
+                Guarded(*value) :- Label(t, value), where t == sym("x");
                 Selected(*value) :- Label(sym("x"), value);
                 Copied(*a, *b, *c, *d, *e) :- Wide(a, b, c, d, e);
             };

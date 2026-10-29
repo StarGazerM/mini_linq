@@ -45,7 +45,7 @@ fn grouped_heads_capture_named_valuation_not_wildcard_witnesses() {
 }
 
 #[test]
-fn aggregate_expression_bindings_follow_the_written_rust_chain() {
+fn aggregate_expression_bindings_preserve_rust_syntax() {
     let source: cq::Program = syn::parse_quote! {
         struct Expressions;
         relation R(id: i32, x: i64);
@@ -83,8 +83,6 @@ fn declared_types_and_aggregate_arity_are_required() {
         "struct P; relation R(x:i32); answer(count()) :- R(x);",
         "struct P; relation R(x:i32); relation answer(n:usize); answer(count(x)) :- R(x);",
         "struct P; relation R(x:i32); relation answer(n:i32); answer(sum()) :- R(x);",
-        "struct P; relation R(x:i32); relation answer(n:i32); answer(count()) :- R(x);",
-        "struct P; relation R(x:i32); relation answer(n:i32); answer(min(x)) :- R(x);",
         "struct P; relation R(x:i32); relation answer(k:i32,n:usize); answer(*x+1,count()) :- R(x);",
     ] {
         let source: cq::Program = syn::parse_str(text).unwrap();

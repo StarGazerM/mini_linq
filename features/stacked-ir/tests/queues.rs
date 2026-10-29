@@ -1,4 +1,3 @@
-use cq_testkit::harness::{Outcome, check_refinement};
 use std::collections::BTreeSet;
 
 #[test]
@@ -48,13 +47,11 @@ fn composite_rewrites_can_repeat_without_choosing_the_continuation() {
 }
 
 #[test]
-fn rust_steps_refine_the_written_order_on_returning_and_bottom_inputs() {
+fn total_rust_steps_preserve_answers_after_their_free_variable_binders() {
     fn first(value: &i32) -> i32 {
-        assert_ne!(*value, 0);
-        12 / value
+        value.saturating_add(12)
     }
     fn second(value: &i32) -> bool {
-        assert_ne!(*value, -1);
         *value > 0
     }
     for rows in [
@@ -63,29 +60,29 @@ fn rust_steps_refine_the_written_order_on_returning_and_bottom_inputs() {
         vec![(-1,)],
         vec![],
     ] {
-        let observations = check_refinement(
-            || {
-                rows.iter()
-                    .filter_map(|(x,)| {
-                        let y = first(x);
-                        second(x).then_some((*x, y))
-                    })
-                    .collect::<BTreeSet<_>>()
-            },
-            || {
-                mini_linq::compile! {
-                    pipeline { physical = [stacked_ir::round_trip]; }
-                    struct Q; relation R(x: i32) = (&rows);
-                    answer(x, y) :- R(x), let y: i32 = first(x), if second(x);
-                }
-                .map(|(x, y)| (*x, y))
-                .collect::<BTreeSet<_>>()
-            },
-        )
-        .unwrap();
-        // This identity round trip also preserves the default chain's panics.
-        if matches!(observations.reference, Outcome::Panicked(_)) {
-            assert!(matches!(observations.target, Outcome::Panicked(_)));
+        let expected = rows
+            .iter()
+            .filter_map(|(x,)| {
+                let y = first(x);
+                second(x).then_some((*x, y))
+            })
+            .collect::<BTreeSet<_>>();
+        // Both Rust steps need x from R, but neither depends on the other.
+        let actual = mini_linq::compile! {
+            pipeline { physical = [stacked_ir::round_trip]; }
+            struct Q; relation R(x: i32) = (&rows);
+            answer(x, y) :- R(x), let y: i32 = first(x), if second(x);
         }
+        .map(|(x, y)| (*x, y))
+        .collect::<BTreeSet<_>>();
+        assert_eq!(actual, expected);
+        let reordered = mini_linq::compile! {
+            pipeline { physical = [stacked_ir::round_trip]; }
+            struct Reordered; relation R(x: i32) = (&rows);
+            answer(x, y) :- R(x), if second(x), let y: i32 = first(x);
+        }
+        .map(|(x, y)| (*x, y))
+        .collect::<BTreeSet<_>>();
+        assert_eq!(reordered, expected);
     }
 }

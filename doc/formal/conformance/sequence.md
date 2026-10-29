@@ -25,7 +25,7 @@ The relevant inventory entries are `doc/formal/rules.tsv:221-229,237-247,249-259
 | BE-Length | `doc/formal/backend_ir.tex:298-300` | `languages/cq-lang-sequence/src/contract.rs:26`; `languages/cq-lang-sequence/src/grading.rs:412-418` | Separated writes consume checked pre-write lengths or bounds. | Grading reads `Analysis.stores`; structural checking propagates Map/Choose lengths and turns completed unknown publications into runtime length inputs. | **exact**, structural | Every separated write has a pre-write size or bound |
 | PL-Select | `doc/formal/backend_ir.tex:465-471` | `passes/cq-sequence-plan/src/rewrites/catalog.rs:16,187-219` | First eligible token in explicitly stable-partitioned catalog order (recorded representation first). | Constructs that order explicitly and uses `find`; native keyed ABI preference is now part of the rule. | **exact** | Explicit catalog policy determines representation selection |
 | PL-Cost | `doc/formal/backend_ir.tex:473-478` | `passes/cq-sequence-plan/src/cost.rs:166,800-829` | Admissible candidates preserving authored decisions; compare `(W,I,S,B,stores,dispatches)` using checked Group mode. | Group evaluation consumes constructor-preorder `Analysis.partial_groups`; layer facts supply geometry only. | **exact**, structural | Cost describes the checked candidate |
-| BE-KeyPartProvider | `doc/formal/backend_ir.tex:187-190` | `languages/cq-lang-sequence/src/contract.rs:1178-1194`; `passes/cq-sequence-plan/src/rewrites/key_partition.rs:821-826` | A key partition; lookup key determines routing key, with routing projection `h`; each part builds its provider. | Language checking accepts routing-key containment. The provider rewrite additionally requires the routing tuple to equal the complete outer provider key, including order. | **stronger** in the rewrite | Build and lookup use identical routing |
+| BE-KeyPartProvider | `doc/formal/backend_ir.tex` (`BE-KeyPartProvider`) | `languages/cq-lang-sequence/src/contract.rs`; `passes/cq-sequence-plan/src/key_partition.rs`; `passes/cq-sequence-plan/src/rewrites/key_partition.rs` | A key partition; lookup key determines routing key, with routing projection `h`; each part builds its provider. | Language checking accepts routing-key containment. The provider rewrite additionally requires the complete outer key in order. Selection and explicit rewriting exclude fused-arm providers whose real prefix-local constructor does not consume the rewritten Store. | **stronger** in the rewrite | Build and lookup use identical routing; a provider type cannot claim routing absent from its actual constructor |
 | EXT-SeqAdaptive | `doc/formal/backend_ir.tex:850-853` | `passes/cq-sequence-plan/src/rewrites/adaptive.rs:93-133` | Published filtered store; equal-support alternatives; threshold is advice. | Also requires a positive threshold, earlier publication and alternatives with different work. | **stronger** | Runtime selection cannot change support |
 | EXT-SeqChoose | `doc/formal/backend_ir.tex:763` | `passes/cq-sequence-plan/src/rewrites/mod.rs:234-275` | Equal-support alternatives; exhaustive guards. | Public advice parser only accepts a single `len x < k` or worker guard plus `else`, naming earlier definitions. General `Term::Choose` is broader. | **stronger** | Choice arms preserve support |
 | EXT-SeqOutput | `doc/formal/backend_ir.tex:797` | `passes/cq-sequence-plan/src/rewrites/mod.rs:281-294` | Protocol belongs to `{count,reserve,reserve_previous,bounded}`; bounded requires declared capacity. | Accepts the explicit protocol enum; arena obligations remain target-owned. | Original **weaker** finding was specification drift; rule corrected, runtime behavior unchanged | Output strategy is explicit |
@@ -33,7 +33,7 @@ The relevant inventory entries are `doc/formal/rules.tsv:221-229,237-247,249-259
 | BE-Abort | `doc/formal/backend_ir.tex:310-311` | `languages/cq-lang-sequence/src/grading.rs:216-220,1015-1018` | Failure below host. | Records a failure-channel obligation. This layer does not establish once-set flag behavior or prohibit runtime truncated success. | **weaker** locally, intentionally delegated to translations/runtime | Failure never becomes truncated success |
 | PL-OptionalFilter | `doc/formal/backend_ir.tex:887-889` | `languages/cq-lang-sequence/src/lib.rs:83`; `passes/cq-sequence-plan/src/rewrites/adaptive_candidates.rs:84-122` | Checked positive pipelined semijoin provenance; preparation proves published provider and covering joins. | lookup_first records printable optional-filter identities; adaptive discovery reads them without generated-prefix or default-lowering equality gates. | **exact**, structural | Semantic eligibility does not depend on spelling |
 | No formal rule: placement candidate topology | —; governing prose at `doc/formal/backend_ir.tex:665-667` | `passes/cq-sequence-plan/src/placement.rs:181-204,345-360` | Prose promises deepest admissible placement. | Considers the first root child, its first child and host, rather than all admissible machine levels. | **no-rule** | Machine data determines legal placement alternatives |
-| No formal rule: universal String host placement | —; documented policy at `doc/formal/backend_ir.tex:644-647` | `passes/cq-sequence-plan/src/placement.rs:839-887` | No natural-deduction rule gives all types named `String` a host-only effect. | Last-path-name test and literal syntax add host-only placement policy in shared planning. | **no-rule** | Target admissibility comes from recorded capabilities |
+| BE-RustRepresentation | `doc/formal/backend_ir.tex` (`BE-RustRepresentation`) | `passes/cq-sequence-plan/src/placement.rs`; `languages/cq-lang-sequence/src/grading.rs` | Machine host_rust capability; recorded identity read columns and closed captures. | Representation facts replace type-spelling policy. | **unverified** | Target eligibility is not a Rust semantic classification. |
 
 ### Remaining relevant rules
 
@@ -54,7 +54,7 @@ The relevant inventory entries are `doc/formal/rules.tsv:221-229,237-247,249-259
 | BE-Separate | `doc/formal/backend_ir.tex:295-296` | `languages/cq-lang-sequence/src/grading.rs:333-360` | Separated sibling levels. | Rejects sibling-local exchange without ancestor publication. | exact, structural | Siblings exchange only through ancestor storage |
 | BE-Publication | `doc/formal/backend_ir.tex:301-302` | `languages/cq-lang-sequence/src/publication.rs:27-189,193-245` | Store with checked provenance and consumers. | Derives borrow/alias/owned/parts ownership and constrained deferred fusion; validates native routed-provider ABI. | exact, structural | Publication ownership has checked provenance |
 | BE-Boundary | `doc/formal/backend_ir.tex:304-305` | `languages/cq-lang-sequence/src/grading.rs:906-1040` | Maximal total segment between separated stores. | Forms components separated by store barriers; checks one outer domain; records producer level, parts and failure channel. | exact, structural | Each dispatch has one explicit stored domain |
-| BE-Partial | `doc/formal/backend_ir.tex:307-308` | `languages/cq-lang-sequence/src/grading.rs:872-901` | Opaque Rust expression. | Traverses dependencies to checked stores; rejects noncapturable opaque evaluation below host. | exact, structural | Row-dependent partial Rust stays at host |
+| BE-RustRepresentation | `doc/formal/backend_ir.tex` (`BE-RustRepresentation`) | `languages/cq-lang-sequence/src/grading.rs` (`BE-RustRepresentation`) | Every read column has identity device representation; other inputs are closed captures. | Unknown/encoded reads require host Rust support; host and CPU task levels support it. | **unverified** | Device expressions remain verbatim. |
 | BE-Resource | `doc/formal/backend_ir.tex:313-315` | `languages/cq-lang-sequence/src/grading.rs:222-273`; `languages/cq-lang-sequence/src/resources.rs:70-184` | Checked dispatch; target layout fits level capacity. | Requires layout model for bounded levels, derives demands, invokes layout and rejects excess bytes. | exact, structural | Dispatch resource demand fits its machine |
 | PL-Closure | `doc/formal/backend_ir.tex:446-449` | `passes/cq-sequence-plan/src/lib.rs:572-575,623-648`; `passes/cq-sequence-plan/src/rewrites/mod.rs:46-53` | Planner returns program and rewrite trace. | Applies checked rewrite entry points and checks completed machine grading/catalog obligations. | exact, structural | Trace reconstructs a checked final program |
 | PL-Precedence | `doc/formal/backend_ir.tex:451-452` | `passes/cq-sequence-plan/src/lib.rs:263-272,551-571`; `passes/cq-sequence-plan/src/decomposition.rs:64-65` | Planner invocation with authored choices. | Rejects machine replacement, skips existing tiles and preserves recorded output protocol. | exact in inspected scheduling paths | Authored scheduling decisions survive planning |
@@ -63,18 +63,16 @@ The relevant inventory entries are `doc/formal/rules.tsv:221-229,237-247,249-259
 | EXT-SeqStore | `doc/formal/backend_ir.tex:759` | `passes/cq-sequence-plan/src/rewrites/mod.rs:93-117` | Selected definition is Flatten. | `store_level` checks selected flatten definitions and preserves support. General `store`/`publish` APIs extend beyond this displayed rule. | exact for `store_level` | Stored flatten preserves support and offsets |
 | EXT-SeqTile | `doc/formal/backend_ir.tex:761` | `passes/cq-sequence-plan/src/rewrites/mod.rs:187-220` | Positive tile; selected definition is not an unbounded unknown-length Store. | Rejects that Store shape, then uses structural checking to reject nonpositive geometry. | exact | Tiling preserves the covered domain |
 | EXT-SeqGrade | `doc/formal/backend_ir.tex:767` | `passes/cq-sequence-plan/src/rewrites/mod.rs:325-381` | Named machine and placement assignments. | Checks names/duplicates/machine consistency; changes grading only and defers machine validation. | exact | Placement advice does not change construction |
-| EXT-SeqLookup | `doc/formal/backend_ir.tex:844-847` | `passes/cq-sequence-plan/src/rewrites/lookup_first.rs:784-830,1317`; `languages/cq-lang-sequence/src/lookup_semantics.rs:1-3,103-131` | Checked endpoints, equal join/semijoin support, preserved Rust Before domains. | Uses support certificates and final rewrite checking. Existing known layering issue is not repeated here. | exact for inspected proof entry points | Join reexpression preserves support and pinned Rust |
+| EXT-SeqLookup | `doc/formal/backend_ir.tex` (`EXT-SeqLookup`) | `passes/cq-sequence-plan/src/rewrites/lookup_first.rs`; `languages/cq-lang-sequence/src/lookup_semantics.rs` | Equal support, unchanged Rust payloads/bindings and recorded placement. | Support equivalence does not grant downstream planning authority. | **unverified** | Refinements preserve the recorded plan. |
 | PL-Evidence | `doc/formal/backend_ir.tex:855-858` | `passes/cq-sequence-plan/src/rewrites/evidence.rs:12-30`; `languages/cq-lang-sequence/src/contract.rs:1365-1380` | Well-formed evidence; asserted keys true; planner invocation. | Records evidence separately; rejects structural rewrites inventing new key premises. Key truth remains author responsibility. | exact, conditional on asserted keys | Estimates cannot become semantic proof premises |
 | BE-Group | `doc/formal/backend_ir.tex:1114-1118` | `languages/cq-lang-sequence/src/contract.rs:966-1049` | Complete distinct valuation store; each group enumerated exactly once. | Checks Physical Group provenance, uniqueness and valid flat/key-disjoint/partial shape. | exact, structural | Aggregates consume complete distinct valuations |
 | BE-GroupKey | `doc/formal/backend_ir.tex:1130-1132` | `languages/cq-lang-sequence/src/contract.rs:422-469` | Asserted unique physical keys; valuation determines atom keys. | Transfers keys through rename and existing Physical inherited-key analysis. | exact, conditional on asserted keys | Removing canon cannot introduce duplicate valuations |
 
 ## Findings
-The original evidence below is retained as the audit record. Findings 1--4
-are superseded by the code/rule resolutions in the table above. Findings 5--6
-remain open: placement couples publication and producer paths throughout
-boundary recovery, and the catalog has no scalar/operation execution-effects
-model. Changing those safely requires a coordinated machine-placement and
-target-capabilities interface rather than replacing a local name test.
+Historical findings 1--4 are retained below with their prior resolutions.
+Finding 5 concerns machine topology. Contract 7 replaces Finding 6's scalar
+name policy with explicit representation and host-Rust capability facts.
+Updated rows marked `unverified` have no new verification-run claim.
 
 
 ### 1. Capacity admissibility is re-derived from syntax, not the checked length facts [D] [severity high]
@@ -179,23 +177,16 @@ target-capabilities interface rather than replacing a local name test.
 - **Violation:** The machine is represented and checked as a tree, but planning substitutes a fixed host→first-child→first-grandchild template. It does not enumerate other branches or deeper admissible levels. **[INFERENCE]** A catalog-supported sibling/deeper execution level can be ignored, producing host fallback or rejection despite a legal placement.
 - **Belongs in:** Machine-driven placement candidate enumeration, with the chosen execution/publication levels recorded as existing Grade/Publish advice.
 
-### 6. String spelling imposes target policy in shared planning [C/E] [severity med]
+### 6. Contract 7: representation facts replace type-spelling policy
 
-- **Evidence — governing doc:** `doc/formal/backend_ir.tex:441-442`:
-  > “The catalog is data: shared planning and checking do not depend on a target implementation.”
-
-  The special policy is explicitly documented at `doc/formal/backend_ir.tex:644-647`:
-  > “String-literal predicates and operations reading or producing String-bearing rows likewise stay host through the projection that publishes a numeric-only row.”
-
-  **Code:** `passes/cq-sequence-plan/src/placement.rs:839-841`:
-  ```rust
-  fn string_type(ty: &syn::Type) -> bool {
-      matches!(ty, syn::Type::Path(path) if path.path.segments.last()
-          .is_some_and(|segment| segment.ident == "String"))
-  ```
-  This joins the host-only operation classification at `placement.rs:860-863`. Catalog selection independently repeats last-segment `String` matching at `passes/cq-sequence-plan/src/rewrites/catalog.rs:470-473,490-492`.
-- **Violation:** This is a documented architectural exception, not merely stale documentation: shared planning hard-codes scalar admissibility and repeats it in selection. **[INFERENCE]** A target supporting strings still inherits host placement; aliases avoid the spelling test, while unrelated qualified types named `String` trigger it. Catalog element/level capabilities cannot express or override this restriction.
-- **Belongs in:** Target-supplied scalar/operation capabilities or checked execution effects, consumed consistently by catalog selection, placement and grading.
+Sequence records `representation { identity [...]; encoded [...]; }` after
+evidence. Machine levels record `host_rust`; CPU tasks support host Rust,
+whereas device levels require identity representations for every read column.
+Unknown and codec-encoded reads cannot justify device Rust. Closed operands
+are evaluated at host and encoded for relational `where` comparisons.
+There is no `String`, integer, decimal or optional-type classification.
+This obligation supersedes the prior spelling-based policy; verification is
+left to integration.
 
 ### 7. Provider partition advice rejects routing projections that the language and docs support [F] [severity med]
 

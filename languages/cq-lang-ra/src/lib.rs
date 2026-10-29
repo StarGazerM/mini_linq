@@ -1,17 +1,8 @@
-//! RA prime: named relational operators with an ordered Rust ancestry chain.
+//! RA prime: named relational operators and unchanged opaque Rust expressions.
 //!
-//! The denotation is Kleisli over `T X = bottom + Set X`: one panic aborts
-//! evaluation. Rust binds and guards are opaque partial functions of their free
-//! variables. I/O, mutation and evaluation counts are outside this meaning.
-//! Relational laws apply only to relational operators. Moving a relational step
-//! earlier across Rust may shrink its evaluation domain; moving it later is not
-//! allowed. Preserving the Rust chain and every source-before relational step is
-//! a sufficient refinement condition, checked by [`check_rewrite`] for RA′
-//! rewrites and by cq-elaborate for VO elaboration.
-//! These are structural contracts for occurrence-preserving passes, not CQ
-//! equivalence deciders. Declared inputs carry a unique source occurrence:
-//! `rename R@2 { a -> x }`. Checks compare fixed column bindings, equality
-//! closure, relational constraints and their first observing Rust region.
+//! Rust expressions are pure and total by premise and depend only on their free
+//! variables. Structural contracts preserve source occurrences, relational
+//! predicates and Rust payloads without imposing written-order barriers.
 //! They visit the DAG and its derived headings without unfolding shared rows
 //! or searching for atom mappings. Split-witness wiring admits local set
 //! identities: redundant projections/selections, a join projected to its left
@@ -47,10 +38,8 @@
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Only differing literals on one interface column prove union arms disjoint.
 //!
 //! `scope[names] @c.j.k` records a Rust step's lexical inputs and source path.
 //! Prefix Rust reached through a positive semijoin remains outside the arm;
@@ -153,7 +142,7 @@ pub enum Operator {
     #[parse(peek = kw::select)]
     Select(Box<Select>),
     /// Formal rule RA-For: Generator binds extend rows with fresh iterator
-    /// bindings and retain the opaque Rust ancestry chain.
+    /// bindings wherever their free variables are bound.
     #[parse(peek = kw::bind)]
     Bind(Box<Bind>),
     #[parse(peek = kw::guard)]
@@ -208,7 +197,7 @@ pub mod contract {
     pub struct Schedule {
         pub(super) nodes: Vec<super::structural::Node>,
         pub(super) atoms: std::collections::HashMap<usize, super::structural::Atom>,
-        pub(super) chain: Vec<super::structural::Rust>,
+        pub(super) rust_steps: Vec<super::structural::Rust>,
         pub(super) reductions: Vec<super::structural::Reduction>,
         pub(super) output: Option<usize>,
         pub(super) head: String,
@@ -235,8 +224,6 @@ pub struct RelationInfo {
     /// mode chosen by a realization when subsequent expressions read the column.
     pub computed: BTreeSet<String>,
     operands: Vec<String>,
-    /// Rust nodes on this result's single ancestry chain, in written order.
-    pub chain: Vec<String>,
 }
 
 /// Formal rule WF-RA: Check declarations, local operators, output heading and definition reachability.
@@ -279,7 +266,6 @@ fn check_in<'a>(
         Ok(())
     };
 
-    let mut chain = Vec::<String>::new();
     let mut occurrences = BTreeSet::new();
     for definition in &plan.definitions {
         let result_name = symbol_name(&definition.result);
@@ -387,8 +373,6 @@ fn check_in<'a>(
                             "anti key must list distinct columns available in both operands",
                         ));
                     }
-                    check_leibniz(&left.types[&name], column)?;
-                    check_leibniz(&right.types[&name], column)?;
                 }
                 (left.heading.clone(), vec![left_name, right_name])
             }
@@ -453,32 +437,28 @@ fn check_in<'a>(
                         "selection requires a relational constraint",
                     ));
                 }
-                // Formal rule RA-Constraint: Central theta has available columns and checked Eq/Ord premises.
+                // Formal rule RA-Constraint: Central theta has available columns and closed host operands.
                 select.condition.check()?;
                 for c in &select.condition.constraints {
                     for p in c.parameters() {
-                        if input.heading.contains(&symbol_name(&p.root)) {
+                        if !cq_syntax::rust::free_variables(p)
+                            .dependencies(&input.heading)
+                            .is_empty()
+                        {
                             return Err(syn::Error::new_spanned(
                                 p,
-                                "relational parameter names an input column",
+                                "closed relational operand reads an input column",
                             ));
                         }
                     }
                     for column in c.variables() {
                         let n = symbol_name(column);
-                        let Some(ty) = input.types.get(&n) else {
+                        if !input.types.contains_key(&n) {
                             return Err(syn::Error::new_spanned(
                                 column,
                                 format!("selection uses unavailable column `{n}`"),
                             ));
-                        };
-                        check_leibniz(ty, column)?;
-                    }
-                    for column in c.ordered_variables() {
-                        cq_syntax::algebra::check_ord_type(
-                            &input.types[&symbol_name(column)],
-                            column,
-                        )?;
+                        }
                     }
                 }
                 for equality in &select.condition.equalities {
@@ -491,7 +471,6 @@ fn check_in<'a>(
                                 format!("selection uses unavailable column `{name}`"),
                             ));
                         }
-                        check_leibniz(&input.types[&name], column)?;
                     }
                 }
                 (input.heading.clone(), vec![name])
@@ -595,61 +574,6 @@ fn check_in<'a>(
             }
             _ => (),
         }
-        let mut ancestry = Vec::new();
-        for operand in &operands {
-            let branch = &relations[operand].chain;
-            if ancestry.starts_with(branch) {
-                continue;
-            }
-            if branch.starts_with(&ancestry) {
-                ancestry = branch.clone();
-                continue;
-            }
-            if matches!(definition.operator, Operator::Union(_)) {
-                for name in branch {
-                    if !ancestry.contains(name) {
-                        ancestry.push(name.clone());
-                    }
-                }
-            } else {
-                return Err(syn::Error::new_spanned(
-                    &definition.operator,
-                    "Rust chain nodes must form one ancestry chain",
-                ));
-            }
-        }
-        if matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_)) {
-            if ancestry != chain
-                && !plan
-                    .definitions
-                    .iter()
-                    .any(|d| matches!(d.operator, Operator::Union(_)))
-            {
-                return Err(syn::Error::new_spanned(
-                    &definition.operator,
-                    "Rust chain nodes must form one ancestry chain in written order",
-                ));
-            }
-            chain.push(result_name.clone());
-            ancestry.push(result_name.clone());
-        }
-        match &definition.operator {
-            Operator::NaturalJoin(_) | Operator::Semijoin(_) => {
-                for name in relations[&operands[0]]
-                    .heading
-                    .intersection(&relations[&operands[1]].heading)
-                {
-                    check_leibniz(&relations[&operands[0]].types[name], &bindings[name])?;
-                    check_leibniz(&relations[&operands[1]].types[name], &bindings[name])?;
-                }
-            }
-            Operator::Project(project) => {
-                for column in &project.attributes {
-                    check_leibniz(&types[&symbol_name(column)], column)?;
-                }
-            }
-            _ => {}
-        }
         relations.insert(
             result_name,
             RelationInfo {
@@ -658,7 +582,6 @@ fn check_in<'a>(
                 types,
                 computed,
                 operands,
-                chain: ancestry,
             },
         );
     }
@@ -688,9 +611,6 @@ fn check_in<'a>(
             &plan.output,
             format!("output `{output_name}` tuple attributes must exactly match its input heading"),
         ));
-    }
-    for column in plan.output.head.variables() {
-        check_leibniz(&output.types[&symbol_name(column)], column)?;
     }
 
     check_all_reachable(plan, &relations, &output_name)?;
@@ -736,7 +656,7 @@ fn check_rename(rename: &Rename, declaration: &cq_syntax::RelationDecl) -> syn::
         constants.check()?;
         for equality in &constants.equalities {
             let source = symbol_name(&equality.left);
-            let Some(column) = declaration
+            let Some(_) = declaration
                 .columns
                 .iter()
                 .find(|c| symbol_name(&c.name) == source)
@@ -752,7 +672,6 @@ fn check_rename(rename: &Rename, declaration: &cq_syntax::RelationDecl) -> syn::
                     "occurrence constant source attribute must not also be mapped",
                 ));
             }
-            check_leibniz(&column.ty, &column.name)?;
             constant_sources.insert(source);
         }
     }
@@ -817,12 +736,6 @@ fn check_all_reachable(
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
-
-/// Reject known failures of Leibniz admissibility. Generated Rust checks the
-/// necessary trait bounds; admissibility of user implementations is a premise.
-fn check_leibniz(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
-    cq_syntax::algebra::check_leibniz_type(ty, column)
-}
 
 mod constants;
 mod structural;

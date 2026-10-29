@@ -127,7 +127,7 @@ fn permuted(mut query: Query, order: &[usize]) -> Query {
     query
 }
 
-/// The first contiguous positive prefix: the only occurrences an order may move.
+/// Conservative producer policy; the contract also admits dependency-safe crossings.
 fn positive_prefix(query: &Query) -> std::ops::Range<usize> {
     let length = query.body.len();
     let first = query

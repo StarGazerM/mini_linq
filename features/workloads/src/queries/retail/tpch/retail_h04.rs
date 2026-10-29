@@ -17,6 +17,6 @@ AND l.l_commitdate < l.l_receiptdate"#;
         relation Lineitem => lineitem(l_orderkey: i64, l_commitdate: Date, l_receiptdate: Date);
     }
     answer(order_key: i64) :-
-        Orders(order_key, order_date), if *order_date >= start && *order_date < end,
-        Lineitem(order_key, commit_date, receipt_date), if commit_date < receipt_date;
+        Orders(order_key, order_date), where order_date >= start && order_date < end,
+        Lineitem(order_key, commit_date, receipt_date), where commit_date < receipt_date;
 }

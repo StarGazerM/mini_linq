@@ -33,6 +33,7 @@ rayon = "1"
 cq-sequence-conformance = { path = "../sequence-conformance" }
 cq-testkit = { path = "../../testkit/cq-testkit" }
 cq-structure-selection = { path = "../../passes/cq-structure-selection" }
+cq-sequence-lowering = { path = "../../passes/cq-sequence-lowering" }
 cq-load = { path = "../../runtime/cq-load", default-features = false }
 cq-storage = { path = "../../runtime/cq-storage", features = ["counters"] }
 

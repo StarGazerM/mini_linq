@@ -1,8 +1,8 @@
 //! Scoped disjunctions. The interface is the intersection of branch binders;
 //! prefix names used inside are free variables. Other branch binders are local.
 //! Union projects to the common heading and combines sets; fallback selects the
-//! first nonempty branch. A branch panic is bottom. Union order and witness
-//! short circuiting may remove bottom; fallback order is part of its meaning.
+//! first nonempty branch. Rust expressions in either form are total by premise
+//! and may be placed wherever their lexical free variables are available.
 
 use crate::{BodyItem, CommaList, rust, symbol_name};
 use quote::{ToTokens, quote};
@@ -233,10 +233,10 @@ pub fn walk(body: &CommaList<BodyItem>) -> Vec<&BodyItem> {
     items
 }
 
-pub(crate) fn split_guards(body: &mut CommaList<BodyItem>, logical: &BTreeSet<String>) {
+pub(crate) fn resolve_constraints(body: &mut CommaList<BodyItem>, logical: &BTreeSet<String>) {
     let mut prefix = BTreeSet::new();
     let mut forbidden = BTreeSet::new();
-    let mut result = CommaList::new();
+    let mut resolved = CommaList::new();
     for mut item in std::mem::take(body) {
         match &mut item {
             BodyItem::Block(block) => {
@@ -247,7 +247,7 @@ pub(crate) fn split_guards(body: &mut CommaList<BodyItem>, logical: &BTreeSet<St
                         .cloned()
                         .chain(bound(&branch.body).into_keys())
                         .collect();
-                    split_guards(&mut branch.body, &branch_logical);
+                    resolve_constraints(&mut branch.body, &branch_logical);
                 }
                 forbidden.extend(facts.locals.into_iter().flatten());
                 prefix.extend(facts.interface.into_keys());
@@ -259,28 +259,29 @@ pub(crate) fn split_guards(body: &mut CommaList<BodyItem>, logical: &BTreeSet<St
             BodyItem::For(binding) => {
                 prefix.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
             }
-            BodyItem::Filter(filter) => {
-                let names = logical.union(&forbidden).cloned().collect();
-                let split = cq_syntax::guard::split(&filter.condition, &names);
-                for c in split.constraints {
-                    result.push(match c.equality() {
-                        Some(e) => BodyItem::Equality(e),
-                        None => BodyItem::Constraint(c),
-                    });
-                }
-                if let Some(condition) = split.residual {
-                    result.push(BodyItem::Filter(crate::Filter {
-                        condition,
-                        ..filter.clone()
-                    }));
-                }
-                continue;
+            BodyItem::Constraint(constraint) => {
+                constraint.resolve(&logical.union(&forbidden).cloned().collect());
             }
             _ => (),
         }
-        result.push(item);
+        append_resolved(item, &mut resolved);
     }
-    *body = result;
+    *body = resolved;
+}
+
+fn append_resolved(item: BodyItem, body: &mut CommaList<BodyItem>) {
+    match item {
+        BodyItem::Constraint(crate::Constraint::Or(mut branches)) if branches.len() == 1 => {
+            for constraint in branches.pop().unwrap() {
+                append_resolved(BodyItem::Constraint(constraint), body);
+            }
+        }
+        BodyItem::Constraint(constraint) => body.push(match constraint.equality() {
+            Some(equality) => BodyItem::Equality(equality),
+            None => BodyItem::Constraint(constraint),
+        }),
+        item => body.push(item),
+    }
 }
 
 /// Infer declared visible types and check each branch's common interface.

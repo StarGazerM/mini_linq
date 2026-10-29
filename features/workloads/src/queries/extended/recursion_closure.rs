@@ -15,7 +15,7 @@ pub fn check(scenario: Scenario) {
             struct RecursionClosure;
             relation Edge(x: i32, y: i32);
             relation reach(x: i32, y: i32);
-            reach(*x,*y) :- Edge(x, y), if *x >= 0;
+            reach(*x,*y) :- Edge(x, y), where x >= 0;
             reach(*x,*z) :- reach(x, y), Edge(y, z);
         }
     };

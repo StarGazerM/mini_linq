@@ -5,15 +5,18 @@ use std::str::FromStr;
 macro_rules! primitives {
     ($($ty:ty => $array:ident),* $(,)?) => {$ (
         impl Load for $ty {
+            // DECODE ?: primitive text parsing constructs host values for generic Load callers with unknown consumers.
             fn load(field: &str) -> Result<Self, String> {
                 field.parse().map_err(|error: <$ty as FromStr>::Err| error.to_string())
             }
 
             #[cfg(feature = "parquet")]
+            // DECODE ?: primitive Arrow loading is a generic boundary; identity arrays already contain logical values.
             fn load_arrow(column: &dyn arrow_array::Array) -> Result<Vec<Self>, crate::ColumnError> {
                 if let Some(array) = column.as_any().downcast_ref::<arrow_array::$array>() {
                     crate::parquet_source::native_values(array.iter())
                 } else {
+                    // DECODE ?: primitive Arrow fallback parses logical values without downstream caller evidence.
                     crate::parquet_source::parse_arrow(column, Self::load)
                 }
             }
@@ -31,11 +34,13 @@ primitives! {
 macro_rules! owned_strings {
     ($($ty:ty),* $(,)?) => {$ (
         impl Load for $ty {
+            // DECODE ?: owned-string loading materializes source text for arbitrary Load consumers.
             fn load(field: &str) -> Result<Self, String> {
                 Ok(field.into())
             }
 
             #[cfg(feature = "parquet")]
+            // DECODE ?: owned-string Arrow loading reconstructs values through string_values for unrecorded consumers.
             fn load_arrow(column: &dyn arrow_array::Array) -> Result<Vec<Self>, crate::ColumnError> {
                 crate::parquet_source::string_values(column, Self::load)
             }
@@ -46,10 +51,14 @@ macro_rules! owned_strings {
 owned_strings!(String, Box<str>, std::sync::Arc<str>, std::rc::Rc<str>);
 
 /// Exact fixed-point value with an `i64` coefficient and compile-time scale.
+/// Its transparent representation is the signed, scaled coefficient, not a
+/// floating-point approximation. Device layouts may retain these bytes directly.
+#[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Decimal<const SCALE: u32 = 2>(i64);
 
 impl<const SCALE: u32> Decimal<SCALE> {
+    // DECODE ?: Decimal::from_scaled constructs a logical fixed-point value; this generic constructor has mixed callers.
     pub fn from_scaled(value: i64) -> Result<Self, String> {
         if SCALE > 18 {
             return Err("Decimal scale must be at most 18".into());
@@ -62,6 +71,7 @@ impl<const SCALE: u32> Decimal<SCALE> {
     }
 
     #[cfg(feature = "parquet")]
+    // DECODE ?: Decimal::rescale reconstructs a host Decimal from Arrow coefficient/scale without consumer facts.
     pub(crate) fn rescale(value: i128, scale: i8) -> Result<Self, String> {
         if SCALE > 18 {
             return Err("Decimal scale must be at most 18".into());
@@ -81,11 +91,13 @@ impl<const SCALE: u32> Decimal<SCALE> {
             }
             value / divisor
         };
+        // DECODE ?: rescale wraps the adjusted coefficient as Decimal for its generic Arrow loader caller.
         Self::from_scaled(i64::try_from(scaled).map_err(|_| "decimal exceeds i64 range")?)
     }
 }
 
 impl<const SCALE: u32> Load for Decimal<SCALE> {
+    // DECODE ?: Decimal::load parses a logical decimal for generic source, test, and user callers.
     fn load(field: &str) -> Result<Self, String> {
         if SCALE > 18 {
             return Err("Decimal scale must be at most 18".into());
@@ -127,10 +139,12 @@ impl<const SCALE: u32> Load for Decimal<SCALE> {
         if negative {
             coefficient = -coefficient;
         }
+        // DECODE ?: decimal text parsing constructs Decimal from its coefficient before downstream use is known.
         Self::from_scaled(i64::try_from(coefficient).map_err(|_| "decimal exceeds i64 range")?)
     }
 
     #[cfg(feature = "parquet")]
+    // DECODE ?: Decimal Arrow loading reconstructs a whole logical column without a recorded read boundary.
     fn load_arrow(column: &dyn arrow_array::Array) -> Result<Vec<Self>, crate::ColumnError> {
         use arrow_schema::DataType;
         if let (Some(array), DataType::Decimal128(_, scale)) = (
@@ -144,14 +158,17 @@ impl<const SCALE: u32> Load for Decimal<SCALE> {
                 .enumerate()
                 .map(|(row, value)| {
                     let value = value.ok_or_else(|| crate::ColumnError::null(row))?;
+                    // DECODE ?: each Arrow decimal coefficient is rescaled into a host value for an unknown consumer.
                     Self::rescale(value, *scale).map_err(|message| crate::ColumnError {
                         row,
+                        // DECODE P: failed decimal rescaling exposes the source value as diagnostic error text only.
                         value: crate::parquet_source::decimal_text(value, *scale),
                         message,
                     })
                 })
                 .collect()
         } else {
+            // DECODE ?: non-Decimal128 Arrow fallback reconstructs Decimal through generic text parsing.
             crate::parquet_source::parse_arrow(column, Self::load)
         }
     }
@@ -160,6 +177,7 @@ impl<const SCALE: u32> Load for Decimal<SCALE> {
 impl<const SCALE: u32> FromStr for Decimal<SCALE> {
     type Err = String;
     fn from_str(field: &str) -> Result<Self, Self::Err> {
+        // DECODE ?: Decimal FromStr forwards logical parsing for callers whose runtime use is not recorded.
         Self::load(field)
     }
 }
@@ -188,10 +206,13 @@ impl<const SCALE: u32> fmt::Display for Decimal<SCALE> {
 }
 
 /// Gregorian date represented by signed days since 1970-01-01.
+/// Its transparent representation is the signed `i32` epoch-day count.
+#[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Date(i32);
 
 impl Date {
+    // DECODE ?: Date::from_days constructs a logical date from epoch days with no caller-use contract.
     pub const fn from_days(days_since_epoch: i32) -> Self {
         Self(days_since_epoch)
     }
@@ -202,6 +223,7 @@ impl Date {
 }
 
 impl Load for Date {
+    // DECODE ?: Date::load reconstructs a logical Gregorian date for generic Load consumers.
     fn load(field: &str) -> Result<Self, String> {
         let bytes = field.as_bytes();
         if bytes.len() != 10
@@ -235,14 +257,18 @@ impl Load for Date {
         let march_month = month + if month > 2 { -3 } else { 9 };
         let day_of_year = (153 * march_month + 2) / 5 + day - 1;
         let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        // DECODE ?: parsed Gregorian components become Date before its downstream purpose is known.
         Ok(Self(era * 146097 + day_of_era - 719468))
     }
 
     #[cfg(feature = "parquet")]
+    // DECODE ?: Date Arrow loading reconstructs dates for arbitrary batch consumers.
     fn load_arrow(column: &dyn arrow_array::Array) -> Result<Vec<Self>, crate::ColumnError> {
         if let Some(array) = column.as_any().downcast_ref::<arrow_array::Date32Array>() {
+            // DECODE ?: Date32 epoch-day values become Date wrappers without opaque-read or publication facts.
             crate::parquet_source::native_values(array.iter().map(|value| value.map(Self)))
         } else {
+            // DECODE ?: Date Arrow fallback reconstructs logical dates via the generic parser.
             crate::parquet_source::parse_arrow(column, Self::load)
         }
     }
@@ -251,6 +277,7 @@ impl Load for Date {
 impl FromStr for Date {
     type Err = String;
     fn from_str(field: &str) -> Result<Self, Self::Err> {
+        // DECODE ?: Date FromStr delegates reconstruction with no evidence about subsequent operations.
         Self::load(field)
     }
 }

@@ -1,9 +1,9 @@
-//! Batch boundaries certify total lookahead from an indexable producer.
+//! Batch boundaries certify supported adapters from an indexable producer.
 use super::*;
 
-fn total(operator: &Operator) -> bool {
-    // ST-Total: Relational constraints are total under the Eq/Ord premises;
-    // opaque Rust binds and guards and branch scopes are not stage steps.
+fn supported(operator: &Operator) -> bool {
+    // ST-Total: The chunk adapter supports relational operators. Rust is total
+    // too, but its adapters and branch scopes do not implement this batch protocol.
     matches!(
         operator,
         Operator::Rename(_)
@@ -24,15 +24,19 @@ fn membership_step(operator: &Operator, facts: &Analysis) -> bool {
         return false;
     };
     let key = (symbol_name(&probe.right), names(&probe.columns));
-    matches!(probe.choice, Some(physical::Choice::First(_)))
-        && facts.membership.contains(&key)
-        && facts.filtered.get(&key.0).is_some_and(|filtered| {
-            filtered
-                .payload
-                .columns
-                .iter()
-                .all(|column| key.1.contains(&symbol_name(column)))
-        })
+    facts.membership.contains(&key)
+        && if let Some(filtered) = facts.filtered.get(&key.0) {
+            matches!(probe.choice, Some(physical::Choice::First(_)))
+                && filtered
+                    .payload
+                    .columns
+                    .iter()
+                    .all(|column| key.1.contains(&symbol_name(column)))
+        } else {
+            // STR-FullKey certificates make even an each-probe zero-or-one:
+            // its complete set row is already present in the supplied key.
+            facts.physical.headings[&key.0] == key.1
+        }
 }
 
 pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, usize>> {
@@ -142,8 +146,8 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             }
         }
     }
-    // ST-Stage: A positive, unique boundary ends a total segment before any
-    // partial step, starting at a for producer, never a probe/merge cursor.
+    // ST-Stage: A positive, unique boundary ends a supported adapter segment,
+    // starting at a for producer, never an unrecorded probe/merge cursor.
     // Certified full-key membership probes are zero-or-one lane-local steps:
     // their only non-key observations are recorded, proven constants. They
     // need no range cursor and assert nothing about source-key uniqueness.
@@ -164,11 +168,8 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             {
                 break;
             }
-            if !total(&definition.operator) {
-                return error(
-                    definition,
-                    "stage segment contains a partial or unsupported step",
-                );
+            if !supported(&definition.operator) {
+                return error(definition, "stage segment contains an unsupported adapter");
             }
             if matches!(definition.operator, Operator::Rename(_))
                 || facts.reads.contains_key(&current)

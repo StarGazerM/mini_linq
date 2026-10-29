@@ -1,0 +1,6 @@
+target/
+gpu/bench
+gpu/bench-profile
+results/*.data
+results/*.data.old
+results/*.script.txt

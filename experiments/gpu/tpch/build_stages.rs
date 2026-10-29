@@ -55,18 +55,26 @@ pub fn compile(
                 publications.insert(name, crate::Publication {
                     placement: advice::Placement::Host,
                     nullable: vec![false; preprocess.columns.len()],
+                    domains: vec![None; preprocess.columns.len()],
                 });
                 dependencies.push(preprocess.name.clone());
             }
         }
-        let kernel = program.kernel(index, &types).map_err(&reject)?;
-        let pipeline = if let Some(pipeline) = override_pipeline {
+        let mut kernel = program.kernel(index, &types).map_err(&reject)?;
+        kernel.published_origins = publications.iter()
+            .map(|(name, publication)| (name.clone(), publication.domains.clone()))
+            .collect();
+        kernel.evidence.facts.extend(advice::Pipeline::staged_keys(query, index));
+        let mut pipeline = if let Some(pipeline) = override_pipeline {
             pipeline.clone()
         } else if mode == "automatic" {
             advice::Pipeline::automatic()
         } else {
             advice::Pipeline::staged(query, index)
         };
+        if override_pipeline.is_none() {
+            pipeline.publication = advice::Placement::Automatic;
+        }
         let (code, mut artifact) = compile_stage(
             &kernel,
             manifest,
@@ -118,6 +126,7 @@ pub fn compile(
         let module = format_ident!("stage_{index}");
         let data = format_ident!("data_{index}");
         let result = format_ident!("result_{index}");
+        // DECODE P: only terminal stage results download logical tuples for final user-answer composition.
         let download = if publication_facts[index].resident() {
             quote!(#result.to_host()?)
         } else {
@@ -125,10 +134,12 @@ pub fn compile(
         };
         let composition =
             terminal_map(&program.stages[index], output_types[index].len()).map_err(&reject)?;
+        // DECODE P: terminal GPU answer resolves source dictionaries and formats values after download.
         device_terminal.push(quote! {
             let rows = #module::decode(&#data, manifest, #download)?;
             answer.extend(#composition);
         });
+        // DECODE P: terminal CPU reference answer resolves the same source dictionaries for final comparison.
         cpu_terminal.push(quote! {
             let rows = #module::decode(&#data, manifest, #result)?;
             answer.extend(#composition);
@@ -139,6 +150,7 @@ pub fn compile(
         "timing": "sum of stage phase timings; host-graded stages use elapsed host execution"});
     Ok((
         quote! {
+            use cq_load::StringCode;
             #(#modules)*
             pub(super) fn run(manifest: &crate::manifest::Manifest, query: &str, conformance_only: bool) -> crate::manifest::Result<serde_json::Value> {
                 let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;

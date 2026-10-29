@@ -3,9 +3,9 @@
 //! Each variant selects one changing positive occurrence; every such occurrence
 //! is covered at least once. Repeated variants are admissible for set relations.
 //! Only `seminaive_covering` is supported; no naive or exact scheme is implied.
-//! An occurrence-order certificate may permute the first contiguous positive
-//! prefix. Delta positions always refer to source order; erasure restores that
-//! order before comparison and never crosses a Rust or negative clause.
+//! An occurrence-order certificate may permute clauses wherever their variables
+//! are bound. Delta positions refer to source order; erasure restores that
+//! order before comparison. Opaque total Rust imposes no written-order chain.
 use cq_datalog_support::{Fresh, ensure};
 pub use cq_lang_datalog_strata as strata;
 use cq_syntax::symbol_name;
@@ -38,7 +38,7 @@ pub struct Program {
 pub struct Variant {
     pub rule: usize,
     pub delta: Option<usize>,
-    /// Source-body positions in execution order; only the first positive prefix may move.
+    /// Source-body positions in execution order; variable dependencies must hold.
     pub order: Vec<usize>,
     /// The order is authored advice, not a driver policy: the hole's CQ plan
     /// keeps it as an explicit atom order instead of choosing its own.
@@ -154,7 +154,7 @@ impl ToTokens for Program {
         );
     }
 }
-/// Check a supplied permutation, without replaying the order-selection heuristic.
+/// Check the permutation; `QueryChecker` separately checks its body's dependencies.
 pub fn variant_order<'a>(query: &Query, order: &'a [usize]) -> syn::Result<&'a [usize]> {
     let length = query.body.len();
     ensure(
@@ -162,29 +162,6 @@ pub fn variant_order<'a>(query: &Query, order: &'a [usize]) -> syn::Result<&'a [
             && order.iter().copied().collect::<BTreeSet<_>>() == (0..length).collect(),
         query,
         "variant order must cover every source occurrence exactly once",
-    )?;
-    let first = query
-        .body
-        .iter()
-        .position(|item| matches!(item, BodyItem::Positive { .. }))
-        .unwrap_or(length);
-    let end = first
-        + query
-            .body
-            .iter()
-            .skip(first)
-            .take_while(|item| matches!(item, BodyItem::Positive { .. }))
-            .count();
-    ensure(
-        order.iter().enumerate().all(|(position, &source)| {
-            if (first..end).contains(&position) {
-                (first..end).contains(&source)
-            } else {
-                position == source
-            }
-        }),
-        query,
-        "variant order must preserve Before constraints outside the first positive prefix",
     )?;
     Ok(order)
 }

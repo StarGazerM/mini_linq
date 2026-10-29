@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+cq-load = { path = "../../../runtime/cq-load", default-features = false }
 cq-gpu-runtime = { path = "../printer-runtime" }
 cq-gpu-sequence-runtime = { path = "../sequence-runtime" }
+gpu-datalog-runtime = { path = "../datalog-runtime" }
 gpu-device-columns = { path = "../device-columns" }
 gpu-compress = { path = "../compress" }
 gpu-compress-host = { path = "../compress-host" }

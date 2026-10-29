@@ -7,6 +7,13 @@ pub(crate) mod codecs {
     use cuda_device::warp;
     use cuda_device::{device, kernel, launch_bounds, launch_contract, thread, DynamicSharedArray};
 
+    // DESIGN contract8-vector-summaries
+    // Owns encode-time vector metadata (contract 8, STR-Repr enclosure and preserved-op laws).
+    // Sources: doc/STORAGE.md §§2,6,12; FastLanes §§1-2.4; Shanbhag binpack_kernel.cuh/q11r.cu.
+    // Known deviation: extrema choose base/width then max is dropped; no retained skip summary (Plan P6).
+    // DO NOT mistake delta-residual extrema for enclosing logical-value bounds.
+    // Keep summaries with payload when implemented; fuse tile decode/predicates, not whole-column decode.
+    // DO NOT claim TPC-H load-order skip wins or codec wins without per-target §12 measurements.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
@@ -347,6 +354,7 @@ pub(crate) mod codecs {
                 } else {
                     unsafe { order.add(position as usize).read() as u64 }
                 };
+                // DECODE I: gather reconstructs source values then recomputes FOR frames and re-encodes; avoidable reorganization, P4 keep index runs plain.
                 let gathered = unsafe { decode_source(source, source_position) };
                 unsafe {
                     if element == ELEMENT_I64 {
@@ -421,11 +429,13 @@ pub(crate) mod codecs {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
+    // DECODE ?: whole-column kernel serves publication and build scratch; caller evidence determines the boundary.
     pub unsafe fn fastlanes_decode_column(view: ColumnView, output: *mut i64) {
         let len = unsafe { crate::logical_len(view) };
         let mut vector = thread::blockIdx_x() as u64;
         let lane = thread::threadIdx_x();
         while vector * 1024 < len {
+            // DECODE ?: tile reconstruction feeds the generic whole-column destination without a consumer fact.
             let [a, b, c, d] = unsafe { crate::decode_tile(view, vector, lane) };
             let row = vector * 1024 + (lane as u64 / 32) * 128 + (lane as u64 % 32) * 2;
             if row < len {

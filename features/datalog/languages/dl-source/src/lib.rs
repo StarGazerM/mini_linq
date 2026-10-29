@@ -1,6 +1,6 @@
 //! DL-Source denotes the stratified least fixpoint of set-valued relations.
-//! Rust clauses are pure partial computations; panic is bottom and termination
-//! remains a caller premise. Surface sugar is not part of this language.
+//! Rust clauses are opaque, pure and total by premise. Relational `where`
+//! clauses use CQ predicates; parsing, printing and checking share its language.
 //! Optional `invariants { hoist N using Helper { original_rule; } }` after
 //! the rules records a bounded frozen filter and its independently checked
 //! erasure. Helpers preserve one positive input's bindings and cardinality.
@@ -251,7 +251,7 @@ impl Graph {
                     _ => {
                         return Err(syn::Error::new_spanned(
                             item,
-                            "Datalog bodies support positive atoms, Rust clauses and !R atoms; extensions, aggregates and nested blocks are not supported",
+                            "Datalog bodies support positive atoms, Rust clauses, where predicates and !R atoms; extensions, aggregates and nested blocks are not supported",
                         ));
                     }
                 };
@@ -376,8 +376,8 @@ pub mod contract {
 /// Check source well-formedness and preserve its externally visible interface.
 ///
 /// Rules may change. The rewrite author must separately establish denotational
-/// refinement: whenever the source terminates without panic, the target returns
-/// the same output sets without introducing panic (under the pure-Rust premise).
+/// refinement: the target returns the same output sets under the pure, total
+/// Rust premise and the column representation's equality/order laws.
 /// This structural check cannot prove equivalence of opaque Rust computations.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
@@ -420,7 +420,7 @@ impl Language for Program {
 /// All declarations are validated, including unused ones. Each CQ projection
 /// carries only its referenced declarations, so unrelated schemas are not
 /// cloned, printed, parsed or checked again for every rule. CQ still performs
-/// its own scope/type checks and schema-sensitive guard recognition.
+/// its own scope checks and relational-predicate validation.
 pub struct QueryChecker<'a> {
     name: &'a Ident,
     checked_head: Ident,

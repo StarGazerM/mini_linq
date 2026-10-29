@@ -28,7 +28,7 @@ fn main() {
         relation S(a:i32,b:i32,c:i32);
         relation T(a:i32,b:i32);
         relation answer(a:i32,b:i32);
-        answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
+        answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), where y > 0;
     };
     let planned = boundaries(&directory, "planned", &source, true);
     let written = boundaries(&directory, "written", &source, false);
@@ -37,7 +37,7 @@ fn main() {
         cq::hypergraph::Analysis::of(&planned.normal).join_tree,
         Some(vec![(0, Some(1)), (1, Some(2)), (2, None)])
     );
-    // The Rust comparison is relational. The reducer goes up from R through S
+    // The explicit predicate is relational. The reducer goes up from R through S
     // to T and down again, before the first atom step.
     let expected_vo: valuation::Program = syn::parse_quote! {
         pub struct Overview;
@@ -45,7 +45,7 @@ fn main() {
         relation S(a:i32,b:i32,c:i32);
         relation T(a:i32,b:i32);
         relation answer(a:i32,b:i32);
-        answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
+        answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), where y > 0;
         valuation {
             reduce S@1 with R@0(_, k, tag, _);
             reduce T@2 with S@1(_, _, z);
@@ -54,7 +54,7 @@ fn main() {
             R@0(x, k, tag, unused);
             S@1(k, tag, z);
             T@2(z, y);
-            y > 0;
+            where y > 0;
         }
     };
     assert_eq!(planned.valuation, expected_vo);

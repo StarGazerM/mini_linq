@@ -5,13 +5,13 @@ fn generators_round_trip_and_survive_schedule_correspondence() {
     let source: source::Program = syn::parse_quote! {
         struct Generated; relation Seed(x:i32) = (seeds); relation Reach(x:i32); output Reach;
         Reach(y) :- Seed(x), for (y,_) in [(*x,())];
-        Reach(y) :- Reach(x), if *x < 3, for y in [*x+1,*x+1];
+        Reach(y) :- Reach(x), where x < 3, for y in [*x+1,*x+1];
     };
     let strata: strata::Program = syn::parse2(quote!(#source strata {component [Reach];})).unwrap();
     let p: Program = syn::parse2(quote!(#strata incremental {
         scheme seminaive_covering; delta Reach = Recent;
         variant 0 seed {Reach(y) :- Seed(x), for (y,_) in [(*x,())];}
-        variant 1 delta 0 {Reach(y) :- Recent(x), if *x < 3, for y in [*x+1,*x+1];}
+        variant 1 delta 0 {Reach(y) :- Recent(x), where x < 3, for y in [*x+1,*x+1];}
     }))
     .unwrap();
     source::contract::check(&source).unwrap();

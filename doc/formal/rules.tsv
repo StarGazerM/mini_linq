@@ -29,8 +29,8 @@ RA-For	implementation	languages/cq-lang-ra/src/lib.rs	/// Formal rule RA-For:	Ch
 RA-Def	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 WF-CQ	implementation	languages/cq-lang-cq/src/lib.rs	/// Formal rule WF-CQ:	Check CQ declarations, positive scope, output arity and symbolic type availability.
 WF-NF	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule WF-NF:	Check CQ plus distinct variables or literals within each body atom.
-WF-VO	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-VO:	Check NF, local coverage and reduction premises, typed arithmetic exception, and explicit block placement.
-WF-VO-Arithmetic	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-VO-Arithmetic:	Typed CQ-Arith leaves the partial Rust chain but keeps dependencies, coverage and Before at later partial steps and blocks.
+WF-VO	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-VO:	Check NF, local coverage, free-variable dependencies, reductions and explicit block placement.
+WF-VO-Rust	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-VO-Rust:	Every unchanged Rust expression appears exactly once with its free variables bound.
 WF-BlockPlacement	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-BlockPlacement:	Require explicit placement; hoisted arms are Rust-free, correlated free variables are bound, repeated reads agree and correlated blocks are not reduction operands.
 WF-RA	implementation	languages/cq-lang-ra/src/lib.rs	/// Formal rule WF-RA:	Check declarations, unique atom occurrences, local operators, output heading and reachability.
 WF-IX	implementation	languages/cq-lang-ix/src/lib.rs	/// Formal rule WF-IX:	Check valid unique used descriptors; complete coverage is a pass obligation.
@@ -47,9 +47,9 @@ STR-Group	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule
 SEL-Group	implementation	passes/cq-structure-selection/src/lib.rs	/// Formal rule SEL-Group:	Record the keyed aggregate table and accumulator tuple types.
 P-GroupState	implementation	passes/cq-physical-realization/src/operators.rs	/// Formal rule P-GroupState:	Realize keyed folds with the recorded accumulator provider, without substituting a concrete map.
 WF-Structures	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule WF-Structures:	Check entries, read coverage and inferred canonical return.
-CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Validate unchanged CQ, split, coverage, Rust Before, Written order, Filtered coarse greedy choices and independently proved branch groups.
+CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Check unchanged CQ, free-variable dependencies, coverage, Written order and recorded choices.
 CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check branch-preserving erasure, no optional reducer for independent branches, otherwise filtered support versions, tree obligations and exact block cuts.
-CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check supplied VO clause occurrences, named semijoins, equality closure, constraints, Rust chain and Before.
+CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check VO occurrences, reductions, relational constraints, unchanged Rust payloads and free-variable bindings.
 E-BlockPlacement	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-BlockPlacement:	Consume recorded Hoisted or Correlated placement independently of predicate optimization mode.
 CK-BlockPlacement	implementation	passes/cq-elaborate/src/block_contract.rs	/// Formal rule CK-BlockPlacement:	Check matching RA block provenance and exact recorded correlation alternative.
 CK-Index	implementation	passes/cq-index-policy/src/correspondence.rs	/// Formal rule CK-Index:	Check unchanged RA and complete first-use descriptors with iN names.
@@ -59,19 +59,20 @@ CK-Structures	implementation	passes/cq-structure-selection/src/correspondence.rs
 A-Variable	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Variable:	Keep the first bare occurrence within an atom, including shared query names.
 A-Repeat	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Repeat:	Replace a repeated name only within one atom and append identity.
 A-Wildcard	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Wildcard:	Replace a wildcard by a fresh unconstrained atom variable.
+A-Closed	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Closed:	Keep query-closed atom operands as relational restrictions with unchanged once-bound host expressions, never row bindings.
 A-Prefix	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Prefix:	Emit an opaque Rust binding immediately before its atom when its query inputs are already bound.
 A-Local	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Local:	Emit an opaque Rust binding after its atom, then a relational equality with the fresh atom column.
 D-Atom	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Atom:	Atom provides its columns and requires scalar-let- or generator-supplied columns.
 D-Guard	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Guard:	Guard requires dependencies on the written prefix.
 D-Bind	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Bind:	Binding provides pattern names and requires RHS prefix dependencies.
-D-For	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-For:	Generator provides pattern names, requires RHS prefix dependencies and retains the opaque Rust Before chain.
-C-Ready	implementation	passes/cq-order/src/lib.rs	/// Formal rule C-Ready:	Require free-variable binders, the next node of one Rust chain and every source-before relational step.
+D-For	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-For:	Generator provides pattern names and requires RHS free variables.
+C-Ready	implementation	passes/cq-order/src/lib.rs	/// Formal rule C-Ready:	Require only free-variable binders, with no Rust-order or relational-predecessor condition.
 S-Written	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Written:	Written uses the complete normal-form body sequence.
 S-Connected	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Connected:	Ready atoms rank by shared names then clause index.
 S-Greedy	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Greedy:	GreedyWidth and Auto rank connected atoms before union arity.
 S-Elimination	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Elimination:	Rank ready atoms by earliest elimination variable then clause index.
-O-Coarse	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Coarse:	Copy equalities and Rust chain nodes; emit one full subatom per chosen atom.
-O-Fine	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Fine:	Introduce one variable per subatom; retain free-variable binders, the written Rust chain and source-before obligations.
+O-Coarse	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Coarse:	Copy equalities, constraints and Rust steps; emit a full subatom per chosen atom.
+O-Fine	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Fine:	Introduce one variable per subatom while preserving free-variable bindings and full occurrence coverage.
 O-BlockPlacement	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-BlockPlacement:	Ordinary ordering records Hoisted iff a block is Rust-free, otherwise Correlated.
 O-WrittenBlocks	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-WrittenBlocks:	The exact Written/Coarse reference constructor records Correlated recursively.
 H-Occurrence	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-Occurrence:	Construct atom facts indexed by the complete normal-form body.
@@ -82,7 +83,7 @@ G-Absorb	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule G
 G-Accept	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule G-Accept:	Accept a terminal residual with at most one edge, all empty.
 G-Reject	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule G-Reject:	Reject every other terminal residual.
 H-JoinTree	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-JoinTree:	Return the constructed GYO parent map exactly when acyclic.
-R-Guard	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Guard:	Retain every opaque Rust guard as its original chain step; compatibility option adds no reductions.
+R-Guard	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Guard:	Retain every Rust guard unchanged at its recorded position; it supplies no relational filter support.
 Y-Up	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule Y-Up:	Produce upward parent-with-child VO steps in reverse BFS order.
 Y-Down	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule Y-Down:	Produce downward child-with-parent VO steps in BFS order.
 R-Tree	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Tree:	Insert only relational tree semijoins before atom reads.
@@ -95,7 +96,7 @@ B-Join	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule B-Join:	Joi
 C-Guard	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Guard:	Append an opaque guard to the prefix, seeding Unit if absent.
 C-Bind	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Bind:	Append an opaque pattern binding to the prefix without applying RA laws to it.
 C-For	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-For:	Append a generator-tagged Bind to the current prefix, seeding Unit if absent.
-P-For	implementation	passes/cq-physical-realization/src/operators.rs	/// Formal rule P-For:	Realize generator Bind as pull flat_map or a push nested loop without changing its scope or Before facts.
+P-For	implementation	passes/cq-physical-realization/src/operators.rs	/// Formal rule P-For:	Realize unchanged generator Bind as flat_map or nested loop with the same free-variable bindings.
 E-ReduceWith	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-ReduceWith:	Semijoin current clause relations and replace only the target entry.
 C-Finish	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Finish:	Project head dependencies or the full heading under a computed head.
 O-Leaf	abstract	-	-	Ghost full-atom binary-tree leaf; no stored order witness.
@@ -107,7 +108,7 @@ Plan-Generic	implementation	features/planners/plan/src/lib.rs	// Formal rule Pla
 Plan-Graph	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Graph:	Hypergraph uses tree reductions only in acyclic scopes and exact block cuts in any scope.
 Plan-Transfer	implementation	features/planners/plan/src/lib.rs	/// Formal rule Plan-Transfer:	Robust predicate transfer on the written order: Masks forward pass, the stream's forward reductions by filtered children, then the backward pass from filtered sides, parents first, all before the stream.
 CK-Transfer	implementation	features/planners/plan/src/lib.rs	// Formal rule CK-Transfer:	The transfer schedule equals the one recomputed from the erased plan.
-Plan-Le	implementation	features/planners/plan/src/le.rs	// Formal rule Plan-Le:	Keep Written/Coarse's outer and Rust chain; probe bound keys in GYO ear order, delay coarse full-row expansion until demand, Before boundary, or scope exit; retain Masks reductions.
+Plan-Le	implementation	features/planners/plan/src/le.rs	// Formal rule Plan-Le:	Record lookup/expand phases with free-variable demand, scope exit and Masks reductions.
 CK-Le	implementation	features/planners/plan/src/le.rs	// Formal rule CK-Le:	Independently check normalized CQ identity, one non-introducing lookup before one coarse full expansion per inner occurrence, written column ownership, outer identity, recursive block contracts and Masks reductions.
 ST-Entry	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Entry:	Start the resolved checked queue unchanged; default sequential planning is selected during configuration resolution.
 ST-Next	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Next:	Parse and transform a payload, then emit the selected next macro invocation.
@@ -123,10 +124,10 @@ IF-Environment	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule IF-
 IF-Leaf	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Leaf:	Evaluate leaf expressions once under fresh bindings.
 IF-Dispatch	implementation	passes/cq-print/src/access.rs	// Formal rule IF-Dispatch:	Native access is eligible only at a leading declaration prefix.
 IF-Fallback	implementation	runtime/cq-storage/src/dispatch.rs	/// Formal rule IF-Fallback:	Initialize a shared fallback once on first use.
-ORD-Admissible	implementation	languages/cq-syntax/src/algebra.rs	/// Formal rule ORD-Admissible:	Syntactic Eq/Ord checks; a total order consistent with Leibniz identity is trusted.
-CQ-Comparison	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Comparison:	Bound query terms and captured constants are separate from Rust expressions.
+ORD-Admissible	abstract	-	-	Representation order is total and consistent with identity; rustc checks bounds, never host type spelling.
+CQ-Comparison	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Comparison:	Relational comparison terms use bound query variables, literals or query-closed Rust expressions.
 D-Constraint	implementation	passes/cq-order/src/lib.rs	// Formal rule D-Constraint:	A central step waits only for its query variables.
-E-Constraint	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Constraint:	Ordinary relational pushdown or prefix select.
+E-Constraint	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Constraint:	Realize the relational constraint at its recorded VO placement.
 CT-Constraint	implementation	languages/cq-lang-ra/src/structural.rs	// Formal rule CT-Constraint:	Preserve exact predicate shape and fixed columns, recomputing implied unary domains on both sides.
 RA-Constraint	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-Constraint:	Relational theta checks scope and Eq/Ord premises without Rust.
 IX-Const	implementation	languages/cq-lang-ix/src/lib.rs	// IX-Const:	Column constant equalities and literal membership produce const supply.
@@ -134,18 +135,17 @@ IX-Range	implementation	languages/cq-lang-ix/src/lib.rs	// IX-Range:	Constant or
 PH-Range	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-Range:	A constant window reads one column with range supply.
 IF-Parameter	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Parameter:	Read each capture once outside query loops.
 IF-Range	implementation	passes/cq-print/src/range.rs	/// Formal rule IF-Range:	Ordered leading windows or scan/filter without builds.
-CQ-GuardRecognize	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardRecognize:	Rust comparison trait operations and pure boolean structure under Eq/Ord premises.
-CQ-Arith	implementation	languages/cq-syntax/src/arithmetic.rs	/// Formal rule CQ-Arith:	Typed fixed-width wrapping addition, subtraction, multiplication and division by a nonzero literal; decimal coefficient projection; Motion and BE-Partial rederive totality.
-CQ-GuardSplit	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardSplit:	Extract total conjuncts; keep one written-order residual; selecting earlier only shrinks opaque evaluation domains.
+CQ-Closed	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Closed:	Closed host operands have no query free variables and retain their original expression.
+CQ-Where	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Where:	Only explicit where syntax introduces relational predicates; check bound variables and closed operands.
 CQ-Neg	implementation	languages/cq-lang-cq/src/lib.rs	fn check_body(	Declared input and arity; bound variables, constants and wildcards; binds nothing and requires Leibniz columns.
 E-Neg	implementation	passes/cq-elaborate/src/lib.rs	/// E-Neg:	Lower negation to the existing anti operator, restricting constants and repeated names and projecting away wildcards; GPU compact inverts the same provider membership probe using retained Anti provenance.
-E-Domain	implementation	languages/cq-syntax/src/constraint.rs	/// Formal rule E-Domain:	Project every disjunct's literal restrictions onto each commonly constrained variable and retain the exact predicate.
-Block-Union	abstract	-	-	Bottom plus Set union; permutation and witness short circuit are refinements.
+E-Domain	implementation	languages/cq-syntax/src/constraint.rs	/// Formal rule E-Domain:	Project every disjunct's literal or query-closed restrictions onto each commonly constrained variable and retain the exact predicate.
+Block-Union	abstract	-	-	Finite-set union; permutation and answer-determined witness short circuit preserve answers.
 Block-Else	abstract	-	-	Ordered first nonempty branch with lazy later Rust.
 CQ-Block	implementation	languages/cq-lang-cq/src/lib.rs	fn check_body(	Recursive written scope, interface/local checks and known declared type agreement; Rust checks inference.
 RA-Union	implementation	languages/cq-lang-ra/src/lib.rs	Operator::Union(union) =>	Equal common headings and recorded branch provenance.
 RA-Anti	implementation	languages/cq-lang-ra/src/structural.rs	pub fn anti(&mut self	Left-heading antijoin on explicit free columns.
-PH-Block	implementation	languages/cq-lang-physical/src/lib.rs	fn branch_scopes(program:	Branch tree and Before obligations; execution choices remain recorded.
+PH-Block	implementation	languages/cq-lang-physical/src/lib.rs	pub fn check_rewrite(source: &Program, target: &Program)	Branch scopes retain unchanged Rust payloads and free-variable identities.
 STR-Lineage	implementation	languages/cq-lang-structures/src/positional.rs	/// Formal rule STR-Lineage:	Occurrence-preserving left lineage survives eager semijoin independently of support representation.
 STR-Read	implementation	languages/cq-lang-structures/src/positional.rs	Formal rule STR-Read:	Only the existing eager semi RHS may supply its summary.
 SEL-Positional	implementation	passes/cq-structure-selection/src/positional.rs	Formal rule SEL-Positional:	Explicit host capabilities; unknown hosts keep old entries.
@@ -154,9 +154,10 @@ IF-Selection	implementation	passes/cq-print/src/positional.rs	Formal rule IF-Sel
 STR-Keyset	implementation	languages/cq-lang-structures/src/positional.rs	Formal rule STR-Keyset:	Keysets serve exact membership without imposing membership on supplemental payload indices.
 IF-PushPositional	implementation	features/own-dialect/printer/src/lib.rs	Formal rule IF-PushPositional:	Push the prepared exact ID stream to its sink; share recorded snapshot and Build construction.
 STR-Existential	implementation	languages/cq-lang-structures/src/filtered.rs	/// Formal rule STR-Existential:	Ordinary renames, selections (including trusted-total predicates) and unions record checked projected layouts; full-key projections with no observed payload use exact membership.
+STR-FullKey	implementation	passes/cq-structure-selection/src/lib.rs	// Formal rule STR-FullKey:	Positive complete-row-key probes of set relations record exact membership independently of source filtering; bounded dense codecs are selected by Rust capability dispatch.
 EXT-SetFold	implementation	features/extensions/cq-ext-aggregate/src/expansion.rs	/// Formal rule EXT-SetFold:	Checked canonical terminals need no extension dedup; unknown terminals retain fast-hashed set boundaries.
 EXT-ConstantGroup	implementation	features/extensions/cq-ext-aggregate/src/expansion.rs	/// Formal rule EXT-ConstantGroup:	Literal-bound group columns use an optional accumulator and preserve empty-input semantics.
-H-FilterRank	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-FilterRank:	Rank literal-bearing occurrences and local total predicates through equality classes, without data statistics.
+H-FilterRank	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-FilterRank:	Rank literal occurrence restrictions and explicit relational predicates, never Rust expression syntax.
 S-Filtered	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Filtered:	Rank ready occurrences by connectivity, local filter strength, then written position.
 R-Filtered	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Filtered:	Propagate independently filtered components, omitting range-only support against a point-filtered component; order strongest siblings first.
 H-SpanningCore	implementation	languages/cq-lang-cq/src/hypergraph.rs	// Formal rule H-SpanningCore:	The reduction tree is the GYO join tree, or GYO ears plus a spanning tree of the cyclic core over shared variables (most shared, then earliest).
@@ -164,16 +165,17 @@ R-Masks	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Masks:	Redu
 R-Placement	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Placement:	Reducer graphs exclude correlated blocks while retaining their written binder context.
 CK-Masks	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Masks:	Check exact eligible edges, outer exclusion, filtered components, child dependencies and strongest sibling order independently of mask construction.
 STR-JoinFilter	implementation	languages/cq-lang-structures/src/join_filter.rs	/// Formal rule STR-JoinFilter:	Conservative scalar scan filters require an eager covering exact probe or semijoin on a key containing the filtered column, an exclusive pipe spine carrying it to the scan and a total build; static filtering is default selection policy.
-SEL-JoinFilter	implementation	passes/cq-structure-selection/src/positional.rs	/// Formal rule SEL-JoinFilter:	Every admissible covered scalar key column of a filtered build chooses an exact AdaptiveKeySet at its scan; approximation requires external retype advice.
+SEL-JoinFilter	implementation	passes/cq-structure-selection/src/positional.rs	/// Formal rule SEL-JoinFilter:	Every admissible covered scalar key column of a filtered payload build chooses an exact AdaptiveMembership at its scan; membership-only builds need no duplicate filter and approximation requires external retype advice.
+STR-AdaptiveMembership	implementation	runtime/cq-storage/src/adaptive.rs	/// Formal rule STR-AdaptiveMembership:	Rust capability dispatch selects dense storage only with a total injective ordinal; generic equality/hash keys retain exact hash membership.
 IF-JoinFilter	implementation	passes/cq-print/src/positional.rs	/// Formal rule IF-JoinFilter:	Build each recorded type through Build from the projected index keys, guard ConservativeMembership with rustc, and filter scan positions by every filter already built when the scan is read while preserving each exact covering operator.
 IF-JoinFilterAbandon	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-JoinFilterAbandon:	A build keeping more than 35% of its positional source occurrence constructs no filter; the abandoned filter passes every key.
 WF-JoinBranch	implementation	languages/cq-lang-vo/src/join_branches.rs	/// Formal rule WF-JoinBranch:	Require disjoint connected full relational atom groups, exact interfaces, and branch-local reductions before reads; opaque Rust remains ungrouped.
 S-JoinBranch	implementation	passes/cq-order/src/branches.rs	/// Formal rule S-JoinBranch:	Pick the widest shared-key occurrence as the fact spine and absorb connected dimension ears through one external key set.
 CK-OrderBranches	implementation	passes/cq-order/src/branch_check.rs	/// Formal rule CK-OrderBranches:	Validate widest-spine exclusion, pinned probes, legal ear proofs and saturated recorded groups without invoking branch selection.
 E-JoinBranch	implementation	passes/cq-elaborate/src/join_branches.rs	/// Formal rule E-JoinBranch:	Materialize each independent exact atom join once, project its interface, and join the prefix against that result.
-CK-JoinBranch	implementation	passes/cq-elaborate/src/join_branches.rs	/// Formal rule CK-JoinBranch:	Require an exact projected branch DAG for every VO atom group in addition to global occurrence, predicate, and Before correspondence.
-INC-Adequacy	abstract	-	-	Planned; exhaustive operational observation refines bottom plus Set; no equality of panic domains is claimed.
-INC-Supp	abstract	-	-	Planned; support commutes with total positive contexts; partial code and consumer boundaries need separate obligations.
+CK-JoinBranch	implementation	passes/cq-elaborate/src/join_branches.rs	/// Formal rule CK-JoinBranch:	Require exact projected branch DAGs plus global occurrence, predicate, reduction and free-variable correspondence.
+INC-Adequacy	abstract	-	-	Exhaustive operational observation preserves finite-set denotation under pure-total Rust and host premises.
+INC-Supp	abstract	-	-	Support commutes with pure-total positive contexts; nonpositive and consumer boundaries retain their separate obligations.
 STR-Maintain	abstract	-	-	Planned; exact-once ordered insertion and merges that never cross protected cuts preserve Runs abstraction.
 CQ-Diff	abstract	-	-	Planned; multilinear expansion uses supplied increments, not subtraction on Boolean or Natural streams.
 DL-InsertNew	implementation	features/datalog/print/src/lib.rs	/// Formal rule DL-InsertNew:	Recorded all-column membership insertion admits each fresh row once into its next container, conditional on opaque provider laws.
@@ -186,19 +188,19 @@ STR-RunSnapshot	abstract	-	-	Publish before readers; enqueue insertion, compacti
 DL-Strata	implementation	features/datalog/languages/dl-strata/src/lib.rs	/// Formal rule DL-Strata:	Complete ordered SCC-union partitions respect positive dependencies and freeze strictly lower negative inputs.
 DL-Delta	implementation	features/datalog/languages/dl-incremental/src/lib.rs	/// Formal rule DL-Delta:	Variants erase to source rules and cover every changing positive position at least once; repeated covering variants are allowed.
 STR-Repr	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Repr:	Check per-result representation lineage and owned-column coverage; storage forward simulation remains a semantic premise.
-ST-Total	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Total:	Derive total stage steps without crossing opaque Rust or cursor-producing probe and merge operators.
-ST-Stage	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Stage:	Require an indexable for producer, positive batch size and a boundary before partial evaluation.
-BK-Dual	abstract	-	-	Fold and unfold realize one stream algebra; lawful early stop preserves answers and may only remove panics.
+ST-Total	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Total:	Record supported batch operators and producer representations; Rust totality is a common premise.
+ST-Stage	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Stage:	Require an indexable producer, positive batch size and represented segment preserving recorded demand.
+BK-Dual	abstract	-	-	Fold and unfold realize the same recorded pure-total stream algebra; answer-determined early stop preserves answers.
 ST-Share	implementation	languages/cq-lang-structures/src/share.rs	// ST-Share:	Couple an eager semi and later same-key probe over an earlier immutable payload build, integral PrefixRun prefix, or identical immutable leveled snapshot layout.
 STR-Witness	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Witness:	Check the non-column cursor carrier and reject every path escaping before its force probe.
-ST-Expand	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Expand:	Admit total segmented flattening of exact SortedRun, PrefixRun, and resident sorted ranges from a for producer without crossing partial steps.
+ST-Expand	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Expand:	Admit segmented flattening of recorded exact range providers from an indexable producer.
 STR-SortedRun	implementation	runtime/cq-storage/src/sorted_run.rs	/// Formal rule STR-SortedRun:	Stable clustered runs preserve the occurrence bag and within-key order; exact directory lookup selects the matching range.
 EXT-SortedRuns	implementation	features/rewrites/passes/src/structures.rs	/// Formal rule EXT-SortedRuns:	Retype eligible one-level stream-keyed HashIndex payload providers while preserving Physical and coverage.
 EXT-SortedIndexes	implementation	features/rewrites/passes/src/indexes.rs	//! Formal rule EXT-SortedIndexes:	Record minimum chain-cover lexicographic layouts for built results' integral stream reads, levels in binding order, probed keys ending their chains; explicit layouts must serve every read.
 WF-DL-Source	implementation	features/datalog/languages/dl-source/src/lib.rs	/// Formal rule WF-DL-Source:	Source safety, exact set-model declarations and stratifiability.
 WF-DL-Strata	implementation	features/datalog/languages/dl-strata/src/lib.rs	pub fn check(	Source contract and complete SCC-union partition with signed dependency order and no internal negation.
-WF-DL-Incremental	implementation	features/datalog/languages/dl-incremental/src/lib.rs	pub fn check(	Only seminaive_covering; checked delta declarations, erasure and at-least-once seed/changing-position coverage; partial Rust remains conditional.
-DL-FrozenNegation	abstract	-	-	Total pure covering theorem with completed lower-component negative inputs frozen; not a partial-Rust proof.
+WF-DL-Incremental	implementation	features/datalog/languages/dl-incremental/src/lib.rs	pub fn check(	Seminaive covering checks delta declarations, erasure and coverage under pure-total Rust.
+DL-FrozenNegation	abstract	-	-	Pure-total covering theorem with completed lower-component negative inputs frozen.
 WF-DL-Storage	implementation	features/datalog/languages/dl-storage/src/lib.rs	/// Formal rule WF-DL-Storage:	Complete opaque provider records, layout permutations and per-layout maintenance; actual-rule key availability, version and occurrence coverage admit BTreeMap layouts and later direct deltas; provider laws remain premises.
 WF-DL-Round	implementation	features/datalog/languages/dl-round/src/lib.rs	/// Formal rule WF-DL-Round:	Exact copied providers, structural host certificates, independent admission-owner coverage and typed per-hole context; hole correspondence, ordered publication, delta replacement, termination, scoped keys and output references.
 WF-DL-Hole	implementation	features/datalog/languages/dl-round/src/lib.rs	/// Formal rule WF-DL-Hole:	Each hole's terminal resolves in the typed registry to its interface; the recorded lower invocation carries exactly its facts and any planning owner precedes lower. Terminal arguments remain terminal-owned; host printers reject batch holes.
@@ -227,7 +229,7 @@ P-DL-Push	implementation	features/datalog/print/src/lib.rs	/// Formal rule P-DL-
 CK-DL-IfLet	implementation	features/datalog/passes/surface-if-let/src/lib.rs	pub fn check(	Independent surface expansion correspondence preserving binders and written position.
 CK-DL-Stratify	implementation	features/datalog/passes/stratify/src/lib.rs	pub fn check(	Exact Source preservation and admissible target Strata contract, not equality to the default SCC order.
 CK-DL-Incremental	implementation	features/datalog/passes/incremental/src/lib.rs	pub fn check(	Exact Strata preservation and target seminaive_covering erasure and coverage, independent of default variant order.
-DL-OccurrenceOrder	implementation	features/datalog/passes/incremental/src/lib.rs	/// Formal rule DL-OccurrenceOrder:	A variant records a permutation of its source body that permutes only the first contiguous positive-atom prefix; erasure restores the delta occurrence and source order and must equal the source rule exactly.
+DL-OccurrenceOrder	implementation	features/datalog/passes/incremental/src/lib.rs	/// Formal rule DL-OccurrenceOrder:	A variant records a full-body permutation; positive atoms may cross opaque total Rust, with free-variable binder dependencies and negative/where variable safety checked on the variant. Erasure restores the delta occurrence and source order and must equal the source rule exactly.
 CK-DL-Storage	implementation	features/datalog/passes/storage/src/lib.rs	/// Formal rule CK-DL-Storage:	Exact Incremental preservation and admissible target providers, initializers, layouts and read bindings, without rerunning storage selection or proving opaque provider laws.
 CK-DL-Fork	implementation	features/datalog/passes/fork/src/lib.rs	/// Formal rule CK-DL-Fork:	Exact Storage preservation and independently checked operational Round correspondence; copied provider choices, maintenance, termination and output references, not equality to the default schedule.
 DL-PlanningOwner	implementation	features/datalog/passes/fork/src/lib.rs	/// Formal rule DL-PlanningOwner:	Authored Datalog order targets the recorded planning invocation; missing ownership or conflicting arguments rejects the configuration.
@@ -253,7 +255,7 @@ GPU-Runs	implementation	experiments/gpu/sequence/core/src/runs.rs	// Formal rule
 GPU-Arena	implementation	experiments/gpu/sequence/core/src/arena.rs	// Formal rule GPU-Arena:	The arena terminal publishes head rows packed in canonical column order into a caller-owned device buffer with its length, sized by the recorded output protocol, never truncated; the result is a candidate bag for admission.
 GPU-Arena-Timing	implementation	experiments/gpu/sequence/core/src/emit.rs	// Formal rule GPU-Arena-Timing:	With metadata and BE-Abort checked before publication and all uses ordered on the producing stream, an arena batch is published without a terminal fence; timing events are opt-in.
 GPU-ReservePrevious	implementation	experiments/gpu/sequence/core/src/emit.rs	// Formal rule GPU-ReservePrevious:	The recorded reserve_previous arena protocol starts from the last validated count as capacity, counts all candidates, writes in bounds, reruns on shortfall against the same snapshot and publishes only a validated prefix, equal to the count protocol batch.
-GPU-Capture	implementation	experiments/gpu/sequence/core/src/capture.rs	/// Formal rule GPU-Capture:	Closed captures record consuming physical definitions; explicit nonempty enabled dispatch domains guard cached host values, encoded through checked codec identity.
+GPU-Capture	implementation	experiments/gpu/sequence/core/src/capture.rs	/// Formal rule GPU-Capture:	Query-closed where operands record consuming definitions and use the recorded equality/order-preserving codec on the host; enabled nonempty dispatches guard cached captures. Rust payloads are not split or dictionary-rewritten. Contract 7 conformance unverified.
 GPU-CodecIdentity	implementation	experiments/gpu/sequence/core/src/runs.rs	/// Formal rule GPU-CodecIdentity:	Every logical symbol type has one structurally checked codec identity across declared native layouts; conflicting declarations are rejected before capture translation.
 GPU-NativeAbi	implementation	experiments/gpu/sequence/core/src/lib.rs	/// Formal rule GPU-NativeAbi:	Complete catalog constructor identities determine native run, symbol, column and range-provider ABI and residency; suffixes are not identities.
 GPU-ProviderLayout	implementation	experiments/gpu/sequence/core/src/rows.rs	/// Formal rule GPU-ProviderLayout:	One checked provider record fixes key reconstruction, payload, dense domain policy and symbolic directory allocation; resident and computed consumers share it and runtime validates the recorded allocation.
@@ -268,7 +270,8 @@ BE-Publication	implementation	languages/cq-lang-sequence/src/publication.rs	// F
 BE-TaskProducer	implementation	languages/cq-lang-sequence/src/task_execution.rs	/// Formal rule BE-TaskProducer:	Record stable producer identities through term ancestry and Ref; task joins consume identities, not generated tokens.
 BE-CarrierPublication	implementation	languages/cq-lang-sequence/src/task_execution.rs	/// Formal rule BE-CarrierPublication:	Record task-driver and selected-choice carrier publications; account their symbolic retained-row traffic.
 BE-Boundary	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Boundary:	Derive maximal total dispatch segments, outer domains and publications; host-produced downward transfers are uploads, not query dispatches.
-BE-Partial	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Partial:	Opaque Rust evaluation requires a host boundary before descendant execution.
+BE-RustRepresentation	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-RustRepresentation:	Verbatim device Rust reads only provider-recorded identity columns plus closed captures; encoded or unknown reads execute at host. Encoded comparisons use where and host codec captures, never type-name recognition. Contract 7 conformance unverified.
+GPU-Representation	implementation	experiments/gpu/sequence/core/src/runs.rs	/// Formal rule GPU-Representation:	Binding records identity and encoded column facts from provider/codec declarations, never host type spelling; unknown columns do not justify device Rust. Contract 7 conformance unverified.
 BE-Abort	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Abort:	Every dispatch has a path to host; runtime flag propagation remains a recorded failure obligation.
 BE-Resource	implementation	languages/cq-lang-sequence/src/resources.rs	/// Formal rule BE-Resource:	Derive payload demands from recorded publication refinement; ordinary range publication expands in place. Grading checks target layout against bounded producer-level capacity.
 T-Tasks	implementation	features/sequence-tasks/src/lib.rs	// Formal rule T-Tasks:	Interpret checked Sequence with shared indexed task dispatch, ordered task-local buffer publication, monoidal reductions and local then global canonicalization.

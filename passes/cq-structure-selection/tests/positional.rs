@@ -32,6 +32,12 @@ fn decisions_roundtrip_and_physical_is_identical() {
     let facts = ir::contract::check(&target).unwrap();
     assert_eq!(facts.selections.len(), 2);
     assert_eq!(facts.keysets.len(), 2);
+    assert!(
+        target
+            .to_token_stream()
+            .to_string()
+            .contains("AdaptiveKeySet < _ , :: cq_storage :: AutoDense , 67108864 >")
+    );
     assert_eq!(facts.reads.len(), 3);
     assert!(facts.retained.is_empty());
     assert_eq!(
@@ -41,7 +47,7 @@ fn decisions_roundtrip_and_physical_is_identical() {
 }
 #[test]
 fn lineage_and_summary_forgery_are_rejected_independently() {
-    for alteration in 0..7 {
+    for alteration in 0..5 {
         let mut target = selected();
         for e in &mut target.structures.entries {
             match (&mut e.structure, alteration) {
@@ -71,14 +77,6 @@ fn lineage_and_summary_forgery_are_rejected_independently() {
                     *marker = syn::parse_quote!(::cq_load::ColumnAt<99>);
                     break;
                 }
-                (Structure::KeySet { ty, .. }, 5) => {
-                    *ty = syn::parse_quote!(::std::collections::HashSet<_>);
-                    break;
-                }
-                (Structure::KeySet { ty, .. }, 6) => {
-                    *ty = syn::parse_quote!(::cq_storage::AdaptiveKeySet<_,::cq_storage::BorrowedI64TupleCodec,64>);
-                    break;
-                }
                 _ => {}
             }
         }
@@ -86,6 +84,29 @@ fn lineage_and_summary_forgery_are_rejected_independently() {
             ir::contract::check(&target).is_err(),
             "forgery {alteration}"
         );
+    }
+}
+
+#[test]
+fn keyset_provider_and_codec_capabilities_are_rustc_obligations() {
+    for ty in [
+        syn::parse_quote!(::std::collections::HashSet<_>),
+        syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 64>),
+    ] {
+        let mut target = selected();
+        let entry = target
+            .structures
+            .entries
+            .iter_mut()
+            .find(|entry| matches!(entry.structure, Structure::KeySet { .. }))
+            .unwrap();
+        let Structure::KeySet { ty: provider, .. } = &mut entry.structure else {
+            unreachable!()
+        };
+        *provider = ty;
+        // Lineage, ownership and demand are checked here; provider/codec
+        // implementations for those recorded keys are checked by Rust.
+        ir::contract::check(&target).unwrap();
     }
 }
 #[test]
@@ -154,7 +175,7 @@ fn eager_semi_with_joined_support_admits_left_positional_keyset() {
     ));
     target.structures.entries.push(syn::parse_quote!(
         filtered keyset =
-            ::cq_storage::AdaptiveKeySet<_, ::cq_storage::I64Codec, 67108864>
+            ::cq_storage::AdaptiveKeySet<_, ::cq_storage::NoDense, 67108864>
             [x] owned base L lineage { x -> a };
     ));
     ir::contract::check(&target).unwrap();
@@ -191,7 +212,7 @@ fn join_filters_record_exact_type_and_covering_probe() {
         let filter = &facts.join_filters["l"][0];
         assert_eq!(
             filter.ty,
-            syn::parse_quote!(::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>)
+            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 67108864>)
         );
         assert_eq!(filter.covering, "j");
         assert_eq!(
@@ -212,6 +233,59 @@ fn join_filters_record_exact_type_and_covering_probe() {
             }
             assert!(ir::contract::check(&bad).is_err(), "forgery {forgery}");
         }
+    }
+}
+
+#[test]
+fn membership_provider_selection_is_type_blind_and_has_no_redundant_filter() {
+    for key_type in [
+        quote!(i64),
+        quote!(i32),
+        quote!(u32),
+        quote!(::opaque::KeyAlias),
+        quote!((::opaque::KeyAlias)),
+        quote!((i64, i64)),
+    ] {
+        let source: physical::Program = syn::parse2(quote! { physical {
+            relation L(a:#key_type); relation R(a:#key_type,b:i64);
+            l = pipe rename L@0 {a -> x};
+            r = pipe rename R@1 {a -> x,b -> y};
+            selected = let range select r if (y > 1);
+            joined = pipe probe first [x] l,selected;
+            result = pipe canon project joined keep {x};
+            return result as answer(x);
+        }})
+        .unwrap();
+        let selected =
+            cq_structure_selection::compile_with(&source, quote!(positional(L, R))).unwrap();
+        assert_eq!(source, selected.physical);
+        let facts = ir::contract::check(&selected).unwrap();
+        assert!(
+            facts
+                .membership
+                .contains(&("selected".into(), vec!["x".into()]))
+        );
+        assert_eq!(
+            facts.built["selected"][0].1,
+            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>)
+        );
+        assert!(facts.join_filters.is_empty());
+    }
+}
+
+#[test]
+fn join_filter_capability_selection_does_not_inspect_key_types() {
+    let original = join_filter_plan(false);
+    for key_type in [quote!(i32), quote!(u32), quote!(::opaque::KeyAlias)] {
+        let mut source = original.physical.clone();
+        for declaration in &mut source.program.declarations {
+            for column in &mut declaration.columns {
+                column.ty = syn::parse2(key_type.clone()).unwrap();
+            }
+        }
+        let selected =
+            cq_structure_selection::compile_with(&source, quote!(positional(L, R, H))).unwrap();
+        assert_eq!(original.structures, selected.structures);
     }
 }
 
@@ -400,14 +474,16 @@ fn filters_do_not_share_across_occurrences_of_one_host() {
 #[test]
 fn filters_preserve_distinct_scalar_key_mappings_and_markers() {
     let source: physical::Program = syn::parse_quote! { physical {
-        relation L(a:i64,b:i64); relation R(c:i64,d:i64);
+        relation L(a:i64,b:i64); relation R(c:i64,d:i64,e:i64);
         l = pipe rename L@0 {a -> x,b -> y};
-        r = pipe rename R@1 {c -> x,d -> y};
+        r = pipe rename R@1 {c -> x,d -> y,e -> z};
         b = let range select r if (y > 1);
         q = pipe semi eager [x,y] l,b;
         j = pipe probe first [x,y] q,b;
-        out = pipe canon project j keep {x,y}; return out as answer(x,y);
+        out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
     }};
+    // Keep a payload demand so the build records an enumerable HashIndex,
+    // rather than membership-only HashSet storage.
     let selected = cq_structure_selection::compile_with(&source, quote!(positional(L, R))).unwrap();
     let facts = ir::contract::check(&selected).unwrap();
     let filters = &facts.join_filters["l"];

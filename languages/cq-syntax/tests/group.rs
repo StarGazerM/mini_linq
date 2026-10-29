@@ -27,23 +27,35 @@ fn grouped_fold_syntax_round_trips() {
 }
 
 #[test]
-fn fold_payloads_require_fresh_names_input_variables_and_correct_types() {
+fn fold_payloads_require_fresh_names_and_input_variables() {
     let input = BTreeMap::from([("x".into(), syn::parse_quote!(i32))]);
     for text in [
         "group r by [missing] { n: usize = count(); }",
         "group r by [x,x] { n: usize = count(); }",
         "group r by [] { x: usize = count(); }",
-        "group r by [] { n: i32 = count(); }",
         "group r by [] { n: usize = count(x); }",
         "group r by [] { n: i32 = sum(); }",
         "group r by [] { n: i32 = sum(y); }",
         "group r by [] { n: i32 = sum(*x + 1); }",
-        "group r by [] { n: i64 = sum(x); }",
-        "group r by [] { n: i32 = min(x); }",
-        "group r by [] { n: Option<i64> = max(x); }",
         "group r by [] {}",
     ] {
         let group: Group = syn::parse_str(text).unwrap();
         assert!(group.check(&input).is_err(), "{text}");
+    }
+}
+
+#[test]
+fn fold_types_are_left_to_rustc() {
+    let input = BTreeMap::from([("x".into(), syn::parse_quote!(f32))]);
+    for text in [
+        "group r by [] { n: CountAlias = count(); }",
+        "group r by [] { n: TotalAlias = sum(x); }",
+        "group r by [] { n: MinimumAlias = min(x); }",
+        "group r by [] { n: MaximumAlias = max(x); }",
+    ] {
+        syn::parse_str::<Group>(text)
+            .unwrap()
+            .check(&input)
+            .unwrap();
     }
 }

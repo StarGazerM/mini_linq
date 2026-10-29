@@ -495,7 +495,10 @@ impl Push<'_> {
                 let expression = &bind.expression;
                 let input = symbol_name(&bind.input);
                 let shadows = self.rust_aliases(&input, expression, bind.environment.as_ref());
-                let expression = self.generator_expressions.get(result).unwrap_or(expression);
+                let expression = match self.binding_functions.get(result) {
+                    Some((function, arguments)) => quote!(#function(#(#arguments),*)),
+                    None => quote!(#expression),
+                };
                 self.emit(
                     &input,
                     {
@@ -563,7 +566,14 @@ impl Push<'_> {
                         None => self
                             .constant_value(&right, column)
                             .filter(|_| !columns.iter().any(|key| key == column))
-                            .unwrap_or_else(|| self.access(&left, column)),
+                            .unwrap_or_else(|| {
+                                let value = self.access(&left, column);
+                                if self.infos[&left].computed.contains(column) {
+                                    quote!(::core::clone::Clone::clone(&#value))
+                                } else {
+                                    value
+                                }
+                            }),
                     }
                 });
                 let pattern = self.bind_columns(result, self.carried(result), false);

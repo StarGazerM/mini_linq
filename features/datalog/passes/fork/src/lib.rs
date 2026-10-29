@@ -484,13 +484,13 @@ fn construct(
                             arguments[*column] = cq_syntax::rust::unparen(expression).clone();
                         } else {
                             let variable = &variables[*column];
-                            selections.push(quote!(if *#variable == (#expression)));
+                            selections.push(quote!(where #variable == (#expression)));
                         }
                     }
                     for &(first, repeated) in &key.equalities {
                         let first = &variables[first];
                         let repeated = &variables[repeated];
-                        selections.push(quote!(if #first == #repeated));
+                        selections.push(quote!(where #first == #repeated));
                     }
                     let declarations = hole_inputs(&context, &[], std::iter::once(source_name));
                     holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#arguments),*) #(, #selections)*;))?);

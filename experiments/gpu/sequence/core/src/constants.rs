@@ -45,11 +45,10 @@ fn derive(source: &Program) -> syn::Result<Program> {
             };
             let variable = fresh("column");
             renamed.mapping.push(syn::parse_quote!(#column -> #variable));
-            conditions.push(quote!(*#variable == (#value)));
+            conditions.push(quote!(#variable = #value));
         }
         definitions.push(syn::parse_quote!(#raw = pipe #renamed;));
-        let condition = conditions.into_iter().reduce(|left, right| quote!((#left) && (#right))).expect("nonempty constants");
-        definitions.push(syn::parse_quote!(#filtered = pipe guard #raw if (#condition);));
+        definitions.push(syn::parse_quote!(#filtered = pipe select #raw if (#(#conditions),*);));
         let mut projected = definition.clone();
         projected.operator = syn::parse_quote!(project #filtered keep {#(#keep),*});
         definitions.push(projected);
@@ -58,7 +57,7 @@ fn derive(source: &Program) -> syn::Result<Program> {
     Ok(target)
 }
 
-// Formal rule PH-ConstantGuard: fresh literal columns, equality guards and projection preserve the renamed atom's bag.
+// Formal rule PH-ConstantGuard: fresh literal columns, relational restrictions and projection preserve the renamed atom's bag.
 pub fn compile(source: &Program) -> syn::Result<Program> {
     let target = derive(source)?;
     check(source, &target)?;
@@ -93,8 +92,8 @@ mod tests {
         assert_eq!(source.program.head, target.program.head);
         check(&source, &target).unwrap();
         let mut changed = target.clone();
-        let Operator::Guard(guard) = &mut changed.program.definitions[1].operator else { panic!() };
-        guard.condition = syn::parse_quote!(false);
+        let Operator::Select(select) = &mut changed.program.definitions[1].operator else { panic!() };
+        select.condition = syn::parse_quote!(__cq_constant_column_0 = 8);
         assert!(check(&source, &changed).is_err());
         let mut changed = target.clone();
         changed.program.definitions.remove(1);

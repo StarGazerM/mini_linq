@@ -86,10 +86,9 @@ pub(super) fn check(
                             cq::BodyItem::Constraint(c)
                                 if c.variables().all(|v| own.contains(&symbol_name(v))) =>
                             {
-                                ra::Theta {
-                                    equalities: Default::default(),
-                                    constraints: std::iter::once(c.clone()).collect(),
-                                }
+                                let mut theta = ra::Theta::default();
+                                theta.push_constraint(c.clone());
+                                theta
                             }
                             _ => continue,
                         };
@@ -165,7 +164,11 @@ pub(super) fn check(
             vo::Step::Equality(equality, _) => {
                 if source.cq.query.body.iter().enumerate().any(|(c, item)| {
                     local_predicates.contains(&c)
-                        && matches!(item, cq::BodyItem::Equality(e) if e == equality)
+                        && match item {
+                            cq::BodyItem::Equality(e) => e == equality,
+                            cq::BodyItem::Constraint(c) => c.equality().as_ref() == Some(equality),
+                            _ => false,
+                        }
                 }) {
                     continue;
                 }
@@ -179,15 +182,21 @@ pub(super) fn check(
                 ));
             }
             vo::Step::Constraint(constraint, _) => {
-                if source.cq.query.body.iter().enumerate().any(|(c, item)| local_predicates.contains(&c) && matches!(item, cq::BodyItem::Constraint(predicate) if predicate == constraint)) { continue; }
+                let equality = constraint.equality();
+                if source.cq.query.body.iter().enumerate().any(|(c, item)| {
+                    local_predicates.contains(&c)
+                        && match item {
+                            cq::BodyItem::Constraint(predicate) => predicate == constraint,
+                            cq::BodyItem::Equality(e) => equality.as_ref() == Some(e),
+                            _ => false,
+                        }
+                }) {
+                    continue;
+                }
                 let input = prefix.unwrap_or_else(|| schedule.unit());
-                prefix = Some(schedule.select(
-                    input,
-                    &ra::Theta {
-                        equalities: Default::default(),
-                        constraints: std::iter::once(constraint.clone()).collect(),
-                    },
-                ));
+                let mut theta = ra::Theta::default();
+                theta.push_constraint(constraint.clone());
+                prefix = Some(schedule.select(input, &theta));
             }
             vo::Step::Negation(negation, _) => {
                 let clause = source

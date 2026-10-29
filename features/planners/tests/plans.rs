@@ -38,7 +38,7 @@ fn every_planner_preserves_relational_negation() {
 }
 
 #[test]
-fn every_planner_preserves_generator_mode_and_written_chain() {
+fn every_planner_preserves_generator_mode_and_dependencies() {
     let source: cq::Program = syn::parse_quote! {
         struct Q;
         relation R(x:i32);
@@ -89,6 +89,16 @@ fn every_planner_preserves_generator_mode_and_written_chain() {
             .position(|step| matches!(step, vo::Step::Guard(..)))
             .unwrap();
         changed.valuation.steps.swap(generator, guard);
+        vo::contract::check(&changed).unwrap();
+
+        let dependent = changed
+            .valuation
+            .steps
+            .iter()
+            .rposition(|step| matches!(step, vo::Step::For(..)))
+            .unwrap();
+        let step = changed.valuation.steps.remove(dependent);
+        changed.valuation.steps.insert(0, step);
         assert!(
             check_valuation(&source, &changed, planner).is_err(),
             "{planner:?}"
@@ -99,7 +109,7 @@ fn every_planner_preserves_generator_mode_and_written_chain() {
 #[test]
 fn prefix_let_domain_keeps_hoisting_and_waits_before_full_reduction() {
     let source: cq::Program = syn::parse_quote! { struct Q; relation R(x:i32);
-        answer(x) :- R(x), let k:i32 = std::convert::identity(*x), {if *k == 1} | {if *k == 2};
+        answer(x) :- R(x), let k:i32 = std::convert::identity(*x), {where k == 1} | {where k == 2};
     };
     for planner in Planner::ALL {
         let target = compile(&source, planner).unwrap_or_else(|e| panic!("{planner:?}: {e}"));
@@ -168,7 +178,7 @@ fn retail_h07_selections_belong_to_atoms_with_and_without_blocks() {
             relation Orders(o:i32,c:i32); relation Customer(c:i32,n:i32);
             relation Nation(n:i32,name:i32);
             answer(o,sn,cn) :- Supplier(s,sn),Lineitem(o,s,ship_date),
-                if *ship_date >= 10 && *ship_date <= 20,
+                where ship_date in 10..=20,
                 Orders(o,c),Customer(c,cn), #countries;
         })
         .unwrap();
@@ -396,7 +406,7 @@ fn transfer_reduces_forward_into_the_stream_then_backward_from_filtered_sides() 
     let source: cq::Program = syn::parse_quote! {
         struct Chain;
         relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
-        answer(a,c) :- R(a,b), if *a > 0, S(b,c), T(c,7);
+        answer(a,c) :- R(a,b), where a > 0, S(b,c), T(c,7);
     };
     let target = compile_valuation(&source, Planner::Transfer).unwrap();
     let reductions: Vec<String> = target
@@ -532,7 +542,7 @@ fn le_h05_plan_b_keeps_nation_as_an_existential_lookup() {
         answer(order_key,supplier_key,nation_key) :-
             Customer(customer_key,nation_key), Nation(nation_key,region_key),
             Region(region_key,"ASIA"), Orders(order_key,customer_key,order_date),
-            if *order_date >= 8766 && *order_date < 9131,
+            where order_date in 8766..9131,
             Lineitem(order_key,supplier_key), Supplier(supplier_key,nation_key);
     };
     let valuation = compile_valuation(&source, Planner::Le).unwrap();
@@ -564,7 +574,7 @@ fn le_h05_plan_b_keeps_nation_as_an_existential_lookup() {
 }
 
 #[test]
-fn le_checks_lookup_expansion_and_rust_before_independently() {
+fn le_checks_lookup_expansion_and_rust_dependencies_independently() {
     let source: cq::Program = syn::parse_quote! {
         struct Q; relation R(a:i32); relation S(a:i32,b:i32); relation T(a:i32,c:i32);
         answer(a,b,c) :- R(a), S(a,b), T(a,c), if keep!(b,c);
@@ -615,7 +625,7 @@ fn le_generators_keep_written_ownership_in_outer_and_recursive_scopes() {
 }
 
 #[test]
-fn le_generator_before_and_binder_mutations_are_rejected() {
+fn le_generator_reordering_preserves_dependencies_and_binders() {
     let source: cq::Program = syn::parse_quote! {
         struct Q;
         relation R(x:i32); relation S(x:i32,y:i32); relation T(z:i32);
@@ -636,13 +646,28 @@ fn le_generator_before_and_binder_mutations_are_rejected() {
         .iter()
         .rposition(|step| matches!(step, vo::Step::Atom(a, _) if a.clause() == 1))
         .unwrap();
-    assert!(expansion < generator);
 
-    // y is not a generator dependency: Before must still require S's full row.
-    let mut late = target.clone();
-    late.valuation.steps.swap(expansion, generator);
-    let error = check_valuation(&source, &late, Planner::Le).unwrap_err();
-    assert!(error.to_string().contains("Before condition"), "{error}");
+    // y is not a generator dependency: S's expansion may precede or follow it.
+    for after in [false, true] {
+        let mut reordered = target.clone();
+        let step = reordered.valuation.steps.remove(expansion);
+        let generator = reordered
+            .valuation
+            .steps
+            .iter()
+            .position(|step| matches!(step, vo::Step::For(..)))
+            .unwrap();
+        reordered
+            .valuation
+            .steps
+            .insert(generator + usize::from(after), step);
+        check_valuation(&source, &reordered, Planner::Le).unwrap();
+    }
+
+    let mut unbound = target.clone();
+    let step = unbound.valuation.steps.remove(generator);
+    unbound.valuation.steps.insert(0, step);
+    assert!(check_valuation(&source, &unbound, Planner::Le).is_err());
 
     // A relational occurrence cannot take ownership of the generator's z.
     let mut stolen = target.clone();
@@ -692,11 +717,11 @@ fn argument_grammar_is_small_and_strict() {
 }
 
 #[test]
-fn two_hundred_partial_fuzz_seeds_through_every_planner_check() {
+fn two_hundred_rust_fuzz_seeds_through_every_planner_check() {
     for ordinal in 0..200 {
         let seed = ordinal * 2;
         let case = cq_testkit::fuzz::generate(seed);
-        assert!(case.has_partial_terms());
+        assert!(case.requires_rust_oracle());
         let source: cq::Program = syn::parse_str(&case.cq()).unwrap();
         for planner in Planner::ALL {
             let target = compile(&source, planner)
@@ -711,7 +736,7 @@ fn hypergraph_reduces_trees_and_keeps_rust_opaque() {
     let source: cq::Program = syn::parse_quote! {
         struct Tree;
         relation R(x:i32,y:i32); relation S(y:i32,z:i32); relation T(z:i32,w:i32);
-        answer(x,w) :- R(x,y), S(y,z), T(z,w), if x > 1, if partial(x), let q:i32 = opaque(w);
+        answer(x,w) :- R(x,y), S(y,z), T(z,w), where x > 1, if keep(x), let q:i32 = opaque(w);
     };
     let valuation = compile_valuation(&source, Planner::Hypergraph).unwrap();
     assert_eq!(
@@ -731,17 +756,14 @@ fn hypergraph_reduces_trees_and_keeps_rust_opaque() {
             .iter()
             .any(|d| matches!(d.operator, ra::Operator::Select(_)))
     );
-    let chain: Vec<_> = target
-        .plan
-        .definitions
-        .iter()
-        .filter_map(|d| match &d.operator {
-            ra::Operator::Guard(g) => Some(g.condition.to_token_stream().to_string()),
-            ra::Operator::Bind(b) => Some(b.expression.to_token_stream().to_string()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(chain, ["partial (x)", "opaque (w)"]);
+    assert!(target.plan.definitions.iter().any(|definition| {
+        matches!(&definition.operator, ra::Operator::Guard(guard)
+            if guard.condition.to_token_stream().to_string() == "keep (x)")
+    }));
+    assert!(target.plan.definitions.iter().any(|definition| {
+        matches!(&definition.operator, ra::Operator::Bind(binding)
+            if binding.expression.to_token_stream().to_string() == "opaque (w)")
+    }));
 
     let cyclic = SCENARIOS
         .iter()
@@ -770,53 +792,54 @@ fn hypergraph_reduces_trees_and_keeps_rust_opaque() {
 }
 
 #[test]
-fn checks_reject_changed_chain_and_before_but_admit_free_rankings() {
+fn every_planner_places_rust_by_its_free_variables() {
     let source: cq::Program = syn::parse_quote! {
         struct Q; relation R(x:i32); relation S(w:i32);
-        answer(y) :- R(x), S(w), if first(x), let y:i32 = partial(x), if last(y,w);
+        answer(x,w) :- R(x), if keep(x), S(w);
     };
     for planner in Planner::ALL {
+        let valuation = compile_valuation(&source, planner).unwrap();
+        let analysis = vo::contract::check(&valuation).unwrap();
+        let guard = valuation
+            .valuation
+            .steps
+            .iter()
+            .position(|step| matches!(step, vo::Step::Guard(..)))
+            .unwrap();
+        let binder = analysis
+            .introduces
+            .iter()
+            .position(|names| names.iter().any(|name| name == "x"))
+            .unwrap();
+        assert!(guard > binder, "{planner:?}: guard requires x to be bound");
+        let mut delayed = valuation.clone();
+        let step = delayed.valuation.steps.remove(guard);
+        delayed.valuation.steps.push(step);
+        vo::contract::check(&delayed).unwrap();
+        let mut unbound = valuation.clone();
+        let step = unbound.valuation.steps.remove(guard);
+        unbound.valuation.steps.insert(0, step);
+        assert!(
+            check_valuation(&source, &unbound, planner).is_err(),
+            "{planner:?}"
+        );
         let mut changed = compile(&source, planner).unwrap();
         let guard = changed
             .plan
             .definitions
             .iter_mut()
-            .find_map(|d| match &mut d.operator {
-                ra::Operator::Guard(g) => Some(g),
+            .find_map(|definition| match &mut definition.operator {
+                ra::Operator::Guard(guard) => Some(guard),
                 _ => None,
             })
             .unwrap();
         guard.condition = syn::parse_quote!(false);
         assert!(check(&source, &changed).is_err());
-
-        let mut changed = compile_valuation(&source, planner).unwrap();
-        let guard = changed
-            .valuation
-            .steps
-            .iter()
-            .position(|s| matches!(s, vo::Step::Guard(..)))
-            .unwrap();
-        let binder = changed
-            .valuation
-            .steps
-            .iter()
-            .position(|s| matches!(s, vo::Step::Let(..)))
-            .unwrap();
-        changed.valuation.steps.swap(guard, binder);
-        assert!(check_valuation(&source, &changed, planner).is_err());
     }
-    let normal = cq::normal::normalize(&source).unwrap();
-    let early: vo::Program = syn::parse2(quote! {
-        #normal valuation { R@0(x); if first(x); S@1(w); let y:i32 = partial(x); if last(y,w); }
-    })
-    .unwrap();
-    assert!(
-        check_valuation(&source, &early, Planner::PrefixConnectedCoarse)
-            .unwrap_err()
-            .to_string()
-            .contains("Before")
-    );
+}
 
+#[test]
+fn checks_admit_free_relational_rankings() {
     let simple: cq::Program = syn::parse_quote! {
         struct Q; relation R(x:i32,y:i32); relation S(y:i32,z:i32);
         answer(x,z) :- R(x,y),S(y,z);

@@ -19,10 +19,9 @@
 //!
 //! Point/Range ::= ("point" | "range") Select
 //! Unit, Rename, Select, Bind, Guard and Project are shared syntax.
-//! Meaning is Kleisli over bottom + Set: bottom aborts the whole evaluation.
-//! Bind/guard expressions outside typed CQ-Arith are opaque partial functions.
-//! Their ancestry chain preserves written order; total steps may move earlier.
-//! Other effects and evaluation counts are outside this meaning.
+//! Rust expressions are opaque, pure and total by premise. Their unchanged
+//! payloads depend only on their free variables; representation choices add no
+//! written-order chain or relational predecessor obligations.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -37,10 +36,9 @@
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Rust expressions never become relational predicates. Only differing literals
+//! on one interface column prove union arms disjoint.
 //!
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -495,36 +493,20 @@ pub struct Analysis {
 }
 
 impl Analysis {
-    /// Rust remains opaque unless CQ's typed arithmetic grammar defines it.
-    pub fn opaque(&self, operator: &Operator) -> bool {
-        match operator {
-            Operator::Bind(bind) => {
-                cq_syntax::arithmetic::binding(bind, &self.rows[&symbol_name(&bind.input)].types)
-                    .is_none()
-            }
-            Operator::Guard(guard) => cq_syntax::arithmetic::predicate(
-                &guard.condition,
-                &self.rows[&symbol_name(&guard.input)].types,
-            )
-            .is_none(),
-            _ => false,
-        }
-    }
-
-    /// IF-Parameter discharges closed Rust fragments at host before dispatch.
-    /// Row-dependent opaque code is never admitted by this predicate.
-    pub fn capturable(&self, operator: &Operator) -> bool {
-        match operator {
-            Operator::Bind(bind) => cq_syntax::arithmetic::capture_binding(
-                bind,
-                &self.rows[&symbol_name(&bind.input)].types,
-            ),
-            Operator::Guard(guard) => cq_syntax::arithmetic::capture_predicate(
-                &guard.condition,
-                &self.rows[&symbol_name(&guard.input)].types,
-            ),
-            _ => false,
-        }
+    /// Query columns read by a Rust expression; an empty set means a closed
+    /// host expression. Lexically opaque expressions read their whole scope.
+    pub fn rust_reads(&self, operator: &Operator) -> Option<BTreeSet<String>> {
+        let (input, expression, environment) = match operator {
+            Operator::Bind(bind) => (&bind.input, &bind.expression, &bind.environment),
+            Operator::Guard(guard) => (&guard.input, &guard.condition, &guard.environment),
+            _ => return None,
+        };
+        let heading = self.headings[&symbol_name(input)].iter().cloned().collect();
+        let scope = environment.as_ref().map_or_else(
+            || heading,
+            |environment| environment.variables.iter().map(symbol_name).collect(),
+        );
+        Some(cq_syntax::rust::free_variables(expression).dependencies(&scope))
     }
 }
 
@@ -601,9 +583,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 format!("host_set `{name}` must name a used host relation"),
             );
         }
-        for column in &declarations[&name].columns {
-            cq_syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
-        }
     }
     if program.consumer_canonical.is_some() && program.return_canon.is_some() {
         return error(&program.returned, "consumer canonical forbids return canon");
@@ -641,8 +620,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
     let mut readers: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut operands: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut unique: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut chains: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut written_chain = Vec::new();
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
         if analysis.rows.contains_key(&name) {
@@ -773,14 +750,13 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     }
                     for equality in &constants.equalities {
                         let source = symbol_name(&equality.left);
-                        let Some(column) = declaration
+                        let Some(_) = declaration
                             .columns
                             .iter()
                             .find(|c| symbol_name(&c.name) == source)
                         else {
                             return error(equality, format!("`{host}` has no column `{source}`"));
                         };
-                        cq_syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
                         if !sources.insert(source) {
                             return error(
                                 equality,
@@ -847,15 +823,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         .or_default()
                         .push((name.clone(), columns.clone(), cq_syntax::SupplyKind::Stream));
                 }
-                for c in &columns {
-                    check_leibniz(&left.types[c], c, &definition.name)?;
-                    check_leibniz(&right.types[c], c, &definition.name)?;
-                    if matches!(definition.operator, Operator::Merge(..)) {
-                        let ident = syn::Ident::new(c, proc_macro2::Span::call_site());
-                        cq_syntax::algebra::check_ord_type(&left.types[c], &ident)?;
-                        cq_syntax::algebra::check_ord_type(&right.types[c], &ident)?;
-                    }
-                }
                 if matches!(definition.operator, Operator::Merge(..)) {
                     for side in [&k.left, &k.right] {
                         analysis
@@ -885,19 +852,19 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 s.condition.check()?;
                 let row = of(&s.input)?;
                 for c in s.condition.columns() {
-                    let Some(ty) = row.types.get(&c) else {
+                    if !row.types.contains_key(&c) {
                         return error(s, format!("select `{name}` uses unavailable column `{c}`"));
-                    };
-                    check_leibniz(ty, &c, &definition.name)?;
+                    }
                 }
                 for c in &s.condition.constraints {
                     for p in c.parameters() {
-                        if row.types.contains_key(&symbol_name(&p.root)) {
-                            return error(p, "relational parameter names an input column");
+                        let heading = row.types.keys().cloned().collect();
+                        if !cq_syntax::rust::free_variables(p)
+                            .dependencies(&heading)
+                            .is_empty()
+                        {
+                            return error(p, "closed relational operand reads an input column");
                         }
-                    }
-                    for v in c.ordered_variables() {
-                        cq_syntax::algebra::check_ord_type(&row.types[&symbol_name(v)], v)?;
                     }
                 }
                 if matches!(definition.operator, Operator::Point(..)) {
@@ -1003,48 +970,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 row
             }
         };
-        let mut chain = Vec::new();
-        for dep in &deps {
-            let input_chain = &chains[dep];
-            if !chain.starts_with(input_chain) && !input_chain.starts_with(&chain) {
-                if matches!(definition.operator, Operator::Union(_)) {
-                    for name in input_chain {
-                        if !chain.contains(name) {
-                            chain.push(name.clone());
-                        }
-                    }
-                    continue;
-                }
-                return error(
-                    &definition.name,
-                    "Rust bind/guard nodes must form one ancestry chain",
-                );
-            }
-            if input_chain.len() > chain.len() {
-                chain = input_chain.clone();
-            }
-        }
-        if matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_)) {
-            if chain != written_chain
-                && !program
-                    .definitions
-                    .iter()
-                    .any(|d| matches!(d.operator, Operator::Union(_)))
-            {
-                return error(
-                    &definition.name,
-                    "Rust bind/guard ancestry must preserve written order",
-                );
-            }
-            chain.push(name.clone());
-            written_chain.push(name.clone());
-        }
-        chains.insert(name.clone(), chain);
-        if definition.canon.is_some() {
-            for (c, ty) in &row.types {
-                check_leibniz(ty, c, &definition.name)?;
-            }
-        }
         analysis
             .headings
             .insert(name.clone(), row.bindings.keys().cloned().collect());
@@ -1375,13 +1300,6 @@ pub fn candidate_prefixes<'a>(
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
 
-/// Reject known failures of Leibniz admissibility; rustc checks necessary bounds.
-fn check_leibniz(ty: &syn::Type, column: &str, at: &impl quote::ToTokens) -> syn::Result<()> {
-    let column = syn::Ident::new(column, proc_macro2::Span::call_site());
-    cq_syntax::algebra::check_leibniz_type(ty, &column)
-        .map_err(|e| syn::Error::new_spanned(at, e.to_string()))
-}
-
 /// Inherit an already established uniqueness key through one operator.
 /// Formal rule PH-HostSet: A rename of a certified host set has its full heading as uniqueness key.
 /// Canonical boundaries are applied by the caller after this transfer.
@@ -1423,26 +1341,16 @@ pub fn inherited_key(
 /// Physical rewrites preserve the named logical graph and satisfy their read contracts.
 /// Operator choices, retention modes and canonicalization may change while
 /// declarations, operands, relational predicates and Rust payloads remain fixed.
-/// Relational definitions may commute in dependency order and move earlier
-/// across Rust nodes. The Rust chain retains its written relative order, and
-/// every source Before obligation survives: no relational definition moves
-/// later across a Rust node.
+/// Definitions may commute in dependency order. Rust expressions retain their
+/// payload and free-variable dependencies, without additional ordering barriers.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     let source_facts = contract::check(source)?;
     let target_facts = contract::check(target)?;
-    let mut target_chain = Vec::new();
     let target_definitions: BTreeMap<_, _> = target
         .program
         .definitions
         .iter()
-        .map(|definition| {
-            let name = symbol_name(&definition.name);
-            let rust_before = target_chain.len();
-            if is_rust(&definition.operator) {
-                target_chain.push(name.clone());
-            }
-            (name, (definition, rust_before))
-        })
+        .map(|definition| (symbol_name(&definition.name), definition))
         .collect();
     if source.program.declarations != target.program.declarations
         || source_facts.discharged_host_sets != target_facts.discharged_host_sets
@@ -1453,9 +1361,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         || source.program.definitions.iter().any(|definition| {
             target_definitions
                 .get(&symbol_name(&definition.name))
-                .is_none_or(|(target, _)| {
-                    !same_logical_operator(&definition.operator, &target.operator)
-                })
+                .is_none_or(|target| !same_logical_operator(&definition.operator, &target.operator))
         })
     {
         return error(
@@ -1464,127 +1370,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         );
     }
 
-    if source
-        .program
-        .definitions
-        .iter()
-        .any(|d| matches!(d.operator, Operator::Union(_)))
-    {
-        let scopes = branch_scopes(source);
-        let positions: BTreeMap<_, _> = target
-            .program
-            .definitions
-            .iter()
-            .enumerate()
-            .map(|(i, d)| (symbol_name(&d.name), i))
-            .collect();
-        for (i, rust) in source
-            .program
-            .definitions
-            .iter()
-            .enumerate()
-            .filter(|(_, d)| is_rust(&d.operator))
-        {
-            let name = symbol_name(&rust.name);
-            let scope = &scopes[&name];
-            for before in &source.program.definitions[..i] {
-                let previous = symbol_name(&before.name);
-                // A sibling union arm has its own chain. Ancestor and local
-                // definitions retain every written Before obligation.
-                if scope.starts_with(&scopes[&previous]) && positions[&previous] > positions[&name]
-                {
-                    return error(
-                        &rust.name,
-                        format!(
-                            "Physical rewrite loses Before result `{previous}` at Rust `{name}`"
-                        ),
-                    );
-                }
-            }
-        }
-        return Ok(());
-    }
-
-    // The contracts give unique names, topological operand edges and Rust
-    // ancestry. With the same graph and Rust chain, a relational node retains
-    // all source Before obligations exactly when its preceding Rust prefix
-    // does not grow. Reordering within a relational region is unrestricted.
-    let mut source_rust_before = 0;
-    for definition in &source.program.definitions {
-        let name = symbol_name(&definition.name);
-        let (target_definition, target_rust_before) = target_definitions[&name];
-        if is_rust(&definition.operator) {
-            if target_chain.get(source_rust_before) != Some(&name) {
-                return error(
-                    &target_definition.name,
-                    "Physical rewrite changes Rust bind/guard written order",
-                );
-            }
-            source_rust_before += 1;
-        } else if target_rust_before > source_rust_before {
-            return error(
-                &target_definition.name,
-                format!(
-                    "Physical rewrite moves relational result `{name}` later across Rust node `{}` and loses a source Before obligation",
-                    target_chain[source_rust_before]
-                ),
-            );
-        }
-    }
     Ok(())
-}
-
-// Given union operands assign branch scopes by graph edges, cutting the
-// recorded prefix and every negative reference. This is structural traversal
-// of named nodes; it performs no occurrence matching or search.
-fn branch_scopes(program: &Program) -> BTreeMap<String, Vec<String>> {
-    let definitions: BTreeMap<_, _> = program
-        .program
-        .definitions
-        .iter()
-        .map(|d| (symbol_name(&d.name), d))
-        .collect();
-    let mut scopes: BTreeMap<_, Vec<String>> = definitions
-        .keys()
-        .map(|name| (name.clone(), Vec::new()))
-        .collect();
-    for definition in &program.program.definitions {
-        let Operator::Union(union) = &definition.operator else {
-            continue;
-        };
-        let Some(origin) = &union.origin else {
-            continue;
-        };
-        let boundary = origin
-            .over
-            .as_ref()
-            .map(|o| symbol_name(&o.prefix))
-            .or_else(|| origin.domain.as_ref().map(|d| symbol_name(&d.input)));
-        for (j, operand) in union.operands.iter().enumerate() {
-            let mut scope = origin.occurrence.0.clone();
-            scope.push(j.to_string());
-            let mut visited = BTreeSet::new();
-            let mut pending = vec![symbol_name(operand)];
-            while let Some(name) = pending.pop() {
-                if boundary.as_ref() == Some(&name) || !visited.insert(name.clone()) {
-                    continue;
-                }
-                if scope.len() > scopes[&name].len() {
-                    scopes.insert(name.clone(), scope.clone());
-                }
-                let operator = &definitions[&name].operator;
-                match operator {
-                    Operator::Anti(_, anti) => pending.push(symbol_name(&anti.left)),
-                    _ => pending.extend(operator.operands().into_iter().map(symbol_name)),
-                }
-            }
-        }
-    }
-    scopes
-}
-
-fn is_rust(operator: &Operator) -> bool {
-    matches!(operator, Operator::Bind(_) | Operator::Guard(_))
 }
 
 // Compare the logical content directly, without importing another language.

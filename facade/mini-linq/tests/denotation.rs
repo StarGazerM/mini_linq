@@ -1,20 +1,20 @@
-//! Compile and run every planner/split/reducer for opaque partial Rust steps.
+//! Compile and run every planner/split/reducer for opaque total Rust steps.
 use quote::quote;
 
 #[test]
-fn every_planner_keeps_partial_steps_in_their_written_domain() {
+fn every_planner_preserves_total_rust_and_relational_selection() {
     let machine = cq_sequence_pull::machine();
     let queries: [(&str, proc_macro2::TokenStream); 3] = [
         (
-            "struct Q; relation R(x:i32); relation S(w:i32); answer(x,y) :- R(x), S(w), if *x != 0 && *w > 1, let y:i32 = 10 / *x;",
+            "struct Q; relation R(x:i32); relation S(w:i32); answer(x,y) :- R(x), S(w), where x != 0 && w > 1, let y:i32 = 10 / (*x).max(1);",
             quote!(let R: &[(i32,)] = &[(0,), (2,)]; let S: &[(i32,)] = &[];),
         ),
         (
-            "struct Q; relation R(x:i32); relation S(k:i32,y:i32); answer(x,y) :- R(x), if *x != 0, S(10 / *x,y);",
+            "struct Q; relation R(x:i32); relation S(k:i32,y:i32); answer(x,y) :- R(x), where x != 0, S(10 / (*x).max(1),y);",
             quote!(let R: &[(i32,)] = &[(0,)]; let S: &[(i32,i32)] = &[(10,4)];),
         ),
         (
-            "struct Q; relation R(x:i32); relation S(w:i32); answer(y,w) :- R(x), if *x != 0, let y:i32 = 10 / *x, S(w);",
+            "struct Q; relation R(x:i32); relation S(w:i32); answer(y,w) :- R(x), where x != 0, let y:i32 = 10 / (*x).max(1), S(w);",
             quote!(let R: &[(i32,)] = &[(0,)]; let S: &[(i32,)] = &[(1,), (2,)];),
         ),
     ];
@@ -55,14 +55,14 @@ fn every_planner_keeps_partial_steps_in_their_written_domain() {
             }
         }
     }
-    // The right keyed input contains the chain itself. Its lazy index is
-    // initialized by nonempty T, but the earlier empty S prevents the bind.
+    // A lazy keyed input containing total Rust preserves the empty join result,
+    // regardless of where its expression is evaluated after its inputs bind.
     let ra = syn::parse_quote!(relational {
         relation R(x:i32); relation S(w:i32); relation T(y:i32);
         r = rename R@0 {x -> x}; s = rename S@1 {w -> w};
         j = natural_join r with s;
         g = guard j if (*x != 0 && *w > 1);
-        b = bind g with y:i32 = (10 / *x);
+        b = bind g with y:i32 = (10 / (*x).max(1));
         t = rename T@2 {y -> y}; indexed = natural_join t with b;
         p = project indexed keep {x,y}; output p as answer(x,y);
     });

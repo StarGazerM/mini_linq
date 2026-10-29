@@ -94,7 +94,7 @@ macro_rules! window {
     ($r:ident) => {
         ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
             struct Q; relation $r(a:i32,b:i32);
-            answer(a,b) :- $r(a,b), if *a >= 2 && *a < 9;
+            answer(a,b) :- $r(a,b), where a >= 2 && a < 9;
         }
     };
 }
@@ -407,10 +407,10 @@ fn relational_comparisons_follow_the_declared_numeric_type() {
         ((2,), vec![(5,)]),
         ((9,), vec![(1,)]),
     ]);
-    let got: Vec<_> = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; } struct Q; relation r(a:u64,b:i32); answer(a,b) :- r(a,b),if *a < 9; }.collect();
+    let got: Vec<_> = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; } struct Q; relation r(a:u64,b:i32); answer(a,b) :- r(a,b),where a < 9; }.collect();
     assert_eq!(got.len(), 2);
     let r = [(1_u64, 0), (2, 5), (9, 1)];
-    let got: Vec<_> = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; } struct Q; relation r(a:u64,b:i32); answer(a,b) :- r(a,b),if *a >= 2 && *a < 9; }.collect();
+    let got: Vec<_> = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; } struct Q; relation r(a:u64,b:i32); answer(a,b) :- r(a,b),where a >= 2 && a < 9; }.collect();
     assert_eq!(got, [(&2, &5)]);
 }
 
@@ -494,7 +494,7 @@ fn direct_merge_requires_ordered_read_without_requiring_payload_lookup() {
 #[test]
 fn ordered_key_sets_support_relational_comparison_windows() {
     let r = std::collections::BTreeSet::from([(1,), (2,), (9,)]);
-    let got: Vec<_> = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; } struct Q; relation r(a:i32); answer(a) :- r(a), if *a >= 2 && *a < 9; }.collect();
+    let got: Vec<_> = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; } struct Q; relation r(a:i32); answer(a) :- r(a), where a >= 2 && a < 9; }.collect();
     assert_eq!(got, [(&2,)]);
 }
 
@@ -554,6 +554,35 @@ fn literal_point_reads_scan_slices_and_directly_read_leading_map_keys() {
 }
 
 #[test]
+fn string_literals_use_native_views_or_scan_owned_keys_without_retyping() {
+    let rows = Observed::new(HashMap::from([
+        ((String::from("BUILDING"),), vec![(1_i32,), (3,)]),
+        ((String::from("AUTOMOBILE"),), vec![(2,)]),
+    ]));
+    let result: std::collections::BTreeSet<_> = ::mini_linq::compile! {
+        pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
+        struct OwnedLiteralMap;
+        relation rows(segment:String,id:i32);
+        answer(id) :- rows("BUILDING",id);
+    }
+    .map(|(id,)| *id)
+    .collect();
+    assert_eq!(result, [1, 3].into());
+    assert_eq!((rows.scans.get(), rows.reads.get()), (1, 0));
+
+    let result: std::collections::BTreeSet<_> = ::mini_linq::compile! {
+        pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
+        struct OwnedPointMap;
+        relation rows(segment:String,id:i32);
+        answer(id) :- rows(segment,id), where segment == "BUILDING";
+    }
+    .map(|(id,)| *id)
+    .collect();
+    assert_eq!(result, [1, 3].into());
+    assert_eq!((rows.scans.get(), rows.reads.get()), (2, 0));
+}
+
+#[test]
 fn relational_range_reads_seek_ordered_hosts_and_scan_slices_without_builds() {
     let map: BTreeMap<(i32,), Vec<(i32,)>> = (0..10_000).map(|x| ((x,), vec![(x + 1,)])).collect();
     let low = 9_995;
@@ -562,7 +591,7 @@ fn relational_range_reads_seek_ordered_hosts_and_scan_slices_without_builds() {
     let rows: Vec<_> =
         ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
             struct Range; relation map(key:i32,value:i32);
-            answer(x,y) :- map(x,y), if * x >= low, if * x < high;
+            answer(x,y) :- map(x,y), where x >= low, where x < high;
         }
         .map(|(x, y)| (*x, *y))
         .collect();
@@ -579,7 +608,7 @@ fn relational_range_reads_seek_ordered_hosts_and_scan_slices_without_builds() {
     let scanned: Vec<_> =
         ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
             struct SliceRange; relation slice(key:i32,value:i32);
-            answer(x,y) :- slice(x,y), if * x >= low, if * x < high;
+            answer(x,y) :- slice(x,y), where x >= low, where x < high;
         }
         .map(|(x, y)| (*x, *y))
         .collect();
@@ -592,7 +621,7 @@ fn relational_range_reads_seek_ordered_hosts_and_scan_slices_without_builds() {
     for (low, high) in [(5, 5), (9, 2)] {
         let rows: Vec<_> = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
             struct EmptyRange; relation map(key:i32,value:i32);
-            answer(x) :- map(x,_), if * x > low, if * x < high;
+            answer(x) :- map(x,_), where x > low, where x < high;
         }
         .collect();
         assert!(rows.is_empty());
@@ -612,7 +641,7 @@ fn relational_disjunction_membership_and_host_parameters_compute_classical_filte
     let got: Vec<_> = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
         struct Disjunction; relation rows(key:i32,tag:String);
         answer(x) :- rows(x,tag),
-            if ((((* x >= 0 && * x <= 1)) && ((* tag == "a" || * tag == "b"))) || ((* x >= low) && (* tag == "c")));
+            where (((((x >= 0 && x <= 1)) && ((tag == "a" || tag == "b"))) || ((x >= low) && (tag == "c"))));
     }
     .map(|(x,)| *x)
     .collect();
@@ -621,7 +650,7 @@ fn relational_disjunction_membership_and_host_parameters_compute_classical_filte
     let got: Vec<_> =
         ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
             struct Parameters; relation rows(key:i32,tag:String);
-            answer(x) :- rows(x,tag), if * tag == tag_param, if 1 < * x, if * x <= 4;
+            answer(x) :- rows(x,tag), where tag == tag_param, where x > 1, where x <= 4;
         }
         .map(|(x,)| *x)
         .collect();
@@ -640,7 +669,7 @@ fn an_ordered_host_and_non_copy_parameter_need_no_cloning_or_scan_fallback() {
     let got: Vec<_> =
         ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
             struct OrderedHost; relation r(k:i32,v:i32);
-            answer(x,y) :- r(x,y), if * x >= cutoff;
+            answer(x,y) :- r(x,y), where x >= cutoff;
         }
         .map(|(x, y)| (*x, *y))
         .collect();
@@ -662,7 +691,7 @@ fn an_ordered_host_and_non_copy_parameter_need_no_cloning_or_scan_fallback() {
     let got: Vec<_> =
         ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
             struct BorrowedBounds; relation map(k:Value,v:i32);
-            answer(y) :- map(x,y), if * x > cutoff;
+            answer(y) :- map(x,y), where x > cutoff;
         }
         .map(|(y,)| *y)
         .collect();
@@ -670,14 +699,14 @@ fn an_ordered_host_and_non_copy_parameter_need_no_cloning_or_scan_fallback() {
 }
 
 #[test]
-fn constraints_on_prefix_values_precede_partial_guards_and_later_atoms() {
+fn constraints_on_prefix_values_compose_with_total_guards_and_later_atoms() {
     let r = [(0,), (2,)];
     let s = [(2, 20)];
     let cutoff = 1;
     let got: Vec<_> =
         ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
             struct LetPrefix; relation r(x:i32); relation s(m:i32,y:i32);
-            answer(y) :- r(x), let m:i32 = *x, if * m > cutoff, if 10 / *m > 0, s(m,y);
+            answer(y) :- r(x), let m:i32 = *x, where m > cutoff, if 10 / (*m).max(1) > 0, s(m,y);
         }
         .map(|(y,)| *y)
         .collect();
@@ -686,7 +715,7 @@ fn constraints_on_prefix_values_precede_partial_guards_and_later_atoms() {
     let t = [(2, 0, 99)];
     let got: Vec<_> = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
         struct PrefixTuple; relation r(x:i32); relation other(y:i32); relation t(x:i32,y:i32,z:i32);
-        answer(z) :- r(x), other(y), if * x > * y, if 10 / (*x - *y) > 0, t(x,y,z);
+        answer(z) :- r(x), other(y), where x > y, if 10 / (*x - *y).max(1) > 0, t(x,y,z);
     }
     .map(|(z,)| *z)
     .collect();
@@ -694,7 +723,7 @@ fn constraints_on_prefix_values_precede_partial_guards_and_later_atoms() {
     let got: Vec<_> =
         ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
             struct BoundIdentity; relation r(x:i32); relation s(m:i32,y:i32);
-            answer(y) :- r(x), let m:i32 = 2, if * m == * x, s(m,y);
+            answer(y) :- r(x), let m:i32 = 2, where m == x, s(m,y);
         }
         .map(|(y,)| *y)
         .collect();

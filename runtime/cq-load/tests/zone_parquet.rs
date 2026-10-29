@@ -12,12 +12,17 @@ struct Typed;
 impl Relation for Typed {
     type Row = (i64, Date, Decimal, String);
     const COLUMNS: &'static [&'static str] = &["id", "day", "price", "text"];
+    // DECODE V: the zone diagnostic builds logical tuples before relational selections; P5 must build summaries with encoded scan columns.
     fn decode(batch: &Batch<'_>) -> cq_load::Result<Vec<Self::Row>> {
         Ok(batch
+            // DECODE V: the zone diagnostic reconstructs id before Point selection; P5 keeps preserved predicates in the encoded scan domain.
             .column::<i64>(0)?
             .into_iter()
+            // DECODE V: the zone diagnostic reconstructs dates before building bounds; P5 builds payload and summaries together.
             .zip(batch.column::<Date>(1)?)
+            // DECODE V: the zone diagnostic reconstructs Decimal before building bounds; P5 requires columnar payload plus summaries.
             .zip(batch.column::<Decimal>(2)?)
+            // DECODE V: the zone diagnostic owns strings before subsequent selection; P5 delays reconstruction to demanded survivors.
             .zip(batch.column::<String>(3)?)
             .map(|(((id, date), price), text)| (id, date, price, text))
             .collect())
@@ -81,7 +86,9 @@ fn decoded_statistics_work_without_parquet_stats_and_across_row_groups() {
             let batches =
                 Loader::<Typed>::parquet_batches(&path, ParquetOptions { batch_size }).unwrap();
             let host =
+                // DECODE V: this test consumes decoding batches before zone predicates; P5 retains encoded columns through selection.
                 ZoneRows::from_batches::<Summary, _, _>(batches, 4.try_into().unwrap()).unwrap();
+            // DECODE V: the expected zone host also eagerly loads tuples before relational reads; P5 builds scan payload and bounds together.
             let rows = Loader::<Typed>::parquet(&path, ParquetOptions::default()).unwrap();
             let expected = ZoneRows::from_rows::<Summary>(rows, 4.try_into().unwrap());
             assert_eq!(

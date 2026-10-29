@@ -1,0 +1,482 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cycles:u'
+# Event count (approx.): 214708055075
+#
+# Overhead  Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         Shared Object                             IPC   [IPC Coverage]
+# ........  .............................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................  ........................................  ....................
+#
+    40.14%  [.] _RINvYNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateNtNtCs4NRVxsYgnAr_4core4hash11BuildHasher8hash_oneRTRxRNtNtCscdodAO9FK5_5alloc6string6StringB1J_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB2r_xB1L_RNtB2u_4DateEECs6lmtIh9dQAT_23tpch_derived_retail_h01                                                                                                                                                                                                                                                                                                                                                                                        tpch_derived_retail_h01-2abb2513a75956d0  -      -            
+            |          
+            |--35.56%--_RINvMs6_NtCsgQfI1edjipl_9hashbrown3rawINtB6_8RawTableTTRxRNtNtCscdodAO9FK5_5alloc6string6StringBR_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1y_xBT_RNtB1B_4DateEuEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_uNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE0ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+            |          _RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+            |          _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+            |          _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+            |          _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+            |          _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+            |          _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+            |          _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+            |          _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+            |          main
+            |          __libc_start_call_main
+            |          __libc_start_main_impl (inlined)
+            |          _start
+            |          
+             --4.58%--_RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+                       _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+                       _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+                       _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+                       _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+                       _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                       _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+                       _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+                       main
+                       __libc_start_call_main
+                       __libc_start_main_impl (inlined)
+                       _start
+
+    13.59%  [.] _RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01                                                                                                                                                                                                                                                                                                                                                                                       tpch_derived_retail_h01-2abb2513a75956d0  -      -            
+            |
+            ---_RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+               _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+    11.65%  [.] _RNvMNtCsgQfI1edjipl_9hashbrown11rustc_entryINtNtB4_3map7HashMapTRNtNtCscdodAO9FK5_5alloc6string6StringB10_ETxxjENtNtNtCs2AWtUsOyxgP_3std4hash6random11RandomStateE11rustc_entryCs6lmtIh9dQAT_23tpch_derived_retail_h01                                                                                                                                                                                                                                                                                                                                                                                                                                    tpch_derived_retail_h01-2abb2513a75956d0  -      -            
+            |
+            ---_RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     6.45%  [.] _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          tpch_derived_retail_h01-2abb2513a75956d0  -      -            
+            |
+            ---_RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     6.10%  [.] _RNvXs3_NtNtCs4NRVxsYgnAr_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs6lmtIh9dQAT_23tpch_derived_retail_h01                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          tpch_derived_retail_h01-2abb2513a75956d0  -      -            
+            |
+            ---_RINvYNtNtNtCs2AWtUsOyxgP_3std4hash6random11RandomStateNtNtCs4NRVxsYgnAr_4core4hash11BuildHasher8hash_oneRTRNtNtCscdodAO9FK5_5alloc6string6StringB1G_EECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNvMNtCsgQfI1edjipl_9hashbrown11rustc_entryINtNtB4_3map7HashMapTRNtNtCscdodAO9FK5_5alloc6string6StringB10_ETxxjENtNtNtCs2AWtUsOyxgP_3std4hash6random11RandomStateE11rustc_entryCs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     4.96%  [.] _RNvXCsgQfI1edjipl_9hashbrownTRxRNtNtCscdodAO9FK5_5alloc6string6StringBr_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB18_xBt_RNtB1b_4DateEINtB2_10EquivalentBq_E10equivalentCs6lmtIh9dQAT_23tpch_derived_retail_h01                                                                                                                                                                                                                                                                                                                                                                                                                                         tpch_derived_retail_h01-2abb2513a75956d0  -      -            
+            |
+            ---_RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+               _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     2.87%  [.] _RINvMs6_NtCsgQfI1edjipl_9hashbrown3rawINtB6_8RawTableTTRxRNtNtCscdodAO9FK5_5alloc6string6StringBR_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1y_xBT_RNtB1B_4DateEuEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_uNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE0ECs6lmtIh9dQAT_23tpch_derived_retail_h01                                                                                                                                                                                                                                                                                                                                        tpch_derived_retail_h01-2abb2513a75956d0  -      -            
+            |
+            ---_RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+               _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     2.32%  [.] _RINvYNtNtNtCs2AWtUsOyxgP_3std4hash6random11RandomStateNtNtCs4NRVxsYgnAr_4core4hash11BuildHasher8hash_oneRTRNtNtCscdodAO9FK5_5alloc6string6StringB1G_EECs6lmtIh9dQAT_23tpch_derived_retail_h01                                                                                                                                                                                                                                                                                                                                                                                                                                                             tpch_derived_retail_h01-2abb2513a75956d0  -      -            
+            |
+            ---_RNvMNtCsgQfI1edjipl_9hashbrown11rustc_entryINtNtB4_3map7HashMapTRNtNtCscdodAO9FK5_5alloc6string6StringB10_ETxxjENtNtNtCs2AWtUsOyxgP_3std4hash6random11RandomStateE11rustc_entryCs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     2.05%  [k] clear_page_erms                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            [kernel.kallsyms]                         -      -            
+            |
+            ---get_page_from_freelist
+               __alloc_pages
+               alloc_pages_mpol
+               |          
+                --2.04%--vma_alloc_folio
+                          alloc_anon_folio
+                          do_anonymous_page
+                          handle_pte_fault
+                          __handle_mm_fault
+                          handle_mm_fault
+                          do_user_addr_fault
+                          exc_page_fault
+                          asm_exc_page_fault
+                          |          
+                           --1.93%--_RINvMs6_NtCsgQfI1edjipl_9hashbrown3rawINtB6_8RawTableTTRxRNtNtCscdodAO9FK5_5alloc6string6StringBR_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1y_xBT_RNtB1B_4DateEuEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_uNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE0ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                                     _RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+                                     _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+                                     _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+                                     _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+                                     _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+                                     _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                                     _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+                                     _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+                                     main
+                                     __libc_start_call_main
+                                     __libc_start_main_impl (inlined)
+                                     _start
+
+     1.77%  [k] asm_exc_page_fault                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         [kernel.kallsyms]                         -      -            
+            |          
+             --1.64%--_RINvMs6_NtCsgQfI1edjipl_9hashbrown3rawINtB6_8RawTableTTRxRNtNtCscdodAO9FK5_5alloc6string6StringBR_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1y_xBT_RNtB1B_4DateEuEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_uNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE0ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                       _RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+                       _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+                       _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+                       _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+                       _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+                       _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                       _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+                       _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+                       main
+                       __libc_start_call_main
+                       __libc_start_main_impl (inlined)
+                       _start
+
+     1.12%  [.] __memcmp_avx2_movbe                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        libc.so.6                                 -      -            
+            |          
+            |--0.67%--_RNvXCsgQfI1edjipl_9hashbrownTRxRNtNtCscdodAO9FK5_5alloc6string6StringBr_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB18_xBt_RNtB1b_4DateEINtB2_10EquivalentBq_E10equivalentCs6lmtIh9dQAT_23tpch_derived_retail_h01
+            |          _RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+            |          _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+            |          _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+            |          _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+            |          _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+            |          _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+            |          _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+            |          _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+            |          main
+            |          __libc_start_call_main
+            |          __libc_start_main_impl (inlined)
+            |          _start
+            |          
+             --0.45%--_RNvMNtCsgQfI1edjipl_9hashbrown11rustc_entryINtNtB4_3map7HashMapTRNtNtCscdodAO9FK5_5alloc6string6StringB10_ETxxjENtNtNtCs2AWtUsOyxgP_3std4hash6random11RandomStateE11rustc_entryCs6lmtIh9dQAT_23tpch_derived_retail_h01
+                       _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+                       _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+                       _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+                       _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                       _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+                       _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+                       main
+                       __libc_start_call_main
+                       __libc_start_main_impl (inlined)
+                       _start
+
+     0.69%  [.] _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_                                     tpch_derived_retail_h01-2abb2513a75956d0  -      -            
+            |
+            ---_RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     0.49%  [k] __handle_mm_fault                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          [kernel.kallsyms]                         -      -            
+            |
+            ---handle_mm_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               |          
+                --0.47%--_RINvMs6_NtCsgQfI1edjipl_9hashbrown3rawINtB6_8RawTableTTRxRNtNtCscdodAO9FK5_5alloc6string6StringBR_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1y_xBT_RNtB1B_4DateEuEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_uNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE0ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                          _RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+                          _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+                          _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+                          _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+                          _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+                          _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                          _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+                          _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+                          main
+                          __libc_start_call_main
+                          __libc_start_main_impl (inlined)
+                          _start
+
+     0.27%  [k] ___perf_sw_event                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           [kernel.kallsyms]                         -      -            
+            |
+            ---__perf_sw_event
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               |          
+                --0.26%--_RINvMs6_NtCsgQfI1edjipl_9hashbrown3rawINtB6_8RawTableTTRxRNtNtCscdodAO9FK5_5alloc6string6StringBR_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1y_xBT_RNtB1B_4DateEuEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_uNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE0ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                          _RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+                          _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+                          _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+                          _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+                          _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+                          _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                          _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+                          _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+                          main
+                          __libc_start_call_main
+                          __libc_start_main_impl (inlined)
+                          _start
+
+     0.26%  [k] do_user_addr_fault                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         [kernel.kallsyms]                         -      -            
+            |          
+             --0.23%--exc_page_fault
+                       asm_exc_page_fault
+                       |          
+                        --0.23%--_RINvMs6_NtCsgQfI1edjipl_9hashbrown3rawINtB6_8RawTableTTRxRNtNtCscdodAO9FK5_5alloc6string6StringBR_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1y_xBT_RNtB1B_4DateEuEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_uNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE0ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                                  _RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+                                  _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+                                  _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+                                  _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+                                  _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+                                  _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                                  _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+                                  _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+                                  main
+                                  __libc_start_call_main
+                                  __libc_start_main_impl (inlined)
+                                  _start
+
+     0.25%  [k] lock_vma_under_rcu                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         [kernel.kallsyms]                         -      -            
+            |          
+             --0.24%--do_user_addr_fault
+                       exc_page_fault
+                       asm_exc_page_fault
+                       |          
+                        --0.21%--_RINvMs6_NtCsgQfI1edjipl_9hashbrown3rawINtB6_8RawTableTTRxRNtNtCscdodAO9FK5_5alloc6string6StringBR_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1y_xBT_RNtB1B_4DateEuEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_uNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE0ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                                  _RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+                                  _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+                                  _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+                                  _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+                                  _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+                                  _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                                  _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+                                  _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+                                  main
+                                  __libc_start_call_main
+                                  __libc_start_main_impl (inlined)
+                                  _start
+
+     0.24%  [k] get_page_from_freelist                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     [kernel.kallsyms]                         -      -            
+            |
+            ---__alloc_pages
+               alloc_pages_mpol
+               vma_alloc_folio
+               alloc_anon_folio
+               do_anonymous_page
+               handle_pte_fault
+               __handle_mm_fault
+               handle_mm_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               _RINvMs6_NtCsgQfI1edjipl_9hashbrown3rawINtB6_8RawTableTTRxRNtNtCscdodAO9FK5_5alloc6string6StringBR_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1y_xBT_RNtB1B_4DateEuEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_uNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE0ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+               _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     0.23%  [k] rmqueue                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    [kernel.kallsyms]                         -      -            
+            |          
+             --0.21%--get_page_from_freelist
+                       __alloc_pages
+                       alloc_pages_mpol
+                       vma_alloc_folio
+                       |          
+                        --0.21%--alloc_anon_folio
+                                  do_anonymous_page
+                                  handle_pte_fault
+                                  __handle_mm_fault
+                                  handle_mm_fault
+                                  do_user_addr_fault
+                                  exc_page_fault
+                                  asm_exc_page_fault
+                                  |          
+                                   --0.20%--_RINvMs6_NtCsgQfI1edjipl_9hashbrown3rawINtB6_8RawTableTTRxRNtNtCscdodAO9FK5_5alloc6string6StringBR_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1y_xBT_RNtB1B_4DateEuEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_uNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE0ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                                             _RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+                                             _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+                                             _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+                                             _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+                                             _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+                                             _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+                                             _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+                                             _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+                                             main
+                                             __libc_start_call_main
+                                             __libc_start_main_impl (inlined)
+                                             _start
+
+
+
+# Samples: 4K of event 'page-faults'
+# Event count (approx.): 7459524
+#
+# Overhead  Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      Shared Object                             IPC   [IPC Coverage]
+# ........  ..........................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................  ........................................  ....................
+#
+    84.24%  [.] _RINvMs6_NtCsgQfI1edjipl_9hashbrown3rawINtB6_8RawTableTTRxRNtNtCscdodAO9FK5_5alloc6string6StringBR_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1y_xBT_RNtB1B_4DateEuEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_uNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE0ECs6lmtIh9dQAT_23tpch_derived_retail_h01                                                                                                                                                                                                                                                                                                     tpch_derived_retail_h01-2abb2513a75956d0  -      -            
+            |
+            ---_RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+               _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+    11.08%  [.] __memset_avx2_unaligned_erms                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            libc.so.6                                 -      -            
+            |
+            ---_RINvMs6_NtCsgQfI1edjipl_9hashbrown3rawINtB6_8RawTableTTRxRNtNtCscdodAO9FK5_5alloc6string6StringBR_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1y_xBT_RNtB1B_4DateEuEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_uNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE0ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNvMs1_NtCsgQfI1edjipl_9hashbrown3mapINtB5_7HashMapTRxRNtNtCscdodAO9FK5_5alloc6string6StringBO_RNtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalxB1v_xBQ_RNtB1y_4DateEuNtNtCs9bpE5tli3iI_10cq_storage10hash_state9HashStateE6insertCs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_
+               _RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     2.01%  [.] __memmove_avx_unaligned_erms                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            libc.so.6                                 -      -            
+            |
+            ---_RNvXs0_NtNtCscdodAO9FK5_5alloc3vec11spec_extendINtB7_3VecTxxNtNtB9_6string6StringBW_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB1k_NtB1m_4DateEEINtB5_10SpecExtendBT_INtNtB7_9into_iter8IntoIterBT_EE11spec_extendCs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RINvNtCshzHV2TyzQ9G_7cq_load14parquet_source12read_parquetINtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query22___MiniLinqLoadLineitemxxNtNtCscdodAO9FK5_5alloc6string6StringB29_NtNtB4_6scalar7DecimalB2O_NtB2Q_4DateENtNtCs2AWtUsOyxgP_3std4path7PathBufEBZ_
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query4load
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     1.28%  [.] _int_free                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               libc.so.6                                 -      -            
+            |
+            ---__GI___libc_free (inlined)
+               _RINvNtCs4NRVxsYgnAr_4core3ptr9drop_glueNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query4DataEBF_
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     0.70%  [.] _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapINtNtB8_3zip3ZipIBY_IBY_IBY_IBY_IBY_INtNtNtCscdodAO9FK5_5alloc3vec9into_iter8IntoIterxEB1x_EIB1y_NtNtB1E_6string6StringEEB2r_EIB1y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalEEB2Z_EIB1y_NtB36_4DateEENCNvXNtCs6lmtIh9dQAT_23tpch_derived_retail_h015queryINtB4d_22___MiniLinqLoadLineitemxxB2w_B2w_B34_B34_B3V_ENtB38_8Relation6decode0ENtNtNtBa_6traits8iterator8Iterator4folduNCINvNvB6f_8for_each4callTxxB2w_B2w_B34_B34_B3V_ENCINvMsj_B1C_INtB1C_3VecB7i_E14extend_trustedBN_E0E0EB4f_                                                                tpch_derived_retail_h01-2abb2513a75956d0  -      -            
+            |
+            ---_RNvXs_NtNtCscdodAO9FK5_5alloc3vec16in_place_collectINtB6_3VecTxxNtNtB8_6string6StringB10_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB1p_NtB1r_4DateEEINtNtB6_14spec_from_iter12SpecFromIterBX_INtNtNtNtCs4NRVxsYgnAr_4core4iter8adapters3map3MapINtNtB35_3zip3ZipIB3P_IB3P_IB3P_IB3P_IB3P_INtNtB6_9into_iter8IntoIterxEB4u_EIB4v_B10_EEB52_EIB4v_B1p_EEB5i_EIB4v_B28_EENCNvXNtCs6lmtIh9dQAT_23tpch_derived_retail_h015queryINtB5O_22___MiniLinqLoadLineitemxxB10_B10_B1p_B1p_B28_ENtB1t_8Relation6decode0EE9from_iterB5Q_
+               _RNvXNtCs6lmtIh9dQAT_23tpch_derived_retail_h015queryINtB2_22___MiniLinqLoadLineitemxxNtNtCscdodAO9FK5_5alloc6string6StringB1k_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB1Z_NtB21_4DateENtB23_8Relation6decodeB4_
+               _RINvNtCshzHV2TyzQ9G_7cq_load14parquet_source12read_parquetINtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query22___MiniLinqLoadLineitemxxNtNtCscdodAO9FK5_5alloc6string6StringB29_NtNtB4_6scalar7DecimalB2O_NtB2Q_4DateENtNtCs2AWtUsOyxgP_3std4path7PathBufEBZ_
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query4load
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     0.31%  [.] _int_malloc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             libc.so.6                                 -      -            
+            |
+            ---__GI___libc_malloc (inlined)
+               _RNvNtNtNtCsfZNTfsZTj5Y_7parquet4file8metadata6thrift14read_row_group
+               _RNvNtNtNtCsfZNTfsZTj5Y_7parquet4file8metadata6thrift27parquet_metadata_from_bytes
+               _RNvMNtNtNtCsfZNTfsZTj5Y_7parquet4file8metadata12push_decoderNtB2_26ParquetMetaDataPushDecoder10try_decode
+               _RNvMs_NtNtNtCsfZNTfsZTj5Y_7parquet4file8metadata6readerNtB4_21ParquetMetaDataReader22decode_footer_metadata
+               _RINvMs_NtNtNtCsfZNTfsZTj5Y_7parquet4file8metadata6readerNtB5_21ParquetMetaDataReader16parse_and_finishNtNtCs2AWtUsOyxgP_3std2fs4FileECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNvMs3_NtNtCsfZNTfsZTj5Y_7parquet5arrow12arrow_readerINtB5_18ArrowReaderBuilderINtB5_10SyncReaderNtNtCs2AWtUsOyxgP_3std2fs4FileEE7try_newCs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RINvNtCshzHV2TyzQ9G_7cq_load14parquet_source12read_parquetINtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query22___MiniLinqLoadLineitemxxNtNtCscdodAO9FK5_5alloc6string6StringB29_NtNtB4_6scalar7DecimalB2O_NtB2Q_4DateENtNtCs2AWtUsOyxgP_3std4path7PathBufEBZ_
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query4load
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+     0.30%  [.] _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapIBO_INtNtB8_6filter6FilterIBO_IBO_INtNtNtBc_5slice4iter4IterTxxNtNtCscdodAO9FK5_5alloc6string6StringB1Y_NtNtCshzHV2TyzQ9G_7cq_load6scalar7DecimalB2D_NtB2F_4DateEENvYRB1V_NtNtCs9bpE5tli3iI_10cq_storage4rows7Columns7columnsENCNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query9no_reduce3runs_0ENCB4z_s0_0ENCB4z_s1_0ENCB4z_s2_0ENtNtNtBa_6traits8iterator8Iterator8try_folduNCINvB6_12map_try_foldTRxRB1Y_B7i_RB2D_xB7t_xB7k_RB3m_EB7h_uINtNtNtBc_3ops12control_flow11ControlFlowB7h_ENCB4z_s3_0NCINvNvB6d_4find5checkB7h_QNCB4z_s4_0E0E0B7T_EB4F_  tpch_derived_retail_h01-2abb2513a75956d0  -      -            
+            |
+            ---_RNvNtNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query7default3run
+               _RNvNtCs6lmtIh9dQAT_23tpch_derived_retail_h015query3run
+               _RNvCs6lmtIh9dQAT_23tpch_derived_retail_h014main
+               _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceFEINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtB1e_5error5ErrorEL_EEB19_ECs6lmtIh9dQAT_23tpch_derived_retail_h01
+               _RNCINvNtCs2AWtUsOyxgP_3std2rt10lang_startINtNtCs4NRVxsYgnAr_4core6result6ResultuINtNtCscdodAO9FK5_5alloc5boxed3BoxDNtNtBI_5error5ErrorEL_EEE0Cs6lmtIh9dQAT_23tpch_derived_retail_h01.llvm.10544914982785257334
+               _RNvNtCs2AWtUsOyxgP_3std2rt19lang_start_internal
+               main
+               __libc_start_call_main
+               __libc_start_main_impl (inlined)
+               _start
+
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

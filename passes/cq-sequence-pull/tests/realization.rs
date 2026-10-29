@@ -465,7 +465,12 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
             quote!([(7, 1, 10), (7, 2, 30)]),
         ),
         (
-            "point select r if (a = @chosen)",
+            "point select r if (a = @(chosen))",
+            "a,k,v",
+            quote!([(7, 1, 10), (7, 2, 30)]),
+        ),
+        (
+            "point select r if (a = @(make_chosen()))",
             "a,k,v",
             quote!([(7, 1, 10), (7, 2, 30)]),
         ),
@@ -528,6 +533,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
                     let L: &[(i32,)] = &[(1,), (1,), (2,), (9,)];
                     let R: &[(i32,i32,i32,i32)] = &[(7,1,10,999), (7,1,10,999), (8,1,20,888), (7,2,30,777)];
                     let chosen = 7;
+                    fn make_chosen() -> i32 { 7 }
                     let actual: ::std::collections::BTreeSet<(i32,i32,i32)> = (#expression).map(|(a,k,v)| (*a,*k,*v)).collect();
                     let expected: ::std::collections::BTreeSet<(i32,i32,i32)> = #expected.into_iter().collect();
                     assert_eq!(actual, expected, "{}", #selection);

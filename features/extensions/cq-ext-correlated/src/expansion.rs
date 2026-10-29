@@ -235,7 +235,7 @@ fn inner(
         }
     }
     for (local, external) in &links {
-        body.push(syn::parse_quote!(if #local == #external));
+        body.push(syn::parse_quote!(where #local == #external));
     }
     let query = syn::parse_quote!(#head :- #body;);
     (with_query(source, declarations, query, Some(output)), links)
@@ -336,7 +336,7 @@ pub fn check(source: &Program, target: &Context, pipeline: &cq_stage::Pipeline) 
         ensure(
             parsed == *query,
             query,
-            "noncanonical recognized guard or capture",
+            "noncanonical relational predicate or capture",
         )?;
         let mut body = subquery.hole.query.body.clone();
         let mut locals = std::collections::BTreeSet::new();
@@ -351,7 +351,7 @@ pub fn check(source: &Program, target: &Context, pipeline: &cq_stage::Pipeline) 
             let expected = BodyItem::Constraint(cq_syntax::Constraint::Compare {
                 left: cq_syntax::constraint::Term::Variable(local.clone()),
                 comparison: cq_syntax::constraint::Comparison::Eq(Default::default()),
-                right: cq_syntax::constraint::Term::Parameter(external.clone().into()),
+                right: cq_syntax::constraint::Term::Closed(syn::parse_quote!(#external)),
             });
             ensure(
                 body.pop().map(|pair| pair.into_value()) == Some(expected),

@@ -33,6 +33,7 @@ impl HostRows {
     fn download(data: &Rows) -> Result<Self> {
         // Download the actual query bindings: no second source parser, column
         // ordering, or dictionary encoding can diverge between the targets.
+        // DECODE ?: diagnostic fixture download reconstructs six input relations for a separate CPU oracle, not production answer publication.
         Ok(Self {
             customer: data.customer.to_host()?,
             orders: data.orders.to_host()?,
@@ -117,6 +118,7 @@ fn h05_cuda_matches_sequential_physical_reference_on_sf1() -> Result<()> {
     let host = HostRows::download(&resident)?;
 
     let expected = sequential(&host);
+    // DECODE P: publish the final CUDA H05 answer for host conformance comparison.
     let actual = cuda(&resident).to_host()?;
     // Both translations retain the fixture's return order (order, supplier,
     // nation) and use the same dense dictionaries, so no answer remapping is
@@ -128,6 +130,7 @@ fn h05_cuda_matches_sequential_physical_reference_on_sf1() -> Result<()> {
         actual,
         true,
     );
+    // DECODE P: publish A/B/R plan answers for host comparison; all three downloads terminate their GPU queries.
     for (name, expected, actual) in [
         ("A", sequential_a(&host), planned_a(&resident).to_host()?),
         ("B", sequential_b(&host), planned_b(&resident).to_host()?),

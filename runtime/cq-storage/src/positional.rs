@@ -1,5 +1,13 @@
 //! Stable borrowed occurrences and exact predicates. IDs are base-relative;
 //! callers must use only live IDs enumerated by that host.
+//!
+//! DESIGN contract8-positional-reads
+//! Owns stable base-relative witnesses and exact borrowed reads (contract 8, STR-Repr/STR-Lineage).
+//! Sources: doc/STORAGE.md §§2,3,9,12; Data Blocks §3.4; DuckDB row_group.cpp:1035-1088.
+//! DO NOT turn positions into logical columns, copy whole rows to scan, or silently change Eq/Ord.
+//! Scan columns and grouped index runs have distinct roles; materialize only surviving required columns.
+//! Block-backed reads remain Plan P5; index Build copying is separate P4 work, not a positional promise.
+//! Summary pruning is selected from evidence, not assumed useful on TPC-H load order (§12).
 use crate::rows::{Columns, Rows};
 use std::ops::Bound;
 
@@ -89,6 +97,12 @@ pub trait Column<H: PositionalRows>: Copy {
     fn key(self, host: H, id: RowId) -> Self::Key;
 }
 pub trait ReadPredicate<K> {
+    /// True proves every key passes and permits omitting all key extraction,
+    /// bounds reads, and predicate evaluation. The fact must remain stable
+    /// while this predicate is borrowed by a read.
+    fn is_identity(&self) -> bool {
+        false
+    }
     fn test(&self, key: &K) -> bool;
     /// AND each exact row test into a same-length selection mask. Existing
     /// false entries stay false, so successive predicates compose by intersection.
@@ -105,6 +119,10 @@ pub trait ReadPredicate<K> {
 }
 impl<K, P: ReadPredicate<K> + ?Sized> ReadPredicate<K> for &P {
     #[inline]
+    fn is_identity(&self) -> bool {
+        P::is_identity(self)
+    }
+    #[inline]
     fn test(&self, key: &K) -> bool {
         P::test(self, key)
     }
@@ -114,6 +132,17 @@ impl<K, P: ReadPredicate<K> + ?Sized> ReadPredicate<K> for &P {
     fn any_in(&self, lo: &K, hi: &K) -> bool {
         P::any_in(self, lo, hi)
     }
+}
+
+/// Test a live position without extracting its key when the predicate is identity.
+#[inline]
+pub fn test_position<H, C, P>(host: H, column: C, predicate: &P, id: RowId) -> bool
+where
+    H: PositionalRows,
+    C: Column<H>,
+    P: ReadPredicate<C::Key> + ?Sized,
+{
+    predicate.is_identity() || predicate.test(&column.key(host, id))
 }
 pub trait BlockRead<C>: PositionalRows
 where
@@ -148,15 +177,17 @@ where
         column: C,
         predicate: P,
     ) -> impl Iterator<Item = RowId> {
+        let identity = predicate.is_identity();
         BlockScan {
             host: self,
             column,
             predicate,
-            size: self.block_size().get(),
+            size: if identity { 1 } else { self.block_size().get() },
             len: self.len(),
             block: 0,
             offset: 0,
             end: 0,
+            identity,
         }
     }
     /// Evaluate each admitted block into a mask before yielding its survivors.
@@ -167,12 +198,16 @@ where
         column: C,
         predicate: P,
     ) -> impl Iterator<Item = RowId> {
+        let mut identity_positions = predicate.is_identity().then(|| self.positions());
         let mut blocks = self.blocks().fuse();
         let mut positions = None;
         let mut keys = Vec::new();
         let mut mask = Vec::new();
         let mut offset = 0;
         std::iter::from_fn(move || {
+            if let Some(positions) = &mut identity_positions {
+                return positions.next();
+            }
             loop {
                 while let Some(id) = positions.as_mut().and_then(Iterator::next) {
                     let selected = mask[offset];
@@ -222,6 +257,7 @@ pub struct BlockScan<H, C, P> {
     /// Remaining positions of the current block.
     offset: usize,
     end: usize,
+    identity: bool,
 }
 impl<H: BlockRead<C>, C: Column<H>, P: ReadPredicate<C::Key>> BlockScan<H, C, P> {
     /// Advance to the next block the bounds cannot exclude. False when exhausted.
@@ -253,8 +289,18 @@ impl<H: BlockRead<C>, C: Column<H>, P: ReadPredicate<C::Key>> BlockScan<H, C, P>
 }
 impl<H: BlockRead<C>, C: Column<H>, P: ReadPredicate<C::Key>> Iterator for BlockScan<H, C, P> {
     type Item = RowId;
-    #[inline]
+    // Keep residual positional filters in the same loop. An out-of-line next
+    // reloads the scan and bounds state for every survivor of the first filter.
+    #[inline(always)]
     fn next(&mut self) -> Option<RowId> {
+        if self.identity {
+            if self.offset == self.len {
+                return None;
+            }
+            let id = RowId(self.offset);
+            self.offset += 1;
+            return Some(id);
+        }
         loop {
             let (mut offset, end) = (self.offset, self.end);
             while offset < end {
@@ -274,6 +320,12 @@ impl<H: BlockRead<C>, C: Column<H>, P: ReadPredicate<C::Key>> Iterator for Block
     }
     #[inline]
     fn fold<B, F: FnMut(B, RowId) -> B>(mut self, mut accumulator: B, mut f: F) -> B {
+        if self.identity {
+            for offset in self.offset..self.len {
+                accumulator = f(accumulator, RowId(offset));
+            }
+            return accumulator;
+        }
         loop {
             for offset in self.offset..self.end {
                 let id = RowId(offset);
@@ -372,6 +424,8 @@ impl<K: Ord> ReadPredicate<K> for Window<K> {
 /// Scan a static predicate and a conservative join filter together. Both
 /// independent block bounds must admit a block; static row tests precede key
 /// filtering, so rejected rows incur no filter hashing or exact-set lookup.
+/// Identity facts are cached once, but their mode is dispatched outside the
+/// row loop so constant-false predicates do not acquire per-row flag checks.
 pub fn read_with_filter<H, C, D, P, Q>(
     host: H,
     column: C,
@@ -386,31 +440,93 @@ where
     P: ReadPredicate<C::Key>,
     Q: ReadPredicate<D::Key>,
 {
+    let predicate_identity = predicate.is_identity();
+    let filter_identity = filter.is_identity();
+    let mut identity_positions = (predicate_identity && filter_identity).then(|| host.positions());
     let mut blocks = host.blocks().fuse();
     let mut positions = None;
-    std::iter::from_fn(move || {
-        loop {
-            while let Some(id) = positions.as_mut().and_then(Iterator::next) {
-                crate::count!(rows_tested);
-                if predicate.test(&column.key(host, id))
-                    && filter.test(&filter_column.key(host, id))
-                {
-                    return Some(id);
-                }
-            }
-            let block = blocks.next()?;
-            crate::count!(blocks_considered);
-            if <H as BlockRead<C>>::bounds(host, column, block)
-                .is_some_and(|(lo, hi)| !predicate.any_in(&lo, &hi))
-                || <H as BlockRead<D>>::bounds(host, filter_column, block)
-                    .is_some_and(|(lo, hi)| !filter.any_in(&lo, &hi))
-            {
-                crate::count!(blocks_skipped);
-                crate::count!(blocks_skipped_metadata);
-                continue;
-            }
-            crate::count!(blocks_visited);
-            positions = Some(host.block_positions(block));
-        }
+    std::iter::from_fn(move || match (predicate_identity, filter_identity) {
+        (true, true) => identity_positions
+            .as_mut()
+            .expect("identity positions")
+            .next(),
+        (false, false) => next_filtered_position::<H, C, D, P, Q, _, _, _, false, false>(
+            host,
+            column,
+            &predicate,
+            filter_column,
+            filter,
+            &mut blocks,
+            &mut positions,
+            |block| host.block_positions(block),
+        ),
+        (true, false) => next_filtered_position::<H, C, D, P, Q, _, _, _, true, false>(
+            host,
+            column,
+            &predicate,
+            filter_column,
+            filter,
+            &mut blocks,
+            &mut positions,
+            |block| host.block_positions(block),
+        ),
+        (false, true) => next_filtered_position::<H, C, D, P, Q, _, _, _, false, true>(
+            host,
+            column,
+            &predicate,
+            filter_column,
+            filter,
+            &mut blocks,
+            &mut positions,
+            |block| host.block_positions(block),
+        ),
     })
+}
+
+#[inline]
+fn next_filtered_position<H, C, D, P, Q, B, I, F, const P_IDENTITY: bool, const Q_IDENTITY: bool>(
+    host: H,
+    column: C,
+    predicate: &P,
+    filter_column: D,
+    filter: &Q,
+    blocks: &mut B,
+    positions: &mut Option<I>,
+    block_positions: F,
+) -> Option<RowId>
+where
+    H: BlockRead<C> + BlockRead<D>,
+    C: Column<H>,
+    D: Column<H>,
+    P: ReadPredicate<C::Key>,
+    Q: ReadPredicate<D::Key>,
+    B: Iterator<Item = BlockId>,
+    I: Iterator<Item = RowId>,
+    F: Fn(BlockId) -> I,
+{
+    loop {
+        while let Some(id) = positions.as_mut().and_then(Iterator::next) {
+            crate::count!(rows_tested);
+            if (P_IDENTITY || predicate.test(&column.key(host, id)))
+                && (Q_IDENTITY || filter.test(&filter_column.key(host, id)))
+            {
+                return Some(id);
+            }
+        }
+        let block = blocks.next()?;
+        crate::count!(blocks_considered);
+        if (!P_IDENTITY
+            && <H as BlockRead<C>>::bounds(host, column, block)
+                .is_some_and(|(lo, hi)| !predicate.any_in(&lo, &hi)))
+            || (!Q_IDENTITY
+                && <H as BlockRead<D>>::bounds(host, filter_column, block)
+                    .is_some_and(|(lo, hi)| !filter.any_in(&lo, &hi)))
+        {
+            crate::count!(blocks_skipped);
+            crate::count!(blocks_skipped_metadata);
+            continue;
+        }
+        crate::count!(blocks_visited);
+        *positions = Some(block_positions(block));
+    }
 }

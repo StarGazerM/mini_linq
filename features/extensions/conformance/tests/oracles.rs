@@ -154,7 +154,7 @@ fn correlated_exists_and_parameters_match_nested_loop_answers() {
             mini_linq::compile! {
                 pipeline { surface = [cq_ext_correlated::correlated]; }
                 struct C; relation A(x:i32); relation S(x:i32,y:i32);
-                answer(x) :- A(x), exists!{S(x,y), if *y > limit};
+                answer(x) :- A(x), exists!{S(x,y), where y > limit};
             }
             .map(|(x,)| vec![*x])
             .collect::<Rows>()
@@ -195,13 +195,14 @@ fn scalar_refines_the_written_cardinality_check_and_default() {
                 answer(*x,v) :- A(x), scalar!{v:i32=(-1); select(*y); S(x,y)};
             }.map(|(x,y)| vec![x,y]).collect::<Rows>()
             },
-        )
-        .unwrap();
+        );
         if S.len() == 2 && S[0] != S[1] {
             assert!(matches!(
-                result.target,
-                cq_testkit::harness::Outcome::Panicked(_)
+                result,
+                Err(cq_testkit::harness::RefinementFailure::ReferencePanicked { .. })
             ));
+        } else {
+            result.unwrap();
         }
     }
     assert_eq!(
@@ -245,7 +246,7 @@ fn partial_rust_preserves_written_order_refinement_in_surface_queries() {
             mini_linq::compile! {
                 pipeline {}
                 struct Partial; relation A(x:i32);
-                    answer(x) :- A(x), if *x > 0, if positive(x);
+                    answer(x) :- A(x), where x > 0, if positive(x);
             }
             .map(|(x,)| vec![*x])
             .collect::<Rows>()

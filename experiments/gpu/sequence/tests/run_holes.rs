@@ -249,7 +249,7 @@ fn native_host_lookup_uses_supplied_runs_without_building() -> Result {
 }
 
 #[test]
-fn native_host_lookup_rejects_keys_outside_declared_prefix() {
+fn native_host_lookup_accepts_a_leading_value_column() {
     let mut source = fixtures::fixture("native_linear");
     source.structures.entries[1] =
         syn::parse_quote!(e host scan = ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [];);
@@ -258,11 +258,11 @@ fn native_host_lookup_rejects_keys_outside_declared_prefix() {
     let bound = cq_gpu_sequence_core::runs::bind(&source).unwrap();
     let sequence = cq_sequence_lowering::compile(&bound).unwrap();
     let machine = cq_gpu_sequence::machine();
+    let sequence = cq_gpu_sequence_core::runs::record_representation(&sequence).unwrap();
     let planned = cq_sequence_plan::plan(&sequence, &machine, &cq_gpu_sequence::catalog()).unwrap();
     let analysis = cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
-    let error = cq_gpu_sequence_core::translate_arena(
-        &planned.program, &analysis, &syn::parse_quote!(&mut arena)).unwrap_err();
-    assert!(error.to_string().contains("native lookup key is not a packed leading prefix"));
+    cq_gpu_sequence_core::translate_arena(
+        &planned.program, &analysis, &syn::parse_quote!(&mut arena)).unwrap();
 }
 
 #[test]

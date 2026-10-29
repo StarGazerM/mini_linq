@@ -397,7 +397,7 @@ fn deferred_rows_do_not_cross_source_publication_rebindings() {
 }
 
 #[test]
-fn deferred_rows_reject_opaque_dependencies_not_just_the_outer_operator() {
+fn deferred_rows_allow_total_rust_dependencies() {
     let cover = deferred_cover();
     for opaque in [
         quote!(g = pipe guard r if (opaque_predicate(a));),
@@ -423,7 +423,9 @@ fn deferred_rows_reject_opaque_dependencies_not_just_the_outer_operator() {
             syn::parse_quote!(selected = let select clean if (b > 0););
         assert_eq!(
             contract::check(&p).unwrap().publications["input"],
-            Publication::OwnRows { staged: true }
+            Publication::DeferredRows {
+                consumer: "selected".into()
+            }
         );
     }
 }
@@ -609,6 +611,7 @@ fn node(name: &str, collaborative: bool, dynamic: bool, children: Vec<LevelNode>
     LevelNode {
         shared_bytes: None,
         name: syn::parse_str(name).unwrap(),
+        host_rust: matches!(name, "host" | "pool" | "task"),
         collaborative,
         dynamic,
         width: (name == "block").then_some(256),
@@ -1126,7 +1129,7 @@ fn separated_publication_keeps_collaborative_store_in_its_dispatch() {
 }
 
 #[test]
-fn partial_rejects_opaque_evaluation_below_host() {
+fn rust_without_identity_representation_stays_host() {
     let mut p: Program = syn::parse_quote! {
         physical {
             relation R(a:i32);
@@ -1140,18 +1143,20 @@ fn partial_rejects_opaque_evaluation_below_host() {
         } sequence { a = store map b rows r; }
     };
     grade(&mut p, quote!(a at device;));
-    reject_grade(&p, &gpu(), "BE-Partial");
+    reject_grade(&p, &gpu(), "BE-RustRepresentation");
+    p.representation.encoded.insert("a".into());
+    reject_grade(&p, &gpu(), "BE-RustRepresentation");
     grade(&mut p, quote!(a at host;));
     check_grading(&p, &gpu()).unwrap();
 }
 
 #[test]
-fn arithmetic_bind_and_guard_earn_device_placement() {
+fn arbitrary_rust_on_identity_columns_earns_device_placement() {
     let mut p: Program = syn::parse_quote! {
         physical {
             relation R(a:i32);
             r = pipe rename R@0 {a -> a};
-            b = pipe bind r with n:i32 = (*a * 100 + 1);
+            b = pipe bind r with n:i32 = (row_function(a));
             g = let canon guard b if (*n / -1 != 0);
             return g as answer(a,n);
         } structures {
@@ -1159,9 +1164,62 @@ fn arithmetic_bind_and_guard_earn_device_placement() {
             g canon = Canon;
             g rows = Rows;
         } sequence { a = store map g rows r; }
+        representation { identity [a,n]; }
     };
     grade(&mut p, quote!(a at device;));
     check_grading(&p, &gpu()).unwrap();
+}
+
+#[test]
+fn representation_facts_round_trip_and_reject_unknown_or_conflicting_columns() {
+    use quote::ToTokens;
+    let mut p = program(quote!(out = store rows r;));
+    p.representation.identity.insert("a".into());
+    contract::check(&p).unwrap();
+    let printed = p.to_token_stream();
+    assert_eq!(syn::parse2::<Program>(printed).unwrap(), p);
+    let mut conflict = p.clone();
+    conflict.representation.encoded.insert("a".into());
+    assert!(contract::check(&conflict).is_err());
+    let mut unknown = p.clone();
+    unknown.representation.identity.insert("missing".into());
+    assert!(contract::check(&unknown).is_err());
+    let mut changed = p.clone();
+    changed.representation.identity.clear();
+    assert!(check_rewrite(&p, &changed).is_err());
+}
+
+#[test]
+fn rewrites_refine_representation_facts_monotonically() {
+    let unknown = program(quote!(out = store rows r;));
+    let mut identity = unknown.clone();
+    identity.representation.identity.insert("a".into());
+    let mut encoded = unknown.clone();
+    encoded.representation.encoded.insert("a".into());
+
+    for refined in [&identity, &encoded] {
+        check_rewrite(&unknown, refined).unwrap();
+        check_rewrite(refined, refined).unwrap();
+        let error = check_rewrite(refined, &unknown).unwrap_err();
+        assert!(error.to_string().contains("BE-RustRepresentation"));
+    }
+    for (source, target) in [(&identity, &encoded), (&encoded, &identity)] {
+        let error = check_rewrite(source, target).unwrap_err();
+        assert!(error.to_string().contains("BE-RustRepresentation"));
+    }
+
+    let mut conflict = identity.clone();
+    conflict.representation.encoded.insert("a".into());
+    assert!(check_rewrite(&identity, &conflict).is_err());
+    for encoded_fact in [false, true] {
+        let mut missing = unknown.clone();
+        if encoded_fact {
+            missing.representation.encoded.insert("missing".into());
+        } else {
+            missing.representation.identity.insert("missing".into());
+        }
+        assert!(check_rewrite(&unknown, &missing).is_err());
+    }
 }
 
 #[test]

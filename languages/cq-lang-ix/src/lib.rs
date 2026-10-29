@@ -2,9 +2,9 @@
 //!
 //! The complete relational plan is retained unchanged. Index descriptors use
 //! sorted logical headings of named RA results and explicitly record whether
-//! key values come from a stream or a compile-time literal tuple. The denotation
-//! is `bottom + Set`: opaque Rust binds and guards retain their ancestry chain;
-//! index analysis preserves that plan and introduces no evaluation freedom.
+//! key values come from a stream or a closed host expression. Rust expressions
+//! are opaque and total; index analysis preserves their recorded placement
+//! without deriving relational demands from their syntax.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -20,10 +20,8 @@
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Only differing literals on one interface column prove union arms disjoint.
 //!
 pub use cq_lang_ra as ra;
 

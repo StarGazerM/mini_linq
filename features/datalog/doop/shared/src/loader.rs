@@ -92,8 +92,10 @@ pub(crate) fn method_descriptors(
     let mut descriptors = Vec::new();
     for (method, (returns, parameters)) in projected {
         for returntype in returns {
+            // DECODE R: method_descriptors' authored format! below needs return-type text to compute a new descriptor.
             let returntype = res(returntype);
             for &params in &parameters {
+                // DECODE R: method_descriptors reads parameter text in opaque format! before interning the computed descriptor.
                 descriptors.push((method, sym(&format!("{}({})", returntype, res(params)))));
             }
         }
@@ -126,7 +128,9 @@ mod tests {
     fn exact_columns_and_empty_strings() {
         let (index, name, empty) = <(i32, IStr, IStr)>::parse("-3\tname\t").unwrap();
         assert_eq!(index, -3);
+        // DECODE P: exact_columns_and_empty_strings exposes the parsed name for a diagnostic answer assertion.
         assert_eq!(&*res(name), "name");
+        // DECODE P: exact_columns_and_empty_strings exposes the empty symbol for a diagnostic answer assertion.
         assert_eq!(&*res(empty), "");
         assert!(<(IStr, IStr)>::parse("one").is_err());
         assert!(<(IStr,)>::parse("one\ttwo").is_err());

@@ -23,7 +23,7 @@ pub(super) fn layout(
     reserved.extend(negation.atom.variables().map(symbol_name));
     let mut keys = Vec::new();
     let mut mapping = Vec::new();
-    let mut constraints = Vec::new();
+    let mut condition = ra::Theta::default();
     for (position, (column, argument)) in declaration
         .columns
         .iter()
@@ -35,7 +35,7 @@ pub(super) fn layout(
             if bound.contains(&symbol_name(v)) {
                 Term::Variable(canonical(v))
             } else {
-                Term::Parameter(v.clone().into())
+                Term::Closed(syn::parse_quote!(#v))
             }
         });
         if let Some(Term::Variable(v)) = &term {
@@ -54,7 +54,7 @@ pub(super) fn layout(
         let fresh = Ident::new(&name, column.name.span());
         mapping.push((column.name.clone(), fresh.clone()));
         if !matches!(argument, syn::Expr::Infer(_)) {
-            constraints.push(syntax::Constraint::Compare {
+            condition.push_constraint(syntax::Constraint::Compare {
                 left: Term::Variable(fresh),
                 comparison: Comparison::Eq(Default::default()),
                 right: term.unwrap_or_else(|| Term::Literal(Box::new(argument.clone()))),
@@ -63,10 +63,7 @@ pub(super) fn layout(
     }
     Layout {
         mapping,
-        condition: ra::Theta {
-            equalities: Default::default(),
-            constraints: constraints.into_iter().collect(),
-        },
+        condition,
         keys,
     }
 }
@@ -81,10 +78,12 @@ pub(super) fn obligation(
 ) -> usize {
     let layout = layout(declaration, negation, bound, Clone::clone);
     let mut right = schedule.atom_path(path, &negation.atom.relation, &layout.mapping, None);
-    if !layout.condition.constraints.is_empty() {
+    let filtered =
+        !layout.condition.equalities.is_empty() || !layout.condition.constraints.is_empty();
+    if filtered {
         right = schedule.select(right, &layout.condition);
     }
-    if layout.keys.len() != layout.mapping.len() && !layout.condition.constraints.is_empty() {
+    if layout.keys.len() != layout.mapping.len() && filtered {
         right = schedule.project(right, &layout.keys);
     }
     schedule.anti(left, right, &layout.keys)

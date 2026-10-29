@@ -597,7 +597,7 @@ fn const_reads_can_coexist_with_storage_justified_by_a_stream() {
 }
 
 #[test]
-fn every_built_key_level_requires_the_leibniz_premise() {
+fn payload_probes_must_cover_every_built_key_level() {
     let p: structures::Program = syn::parse_quote! { physical {
         relation L(a: i32); relation R(a: i32, payload: f64);
         l = pipe rename L@0 { a -> x };
@@ -608,7 +608,7 @@ fn every_built_key_level_requires_the_leibniz_premise() {
     } structures { r = UserTrie [x][y]; } };
     let error = structures::contract::check(&p).unwrap_err().to_string();
     assert!(
-        error.contains("y") && error.contains("Eq") && error.contains("f64"),
+        error.contains("payload probe must read all built levels"),
         "{error}"
     );
 }
@@ -704,7 +704,7 @@ fn representation_rejects_uncovered_noncomputed_and_forged_columns() {
 }
 
 #[test]
-fn stages_reject_partial_steps_cursor_producers_and_zero_batches() {
+fn stages_reject_unsupported_adapters_cursor_producers_and_zero_batches() {
     for entry in [
         syn::parse_quote!(b stage = batch 16;),
         syn::parse_quote!(out stage = batch 16;),
@@ -716,7 +716,7 @@ fn stages_reject_partial_steps_cursor_producers_and_zero_batches() {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("partial") || error.contains("positive"),
+            error.contains("unsupported") || error.contains("positive"),
             "{error}"
         );
     }
@@ -737,7 +737,7 @@ fn stages_reject_partial_steps_cursor_producers_and_zero_batches() {
         .entries
         .push(syn::parse_quote!(s stage = batch 16;));
     let error = structures::contract::check(&guard).unwrap_err().to_string();
-    assert!(error.contains("partial"), "{error}");
+    assert!(error.contains("unsupported"), "{error}");
 }
 
 #[test]
@@ -973,7 +973,7 @@ fn expand_cannot_stage_across_bind() {
         structures::contract::check(&p)
             .unwrap_err()
             .to_string()
-            .contains("partial")
+            .contains("unsupported")
     );
 }
 

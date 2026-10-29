@@ -86,13 +86,13 @@ fn check_absorption(source: &Program, target: &Program, schedule: &Schedule) -> 
         .map(|(index, definition)| (symbol_name(&definition.result), index))
         .collect();
     let mut negative = vec![false; schedule.nodes.len()];
-    let mut opaque = vec![false; schedule.nodes.len()];
+    let mut grouped = vec![false; schedule.nodes.len()];
     for (index, node) in schedule.nodes.iter().enumerate() {
         if matches!(node.kind, Kind::Anti(_)) {
             negative[node.operands[1]] = true;
         }
-        opaque[index] = matches!(node.kind, Kind::Rust(_) | Kind::Group(_))
-            || dependencies(node).any(|input| opaque[input]);
+        grouped[index] =
+            matches!(node.kind, Kind::Group(_)) || dependencies(node).any(|input| grouped[input]);
     }
     for (index, node) in schedule.nodes.iter().enumerate().rev() {
         if negative[index] {
@@ -111,7 +111,7 @@ fn check_absorption(source: &Program, target: &Program, schedule: &Schedule) -> 
     let proof = Proof {
         schedule,
         negative,
-        opaque,
+        grouped,
         retained,
     };
     let mut remaining = target.plan.definitions.iter().peekable();
@@ -127,7 +127,7 @@ fn check_absorption(source: &Program, target: &Program, schedule: &Schedule) -> 
             // this omitted definition remains.
             if !matches!(definition.operator, Operator::Semijoin(_))
                 || proof.negative[index]
-                || proof.opaque[index]
+                || proof.grouped[index]
             {
                 return false;
             }
@@ -208,7 +208,7 @@ fn check_dead_expansion(source: &Program, target: &Program, schedule: &Schedule)
         let proof = Proof {
             schedule: &current_schedule,
             negative: vec![false; current_schedule.nodes.len()],
-            opaque: vec![false; current_schedule.nodes.len()],
+            grouped: vec![false; current_schedule.nodes.len()],
             retained: current
                 .plan
                 .definitions
@@ -442,7 +442,7 @@ fn dependencies(node: &super::Node) -> impl Iterator<Item = usize> + '_ {
 struct Proof<'a> {
     schedule: &'a Schedule,
     negative: Vec<bool>,
-    opaque: Vec<bool>,
+    grouped: Vec<bool>,
     retained: Vec<bool>,
 }
 
@@ -452,7 +452,7 @@ impl Proof<'_> {
             let node = &self.schedule.nodes[reduced];
             if !matches!(node.kind, Kind::Join(true))
                 || self.negative[reduced]
-                || self.opaque[reduced]
+                || self.grouped[reduced]
                 // A surviving restricted row still supplies correlated
                 // projected witnesses. All its consumers must keep that
                 // same row rather than partially bypass its restrictions.

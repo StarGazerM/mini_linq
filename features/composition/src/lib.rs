@@ -13,11 +13,11 @@
 //! The query returns references to host fields. Only the executable copies
 //! integers for deterministic display.
 //!
-//! The meaning is Kleisli over bottom + Set, with Leibniz equality on integers.
-//! Rust steps are opaque partial functions and stay pinned relative to each
-//! other and their binders. Tests use cq-testkit's independent CQ oracle and
-//! written-order refinement harness. Core dependencies have version and path
-//! entries so the external gate can replace them with packaged crates.
+//! The meaning is Set, with Leibniz equality on integers. Rust steps are opaque,
+//! pure, total functions placed after the binders of their free variables, not
+//! pinned to written order. Relational predicates use `where`. Tests compare
+//! total answer sets with independent oracles. Core dependencies have version
+//! and path entries so the external gate can replace them with packaged crates.
 //! Run `cargo run --manifest-path features/composition/Cargo.toml --locked`
 //! from the repository root to execute the heterogeneous join.
 //!
@@ -34,8 +34,8 @@
 //! Core blocks preserve union and ordered fallback through this consumer.
 //! Their laws are join distribution over union and `B1 else B2 = B1 union
 //! (B2 anti_F B1)`. Common interface bindings escape; locals do not. The complete
-//! IR retains union/anti, nested occurrence paths and branch Before ancestry.
-//! Rust-free blocks hoist; Rust arms run from one prefix row with ordered else.
+//! IR retains union/anti, nested occurrence paths and branch-local bindings.
+//! Rust placement follows free-variable dependencies in each branch.
 //!
 #![recursion_limit = "512"]
 
@@ -71,7 +71,7 @@ pub fn query<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cq_testkit::{Database, Rows, cq_semantics, harness};
+    use cq_testkit::{Database, Rows, cq_semantics};
 
     #[test]
     fn composed_pipeline_preserves_nested_union_and_fallback() {
@@ -223,13 +223,11 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn ordered_rust_steps_refine_the_written_reference() {
+    fn total_rust_steps_preserve_answers_after_their_free_variable_binders() {
         fn first(b: &i32) -> i32 {
-            assert_ne!(*b, 9);
-            *b + 1
+            b.saturating_add(1)
         }
         fn second(d: &i32) -> bool {
-            assert_ne!(*d, 8);
             *d > 2
         }
         for value in [0, 1, 3, 7, 9] {
@@ -240,42 +238,37 @@ mod tests {
                         HashMap::from([((1,), if has_middle { vec![(value,)] } else { vec![] })]);
                     let S =
                         BTreeMap::from([((value,), if has_right { vec![(100,)] } else { vec![] })]);
-                    harness::check_refinement(
-                        || {
-                            let mut answer = Rows::new();
-                            for &(a,) in &L {
-                                for &(b,) in &R[&(a,)] {
-                                    let d = first(&b);
-                                    if second(&d) {
-                                        for &(c,) in &S[&(b,)] {
-                                            answer.insert(vec![a, b, c]);
-                                        }
-                                    }
+                    let mut expected = Rows::new();
+                    for &(a,) in &L {
+                        for &(b,) in &R[&(a,)] {
+                            let d = first(&b);
+                            if second(&d) {
+                                for &(c,) in &S[&(b,)] {
+                                    expected.insert(vec![a, b, c]);
                                 }
                             }
-                            answer
-                        },
-                        || {
-                            mini_linq::compile! {
-                                pipeline {
-                                    plan = mini_linq::passes::plan;
-                                    ix = mini_linq::passes::index_demands;
-                                    lower = mini_linq::passes::lower;
-                                    select = mini_linq::passes::select;
-                                    print = mini_linq::passes::translate_pull;
-                                }
-                                struct Partial;
-                                relation L(a: i32);
-                                relation R(a: i32, b: i32);
-                                relation S(b: i32, c: i32);
-                                answer(a, b, c) :- L(a), R(a, b),
-                                    let d: i32 = first(b), if second(d), S(b, c);
-                            }
-                            .map(|(a, b, c)| vec![*a, *b, *c])
-                            .collect::<Rows>()
-                        },
-                    )
-                    .unwrap();
+                        }
+                    }
+                    // `first` needs b from R; `second` needs d from the let.
+                    // Neither must wait for unrelated relational work on S.
+                    let actual = mini_linq::compile! {
+                        pipeline {
+                            plan = mini_linq::passes::plan;
+                            ix = mini_linq::passes::index_demands;
+                            lower = mini_linq::passes::lower;
+                            select = mini_linq::passes::select;
+                            print = mini_linq::passes::translate_pull;
+                        }
+                        struct Total;
+                        relation L(a: i32);
+                        relation R(a: i32, b: i32);
+                        relation S(b: i32, c: i32);
+                        answer(a, b, c) :- L(a), R(a, b),
+                            let d: i32 = first(b), if second(d), S(b, c);
+                    }
+                    .map(|(a, b, c)| vec![*a, *b, *c])
+                    .collect::<Rows>();
+                    assert_eq!(actual, expected);
                 }
             }
         }

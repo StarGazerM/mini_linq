@@ -115,6 +115,7 @@ fn inspect(
     for (word, (&got, &want)) in actual.iter().zip(&expected).enumerate() {
         assert_eq!(got, want, "{label}: payload word {word}, codec {codec:?}");
     }
+    // DECODE P: diagnostic codec oracle publishes reconstructed column values for exact comparison.
     assert_eq!(column.to_host()?, input, "{label}: GPU decode {codec:?}");
     Ok(())
 }
@@ -153,6 +154,7 @@ fn device_output(pool: &Arc<Pool>, codec: Codec, len: usize, order: &[usize]) ->
             },
         )?
     };
+    // DECODE I: diagnostic device chain decodes then immediately re-encodes the column; this reorganization is avoidable.
     let decoded = encoded.decoded()?;
     let chained = unsafe {
         EncodedColumn::from_device(
@@ -235,9 +237,11 @@ fn owned_plain(pool: &Arc<Pool>, len: usize) -> Result<()> {
         capacity * 8,
         "Plain adoption allocates no metadata"
     );
+    // DECODE P: diagnostic adopted Plain column publishes its logical answer prefix.
     assert_eq!(column.to_host()?, input[..len]);
     // No capacity initialization: decode writes only the prefix read below.
     let scratch = unsafe { Buffer::<i64>::uninitialized(pool.clone(), capacity)? };
+    // DECODE P: diagnostic scratch inverse exposes live logical values for the following host assertion.
     unsafe { column.decode_into(scratch.ptr())? };
     assert_eq!(scratch.to_host_prefix(len)?, input[..len]);
     drop(column);
@@ -368,12 +372,15 @@ fn main() -> Result<()> {
         right.len(),
         &order,
     )?;
+    // DECODE P: diagnostic left dictionary-code column exposes FOR-reconstructed IDs for equality checks.
     let decoded_a = a.to_host()?;
+    // DECODE P: diagnostic right dictionary-code column exposes FOR-reconstructed IDs for equality checks.
     let decoded_b = b.to_host()?;
     for (i, &id_a) in decoded_a.iter().enumerate() {
         for (j, &id_b) in decoded_b.iter().enumerate() {
             assert_eq!(
                 id_a == id_b,
+                // DECODE P: diagnostic dictionary resolution exposes both expected strings for shared-ID equality checking.
                 dictionary[left[i] as usize] == dictionary[right[j] as usize]
             );
         }

@@ -132,6 +132,71 @@ fn unordered_owned_payload_does_not_require_key_traits() {
     assert_eq!(ordered[&(42,)][0].1, OwnedUserType("first".into()));
 }
 
+mod interned {
+    use super::OwnedUserType;
+    use cq_load::StringCode;
+
+    // Alias spelling deliberately differs from StringCode: dispatch must use
+    // trait implementations, not inspect authored Rust type names.
+    type Text = cq_load::StringCode;
+
+    ::mini_linq::interned_relation_loaders! {
+        relation Encoded(id: i64, label: Text, other: Text, annotation: OwnedUserType);
+    }
+
+    #[test]
+    fn generated_interning_preserves_rows_and_custom_scalar_fields() {
+        let mut dictionaries = cq_load::Dictionaries::default();
+        let rows = <relation_loader!(Encoded)>::intern(
+            vec![
+                (2, "z".into(), "a".into(), OwnedUserType("first".into())),
+                (1, "a".into(), "z".into(), OwnedUserType("second".into())),
+                (2, "z".into(), "a".into(), OwnedUserType("first".into())),
+            ],
+            &mut dictionaries,
+        );
+        assert_eq!(
+            rows,
+            [
+                (
+                    2,
+                    StringCode(1),
+                    StringCode(0),
+                    OwnedUserType("first".into())
+                ),
+                (
+                    1,
+                    StringCode(0),
+                    StringCode(1),
+                    OwnedUserType("second".into())
+                ),
+                (
+                    2,
+                    StringCode(1),
+                    StringCode(0),
+                    OwnedUserType("first".into())
+                ),
+            ]
+        );
+        assert_eq!(dictionaries.literal("label", "missing"), Text::MAX);
+        assert_eq!(
+            dictionaries.select("label", |value| value == "a"),
+            [(cq_load::StringCode(0),)]
+        );
+        assert!(dictionaries.get("id").is_none());
+        assert!(dictionaries.get("annotation").is_none());
+    }
+
+    #[test]
+    fn generated_interning_registers_empty_string_columns() {
+        let mut dictionaries = cq_load::Dictionaries::default();
+        assert!(<relation_loader!(Encoded)>::intern(Vec::new(), &mut dictionaries).is_empty());
+        assert!(dictionaries.get("label").is_some());
+        assert!(dictionaries.get("other").is_some());
+        assert_eq!(dictionaries.literal("label", ""), Text::MAX);
+    }
+}
+
 #[test]
 fn schema_column_names_survive_parse_errors_and_header_reordering() {
     let file = File::new("amount,label,id\n10,a,1\nwrong,b,2\n");

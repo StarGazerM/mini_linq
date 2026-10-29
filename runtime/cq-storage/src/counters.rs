@@ -268,8 +268,12 @@ impl Default for CountingHasher {
     fn default() -> Self {
         #[cfg(feature = "counters")]
         let inner = CountingInner::default();
+        // `BuildHasherDefault` builds one hasher per hash, so the keys must be
+        // fixed: a fresh `RandomState` per hasher hashes equal keys differently
+        // and sets stop deduplicating.
         #[cfg(not(feature = "counters"))]
-        let inner = std::hash::BuildHasher::build_hasher(&crate::HashState::default());
+        let inner =
+            std::hash::BuildHasher::build_hasher(&ahash::RandomState::with_seeds(0, 0, 0, 0));
         Self(inner)
     }
 }
@@ -322,5 +326,15 @@ impl<K: Eq + std::hash::Hash, S: std::hash::BuildHasher> DistinctSet<K, S> {
         self.1
             .grow((self.0.capacity() - before) * (std::mem::size_of::<K>() + 1));
         inserted
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn instrumented_sets_deduplicate_equal_keys() {
+        let mut seen = super::DistinctSet::new();
+        assert!(seen.insert((7_u64, String::from("x"))));
+        assert!(!seen.insert((7_u64, String::from("x"))));
     }
 }

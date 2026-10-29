@@ -1,5 +1,13 @@
 //! Opt-in host capabilities are selection inputs, never type-dispatch guesses.
 //! Unknown hosts keep the exact pre-existing entries.
+//!
+//! DESIGN contract8-positional-selection
+//! Owns recorded positional access strategy, not join order (contract 8, SEL-Positional/STR-Repr).
+//! Sources: doc/STORAGE.md §§4,8,9,12; Data Blocks §3; DuckDB physical_hash_join.cpp:1837-1966.
+//! DO NOT infer provider capabilities from types or conflate scan columns with grouped index runs.
+//! Known deviation: separate adaptive keysets still accompany indexes; grouped-run reuse is Plan P4.
+//! Group ranges/offsets should avoid payload expansion; filter/evidence propagation is Plan P7.
+//! DO NOT select pruning/compression by doctrine: TPC-H load order skips almost nothing; require target evidence.
 use super::*;
 use structures::{Origin, Structure};
 
@@ -59,8 +67,6 @@ pub(super) fn choose(
                 .unwrap();
             if !matches!(&d.operator, Operator::Semi(_,k) if !matches!(k.choice, Some(physical::Choice::Lazy(_))))
                 || key.len() != 1
-                || structures::ungroup_type(&facts.physical.rows[name].types[&key[0]])
-                    != &syn::parse_quote!(i64)
             {
                 continue;
             }
@@ -75,7 +81,7 @@ pub(super) fn choose(
                 .clone();
             let column = &facts.physical.rows[name].bindings[&key[0]];
             let origin = origin(name)?;
-            extra.push(syn::parse2(quote!(#ident keyset = ::cq_storage::AdaptiveKeySet<_, ::cq_storage::I64Codec, 67108864> [#column] owned #origin;))?);
+            extra.push(syn::parse2(quote!(#ident keyset = ::cq_storage::AdaptiveKeySet<_, ::cq_storage::AutoDense, 67108864> [#column] owned #origin;))?);
         }
     }
     let mut reads = BTreeSet::new();
@@ -108,28 +114,7 @@ pub(super) fn choose(
         } else {
             continue;
         };
-        // cq-load's default markers support these exact scalar/text schemas.
-        let ty = structures::ungroup_type(&facts.physical.rows[&name].types[&column]);
-        let type_name = quote!(#ty).to_string();
-        if !matches!(
-            type_name.as_str(),
-            "i8" | "i16"
-                | "i32"
-                | "i64"
-                | "i128"
-                | "isize"
-                | "u8"
-                | "u16"
-                | "u32"
-                | "u64"
-                | "u128"
-                | "usize"
-                | "bool"
-                | "String"
-                | "Date"
-        ) {
-            continue;
-        }
+        // The chosen marker's trait bounds establish accepted row elements.
         let l = &lineage[&name];
         let host_column = &l.columns[&column];
         let n = syn::Index::from(
@@ -308,11 +293,31 @@ pub(super) fn choose(
                 false
             }
             Structure::Rows { .. } => !selections.contains(&symbol_name(&entry.name)),
-            Structure::Built { keyed, .. }
-                if keyed.ty == syn::parse_quote!(::cq_storage::HashSet<_>)
-                    && keyed.levels.len() == 1 =>
-            {
-                !sets.contains(&(symbol_name(&entry.name), keyed.level_names()[0].clone()))
+            Structure::Built { keyed, .. } if keyed.levels.len() == 1 => {
+                let name = symbol_name(&entry.name);
+                let key = &keyed.level_names()[0];
+                let contains_only = facts
+                    .physical
+                    .keyed_reads
+                    .get(&name)
+                    .into_iter()
+                    .flatten()
+                    .filter(|(_, columns, _)| columns == key)
+                    .all(|(reader, _, _)| {
+                        defs.iter()
+                            .find(|d| symbol_name(&d.name) == *reader)
+                            .is_some_and(|d| {
+                                matches!(d.operator, Operator::Semi(..) | Operator::Anti(..))
+                            })
+                    })
+                    && !facts
+                        .physical
+                        .merge_reads
+                        .get(&name)
+                        .into_iter()
+                        .flatten()
+                        .any(|(_, columns)| columns == key);
+                !contains_only || !sets.contains(&(name, key.clone()))
             }
             _ => true,
         });
@@ -356,6 +361,35 @@ fn positional_source(
     }
 }
 
+/// Recorded provider families with a payload-directory enumeration policy.
+/// This examines the selected representation, never a query column's Rust type.
+fn supplementary_filter_provider(ty: &syn::Type) -> bool {
+    let syn::Type::Path(path) = ty else {
+        return false;
+    };
+    if path.qself.is_some() {
+        return false;
+    }
+    let segments = &path.path.segments;
+    if segments.len() == 2 && segments[0].ident == "cq_storage" {
+        return segments[1].ident == "HashIndex" || segments[1].ident == "SortedRun";
+    }
+    if segments.len() != 3 || segments[0].ident != "cq_storage" || segments[1].ident != "sharded" {
+        return false;
+    }
+    if segments[2].ident == "Index" {
+        return true;
+    }
+    if segments[2].ident != "Sharded" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &segments[2].arguments else {
+        return false;
+    };
+    matches!(arguments.args.first(), Some(syn::GenericArgument::Type(inner))
+        if supplementary_filter_provider(inner))
+}
+
 /// Formal rule SEL-JoinFilter: Choose an exact key set for each eligible covered scalar key column of a filtered build, at its scan.
 fn choose_join_filters(
     target: &mut structures::Program,
@@ -376,9 +410,25 @@ fn choose_join_filters(
     // Record every admissible covering witness. The contract checks all of
     // them before coalescing equivalent scan/build/key/layout runtime filters.
     for d in &target.physical.program.definitions {
+        let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &d.operator else {
+            continue;
+        };
+        let columns: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
         for candidate in structures::join_filter_candidates(target, &facts, &symbol_name(&d.name)) {
             let origin = &facts.lineage[&candidate.scan];
-            if !candidate.filtered || !bases.contains(&origin.base) {
+            if !candidate.filtered
+                || !bases.contains(&origin.base)
+                || facts
+                    .built_on(&candidate.build, &columns)
+                    .is_none_or(|(ty, _)| !supplementary_filter_provider(ty))
+                // A contains-only build already performs this exact test and
+                // need not enumerate keys to build a redundant scan filter.
+                || facts.membership.iter().any(|(build, columns)| {
+                    build == &candidate.build
+                        && matches!(&d.operator, Operator::Probe(_, key) | Operator::Semi(_, key)
+                            if sorted(&key.columns.iter().map(symbol_name).collect::<Vec<_>>()) == *columns)
+                })
+            {
                 continue;
             }
             let index = syn::Index::from(
@@ -391,10 +441,35 @@ fn choose_join_filters(
             let build = named(&candidate.build);
             let key = &facts.physical.rows[&candidate.build].bindings[&candidate.key];
             let covering = &d.name;
-            let ty = quote!(::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>);
+            let ty = quote!(::cq_storage::AdaptiveMembership<_, 67108864>);
             entries.push(syn::parse2(quote!(#scan join_filter = #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;))?);
         }
     }
     target.structures.entries.extend(entries);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supplementary_filter_provider;
+
+    #[test]
+    fn supplementary_enumeration_is_a_payload_provider_policy() {
+        for ty in [
+            syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>),
+            syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::NoDense>),
+            syn::parse_quote!(::cq_storage::sharded::Index<_, _>),
+            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>),
+        ] {
+            assert!(supplementary_filter_provider(&ty));
+        }
+        for ty in [
+            syn::parse_quote!(::cq_storage::HashSet<_>),
+            syn::parse_quote!(::std::collections::HashSet<_>),
+            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
+            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::HashSet<_>>),
+        ] {
+            assert!(!supplementary_filter_provider(&ty));
+        }
+    }
 }

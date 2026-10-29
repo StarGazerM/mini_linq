@@ -49,7 +49,7 @@ fn conflicting_points_keep_all_residuals_before_the_next_read() {
         pipeline { print_input = $input; print = $($printer)::+; select = mini_linq::passes::select(positional(R)); }
         struct Conflicting;
         relation R(a:i64,b:i64) = (rows);
-        answer(a) :- R(a,b), if *a == 1 && *a == 2 && *b == 10;
+        answer(a) :- R(a,b), where a == 1 && a == 2 && b == 10;
     }
     .collect();
     assert!(result.is_empty());
@@ -67,7 +67,7 @@ fn nonleading_filtered_index_keeps_payload_and_constant_reconstruction() {
         struct Filtered;
         relation L(a:i64) = (left);
         relation R(a:i64,label:String,value:i64) = (right);
-        answer(a,label,value) :- L(a), R(a,label,value), if label == "yes";
+        answer(a,label,value) :- L(a), R(a,label,value), where label == "yes";
     }
     .map(|(a, l, v)| (*a, l.clone(), *v))
     .collect();
@@ -137,7 +137,7 @@ fn positional_bindings_do_not_shadow_captured_parameters() {
         pipeline { print_input = $input; print = $($printer)::+; select = mini_linq::passes::select(positional(r)); }
         struct Hygiene;
         relation r(x:i64) = (rows);
-        answer(x) :- r(x), if *x < __cq_positional_r;
+        answer(x) :- r(x), where x < __cq_positional_r;
     }
     .map(|(x,)| *x)
     .collect();
@@ -174,7 +174,7 @@ fn raw_identifiers_survive_recorded_base_and_column_lineage() {
         pipeline { print_input = $input; print = $($printer)::+; select = mini_linq::passes::select(positional(r#type)); }
         struct Raw;
         relation r#type(r#match:i64) = (rows);
-        answer(r#loop) :- r#type(r#loop), if *r#loop > 1;
+        answer(r#loop) :- r#type(r#loop), where r#loop > 1;
     }
     .map(|(x,)| *x)
     .collect();

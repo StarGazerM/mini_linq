@@ -1,10 +1,7 @@
-//! Schedule `T X = bottom + Set X` comprehensions into valuations.
-//! Rust lets, finite set-valued generators and guards are opaque partial functions and keep written relative
-//! order, their free-variable binders, and all their written relational
-//! predecessors. Relational steps alone commute and may move earlier across
-//! the Rust chain. This sufficient refinement condition permits no new panic
-//! on a nonpanicking written reference input. Other effects, including I/O,
-//! mutation and evaluation counts, are outside this denotation.
+//! Schedule set-valued comprehensions into valuations.
+//! Rust lets, generators and guards are opaque, pure and total by premise.
+//! They are placed solely by their free-variable dependencies and are never
+//! recognized, split or rewritten as relational predicates.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -13,16 +10,14 @@
 
 //! Ordering plans each block recursively.
 //! A Rust-free block is one hyperedge over its free/interface heading at its CQ clause index.
-//! A Rust block is pinned by its branch Before requirements and provides its interface only after all arms.
+//! A Rust block requires its free variables and provides its interface after all arms.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
-//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
-//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! Union siblings are unordered; fallback retains its relational anti steps.
+//! Only differing literals on one interface column prove union arms disjoint.
 //!
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -96,11 +91,7 @@ impl Clause<'_> {
 /// Formal rule D-Guard: Guard requires dependencies on the written prefix.
 /// Formal rule D-Bind: Binding provides pattern names and requires RHS prefix dependencies.
 /// Formal rule D-For: Generator provides pattern names and requires RHS prefix dependencies.
-fn clauses<'a>(
-    body: &'a cq::CommaList<BodyItem>,
-    context: &BTreeSet<String>,
-    types: &BTreeMap<String, syn::Type>,
-) -> Vec<Clause<'a>> {
+fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) -> Vec<Clause<'a>> {
     let mut let_bound = BTreeSet::new();
     let mut written = context.clone();
     for item in body {
@@ -201,7 +192,7 @@ fn clauses<'a>(
                     unreachable!("normal form")
                 }
             };
-            let rust = (item.rust_step().is_some() && item.arithmetic(types).is_none())
+            let rust = item.rust_step().is_some()
                 || matches!(item, BodyItem::Block(block) if block.analyze(&prefix).rust);
             let atom = match item {
                 BodyItem::Positive { atom } => Some(atom.clone()),
@@ -232,19 +223,9 @@ fn clauses<'a>(
         .collect()
 }
 
-/// Formal rule C-Ready: Require inputs, next Rust chain step, and every written relational predecessor.
-fn ready(
-    clauses: &[Clause<'_>],
-    pending: &[usize],
-    bound: &BTreeSet<String>,
-    clause: usize,
-) -> bool {
+/// Formal rule C-Ready: Require precisely the clause's free-variable inputs.
+fn ready(clauses: &[Clause<'_>], bound: &BTreeSet<String>, clause: usize) -> bool {
     clauses[clause].requires.is_subset(bound)
-        && (!clauses[clause].rust
-            || (pending.iter().copied().filter(|&c| clauses[c].rust).min() == Some(clause)
-                && !pending
-                    .iter()
-                    .any(|&c| c < clause && (!clauses[c].rust || clauses[c].atom.is_some()))))
 }
 
 /// A rank orders the ready clauses; the least is placed next. Guards and
@@ -265,7 +246,7 @@ fn schedule(
         let choice = pending
             .iter()
             .copied()
-            .filter(|&c| ready(clauses, &pending, &bound, c))
+            .filter(|&c| ready(clauses, &bound, c))
             .min_by_key(|&c| rank(c, &bound));
         let Some(choice) = choice else {
             return Err(syn::Error::new_spanned(query, "no clause is ready"));
@@ -445,24 +426,17 @@ struct Fine<'a> {
     bound: BTreeSet<String>,
     /// Guards and bindings not yet placed, in query order.
     waiting: Vec<usize>,
-    incomplete_atoms: BTreeSet<usize>,
     steps: Vec<valuation::Step>,
 }
 
 impl Fine<'_> {
     fn place_ready(&mut self) {
         loop {
-            let pending: Vec<_> = self
-                .waiting
-                .iter()
-                .copied()
-                .chain(self.incomplete_atoms.iter().copied())
-                .collect();
             let Some(clause) = self
                 .waiting
                 .iter()
                 .copied()
-                .filter(|&c| ready(self.clauses, &pending, &self.bound, c))
+                .filter(|&c| ready(self.clauses, &self.bound, c))
                 .min_by_key(|&c| {
                     (
                         usize::from(!matches!(
@@ -504,12 +478,6 @@ impl Fine<'_> {
     /// The clause's subatom over its bound columns.
     fn subatom(&mut self, clause: usize, atom: &cq::Atom) {
         let step = subatom(clause, atom, |v| self.bound.contains(v));
-        if atom
-            .variables()
-            .all(|v| self.bound.contains(&symbol_name(v)))
-        {
-            self.incomplete_atoms.remove(&clause);
-        }
         self.steps.push(step);
     }
 }
@@ -541,7 +509,6 @@ fn fine(
         waiting: (0..clauses.len())
             .filter(|&c| !clauses[c].is_atom())
             .collect(),
-        incomplete_atoms: atoms.iter().copied().collect(),
         steps: Vec::new(),
     };
     for &clause in &atoms {
@@ -753,16 +720,15 @@ impl OrderAtom {
 /// Unqualified relations must occur exactly once; `R@i` selects the positive
 /// atom named R at normal-body clause i, including non-atom clauses in the
 /// numbering. `block@i` selects a block as a unit. Unnamed clauses retain
-/// written priority after named atoms/blocks. Opaque Rust still obeys readiness
-/// and Before; nested blocks keep their internal order.
+/// written priority after named atoms/blocks. Rust obeys free-variable readiness;
+/// nested blocks keep their internal order.
 pub fn compile_explicit(
     source: &cq::Program,
     relations: &[OrderAtom],
 ) -> syn::Result<valuation::Program> {
     cq::normal::check(source)?;
     let context = BTreeSet::new();
-    let types = declared_types(source, &source.query.body)?;
-    let clauses = clauses(&source.query.body, &context, &types);
+    let clauses = clauses(&source.query.body, &context);
     let mut priorities = BTreeMap::new();
     for (priority, selector) in relations.iter().enumerate() {
         let relation = &selector.relation;
@@ -813,14 +779,6 @@ pub fn compile_explicit(
     Ok(program)
 }
 
-fn declared_types(
-    source: &cq::Program,
-    body: &cq::CommaList<BodyItem>,
-) -> syn::Result<BTreeMap<String, syn::Type>> {
-    let schema = source.inputs().map(|d| (symbol_name(&d.name), d)).collect();
-    cq::blocks::types(&schema, body, &BTreeMap::new())
-}
-
 /// Formal rule O-BlockPlacement: Ordinary ordering hoists Rust-free blocks and correlates blocks containing Rust steps.
 fn compile_body(
     source: &cq::Program,
@@ -829,8 +787,7 @@ fn compile_body(
     parent: Option<(valuation::Occurrence, usize)>,
 ) -> syn::Result<Vec<valuation::Step>> {
     let query = &source.query;
-    let types = declared_types(source, &query.body)?;
-    let clauses = clauses(&query.body, context, &types);
+    let clauses = clauses(&query.body, context);
     let hypergraph = cq::hypergraph::Analysis::of_body(&query.body, context);
     let (sequence, mut variables) = match options.heuristic {
         Heuristic::Filtered => {
@@ -928,11 +885,7 @@ fn compile_body(
         };
         if let BodyItem::Block(block) = clauses[clause].item {
             let facts = block.analyze(&written_contexts[clause]);
-            let context = if facts.rust {
-                written_contexts[clause].clone()
-            } else {
-                facts.free.keys().cloned().collect()
-            };
+            let context = facts.free.keys().cloned().collect();
             let mut branches = Vec::new();
             for (j, branch) in block.branches.iter().enumerate() {
                 let mut branch_source = source.clone();
@@ -969,7 +922,7 @@ fn compile_body(
 
 /// Check normal form, unchanged CQ, split granularity and explicit order.
 /// Prefix and elimination rankings are expansion choices, not obligations.
-/// Formal rule CK-Order: Validate unchanged CQ, split, coverage, Rust Before, Written order, Filtered coarse greedy choices and independently proved branch groups.
+/// Formal rule CK-Order: Validate unchanged CQ, split, coverage, free-variable readiness, Written order, Filtered coarse greedy choices and independently proved branch groups.
 pub fn check(
     source: &cq::Program,
     target: &valuation::Program,
@@ -1024,14 +977,40 @@ fn check_steps(
                     previous_atom = Some(atom.clause());
                 }
                 valuation::Step::Equality(equality, _) => {
-                    let position = body.iter().enumerate().find(|(i,item)| !written.contains(i) && matches!(item, BodyItem::Equality(expected) if expected == equality)).map(|(i,_)| i).expect("VO equality correspondence");
+                    let position = body
+                        .iter()
+                        .enumerate()
+                        .find(|(i, item)| {
+                            !written.contains(i)
+                                && match item {
+                                    BodyItem::Equality(expected) => expected == equality,
+                                    BodyItem::Constraint(expected) => {
+                                        expected.equality().as_ref() == Some(equality)
+                                    }
+                                    _ => false,
+                                }
+                        })
+                        .map(|(i, _)| i)
+                        .expect("VO equality correspondence");
                     written.push(position);
                     previous_atom = None;
                 }
                 valuation::Step::Constraint(constraint, _) => {
-                    let position = body.iter().enumerate().find(|(i, item)|
-                        !written.contains(i) && matches!(item, BodyItem::Constraint(expected) if expected == constraint)
-                    ).map(|(i, _)| i).expect("VO constraint correspondence");
+                    let position = body
+                        .iter()
+                        .enumerate()
+                        .find(|(i, item)| {
+                            !written.contains(i)
+                                && match item {
+                                    BodyItem::Constraint(expected) => expected == constraint,
+                                    BodyItem::Equality(expected) => {
+                                        constraint.equality().as_ref() == Some(expected)
+                                    }
+                                    _ => false,
+                                }
+                        })
+                        .map(|(i, _)| i)
+                        .expect("VO constraint correspondence");
                     written.push(position);
                     previous_atom = None;
                 }
@@ -1105,8 +1084,7 @@ fn check_steps(
                 .flatten()
                 .cloned()
                 .collect();
-            let types = declared_types(source, body)?;
-            let facts = clauses(body, &context, &types);
+            let facts = clauses(body, &context);
             let graph = cq::hypergraph::Analysis::of_body(body, &context);
             let mut filters = cq::hypergraph::filter_ranks(body, &graph);
             if let Some(groups) = join_branches {
@@ -1128,7 +1106,7 @@ fn check_steps(
                 if pending
                     .iter()
                     .copied()
-                    .filter(|&c| ready(&facts, &pending, &bound, c))
+                    .filter(|&c| ready(&facts, &bound, c))
                     .any(|c| rank(c, &bound) < rank(clause, &bound))
                 {
                     return Err(syn::Error::new_spanned(

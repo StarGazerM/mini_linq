@@ -925,7 +925,7 @@ fn task_catalog_retains_membership_fallbacks_before_shared_reads() {
         structures {
             l host scan = Reader [];
             r host scan = Reader [];
-            r host result = ::cq_storage::dispatch::KeySet<_> [a];
+            r host result(result) = ::cq_storage::dispatch::KeySet<_> [a];
         }
         sequence {
             l = rows l; r = rows r;
@@ -955,6 +955,87 @@ fn task_catalog_retains_membership_fallbacks_before_shared_reads() {
                     cq_lang_sequence::structures::Structure::Built { .. }
                 ))
     );
+}
+
+#[test]
+fn raw_full_key_host_membership_is_published_before_shared_task_reads() {
+    let physical = syn::parse_quote! {
+        physical {
+            relation L(a:i32,b:i32); relation R(a:i32,b:i32);
+            consumer canonical;
+            l = pipe rename L@0 {a -> a,b -> b};
+            r = pipe rename R@1 {a -> a,b -> b};
+            member = pipe probe first [a,b] l,r;
+            return member as answer(a,b);
+        }
+    };
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let source: Program = syn::parse_quote! {
+        #structures
+        sequence {
+            r = rows r;
+            input = store rows l;
+            parts = store flatten compact member lookup r [a,b] tile 2 input;
+            output_rows = store parts;
+        }
+        graded tasks {
+            r at host; input at host; parts at pool; output_rows at host;
+        }
+    };
+    let target =
+        cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
+    let native: syn::Type = syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>);
+    assert!(target.structures.structures.entries.iter().any(|entry| {
+        entry.name == "r"
+            && matches!(&entry.structure,
+                cq_lang_sequence::structures::Structure::Built { keyed, .. }
+                if keyed.ty == native && keyed.membership.is_some() && keyed.filtered.is_none())
+    }));
+    assert!(!target.structures.structures.entries.iter().any(|entry| {
+        entry.name == "r"
+            && matches!(&entry.structure,
+                cq_lang_sequence::structures::Structure::Host { reader, .. }
+                if !matches!(reader, cq_lang_sequence::structures::ReaderRef::Scan))
+    }));
+    assert!(matches!(
+        target.sequence.definitions[0].term,
+        cq_lang_sequence::Term::Store { .. }
+    ));
+    let facts = check_grading(&target, &machine()).unwrap();
+    let tasks = translate(&target, &facts).unwrap();
+    assert_eq!(worker_bodies(&tasks).len(), 1);
+    assert!(!tasks.to_token_stream().to_string().contains("dispatch :: Lazy"));
+    let mut sequential = target;
+    sequential.graded = Some(syn::parse_quote! {
+        graded tasks {
+            r at host; input at host; parts at host; output_rows at host;
+        }
+    });
+    let facts = check_grading(&sequential, &machine()).unwrap();
+    let pull = cq_sequence_pull::translate(&sequential, &facts).unwrap();
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let populated = [(1, 10), (2, 20), (1, 10), (3, 30), (4, 40)];
+            let members = [(1, 10), (1, 10), (3, 30), (3, 99)];
+            for threads in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                for L in [&[][..], &populated[..1], &populated[..]] {
+                    for R in [&[][..], &members[..]] {
+                        let expected: Vec<(i32, i32)> =
+                            L.iter().copied().filter(|row| R.contains(row)).collect();
+                        let parallel: Vec<(i32, i32)> = pool.install(|| {
+                            (#tasks).into_iter().map(|(a, b)| (*a, *b)).collect()
+                        });
+                        let serial: Vec<(i32, i32)> =
+                            (#pull).into_iter().map(|(a, b)| (*a, *b)).collect();
+                        assert_eq!(parallel, expected);
+                        assert_eq!(serial, expected);
+                    }
+                }
+            }
+        }
+    });
 }
 
 #[test]
@@ -992,6 +1073,54 @@ fn membership_projected_probes_keep_native_keysets() {
                 && matches!(&entry.structure,
             cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native))
     );
+}
+
+#[test]
+fn type_directed_membership_keeps_routed_provider_construction() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i64); relation R(a:i64);
+            consumer canonical;
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a};
+            result = pipe probe first [a] l,r;
+            return result as answer(a);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            r = ::cq_storage::AdaptiveMembership<_, 16777216>
+                [a] membership payload [a] constants {};
+        }
+        sequence {
+            l = rows l; r = store rows r;
+            result = compact result lookup r[a] l;
+            output_rows = store result;
+        }
+    };
+    let catalog = cq_sequence_tasks::catalog();
+    let source = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
+    let planned = cq_sequence_plan::decompose_with_key_partitions(
+        &source,
+        &machine(),
+        &catalog,
+        &[cq_sequence_plan::KeyPartitionPolicy {
+            name: syn::parse_quote!(r),
+            select: true,
+        }],
+    )
+    .unwrap();
+    let facts = check_grading(&planned.program, &machine()).unwrap();
+    let native: syn::Type = syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>);
+    assert_eq!(facts.routed_providers["r"][&0], native);
+    let rendered = translate(&planned.program, &facts)
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(
+        rendered.contains("build_from_parts_with_router"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("AdaptiveMembership"), "{rendered}");
 }
 
 #[test]
@@ -1322,7 +1451,7 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
             (true, "forced"),
         ] {
             let mut program = deferred_provider_program(tiled, host_bound);
-            let deferred = mode == "deferred";
+            let deferred = matches!(mode, "deferred" | "opaque");
             let forced = mode == "forced";
             if mode == "shared" {
                 let provider = program
@@ -1350,17 +1479,6 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
                     selected,
                     syn::parse_quote!(guarded = pipe guard raw if (opaque_positive(c));),
                 );
-                if tiled {
-                    program
-                        .graded
-                        .as_mut()
-                        .unwrap()
-                        .grades
-                        .iter_mut()
-                        .find(|grade| grade.name == "producer")
-                        .unwrap()
-                        .level = vec![syn::parse_quote!(host)];
-                }
             } else if forced {
                 program
                     .sequence
@@ -1383,15 +1501,10 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
             );
             let mut expression = cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
             if tiled {
-                // Opaque producer tiles stay at host; total producers retain
-                // their distributing schedule even when staging is fused.
+                // All Rust is total and retains the distributing task schedule.
                 assert_eq!(
                     facts.tilings["producer"],
-                    vec![if mode == "opaque" {
-                        cq_lang_sequence::Tiling::Strip
-                    } else {
-                        cq_lang_sequence::Tiling::Distribute
-                    }]
+                    vec![cq_lang_sequence::Tiling::Distribute]
                 );
                 assert!(!worker_bodies(&expression).is_empty());
             }
@@ -1711,7 +1824,7 @@ fn retained_scans_never_use_join_filters_before_the_covering_build() {
 }
 
 #[test]
-fn covering_filters_reject_families_without_routed_key_enumeration() {
+fn covering_filters_leave_provider_capabilities_to_the_rust_boundary() {
     let mut source = late_covering_program(quote::quote!(rows l));
     source.graded = None;
     cq_lang_sequence::contract::check(&source).unwrap();
@@ -1722,8 +1835,8 @@ fn covering_filters_reject_families_without_routed_key_enumeration() {
     ];
     for ty in families {
         for routed in [false, true] {
-            let mut invalid = source.clone();
-            for entry in &mut invalid.structures.structures.entries {
+            let mut candidate = source.clone();
+            for entry in &mut candidate.structures.structures.entries {
                 if entry.name == "b"
                     && let cq_lang_sequence::structures::Structure::Built { keyed, .. } =
                         &mut entry.structure
@@ -1735,17 +1848,9 @@ fn covering_filters_reject_families_without_routed_key_enumeration() {
                     };
                 }
             }
-            let error = cq_lang_sequence::contract::check(&invalid).unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("join filter requires an exact covering"),
-                "{error}"
-            );
-            assert!(
-                cq_sequence_plan::decompose(&invalid, &machine(), &cq_sequence_tasks::catalog())
-                    .is_err()
-            );
+            // Structure checks validate the covering relation and key, not the
+            // opaque provider type. Emitted Keys/lookup obligations are Rust's.
+            cq_lang_sequence::contract::check(&candidate).unwrap();
         }
     }
 }
@@ -2017,7 +2122,10 @@ fn filtered_host_tiles_apply_predicates_without_collecting_the_host() {
         "{rendered}"
     );
     assert!(!rendered.contains("into_par_iter"), "{rendered}");
-    assert!(rendered.contains("ReadPredicate :: test"), "{rendered}");
+    assert!(
+        rendered.contains("cq_storage :: test_position"),
+        "{rendered}"
+    );
     assert!(!rendered.contains("let __cq_driver = ("), "{rendered}");
     run_partition_fixture(quote::quote! {
         fn main() {
@@ -2079,6 +2187,66 @@ fn borrowed_host_key_cover_uses_host_tiles_without_input_collection() {
                             (#expression).map(|(a,)| *a).collect();
                         let expected: ::std::collections::BTreeSet<_> =
                             R.iter().map(|&(a,)| a).collect();
+                        assert_eq!(actual, expected);
+                    }
+                });
+            }
+        }
+    });
+}
+
+#[test]
+fn fused_fallback_providers_keep_their_prefix_local_constructor() {
+    let physical = syn::parse_quote! {
+        physical {
+            relation R(a:i32);
+            r = pipe rename R@0 {a -> a};
+            selected = pipe select r if (a > 0);
+            positive = let bind selected with b:i64 = (i64::from(*a) * 10);
+            absent = pipe anti eager [a] r,positive;
+            negative = pipe bind absent with b:i64 = (0);
+            answer = pipe union fused positive,negative
+                block @1 free [a] interface [b] fallback over r;
+            valuations = pipe canon project answer keep {a,b};
+            grouped = pipe group valuations by [] { n:usize = count(); total:i64 = sum(b); };
+            return grouped as answer(n,total);
+        }
+    };
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let source: Program = syn::parse_quote! {
+        #structures
+        sequence {
+            input = rows r;
+            selected = compact selected input;
+            positive = store map positive selected;
+            absent = compact absent lookup positive [a] input;
+            negative = map negative absent;
+            answer = union [positive,negative];
+            valuations = canon map valuations answer;
+            result = store group grouped valuations;
+        }
+    };
+    let catalog = cq_sequence_tasks::catalog();
+    let source = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
+    let facts = cq_lang_sequence::contract::check(&source).unwrap();
+    assert!(facts.structures.physical.fused["answer"].members.contains("positive"));
+    let error = cq_sequence_plan::rewrites::key_partition(
+        &source, quote::quote!(positive, staged, [a], 64),
+    ).unwrap_err().to_string();
+    assert!(error.contains("fused arm's provider"), "{error}");
+    let planned = cq_sequence_plan::decompose(&source, &machine(), &catalog).unwrap();
+    assert!(!planned.trace.iter().any(|advice| matches!(advice,
+        cq_sequence_plan::Advice::KeyPartition(partition) if partition.name == "positive"
+    )));
+    let facts = check_grading(&planned.program, &machine()).unwrap();
+    let expression = translate(&planned.program, &facts).unwrap();
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            for threads in [1,4] {
+                rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                    for R in [vec![], vec![(-2,), (0,), (1,), (2,), (2,)]] {
+                        let actual: Vec<_> = (#expression).collect();
+                        let expected = if R.is_empty() { vec![(0,0)] } else { vec![(4,30)] };
                         assert_eq!(actual, expected);
                     }
                 });

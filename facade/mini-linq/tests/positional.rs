@@ -92,7 +92,7 @@ fn positional_predicate_does_not_shadow_an_opaque_guard_capture() {
         pipeline { select = mini_linq::passes::select(positional(r)); }
         struct GuardHygiene;
         relation r(x:i64) = (rows);
-        answer(x) :- r(x), if *x >= 1, if keep(x, __cq_r1_predicate);
+        answer(x) :- r(x), where x >= 1, if keep(x, __cq_r1_predicate);
     }
     .map(|(x,)| *x)
     .collect();
@@ -102,19 +102,22 @@ fn positional_predicate_does_not_shadow_an_opaque_guard_capture() {
 #[test]
 #[allow(non_snake_case)]
 fn pipe_reads_remain_lazy_without_an_output_tuple_buffer() {
-    fn partial(_: &i64) -> bool {
-        panic!("unconsumed pipe reached its guard")
-    }
+    let visits = std::cell::Cell::new(0);
+    let observe = |_: &i64| {
+        visits.set(visits.get() + 1);
+        true
+    };
     let R = [(1_i64,), (2,), (3,)];
     cq_storage::counters::reset();
     let rows = mini_linq::compile! {
         pipeline { select = mini_linq::passes::select(positional(R)); }
         struct LazyRead;
         relation R(x:i64);
-        answer(x) :- R(x), if *x >= 1, if partial(x);
+        answer(x) :- R(x), where x >= 1, if observe(x);
     };
     assert_eq!(cq_storage::counters::snapshot().rows_tested, 0);
     assert_eq!(rows.take(0).count(), 0);
+    assert_eq!(visits.get(), 0);
 }
 
 #[test]
@@ -125,7 +128,7 @@ fn borrowed_scalar_parameters_match_the_recorded_column_key_type() {
         pipeline { select = mini_linq::passes::select(positional(R)); }
         struct PointParameter;
         relation R(x:i64) = (rows);
-        answer(x) :- R(x), if *x == cutoff;
+        answer(x) :- R(x), where x == cutoff;
     }
     .map(|(x,)| *x)
     .collect();
@@ -133,7 +136,7 @@ fn borrowed_scalar_parameters_match_the_recorded_column_key_type() {
         pipeline { select = mini_linq::passes::select(positional(R)); }
         struct RangeParameter;
         relation R(x:i64) = (rows);
-        answer(x) :- R(x), if *x >= cutoff;
+        answer(x) :- R(x), where x >= cutoff;
     }
     .map(|(x,)| *x)
     .collect();

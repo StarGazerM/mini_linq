@@ -10,6 +10,13 @@ mod sealed {
     impl<const L: usize> Sealed for [u64; L] {}
 }
 
+/// Select the arena's native lane order from recorded scalar widths.
+pub struct WordWidth<const LANES: usize, const SCALAR: bool>;
+pub trait NativeWord { type Word: Word; }
+impl NativeWord for WordWidth<1, true> { type Word = u64; }
+impl NativeWord for WordWidth<2, true> { type Word = u128; }
+impl<const LANES: usize> NativeWord for WordWidth<LANES, false> { type Word = [u64; LANES]; }
+
 /// An unsigned packed key. Array words store their most significant lane first.
 /// Lane access numbers lanes from the least significant end for all word types.
 pub trait Word: sealed::Sealed + Copy + Ord + Debug + DeviceCopy {
@@ -136,10 +143,12 @@ impl Column {
         Ok(Field { bits: self.bits(), signed: self.is_signed(), shift: 0 }.encode(value)? as u64)
     }
 
+    // DECODE ?: public sign-ordinal inverse has no enforced caller read boundary.
     pub fn decode(self, encoded: u64) -> Result<i128> {
         if encoded as u128 > mask(self.bits()) {
             return Err("encoded value exceeds column width".into());
         }
+        // DECODE ?: Field inverse delegation inherits the public Column caller boundary.
         Ok(Field { bits: self.bits(), signed: self.is_signed(), shift: 0 }.decode(encoded as u128))
     }
 }
@@ -163,6 +172,7 @@ impl Field {
         Ok(((value as u128) & mask(self.bits)) ^ sign as u128)
     }
 
+    // DECODE ?: field sign-ordinal inverse serves publication and diagnostic data generators.
     fn decode(self, encoded: u128) -> i128 {
         if self.signed {
             encoded as i128 - (1_i128 << (self.bits - 1))
@@ -263,6 +273,7 @@ impl Packing {
         Ok(packed)
     }
 
+    // DECODE P: datalog output printer and layout diagnostic download unpack host answer rows.
     pub fn unpack<W: Word>(&self, packed: W) -> Result<Vec<i128>> {
         self.check_word::<W>()?;
         for lane in self.bits / 64..W::BITS / 64 {
@@ -272,6 +283,7 @@ impl Packing {
             }
         }
         Ok(self.fields.iter().map(|field| {
+            // DECODE P: per-field ordinal inversion implements host answer unpacking.
             field.decode(packed.extract(field.shift, field.bits) as u128)
         }).collect())
     }
@@ -433,6 +445,7 @@ mod tests {
 
     fn tuple(packing: &Packing, state: &mut u64) -> Vec<i128> {
         packing.fields.iter().map(|field| {
+            // DECODE I: diagnostic random codes become values then are repacked; this reorganization is avoidable.
             field.decode(random(state) as u128 & mask(field.bits))
         }).collect()
     }
@@ -447,7 +460,9 @@ mod tests {
             }
             let a = packing.pack::<W>(&left).unwrap();
             let b = packing.pack::<W>(&right).unwrap();
+            // DECODE P: diagnostic left tuple unpack exposes the round-trip answer.
             assert_eq!(packing.unpack(a).unwrap(), left);
+            // DECODE P: diagnostic right tuple unpack exposes the round-trip answer.
             assert_eq!(packing.unpack(b).unwrap(), right);
             assert_eq!(a.cmp(&b), left.cmp(&right));
             assert_eq!(a == b, left == right);
@@ -490,6 +505,7 @@ mod tests {
             for value in [-sign, -1, 0, sign - 1] {
                 let encoded = column.encode(value).unwrap();
                 assert_eq!(encoded as u128, value as u128 & mask(column.bits()) ^ sign as u128);
+                // DECODE P: diagnostic signed boundary inverse exposes the numeric answer.
                 assert_eq!(column.decode(encoded).unwrap(), value);
             }
             assert_eq!(column.encode(-sign).unwrap(), 0);
@@ -499,10 +515,12 @@ mod tests {
         }
         for column in [Column::U8, Column::U16, Column::U32, Column::U64] {
             let maximum = mask(column.bits()) as i128;
+            // DECODE P: diagnostic unsigned maximum inverse exposes the round-trip answer.
             assert_eq!(column.decode(column.encode(maximum).unwrap()).unwrap(), maximum);
             assert!(column.encode(-1).is_err());
             assert!(column.encode(maximum + 1).is_err());
         }
+        // DECODE P: diagnostic over-width decode checks answer rejection.
         assert!(Column::U8.decode(256).is_err());
     }
 
@@ -518,6 +536,7 @@ mod tests {
         assert_eq!(*prefix.end(), u128::MAX);
         let empty = Packing::new(&[]).unwrap();
         assert_eq!(empty.pack::<u64>(&[]).unwrap(), 0);
+        // DECODE P: diagnostic empty tuple inverse exposes the zero-column answer.
         assert_eq!(empty.unpack(0_u128).unwrap(), Vec::<i128>::new());
         assert_eq!(empty.prefix_range::<u128>(&[]).unwrap(), 0..=0);
     }
@@ -535,6 +554,7 @@ mod tests {
             let original = tuple(&packing, &mut state);
             let values: Vec<_> = order.iter().map(|&index| original[index]).collect();
             let key = permuted.pack::<u128>(&values).unwrap();
+            // DECODE P: diagnostic permutation inverse exposes reconstructed host fields.
             assert_eq!(permuted.unpack(key).unwrap(), values);
             for prefix in 0..=values.len() {
                 assert!(permuted.prefix_range::<u128>(&values[..prefix]).unwrap().contains(&key));
@@ -549,12 +569,14 @@ mod tests {
         }
         let wide = Packing::new(&[64, 64]).unwrap();
         assert!(wide.pack::<u64>(&[0, 0]).is_err());
+        // DECODE P: diagnostic undersized word decode checks schema rejection.
         assert!(wide.unpack(0_u64).is_err());
         assert!(wide.prefix_range::<u64>(&[]).is_err());
         let packing = Packing::with_columns(&[Column::I8, Column::U8]).unwrap();
         assert!(packing.pack::<u64>(&[128, 0]).is_err());
         assert!(packing.pack::<u64>(&[0, -1]).is_err());
         assert!(packing.pack::<u64>(&[0]).is_err());
+        // DECODE P: diagnostic stray packed bits check answer rejection.
         assert!(packing.unpack(1_u64 << 16).is_err());
         assert!(packing.prefix_range::<u64>(&[0, 0, 0]).is_err());
         assert!(packing.prefix_range::<u64>(&[128]).is_err());
@@ -598,7 +620,9 @@ mod tests {
         assert_eq!(full.pack::<[u64; 4]>(&[u64::MAX as i128; 4]).unwrap(), [u64::MAX; 4]);
         assert!(full.pack::<[u64; 3]>(&[0; 4]).is_err());
         let narrow = Packing::new(&[64, 1]).unwrap();
+        // DECODE P: diagnostic excess high lane checks narrow-layout decode rejection.
         assert!(narrow.unpack([1_u64, 0, 0]).is_err());
+        // DECODE P: diagnostic excess low lane checks narrow-layout decode rejection.
         assert!(narrow.unpack([0_u64, 2, 0]).is_err());
 
         // Neither column count nor array length has the former 128-bit cap.

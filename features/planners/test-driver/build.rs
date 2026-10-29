@@ -1,5 +1,5 @@
 //! Generate compiled refinement consumers from the public testkit's model.
-//! All 200 seeds are partial; every planner invocation is compiled.
+//! All 200 seeds use opaque Rust; every planner invocation is compiled.
 use cq_planners_plan::{Planner, cq};
 use cq_testkit::fuzz::Case;
 use quote::ToTokens;
@@ -37,7 +37,7 @@ fn main() {
     for ordinal in 0..200 {
         let seed = ordinal * 2;
         let case = cq_testkit::fuzz::generate(seed);
-        assert!(case.has_partial_terms());
+        assert!(case.requires_rust_oracle());
         // The independent model printer preserves parentheses, uniform owned
         // i32 expressions and tautological/contradictory random constraints.
         // Keep those authored terms intact; these allowances affect syntax

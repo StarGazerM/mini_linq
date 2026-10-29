@@ -18,6 +18,7 @@ fn accept(source: &cq_lang_structures::Program) -> Program {
             root: LevelNode {
                 shared_bytes: None,
                 name: syn::parse_quote!(host),
+                host_rust: true,
                 collaborative: false,
                 dynamic: false,
                 width: None,
@@ -245,4 +246,67 @@ fn projected_membership_probe_lowers_to_flat_compact_before_expansion() {
         facts.capabilities[&("r".into(), vec!["a".into()])],
         Capability::Membership
     );
+}
+
+#[test]
+fn raw_full_key_host_membership_lowers_to_compact_without_type_inspection() {
+    for key_type in [syn::parse_quote!(i32), syn::parse_quote!(StringCode)] {
+        let key_type: syn::Type = key_type;
+        let physical = syn::parse_quote! {
+            physical {
+                relation L(a:#key_type,b:i32,c:i32);
+                relation R(a:#key_type,b:i32);
+                relation T(c:i32,d:i32);
+                l = pipe rename L@0 {a -> a,b -> b,c -> c};
+                r = pipe rename R@1 {a -> a,b -> b};
+                t = let rename T@2 {c -> c,d -> d};
+                member = pipe probe first [a,b] l,r;
+                expanded = pipe probe first [c] member,t;
+                out = pipe canon project expanded keep {a,b,c,d};
+                return out as answer(a,b,c,d);
+            }
+        };
+        let structures = cq_structure_selection::compile(&physical).unwrap();
+        let target = accept(&structures);
+        let facts = cq_lang_sequence::contract::check(&target).unwrap();
+        let key = ("r".into(), vec!["a".into(), "b".into()]);
+        assert!(facts.structures.membership.contains(&key));
+        assert_eq!(facts.capabilities[&key], Capability::Membership);
+        assert_eq!(
+            target.sequence.definitions[3].term,
+            syn::parse_quote!(compact member lookup r [a,b] l)
+        );
+        assert_eq!(
+            target.sequence.definitions[4].term,
+            syn::parse_quote!(flatten lookup t [c] member)
+        );
+        assert!(structures.structures.entries.iter().any(|entry| {
+            entry.name == "r"
+                && matches!(&entry.structure,
+                    cq_lang_structures::Structure::Host { keyed, .. }
+                    if keyed.membership.is_some() && keyed.filtered.is_none())
+        }));
+
+        let mut expanded_membership = target.clone();
+        expanded_membership.sequence.definitions[3].term =
+            syn::parse_quote!(flatten lookup r [a,b] l);
+        assert!(check(&structures, &expanded_membership).is_err());
+
+        // A Rust type, even the selected membership implementation, supplies no proof.
+        let mut uncertified = target;
+        for entry in &mut uncertified.structures.structures.entries {
+            if entry.name == "r"
+                && let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure
+            {
+                keyed.membership = None;
+            }
+        }
+        cq_lang_structures::contract::check(&uncertified.structures).unwrap();
+        assert!(
+            cq_lang_sequence::contract::check(&uncertified)
+                .unwrap_err()
+                .to_string()
+                .contains("membership compact needs a membership operator")
+        );
+    }
 }

@@ -126,6 +126,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .ok_or("triangle translator supplied no execution timings")?;
         let count = answer.checked_len()?;
         if let Some(expected) = &expected {
+            // DECODE P: diagnostic triangle answer publication exposes logical tuples for CPU comparison.
             let mut actual = answer.to_host()?;
             actual.sort_unstable();
             assert_eq!(
@@ -186,6 +187,7 @@ mod tests {
                 &[cq_gpu_runtime::Codec::For; 2],
             )?;
             let answer = triangles(&resident);
+            // DECODE P: diagnostic signed-boundary triangle publication exposes reconstructed result tuples.
             let mut actual = answer.to_host()?;
             actual.sort_unstable();
             let mut expected = reference(&rows);

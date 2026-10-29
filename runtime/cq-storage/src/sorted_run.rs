@@ -145,6 +145,23 @@ impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> SortedRun<K, V, C> {
     }
 }
 
+/// The directory stores each key once, independently of payload multiplicity.
+impl<K, V, C> crate::Keys for SortedRun<K, V, C> {
+    type Key = K;
+    type Iter<'a>
+        = crate::instrument::Cursor<std::slice::Iter<'a, K>>
+    where
+        Self: 'a;
+
+    fn key_count(&self) -> usize {
+        self.keys.len()
+    }
+
+    fn distinct_keys(&self) -> Self::Iter<'_> {
+        crate::instrument::cursor!(self.keys.iter())
+    }
+}
+
 impl<K: Ord + Copy, V: Copy, C: KeyCodec<K> + Default, I: Iterator<Item = (K, V)>> Build<I>
     for SortedRun<K, V, C>
 {
@@ -219,6 +236,30 @@ mod tests {
     use super::*;
     use crate::I64Codec;
 
+    #[test]
+    fn distinct_keys_count_directory_entries_not_payload_occurrences() {
+        fn check<C: KeyCodec<i64>>(codec: C) {
+            for pairs in [
+                vec![],
+                vec![(2, 'a'), (1, 'z'), (2, 'b'), (1, 'z'), (2, 'a')],
+            ] {
+                let run = SortedRun::from_pairs(pairs.iter().copied(), codec);
+                let expected: std::collections::BTreeSet<_> =
+                    pairs.iter().map(|pair| pair.0).collect();
+                assert_eq!(crate::Keys::key_count(&run), expected.len());
+                assert_eq!(
+                    crate::Keys::distinct_keys(&run)
+                        .copied()
+                        .collect::<Vec<_>>(),
+                    expected.into_iter().collect::<Vec<_>>()
+                );
+                assert_eq!(run.items().len(), pairs.len());
+            }
+        }
+        check(NoDense);
+        check(I64Codec);
+    }
+
     #[cfg(feature = "counters")]
     #[test]
     fn payload_build_counts_occurrences_not_set_insertions() {
@@ -292,10 +333,21 @@ mod tests {
     fn borrowed_integer_keys_and_partial_codecs() {
         use crate::BorrowedI64TupleCodec;
         let keys = [-65i64, -1, 0, 65];
-        let run = SortedRun::from_pairs(keys.iter().map(|k| ((k,), *k)), BorrowedI64TupleCodec);
+        let run = crate::build!(
+            SortedRun<_, _, crate::AutoDense>,
+            keys.iter().map(|k| ((k,), *k)),
+        );
+        let run: SortedRun<(&i64,), i64, BorrowedI64TupleCodec> = run;
         assert!(run.rank.is_some());
         assert_eq!((&run).lookup(&(&-1,)).collect::<Vec<_>>(), [-1]);
         assert!(!run.contains(&(&1,)));
+        let default_run = crate::build!(SortedRun<_, _>, keys.iter().map(|k| ((k,), *k)));
+        assert!(default_run.rank.is_none());
+        let explicit_run = crate::build!(
+            SortedRun<_, _, NoDense>,
+            keys.iter().map(|k| ((k,), *k)),
+        );
+        assert!(explicit_run.rank.is_none());
         let run = SortedRun::from_pairs([((&-1i32,), 'a'), ((&65,), 'b')], BorrowedI64TupleCodec);
         assert!(run.rank.is_some());
         assert_eq!((&run).lookup(&(&65,)).collect::<Vec<_>>(), ['b']);

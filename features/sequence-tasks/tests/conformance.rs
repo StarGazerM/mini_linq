@@ -24,14 +24,15 @@ fn named_tile_pipeline_preserves_rows_across_join() {
         physical {
             relation R(a:i32);
             r = pipe rename R@0 {a -> a};
-            return r as answer(a);
+            out = pipe canon project r keep {a};
+            return out as answer(a);
         }
         structures {}
         sequence {
             renamed_input = rows r;
             renamed_cover = tile 2 renamed_input;
             renamed_rows = flatten renamed_cover;
-            result = store renamed_rows;
+            result = store canon map out renamed_rows;
         }
     });
     assert_conformant_with_inputs(&program, TARGETS, &[("R", &[&[3], &[1], &[3], &[2], &[9]])]);

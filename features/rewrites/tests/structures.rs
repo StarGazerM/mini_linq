@@ -390,11 +390,9 @@ fn selectors_are_by_recorded_reads_and_levels_not_old_type_spelling() {
 }
 
 #[test]
-fn incompatible_known_types_and_unmatched_or_malformed_selectors_are_errors() {
+fn unmatched_or_malformed_selectors_are_errors() {
     let source = source();
     for arguments in [
-        quote!(payload => ::std::collections::HashSet<_>),
-        quote!(ordered => ::cq_storage::HashIndex<'_, _, _>),
         quote!(dedup => _),
         quote!(dedup => some_macro!()),
         quote!(trie => Generic<some_macro!()>),
@@ -407,6 +405,21 @@ fn incompatible_known_types_and_unmatched_or_malformed_selectors_are_errors() {
         quote!(),
     ] {
         assert!(retype(&source, arguments.clone()).is_err(), "{arguments}");
+    }
+}
+
+#[test]
+fn provider_trait_compatibility_is_not_inferred_from_type_spelling() {
+    let source = source();
+    for arguments in [
+        quote!(payload => ::std::collections::HashSet<_>),
+        quote!(ordered => ::cq_storage::HashIndex<'_, _, _>),
+    ] {
+        // Retyping preserves the recorded layout. Rust trait checking, not
+        // matching a provider's name, decides whether it can serve the reads.
+        let target = retype(&source, arguments).unwrap();
+        ir::check_rewrite(&source, &target).unwrap();
+        assert_eq!(source.physical, target.physical);
     }
 }
 
@@ -442,8 +455,7 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
         p = pipe canon probe first [x] s,r; return p as answer(x);
     });
     let source = cq_structure_selection::compile(&source).unwrap();
-    let error = retype(&source, quote!(payload => Shared<'_, _, _>)).unwrap_err();
-    assert!(error.to_string().contains("shared host fallback types"));
+    assert!(retype(&source, quote!(payload => Shared<'_, _, _>)).is_err());
     let target = retype(&source, quote!(r => Shared<'_, _, _>)).unwrap();
     let expected: ir::Program = syn::parse_quote! {
         physical {
@@ -455,12 +467,14 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
         structures {
             l host scan = ::core::iter::Map<_, _> [];
             r host scan = ::core::iter::Map<_, _> [];
-            r host result(s) = Shared<'_, _, _> [x];
-            r host result(p) = Shared<'_, _, _> [x];
+            r host result(s) = Shared<'_, _, _> [x] membership;
+            r host result(p) = Shared<'_, _, _> [x] membership;
             p canon = ::cq_storage::HashSet<_>;
         }
     };
     assert_eq!(target, expected);
+    // Retyping the shared provider preserves STR-FullKey existence reads.
+    ir::check_rewrite(&source, &target).unwrap();
     assert!(matches!(
         target.structures.entries[1].structure,
         Structure::Host { .. }
@@ -496,13 +510,12 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
     )
     .unwrap();
     assert_eq!(source.physical, target.physical);
-    assert!(
-        retype(
-            &source,
-            quote!(kind(membership) => ::std::collections::HashSet<_>)
-        )
-        .is_err()
-    );
+    let target = retype(
+        &source,
+        quote!(kind(membership) => ::std::collections::HashSet<_>),
+    )
+    .unwrap();
+    assert_eq!(source.physical, target.physical);
     assert!(retype(&source, quote!(kind(rows) => ::std::vec::Vec<_>)).is_err());
     let mut row_only = source.clone();
     for e in &mut row_only.structures.entries {
@@ -568,7 +581,7 @@ fn hashed_runs_records_composite_keys_and_preserves_single_key_selection() {
 }
 
 #[test]
-fn sorted_runs_records_owned_singleton_probe_as_no_dense() {
+fn sorted_runs_records_owned_singleton_probe_as_automatic_codec_request() {
     let physical = syn::parse_quote! { physical {
         relation R(a:i64,b:i64);
         u = pipe unit;
@@ -581,7 +594,7 @@ fn sorted_runs_records_owned_singleton_probe_as_no_dense() {
     let target = cq_rewrite_passes::sorted_runs(&source, quote!()).unwrap();
     let text = target.to_token_stream().to_string();
     assert!(
-        text.contains("SortedRun < _ , _ , :: cq_storage :: NoDense > [x]"),
+        text.contains("SortedRun < _ , _ , :: cq_storage :: AutoDense > [x]"),
         "{text}"
     );
     assert_eq!(

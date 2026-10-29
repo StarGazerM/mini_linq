@@ -20,6 +20,79 @@ DuckDB witnesses and separate deterministic counters. See
 experiments/gpu/compare/rpt-repair/summary.json from the repository root for the full
 matrix, H09 timeout control, paired timing method and remaining limitations.
 
+Contract-7 CPU representation regression
+----------------------------------------
+Comparing HEAD 4944b917 with the explicit-where migration at VO, relational-plan,
+Physical, Structures and Sequence showed preserved range reads and join plans.
+The eight SF1 regressions first diverged in Structures: H04 and D27 lost dense
+membership-only builds, while H03/H05/H07/H08/D19/D85 replaced dense join filters
+with NoDense hash-and-sorted-key providers. H04/D27 also acquired redundant
+supplementary filters over their membership-only builds. H07 gained two scalar
+nation filters; its existing three large filters lost dense storage.
+
+AdaptiveMembership now records the same type-blind provider and bitmap budget
+for every eligible key. Rust capability dispatch, not compiler inspection of
+column types or Rust guards, selects a total injective DenseOrdinal codec.
+Arbitrary Eq + Hash keys and oversized spans retain exact hash membership;
+contains-only fallback does not need Ord or a sorted interval index.
+Membership-only builds do not also construct the redundant scan filter.
+Automatic supplementary scan-filter selection retains its separate opt-in
+policy: only recorded payload-index families (HashIndex, SortedRun, and their
+routed forms) supply them, not HashSet merely because it can enumerate keys.
+This is a selection cost policy, not a validity restriction: explicitly selected
+custom single-level providers remain legal when they satisfy the covering
+probe and `Keys` contracts. Rust autoref dispatch
+enables the scalar policy for i64 (including aliases); other scalar types skip
+key counting, enumeration, and construction before the selectivity check.
+Identity-only filters do not make a previously unknown source population known.
+The runtime exposes an explicit identity fact for absent filters. Scalar and
+chunked block reads enumerate positions directly for identity predicates,
+without extracting keys, reading bounds, or calling row predicates; combined
+reads omit only the identity operand. Generated supplementary position tests
+also check the identity fact before extracting a key. Instrumentation remains
+attached to actual tested rows rather than hiding redundant predicate work.
+These gates preserve the earlier filter workload without inspecting column-type
+spellings in the compiler; membership codec capability alone is not an opt-in.
+The representation law and conformance row are STR-AdaptiveMembership in
+doc/formal/ir_structures.tex and doc/formal/conformance/front.md.
+
+Individual SF1 default measurements (2026-10-28, median of three, milliseconds):
+
+| Query | CPU reference | Regressed | Repaired | Repaired/reference |
+|---|---:|---:|---:|---:|
+| retail_h04 | 50.404 | 628.212 | 50.848 | 1.009 |
+| retail_d27 | 18.064 | 60.936 | 18.408 | 1.019 |
+| retail_h07 | 39.322 | 75.577 | 36.744 | 0.934 |
+| retail_h08 | 39.276 | 71.852 | 36.797 | 0.937 |
+| retail_d19 | 21.450 | 34.618 | 21.573 | 1.006 |
+| retail_h05 | 41.987 | 64.069 | 42.084 | 1.002 |
+| retail_h03 | 57.806 | 82.220 | 42.845 | 0.741 |
+| retail_d85 | 28.429 | 39.656 | 28.382 | 0.998 |
+
+All eight matched the independent DuckDB oracle exactly. Commands were
+  cargo xtask bench --tpch --sf 1 --runs 3 --query QUERY --config default
+from features/workloads. CPU references are from
+experiments/gpu/compare/performance_cpu_sf1.tsv at repository root.
+Reports are target/bench/tpch-1-QUERY-config-default.tsv. Boundary captures,
+numbered IR, diffs and the preserved regressed counters are in repository-root
+target/tpch-regression-ir. H04 restored the reference's 109863 hash operations,
+57218 lookups and one index build (regressed: 4752814, 109741 and two).
+D27 restored 1510000 rows tested, avoiding the redundant filter's additional
+6001215 lineitem row tests. Other large filters restored the reference hash
+counts; H07's two additional tiny dense filters further reduce hash work.
+
+The final full default sweep (`--tpch --sf 1 --runs 3 --config default`) passed
+all 29 exact comparisons. Every query with a CPU reference was below 1.15x;
+the largest ratio was retail_h22 at 1.099x. retail_h09, tpch_q06 and tpch_q19
+have no default reference row in performance_cpu_sf1.tsv, so no ratio is claimed
+for them. The full report is target/bench/tpch-1-config-default.tsv; the joined
+reference/regressed/repaired table is repository-root
+target/tpch-regression-ir/summary.tsv. No contract-7 semantic exception was used.
+Root `cargo test --workspace` passed 1095 tests across 138 suites after registering
+the adaptive provider's native Sequence membership capability. Runtime consumer
+tests cover dense integer/borrowed-singleton keys, arbitrary non-Ord exact-hash
+keys, sparse fallback, custom capabilities, and unchanged custom Build providers.
+
 SF0.1 configuration validation (2026-10-24)
 ------------------------------------------
 Each cell below was exercised with CARGO_BUILD_JOBS=4 and:

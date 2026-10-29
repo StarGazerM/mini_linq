@@ -1,0 +1,446 @@
+{
+  "baseline_revision": "4944b91730fceff08abe2fdea71feb5c157d2b3c",
+  "baseline_provenance": "Existing isolated HEAD release workers built by CpuIntern; original worktree removed. Binary hashes below.",
+  "query": "tpch_q06",
+  "scale": 1,
+  "configuration": "default",
+  "threads": 1,
+  "change": "runtime/cq-storage/src/positional.rs BlockScan::next inline(always); no query-emitter changes",
+  "perf_method": "10 interleaved HEAD/current pairs; each process perf stat instructions,cycles, RUNS=31 minus RUNS=0 divided by 31; both include identical load and exact warm-run protocol. Postfix perf is one zero-subtracted pair.",
+  "perf_pairs_before": [
+    {
+      "head": {
+        "instructions": 178914701.9032258,
+        "cycles": 191280125.67741936
+      },
+      "current": {
+        "instructions": 213200259.77419356,
+        "cycles": 197843188.29032257
+      }
+    },
+    {
+      "current": {
+        "instructions": 213312073.32258064,
+        "cycles": 199556154.93548387
+      },
+      "head": {
+        "instructions": 178801326.16129032,
+        "cycles": 191016590.9032258
+      }
+    },
+    {
+      "head": {
+        "instructions": 178667046.9032258,
+        "cycles": 193347273.22580644
+      },
+      "current": {
+        "instructions": 213132480.03225806,
+        "cycles": 198999498.32258064
+      }
+    },
+    {
+      "current": {
+        "instructions": 213198880.0,
+        "cycles": 202069998.96774194
+      },
+      "head": {
+        "instructions": 178966212.80645162,
+        "cycles": 185204964.38709676
+      }
+    },
+    {
+      "head": {
+        "instructions": 178800501.80645162,
+        "cycles": 189177601.38709676
+      },
+      "current": {
+        "instructions": 213166033.93548387,
+        "cycles": 194755973.41935483
+      }
+    },
+    {
+      "current": {
+        "instructions": 213577803.06451613,
+        "cycles": 198942688.96774194
+      },
+      "head": {
+        "instructions": 178889939.7419355,
+        "cycles": 179587166.83870968
+      }
+    },
+    {
+      "head": {
+        "instructions": 178807184.93548387,
+        "cycles": 193173180.87096775
+      },
+      "current": {
+        "instructions": 213208148.80645162,
+        "cycles": 199885047.0
+      }
+    },
+    {
+      "current": {
+        "instructions": 213879789.03225806,
+        "cycles": 209651631.3548387
+      },
+      "head": {
+        "instructions": 178859563.80645162,
+        "cycles": 191060987.29032257
+      }
+    },
+    {
+      "head": {
+        "instructions": 179014632.58064517,
+        "cycles": 181215665.3548387
+      },
+      "current": {
+        "instructions": 213218514.70967743,
+        "cycles": 204425476.6451613
+      }
+    },
+    {
+      "current": {
+        "instructions": 213216919.67741936,
+        "cycles": 191712374.03225806
+      },
+      "head": {
+        "instructions": 178886508.80645162,
+        "cycles": 179388712.16129032
+      }
+    }
+  ],
+  "perf_fixed": {
+    "instructions": 181663508.93548387,
+    "cycles": 189161084.41935483
+  },
+  "timing_method": "Five AB/BA paired processes per query; each loads outside timing, checks one warm result and 3 measured results exactly against shared DuckDB oracle. Pair value is median of 3. CI: exact paired bootstrap, median(fixed)/median(HEAD), all 5^5 resamples, empirical 2.5/97.5 percentiles.",
+  "paired": {
+    "tpch_q06": {
+      "pairs": [
+        {
+          "head": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 545.489825,
+            "median_ms": 44.382048,
+            "peak_rss_kib": 310448,
+            "samples_ms": [
+              43.080002,
+              44.382048,
+              44.518519
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          },
+          "fixed": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 551.0197730000001,
+            "median_ms": 42.179255999999995,
+            "peak_rss_kib": 310264,
+            "samples_ms": [
+              41.834576,
+              42.179255999999995,
+              42.276623
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          }
+        },
+        {
+          "fixed": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 550.284203,
+            "median_ms": 42.013377999999996,
+            "peak_rss_kib": 310436,
+            "samples_ms": [
+              41.635324000000004,
+              42.013377999999996,
+              42.070508
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          },
+          "head": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 545.6266360000001,
+            "median_ms": 42.438071,
+            "peak_rss_kib": 310256,
+            "samples_ms": [
+              41.13744,
+              42.438071,
+              44.316412
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          }
+        },
+        {
+          "head": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 541.866801,
+            "median_ms": 43.843656,
+            "peak_rss_kib": 310456,
+            "samples_ms": [
+              40.998453,
+              43.843656,
+              44.785039999999995
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          },
+          "fixed": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 548.833703,
+            "median_ms": 42.470815,
+            "peak_rss_kib": 310460,
+            "samples_ms": [
+              41.825147,
+              42.470815,
+              45.318082000000004
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          }
+        },
+        {
+          "fixed": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 547.065434,
+            "median_ms": 42.211588,
+            "peak_rss_kib": 310456,
+            "samples_ms": [
+              41.798386,
+              42.211588,
+              45.239631
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          },
+          "head": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 538.454862,
+            "median_ms": 41.284662,
+            "peak_rss_kib": 310264,
+            "samples_ms": [
+              40.964899,
+              41.284662,
+              44.636215
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          }
+        },
+        {
+          "head": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 538.210603,
+            "median_ms": 42.377385,
+            "peak_rss_kib": 310264,
+            "samples_ms": [
+              41.109205,
+              42.377385,
+              42.610583
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          },
+          "fixed": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 542.671011,
+            "median_ms": 43.512121,
+            "peak_rss_kib": 310456,
+            "samples_ms": [
+              41.652577,
+              43.512121,
+              45.219392
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          }
+        }
+      ],
+      "ratio": 0.9946632117185533,
+      "ci95": [
+        0.9503674999405164,
+        1.0267769235878996
+      ]
+    },
+    "retail_h06": {
+      "pairs": [
+        {
+          "head": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 543.364701,
+            "median_ms": 26.383514,
+            "peak_rss_kib": 306908,
+            "samples_ms": [
+              25.001345,
+              26.383514,
+              28.408665
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          },
+          "fixed": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 533.430261,
+            "median_ms": 26.680793,
+            "peak_rss_kib": 306908,
+            "samples_ms": [
+              25.305557,
+              26.680793,
+              29.282339
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          }
+        },
+        {
+          "fixed": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 536.688425,
+            "median_ms": 25.171771,
+            "peak_rss_kib": 306712,
+            "samples_ms": [
+              24.179901,
+              25.171771,
+              30.446379999999998
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          },
+          "head": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 538.534293,
+            "median_ms": 25.261964000000003,
+            "peak_rss_kib": 306712,
+            "samples_ms": [
+              24.788888,
+              25.261964000000003,
+              30.297003999999998
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          }
+        },
+        {
+          "head": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 539.259493,
+            "median_ms": 26.559582000000002,
+            "peak_rss_kib": 306712,
+            "samples_ms": [
+              24.950107,
+              26.559582000000002,
+              27.658116
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          },
+          "fixed": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 533.994322,
+            "median_ms": 25.422121,
+            "peak_rss_kib": 306716,
+            "samples_ms": [
+              24.467352,
+              25.422121,
+              30.720265
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          }
+        },
+        {
+          "fixed": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 536.04968,
+            "median_ms": 24.226059000000003,
+            "peak_rss_kib": 306720,
+            "samples_ms": [
+              23.806244,
+              24.226059000000003,
+              29.201945
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          },
+          "head": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 538.480539,
+            "median_ms": 25.262093999999998,
+            "peak_rss_kib": 306716,
+            "samples_ms": [
+              24.265183999999998,
+              25.262093999999998,
+              29.2144
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          }
+        },
+        {
+          "head": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 542.948001,
+            "median_ms": 24.985725,
+            "peak_rss_kib": 306716,
+            "samples_ms": [
+              24.495205,
+              24.985725,
+              30.422655
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          },
+          "fixed": {
+            "answer_rows": 1,
+            "instrumented": false,
+            "load_ms": 537.180648,
+            "median_ms": 26.434822,
+            "peak_rss_kib": 306908,
+            "samples_ms": [
+              25.242066,
+              26.434822,
+              27.635923
+            ],
+            "zone_build_ms": 0.0,
+            "zone_metadata_bytes": 0
+          }
+        }
+      ],
+      "ratio": 1.0063346688520756,
+      "ci95": [
+        0.9571732341269527,
+        1.0579969962848788
+      ]
+    }
+  },
+  "artifacts": "/data/mini_linq/target/q06-attribution",
+  "binary_sha256": {
+    "head_q06": "9d6ad6a3579d2d8531ecbbf342e70e8ff2e767273c6371a36004a60f9e5c59b0",
+    "before_q06": "b6e58fefcf6f6de9b45b6b94e9a7fb9ac3f9ee87ca93c49e9b800d529d71a390",
+    "fixed_q06": "c98fc8e2ff883d0667652c403faa455e428f822da1cdf12b7b067287886002e6",
+    "head_h06": "ddc3c3c0fb4bc2ca8c632f24ace615c500da5ff8ffccc9b659bda246a7fd8865",
+    "fixed_h06": "50d2f80a1fdc6e053aadb0212b4bef6531c586d1cb4b1afbc4cbb27cb8d12822"
+  },
+  "perf_record": "perf record -e cycles:u -g, 101 measured runs; perf report and perf annotate --stdio --no-source for hot symbol; before/after annotation and unified diff retained in artifacts directory"
+}
