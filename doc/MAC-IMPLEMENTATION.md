@@ -1175,8 +1175,8 @@ aggregate builds, constructing 24,660 individual indexes**, excluding first
 observations and warmups. Reports indicate successful cache-limit restoration:
 
 - [Balanced sizes/distributions/relations (lossless gzip archive)](../experiments/mac/query-expansion/results/index-matrix-balanced-m3max-20261026.json.gz)
-- [Individually named relation projections](../experiments/mac/query-expansion/results/index-matrix-relations-m3max-20261026.json)
-- [Skewed relation sizes and cache boundaries](../experiments/mac/query-expansion/results/index-matrix-skewed-m3max-20261026.json)
+- [Individually named relation projections](../experiments/mac/query-expansion/results/index-matrix-relations-m3max-20261026.json.gz)
+- [Skewed relation sizes and cache boundaries](../experiments/mac/query-expansion/results/index-matrix-skewed-m3max-20261026.json.gz)
 
 Same **1,048,576 total uniform rows**, all outputs simultaneously live:
 
@@ -1214,7 +1214,7 @@ MCCL still pays per-call cached allocation and graph work. Raw and MCCL use the
 same canonical shader source, compiled at runtime/offline respectively.
 
 All 16 size/input configurations completed, with 640 measured samples plus
-first calls and warmups. [Raw controls](../experiments/mac/gpu-index/index-compare-m3max-20261026.json).
+first calls and warmups. [Raw controls](../experiments/mac/gpu-index/index-compare-m3max-20261026.json.gz).
 The `workspace` distribution is the **exact historical fixture**:
 `((source_row_id * 40503) & 65535) * 65537`.
 
@@ -1456,9 +1456,9 @@ are not disguised as GPU construction. New schemas prevent mixing old boundaries
 
 Post-cutover raw evidence (historical files remain unchanged):
 
-- [Source boundary smoke](../experiments/mac/query-expansion/results/shared-source-smoke-20261026.json).
-- [36 size/input/relation configurations through 64M rows](../experiments/mac/query-expansion/results/shared-source-matrix-m3max-20261026.json).
-- [16 two-column reuse/cache configurations](../experiments/mac/query-expansion/results/shared-source-multicolumn-m3max-20261026.json).
+- [Source boundary smoke](../experiments/mac/query-expansion/results/shared-source-smoke-20261026.json.gz).
+- [36 size/input/relation configurations through 64M rows](../experiments/mac/query-expansion/results/shared-source-matrix-m3max-20261026.json.gz).
+- [16 two-column reuse/cache configurations](../experiments/mac/query-expansion/results/shared-source-multicolumn-m3max-20261026.json.gz).
 - [H09 CPU/GPU constructor comparison](../experiments/mac/query-expansion/results/shared-source-h09-m3max-20261026.json),
   [H09 pool cases](../experiments/mac/query-expansion/results/shared-source-pool-h09-m3max-20261026.json),
   [constructor pool cases](../experiments/mac/query-expansion/results/shared-source-pool-construction-m3max-20261026.json).

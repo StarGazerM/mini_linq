@@ -50,9 +50,9 @@ The original M5 Pro files and their checksum manifest remain unchanged.
 | File | Meaning |
 |---|---|
 | `m3-max-array-ready-2026-10-25.csv` | Existing matched merge/copy benchmark after the Rust array-ready completion cutover; equal input lengths, nine samples, three warmups. |
-| `m3-max-lifecycle-2026-10-25.json` | Cache-cleared/pooled output and whole-round cases, direct/extra-copy input preparation, four patterns at 64K/1M/16M/64M output keys, nine samples and two warmups; wired budget zero. |
-| `m3-max-lifecycle-wired-2026-10-25.json` | Same lifecycle cases at 1M/16M with an explicit 1 GiB wired budget; previous settings restored. |
-| `m3-max-lifecycle-sync-2026-10-25.json` | 1M-key lifecycle cases with five samples and a separately measured additional whole-stream synchronization. |
+| `m3-max-lifecycle-2026-10-25.json.gz` | Cache-cleared/pooled output and whole-round cases, direct/extra-copy input preparation, four patterns at 64K/1M/16M/64M output keys, nine samples and two warmups; wired budget zero. |
+| `m3-max-lifecycle-wired-2026-10-25.json.gz` | Same lifecycle cases at 1M/16M with an explicit 1 GiB wired budget; previous settings restored. |
+| `m3-max-lifecycle-sync-2026-10-25.json.gz` | 1M-key lifecycle cases with five samples and a separately measured additional whole-stream synchronization. |
 
 Lifecycle inputs split total keys one-third/two-thirds. Each result is checked
 exactly outside operation timers, and bounded retained-output checks verify old

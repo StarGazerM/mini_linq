@@ -69,7 +69,7 @@ Run timing experiments sequentially and without Shader Validation.
 
 [Current shared-source contract and measurements](../../../doc/MAC-IMPLEMENTATION.md#shared-relation-input-cutover).
 [Shared-source comparison](shared-source-compare-m3max-20261026.json).
-The [historical host-populated comparison](index-compare-m3max-20261026.json)
+The [historical host-populated comparison](index-compare-m3max-20261026.json.gz)
 remains unchanged and has different timing boundaries.
 
 
