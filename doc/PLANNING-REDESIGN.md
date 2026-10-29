@@ -181,13 +181,30 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
 - **P2 Merge remote** `origin/codex/all-answers` (RadixRun, RadixSpline,
   MCCL, Mac work, provider-contract refactor), reconciling on the type-blind
   design.
-- **P3 Lookup/Expand at the right layer.** Move L&E decisions (lookup order,
-  expand placement, iterator carrying without re-probe) into planning
-  (Physical operator order produced from VO/RA); replace `transfer` stored
-  semijoins with recorded join filters (exact / min-max / Bloom, built during
-  the build side, as L&E §4.1 and RPT do); delete `lookup_first`'s
-  reordering. Target: H05 automatic approaches plan R.
-  Ordered before P4 (decided 2026-10-28).
+- **P3 Lookup/Expand (L&E) without a new IR** (revised 2026-10-29 after
+  reading Birler/Kemper/Neumann PVLDB'24 in full). The paper's result laws
+  reduce to flat RA (`e(R→S) ≡ R⋈S`, `head(R→S) ≡ R⋉S`, lookup reordering is
+  semijoin reordering), so VO/RA already express L&E's meaning: a lookup is a
+  subatom that binds nothing (E-Check, `⋉`), an expand is the full subatom
+  (B-Join, `⋈`); Plan-Le/CK-Le check it. What the paper adds is operational
+  and lives where match sets are values: reuse of the lookup's match set for
+  the expand (Structures ST-Share/STR-Witness; Sequence buckets, BE-Bind),
+  iterators stored in builds (Fig. 4), and per-tuple smallest-side
+  intersection (Physical `probe smallest`, generalized; Expand3).
+  DOOP evidence (offline, final relations; `local://doop-skew-*`): 6–12% of
+  rules are α-cyclic; keys are heavily skewed; smallest-side intersection
+  saves 4.8×/15.4× on generic AIPT_Store and 3.4×/2.4× on array load only if
+  placed early; ~1× on virtual dispatch and Assign_Param.
+  - **P3.1 Checked advice for every L&E decision** at its owner layer:
+    step-level VO order advice (`R@k(b̄)` lookup, `R@k` expand, adjacent
+    fine subatoms as intersection points; WF-VO + CK-Le), k-way
+    `smallest(...)` Physical advice, existing `retain_lookups`/`join_filter`
+    Structures advice. Plus counters at each fused expansion (GPU
+    `emit.rs` fused expansion, CPU pull printer) per rule/delta/stage.
+  - **P3.2 Hand-advised experiments** measured with counters and paired
+    timing: DOOP generic AIPT_Store, DOOP array load, TPC-H H05 plan R.
+  - **P3.3** Default planner emits L&E phases from evidence; delete
+    `lookup_first` and EXT-SeqLookup; GPU match-set carrier after P4.
 - **P3b Profile the engine gaps** (`doc/STORAGE.md` §12.4): GPU h06
   reduce/dedup at 16–74× a hand kernel; CPU h01 at ~140× a String-grouping
   microbenchmark. Profiles (perf, nsys/ncu) decide whether these come before
