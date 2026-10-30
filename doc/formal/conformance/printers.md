@@ -28,8 +28,9 @@ This section extends the printer audit to the requested R/E/C and BE rules. All 
 | GPU-CodecIdentity | `doc/formal/backend_ir.tex` GPU-CodecIdentity | `experiments/gpu/sequence/core/src/runs.rs` `Codecs::record` | One codec for each logical symbol type. | Checks structural type/codec equality across every native layout before lowering captures; rejects conflicts. | **exact** (was no-rule) | Captures use the compared column’s compatible encoding |
 | GPU-Capture | `doc/formal/backend_ir.tex` GPU-Capture | `experiments/gpu/sequence/core/src/capture.rs` `Captures::value`; `experiments/gpu/sequence/core/src/rows.rs` `capture_arguments` | Recorded consuming definitions and nonempty enabled launch domains. | Records capture IDs while lowering expressions and consumes explicit domain conditions; no generated-name/launch-ABI recovery. | **exact** (was no-rule) | Captures execute only in their required invocation domain |
 | — Terminal Group pipeline | **No rule recording this selection.** Governing grade/boundary rules: `doc/formal/backend_ir.tex:288-305`; GPU grouped interpretation prose: `1145-1160`. | `experiments/gpu/sequence/core/src/emit.rs:1453-1609`; `experiments/gpu/sequence/core/src/reduce.rs:267-300` | — | Terminal syntax chooses a special device grouping pipeline, suppresses an earlier Store wrapper, and selects direct versus packed input by inspecting the emitted chain. | **no-rule** | Group execution stages and publication are explicit |
-| GPU-ProviderLayout | `doc/formal/backend_ir.tex` GPU-ProviderLayout | `experiments/gpu/sequence/core/src/rows.rs` `ProviderLayout::check`; `experiments/gpu/sequence-runtime/src/lib.rs` `RangeDescriptor` | Recorded key reconstruction, payload and dense allocation policy. | One checked layout is consumed by resident and computed providers; runtime checks and consumes explicit directory entries. | **exact** (was no-rule) | Provider reconstruction and allocation are checked facts |
+| GPU-ProviderLayout | `doc/formal/backend_ir.tex` GPU-ProviderLayout | `experiments/gpu/sequence/core/src/bindings.rs` `select`, `check`; `languages/cq-lang-sequence/src/gpu/bindings.rs` | Recorded provider/catalog ABI, key reconstruction, payload, native permutation, download adapter and dense policy. | GPU binding selects facts upstream; independent checking rejects stale records; both construction paths consume them. | **exact** for recorded provider realization | Provider reconstruction and allocation are checked facts |
 | GPU-NativeAbi | `doc/formal/backend_ir.tex` GPU-NativeAbi | `experiments/gpu/sequence/core/src/lib.rs` `native_abi`; `experiments/gpu/sequence/core/src/runs.rs` | Complete native catalog constructor identity. | Native schemas and residency are selected by complete structural path identity, never a type suffix. | **exact** (was no-rule) | ABI and residency follow recorded capability identity |
+| GPU-GroupProvider | `doc/formal/backend_ir.tex` GPU-GroupProvider | `experiments/gpu/sequence/core/src/grouping.rs`; `experiments/gpu/sequence/core/src/reduce.rs` | Keyed accumulator provider recorded in Structures. | GPU binding selects `SegmentedGroup`; terminal keyed emission invokes that recorded provider. | **exact** for provider ownership; execution-stage gap remains above | Group accumulator selection is not a printer decision |
 | BE-TaskProducer | `doc/formal/backend_ir.tex` | `languages/cq-lang-sequence/src/task_execution.rs`; `features/sequence-tasks/src/lib.rs` | Checked term ancestry and stable definition/preorder identity. | Joins, Group drivers and partition lifetime consume recorded producer identities; token scanning is removed. | **exact** (was no-rule) | Join ownership follows checked dataflow |
 | BE-CarrierPublication | `doc/formal/backend_ir.tex` | `languages/cq-lang-sequence/src/task_execution.rs`; `passes/cq-sequence-plan/src/cost.rs`; `passes/cq-sequence-pull/src/lib.rs` | Non-borrowable task driver or runtime choice. | Records TileInput/Choice publications and charges independent symbolic retained-row volumes; only selected choice arms execute. | **exact** (was no-rule) | Materialization and retained traffic are explicit |
 
@@ -121,12 +122,14 @@ visitor and positional launch-argument recovery were deleted.
 
 ### Resolved: provider layout and native ABI identity
 
-GPU-ProviderLayout derives one record of key reconstruction, payload columns,
-dense zero-based domain policy and symbolic allocation size, shared by resident
-and computed provider construction. `RangeDescriptor.directory_entries` carries
-the checked allocation to the runtime; runtime validation checks the sentinel
-entry rather than inventing allocation size. Sparse codes still deliberately
-use the recorded dense policy, so its resource demand is explicit.
+GPU-ProviderLayout now records catalog identity/ABI, reconstruction, payload,
+directory policy, native complete permutations and download adapters during
+GPU binding/grading, not in `Rows::new`. Its independent checker never reruns
+selection. Both resident and computed paths consume the same records, and
+unsupported constructors are rejected rather than replaced by RangeProvider.
+`RangeDescriptor.directory_entries` carries the checked allocation to the
+runtime; validation checks the sentinel instead of inventing allocation size.
+Sparse codes still use the recorded dense policy, with explicit resource demand.
 
 GPU-NativeAbi recognizes complete native catalog constructor identities.
 `DeviceLayout`, `Symbol`, `DeviceColumns` and `RangeProvider` suffixes no longer

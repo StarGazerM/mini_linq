@@ -452,6 +452,10 @@ pub struct Analysis {
     /// Publication ownership, derived once from checked provenance and consumers.
     pub publications: BTreeMap<String, Publication>,
     pub task_execution: task_execution::Execution,
+    pub gpu_bindings: gpu::bindings::Bindings,
+    /// Concrete GPU carrier storage, ordered key-codec recipes with their
+    /// bounds sources, and packed-key equality granularity.
+    pub gpu_publications: BTreeMap<String, gpu::publication::PublicationRecord>,
     /// Pure Rows/Ref/Store provenance, before any support-equal reheading.
     pub host_sources: BTreeMap<String, String>,
     /// Borrowable base provenance of Tile inputs, in constructor preorder.

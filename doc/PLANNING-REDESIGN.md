@@ -314,16 +314,18 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     `plan(L, …, known(at(level k)))`, `plan(L, known(admit))`,
     `admit(O, granularity(batch(n)), partial(per_task))`; index advice as for
     any read.
-  - **GPU printers print recorded providers** (CUDA audit 2026-10-30,
-    `agent://CudaProviderAudit`): built providers ignore `Keyed.ty` (always
-    `RangeBuilder`, `experiments/gpu/sequence/core/src/rows.rs:696-777,1090-1196`);
-    the printer invents a permuted sorted provider (`rows.rs:615-637`);
-    terminal grouping ignores the recorded accumulator (`emit.rs:1640-1659`);
-    Datalog rebuilds relation/view types and literal `DeviceRuns`
-    (`experiments/gpu/datalog/src/print.rs:16-18,280`) and overrides
-    `KeySet.provider` and `next` (`print.rs:32-37,329-345,447-449`).
-    The key codec, flat vs packed publication and the directory policy need IR
-    records (`emit.rs:1573-1607,1931-1974`; `rows.rs:48-106`).
+  - **GPU printers print recorded providers** (P3d C1, CUDA audit
+    `agent://CudaProviderAudit`). GPU binding/grading records the built-provider
+    catalog ABI and construction type, complete native lookup permutations,
+    download adapters, directory policy, key codec and publication storage.
+    Independent checkers validate these facts; printers consume them.
+    Keyed grouping records its segmented accumulator in `Structure::Group.ty`.
+    Upload adapters and immutable bounds provenance are also recorded. C1 is
+    CQ-only: Datalog provider/initializer fixes are deferred to C2 on top of
+    track B's ordinary canonical-layout records, without parallel GPU-only
+    ownership fields. Fused `DeviceRuns::admit` remains until that cutover.
+    Terminal-group execution placement remains a separate refinement obligation,
+    not discharged by recording its accumulator provider.
   - **Removes** CQ `CanonStrategy`/`dedup::sort` canon, `__cq_seen` and
     callback barriers; CPU Datalog `seen`/`all` (hash, `ShardedSeen`, `RunSeen`
     seeds), DL-InsertNew/DL-ShardedAdmission; GPU fused admission. Verified

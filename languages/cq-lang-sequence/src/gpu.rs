@@ -1,4 +1,7 @@
 //! Checked GPU launch and publication refinement. Emitters consume these records.
+pub mod bindings;
+pub mod publication;
+
 use crate::{Analysis, Capability, Monoid, Obligation, Program, Term};
 use cq_lang_structures::physical::symbol_name;
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,6 +11,8 @@ pub struct Machine {
     pub block_threads: u32,
     /// Catalog identity predicate, never a type-name suffix test.
     pub contiguous_range: fn(&syn::Type) -> bool,
+    /// Target refinement records concrete provider/storage bindings upstream.
+    pub bindings: fn(&Program, &Analysis) -> syn::Result<bindings::Bindings>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

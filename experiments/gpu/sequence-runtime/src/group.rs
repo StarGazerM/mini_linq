@@ -247,6 +247,29 @@ impl<F> GroupedRows<F> {
     }
 }
 
+/// Recorded GPU keyed accumulator provider. Its implementation sorts canonical
+/// valuation arguments by key and folds each resulting segment.
+pub struct SegmentedGroup;
+
+impl SegmentedGroup {
+    /// Execute the recorded segmented accumulator over row-major arguments.
+    ///
+    /// # Safety
+    /// The input and flags must satisfy [`fold`]'s canonical-valuation,
+    /// initialization, device and stream requirements.
+    pub unsafe fn fold(
+        pool: Arc<Pool>,
+        input: &Buffer<i64>,
+        live: Option<&cuda_core::DeviceBuffer<u32>>,
+        rows: usize,
+        keys: usize,
+        aggregates: &[Aggregate],
+        statuses: Vec<Arc<Buffer<OutputCount>>>,
+    ) -> Result<GroupedOutput> {
+        unsafe { fold(pool, input, live, rows, keys, aggregates, statuses) }
+    }
+}
+
 /// Reduce canonical valuation arguments. Each input row contains the key fields
 /// followed by one evaluated argument per aggregate (count uses one).
 ///

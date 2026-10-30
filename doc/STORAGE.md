@@ -758,3 +758,25 @@ No build, test, or performance result is claimed for this migration here.
    current implementation is naive (per-row `String`, sort of all values,
    per-row lookup; h13 load 188 → 2248 ms) and is a later P3c item: hash pass
    over Arrow string buffers, no per-row allocation, parallel.
+
+### 13.2 GPU provider ownership (P3d C1)
+
+GPU binding/grading records the selected built-provider catalog ABI, key and
+payload layout, dense-directory policy, native lookup permutation, upload and
+download adapters, publication storage and key-codec recipe before translation.
+Checkers validate complete adapter coverage and exact provider payload demands.
+Packing bounds name immutable original resident columns or declared Scalar
+carrier metadata; a later uploaded publication cannot change an earlier codec
+recipe. A non-range provider is never silently realized as `RangeProvider`.
+Native materialization is an explicit complete permutation; the provider owns
+its sorting implementation.
+
+Keyed groups record `group::SegmentedGroup` in `Structure::Group.ty` during
+GPU refinement and print that provider's fold. Keyless folds have no keyed
+accumulator record. The separate terminal-group execution-placement gap is
+not resolved by this provider change.
+
+Datalog provider/initializer and admission changes are deferred to C2, on top
+of the ordinary canonical-layout records from track B. C1 adds no parallel
+GPU-only relation-view, candidate-buffer or layout-state ownership records.
+The existing fused device admission is unchanged in this CQ-only milestone.

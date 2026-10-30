@@ -3,9 +3,27 @@ use cq_gpu_sequence_runtime::Result;
 use cq_lang_sequence::{Program, check_grading};
 use quote::ToTokens;
 
+/// Accumulator providers of every emitted `fold` call.
+fn fold_providers(generated: &syn::Expr) -> Vec<Option<syn::Type>> {
+    struct Folds(Vec<Option<syn::Type>>);
+    impl<'a> syn::visit::Visit<'a> for Folds {
+        fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
+            if let syn::Expr::Path(path) = &*call.func
+                && path.path.segments.last().is_some_and(|segment| segment.ident == "fold")
+            {
+                self.0.push(path.qself.as_ref().map(|qself| (*qself.ty).clone()));
+            }
+            syn::visit::visit_expr_call(self, call);
+        }
+    }
+    let mut folds = Folds(Vec::new());
+    syn::visit::Visit::visit_expr(&mut folds, generated);
+    folds.0
+}
+
 #[test]
 fn translates_grouped_canonical_publication() {
-    let program: Program = syn::parse_quote! {
+    let mut program: Program = syn::parse_quote! {
         physical {
             relation R(k:u32,id:u32,value:i64) = (data);
             r = pipe canon rename R@0 {k -> k,id -> id,value -> value};
@@ -27,13 +45,15 @@ fn translates_grouped_canonical_publication() {
         }
         graded gpu {source at host; feed at device.block; valuations at host; result at host;}
     };
+    // Authored Sequence skips the `stage` pass: bind target Structures explicitly.
+    program.structures = cq_gpu_sequence::bind_structures(&program.structures).unwrap();
     let program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
     let analysis = check_grading(&program, &cq_gpu_sequence::machine()).unwrap();
-    let code = cq_gpu_sequence::translate(&program, &analysis)
-        .unwrap()
-        .to_token_stream()
-        .to_string();
-    assert!(code.contains("group :: fold"));
+    let expression = cq_gpu_sequence::translate(&program, &analysis).unwrap();
+    let code = expression.to_token_stream().to_string();
+    let segmented: syn::Type = syn::parse_quote!(::cq_gpu_sequence_runtime::group::SegmentedGroup);
+    assert_eq!(analysis.structures.groups["grouped"], segmented);
+    assert_eq!(fold_providers(&expression), vec![Some(segmented)], "{code}");
     assert!(code.contains("canonicalize"));
     assert!(code.contains("valid [3usize]"));
 }

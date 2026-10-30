@@ -3,6 +3,12 @@
 use cq_lang_sequence::{LevelNode, Machine};
 
 mod arena;
+// DESIGN gpu-provider-records
+// P3d/T-Gpu: select once into GPU analysis; check recorded facts and print them.
+// Runtime layout algorithms belong to the selected provider, never the emitter.
+mod bindings;
+mod domains;
+mod grouping;
 mod capture;
 pub mod constants;
 pub mod runs;
@@ -14,6 +20,13 @@ mod rows;
 pub use emit::translate;
 pub use arena::translate_arena;
 
+/// Select target-owned accumulator providers before checking GPU Structures.
+/// The only grouping selection site: pipelines reach it through `stage`, the
+/// TPC-H build before Sequence lowering, and authored fixtures explicitly.
+pub fn bind_structures(source: &cq_lang_structures::Program) -> syn::Result<cq_lang_structures::Program> {
+    grouping::bind(source)
+}
+
 /// Validate the Structures boundary without selecting CPU batching.
 /// GPU batching and storage scheduling are recorded later in Sequence.
 pub fn check_structures(
@@ -21,6 +34,7 @@ pub fn check_structures(
     analysis: &cq_lang_structures::Analysis,
 ) -> syn::Result<()> {
     check_physical(&source.physical)?;
+    grouping::check(source, analysis)?;
     if !analysis.witnesses.is_empty()
         || !analysis.stages.is_empty()
         || !analysis.join_filters.is_empty()
@@ -111,6 +125,7 @@ pub fn native_abi(ty: &syn::Type) -> Option<NativeAbi> {
 pub fn machine() -> Machine {
     Machine { gpu: Some(cq_lang_sequence::gpu::Machine {
         block_threads: 256,
+        bindings: bindings::select,
         contiguous_range: |ty| native_abi(ty) == Some(NativeAbi::Range),
     }), name: syn::parse_quote!(gpu),
     items: 4,

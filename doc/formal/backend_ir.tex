@@ -1012,12 +1012,12 @@ boundaries.
   \text{one query kernel plus recorded completion steps per BE-Boundary dispatch};\
   \mathsf{tile}\mapsto\text{recorded distribution or strip-mining};\
   \mathsf{flatten}\mapsto\text{block scan and owner search};\
-  \mathsf{store}\mapsto\text{shared storage or device publication};\
-  \mathsf{canon}\mapsto\text{packed radix sort and unique}}
+  \mathsf{store}\mapsto\text{recorded storage and key codec};\
+  \mathsf{canon}\mapsto\text{recorded provider}}
 \end{mathpar}
-Range providers are built before their query dispatches using stable radix
-ordering and lower-bound directories. Membership searches within those
-recorded ranges. The output protocol and sticky failure flags discharge
+Provider construction consumes the recorded catalog ABI and provider type.
+Range providers own their ordering and directory algorithms; native run
+lookups consume recorded complete permutations. The output protocol and sticky failure flags discharge
 BE-Length and BE-Abort; bounded output retries rather than publishing a
 truncated result. No target-side join order, uniqueness or tile choice is
 inferred by the translation.
@@ -1199,21 +1199,50 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  {\mathrm{abi}(T)=a\quad\mathrm{residency}(T)=\mathrm{residency}(a)}
 \Rule{GPU-CodecIdentity}{\forall (T,c),(T,c')\in\mathrm{declaredSymbols}.\ c=c'}
  {\mathrm{codecs}(T)=c\quad\mathrm{captureCodec}(x:T)=\mathrm{codecs}(T)}
-\Rule{GPU-ProviderLayout}{K=\mathrm{concat}(\mathrm{levels})\quad
- P=\mathrm{scanPayload}\ \text{if scanned, else }(\mathrm{builtPayload}\setminus K_0)\cup K_{>0}\quad
- d=\text{empty: }0\text{; otherwise }\max(K_0)+1\quad 0\le K_i\le 2^{32}-1}
- {\mathrm{layout}=(K,P,\mathrm{DenseU32},d,\mathrm{entries}=d+1)}
+\Rule{GPU-ProviderLayout}{T=\text{recorded built provider}\quad
+ a=\text{checked catalog ABI of }T\quad K=\mathrm{concat}(\mathrm{levels})\quad
+ P=\text{recorded complete scan or reconstructed lookup payload}}
+ {\mathrm{layout}=(T,a,K,P,\text{provider directory policy})}
+\Rule{GPU-GroupProvider}{G.\mathrm{ty}=\text{recorded GPU accumulator provider}\quad
+ G\text{ is keyed}}
+ {\mathsf{group}_{\rm gpu}(G)=G.\mathrm{ty}::\mathsf{fold}(G)}
+\Rule{GPU-PublicationStorage}{S=\text{recorded flat carrier or packed-key recipe}\quad
+ C=\text{recorded canonical-publication obligation}\quad
+ \text{packed fields cover the complete published heading in recorded order}\quad
+ \text{each field names its bounds provenance}}
+ {\mathsf{publish}_{\rm gpu}\text{ consumes }(S,C)\text{ without selecting storage, codec or canonicality}}
 \end{mathpar}
 Codec identities are checked structurally for every declared native layout
 before translating expressions; a conflict is rejected, never overwritten.
 Thus a compared column and its closed capture use the same declared encoding.
-The provider record is derived once for resident and computed paths: the first
-key is reconstructed from the probe, later keys remain payload, and scans retain
-their complete payload. Keyless providers record zero directory entries.
-The dense domain is symbolic until column bounds are available (computed run
-columns measure those bounds); its overflow-checked allocation size is recorded
-in the runtime descriptor. The runtime checks the terminal-entry invariant and
-consumes that size rather than selecting an allocation policy.
+The GPU binding pass records one catalog-backed provider realization for both
+resident and computed paths; the checker validates supplied records without
+rerunning selection. Range providers record a dense nonnegative u32 domain
+with one terminal entry (zero entries for keyless providers). The first key is
+reconstructed from the probe, later keys remain payload, and scans retain their
+complete payload. The domain is symbolic until bounds are available; the runtime
+checks and consumes the allocation rather than selecting its policy.
+Native lookups record either a borrowed leading-prefix view or a complete
+materialized permutation; printers cannot invent a sorted provider.
+Downloaded host scans consume a recorded host adapter replacement; every
+resident scan has exactly one such record. Uploads consume the recorded
+empty-row or numeric-column adapter and its declared carrier tuple.
+Keyed terminal groups print the accumulator recorded in Structures; keyless
+global folds have no keyed accumulator record. This provider refinement does
+not itself supply the separate terminal-group execution-placement refinement.
+GPU publication refinement records flat carrier columns and stride, or a
+frame-of-reference equality-key recipe with ordered fields and bounds sources.
+Each packed field uses its minimum as base and its range bit width; fields and
+u64 lanes are low-first, with at least one lane for a zero-bit key. Runtime
+bounds instantiate this recorded recipe. Column fields name the complete union
+of their immutable original resident input domains, or their declared Scalar
+carrier metadata; scalar folds record their monoid's fixed bounds.
+An uploaded host publication does not mutate a recorded packing domain, so
+early and late emission use the same source. Host unions separately record
+their flat staging carrier. The checker traverses Sequence constructors and
+checks coverage, canonical obligations, field provenance, stride and staging
+without calling the producer's context/selection helpers. A codec does not
+select a canonicalization provider.
 
 A literal atom argument such as \code{method\_modifier(sym("abstract"), m)}
 reaches the translator as a constant inside a rename. The checked Physical

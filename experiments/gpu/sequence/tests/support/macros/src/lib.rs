@@ -2,10 +2,14 @@ use proc_macro::TokenStream;
 use quote::ToTokens;
 
 /// Expand an authored checked Sequence fixture without planning decisions.
+/// Authored fixtures skip the `stage` pass, so bind target Structures here.
 #[proc_macro]
 pub fn sequence(input: TokenStream) -> TokenStream {
-    let program = syn::parse_macro_input!(input as cq_lang_sequence::Program);
-    let result = cq_gpu_sequence_core::runs::record_representation(&program).and_then(|program| {
+    let mut program = syn::parse_macro_input!(input as cq_lang_sequence::Program);
+    let result = cq_gpu_sequence_core::bind_structures(&program.structures).and_then(|structures| {
+        program.structures = structures;
+        cq_gpu_sequence_core::runs::record_representation(&program)
+    }).and_then(|program| {
         let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())?;
         cq_gpu_sequence::translate(&program, &analysis)
     });

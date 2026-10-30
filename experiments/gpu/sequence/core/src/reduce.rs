@@ -91,6 +91,7 @@ pub struct GroupInput {
 /// valuation boundary. No sorting/canonicalization choices are made here.
 pub fn group(
     group: &cq_lang_structures::syntax::algebra::Group,
+    provider: Option<&syn::Type>,
     input_columns: &[String],
     output_columns: &[String],
     output_types: &std::collections::BTreeMap<String, syn::Type>,
@@ -113,6 +114,14 @@ pub fn group(
     let prepare = format_ident!("prepare_{kernel}");
     let mut columns = group.keys.iter().map(symbol_name).collect::<Vec<_>>();
     let keys = columns.len();
+    let fold = match (keys, provider) {
+        (0, None) => quote!(::cq_gpu_sequence_runtime::group::fold),
+        (0, Some(_)) => return Err(syn::Error::new_spanned(group,
+            "GPU-Group: global fold cannot carry a keyed accumulator provider")),
+        (_, Some(provider)) => quote!(<#provider>::fold),
+        (_, None) => return Err(syn::Error::new_spanned(group,
+            "GPU-Group: keyed fold lacks a recorded accumulator provider")),
+    };
     let mut arguments = columns.iter().cloned().map(Some).collect::<Vec<_>>();
     let mut descriptors = Vec::new();
     for aggregate in &group.aggregates {
@@ -270,7 +279,7 @@ pub fn group(
                 __cq_module.#kernel(__cq_pool.stream(),&prepared,__cq_group_values.ptr(),#length,#input_arguments #(#args),*)?;
             }
             #status
-            let __cq_result=unsafe {::cq_gpu_sequence_runtime::group::fold(
+            let __cq_result=unsafe {#fold(
                 __cq_pool.clone(),&__cq_group_values,#live_argument,#length,#keys,&[#(#descriptors),*],__cq_statuses,
             )?}.with_decoder(
                 move |values:&[i64],valid:&[u8]| -> ::cq_gpu_sequence_runtime::Result<_> {Ok((#(#decoded,)*))}

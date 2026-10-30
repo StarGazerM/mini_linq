@@ -18,9 +18,10 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
 pub fn stage(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, arguments| {
         no_arguments(arguments)?;
-        let analysis = cq_lang_structures::contract::check(source)?;
-        cq_gpu_sequence_core::check_structures(source, &analysis)?;
-        Ok(source.clone())
+        let target = cq_gpu_sequence_core::bind_structures(source)?;
+        let analysis = cq_lang_structures::contract::check(&target)?;
+        cq_gpu_sequence_core::check_structures(&target, &analysis)?;
+        Ok(target)
     })
     .into()
 }

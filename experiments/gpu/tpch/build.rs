@@ -367,6 +367,13 @@ fn compile_stage(
             )?;
         }
     }
+    if !host {
+        structures = checked(
+            "target provider binding",
+            &structures,
+            cq_gpu_sequence::bind_structures(&structures),
+        )?;
+    }
     let mut sequence = checked(
         "Sequence lowering",
         &structures,

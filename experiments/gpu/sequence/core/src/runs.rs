@@ -274,10 +274,13 @@ mod tests {
                 result_rows = store canon map result compact selected flatten tile 256 input;
                 output count;
             }
+            graded gpu { input at host; result_rows at host.device; }
         };
         let recorded = record_representation(&program).unwrap();
         assert!(recorded.representation.identity.contains("x"));
         assert!(recorded.representation.identity.contains("y"));
+        let analysis = cq_lang_sequence::check_grading(&recorded, &crate::machine()).unwrap();
+        assert!(analysis.gpu_bindings.native.is_empty());
     }
 
     #[test]
