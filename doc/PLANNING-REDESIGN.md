@@ -203,6 +203,10 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     `emit.rs` fused expansion, CPU pull printer) per rule/delta/stage.
   - **P3.2 Hand-advised experiments** measured with counters and paired
     timing: DOOP generic AIPT_Store, DOOP array load, TPC-H H05 plan R.
+    Also measure the existing CPU `join_filter`/Bloom advice there (rows
+    removed before lookup). Building filters during the hash build, bitmap
+    vs Bloom choice and small-to-large filter order stay in P7; revisit
+    after P3.2 whether to pull them earlier (decided 2026-10-29).
   - **P3.3** Default planner emits L&E phases from evidence; delete
     `lookup_first` and EXT-SeqLookup; GPU match-set carrier after P4.
 - **P3b Profile the engine gaps** (`doc/STORAGE.md` §12.4): GPU h06
