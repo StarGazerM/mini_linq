@@ -223,6 +223,17 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     - DOOP AIPT_Store is 2.6% of the traced batik fixpoint: skew-heavy rules
       are not where fixpoint time goes; per-hole time from the counters must
       choose targets.
+    Diagnosis (2026-10-30): answers are exact in every variant; the
+    semantics (VO/RA meaning, L&E as subatom phases) hold. The losses are
+    implementation: our `lookup_first` is an exact-semijoin adaptation of
+    RPT (doc/formal/passes.tex, order(transfer)), not RPT's cheap Bloom
+    pipeline. It materializes stored transfers, probes again, replicates
+    adaptive alternatives and runs on cyclic queries and per-iteration
+    Datalog deltas, outside RPT's acyclic guarantee. RPT's robustness is
+    insensitivity to join order at low transfer cost, so a transfer that
+    makes plans slower than no transfer (DOOP 1.07x/1.23x, H05) indicates
+    a wrong realization. Fixed by P3.3 (delete re-planning) and P7
+    (filters built during builds).
   - **P3.3** Default planner emits L&E phases from evidence; delete
     `lookup_first`/automatic Sequence re-planning first (measured win on
     DOOP); grading learns R's schedule shapes (retained small prefixes,
