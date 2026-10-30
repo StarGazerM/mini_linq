@@ -22,7 +22,7 @@
 //!
 //! `radix_runs` instead selects `::cq_storage::RadixRun<_,_>` for explicit
 //! singleton payload builds, including owned/computed keys. Rust checks the
-//! provider's RadixKey obligations. Its radix12/error32 spline narrows exact
+//! provider's OrderKey obligations. Its radix12/error32 spline narrows exact
 //! payload search, without a hash or whole-array binary fallback. Dense-domain
 //! membership can use a lazy exact presence bitmap (at most 128 KiB and one
 //! byte per distinct key); payload-only reads do not allocate it. Unsupported

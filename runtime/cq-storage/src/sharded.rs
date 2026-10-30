@@ -362,7 +362,7 @@ macro_rules! routed_read {
 }
 routed_read!([K, V] Index<K, V>);
 routed_read!([K, V, C] crate::SortedRun<K, V, C>);
-routed_read!([K, V] crate::RadixRun<K, V>);
+routed_read!([K, V, C] crate::RadixRun<K, V, C>);
 routed_read!([K, V] std::collections::BTreeMap<K, Vec<V>>);
 
 /// Shared routing function used by the Sequence key partition and its provider.

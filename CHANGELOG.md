@@ -7,6 +7,29 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Unify dense membership and radix/rank keys under `cq_storage::OrderKey`:
+  one total, injective, order-preserving ordinal covers stored and absent keys.
+  Remove `DenseOrdinal` and `RadixKey`; custom keys implement `OrderKey`.
+  `KeyCodec` is now a sealed representation policy: enabled adapters reuse
+  that canonical ordinal, while `NoDense` retains the generic fallback.
+  Partial/custom codec implementations are replaced by the shared key law.
+  Signed i32 and unsigned u32 adapters now use the same ordinals as radix runs;
+  native u64/u128 membership and existing provider reads remain supported.
+  Export `cq_storage::HashMap` with configurable/default `HashState`.
+- Implement ordinary-index `Fresh`/`Publish` for hash/tree sets, grouped hash
+  and ordered maps, sorted/radix runs and recursive tries. Admission compares complete
+  rows, not just grouped keys, and does not mutate the represented relation.
+  Radix publication uses ratio-bounded immutable runs, stable merge-path and
+  narrow group offsets. Membership/count/range reads do not touch payloads.
+  `RadixRun<K,V,C=Vec<V>>` supports explicit `ItemColumns` layouts, including
+  tuple-of-vector SoA columns and selective `column_groups` reads; old flat
+  constructors and contiguous item APIs remain available. Radix lookup now
+  returns a Copy/ExactSize cross-run cursor through `IndexRead::Cursor`.
+  Empty sorted/radix/trie indices implement `Default` for uniform admission
+  construction; no provider-name branch is required.
+  Set-bucket hash maps support ordinary reads and complete-row admission
+  with independent key/payload hashers. Single-run retained radix expansion
+  resolves its directory once; published key scans merge runs without sorting.
 - P3.3-lite: remove `lookup_first`, adaptive optional-filter advice/provenance,
   and automatic Sequence relational replanning. Default and GPU automatic
   routes now use order-preserving decomposition with existing grading.

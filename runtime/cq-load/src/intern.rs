@@ -13,23 +13,12 @@ impl StringCode {
     pub const MAX: Self = Self(u32::MAX);
 }
 
-impl cq_storage::DenseOrdinal for StringCode {
+impl cq_storage::OrderKey for StringCode {
     type Ordinal = u64;
 
     #[inline]
-    fn dense_ordinal(&self) -> Self::Ordinal {
+    fn ordinal(&self) -> Self::Ordinal {
         u64::from(self.0)
-    }
-}
-
-impl cq_storage::KeyCodec<StringCode> for cq_storage::I64Codec {
-    #[inline]
-    fn ordinal(self, key: &StringCode) -> Option<u128> {
-        Some(u128::from(key.0))
-    }
-
-    fn total(self) -> bool {
-        true
     }
 }
 
@@ -327,9 +316,9 @@ mod tests {
 
     #[test]
     fn string_code_dense_ordinals_use_native_words() {
-        use cq_storage::{DenseMembership, DenseOrdinal, ExactMembership};
+        use cq_storage::{DenseMembership, ExactMembership, OrderKey};
 
-        let ordinal: u64 = StringCode::MAX.dense_ordinal();
+        let ordinal: u64 = StringCode::MAX.ordinal();
         assert_eq!(ordinal, u64::from(u32::MAX));
         let set = DenseMembership::<_, 64>::from_dense_keys([StringCode(0), StringCode(63)]);
         assert!(set.is_dense());

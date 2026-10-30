@@ -1002,7 +1002,7 @@ probe-side scan. A scan may therefore carry filters from several builds.
 Every eligible payload-index build selects an exact
 \code{AdaptiveMembership<K,67108864>}. A membership-only build already answers
 the same exact key test and receives no redundant supplementary filter.
-Rust's \code{DenseOrdinal} capability selects the dense representation under
+Rust's \code{OrderKey} capability selects the dense representation under
 \textsc{STR-AdaptiveMembership}; other keys keep exact hash membership.
 Selection does not sample cardinalities or assume keys or foreign keys.
 Approximate structures live in an external feature and require explicit

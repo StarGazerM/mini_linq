@@ -110,7 +110,7 @@ fn generic_proofs_do_no_lookup_and_cursor_types_preserve_occurrences() {
     type OrderedLedger<K, V> = SortedRun<K, V>;
     let alias = OrderedLedger::build(input.into_iter());
     expansion_law(&alias);
-    let radix = cq_storage::RadixRun::build(input.into_iter());
+    let radix = cq_storage::RadixRun::<_, _>::build(input.into_iter());
     expansion_law(&radix);
     for keys in [
         ledger.distinct_keys().copied().collect::<Vec<_>>(),

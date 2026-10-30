@@ -41,7 +41,7 @@ impl<S: crate::Build<I>, I: Iterator> BuildProvider<I> for &BuildTarget<S, I> {
 
 impl<K, V, I, const B: usize> BuildProvider<I> for &&BuildTarget<crate::AdaptiveMembership<K, B>, I>
 where
-    K: crate::DenseOrdinal + std::hash::Hash,
+    K: crate::OrderKey + std::hash::Hash,
     I: Iterator<Item = (K, V)>,
 {
     type Output = crate::DenseMembership<K, B>;

@@ -129,7 +129,7 @@ pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
 
 /// Formal rule EXT-RadixRuns:
 /// Retype eligible singleton payload builds to RadixSpline runs.
-/// Rust checks RadixKey; this selects storage, not an ordered-input algorithm.
+/// Rust checks OrderKey; this selects storage, not an ordered-input algorithm.
 pub fn radix_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     select_runs(source, arguments, RunKind::Radix)
 }

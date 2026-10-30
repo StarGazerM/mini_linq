@@ -112,15 +112,8 @@ fn adaptive_extremes_budget_edges_and_borrowed_tpc_keys() {
     let borrowed32 =
         AdaptiveKeySet::<_, _, 65>::from_keys([(&-32i32,), (&32i32,)], BorrowedI64TupleCodec);
     assert!(borrowed32.any_in(&(&32,), &(&32,)));
-    #[derive(Clone, Copy)]
-    struct Partial;
-    impl KeyCodec<i64> for Partial {
-        fn ordinal(self, key: &i64) -> Option<u128> {
-            (*key >= 0).then_some(*key as u128)
-        }
-    }
-    let partial = AdaptiveKeySet::<_, _, 128>::from_keys([1, 3], Partial);
-    assert!(partial.any_in(&-1, &2));
+    let disabled = AdaptiveKeySet::<_, _, 128>::from_keys([1i64, 3], NoDense);
+    assert!(disabled.any_in(&-1, &2));
 }
 
 #[test]
@@ -186,17 +179,7 @@ fn codec_full_width_overflow_and_nonclone_keys_are_exact() {
         NoDense,
     );
     assert!(!set.any_in(&NonClone("b".into()), &NonClone("b".into())));
-    #[derive(Clone, Copy)]
-    struct Full;
-    impl KeyCodec<u128> for Full {
-        fn ordinal(self, key: &u128) -> Option<u128> {
-            Some(*key)
-        }
-        fn total(self) -> bool {
-            true
-        }
-    }
-    let full = AdaptiveKeySet::<_, _, 64>::from_keys([0, u128::MAX], Full);
+    let full = AdaptiveKeySet::<_, _, 64>::from_keys([0, u128::MAX], I64Codec);
     assert!(!full.any_in(&1, &(u128::MAX - 1)));
     assert!(full.any_in(&u128::MAX, &u128::MAX));
     assert_eq!(I64Codec.ordinal(&i64::MIN), Some(0));

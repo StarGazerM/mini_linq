@@ -15,14 +15,46 @@ struct RankDirectory {
     prefixes: Vec<usize>,
 }
 
-/// Shared clustered payload storage; each provider owns its own lookup directory.
-pub(crate) struct RunRows<K, V> {
-    pub(crate) keys: Vec<K>,
-    pub(crate) offsets: Vec<usize>,
-    pub(crate) items: Vec<V>,
+/// Offsets use the narrowest supported carrier that represents the terminal
+/// item position. Width is fixed when an immutable run is built.
+pub(crate) enum RunOffsets {
+    Narrow(Vec<u32>),
+    Wide(Vec<usize>),
 }
 
-impl<K: Ord + Copy, V> RunRows<K, V> {
+impl RunOffsets {
+    fn with_capacity(capacity: usize, items: usize) -> Self {
+        if u32::try_from(items).is_ok() {
+            Self::Narrow(Vec::with_capacity(capacity))
+        } else {
+            Self::Wide(Vec::with_capacity(capacity))
+        }
+    }
+
+    fn push(&mut self, offset: usize) {
+        match self {
+            Self::Narrow(offsets) => offsets.push(u32::try_from(offset).expect("run width")),
+            Self::Wide(offsets) => offsets.push(offset),
+        }
+    }
+
+    pub(crate) fn get(&self, slot: usize) -> usize {
+        match self {
+            Self::Narrow(offsets) => offsets[slot] as usize,
+            Self::Wide(offsets) => offsets[slot],
+        }
+    }
+}
+
+/// Shared clustered payload storage; each provider owns its own lookup directory.
+pub(crate) struct RunRows<K, V, C = Vec<V>> {
+    pub(crate) keys: Vec<K>,
+    pub(crate) offsets: RunOffsets,
+    pub(crate) items: C,
+    row: std::marker::PhantomData<fn() -> V>,
+}
+
+impl<K: Ord + Copy, V: Copy, C: crate::ItemColumns<Row = V>> RunRows<K, V, C> {
     pub(crate) fn from_pairs(source: impl IntoIterator<Item = (K, V)>) -> Self {
         crate::count!(index_builds);
         let mut pairs: Vec<_> = source.into_iter().collect();
@@ -57,8 +89,8 @@ impl<K: Ord + Copy, V> RunRows<K, V> {
         let distinct =
             usize::from(!pairs.is_empty()) + pairs.windows(2).filter(|p| p[0].0 != p[1].0).count();
         let mut keys = Vec::with_capacity(distinct);
-        let mut offsets = Vec::with_capacity(distinct + 1);
-        let mut items = Vec::with_capacity(pairs.len());
+        let mut offsets = RunOffsets::with_capacity(distinct + 1, pairs.len());
+        let mut items = C::with_capacity(pairs.len());
         for (key, item) in pairs {
             if keys.last() != Some(&key) {
                 keys.push(key);
@@ -74,18 +106,21 @@ impl<K: Ord + Copy, V> RunRows<K, V> {
             keys,
             offsets,
             items,
+            row: std::marker::PhantomData,
         }
     }
 }
 
-impl<K, V> RunRows<K, V> {
+impl<K, V: Copy, C: crate::ItemColumns<Row = V>> RunRows<K, V, C> {
     #[inline]
     pub(crate) fn range(&self, slot: Option<usize>) -> (usize, usize) {
         slot.map_or((self.items.len(), self.items.len()), |slot| {
-            (self.offsets[slot], self.offsets[slot + 1])
+            (self.offsets.get(slot), self.offsets.get(slot + 1))
         })
     }
+}
 
+impl<K, V: Copy> RunRows<K, V> {
     #[inline]
     pub(crate) fn cursor(&self, slot: Option<usize>) -> RunCursor<'_, V> {
         let (begin, end) = self.range(slot);
@@ -96,14 +131,74 @@ impl<K, V> RunRows<K, V> {
     }
 }
 
-impl<K: Copy, V: Copy> RunRows<K, V> {
+impl<K: Copy, V: Copy, C: crate::ItemColumns<Row = V>> RunRows<K, V, C> {
     pub(crate) fn rows(&self) -> impl Iterator<Item = (K, V)> {
         self.keys.iter().enumerate().flat_map(move |(slot, &key)| {
-            self.items[self.offsets[slot]..self.offsets[slot + 1]]
-                .iter()
-                .map(move |&item| (key, item))
+            (self.offsets.get(slot)..self.offsets.get(slot + 1))
+                .map(move |position| (key, self.items.item(position)))
         })
     }
+
+    /// Merge-path partitions the two key directories, never materializing row
+    /// tuples. Equal keys choose the older (left) run first; payload columns
+    /// are copied by whole group, preserving occurrence order.
+    pub(crate) fn merge(left: &Self, right: &Self) -> Self
+    where
+        K: Ord,
+    {
+        let total = left.keys.len() + right.keys.len();
+        let item_count = left.items.len() + right.items.len();
+        let mut result = Self {
+            keys: Vec::with_capacity(total),
+            offsets: RunOffsets::with_capacity(total + 1, item_count),
+            items: C::with_capacity(item_count),
+            row: std::marker::PhantomData,
+        };
+        const TILE: usize = 1024;
+        for diagonal in (0..total).step_by(TILE) {
+            let (mut a, mut b) = merge_path(&left.keys, &right.keys, diagonal);
+            for _ in diagonal..(diagonal + TILE).min(total) {
+                let (source, slot) = if b == right.keys.len()
+                    || (a < left.keys.len() && left.keys[a] <= right.keys[b])
+                {
+                    let slot = a;
+                    a += 1;
+                    (left, slot)
+                } else {
+                    let slot = b;
+                    b += 1;
+                    (right, slot)
+                };
+                let key = source.keys[slot];
+                if result.keys.last() != Some(&key) {
+                    result.keys.push(key);
+                    result.offsets.push(result.items.len());
+                }
+                let (begin, end) = source.range(Some(slot));
+                result.items.extend_range(&source.items, begin..end);
+                #[cfg(feature = "counters")]
+                crate::counters::record(|counts| counts.rows_copied += (end - begin) as u64);
+            }
+        }
+        result.offsets.push(result.items.len());
+        result
+    }
+}
+
+/// Stable co-rank of a merge diagonal: left keys precede equal right keys.
+fn merge_path<K: Ord>(left: &[K], right: &[K], diagonal: usize) -> (usize, usize) {
+    let mut low = diagonal.saturating_sub(right.len());
+    let mut high = diagonal.min(left.len());
+    while low < high {
+        let a = (low + high) / 2;
+        let b = diagonal - a;
+        if b > 0 && a < left.len() && right[b - 1] >= left[a] {
+            low = a + 1;
+        } else {
+            high = a;
+        }
+    }
+    (low, diagonal - low)
 }
 
 /// A stable sorted representation of `(key, item)` occurrences.
@@ -224,6 +319,12 @@ impl<K, V, C> crate::Keys for SortedRun<K, V, C> {
     }
 }
 
+impl<K: Ord + Copy, V: Copy, C: KeyCodec<K> + Default> Default for SortedRun<K, V, C> {
+    fn default() -> Self {
+        Self::from_pairs([], C::default())
+    }
+}
+
 impl<K: Ord + Copy, V: Copy, C: KeyCodec<K> + Default, I: Iterator<Item = (K, V)>> Build<I>
     for SortedRun<K, V, C>
 {
@@ -240,8 +341,9 @@ pub struct RunCursor<'a, V> {
 }
 
 impl<'a, V> RunCursor<'a, V> {
+    /// Borrow a contiguous payload group without copying or allocating.
     #[inline]
-    pub(crate) fn from_slice(items: &'a [V]) -> Self {
+    pub fn from_slice(items: &'a [V]) -> Self {
         Self { items, position: 0 }
     }
 }
@@ -293,10 +395,53 @@ impl<K: Copy, V: Copy, C> Rows for &SortedRun<K, V, C> {
     }
 }
 
+// Eq-only payloads require O(g) existing-group comparisons per candidate and
+// O(b²) comparisons for a batch group of b rows. A faster payload directory
+// belongs to a separately selected provider, not runtime type inspection.
+impl<K: Ord + Copy, V: Copy + Eq, C: KeyCodec<K>> crate::Fresh for SortedRun<K, V, C> {
+    type Row = (K, V);
+
+    fn fresh(&self, mut batch: Vec<Self::Row>) -> Vec<Self::Row> {
+        batch.retain(|(key, item)| !self.rows.cursor(self.slot(key)).any(|old| old == *item));
+        crate::maintain::distinct_pairs(batch)
+    }
+}
+
+impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> crate::Publish for SortedRun<K, V, C> {
+    type Item = (K, V);
+
+    fn publish<I: IntoIterator<Item = Self::Item>>(&mut self, items: I) {
+        let delta = RunRows::<K, V>::from_pairs(items);
+        if delta.items.is_empty() {
+            return;
+        }
+        self.rows = RunRows::merge(&self.rows, &delta);
+        self.rank = Self::rank_directory(&self.rows.keys, self.codec);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::I64Codec;
+
+    #[test]
+    fn offset_width_preserves_terminal_positions_at_the_u32_boundary() {
+        let mut narrow = RunOffsets::with_capacity(2, u32::MAX as usize);
+        narrow.push(0);
+        narrow.push(u32::MAX as usize);
+        assert_eq!(narrow.get(0), 0);
+        assert_eq!(narrow.get(1), u32::MAX as usize);
+        assert!(matches!(narrow, RunOffsets::Narrow(_)));
+        if usize::BITS > 32 {
+            let terminal = (u32::MAX as usize).checked_add(1).unwrap();
+            let mut wide = RunOffsets::with_capacity(2, terminal);
+            wide.push(0);
+            wide.push(terminal);
+            assert_eq!(wide.get(1), terminal);
+            assert!(matches!(wide, RunOffsets::Wide(_)));
+        }
+    }
 
     #[test]
     fn distinct_keys_count_directory_entries_not_payload_occurrences() {
@@ -392,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn borrowed_integer_keys_and_partial_codecs() {
+    fn borrowed_integer_keys_and_disabled_codecs() {
         use crate::BorrowedI64TupleCodec;
         let keys = [-65i64, -1, 0, 65];
         let run = crate::build!(
@@ -413,14 +558,7 @@ mod tests {
         let run = SortedRun::from_pairs([((&-1i32,), 'a'), ((&65,), 'b')], BorrowedI64TupleCodec);
         assert!(run.rank.is_some());
         assert_eq!((&run).lookup(&(&65,)).collect::<Vec<_>>(), ['b']);
-        #[derive(Clone, Copy)]
-        struct Partial;
-        impl KeyCodec<i64> for Partial {
-            fn ordinal(self, key: &i64) -> Option<u128> {
-                (*key >= 0).then_some(*key as u128)
-            }
-        }
-        let run = SortedRun::from_pairs([(-1, 'a'), (1, 'b')], Partial);
+        let run = SortedRun::from_pairs([(-1i64, 'a'), (1, 'b')], NoDense);
         assert!(run.rank.is_none());
         assert_eq!((&run).lookup(&-1).collect::<Vec<_>>(), ['a']);
     }

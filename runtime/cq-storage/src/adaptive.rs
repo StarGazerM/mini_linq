@@ -21,80 +21,9 @@
 //! P4 replaces it with read-in-place grouped runs/lazy bounded membership; copies need recorded reasons.
 //! Codec/role choices still require per-target measurements; Mac evidence is not CPU/CUDA evidence.
 use crate::instrument::HashSet;
-use crate::{Build, ExactIntervalMembership, ExactMembership};
+use crate::{Build, ExactIntervalMembership, ExactMembership, KeyCodec, OrderKey, OrdinalWord};
 use std::{hash::Hash, sync::Arc};
 
-/// Some ordinals must be injective and order-preserving for all supported keys.
-/// Returning None disables dense representation for the entire set.
-pub trait KeyCodec<K>: Copy {
-    // Encoding only: this capability maps logical keys to ordinals and provides no ordinal-to-key decode.
-    fn ordinal(self, key: &K) -> Option<u128>;
-    /// Certifies that ordinal is Some for every K, including query endpoints.
-    /// Partial codecs retain the hash form so interval queries remain exact.
-    fn total(self) -> bool {
-        false
-    }
-}
-#[derive(Clone, Copy, Default)]
-pub struct NoDense;
-impl<K> KeyCodec<K> for NoDense {
-    fn ordinal(self, _: &K) -> Option<u128> {
-        None
-    }
-}
-/// Full-width signed encoding, also supports TPC's i32 keys.
-#[derive(Clone, Copy, Default)]
-pub struct I64Codec;
-impl KeyCodec<i64> for I64Codec {
-    fn total(self) -> bool {
-        true
-    }
-    fn ordinal(self, key: &i64) -> Option<u128> {
-        Some((*key as u64 ^ (1 << 63)) as u128)
-    }
-}
-impl KeyCodec<i32> for I64Codec {
-    fn total(self) -> bool {
-        true
-    }
-    fn ordinal(self, key: &i32) -> Option<u128> {
-        self.ordinal(&i64::from(*key))
-    }
-}
-impl KeyCodec<u32> for I64Codec {
-    fn total(self) -> bool {
-        true
-    }
-    fn ordinal(self, key: &u32) -> Option<u128> {
-        self.ordinal(&i64::from(*key))
-    }
-}
-#[derive(Clone, Copy, Default)]
-pub struct BorrowedI64TupleCodec;
-impl KeyCodec<(&i64,)> for BorrowedI64TupleCodec {
-    fn total(self) -> bool {
-        true
-    }
-    fn ordinal(self, key: &(&i64,)) -> Option<u128> {
-        I64Codec.ordinal(key.0)
-    }
-}
-impl KeyCodec<(&i32,)> for BorrowedI64TupleCodec {
-    fn total(self) -> bool {
-        true
-    }
-    fn ordinal(self, key: &(&i32,)) -> Option<u128> {
-        I64Codec.ordinal(key.0)
-    }
-}
-impl KeyCodec<(&u32,)> for BorrowedI64TupleCodec {
-    fn total(self) -> bool {
-        true
-    }
-    fn ordinal(self, key: &(&u32,)) -> Option<u128> {
-        I64Codec.ordinal(key.0)
-    }
-}
 enum Form<K> {
     Dense {
         min: u128,
@@ -309,76 +238,7 @@ impl<K: Eq + Hash + Ord, C: KeyCodec<K> + Default, const B: usize, V, I: Iterato
     }
 }
 
-/// Unsigned ordinal arithmetic in the representation's native word width.
-///
-/// Ordering and subtraction must be exact integer operations; conversion to
-/// usize succeeds exactly when the difference is representable. A dense bitmap
-/// is built only after its complete span passes that checked conversion.
-pub trait OrdinalWord:
-    Copy + Ord + Send + Sync + std::ops::Sub<Output = Self> + TryInto<usize>
-{
-}
-
-impl OrdinalWord for u64 {}
-impl OrdinalWord for u128 {}
-
-/// A total, injective encoding for exact dense membership.
-///
-/// Implementations must return the same ordinal exactly when keys are equal,
-/// including query keys not present during construction. Unlike [`KeyCodec`],
-/// ordering is unnecessary: this capability supports contains-only storage.
-pub trait DenseOrdinal: Eq {
-    type Ordinal: OrdinalWord;
-    // Encoding only: dense membership compares ordinals; DenseOrdinal has no inverse logical conversion.
-    fn dense_ordinal(&self) -> Self::Ordinal;
-}
-
-impl DenseOrdinal for i64 {
-    type Ordinal = u64;
-
-    #[inline]
-    fn dense_ordinal(&self) -> Self::Ordinal {
-        *self as u64 ^ (1 << 63)
-    }
-}
-
-impl DenseOrdinal for i32 {
-    type Ordinal = u64;
-
-    #[inline]
-    fn dense_ordinal(&self) -> Self::Ordinal {
-        i64::from(*self).dense_ordinal()
-    }
-}
-
-impl DenseOrdinal for u32 {
-    type Ordinal = u64;
-
-    #[inline]
-    fn dense_ordinal(&self) -> Self::Ordinal {
-        u64::from(*self)
-    }
-}
-
-impl<T: DenseOrdinal + ?Sized> DenseOrdinal for &T {
-    type Ordinal = T::Ordinal;
-
-    #[inline]
-    fn dense_ordinal(&self) -> Self::Ordinal {
-        T::dense_ordinal(*self)
-    }
-}
-
-impl<T: DenseOrdinal> DenseOrdinal for (T,) {
-    type Ordinal = T::Ordinal;
-
-    #[inline]
-    fn dense_ordinal(&self) -> Self::Ordinal {
-        self.0.dense_ordinal()
-    }
-}
-
-enum MembershipForm<K: DenseOrdinal, const B: usize> {
+enum MembershipForm<K: OrderKey, const B: usize> {
     Dense {
         min: K::Ordinal,
         max: K::Ordinal,
@@ -391,11 +251,11 @@ enum MembershipForm<K: DenseOrdinal, const B: usize> {
 /// Contains-only exact membership factory with a bounded dense bitmap.
 ///
 /// [`crate::build!`] returns [`DenseMembership`] when the callsite proves
-/// [`DenseOrdinal`], allowing ordinal calls to inline into probes. Otherwise it
+/// [`OrderKey`], allowing ordinal calls to inline into probes. Otherwise it
 /// returns this exact hash provider. The ordinary [`Build`] implementation also
 /// uses hashing, requiring only `Eq + Hash`, without a sorted copy or shared cells.
 ///
-/// Formal rule STR-AdaptiveMembership: Rust capability dispatch selects dense storage only with a total injective ordinal; generic equality/hash keys retain exact hash membership.
+/// Formal rule STR-AdaptiveMembership: Rust capability dispatch selects dense storage only with the total order-preserving key law; generic equality/hash keys retain exact hash membership.
 pub struct AdaptiveMembership<K, const MAX_BITS: usize> {
     keys: HashSet<K>,
     bytes: usize,
@@ -437,11 +297,11 @@ impl<K: Eq + Hash, const B: usize> AdaptiveMembership<K, B> {
 ///
 /// Both the bitmap and sparse hash forms use static ordinal capability bounds;
 /// no function pointer or runtime key-type inspection is needed by a probe.
-pub struct DenseMembership<K: DenseOrdinal, const MAX_BITS: usize> {
+pub struct DenseMembership<K: OrderKey, const MAX_BITS: usize> {
     form: MembershipForm<K, MAX_BITS>,
 }
 
-impl<K: DenseOrdinal, const B: usize> DenseMembership<K, B> {
+impl<K: OrderKey, const B: usize> DenseMembership<K, B> {
     pub fn is_dense(&self) -> bool {
         matches!(&self.form, MembershipForm::Dense { .. })
     }
@@ -456,7 +316,7 @@ impl<K: DenseOrdinal, const B: usize> DenseMembership<K, B> {
     }
 }
 
-impl<K: DenseOrdinal + Hash, const B: usize> DenseMembership<K, B> {
+impl<K: OrderKey + Hash, const B: usize> DenseMembership<K, B> {
     fn from_hash_keys(keys: impl IntoIterator<Item = K>) -> Self {
         Self {
             form: MembershipForm::Hash(AdaptiveMembership::from_hash_keys(keys)),
@@ -479,7 +339,7 @@ impl<K: DenseOrdinal + Hash, const B: usize> DenseMembership<K, B> {
         });
         let mut range: Option<(K::Ordinal, K::Ordinal)> = None;
         for key in &keys {
-            let ordinal = key.dense_ordinal();
+            let ordinal = key.ordinal();
             range = Some(range.map_or((ordinal, ordinal), |(lo, hi)| {
                 (lo.min(ordinal), hi.max(ordinal))
             }));
@@ -492,7 +352,7 @@ impl<K: DenseOrdinal + Hash, const B: usize> DenseMembership<K, B> {
             let mut words = vec![0u64; span.div_ceil(64)];
             for key in &keys {
                 crate::count!(distinct_insertions);
-                let offset: usize = (key.dense_ordinal() - min)
+                let offset: usize = (key.ordinal() - min)
                     .try_into()
                     .ok()
                     .expect("bounded dense ordinal span");
@@ -531,7 +391,7 @@ impl<K: Eq + Hash, const B: usize, V, I: Iterator<Item = (K, V)>> Build<I>
     }
 }
 
-impl<K: DenseOrdinal + Hash, const B: usize, V, I: Iterator<Item = (K, V)>> Build<I>
+impl<K: OrderKey + Hash, const B: usize, V, I: Iterator<Item = (K, V)>> Build<I>
     for DenseMembership<K, B>
 {
     fn build(source: I) -> Self {
@@ -548,7 +408,7 @@ impl<K: Eq + Hash, const B: usize> ExactMembership<K> for AdaptiveMembership<K, 
     }
 }
 
-impl<K: DenseOrdinal + Hash, const B: usize> ExactMembership<K> for DenseMembership<K, B> {
+impl<K: OrderKey + Hash, const B: usize> ExactMembership<K> for DenseMembership<K, B> {
     #[inline]
     fn contains(&self, key: &K) -> bool {
         #[inline(never)]
@@ -561,7 +421,7 @@ impl<K: DenseOrdinal + Hash, const B: usize> ExactMembership<K> for DenseMembers
                 min, max, words, ..
             } => {
                 crate::count!(lookups);
-                bitmap_contains(*min, *max, words, key.dense_ordinal())
+                bitmap_contains(*min, *max, words, key.ordinal())
             }
         }
     }

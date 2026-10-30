@@ -345,16 +345,22 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     | A CQ admit | Replace canon/`__cq_seen`/sort barrier by `admit` (anti-join against the canonical built index of O, publish to O's indices, recorded granularity); canonical selection in Structures index selection; restore first-answer streaming | `languages/cq-lang-{structures,sequence}`, `passes/cq-{physical-lowering,structure-selection,sequence-lowering,sequence-plan,physical-realization}`, `features/rewrites`, facade tests | Claude |
     | B Datalog CPU admit | Storage index selection over all reads incl. the anti-join, completed permutations, recorded canonical (SRDatalog policy); Round `admit` = fresh on canonical (δ within round + ▷R) then publish to every layout; remove `seen`/`all`/`ShardedSeen`/`RunSeen` seeds | `features/datalog/*`, `features/datalog-parallel/*` | Claude |
     | C GPU conformance | Printers print recorded providers (CUDA audit list); then GPU Datalog admission split into fresh/publish over Round records from B | `experiments/gpu/{sequence/core,sequence-runtime,datalog,datalog-runtime}` | GPT (task default) |
-    | D Index providers | `Fresh`/`Publish` for existing providers and P4 runs (RadixRun index role, order-preserving key law, merge-path, lazy leveled publish) | `runtime/cq-storage` providers, runs, key codecs | GPT (task default) |
+    | D Index providers | Implemented `Fresh`/`Publish` for sets, grouped maps, sorted/radix runs and tries; unified `OrderKey`; narrow grouped offsets, merge-path and lazy ratio-bounded radix publication | `runtime/cq-storage` providers, runs, key codecs | GPT (task default) |
 
     Merge order: M1 = C's provider printing, then A; M2 = B (rebased on A)
     and D's providers; M3 = C's Datalog admission (needs B's Round records);
     then P3.3 planner work (touches `cq-sequence-plan`, after A). Main and
     milestone reviews run on Claude.
-- **P4 Index runs.** RadixRun as the index-role provider: one order-
-  preserving key law (merge `KeyCodec`, `DenseOrdinal`, `RadixKey`), narrow
-  offsets, columnar items, key predicates as group ranges, membership/count/
-  semijoin without items, retire AdaptiveKeySet staging/`Arc`; Datalog runs
+- **P4 Index runs.** Runtime radix index role now uses one order-preserving
+  `OrderKey` law (replacing `DenseOrdinal`/`RadixKey`; codec policies delegate),
+  narrow offsets and stable merge-path, with lazy ratio-bounded publication.
+  Membership/count/range/key reads do not read item columns; lookup cursors
+  visit all published runs without compaction. `RadixRun<K,V,C=Vec<V>>`
+  offers explicit `ItemColumns<Row=V>` layouts: tuple-of-Vec SoA columns,
+  selective group-range field reads, and late row materialization only for
+  demanded rows or contiguous legacy item reads. Compiler selection records C.
+  Standalone AdaptiveKeySet remains for existing non-Clone interval/hash
+  callers; radix maintenance introduces no adaptive staging or `Arc`. Datalog runs
   become grouped runs merged by merge-path. The dictionary policy is decided
   here from measurements (`doc/STORAGE.md` §10): code assignment is a
   publication, aligned with round/load boundaries.

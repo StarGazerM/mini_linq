@@ -41,7 +41,7 @@ nation filters; its existing three large filters lost dense storage.
 
 AdaptiveMembership now records the same type-blind provider and bitmap budget
 for every eligible key. Rust capability dispatch, not compiler inspection of
-column types or Rust guards, selects a total injective DenseOrdinal codec.
+column types or Rust guards, selects the total order-preserving OrderKey capability.
 Arbitrary Eq + Hash keys and oversized spans retain exact hash membership;
 contains-only fallback does not need Ord or a sorted interval index.
 Membership-only builds do not also construct the redundant scan filter.

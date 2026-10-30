@@ -184,9 +184,20 @@ Composite stored keys retain their existing payload or hash-set provider.
 The membership contract itself remains valid for explicitly recorded composite keys.
 No base-table key or foreign-key assumption is used.
 
+\paragraph{One ordered key law.}
+\code{OrderKey} supplies one total order embedding for stored and absent
+query keys. Dense, rank and radix representations all use this encoding;
+\code{KeyCodec} is only a sealed directory policy delegating to it, or
+\code{NoDense}, which disables numeric directories. Width requirements
+are provider capabilities, never truncation.
+\[
+\Rule{IX-OrderKey}{x,y:K\quad \mathsf{OrderKey}(K)}
+ {\mathsf{cmp}(x,y)=\mathsf{cmp}(\mathsf{ord}(x),\mathsf{ord}(y))}
+\]
+
 \paragraph{Adaptive membership representation law.}
 \code{AdaptiveMembership<K,B>} denotes exactly the supplied set of keys.
-Its \code{DenseOrdinal} capability supplies a total injective ordinal:
+Its \code{OrderKey} capability supplies a total order-preserving ordinal:
 $\mathsf{ord}(x)=\mathsf{ord}(y)\iff x=y$. Ordinary Rust trait resolution
 at \code{cq_storage::build!} selects a statically specialized dense-capable
 result when this capability is available; neither selection nor printing
@@ -205,7 +216,7 @@ The compiler records the provider and budget, not a guessed codec;
 integer aliases and user implementations obey the same capability law.
 \[
 \Rule{STR-AdaptiveMembership}{
- \mathsf{DenseOrdinal}(K)\quad
+ \mathsf{OrderKey}(K)\quad
  \forall x,y:K.\ \mathsf{ord}(x)=\mathsf{ord}(y)\iff x=y\\
  \mathsf{span}(\mathsf{ord}(I))\le B
 }{
@@ -223,7 +234,7 @@ Presence/rank and binary-search directory access identify the same exact
 range. This is a payload representation, not a uniqueness assertion.
 \code{RadixRun} uses the same stable clustered payload representation, but its
 directory is radix routing over a bounded-error rank spline. A total injective
-order-preserving \code{RadixKey} encoding covers owned, borrowed, and singleton
+order-preserving \code{OrderKey<Ordinal = u64>} encoding covers owned, borrowed, and singleton
 tuple i32/i64/u32/u64 keys. Integer differences precede floating conversion;
 the final window includes a conservative rounding allowance. Exact equality
 inside that window determines the payload range, not the prediction itself.
@@ -232,6 +243,18 @@ the encoded keys in a bitmap: a bit is set iff that key occurs in $D$.
 Its word-rounded storage is at most one byte per distinct key and 128 KiB;
 sparse domains keep exact spline search. Initialization neither changes
 $(D,O,V)$ nor invalidates existing payload cursors.
+Payload layout is explicit: \code{RadixRun<K,V,C>} requires
+\code{ItemColumns<Row=V>}. The default vector stores opaque items;
+tuple-of-vector layouts store independent columns. All columns have the same
+length; append and range-copy preserve the same occurrence positions.
+Key-only operations do not call row reconstruction. Column-group reads
+borrow the selected arrays and position ranges; lookup reconstructs only
+demanded rows, while contiguous legacy item reads may materialize a row view.
+The compiler records C rather than inspecting V.
+\[
+\Rule{IX-ItemColumns}{\mathsf{columns}(I)=(C_1,\ldots,C_m)\quad 0\le j<|I|}
+ {\forall i.\ |C_i|=|I|\quad (C_1[j],\ldots,C_m[j])=I[j]}
+\]
 \begin{mathpar}
 \Rule{STR-SortedRun}{
  \mathsf{stableCluster}(I,K)=(D,O,V)\quad
@@ -264,7 +287,7 @@ The external sorted-runs and radix-runs rewrites change only eligible built
 providers, not host fallbacks or smallest-intersection candidate providers.
 Their independent checker preserves Physical and rederives coverage.
 The key-shape premises concern recorded columns, not their Rust types.
-Rust proves the selected provider's ordering and \code{RadixKey} obligations;
+Rust proves the selected provider's ordering and \code{OrderKey} obligations;
 \code{AutoDense} selects a supported codec at the build callsite and otherwise
 uses \code{NoDense}. No compiler type inspection establishes these capabilities.
 RadixRun declares Exact, Range, and Membership at the Sequential host level;

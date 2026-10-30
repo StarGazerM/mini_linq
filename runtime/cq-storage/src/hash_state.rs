@@ -24,3 +24,6 @@ impl BuildHasher for HashState {
 
 /// Membership provider for keyed reads, including its concrete hash state.
 pub type HashSet<K> = std::collections::HashSet<K, HashState>;
+
+/// Keyed map provider with the default recorded hash state.
+pub type HashMap<K, V, S = HashState> = std::collections::HashMap<K, V, S>;

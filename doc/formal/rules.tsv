@@ -200,7 +200,7 @@ STR-Witness	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Witne
 ST-Expand	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Expand:	Require declared Expand on the selected payload or candidate directory, total finite cursor flattening, and represented producer segments preserving recorded demand; target realizations enforce cursor obligations.
 STR-SortedRun	implementation	runtime/cq-storage/src/sorted_run.rs	/// Formal rule STR-SortedRun:	Stable clustered runs preserve the occurrence bag and within-key order; exact directory lookup selects the matching range.
 EXT-SortedRuns	implementation	features/rewrites/passes/src/structures.rs	/// Formal rule EXT-SortedRuns:	Retype eligible one-level stream-keyed HashIndex payload providers while preserving Physical and coverage.
-STR-RadixRun	implementation	runtime/cq-storage/src/radix_run.rs	/// Formal rule STR-RadixRun:	Stable clustered payloads and an injective ordered key encoding allow radix/spline bounded exact lookup and Copy range cursors without changing multiplicity.
+STR-RadixRun	implementation	runtime/cq-storage/src/radix_run.rs	/// Formal rule STR-RadixRun:	Stable grouped payload columns and OrderKey permit spline-bounded exact lookup; Copy cross-run cursors eagerly resolve the first run and preserve multiplicity.
 EXT-RadixRuns	implementation	features/rewrites/passes/src/structures.rs	/// Formal rule EXT-RadixRuns:	Retype eligible singleton-key HashIndex payload builds to RadixRun with key capabilities proved by Rust; preserve default selection and separate retained/staged processing advice.
 EXT-SortedIndexes	implementation	features/rewrites/passes/src/indexes.rs	//! Formal rule EXT-SortedIndexes:	Record minimum chain-cover lexicographic layouts for built results' stream reads, levels in binding order, probed keys ending their chains; explicit layouts must serve every read.
 WF-DL-Source	implementation	features/datalog/languages/dl-source/src/lib.rs	/// Formal rule WF-DL-Source:	Source safety, exact set-model declarations and stratifiability.
@@ -323,6 +323,9 @@ ADM-Union	abstract	-	-	Anti-join distributes over bag union of producers.
 ADM-Commute	abstract	-	-	Distinct commutes with anti-join.
 ADM-Partial	abstract	-	-	Partial distinct of parts preserves the distinct of the union (per-task distinct).
 ADM-InPlan	abstract	-	-	The anti-join may be placed in a plan as a negated subatom at the level where every head variable is bound, reading the committed version; unimplemented.
-IX-Fresh	implementation	runtime/cq-storage/src/maintain.rs	/// Formal rule IX-Fresh:	Trait only; provider implementations arrive with P3d tracks A, B and D.
-IX-Publish	implementation	runtime/cq-storage/src/maintain.rs	/// Formal rule IX-Publish:	Trait only; provider implementations arrive with P3d tracks A, B and D.
-IX-Stable	abstract	-	-	Reads between publications observe one represented relation; providers may merge lazily.
+IX-Fresh	implementation	runtime/cq-storage/src/maintain.rs	/// Formal rule IX-Fresh:	Ordinary sets, grouped maps, sorted/radix runs and tries implement read-only full-row anti-join and provider-local batch distinct; deterministic maintenance laws cover partitions and replay.
+IX-Publish	implementation	runtime/cq-storage/src/maintain.rs	/// Formal rule IX-Publish:	Ordinary provider publication extends every complete-row index by its disjoint delta; sorted/radix runs use stable grouped merging.
+IX-Stable	abstract	-	-	Reads between publications observe one represented relation; immutable runs and Rust borrows preserve cursor snapshots.
+IX-RunPublish	implementation	runtime/cq-storage/src/radix_run.rs	/// Formal rule IX-RunPublish:	Publish appends grouped deltas, stably merges adjacent runs by merge-path, and maintains a geometric item-count ratio without delaying read visibility.
+IX-OrderKey	implementation	runtime/cq-storage/src/key.rs	/// Formal rule IX-OrderKey:	One total order embedding covers stored and absent keys for dense, rank and radix representations; sealed codec policies delegate to that embedding.
+IX-ItemColumns	implementation	runtime/cq-storage/src/item_columns.rs	/// Formal rule IX-ItemColumns:	Explicit vector or tuple-vector layouts preserve occurrence positions and column lengths; group merges copy slices without reconstructing rows.
