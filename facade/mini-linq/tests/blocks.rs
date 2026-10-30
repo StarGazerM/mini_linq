@@ -194,7 +194,7 @@ fn one_arms_local_name_does_not_hide_another_arms_host_capture() {
 }
 
 #[test]
-fn union_is_lazy_across_disjuncts_and_retains_borrowed_non_copy_columns() {
+fn canonical_union_sorts_all_disjuncts_once_and_retains_borrowed_non_copy_columns() {
     let A = [(String::from("a"),)];
     let B = [(String::from("b"),)];
     let first = std::cell::Cell::new(0);
@@ -211,12 +211,14 @@ fn union_is_lazy_across_disjuncts_and_retains_borrowed_non_copy_columns() {
        struct Lazy; relation A(x:String); relation B(x:String);
        answer(x) :- A(x), if visit_first(x); answer(x) :- B(x), if visit_second(x);
     };
-    assert_eq!((first.get(), second.get()), (0, 0));
+    // Sort canonicalization is a barrier: the first answer consumes every disjunct.
     let (value,) = result.next().unwrap();
     assert!(std::ptr::eq(value, &A[0].0));
-    assert_eq!((first.get(), second.get()), (1, 0));
-    assert_eq!(result.count(), 1);
-    assert_eq!(second.get(), 1);
+    assert_eq!((first.get(), second.get()), (1, 1));
+    let (value,) = result.next().unwrap();
+    assert!(std::ptr::eq(value, &B[0].0));
+    assert!(result.next().is_none());
+    assert_eq!((first.get(), second.get()), (1, 1));
 }
 
 #[test]

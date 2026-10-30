@@ -5,5 +5,5 @@ structures { r0 host scan = :: core :: iter :: Map < _ , _ > [];
  r3 host result(r4) = :: cq_storage :: HashIndex < '_ , _ , _ > [c];
  r5 host scan = :: core :: iter :: Map < _ , _ > [];
  r5 host result(r6) = :: cq_storage :: AdaptiveMembership < _ , 16777216 > [a , d] membership;
- r7 canon = :: cq_storage :: HashSet < _ >;
+ r7 canon = sort;
  }

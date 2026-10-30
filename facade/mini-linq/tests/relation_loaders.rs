@@ -285,7 +285,7 @@ mod dispatch {
                         let $relation = <relation_loader!($relation)>::$method::<$prefix>(
                             file.path(), CsvOptions::default(),
                         ).unwrap();
-                        let mut actual = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
+                        let mut actual = ::mini_linq::compile! { pipeline { }
                             struct $query; relation $relation($($columns)*); $($rest)*
                         }
                             .map(|(id, label, amount)| (*id, label.clone(), *amount))

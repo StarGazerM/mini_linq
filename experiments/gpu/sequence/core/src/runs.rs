@@ -235,7 +235,7 @@ mod tests {
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
-                result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 input = store rows r;
@@ -267,7 +267,7 @@ mod tests {
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-                result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 input = store rows r;

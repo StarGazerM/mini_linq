@@ -63,6 +63,13 @@
 //! into a loaded dictionary. Use [`Dictionaries::publish`] only for final owned
 //! answers or [`Dictionaries::read`] for an explicit opaque Rust read.
 //! [`StringDictionary`] also remains available for standalone `u32` encoding.
+//!
+//! [`verify_prefix_order`] checks loaded rows once and returns [`PrefixOrdered`],
+//! an immutable, proof-carrying wrapper with the original logical row layout.
+//! Equal prefixes and duplicate rows remain legal. Its retained comparison and
+//! rows can be consumed by [`cq_storage::dedup::ordered`] or borrowed by
+//! [`cq_storage::dedup::ordered_ref`] to sort and unique within prefix runs;
+//! no unchecked sortedness or uniqueness declaration is accepted.
 
 mod csv_source;
 mod intern;
@@ -74,6 +81,7 @@ mod zone_docs;
 #[cfg(feature = "parquet")]
 mod parquet_source;
 
+pub use cq_storage::dedup::{PrefixOrderError, PrefixOrdered, verify_prefix_order};
 pub use csv_source::{Csv, CsvOptions, read_csv};
 pub use intern::{
     Dictionaries, InternedField, InternedRelation, StringCode, StringDictionary, dictionary_where,

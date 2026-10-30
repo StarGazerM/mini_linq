@@ -11,7 +11,7 @@ fn constant_occurrences_use_ordinary_storage() {
     } structures {
         r host scan = ::core::iter::Map<_,_> [];
         r rows = ::std::vec::Vec<_>;
-        r canon = ::cq_storage::HashSet<_>;
+        r canon = sort;
     }};
     structures::contract::check(&source).unwrap();
     assert_eq!(
@@ -34,7 +34,7 @@ fn constant_occurrences_use_ordinary_storage() {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         r = ::cq_storage::HashIndex<'_,_,_> [x];
-        j canon = ::cq_storage::HashSet<_>;
+        j canon = sort;
     }};
     let facts = structures::contract::check(&indexed).unwrap();
     assert!(!facts.filtered.contains_key("r"));
@@ -69,7 +69,7 @@ fn smallest_expand_program() -> structures::Program {
         s host scan = ::core::iter::Map<_, _> [];
         r rows = ::std::vec::Vec<_>;
         s rows = ::std::vec::Vec<_>;
-        checked canon = ::std::collections::HashSet<_>;
+        checked canon = sort;
         candidate stage = batch 256 expand;
     } }
 }
@@ -85,7 +85,7 @@ fn resident_expand_program() -> structures::Program {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         r host result(p) = ::custom::Snapshot<_> [x,y] supports [expand];
-        p canon = ::std::collections::HashSet<_>;
+        p canon = sort;
         p stage = batch 256 expand;
     }}
 }
@@ -120,7 +120,7 @@ fn composite_prefix_ranges_support_expansion_and_shared_witnesses() {
             l host scan = ::core::iter::Map<_,_> [];
             r = ::custom::Directory<_,_> [x][y] supports [expand];
             r host scan = ::core::iter::Map<_,_> [];
-            p canon = ::std::collections::HashSet<_>;
+            p canon = sort;
             s share = lookup r [x,y] first s force p;
             s repr = tuples witness { r [x,y] at s as ::cq_storage::RunCursor<'_,_> };
             p stage = batch 256 expand;
@@ -206,7 +206,7 @@ fn membership_bridge_program() -> structures::Program {
         m host result(selected) = ::core::iter::Map<_,_> [tag];
         s host scan = ::core::iter::Map<_,_> [];
         t host scan = ::core::iter::Map<_,_> [];
-        out canon = ::std::collections::HashSet<_>;
+        out canon = sort;
     } }
 }
 
@@ -318,7 +318,7 @@ fn smallest_prefix_witness_requires_preserving_chain_and_no_escape() {
     escaped
         .structures
         .entries
-        .push(syn::parse_quote!(pre_s canon = ::std::collections::HashSet<_>;));
+        .push(syn::parse_quote!(pre_s canon = sort;));
     assert!(
         structures::contract::check(&escaped)
             .unwrap_err()
@@ -427,7 +427,7 @@ fn program() -> structures::Program {
         relation L(a:i32); relation R(a:i32,b:i32);
         l = pipe rename L@0 {a -> x}; r = let rename R@1 {a -> x,b -> y};
         j = pipe canon probe first [x] l,r; return j as answer(x,y);
-    } structures { r = UserIndex [x]; r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; l host scan = ::core::iter::Map<_, _> []; j canon = ::std::collections::HashSet<_>; } }
+    } structures { r = UserIndex [x]; r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; l host scan = ::core::iter::Map<_, _> []; j canon = sort; } }
 }
 
 #[test]
@@ -463,7 +463,7 @@ fn only_built_lets_have_entries_and_host_reads_make_no_claims() {
     q.structures = syn::parse_quote!(structures {
         l host scan = ::core::iter::Map<_, _> [];
         r host scan = ::core::iter::Map<_, _> [];
-        r host result(j) = UserIndex [x]; j canon = ::std::collections::HashSet<_>;
+        r host result(j) = UserIndex [x]; j canon = sort;
     });
     structures::contract::check(&q).unwrap();
 }
@@ -475,7 +475,7 @@ fn canonicality_comes_only_from_plan_boundaries_and_key_preservation() {
         r = let canon rename R@0 {a -> a,b -> b};
         e = pipe bind r with n: i32 = (1);
         p = pipe project e keep {a,b}; return p as answer(a,b);
-    } structures { r canon = ::std::collections::HashSet<_>; r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; } };
+    } structures { r canon = sort; r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; } };
     let a = structures::contract::check(&p).unwrap();
     assert_eq!(a.unique["p"], ["a", "b"]);
     let mut q = p.clone();
@@ -494,7 +494,7 @@ fn ordered_premises_require_storage_or_a_same_key_merge_stream() {
         l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a,b -> b}; s = pipe rename S@2 {b -> b};
         j = let merge[a] l,r; k = pipe canon merge[b] j,s; return k as answer(a,b);
     } structures {
-        j = Ordered [b]; j rows = ::std::vec::Vec<_>; k canon = ::std::collections::HashSet<_>;
+        j = Ordered [b]; j rows = ::std::vec::Vec<_>; k canon = sort;
         l host scan = ::core::iter::Map<_, _> []; r host scan = ::core::iter::Map<_, _> []; s host scan = ::core::iter::Map<_, _> [];
         l host result(j) = Ordered [a]; r host result(j) = Ordered [a]; s host result(k) = Ordered [b];
     } };
@@ -532,7 +532,7 @@ fn complete_read_structures_take_precedence_over_candidate_prefixes() {
         r = Curried [x][y]; r = Full [x,y]; r = Payload [x];
         r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> [];
         l host scan = ::core::iter::Map<_, _> [];
-        checked canon = ::std::collections::HashSet<_>;
+        checked canon = sort;
     });
     let mut reordered = source.clone();
     reordered.structures.entries.reverse();
@@ -570,7 +570,7 @@ fn a_const_only_read_cannot_justify_a_built_entry() {
         r = let rename R@0 { a -> x };
         p = pipe canon point select r if (x = 5);
         return p as answer(x);
-    } structures { r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; p canon = ::std::collections::HashSet<_>; } };
+    } structures { r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; p canon = sort; } };
     structures::contract::check(&p).unwrap();
     let mut invalid = p;
     invalid
@@ -592,7 +592,7 @@ fn const_reads_can_coexist_with_storage_justified_by_a_stream() {
         j = pipe probe first [x] l,r;
         out = pipe canon semi eager [x] j,p;
         return out as answer(x);
-    } structures { r = UserIndex [x]; p = UserIndex [x]; r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; p rows = ::std::vec::Vec<_>; out canon = ::std::collections::HashSet<_>; l host scan = ::core::iter::Map<_, _> []; } };
+    } structures { r = UserIndex [x]; p = UserIndex [x]; r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; p rows = ::std::vec::Vec<_>; out canon = sort; l host scan = ::core::iter::Map<_, _> []; } };
     structures::contract::check(&p).unwrap();
 }
 
@@ -642,7 +642,7 @@ fn represented_program() -> structures::Program {
         return out as answer(x,y,z);
     } structures {
         r host scan = ::core::iter::Map<_, _> [];
-        out canon = ::std::collections::HashSet<_>;
+        out canon = sort;
     } }
 }
 
@@ -803,7 +803,7 @@ fn generator_bind_round_trip_drops_inherited_uniqueness() {
         g = pipe bind u with for x = ([1, 1, 2]);
         return canon g as answer(x);
     } structures {
-        g head = ::std::collections::HashSet<_>;
+        g head = sort;
     } };
     let facts = structures::contract::check(&source).unwrap();
     assert!(!facts.unique.contains_key("g"));
@@ -834,7 +834,7 @@ fn shared_program() -> structures::Program {
         b host scan = ::core::iter::Map<_, _> [];
         b rows = ::std::vec::Vec<_>;
         b = ::custom::ExactCursor<_,_> [x] supports [retain, expand, keys];
-        p canon = ::std::collections::HashSet<_>;
+        p canon = sort;
         s share = lookup b [x] first s force p;
         s repr = tuples witness { b [x] at s as ::cq_storage::RunCursor<'_, _> };
     } }
@@ -874,7 +874,7 @@ fn retained_snapshot_witness_requires_identical_provider_and_key() {
         b host scan = ::core::iter::Map<_,_> [];
         b host result(s) = ::custom::Snapshot<_,_,Layout0> [x] supports [retain, expand];
         b host result(p) = ::custom::Snapshot<_,_,Layout0> [x] supports [expand];
-        p canon = ::std::collections::HashSet<_>;
+        p canon = sort;
         s share = lookup b [x] first s force p;
         s repr = tuples witness { b [x] at s as ::cq_storage::RunCursor<'_,_> };
         p stage = batch 256 expand;
@@ -913,7 +913,7 @@ fn witness_cannot_escape_into_canon() {
     p.physical.program.definitions[2].canon = Some(Default::default());
     p.structures
         .entries
-        .push(syn::parse_quote!(s canon = ::std::collections::HashSet<_>;));
+        .push(syn::parse_quote!(s canon = sort;));
     let error = structures::contract::check(&p).unwrap_err().to_string();
     assert!(error.contains("witness s for b escapes at s"), "{error}");
 }
@@ -926,7 +926,7 @@ fn witness_cannot_escape_into_head() {
     p.physical.program.definitions[2].canon = Some(Default::default());
     p.structures
         .entries
-        .push(syn::parse_quote!(s canon = ::std::collections::HashSet<_>;));
+        .push(syn::parse_quote!(s canon = sort;));
     assert!(structures::contract::check(&p).is_err());
 }
 
@@ -987,7 +987,7 @@ fn witness_cannot_escape_into_union_arm() {
     ]);
     p.physical.program.returned = syn::parse_quote!(u);
     p.physical.program.head = syn::parse_quote!(answer(x));
-    p.structures.entries[4] = syn::parse_quote!(u canon = ::std::collections::HashSet<_>;);
+    p.structures.entries[4] = syn::parse_quote!(u canon = sort;);
     assert!(structures::contract::check(&p).is_err());
 }
 
@@ -1001,7 +1001,7 @@ fn witness_cannot_escape_into_fused_prefix() {
     ]);
     p.physical.program.returned = syn::parse_quote!(u);
     p.physical.program.head = syn::parse_quote!(answer(x, y));
-    p.structures.entries[4] = syn::parse_quote!(u canon = ::std::collections::HashSet<_>;);
+    p.structures.entries[4] = syn::parse_quote!(u canon = sort;);
     let error = structures::contract::check(&p).unwrap_err().to_string();
     assert!(error.contains("witness s for b escapes at s"), "{error}");
 }
@@ -1029,7 +1029,7 @@ fn canonical_consumer_accepts_bag_return_and_forbids_head_dedup() {
     assert!(structures::contract::check(&missing).is_err());
     let mut invalid = program;
     invalid.structures.entries.push(syn::parse_quote!(
-        r head = ::std::collections::HashSet<_>;
+        r head = sort;
     ));
     assert!(structures::contract::check(&invalid).is_err());
 }
@@ -1216,7 +1216,7 @@ fn join_filter_uses_declared_keys_and_preserves_scalar_and_totality_proofs() {
             l host scan = Scan [];
             r host scan = Scan [];
             r = ::custom::Index<_,_> [x] supports [keys];
-            p canon = Set;
+            p canon = sort;
             l join_filter = Filter build r [x] covering p marker ::cq_load::ColumnAt<0>;
         }
     };
@@ -1307,4 +1307,53 @@ fn declared_retain_does_not_relax_eager_sharing() {
     let mut source = shared_program();
     source.physical.program.definitions[2] = syn::parse_quote!(s = pipe semi lazy [x] l,b;);
     assert!(structures::contract::check(&source).is_err());
+}
+
+#[test]
+fn canon_strategy_rejects_legacy_provider_syntax() {
+    assert!(
+        syn::parse_str::<structures::Entry>("r canon = ::std::collections::HashSet<_>;").is_err()
+    );
+    let entry: structures::Entry = syn::parse_quote!(r canon = sort;);
+    assert!(matches!(
+        entry.structure,
+        structures::Structure::Dedup {
+            strategy: structures::CanonStrategy::Sort(_),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn ordered_canon_requires_complete_direct_source() {
+    let source: structures::Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32,b:i32);
+            r = pipe canon rename R@0 {a -> x,b -> y};
+            return r as answer(x,y);
+        }
+        structures {
+            r host scan = ::core::iter::Map<_,_> [];
+            r canon = ordered;
+        }
+    };
+    structures::contract::check(&source).unwrap();
+    let projected: structures::Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32,b:i32);
+            r = pipe rename R@0 {a -> x,b -> y};
+            p = pipe canon project r keep {x};
+            return p as answer(x);
+        }
+        structures {
+            r host scan = ::core::iter::Map<_,_> [];
+            p canon = ordered;
+        }
+    };
+    assert!(
+        structures::contract::check(&projected)
+            .unwrap_err()
+            .to_string()
+            .contains("complete direct load-verified host scan")
+    );
 }

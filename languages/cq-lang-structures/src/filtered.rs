@@ -386,7 +386,7 @@ mod tests {
             structures {
                 r host scan = Reader [];
                 selected rows = Rows;
-                projected canon = Canon;
+                projected canon = sort;
             }
         };
         let facts = crate::contract::check(&source).unwrap();

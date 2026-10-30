@@ -166,6 +166,11 @@ erase their distinct semantic obligations. Cost includes processing the
 candidate bag, not only the accepted delta. A lawful maintained index needs
 work proportional to its update/merge algorithm; no universal
 $O(|\delta R_t|)$ round bound follows from these equations.
+CPU Datalog's existing hash-seen realization of \textsc{DL-InsertNew} remains
+outside the CQ Sort/Ordered canonicalization cutover. Its membership against
+the committed relation is not the Structures self-dedup strategy, and the
+insertion law here does not authorize a per-element hash canonicalizer in
+CQ or Sequence.
 
 \paragraph{Maintained device runs.}
 Let $V_L$ retain the complete row in the recorded permutation $L$.

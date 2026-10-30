@@ -25,22 +25,6 @@ pub fn stage(input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Fill unauthored decomposition using the GPU's exported machine and catalog.
-#[proc_macro]
-pub fn plan(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, arguments| {
-        no_arguments(arguments)?;
-        let source = cq_gpu_sequence_core::runs::record_representation(source)?;
-        Ok(cq_sequence_plan::plan(
-            &source,
-            &cq_gpu_sequence_core::machine(),
-            &cq_gpu_sequence_core::catalog(),
-        )?
-        .program)
-    })
-    .into()
-}
-
 /// Decompose a checked authored traversal without automatic relational replanning.
 #[proc_macro]
 pub fn decompose(input: TokenStream) -> TokenStream {

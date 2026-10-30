@@ -1,4 +1,4 @@
-//! Joining triangle kernel: prefix greedy fine planner (320 configurations).
+//! Joining triangle kernel: prefix greedy fine planner (160 configurations).
 #![recursion_limit = "512"]
 #[macro_use]
 mod support;

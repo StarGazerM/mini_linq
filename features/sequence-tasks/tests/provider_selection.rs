@@ -35,7 +35,7 @@ fn host_only_provider_survives_an_unavailable_shareable_rewrite() {
         !token.levels.is_empty()
     });
     let target = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
-    cq_sequence_plan::plan(&target, &cq_sequence_tasks::machine(), &catalog).unwrap();
+    cq_sequence_plan::decompose(&target, &cq_sequence_tasks::machine(), &catalog).unwrap();
     assert_eq!(source.structures.physical, target.structures.physical);
     let original: Vec<_> = source
         .structures

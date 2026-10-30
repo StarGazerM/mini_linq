@@ -9,11 +9,24 @@ fn program(body: proc_macro2::TokenStream) -> Program {
             return r as answer(a);
         } structures {
             r host scan = Reader [];
-            r canon = Canon;
+            r canon = sort;
         }
         sequence { #body }
     })
     .unwrap()
+}
+
+#[test]
+fn retired_optional_filter_statement_is_rejected() {
+    assert!(
+        syn::parse2::<Sequence>(quote! {
+            sequence {
+                result = store rows r;
+                optional_filter r;
+            }
+        })
+        .is_err()
+    );
 }
 
 #[test]
@@ -58,7 +71,7 @@ fn publication_alias_preserves_original_carrier_across_reheading() {
             s = pipe canon project r keep {a};
             return s as answer(a);
         }
-        structures { r host scan = Reader []; r canon = Canon; s canon = Canon; }
+        structures { r host scan = Reader []; r canon = sort; s canon = sort; }
         sequence {
             input = store canon rows r;
             input_parts = partition_k[a](4) input;
@@ -159,10 +172,10 @@ fn deferred_publication_program(body: proc_macro2::TokenStream) -> Program {
         }
         structures {
             r host scan = Reader [];
-            r canon = Canon;
+            r canon = sort;
             selected = ::cq_storage::sharded::Sharded<Provider> [a];
             probe host scan = Reader [];
-            out canon = Canon;
+            out canon = sort;
         }
         sequence { #body }
     })
@@ -499,12 +512,12 @@ fn deferred_rows_reject_support_equal_source_and_consumer_reheading() {
             }
             structures {
                 r host scan = Reader [];
-                r canon = Canon;
+                r canon = sort;
                 probe host scan = Reader [];
                 selected = ::cq_storage::sharded::Sharded<Provider> [a];
                 selected rows = Rows;
                 alias = ::cq_storage::sharded::Sharded<AliasProvider> [a,b];
-                out canon = Canon;
+                out canon = sort;
             }
             sequence {
                 #input = store compact selected rows r;
@@ -549,7 +562,7 @@ fn deferred_rows_pin_sources_with_shadowed_join_filter_bindings() {
             l join_filter = Filter build b [a] covering selected marker ::cq_load::ColumnAt<0>;
             selected = ::cq_storage::sharded::Sharded<Provider> [a];
             probe host scan = Reader [];
-            out canon = Canon;
+            out canon = sort;
         }
         sequence {
             source = rows l;
@@ -595,7 +608,7 @@ fn lookup_program(body: proc_macro2::TokenStream) -> Program {
             l host scan = Reader [];
             r host scan = Reader [];
             r = Provider [a];
-            j canon = Canon;
+            j canon = sort;
         }
         sequence { #body }
     })
@@ -776,7 +789,7 @@ fn physical_rows_name_is_preserved_in_sequence_references() {
             return rows as answer(a);
         } structures {
             rows host scan = Reader [];
-            rows canon = Canon;
+            rows canon = sort;
         }
         sequence {
             source = rows rows;
@@ -1138,7 +1151,7 @@ fn rust_without_identity_representation_stays_host() {
             return b as answer(a,n);
         } structures {
             r host scan = Reader [];
-            b canon = Canon;
+            b canon = sort;
             b rows = Rows;
         } sequence { a = store map b rows r; }
     };
@@ -1161,7 +1174,7 @@ fn arbitrary_rust_on_identity_columns_earns_device_placement() {
             return g as answer(a,n);
         } structures {
             r host scan = Reader [];
-            g canon = Canon;
+            g canon = sort;
             g rows = Rows;
         } sequence { a = store map g rows r; }
         representation { identity [a,n]; }
@@ -1237,7 +1250,7 @@ fn bind_rejects_membership_as_range_cursor() {
             r host scan = Reader [];
             r host result(selected) = Reader [tag];
             selected = Provider [a] membership payload [a] constants {tag = 7};
-            j canon = Canon;
+            j canon = sort;
         } sequence {
             s = store map selected rows r;
             a = flatten lookup selected [a] rows l;
@@ -1280,7 +1293,7 @@ fn compact_and_total_map_derive_the_physical_result() {
             return s as answer(a);
         } structures {
             r host scan = Reader [];
-            s canon = Canon;
+            s canon = sort;
         } sequence { a = store compact s rows r; }
     };
     assert_eq!(
@@ -1345,7 +1358,7 @@ fn host_retained_probe_stores_rows_without_requiring_range_offsets() {
             r host scan = Reader [];
             r = Provider [a];
             j rows = Retained;
-            j canon = Canon;
+            j canon = sort;
         } sequence {
             input = rows l;
             joined = store flatten lookup r [a] input;
@@ -1429,7 +1442,7 @@ fn membership_compact_records_polarity_and_never_enumerates() {
             return j as answer(a);
         }} structures {{
             l host scan = Reader []; r host scan = Reader [];
-            r = Provider [a]; j canon = Canon;
+            r = Provider [a]; j canon = sort;
         }} sequence {{ a = compact j lookup r [a] rows l; }}"
         );
         let p: Program = syn::parse_str(&text).unwrap();
@@ -1459,7 +1472,7 @@ fn empty_key_membership_uses_named_reader_not_scan_adapter() {
                 l host scan = ScanAdapter [];
                 r host scan = ScanAdapter [];
                 r host result(scan) = MembershipProvider [];
-                scan canon = Canon;
+                scan canon = sort;
             }} sequence {{
                 answer = compact scan lookup r [] rows l;
             }}"
@@ -1486,7 +1499,7 @@ fn unit_opaque_maps_and_union_preserve_explicit_arms() {
             b = pipe bind v with n:i32 = (1);
             out = pipe canon union g,b;
             return out as answer(n);
-        } structures { out canon = Canon; }
+        } structures { out canon = sort; }
         sequence {
             su = rows u;
             sv = rows v;
@@ -1737,7 +1750,7 @@ fn grouped_program(keys: proc_macro2::TokenStream, body: proc_macro2::TokenStrea
         }
         structures {
             r host scan = Reader [];
-            r canon = Canon;
+            r canon = sort;
             #accumulator
         }
         sequence { #body }
@@ -1887,7 +1900,7 @@ fn shared_checker_rechecks_evidence_and_complete_opaque_prefix_syntax() {
     let mut source = program(quote!(out = store rows r;));
     source.structures.structures = syn::parse_quote!(structures {
         r host scan = Reader<{ opaque!(left) }> [];
-        r canon = Canon;
+        r canon = sort;
     });
     let mut checker = contract::Checker::new(&source).unwrap();
     let original = checker.check_shared(&source).unwrap();
@@ -1903,7 +1916,7 @@ fn shared_checker_rechecks_evidence_and_complete_opaque_prefix_syntax() {
     let mut changed = source.clone();
     changed.structures.structures = syn::parse_quote!(structures {
         r host scan = Reader<{ opaque!(right) }> [];
-        r canon = Canon;
+        r canon = sort;
     });
     assert!(!std::rc::Rc::ptr_eq(
         &original,
@@ -2142,7 +2155,7 @@ fn key_partition_canon_rejects_projection_losing_the_routing_key() {
             projected = pipe canon project r keep {a};
             return projected as answer(a);
         }
-        structures { r host scan = Reader []; projected canon = Canon; }
+        structures { r host scan = Reader []; projected canon = sort; }
         sequence {
             input = store rows r;
             out = flatten canon map projected partition_k[b](4) input;
@@ -2178,7 +2191,7 @@ fn key_partition_provider_accepts_projected_and_reordered_lookup_keys() {
             }
             structures {
                 l host scan = Reader []; r host scan = Reader [];
-                r = Provider [a,b]; j canon = Canon;
+                r = Provider [a,b]; j canon = sort;
             }
             sequence {
                 input = store rows r;
@@ -2293,7 +2306,7 @@ fn partial_group_metadata_uses_constructor_preorder_and_definition_ownership() {
             return all_rows as answer(grand_total);
         }
         structures {
-            r host scan = Reader []; r canon = Canon; by_key canon = Canon;
+            r host scan = Reader []; r canon = sort; by_key canon = sort;
             by_key group = ::std::collections::HashMap<_, (i64,)>;
         }
         sequence {
@@ -2365,7 +2378,9 @@ fn storage_type_rewrites_preserve_adapters_and_key_layouts() {
             structures::Structure::Built { keyed, .. } => {
                 keyed.ty = syn::parse_quote!(NativeProvider)
             }
-            structures::Structure::Dedup { ty, .. } => *ty = syn::parse_quote!(NativeCanon),
+            structures::Structure::Dedup { strategy, .. } => {
+                *strategy = syn::parse_quote!(sort using NativeCanon)
+            }
             _ => {}
         }
     }

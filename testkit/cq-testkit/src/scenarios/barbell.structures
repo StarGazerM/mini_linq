@@ -11,5 +11,5 @@ structures { r0 host scan = :: core :: iter :: Map < _ , _ > [];
  r9 host result(r10) = :: cq_storage :: HashIndex < '_ , _ , _ > [v];
  r11 host scan = :: core :: iter :: Map < _ , _ > [];
  r11 host result(r12) = :: cq_storage :: AdaptiveMembership < _ , 16777216 > [u , w] membership;
- r13 canon = :: cq_storage :: HashSet < _ >;
+ r13 canon = sort;
  }

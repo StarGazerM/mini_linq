@@ -95,7 +95,7 @@ fn expand_compile(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::T
     source.config.resolve(defaults())?.start(source.tokens)
 }
 
-/// Complete Sequence input starts at planning, not at the CQ ordering phase.
+/// Complete Sequence input starts at decomposition, not at the CQ ordering phase.
 fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::Pipeline> {
     if config.ix.is_some()
         || config.lower.is_some()
@@ -113,9 +113,11 @@ fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::P
         ));
     }
     let mut passes = config.decompose;
-    passes.push(config.plan.unwrap_or_else(|| {
-        syn::parse_quote!(::mini_linq::passes::plan_sequential(preserve_order))
-    }));
+    passes.push(
+        config
+            .plan
+            .unwrap_or_else(|| syn::parse_quote!(::mini_linq::passes::plan_sequential)),
+    );
     passes.push(
         config
             .grade
@@ -187,9 +189,9 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
 }
 
 /// In a Sequence decomposition list, `plan(target::plan)` delegates to the
-/// target-owned planner macro after all preceding authored advice. The target
-/// supplies its machine/catalog to the shared planner without a target dependency
-/// in this facade. CQ planning options retain their existing meaning.
+/// target-owned decomposition macro after all preceding authored advice. The target
+/// supplies its machine/catalog without a target dependency in this facade.
+/// CQ planning options retain their existing meaning.
 /// CQ → RA′: a connected-prefix plan with checked reductions.
 /// The first clause of each scope is the outer stream; every other clause is
 /// reduced by its filtered subtrees of the outer-rooted reduction tree before
@@ -295,11 +297,9 @@ fn sequence_plan_target(input: &proc_macro2::TokenStream) -> bool {
         syn::braced!(arguments in input);
         let args: proc_macro2::TokenStream = arguments.parse()?;
         let _: proc_macro2::TokenStream = input.parse()?;
-        Ok(
-            !matches!(args.to_string().as_str(), "lookup_first" | "preserve_order")
-                && syn::parse2::<PlanOptions>(args.clone()).is_err()
-                && syn::parse2::<syn::Path>(args).is_ok(),
-        )
+        Ok(args.to_string() != "preserve_order"
+            && syn::parse2::<PlanOptions>(args.clone()).is_err()
+            && syn::parse2::<syn::Path>(args).is_ok())
     };
     parser.parse2(input.clone()).unwrap_or(false)
 }
@@ -328,41 +328,21 @@ fn sequence_plan_source(input: &proc_macro2::TokenStream) -> bool {
     parser.parse2(input.clone()).unwrap_or(false)
 }
 
-/// Fill unauthored Sequence decisions using the Sequential machine and catalog.
+/// Decompose authored Sequence decisions using the Sequential machine and catalog.
 /// Use in `decompose` directly or through `plan(mini_linq::passes::plan_sequential)`.
-/// The unadvised default keeps the written order; `lookup_first` opts into Lookup/Expand ordering.
+/// `preserve_order` requests the explicit authored policy; it is also the default.
 #[proc_macro]
 pub fn plan_sequential(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
+        if !args.is_empty() {
+            let option: syn::Ident = syn::parse2(args)?;
+            if option != "preserve_order" {
+                return Err(syn::Error::new_spanned(option, "expected preserve_order"));
+            }
+        }
         let machine = cq_sequence_pull::machine();
         let catalog = cq_sequence_pull::catalog();
-        // The unadvised default keeps the author's written order (checked
-        // decomposition only); Lookup-first ordering is opt-in because its
-        // estimate-free plans run far slower than advised ones on the suite.
-        let lookup_first = if args.is_empty() {
-            false
-        } else {
-            let option: syn::Ident = syn::parse2(args)?;
-            if option != "lookup_first" && option != "preserve_order" {
-                return Err(syn::Error::new_spanned(
-                    option,
-                    "expected lookup_first or preserve_order",
-                ));
-            }
-            option == "lookup_first"
-        };
-        let planned = if lookup_first {
-            cq_sequence_plan::Planner::plan(
-                &cq_sequence_plan::RuleBased,
-                source,
-                &machine,
-                &catalog,
-                &source.evidence,
-            )?
-        } else {
-            cq_sequence_plan::decompose(source, &machine, &catalog)?
-        };
-        Ok(planned.program)
+        Ok(cq_sequence_plan::decompose(source, &machine, &catalog)?.program)
     })
     .into()
 }
@@ -510,17 +490,16 @@ mod tests {
     }
 
     #[test]
-    fn robust_sequence_default_keeps_authored_cq_advisory_precedence() {
+    fn sequence_decomposition_keeps_authored_cq_advisory_precedence() {
         let source = quote! {
             struct Query;
             relation R(x:i32);
             answer(x) :- R(x);
         };
-        let automatic = expand_compile(quote!(pipeline {} #source))
+        let default = expand_compile(quote!(pipeline {} #source))
             .unwrap()
             .to_string();
-        assert!(automatic.contains("plan_sequential"));
-        assert!(!automatic.contains("preserve_order"));
+        assert!(default.contains("plan_sequential"));
         for advice in [
             quote!(plan = custom_order;),
             quote!(select = custom_selection;),

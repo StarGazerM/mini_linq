@@ -1819,7 +1819,7 @@ mod tests {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
                 h host scan = ::core::iter::Map<_,_> [];
                 h = ::cq_storage::SortedRun<_,_> [];
-                result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 input = store rows r;
@@ -1856,7 +1856,7 @@ mod tests {
             structures {
                 r host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
                 r host result(selected) = ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
-                selected canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                selected canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 input = store rows r;
@@ -1898,7 +1898,7 @@ mod tests {
                 d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
                 r host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
                 r = ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
-                result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 input = store rows d;
@@ -1932,7 +1932,7 @@ mod tests {
                 r host scan = ::gpu_datalog_runtime::DeviceLayout<
                     (::gpu_datalog_runtime::Symbol<i32, FirstCodec>,),
                     (::gpu_datalog_runtime::Symbol<i32, SecondCodec>,)> [];
-                result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 input = store rows r;
@@ -1981,7 +1981,7 @@ mod tests {
                 nation host scan = ::core::iter::Map<_,_> [];
                 nation = ::cq_storage::SortedRun<_,_> [supplier_nation];
                 filtered rows = ::std::vec::Vec<_>;
-                result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 input = store rows driver;

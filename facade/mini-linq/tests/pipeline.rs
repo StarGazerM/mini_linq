@@ -492,7 +492,7 @@ fn total_identifier_remains_available_in_let_bindings_and_guards() {
     }
     .map(|(x,)| *x)
     .collect();
-    assert_eq!(actual, [2, -2]);
+    assert_eq!(actual, [-2, 2]);
     let actual: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation rows(x:i32,y:i32);
         answer(total) :- rows(total,_), if total.is_positive();
@@ -629,7 +629,7 @@ fn cq_constant_only_negation_tests_matching_rows_not_global_emptiness() {
 }
 
 #[test]
-fn named_sequence_planner_swaps_checked_policy_and_preserves_target_delegation() {
+fn named_sequence_decomposition_preserves_authored_advice_and_target_delegation() {
     macro_rules! planned {
         ($($planner:ident)::+ $(($($args:tt)*))?; $($output:tt)*) => {
             mini_linq::compile! {
@@ -644,7 +644,7 @@ fn named_sequence_planner_swaps_checked_policy_and_preserves_target_delegation()
                 }
                 structures {
                     r host scan = ::core::iter::Map<_, _> [];
-                    r canon = ::std::collections::HashSet<_>;
+                    r canon = sort;
                 }
                 sequence { result = store rows r; $($output)* }
             }
@@ -675,13 +675,15 @@ fn named_sequence_planner_swaps_checked_policy_and_preserves_target_delegation()
         syn::parse_str(planned!(mini_linq::passes::plan(mini_linq::passes::plan_sequential);))
             .unwrap();
     assert_eq!(delegated, default);
+    let decomposed: cq_lang_sequence::Program =
+        syn::parse_str(planned!(mini_linq::passes::plan_sequential;)).unwrap();
+    assert_eq!(decomposed, default);
     let preserved: cq_lang_sequence::Program =
-        syn::parse_str(planned!(mini_linq::passes::plan_sequential(preserve_order);)).unwrap();
+        syn::parse_str(planned!(mini_linq::passes::plan(preserve_order);)).unwrap();
     assert_eq!(preserved, default);
-    let automatic: cq_lang_sequence::Program =
-        syn::parse_str(planned!(mini_linq::passes::plan(lookup_first);)).unwrap();
-    cq_lang_sequence::check_rewrite(&default, &automatic).unwrap();
-    cq_lang_sequence::check_grading(&automatic, &cq_sequence_pull::machine()).unwrap();
+    let explicitly_decomposed: cq_lang_sequence::Program =
+        syn::parse_str(planned!(mini_linq::passes::plan_sequential(preserve_order);)).unwrap();
+    assert_eq!(explicitly_decomposed, default);
 
     let rows = [(1,), (1,), (2,)];
     let custom: Vec<_> = mini_linq::compile! {
@@ -693,7 +695,7 @@ fn named_sequence_planner_swaps_checked_policy_and_preserves_target_delegation()
         }
         structures {
             r host scan = ::core::iter::Map<_, _> [];
-            r canon = ::std::collections::HashSet<_>;
+            r canon = sort;
         }
         sequence { result = store canon rows r; }
     }

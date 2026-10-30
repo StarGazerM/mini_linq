@@ -48,6 +48,9 @@ enum Need {
 impl Need {
     fn default_type(self) -> syn::Type {
         match self {
+            // Semi/anti/full-key probes must answer membership for each outer
+            // row before that outer stream ends. This is a keyed read index,
+            // not whole-stream self-canonicalization (which records Sort).
             Need::Contains => syn::parse_quote!(::cq_storage::HashSet<_>),
             Need::Seek => syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>),
             Need::Ordered => {
@@ -286,7 +289,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             entries.extend(group_accumulator(ident, group));
         }
         if definition.canon.is_some() {
-            entries.extend(quote!(#ident canon = ::cq_storage::HashSet<_>;));
+            entries.extend(quote!(#ident canon = sort;));
         }
         if analysis.modes[&name] != ModeKind::Pipe {
             let ty: syn::Type = if analysis.modes[&name] == ModeKind::Exists {
@@ -380,7 +383,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     }
     if structures::head_needs_dedup(source, &analysis) {
         let returned = &program.returned;
-        entries.extend(quote!(#returned head = ::cq_storage::HashSet<_>;));
+        entries.extend(quote!(#returned head = sort;));
     }
     // Record the storage decision, including its row projection, before any
     // realization. Readers on one key share a single filtered build.

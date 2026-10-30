@@ -146,14 +146,12 @@ closures and Tasks workers retain their own profile/provider handles.
 
 ### Authored Datalog Lookup/Expand experiments
 
-The SRD GPU engine offers `decompose-only` (no automatic Sequence relational
-replanning) and mutually exclusive `advice-aipt`, `advice-load`,
-`advice-fieldflow`, and `advice-dispatch` features. Each advice feature includes
-`decompose-only`; the no-feature engine retains its existing automatic plan.
-Compare default, decomposition-only, and decomposition-only plus one advice
-separately: automatic `cq_gpu_sequence::plan` may replan a CQ order, whereas
-`cq_gpu_sequence::decompose` only realizes its decomposition. This is an
-experiment-level whole-program switch, not per-hole precedence metadata.
+The SRD GPU engine uses order-preserving decomposition by default and offers
+mutually exclusive `advice-aipt`, `advice-load`, `advice-fieldflow`, and
+`advice-dispatch` features for individually authored experiments.
+Compare order-preserving decomposition and decomposition plus one authored
+advice separately. `cq_gpu_sequence::decompose` realizes the recorded CQ
+construction without relational replanning.
 
 `advice-aipt` requests an intersection of source heaps with compatible heaps
 (and the symmetric baseheap site in the source-heap delta variant). `advice-load` moves VarType and
@@ -179,6 +177,42 @@ For timing, omit `CQ_EXPANSION_COUNTERS`, set `GPU_DATALOG_PHASES=1`, and use th
 `phase<TAB>fixpoint` record rather than the harness's outer evaluation total.
 Counter builds are separate; relation counts must match all 40 reference
 relations on every run (the factored program also exposes three helper outputs).
+
+#### P3.3-lite removal acceptance (2026-10-30)
+
+Automatic GPU routes now decompose the planner's recorded order; Sequence
+lookup-first and optional-filter adaptive replanning are deleted. Five fresh-
+process interleaved AB/BA pairs compare against HEAD `0072f5f`. TPC-H uses
+one warmup and five samples per process; DOOP uses the synchronized
+`GPU_DATALOG_PHASES=1` fixpoint phase. The GPU was idle before every invocation.
+Intervals below are paired current/HEAD ratios, percentile bootstrap,
+20,000 resamples, seed 3303 (lower is better).
+
+| Target | HEAD median ms | Current median ms | Current/HEAD [95% CI] |
+|---|---:|---:|---:|
+| H05 SF1 automatic | 7.409 | 1.752 | 0.236 [0.235, 0.237] |
+| H05 SF10 automatic | 68.649 | 13.084 | 0.191 [0.190, 0.191] |
+| DOOP xalan fixpoint | 1590.302 | 1481.221 | 0.931 [0.930, 0.934] |
+| DOOP batik fixpoint | 5654.268 | 4464.366 | 0.789 [0.788, 0.791] |
+| H04 SF1 automatic | 0.798 | 0.968 | 1.213 [1.169, 1.225] |
+
+All 26 automatic TPC-H queries at SF1 and H05 at SF10 matched the DuckDB
+answers on every invocation. Every DOOP run matched 40/40 reference counts.
+All 52 advised GPU executor bodies (26 queries × two scales) are identical
+after normalizing only generated kernel-name hexadecimal salts. The concurrent
+recorded canon-strategy migration changes those salts and CPU reference
+interpreters, not advised GPU execution.
+
+H04 is the only ratio interval wholly above 1. Its preserved CQ order retains
+filtered Lineitem and probes it from Orders. The removed rewrite instead
+retained date-filtered Orders and streamed Lineitem through semijoin/probe,
+using one dispatch with four items per lane. Decomposition materializes the
+recorded Lineitem provider and uses two dispatches with one item per lane.
+Build time falls 0.263→0.002 ms, but kernel time rises 0.422→0.854 ms.
+This is the loss of a downstream join-order optimization; no Sequence
+reordering is reintroduced to hide it. Full per-query ratios, samples,
+binary hashes, advised-code hashes and the two H04 plans are retained in
+[`compare/p33-replanning.results.json.gz`](compare/p33-replanning.results.json.gz).
 
 #### P3.2 DOOP measurements (2026-10-30)
 
@@ -371,7 +405,7 @@ pipeline {
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
         stage = ::cq_gpu_sequence::stage;
         sequence = ::mini_linq::passes::sequence;
-        decompose = [::cq_gpu_sequence::plan];
+        decompose = [::cq_gpu_sequence::decompose];
         grade = ::cq_gpu_sequence::machine_grade;
         print = ::cq_gpu_sequence::translate_arena;
     };
@@ -756,8 +790,8 @@ lowering, grading and translation. The default build generates only `advised`
 executors, using explicit pipeline choices followed by decomposition-only
 completion. Automatic is opt-in pending box 11b: build with
 `CQ_GPU_TPCH_AUTOMATIC=1` to also generate `automatic` executors using
-`cq_sequence_plan::plan`. No automatic lookup rewrite is required to compile or
-measure the advised baseline.
+`cq_sequence_plan::decompose` plus existing grading. The advised recipe
+path remains unchanged; automatic Sequence relational replanning is removed.
 The manifest loader records provider encoding facts separately from logical Rust
 types. Relational-only columns may use manifest scalar or dictionary codes, with
 closed `where` operands encoded on the host. Rust arithmetic and conditional binds

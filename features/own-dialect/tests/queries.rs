@@ -31,13 +31,12 @@ fn consumer_form_matches_pull_with_borrowed_and_owned_columns() {
 
 #[test]
 #[allow(non_snake_case)]
-fn consumer_runs_before_the_next_answer_is_evaluated() {
-    // An operational regression witness, not an extension of CQ's pure semantics.
+fn consumer_observes_recorded_whole_stream_canon_barriers() {
+    // An operational witness: Sort must finish the computed-head stream before publication.
     let R = [(1_i32,), (2,), (3,)];
     let evaluated = std::cell::Cell::new(0);
     let consumed = std::cell::Cell::new(0);
     let next = |x: i32| {
-        assert_eq!(evaluated.get(), consumed.get(), "answer buffering");
         evaluated.set(evaluated.get() + 1);
         x
     };
@@ -45,7 +44,10 @@ fn consumer_runs_before_the_next_answer_is_evaluated() {
         pipeline {
             print_input = structures;
             print = own_push::push_into(consumer {
-                |(_x,): (i32,)| { consumed.set(consumed.get() + 1); }
+                |(_x,): (i32,)| {
+                    assert_eq!(evaluated.get(), 3, "canon published before its input ended");
+                    consumed.set(consumed.get() + 1);
+                }
             };);
         }
         struct Q; relation R(x:i32); relation answer(x:i32);
@@ -73,7 +75,7 @@ fn staged_selection_chain_pushes_only_survivors_into_partial_suffix() {
         structures {
             r host scan = ::core::iter::Map<_,_> [];
             p stage = batch 2;
-            out canon = ::std::collections::HashSet<_>;
+            out canon = sort;
         }
     }
     .map(|(y, z)| (*y, z))
@@ -142,7 +144,7 @@ fn filtered_storage_reconstructs_constants_in_both_printers() {
                     r host scan = ::core::iter::Map<_,_> [];
                     r host result(filtered) = ::core::iter::Map<_,_> [a];
                     filtered = ::cq_storage::HashIndex<'_,_,_> [k] payload [k] constants {a = 7};
-                    out canon = ::std::collections::HashSet<_>;
+                    out canon = sort;
                 }
             }
         };
@@ -242,8 +244,8 @@ fn authored_structures_control_build_retention_and_nested_canonical_states() {
                     r host scan = ::core::iter::Map<_,_> [];
                     r = ::std::collections::BTreeMap<_,::std::vec::Vec<_>> [a];
                     r rows = Retained<_>;
-                    r canon = ::std::collections::BTreeSet<_>;
-                    o canon = ::std::collections::BTreeSet<_>;
+                    r canon = sort;
+                    o canon = sort;
                 }
             }
         };
@@ -290,8 +292,8 @@ fn computed_head_deduplicates_its_image_with_the_recorded_type() {
                 }
                 structures {
                     r host scan = ::core::iter::Map<_,_> [];
-                    o canon = ::std::collections::BTreeSet<_>;
-                    o head = HeadState<_>;
+                    o canon = sort;
+                    o head = sort;
                 }
             }
         };
@@ -329,7 +331,7 @@ fn exists_retains_only_nonemptiness_under_total_rust() {
                 }
                 structures {
                     r host scan = ::core::iter::Map<_,_> [];
-                    e canon = ::std::collections::BTreeSet<_>;
+                    e canon = sort;
                     e rows = ::cq_storage::Exists;
                 }
             }
@@ -462,7 +464,7 @@ fn full_depth_curried_probes_and_prefix_membership_use_written_levels() {
                     l host result(n) = ::cq_storage::HashIndex<'_,_,_> [a];
                     r = ::cq_storage::Trie<'_,_,::cq_storage::HashIndex<'_,_,_>> [a][b];
                     r rows = ::std::vec::Vec<_>;
-                    o canon = ::std::collections::BTreeSet<_>;
+                    o canon = sort;
                 }
             }
         };
@@ -502,7 +504,7 @@ fn written_lazy_host_membership_and_fallback_type_are_preserved() {
                     r host scan = ::core::iter::Map<_,_> [];
                     s host scan = ::core::iter::Map<_,_> [];
                     s host result(m) = ::cq_storage::dispatch::KeySet<_,false> [x];
-                    o canon = ::std::collections::BTreeSet<_>;
+                    o canon = sort;
                 }
             }
         };
@@ -527,8 +529,8 @@ fn nested_stream_canonical_boundaries_have_separate_state() {
         }
         structures {
             r host scan = ::core::iter::Map<_,_> [];
-            r canon = ::std::collections::BTreeSet<_>;
-            o canon = ::std::collections::BTreeSet<_>;
+            r canon = sort;
+            o canon = sort;
         }
     }
     .collect();
@@ -605,7 +607,7 @@ fn nested_stage_boundaries_run_within_their_bound() {
         }
         structures {
             r host scan = ::core::iter::Map<_,_> [];
-            out canon = ::std::collections::HashSet<_>;
+            out canon = sort;
             r stage = batch 2;
             s stage = batch 4;
         }
@@ -887,7 +889,7 @@ fn canonical_consumer_delegates_duplicate_answers_and_keeps_internal_canon() {
         }
         structures {
             r host scan = ::core::iter::Map<_,_> [];
-            r canon = ::std::collections::BTreeSet<_>;
+            r canon = sort;
         }
     };
     assert_eq!(witnesses, vec![1, 1, 1]);
@@ -947,7 +949,7 @@ fn authored_group_provider_and_role_named_readers_execute() {
                     l host scan = ::core::iter::Map<_,_> [];
                     r host scan = ::core::iter::Map<_,_> [];
                     r host result($reader) = ::cq_storage::HashIndex<'_,_,_> [k];
-                    $reader canon = ::std::collections::BTreeSet<_>;
+                    $reader canon = sort;
                     grouped group = ::std::collections::BTreeMap<_, (usize,i32)>;
                 }
             }

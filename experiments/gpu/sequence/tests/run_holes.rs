@@ -259,7 +259,7 @@ fn native_host_lookup_accepts_a_leading_value_column() {
     let sequence = cq_sequence_lowering::compile(&bound).unwrap();
     let machine = cq_gpu_sequence::machine();
     let sequence = cq_gpu_sequence_core::runs::record_representation(&sequence).unwrap();
-    let planned = cq_sequence_plan::plan(&sequence, &machine, &cq_gpu_sequence::catalog()).unwrap();
+    let planned = cq_sequence_plan::decompose(&sequence, &machine, &cq_gpu_sequence::catalog()).unwrap();
     let analysis = cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
     cq_gpu_sequence_core::translate_arena(
         &planned.program, &analysis, &syn::parse_quote!(&mut arena)).unwrap();

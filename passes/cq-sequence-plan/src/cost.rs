@@ -1106,7 +1106,7 @@ mod tests {
                 r = pipe canon rename R@0 {a -> a};
                 return r as answer(a);
             }
-            structures { r host scan = Reader []; r canon = Canon; }
+            structures { r host scan = Reader []; r canon = sort; }
             sequence { #body }
         })
         .unwrap()
@@ -1232,10 +1232,10 @@ mod tests {
             }
             structures {
                 r host scan = Reader [];
-                r canon = Canon;
+                r canon = sort;
                 selected = ::cq_storage::sharded::Sharded<Provider> [a];
                 probe host scan = Reader [];
-                out canon = Canon;
+                out canon = sort;
             }
             sequence {
                 input = store compact selected rows r;
@@ -1382,7 +1382,7 @@ mod tests {
                 l host scan = Reader [];
                 r host scan = Reader [];
                 r = Provider [a];
-                j canon = Canon;
+                j canon = sort;
             }
             sequence {
                 left = store rows l;

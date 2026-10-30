@@ -18,7 +18,7 @@ macro_rules! apply_macro {
                 r = pipe canon rename R@0 {a -> a};
                 return r as answer(a);
             }
-            structures { r host scan = Reader []; r canon = Canon; }
+            structures { r host scan = Reader []; r canon = sort; }
             sequence {
                 a = rows r;
                 b = flatten tile 8 a;
@@ -36,7 +36,7 @@ fn source() -> Program {
             r = pipe canon rename R@0 {a -> a};
             return r as answer(a);
         }
-        structures { r host scan = Reader []; r canon = Canon; }
+        structures { r host scan = Reader []; r canon = sort; }
         sequence {
             a = rows r;
             b = flatten tile 8 a;
@@ -143,7 +143,7 @@ fn registered_macros_chain_and_forward_advice() {
             r = pipe canon rename R@0 {a -> a};
             return r as answer(a);
         }
-        structures { r host scan = Reader []; r canon = Canon; }
+        structures { r host scan = Reader []; r canon = sort; }
         sequence {
             a = rows r;
             b = flatten tile 8 a;

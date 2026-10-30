@@ -16,7 +16,6 @@ pub struct Pipeline {
     pub canon: bool,
     pub smallest: bool,
     pub lazy: bool,
-    pub ordered_dedup: bool,
     pub sorted_payload: bool,
     pub push: bool,
     pub positional: bool,
@@ -70,9 +69,6 @@ impl Pipeline {
             physical.push(quote!(::cq_rewrites::merge_joins));
         }
         let mut structures = Vec::new();
-        if self.ordered_dedup {
-            structures.push(quote!(::cq_workload_passes::ordered_dedup));
-        }
         if self.sorted_payload {
             structures.push(quote!(::cq_workload_passes::sorted_payload));
         }

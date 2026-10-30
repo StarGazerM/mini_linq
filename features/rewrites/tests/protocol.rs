@@ -25,7 +25,6 @@ fn rewritten_corpus_physical_flows_into_the_default_selector() {
         fine_triangle; pipeline {
             cq_rewrites::canon_prefixes(r1),
             mini_linq::passes::select,
-            cq_rewrites::retype(dedup => ::std::collections::BTreeSet<_>),
             cq_rewrite_test_driver::capture_structures
         }
     };
@@ -36,8 +35,8 @@ fn rewritten_corpus_physical_flows_into_the_default_selector() {
     );
     let facts = cq_testkit::structures::contract::check(&output).unwrap();
     assert_eq!(facts.dedup.len(), 2);
-    for ty in facts.dedup.values() {
-        assert_eq!(*ty, syn::parse_quote!(::std::collections::BTreeSet<_>));
+    for strategy in facts.dedup.values() {
+        assert_eq!(*strategy, syn::parse_quote!(sort));
     }
 }
 

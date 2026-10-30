@@ -482,7 +482,7 @@ fn compile_stage(
         advice::apply_sequence(&sequence, &pipeline.sequence),
     )?;
     let planned = checked(
-        "plan(machine)",
+        "decompose(machine)",
         &authored.program,
         if pipeline.complete {
             Ok(cq_sequence_plan::Planned {
@@ -493,12 +493,6 @@ fn compile_stage(
             cq_sequence_plan::decompose(&authored.program, &machine, &catalog)
         } else if let Some(schedule) = &recipe.schedule {
             advice::hand_schedule(&authored.program, schedule)
-        } else if recipe.automatic {
-            cq_sequence_plan::plan(
-                &authored.program,
-                &cq_gpu_sequence::machine(),
-                &cq_gpu_sequence::catalog(),
-            )
         } else {
             cq_sequence_plan::decompose(
                 &authored.program,

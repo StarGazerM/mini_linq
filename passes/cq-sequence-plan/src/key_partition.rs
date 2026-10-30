@@ -9,7 +9,7 @@ use cq_syntax::symbol_name;
 use std::collections::{BTreeMap, BTreeSet};
 use syn::Ident;
 
-/// An explicit static decision, following adaptive advice's `select` convention.
+/// An explicit static decision for an authored key-partition policy.
 /// `true` requires a fixed checked partition; `false` retains the native provider.
 /// Unmentioned providers use worker/count choice; collectives remain PL-Cost choices.
 /// For global aggregates this controls both tiled partial folds and key-routed

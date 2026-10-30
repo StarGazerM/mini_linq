@@ -28,7 +28,7 @@ fn main() {
             s host result(checked) = ::cq_storage::dispatch::KeySet<_> [a,c];
             s host candidates = ::cq_storage::HashIndex<'_, _, _> [a];
             s host membership = ::cq_storage::dispatch::KeySet<_> [a,c];
-            checked canon = ::cq_storage::HashSet<_>;
+            checked canon = sort;
         }
     };
 }

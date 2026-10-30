@@ -17,7 +17,7 @@ mod placement;
 mod planner;
 pub use key_partition::{KeyPartitionPolicy, decompose_with_key_partitions};
 pub mod rewrites;
-pub use planner::{Planner, RuleBased};
+pub use planner::Planner;
 
 pub use crate::rewrites::select_from_catalog;
 
@@ -25,8 +25,6 @@ pub use crate::rewrites::select_from_catalog;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Advice {
     Evidence(cq_lang_sequence::Evidence),
-    LookupFirst(Box<crate::rewrites::LookupFirst>),
-    Adaptive(crate::rewrites::AdaptiveCandidate),
     KeyPartition(crate::rewrites::KeyPartition),
     GroupWithoutCanon(Ident),
     Store(Ident),
@@ -72,10 +70,6 @@ impl Advice {
         use crate::rewrites;
         let result = match self {
             Self::Evidence(evidence) => rewrites::record_evidence_in(checker, source, evidence),
-            Self::LookupFirst(arguments) => {
-                rewrites::lookup_first_in(checker, source, quote!(#arguments))
-            }
-            Self::Adaptive(arguments) => rewrites::apply_adaptive_in(checker, source, arguments),
             Self::KeyPartition(arguments) => rewrites::key_partition_in(checker, source, arguments),
             Self::GroupWithoutCanon(name) => {
                 rewrites::group_without_canon_in(checker, source, quote!(#name))
@@ -142,58 +136,6 @@ impl Advice {
 pub struct Planned {
     pub program: Program,
     pub trace: Vec<Advice>,
-}
-
-/// Fill unauthored scheduling decisions, returning the checked result and its proof trace.
-pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Result<Planned> {
-    plan_with_key_partitions(program, machine, catalog, &[])
-}
-
-/// Plan with explicit force/forbid decisions for key partitioning. Unmentioned
-/// providers use a checked runtime count choice; collectives use PL-Cost.
-pub fn plan_with_key_partitions(
-    program: &Program,
-    machine: &Machine,
-    catalog: &Catalog,
-    policies: &[KeyPartitionPolicy],
-) -> syn::Result<Planned> {
-    let started = std::env::var_os("CQ_SEQUENCE_PLAN_TIMING").map(|_| std::time::Instant::now());
-    let checker = &mut cq_lang_sequence::contract::Checker::new(program)?;
-    let mut prepared = Planned {
-        program: program.clone(),
-        trace: Vec::new(),
-    };
-    if let Some(advice) = crate::rewrites::lookup_first_advice_in(checker, program, catalog)? {
-        push(
-            checker,
-            &mut prepared,
-            Advice::LookupFirst(Box::new(advice)),
-        )?;
-    }
-    let ordering_elapsed = started.map(|started| started.elapsed());
-    // Freeze every decision before the first choice changes the candidate graph.
-    let adaptive = crate::rewrites::adaptive_candidates_in(checker, &prepared.program)?;
-    for advice in adaptive {
-        push(checker, &mut prepared, Advice::Adaptive(advice))?;
-    }
-    let adaptive_elapsed = started.map(|started| started.elapsed());
-    let mut planned = decompose_in(checker, &prepared.program, machine, catalog, policies)?;
-    prepared.trace.append(&mut planned.trace);
-    planned.trace = prepared.trace;
-    if let Some(started) = started {
-        eprintln!("Sequence plan: {:.6}s", started.elapsed().as_secs_f64());
-        let ordering = ordering_elapsed.expect("timing enabled").as_secs_f64();
-        let adaptive = adaptive_elapsed.expect("timing enabled").as_secs_f64();
-        eprintln!(
-            "Sequence phases: ordering {ordering:.6}s, adaptive {:.6}s, decomposition {:.6}s",
-            adaptive - ordering,
-            started.elapsed().as_secs_f64() - adaptive,
-        );
-        if started.elapsed() >= std::time::Duration::from_millis(100) {
-            eprintln!("Sequence slow input: {}", quote!(#program));
-        }
-    }
-    Ok(planned)
 }
 
 /// Fill only execution decomposition, preserving an explicitly authored join order.

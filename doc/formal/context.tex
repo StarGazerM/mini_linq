@@ -61,8 +61,8 @@ combine keys and projections keep a key they retain, so a hole whose head
 keeps the inherited key needs no \code{canon} at all. \textsc{CK-Return}
 replaces the third premise of \textsc{CK-Physical} and the corresponding
 Structures rule: with \code{consumer canonical} lowering records no
-\code{return canon}, Structures records no head dedup provider, and the
-printers emit no local set. Internal \code{canon} boundaries (union arms,
+\code{return canon}, Structures records no head dedup strategy, and the
+printers emit no local canonicalization. Internal \code{canon} boundaries (union arms,
 noninjective computed heads inside the plan) are untouched: they serve
 intermediate joins, not the result's set-ness.
 
@@ -156,8 +156,8 @@ Compose with Theorem~\ref{thm:composition}.
 on a program with \code{consumer canonical}, the obligation at the returned
 result is $\mathrm{supp}(\llbracket s\rrbracket)=\mathrm{supp}(\llbracket
 t\rrbracket)$ and no new $\bot$; elsewhere it is unchanged. Reductions,
-disjoint-union rewrites and dedup retyping already satisfy this: none
-changes a support.
+disjoint-union rewrites and checked canonicalization strategy choices satisfy
+this: none changes a support.
 
 \paragraph{Instances.} The following languages compile to CQ and may
 discharge facts; each names the checker that proves them.

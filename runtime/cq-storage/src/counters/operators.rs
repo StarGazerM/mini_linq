@@ -823,7 +823,7 @@ mod tests {
 
     #[cfg(feature = "counters")]
     #[test]
-    fn task_store_and_native_canon_match_independent_primitives() {
+    fn task_store_and_sort_canon_match_independent_primitives() {
         counters::reset();
         let program = OperatorProgram::new(&[
             OperatorLabel {
@@ -857,10 +857,8 @@ mod tests {
                         let part: Vec<_> = program
                             .build(1, || program.inserting(1, rows.iter().copied()).collect());
                         let _part = crate::retain_rows(&part);
-                        let mut seen = counters::DistinctSet::from_set(crate::HashSet::default());
-                        let canonical = program
-                            .inserting(2, part.into_iter())
-                            .filter(|row| seen.insert(*row));
+                        let canonical =
+                            crate::dedup::sort(program.inserting(2, part.into_iter()), Ord::cmp);
                         assert_eq!(program.stream(2, canonical).collect::<Vec<_>>(), [1, 2]);
                     })
                 });
@@ -876,32 +874,10 @@ mod tests {
             counts.rows_copied,
             records[0].rows_inserted + records[1].rows_inserted
         );
-        assert_eq!(counts.distinct_insertions, records[2].rows_inserted);
+        assert_eq!(counts.distinct_insertions, 0);
+        assert_eq!(counts.hash_computations, 0);
         assert_eq!(counts.bytes_retained_current, 0);
         assert!(counts.bytes_retained_peak > 0);
-    }
-
-    #[cfg(feature = "counters")]
-    #[test]
-    fn native_canon_wrapper_preserves_hash_state_and_capacity() {
-        use std::hash::BuildHasher;
-        counters::reset();
-        let native =
-            crate::HashSet::<u64>::with_capacity_and_hasher(16, crate::HashState::default());
-        let capacity = native.capacity();
-        let hash = native.hasher().hash_one(42u64);
-        let mut counted = counters::DistinctSet::from_set(native);
-        assert_eq!(counted.0.capacity(), capacity);
-        assert_eq!(counted.0.hasher().hash_one(42u64), hash);
-        assert_eq!(
-            counters::snapshot().bytes_retained_current,
-            (capacity * 9) as u64
-        );
-        assert!(counted.insert(42));
-        assert!(!counted.insert(42));
-        assert_eq!(counters::snapshot().distinct_insertions, 2);
-        drop(counted);
-        assert_eq!(counters::snapshot().bytes_retained_current, 0);
     }
 
     #[cfg(feature = "counters")]

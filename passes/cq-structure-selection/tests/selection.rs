@@ -56,7 +56,7 @@ fn raw_membership_proof_rejects_unbound_payload_columns() {
             r rows = ::std::vec::Vec<_>;
             l host scan = ::core::iter::Map<_, _> [];
             r host scan = ::core::iter::Map<_, _> [];
-            result canon = ::cq_storage::HashSet<_>;
+            result canon = sort;
         }
     };
     assert!(

@@ -15,7 +15,7 @@ fn membership_advice_preserves_a_fully_bound_physical_probe() {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         r = ::cq_storage::HashIndex<'_,_,_> [x,y] supports [keys];
-        joined canon = ::cq_storage::HashSet<_>;
+        joined canon = sort;
     }};
     let target = cq_rewrite_passes::membership(&source, quote!(r)).unwrap();
     assert_eq!(target.physical, source.physical);
@@ -48,7 +48,7 @@ fn membership_advice_cannot_discard_a_demanded_payload() {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         r = ::cq_storage::HashIndex<'_,_,_> [x];
-        joined canon = ::cq_storage::HashSet<_>;
+        joined canon = sort;
     }};
     assert!(cq_rewrite_passes::membership(&source, quote!(r)).is_err());
 }
@@ -70,7 +70,7 @@ fn smallest_expand_source() -> ir::Program {
         s host scan = ::core::iter::Map<_, _> [];
         r rows = ::std::vec::Vec<_>;
         s rows = ::std::vec::Vec<_>;
-        checked canon = ::std::collections::HashSet<_>;
+        checked canon = sort;
     } }
 }
 
@@ -174,7 +174,7 @@ fn membership_bridge_source() -> ir::Program {
         m host result(selected) = ::core::iter::Map<_,_> [tag];
         s host scan = ::core::iter::Map<_,_> [];
         t host scan = ::core::iter::Map<_,_> [];
-        out canon = ::std::collections::HashSet<_>;
+        out canon = sort;
     } }
 }
 
@@ -307,10 +307,6 @@ fn every_selector_has_a_pinned_ir_and_independent_mutation_checks() {
             include_str!("fixtures/retype_trie.structures"),
         ),
         (
-            quote!(dedup => ::std::collections::BTreeSet<_>),
-            include_str!("fixtures/retype_dedup.structures"),
-        ),
-        (
             quote!(rows => ::std::collections::VecDeque<_>),
             include_str!("fixtures/retype_rows.structures"),
         ),
@@ -415,26 +411,25 @@ fn provider_trait_compatibility_is_not_inferred_from_type_spelling() {
 }
 
 #[test]
-fn computed_head_dedup_is_retyped_without_touching_physical() {
+fn computed_head_uses_sort_without_touching_physical() {
     let source: cq_testkit::physical::Program = syn::parse_quote!(physical {
         relation R(a:i32); r = pipe canon rename R@0 {a -> x};
         return r as answer(*x % 2);
     });
     let source = cq_structure_selection::compile(&source).unwrap();
-    let target = retype(&source, quote!(dedup => ::std::collections::BTreeSet<_>)).unwrap();
     let expected: ir::Program = syn::parse_quote! {
         physical {
             relation R(a:i32); r = pipe canon rename R@0 {a -> x};
             return r as answer(*x % 2);
         }
         structures {
-            r canon = ::std::collections::BTreeSet<_>;
+            r canon = sort;
             r host scan = ::core::iter::Map<_, _> [];
-            r head = ::std::collections::BTreeSet<_>;
+            r head = sort;
         }
     };
-    assert_eq!(target, expected);
-    ir::check_rewrite(&source, &target).unwrap();
+    assert_eq!(source, expected);
+    ir::contract::check(&source).unwrap();
 }
 
 #[test]
@@ -460,7 +455,7 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
             r host scan = ::core::iter::Map<_, _> [];
             r host result(s) = Shared<'_, _, _> [x] membership;
             r host result(p) = Shared<'_, _, _> [x] membership;
-            p canon = ::cq_storage::HashSet<_>;
+            p canon = sort;
         }
     };
     assert_eq!(target, expected);

@@ -17,7 +17,6 @@ impl<K: Ord> cq_storage::ExactMembership<K> for Membership<K> {
 }
 type Ordered<K, V> = BTreeMap<K, V>;
 type Curried<'a, K, I> = cq_storage::Trie<'a, K, I>;
-type State<K> = BTreeSet<K>;
 type Buffer<T> = VecDeque<T>;
 type Pairs = Vec<(i32, i32)>;
 
@@ -84,13 +83,12 @@ fn merge_mixed_native_and_retained_keys_execute_corpus_answers() {
 
 #[test]
 #[allow(non_snake_case)]
-fn named_payload_and_dedup_retypes_execute_corpus_physical() {
+fn named_payload_retype_executes_corpus_physical() {
     let (R, S, expected) = intersection_inputs();
     let actual: Rows = cq_rewrite_test_driver::corpus_physical! {
         intersection; pipeline {
             mini_linq::passes::select,
             cq_rewrites::retype(r1 => Payload<'_, _, _>),
-            cq_rewrites::retype(dedup => State<_>),
             mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         }
     }
@@ -106,7 +104,6 @@ fn standard_hash_state_retypes_execute_after_fast_default_selection() {
     let actual: Rows = cq_rewrite_test_driver::corpus_physical! {
         intersection; pipeline {
             mini_linq::passes::select,
-            cq_rewrites::retype(dedup => ::std::collections::HashSet<_>),
             mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         }
     }
@@ -129,7 +126,6 @@ fn membership_trie_and_rows_retypes_execute_their_trait_obligations() {
             cq_rewrites::retype(s => Membership<_>),
             cq_rewrites::retype(trie => Curried<'_, _, Payload<'_, _, _>>),
             cq_rewrites::retype(rows => Buffer<_>),
-            cq_rewrites::retype(dedup => State<_>),
             mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         };
         physical {
@@ -157,7 +153,6 @@ fn facade_pipeline_keeps_opaque_rust_steps_in_written_order() {
         mini_linq::compile! {
             pipeline {
                 physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections, cq_rewrites::lazy_semijoins];
-                structures = [cq_rewrites::retype(dedup => State<_>)];
             }
             struct Division;
             relation R(x:i32, y:i32) = (rows);

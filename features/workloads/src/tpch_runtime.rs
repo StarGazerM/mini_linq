@@ -1,13 +1,6 @@
 //! Explicit pipelines and the common typed shell for TPC-H-derived CQ kernels.
 //! Query collection is timed; answer serialization and comparison are separate.
 
-#[cfg(feature = "counters")]
-pub type Dedup<T> = cq_storage::counters::DistinctSet<T>;
-// Keep the recorded measurement alias aligned with the default provider.
-// The counter build retains its explicit deterministic instrumentation state.
-#[cfg(not(feature = "counters"))]
-pub type Dedup<T> = cq_storage::HashSet<T>;
-
 /// Expand the same authored CQ with an explicit sequence of public passes.
 macro_rules! configuration {
     (default, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
@@ -55,7 +48,7 @@ macro_rules! configuration {
                     pipeline {
                         $($stages)*
                         select = ::mini_linq::passes::select(positional($d($d host),*));
-                        structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
+                        structures = [$($extra,)* ];
                         surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
                     }
                     $d($d tokens)*
@@ -63,7 +56,7 @@ macro_rules! configuration {
                 ($d($d tokens:tt)*) => { ::mini_linq::compile! {
                     pipeline {
                         $($stages)*
-                        structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
+                        structures = [$($extra,)* ];
                         surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
                     }
                     $d($d tokens)*
@@ -159,7 +152,7 @@ macro_rules! standalone_query {
         ::mini_linq::compile! {
             pipeline {
                 $($stages)*
-                structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
+                structures = [$($extra,)* ];
                 surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
             }
             $($tokens)*

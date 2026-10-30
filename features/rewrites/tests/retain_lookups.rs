@@ -21,7 +21,7 @@ fn triangle_source() -> ir::Program {
         s host scan = ::core::iter::Map<_, _> [];
         r rows = ::std::vec::Vec<_>;
         s rows = ::std::vec::Vec<_>;
-        checked canon = ::std::collections::HashSet<_>;
+        checked canon = sort;
     } }
 }
 
@@ -86,7 +86,7 @@ fn declared_host_lookup_retains_exact_snapshot_ranges() {
         r host scan = ::core::iter::Map<_,_> [];
         r host result(s) = Snapshot<0> [x] supports [retain];
         r host result(p) = Snapshot<0> [x] supports [retain];
-        p canon = ::std::collections::HashSet<_>;
+        p canon = sort;
     } };
     let target = retain_lookups(&source, quote!()).unwrap();
     let facts = ir::contract::check(&target).unwrap();
@@ -154,7 +154,7 @@ fn triangle_prefix_witnesses_do_not_escape() {
     escaping
         .structures
         .entries
-        .push(syn::parse_quote!(pre_s canon = ::std::collections::HashSet<_>;));
+        .push(syn::parse_quote!(pre_s canon = sort;));
     assert_eq!(retain_lookups(&escaping, quote!()).unwrap(), escaping);
 }
 
@@ -285,7 +285,7 @@ fn retained_rows_and_canon_are_not_witness_escape_paths() {
         .unwrap();
     definition.canon = Some(Default::default());
     canonical.structures.entries.push(syn::parse_quote! {
-        s canon = ::cq_storage::HashSet<_>;
+        s canon = sort;
     });
     ir::contract::check(&canonical).unwrap();
     assert_eq!(retain_lookups(&canonical, quote!()).unwrap(), canonical);

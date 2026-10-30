@@ -19,8 +19,6 @@ impl Parse for Advice {
         let result = match kind.to_string().as_str() {
             "store" => Self::Store(arguments.parse()?),
             "group_without_canon" => Self::GroupWithoutCanon(arguments.parse()?),
-            "lookup_first" => Self::LookupFirst(Box::new(arguments.parse()?)),
-            "adaptive" => Self::Adaptive(arguments.parse()?),
             "key_partition" => Self::KeyPartition(arguments.parse()?),
             "store_level" => Self::StoreLevel(arguments.parse()?),
             "publish" => {
@@ -83,11 +81,9 @@ impl ToTokens for Advice {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let invocation = match self {
             Self::Evidence(evidence) => quote!(#evidence),
-            Self::LookupFirst(arguments) => quote!(lookup_first(#arguments)),
             Self::Store(name) => quote!(store(#name)),
             Self::GroupWithoutCanon(name) => quote!(group_without_canon(#name)),
             Self::StoreLevel(name) => quote!(store_level(#name)),
-            Self::Adaptive(arguments) => quote!(adaptive(#arguments)),
             Self::KeyPartition(arguments) => quote!(key_partition(#arguments)),
             Self::Publish { name, producer } => quote!(publish(#name, #producer)),
             Self::Tile { name, n, items }
@@ -134,14 +130,21 @@ mod tests {
             "output(reserve)",
             "grade(gpu, result at host.device)",
             "evidence { count R = 42; }",
-            "lookup_first(using Index, order [r,s,t], transfer [s], early [t])",
-            "adaptive(filtered, published, 100000)",
-            "adaptive(filtered, published, 100000, select false)",
             "key_partition(grouped, published, [region, year], 8)",
             "key_partition(provider, published, [key], 8, threshold 65536)",
         ] {
             let advice: Advice = syn::parse_str(invocation).unwrap();
             assert_eq!(advice, syn::parse2(advice.to_token_stream()).unwrap());
+        }
+    }
+
+    #[test]
+    fn retired_relational_replanning_advice_is_rejected() {
+        for invocation in [
+            "lookup_first(using Index, order [r,s])",
+            "adaptive(filtered, published, 100000)",
+        ] {
+            assert!(syn::parse_str::<Advice>(invocation).is_err());
         }
     }
 }

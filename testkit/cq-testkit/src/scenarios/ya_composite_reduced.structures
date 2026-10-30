@@ -6,5 +6,5 @@ structures { r2 = :: cq_storage :: HashSet < _ > [b , c];
  r1 host result(r2) = :: cq_storage :: dispatch :: KeySet < _ > [a , b];
  r2 rows = :: std :: vec :: Vec < _ >;
  r3 host scan = :: core :: iter :: Map < _ , _ > [];
- r9 canon = :: cq_storage :: HashSet < _ >;
+ r9 canon = sort;
  }

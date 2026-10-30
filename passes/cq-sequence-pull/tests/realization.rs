@@ -127,6 +127,7 @@ fn worker_guards_use_serial_or_explicit_target_worker_counts() {
         &program,
         &analysis,
         syn::parse_quote!(available_workers),
+        cq_sequence_pull::CanonTarget::Sequential,
         |term, _, _, output, _, _| {
             if let Term::Tile { n, .. } = term {
                 let rows = &output.rows;
@@ -140,6 +141,7 @@ fn worker_guards_use_serial_or_explicit_target_worker_counts() {
         &program,
         &analysis,
         syn::parse_quote!(available_workers),
+        cq_sequence_pull::CanonTarget::Sequential,
         |_, _, _, _, _, _| Ok(()),
     )
     .unwrap();
@@ -230,6 +232,7 @@ fn projected_membership_probes_keep_flat_rows_inside_outer_tiles() {
                 &program,
                 &analysis,
                 syn::parse_quote!(1usize),
+                cq_sequence_pull::CanonTarget::Sequential,
                 |term, _, input, output, _, _| {
                     if matches!(term, Term::Compact(name, _) if name == "member") {
                         assert_eq!(output.depth, input.unwrap().depth);
@@ -294,12 +297,12 @@ fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
                 let provider = match &mut entry.structure {
                     Structure::Built { keyed, .. } | Structure::Host { keyed, .. } => &mut keyed.ty,
                     Structure::Rows { ty, .. }
-                    | Structure::Dedup { ty, .. }
-                    | Structure::HeadDedup { ty, .. }
                     | Structure::Group { ty, .. }
                     | Structure::Selection { ty, .. }
                     | Structure::KeySet { ty, .. } => ty,
                     Structure::Read { .. }
+                    | Structure::Dedup { .. }
+                    | Structure::HeadDedup { .. }
                     | Structure::JoinFilter { .. }
                     | Structure::Repr { .. }
                     | Structure::Stage { .. }
@@ -671,7 +674,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         r = ::cq_storage::HashIndex<'_,_,_> [x];
-        j canon = ::cq_storage::HashSet<_>;
+        j canon = sort;
     }};
     let expression = sequence_rows(&authored).unwrap();
     checks.push(quote!({
@@ -821,7 +824,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
 }
 
 #[test]
-fn point_prints_build_free_dispatch_and_canonical_lets_use_the_distinct_provider() {
+fn point_prints_build_free_dispatch_and_canonical_lets_use_sort() {
     let p: structures::Program = syn::parse_quote!(physical {
         relation R(a:i32,b:i32); r = pipe rename R@0 {a -> x,b -> y};
         w = let canon point select r if (x = 2);
@@ -831,7 +834,7 @@ fn point_prints_build_free_dispatch_and_canonical_lets_use_the_distinct_provider
     assert_eq!(text.matches("Lazy :: new").count(), 0);
     assert!(text.contains("dispatch :: PointHost"));
     assert!(text.contains(". point ("));
-    assert!(text.contains("HashSet < _ > > :: new"));
+    assert!(text.contains("cq_storage :: dedup :: sort"));
     assert!(text.contains("(y , x ,)"));
 }
 

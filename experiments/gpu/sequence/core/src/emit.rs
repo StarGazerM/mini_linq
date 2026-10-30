@@ -1314,8 +1314,8 @@ fn canon_type<'a>(analysis: &'a Analysis, publication: &str) -> syn::Result<&'a 
         .find_map(|obligation| match obligation {
             cq_lang_sequence::Obligation::Canon {
                 result,
-                ty: Some(ty),
-            } if result == publication => Some(ty),
+                strategy: Some(strategy),
+            } if result == publication => strategy.provider(),
             _ => None,
         })
         .or_else(|| {
@@ -1323,8 +1323,9 @@ fn canon_type<'a>(analysis: &'a Analysis, publication: &str) -> syn::Result<&'a 
                 .results
                 .get(publication)
                 .and_then(|result| analysis.structures.dedup.get(result))
+                .and_then(|strategy| strategy.provider())
         })
-        .ok_or_else(|| error("GPU canon publication requires its recorded provider type"))
+        .ok_or_else(|| error("GPU canon publication requires its recorded sort implementation"))
 }
 
 fn publish_host(
@@ -2998,7 +2999,7 @@ mod tests {
                 d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
                 r host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
                 r = ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
-                result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 input = store rows d;
@@ -3059,7 +3060,7 @@ mod tests {
                 }
                 structures {
                     r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i32,i32)> [];
-                    result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                    result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 }
                 sequence {
                     input = store rows r;
@@ -3176,7 +3177,7 @@ mod tests {
                 resident host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
                 host_input host scan = ::core::iter::Map<_,_> [];
                 resident = ::cq_storage::SortedRun<_,_> [a];
-                host canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                host canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 resident_rows = store rows resident;
@@ -3227,7 +3228,7 @@ mod tests {
                 }
                 structures {
                     r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
-                    valuation canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                    valuation canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
                     #accumulator
                 }
                 sequence {
@@ -3273,7 +3274,7 @@ mod tests {
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
-                valuation canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                valuation canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 grouped group = ::std::collections::HashMap<_, (i64, usize)>;
             }
             sequence {
@@ -3315,7 +3316,7 @@ mod tests {
                 }
                 structures {
                     r host scan = #provider [];
-                    valuation canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                    valuation canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 }
                 sequence {
                     input = rows r;
@@ -3405,7 +3406,7 @@ mod tests {
                 p host scan = ::core::iter::Map<_,_> [];
                 p = ::cq_gpu_sequence_runtime::RangeProvider [a];
                 present rows = ::std::vec::Vec<_>;
-                present canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                present canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 input = store rows r;
@@ -3436,7 +3437,7 @@ mod tests {
             let canon = canonical.then(|| quote!(canon));
             let canon_provider = canonical.then(|| {
                 quote!(
-                    filtered canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                    filtered canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 )
             });
             let program: Program = syn::parse2(quote! {
@@ -3450,7 +3451,7 @@ mod tests {
                 structures {
                     r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
                     filtered rows = ::std::vec::Vec<_>;
-                    guarded canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                    guarded canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
                     #canon_provider
                 }
                 sequence {
@@ -3496,7 +3497,7 @@ mod tests {
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
-                r canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                r canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 input = store rows r;
@@ -3560,7 +3561,7 @@ mod tests {
                 }
                 structures {
                     r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(#ty,),::cq_gpu_runtime::For> [];
-                    r canon = Canon;
+                    r canon = sort;
                 }
                 sequence { input = store canon rows r; }
                 graded gpu { input at host; }

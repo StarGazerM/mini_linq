@@ -11,8 +11,8 @@ fn planned(authored: &Program) -> Program {
     let machine = cq_gpu_sequence::machine();
     let source = cq_sequence_lowering::compile(&authored.structures).unwrap();
     let source = cq_gpu_sequence_core::runs::record_representation(&source).unwrap();
-    let result = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
-    let repeated = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
+    let result = cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
+    let repeated = cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
     assert_eq!(
         result, repeated,
         "PL-Det: repeated planning must be identical"

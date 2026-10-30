@@ -22,16 +22,5 @@ impl BuildHasher for HashState {
     }
 }
 
-/// Default membership and dedup provider, including its concrete hash state.
+/// Membership provider for keyed reads, including its concrete hash state.
 pub type HashSet<K> = std::collections::HashSet<K, HashState>;
-
-/// The dedup provider's `new()` protocol for sets with a recorded hash state.
-/// Standard and custom providers with an inherent `new()` keep that method.
-pub trait HashSetConstructor {
-    fn new() -> Self;
-}
-impl<K, S: Default> HashSetConstructor for std::collections::HashSet<K, S> {
-    fn new() -> Self {
-        Self::with_hasher(S::default())
-    }
-}

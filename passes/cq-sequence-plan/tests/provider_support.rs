@@ -16,7 +16,7 @@ fn source(decision: &str) -> structures::Program {
             l host scan = Reader [];
             r host scan = Reader [];
             r = Original [x] supports [expand, keys];
-            p canon = Canon;
+            p canon = sort;
             #decision
         }
     }
@@ -36,7 +36,7 @@ fn catalog(supports: Vec<Support>) -> Catalog {
             token(syn::parse_quote!(SelectedAlias), supports),
         ],
         canons: vec![CanonToken {
-            ty: syn::parse_quote!(Canon),
+            ty: syn::parse_quote!(::cq_storage::dedup::Sort),
             levels: vec![vec!["host".into()]],
             max_packed_bits: None,
         }],

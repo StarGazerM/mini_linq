@@ -48,7 +48,7 @@ macro_rules! execute {
         sequence { $($sequence:tt)* }) => {
         mini_linq::passes::sequence! {
             pipeline {
-                ::cq_gpu_sequence::plan,
+                ::cq_gpu_sequence::decompose,
                 ::cq_gpu_sequence::machine_grade,
                 ::cq_gpu_sequence::translate
             };
@@ -97,7 +97,7 @@ macro_rules! compiled_le {
                 supplier host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
                 r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
                 r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-                answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 $($structures)*
             }
             sequence {
@@ -230,7 +230,7 @@ macro_rules! reference {
             lineitem_index = ::cq_gpu_sequence_runtime::RangeProvider [order];
             supplier_index = ::cq_gpu_sequence_runtime::RangeProvider [nation][supplier];
             rnc rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
         }
         sequence {
             RegionASIA = store map region_asia compact region_selected rows region_base;
@@ -296,7 +296,7 @@ pub fn chain<'a>(input: &'a DeviceColumns<'_, Answer>) -> DeviceColumns<'a, Answ
         }
         structures {
             source host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32)> [];
-            answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
         }
         sequence {
             source = store rows source;

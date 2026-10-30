@@ -19,7 +19,7 @@ fn filtered_probe(condition: proc_macro2::TokenStream) -> Program {
             driver host scan = ::cq_gpu_runtime::DeviceColumns [];
             provider host scan = ::cq_gpu_runtime::DeviceColumns [];
             provider = ::cq_gpu_sequence_runtime::RangeProvider [a];
-            result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
         }
         sequence {
             input = store rows driver;
@@ -144,7 +144,7 @@ fn negative_membership_inverts_the_provider_probe_without_expanding_witnesses() 
                 driver host scan = ::cq_gpu_runtime::DeviceColumns [];
                 provider host scan = ::cq_gpu_runtime::DeviceColumns [];
                 provider = ::cq_gpu_sequence_runtime::RangeProvider [a, b];
-                result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 input = store rows driver;
@@ -188,7 +188,7 @@ fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
             driver host scan = ::cq_gpu_runtime::DeviceColumns [];
             provider host scan = ::cq_gpu_runtime::DeviceColumns [];
             selected = ::cq_gpu_sequence_runtime::RangeProvider [a];
-            result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
         }
         sequence {
             input = rows driver;
@@ -201,7 +201,7 @@ fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
     };
     let machine = cq_gpu_sequence::machine();
     let source = cq_gpu_sequence_core::runs::record_representation(&source).unwrap();
-    let planned = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
+    let planned = cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
     let analysis = check_grading(&planned.program, &machine).unwrap();
     assert_eq!(analysis.levels["index"], ["host", "device"]);
     let generated = translate(&planned.program);
@@ -229,7 +229,7 @@ fn segmented_binding(expression: proc_macro2::TokenStream) -> Program {
             driver host scan = ::cq_gpu_runtime::DeviceColumns [];
             provider host scan = ::cq_gpu_runtime::DeviceColumns [];
             provider = ::cq_gpu_sequence_runtime::RangeProvider [a];
-            result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
         }
         sequence {
             input = store rows driver;

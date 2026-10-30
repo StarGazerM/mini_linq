@@ -123,7 +123,7 @@ fn custom_aliases_and_bare_build_provider_keep_selected_source_contracts() {
             s read = positional base R lineage{x -> c,z -> d} column d marker ::cq_load::ColumnAt<1> predicate physical;
             t read = positional base L lineage{x -> a,y -> b} column a marker ::cq_load::ColumnAt<0> predicate membership s[x] summary exact;
             u read = positional base R lineage{x -> c,z -> d} column c marker ::cq_load::ColumnAt<0> predicate membership t[x] summary exact;
-            out canon = ::std::collections::HashSet<_>;
+            out canon = sort;
         }
     }.map(|(x,y)| (*x,*y)).collect();
     assert_eq!(actual, BTreeSet::from([(1, 10), (1, 20)]));

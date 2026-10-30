@@ -12,7 +12,6 @@ macro_rules! runner {
                 pipeline {
                     $($rewrite,)*
                     mini_linq::passes::select,
-                    cq_rewrites::retype(dedup => cq_storage::counters::DistinctSet<_>),
                     mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
                 }
             }.map(|(a, b, c)| vec![*a, *b, *c]).collect()

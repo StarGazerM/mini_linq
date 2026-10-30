@@ -116,7 +116,6 @@ pub fn compile(source: &cq_lang_structures::Program) -> syn::Result<Program> {
         sequence: Sequence {
             definitions,
             output: Some(OutputProtocol::Count),
-            optional_filters: Vec::new(),
         },
         graded: None,
         evidence: Default::default(),

@@ -1,4 +1,4 @@
-//! Joining triangle kernel: hypergraph planner (224 configurations).
+//! Joining triangle kernel: hypergraph planner (112 configurations).
 #![recursion_limit = "512"]
 #[macro_use]
 mod support;

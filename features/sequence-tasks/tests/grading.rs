@@ -37,11 +37,233 @@ fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream)
             relation R(a:i32);
             r = pipe canon rename R@0 {a -> a};
             return r as answer(a);
-        } structures { r host scan = ::core::iter::Map<_, _> []; r canon = ::std::collections::HashSet<_>; }
+        } structures { r host scan = ::core::iter::Map<_, _> []; r canon = sort; }
         sequence { #sequence }
         graded tasks { #grades }
     })
     .unwrap()
+}
+
+#[test]
+fn tasks_canon_shapes_use_parallel_sort_and_remove_cross_part_duplicates() {
+    let cases = [
+        (
+            quote::quote! { input = rows r; result = store canon input; },
+            quote::quote! { input at host; result at host; },
+        ),
+        (
+            quote::quote! {
+                input = store rows r;
+                parts = store flatten tile 64 input;
+                joined = store parts;
+                result = store canon joined;
+            },
+            quote::quote! { input at host; parts at pool; joined at host; result at host; },
+        ),
+        (
+            quote::quote! {
+                input = store rows r;
+                parts = store canon partition_k[a](64) input;
+                joined = store parts;
+                result = store flatten joined;
+            },
+            quote::quote! { input at host; parts at pool; joined at host; result at host; },
+        ),
+    ];
+    let mut checks = Vec::new();
+    for (sequence, grades) in cases {
+        let program = program(sequence, grades);
+        let facts = check_grading(&program, &machine()).unwrap();
+        let expression = cq_sequence_tasks::translate_with(
+            &program,
+            &facts,
+            cq_sequence_tasks::Config {
+                grain: 127,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let rendered = expression.to_token_stream().to_string();
+        assert!(rendered.contains("dedup :: par_sort"), "{rendered}");
+        assert!(!rendered.contains("dedup :: sort"), "{rendered}");
+        assert!(!rendered.contains("HashSetConstructor"), "{rendered}");
+        assert!(!rendered.contains("__cq_seen"), "{rendered}");
+        checks.push(quote::quote! {
+            let mut actual: Vec<i32> =
+                pool.install(|| (#expression).map(|(a,)| *a).collect());
+            actual.sort_unstable();
+            // Compare the actual row count too, not just set equality.
+            assert_eq!(actual, expected);
+        });
+    }
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let populated: Vec<(i32,)> =
+                (0..4099).map(|index| ((index * 13) % 7,)).collect();
+            for threads in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                for R in [&[][..], &populated[..1], &populated[..65], &populated[..]] {
+                    let mut expected: Vec<_> = R.iter().map(|row| row.0).collect();
+                    expected.sort_unstable();
+                    expected.dedup();
+                    #(#checks)*
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds() {
+    let columns: Vec<_> = (0..16).map(|index| quote::format_ident!("h{index}")).collect();
+    let expressions = columns.iter().map(|_| quote::quote!(OnlyOrd(*a % 3)));
+    let mut checks = Vec::new();
+    for (head, project, collect, expected) in [
+        (
+            quote::quote!(a),
+            true,
+            quote::quote!(map(|(a,)| *a).collect::<Vec<_>>()),
+            quote::quote! {
+                let mut expected: Vec<_> = R.iter().map(|row| row.0).collect();
+                expected.sort_unstable();
+                expected.dedup();
+            },
+        ),
+        (
+            quote::quote!(#(#expressions),*),
+            false,
+            quote::quote!(map(|(#(#columns,)*)| [#(#columns),*]).collect::<Vec<_>>()),
+            quote::quote! {
+                let mut values: Vec<_> = R.iter().map(|row| row.0 % 3).collect();
+                values.sort_unstable();
+                values.dedup();
+                let expected: Vec<[OnlyOrd; 16]> = values.into_iter()
+                    .map(|value| ::core::array::from_fn(|_| OnlyOrd(value))).collect();
+            },
+        ),
+    ] {
+        let projection = project.then(|| quote::quote!(p = pipe project r keep {a};));
+        let returned = if project { quote::quote!(p) } else { quote::quote!(r) };
+        let output = if project {
+            quote::quote!(map p canonical)
+        } else {
+            quote::quote!(canonical)
+        };
+        let physical = syn::parse2(quote::quote! {
+            physical {
+                relation R(a:i32,b:i32);
+                r = pipe canon rename R@0 {a -> a,b -> b};
+                #projection
+                return canon #returned as answer(#head);
+            }
+        })
+        .unwrap();
+        let structures = cq_structure_selection::compile(&physical).unwrap();
+        let program: Program = syn::parse2(quote::quote! {
+            #structures
+            sequence {
+                input = store rows r;
+                parts = store flatten tile 64 input;
+                joined = store parts;
+                canonical = canon joined;
+                result = store #output;
+            }
+            graded tasks {
+                input at host; parts at pool; joined at host;
+                canonical at host; result at host;
+            }
+        })
+        .unwrap();
+        let facts = check_grading(&program, &machine()).unwrap();
+        assert!(facts.structures.head_dedup.contains_key(&returned.to_string()));
+        let expression = translate(&program, &facts).unwrap();
+        let profiled = cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
+        for expression in [expression, profiled] {
+            let rendered = expression.to_token_stream().to_string();
+            assert!(rendered.matches("dedup :: par_sort").count() >= 2, "{rendered}");
+            assert!(!rendered.contains("dedup :: sort"), "{rendered}");
+            checks.push(quote::quote! {
+                #expected
+                let actual = pool.install(|| (#expression).#collect);
+                assert_eq!(actual, expected);
+            });
+        }
+    }
+    run_partition_fixture(quote::quote! {
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+        struct OnlyOrd(i32);
+
+        fn main() {
+            let populated: Vec<(i32,i32)> =
+                (0..4099).map(|index| (index % 7, index % 11)).collect();
+            for threads in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                for R in [&[][..], &populated[..1], &populated[..]] {
+                    #(#checks)*
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn tasks_wide_valuation_canon_compares_every_field() {
+    let left: Vec<_> = (0..8).map(|index| quote::format_ident!("a{index}")).collect();
+    let right: Vec<_> = (0..8).map(|index| quote::format_ident!("b{index}")).collect();
+    let columns: Vec<_> = left.iter().chain(&right).collect();
+    let physical = syn::parse2(quote::quote! {
+        physical {
+            relation L(#(#left:i32),*);
+            relation R(a0:i32,#(#right:i32),*);
+            l = pipe rename L@0 {#(#left -> #left),*};
+            r = let rename R@1 {a0 -> a0,#(#right -> #right),*};
+            j = pipe canon probe first [a0] l,r;
+            return j as answer(#(#columns),*);
+        }
+    })
+    .unwrap();
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let program: Program = syn::parse2(quote::quote! {
+        #structures
+        sequence {
+            r = store rows r;
+            input = rows l;
+            result = store canon flatten lookup r[a0] input;
+        }
+        graded tasks { r at host; input at host; result at host; }
+    })
+    .unwrap();
+    let facts = check_grading(&program, &machine()).unwrap();
+    let expression = translate(&program, &facts).unwrap();
+    let rendered = expression.to_token_stream().to_string();
+    assert!(rendered.contains("dedup :: par_sort"), "{rendered}");
+    assert!(rendered.contains("__cq_left . 15"), "{rendered}");
+    assert!(!rendered.contains("dedup :: sort"), "{rendered}");
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let populated = vec![(1i32,0i32,0i32,0i32,0i32,0i32,0i32,0i32); 129];
+            let R = [(1i32,0i32,0i32,0i32,0i32,0i32,0i32,0i32,2i32),
+                     (1,0,0,0,0,0,0,0,1), (1,0,0,0,0,0,0,0,2)];
+            for threads in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                for L in [&[][..], &populated[..1], &populated[..]] {
+                    let actual: Vec<[i32; 16]> = pool.install(|| (#expression)
+                        .map(|(#(#columns,)*)| [#(*#columns),*]).collect());
+                    let expected = if L.is_empty() {
+                        Vec::new()
+                    } else {
+                        (1..=2).map(|last| {
+                            let mut row = [0; 16];
+                            row[0] = 1;
+                            row[15] = last;
+                            row
+                        }).collect()
+                    };
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+    });
 }
 
 #[test]
@@ -792,7 +1014,7 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             s host scan = Reader [];
             s = ::cq_storage::SortedRun<_, _, _> [b];
             s rows = ::std::vec::Vec<_>;
-            result canon = ::std::collections::HashSet<_>;
+            result canon = sort;
         }
         sequence {
             l = rows l;

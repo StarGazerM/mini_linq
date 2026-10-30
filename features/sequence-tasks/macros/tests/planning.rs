@@ -14,7 +14,7 @@ macro_rules! source {
                 r = pipe canon rename R@0 {a -> a};
                 return r as answer(a);
             }
-            structures { r host scan = ::core::iter::Map<_,_> []; r canon = ::cq_storage::HashSet<_>; }
+            structures { r host scan = ::core::iter::Map<_,_> []; r canon = sort; }
             sequence { $($body)* }
         }
     };
@@ -35,7 +35,7 @@ fn facade_target_plan_equals_the_shared_planner_without_authored_decomposition()
     .unwrap();
     let machine = cq_sequence_tasks::machine();
     let expected =
-        cq_sequence_plan::plan(&source, &machine, &cq_sequence_tasks::catalog()).unwrap();
+        cq_sequence_plan::decompose(&source, &machine, &cq_sequence_tasks::catalog()).unwrap();
     assert_eq!(actual, expected.program);
     cq_lang_sequence::check_grading(&actual, &machine).unwrap();
 }
@@ -59,7 +59,7 @@ fn authored_grade_output_and_tile_precede_facade_planning() {
             r = pipe canon rename R@0 {a -> a};
             return r as answer(a);
         }
-        structures { r host scan = ::core::iter::Map<_,_> []; r canon = ::cq_storage::HashSet<_>; }
+        structures { r host scan = ::core::iter::Map<_,_> []; r canon = sort; }
         sequence {
             input = store rows r;
             result = store tile 7 items 3 input;
@@ -69,7 +69,7 @@ fn authored_grade_output_and_tile_precede_facade_planning() {
     })
     .unwrap();
     assert_eq!(actual, expected);
-    let replay = cq_sequence_plan::plan(
+    let replay = cq_sequence_plan::decompose(
         &expected,
         &cq_sequence_tasks::machine(),
         &cq_sequence_tasks::catalog(),
@@ -92,7 +92,7 @@ fn sequential_facade_planning_uses_the_exported_catalog() {
         result = input;
     ))
     .unwrap();
-    let expected = cq_sequence_plan::plan(
+    let expected = cq_sequence_plan::decompose(
         &source,
         &cq_sequence_pull::machine(),
         &cq_sequence_pull::catalog(),

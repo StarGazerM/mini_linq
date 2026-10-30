@@ -54,7 +54,7 @@ pub fn program_with_capacity(capacity: usize) -> Program {
             lineitem_index = ::cq_gpu_sequence_runtime::RangeProvider [order];
             supplier_index = ::cq_gpu_sequence_runtime::RangeProvider [nation][supplier];
             rnc rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
         }
         sequence {
             RegionASIA = store map region_asia compact region_selected rows region_base;

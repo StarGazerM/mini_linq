@@ -2,11 +2,7 @@ use cq_lang_sequence::{
     CanonToken, Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken, Term,
     check_grading, check_rewrite, structures,
 };
-use cq_sequence_plan::rewrites::{
-    adaptive_candidates, apply_adaptive, lookup_first, lookup_first_advice,
-};
-use cq_sequence_plan::{Advice, decompose, plan, select_from_catalog};
-use quote::ToTokens;
+use cq_sequence_plan::{Advice, decompose, select_from_catalog};
 
 fn machine() -> Machine {
     fn node(name: &str, children: Vec<LevelNode>) -> LevelNode {
@@ -54,7 +50,7 @@ fn catalog() -> Catalog {
             },
         ],
         canons: vec![CanonToken {
-            ty: syn::parse_quote!(Canon),
+            ty: syn::parse_quote!(::cq_storage::dedup::Sort),
             levels: vec![host.clone(), device.clone(), block.clone()],
             max_packed_bits: None,
         }],
@@ -77,7 +73,7 @@ fn string_reader(retained: bool) -> structures::Program {
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r host result(answer) = Reader [a]; answer canon = Canon;
+            r host result(answer) = Reader [a]; answer canon = sort;
         }
     };
     if retained {
@@ -106,35 +102,6 @@ fn numeric_provider_of_string_carrying_reader_selects_host_level() {
     }
 }
 
-#[test]
-fn automatic_lookup_records_host_reader_token_without_overriding_authored_tokens() {
-    let source = cq_sequence_lowering::compile(&string_reader(false)).unwrap();
-    let advice = lookup_first_advice(&source, &catalog()).unwrap().unwrap();
-    assert!(
-        advice
-            .providers
-            .iter()
-            .any(|(name, _, ty, _)| name == "r" && *ty == syn::parse_quote!(HostIndex))
-    );
-    let target = lookup_first(&source, advice.to_token_stream()).unwrap();
-    check_rewrite(&source, &target).unwrap();
-    assert_eq!(
-        target,
-        lookup_first(&source, advice.to_token_stream()).unwrap()
-    );
-
-    let source = cq_sequence_lowering::compile(&string_reader(true)).unwrap();
-    let advice = lookup_first_advice(&source, &catalog()).unwrap().unwrap();
-    assert!(!advice.providers.iter().any(|(name, _, _, _)| name == "r"));
-    let target = lookup_first(&source, advice.to_token_stream()).unwrap();
-    let facts = structures::contract::check(&target.structures).unwrap();
-    assert_eq!(
-        facts.built_on("r", &["a".into()]).map(|(ty, _)| ty),
-        Some(&syn::parse_quote!(Authored)),
-    );
-    check_rewrite(&source, &target).unwrap();
-}
-
 fn assert_replay(source: &Program, planned: &cq_sequence_plan::Planned) {
     let mut replay = source.clone();
     for advice in &planned.trace {
@@ -161,7 +128,7 @@ fn numeric_lookup_is_published_before_host_string_expansion() {
         }
         structures {
             r host scan = Reader []; s host scan = Reader []; t host scan = Reader [];
-            s = RangeProvider [a]; t = HostIndex [b]; answer canon = Canon;
+            s = RangeProvider [a]; t = HostIndex [b]; answer canon = sort;
         }
     };
     let source = cq_sequence_lowering::compile(&structures).unwrap();
@@ -225,7 +192,7 @@ fn automatic_h09_uses_catalog_read_levels_after_opaque_prefix() {
         count Part = 20; count Orders = 150; count Lineitem = 600;
         count PartSupp = 80; count Supplier = 10; count Nation = 2;
     });
-    let planned = plan(&source, &machine(), &catalog()).unwrap();
+    let planned = decompose(&source, &machine(), &catalog()).unwrap();
     assert_replay(&source, &planned);
 }
 
@@ -276,23 +243,21 @@ fn automatic_h07_keeps_numeric_forwards_legal_before_string_readers() {
         count Supplier = 10; count Lineitem = 600; count Orders = 150;
         count Customer = 15; count Nation = 2;
     });
-    let planned = plan(&source, &machine(), &catalog()).unwrap();
-    assert!(
-        planned
-            .trace
-            .iter()
-            .any(|advice| matches!(advice, Advice::LookupFirst(_)))
+    let planned = decompose(&source, &machine(), &catalog()).unwrap();
+    assert_eq!(
+        planned.program.structures.physical,
+        source.structures.physical
     );
     assert_replay(&source, &planned);
 }
 
 #[test]
-fn catalog_retention_and_canon_retyping_cross_the_sequence_boundary() {
+fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
     let source = string_reader(false);
     let mut selected = select_from_catalog(&source, &catalog()).unwrap();
     for entry in &mut selected.structures.entries {
-        if let structures::Structure::Dedup { ty, .. } = &mut entry.structure {
-            *ty = syn::parse_quote!(NativeCanon);
+        if let structures::Structure::Dedup { strategy, .. } = &mut entry.structure {
+            *strategy = syn::parse_quote!(sort using NativeCanon);
         }
     }
     // The ordinary Structures-only contract remains exact.
@@ -319,35 +284,6 @@ fn catalog_retention_and_canon_retyping_cross_the_sequence_boundary() {
     assert!(structures::check_retention_rewrite(&source, &changed_mode).is_err());
 }
 
-#[test]
-fn catalog_retyping_composes_with_checked_join_reexpression() {
-    let mut original = string_reader(false);
-    for entry in &mut original.structures.entries {
-        if let structures::Structure::Dedup { ty, .. } = &mut entry.structure {
-            *ty = syn::parse_quote!(AuthoredCanon);
-        }
-    }
-    let source = cq_sequence_lowering::compile(&original).unwrap();
-    let selected = select_from_catalog(&original, &catalog()).unwrap();
-    let intermediate = cq_sequence_lowering::compile(&selected).unwrap();
-    check_rewrite(&source, &intermediate).unwrap();
-    let target = lookup_first(&intermediate, quote::quote!(using HostIndex, order [r,l])).unwrap();
-    check_rewrite(&intermediate, &target).unwrap();
-    assert_ne!(source.structures.physical, target.structures.physical);
-    // This is a composition, not merely the retention-only special case.
-    assert!(structures::check_retention_rewrite(&source.structures, &target.structures).is_err());
-    check_rewrite(&source, &target).unwrap();
-
-    let mut changed_reader = target;
-    let scan = changed_reader.structures.structures.entries.iter_mut().find(|entry|
-        matches!(&entry.structure, structures::Structure::Host { reader, .. } if matches!(reader, structures::ReaderRef::Scan))
-    ).unwrap();
-    if let structures::Structure::Host { keyed, .. } = &mut scan.structure {
-        keyed.ty = syn::parse_quote!(DifferentReader);
-    }
-    assert!(check_rewrite(&source, &changed_reader).is_err());
-}
-
 fn full_key_host_membership() -> structures::Program {
     syn::parse_quote! {
         physical {
@@ -360,7 +296,7 @@ fn full_key_host_membership() -> structures::Program {
         structures {
             l host scan = Reader []; r host scan = Reader [];
             r host result(answer) = HostMembership [a] membership;
-            answer canon = Canon;
+            answer canon = sort;
         }
     }
 }
@@ -426,121 +362,6 @@ fn catalog_retention_preserves_raw_membership_certificate_and_compact() {
     let mut unavailable = available;
     unavailable.providers[0].capabilities = vec![Capability::Exact, Capability::Range];
     assert!(select_from_catalog(&source, &unavailable).is_err());
-}
-
-#[test]
-fn adaptive_candidates_clone_raw_host_membership_read_certificates() {
-    let structures = syn::parse_quote! {
-        physical {
-            relation L(a:i32,b:i32); relation R(a:i32); relation T(b:i32,c:i32);
-            l = pipe rename L@0 {a -> a,b -> b};
-            r = pipe rename R@1 {a -> a};
-            t = pipe rename T@2 {b -> b,c -> c};
-            tf = let select t if (c > 0);
-            member = pipe probe first [a] l,r;
-            optional = pipe semi eager [b] member,tf;
-            joined = pipe probe first [b] optional,tf;
-            answer = pipe canon project joined keep {a,b,c};
-            return answer as answer(a,b,c);
-        }
-        structures {
-            l host scan = Reader []; r host scan = Reader []; t host scan = Reader [];
-            r host result(member) = HostMembership [a] membership;
-            tf = Index [b];
-            answer canon = Canon;
-        }
-    };
-    let mut source = cq_sequence_lowering::compile(&structures).unwrap();
-    source
-        .sequence
-        .optional_filters
-        .push(syn::parse_quote!(optional));
-    let candidates = adaptive_candidates(&source).unwrap();
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].filter, "optional");
-    for select in [None, Some(false), Some(true)] {
-        let mut candidate = candidates[0].clone();
-        candidate.select = select;
-        let target = apply_adaptive(&source, &candidate).unwrap();
-        check_rewrite(&source, &target).unwrap();
-        assert!(adaptive_candidates(&target).unwrap().is_empty());
-        let facts = cq_lang_sequence::contract::check(&target).unwrap();
-        assert!(
-            facts
-                .structures
-                .membership
-                .contains(&("r".into(), vec!["a".into()]))
-        );
-        let reads = &facts.structures.physical.keyed_reads["r"];
-        assert_eq!(
-            reads.len(),
-            2,
-            "both arms retain their mandatory membership read"
-        );
-        for (reader, keys, _) in reads {
-            assert!(target.structures.structures.entries.iter().any(|entry| {
-                entry.name == "r"
-                    && matches!(&entry.structure,
-                        structures::Structure::Host { reader: adapter, keyed, .. }
-                        if adapter.result().is_some_and(|name| name.to_string() == *reader)
-                            && keyed.membership.is_some()
-                            && keyed.ty == syn::parse_quote!(HostMembership)
-                            && keyed.level_names().concat() == *keys)
-            }));
-            assert!(target.sequence.definitions.iter().any(|definition| {
-                matches!(&definition.term, Term::Compact(result, inner)
-                    if result.to_string() == *reader
-                        && matches!(inner.as_ref(), Term::Lookup { provider, .. } if provider == "r"))
-            }));
-        }
-
-        let mut missing_adapter = target.clone();
-        missing_adapter
-            .structures
-            .structures
-            .entries
-            .retain(|entry| {
-                !matches!(&entry.structure, structures::Structure::Host { reader, .. }
-                if entry.name == "r"
-                    && reader.result().is_some_and(|name| name != "member"))
-            });
-        assert!(cq_lang_sequence::contract::check(&missing_adapter).is_err());
-        assert_eq!(target, apply_adaptive(&source, &candidate).unwrap());
-    }
-}
-
-#[test]
-fn lookup_first_rebuilds_raw_membership_when_prefix_reads_expand_its_domain() {
-    let physical = syn::parse_quote! {
-        physical {
-            relation L(x:i32,y:i32); relation R(y:i32,z:i32); relation S(x:i32,z:i32);
-            l = pipe rename L@0 {x -> x,y -> y};
-            r = let rename R@1 {y -> y,z -> z};
-            s = let rename S@2 {x -> x,z -> z};
-            joined = pipe probe first [y] l,r;
-            answer = pipe canon probe first [x,z] joined,s;
-            return answer as answer(x,y,z);
-        }
-    };
-    let structures = cq_structure_selection::compile(&physical).unwrap();
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
-    let before = structures::contract::check(&source.structures).unwrap();
-    assert!(
-        before
-            .membership
-            .contains(&("s".into(), vec!["x".into(), "z".into()]))
-    );
-    let advice = quote::quote!(using HostIndex, order [l,r,s], transfer [], early []);
-    let target = lookup_first(&source, advice.clone()).unwrap();
-    check_rewrite(&source, &target).unwrap();
-    let after = structures::contract::check(&target.structures).unwrap();
-    assert!(after.membership.iter().all(|(name, _)| name != "s"));
-    assert!(target.structures.structures.entries.iter().any(|entry| {
-        matches!(&entry.structure, structures::Structure::Built { keyed, .. }
-            if keyed.level_names() == vec![vec!["x".to_owned()]]
-                && keyed.membership.is_none() && keyed.ty == syn::parse_quote!(HostIndex))
-    }));
-    assert_eq!(target, lookup_first(&source, advice).unwrap());
 }
 
 #[test]

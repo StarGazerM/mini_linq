@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use cq_lang_sequence::{Analysis, Capability, Guard, Monoid, Program, Term};
 use cq_lang_structures::physical::{Operator, symbol_name};
+pub use cq_physical_realization::CanonTarget;
 use cq_physical_realization::RowEmitter;
 use cq_print::{Context, Repr, access::Access};
 use proc_macro2::TokenStream;
@@ -163,19 +164,11 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             levels: levels.clone(),
         })
         .collect(),
-        canons: [
-            syn::parse_quote!(::cq_storage::HashSet<_>),
-            syn::parse_quote!(::std::collections::HashSet<_>),
-            syn::parse_quote!(::std::collections::HashSet<_, _>),
-            syn::parse_quote!(::std::collections::BTreeSet<_>),
-        ]
-        .into_iter()
-        .map(|ty| CanonToken {
-            ty,
-            levels: levels.clone(),
+        canons: vec![CanonToken {
+            ty: syn::parse_quote!(::cq_storage::dedup::Sort),
+            levels,
             max_packed_bits: None,
-        })
-        .collect(),
+        }],
     }
 }
 
@@ -1000,9 +993,9 @@ impl<'a> Emitter<'a> {
         })
     }
 
-    /// Apply the recorded canonical provider to flat rows, preserving first occurrences.
+    /// Apply the recorded canonicalization strategy to the complete flat stream.
     pub fn canon(&mut self, mut input: Value) -> syn::Result<Value> {
-        let ty = input
+        let strategy = input
             .result
             .as_ref()
             .and_then(|name| self.analysis.structures.dedup.get(name))
@@ -1011,10 +1004,10 @@ impl<'a> Emitter<'a> {
                     .obligations
                     .iter()
                     .find_map(|obligation| match obligation {
-                        cq_lang_sequence::Obligation::Canon { result, ty }
+                        cq_lang_sequence::Obligation::Canon { result, strategy }
                             if result == &self.owner =>
                         {
-                            ty.as_ref()
+                            strategy.as_ref()
                         }
                         _ => None,
                     })
@@ -1022,7 +1015,7 @@ impl<'a> Emitter<'a> {
             .ok_or_else(|| {
                 syn::Error::new(
                     proc_macro2::Span::call_site(),
-                    "Sequence canon requires a recorded provider",
+                    "Sequence canon requires a recorded strategy",
                 )
             })?;
         let width = input
@@ -1033,8 +1026,19 @@ impl<'a> Emitter<'a> {
         let inputs = input.result.iter().cloned().collect();
         self.context_mut()
             .profile_label(&label, "DEDUP", "", inputs);
-        let rows = self.context().profile_inserting(&label, input.rows);
-        let rows = RowEmitter::canon(ty, rows, width);
+        let rows = match strategy {
+            cq_lang_structures::CanonStrategy::Sort(_) => {
+                let rows = self.context().profile_inserting(&label, input.rows);
+                RowEmitter::canon_with_target(self.adapters.canon_target(), strategy, rows, width)
+            }
+            cq_lang_structures::CanonStrategy::Ordered(_) => {
+                let result = input
+                    .result
+                    .as_deref()
+                    .expect("checked direct ordered source");
+                RowEmitter::ordered_source(self.context(), self.adapters.canon_target(), result)
+            }
+        };
         input.rows = self.context().profile_stream(&label, rows);
         input.stored = false;
         Ok(input)
@@ -1254,6 +1258,7 @@ fn translate_host(program: &Program, analysis: &Analysis, profile: bool) -> syn:
         syn::parse_quote!(1usize),
         profile,
         true,
+        CanonTarget::Sequential,
         |_, _, _, _, _, _| Ok(()),
     )
 }
@@ -1262,10 +1267,13 @@ fn translate_host(program: &Program, analysis: &Analysis, profile: bool) -> syn:
 /// original child, `owner` its definition and `tiles` its enclosing tile depth.
 /// The hook may replace emitted iterator tokens without inspecting the program.
 /// `workers` evaluates to the target-wide available worker count in every scope.
+/// `canon_target` realizes the recorded sort strategy for the selected CPU target,
+/// including the final answer-head boundary.
 pub fn translate_with(
     program: &Program,
     analysis: &Analysis,
     workers: syn::Expr,
+    canon_target: CanonTarget,
     hook: impl FnMut(
         &Term,
         &mut Emitter<'_>,
@@ -1275,7 +1283,7 @@ pub fn translate_with(
         usize,
     ) -> syn::Result<()>,
 ) -> syn::Result<syn::Expr> {
-    translate_with_profile(program, analysis, workers, false, false, hook)
+    translate_with_profile(program, analysis, workers, false, false, canon_target, hook)
 }
 
 /// Target-hook interpretation with real operator counters and disjoint host
@@ -1286,6 +1294,7 @@ pub fn translate_profile_with(
     program: &Program,
     analysis: &Analysis,
     workers: syn::Expr,
+    canon_target: CanonTarget,
     hook: impl FnMut(
         &Term,
         &mut Emitter<'_>,
@@ -1295,7 +1304,7 @@ pub fn translate_profile_with(
         usize,
     ) -> syn::Result<()>,
 ) -> syn::Result<syn::Expr> {
-    translate_with_profile(program, analysis, workers, true, false, hook)
+    translate_with_profile(program, analysis, workers, true, false, canon_target, hook)
 }
 
 fn translate_with_profile(
@@ -1304,6 +1313,7 @@ fn translate_with_profile(
     workers: syn::Expr,
     profile: bool,
     pull: bool,
+    canon_target: CanonTarget,
     mut hook: impl FnMut(
         &Term,
         &mut Emitter<'_>,
@@ -1475,6 +1485,7 @@ fn translate_with_profile(
         Ok(value)
     }
     let mut emitter = Emitter::new(program, analysis);
+    emitter.adapters.set_canon_target(canon_target);
     emitter.pull = pull;
     emitter.workers = workers;
     if profile {

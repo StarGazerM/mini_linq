@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / "tests/support/configurations.rs"
 DESTINATION = ROOT / "tests/support/le_configurations.rs"
 
-REJECTED_SUFFIX = "_merge_canon_first_hashmap_ordered_dedup_sorted_lazy_pull_unadvised"
+REJECTED_SUFFIX = "_merge_canon_first_hashmap_sorted_lazy_pull_unadvised"
 REJECTED = {("retail_d85", planner + REJECTED_SUFFIX) for planner in ("le", "le_runs")}
 
 def generate(source):
@@ -55,7 +55,7 @@ def generate(source):
         out.append("        $(mod $configuration { configuration!($configuration, run_" + case + "); })+\n")
         for name in added:
             out.append(f"        mod {name} {{ le_configuration!({name}, run_{case}); }}\n")
-        out.append("        pub const CONFIGURATIONS: &[[usize; 10]] = &[\n            $($configuration::CONFIG),+,\n")
+        out.append("        pub const CONFIGURATIONS: &[[usize; 9]] = &[\n            $($configuration::CONFIG),+,\n")
         out.extend(f"            {name}::CONFIG,\n" for name in added)
         out.append("        ];\n    };\n")
     out.append("}\n")

@@ -100,14 +100,6 @@ pub fn smallest(input: TokenStream) -> TokenStream {
     .into()
 }
 #[proc_macro]
-pub fn ordered_dedup(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, args| {
-        no_arguments(args)?;
-        cq_testkit::rewrites::ordered_dedup(source)
-    })
-    .into()
-}
-#[proc_macro]
 pub fn custom_indexes(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, args| {
         no_arguments(args)?;

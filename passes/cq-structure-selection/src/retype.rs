@@ -9,7 +9,6 @@ enum Kind {
     Membership,
     Ordered,
     Trie,
-    Dedup,
     Rows,
     Selection,
     KeySet,
@@ -24,7 +23,6 @@ impl Kind {
             "membership" => Some(Self::Membership),
             "ordered" => Some(Self::Ordered),
             "trie" => Some(Self::Trie),
-            "dedup" => Some(Self::Dedup),
             "rows" => Some(Self::Rows),
             "selection" => Some(Self::Selection),
             "keyset" => Some(Self::KeySet),
@@ -120,7 +118,7 @@ impl Parse for Retype {
 /// Retype keyed representations on a named result, or entries serving the
 /// selected read kind. Scan/point/range adapters are not keyed representations.
 /// Levels, reader names and Physical are preserved, even for custom types.
-/// Dedup includes both canon and computed-head state; rows selects buffers.
+/// Rows selects retained buffers; canonicalization has a strategy, not a provider.
 /// `entry(N)` selects exactly one provider-bearing entry by its zero-based
 /// Structures order, including host adapters, without touching sibling entries.
 /// Retyping replaces support metadata: append `supports [...]` to declare the
@@ -143,6 +141,8 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                                 | Structure::Repr { .. }
                                 | Structure::Stage { .. }
                                 | Structure::Share { .. }
+                                | Structure::Dedup { .. }
+                                | Structure::HeadDedup { .. }
                         )
                 }
                 Selector::Result(ref result) => {
@@ -153,9 +153,7 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                         && matches!(entry.structure, Structure::JoinFilter { .. })
                 }
                 Selector::Kind(kind) => match &entry.structure {
-                    Structure::Dedup { .. } | Structure::HeadDedup { .. } => {
-                        matches!(kind, Kind::Dedup)
-                    }
+                    Structure::Dedup { .. } | Structure::HeadDedup { .. } => false,
                     Structure::Rows { .. } => matches!(kind, Kind::Rows),
                     Structure::Group { .. } => matches!(kind, Kind::Group),
                     Structure::Selection { .. } => matches!(kind, Kind::Selection),
@@ -214,9 +212,7 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                     keyed.ty = request.ty.clone();
                     keyed.supports = request.supports.clone();
                 }
-                Structure::Dedup { ty, .. }
-                | Structure::HeadDedup { ty, .. }
-                | Structure::Rows { ty, .. }
+                Structure::Rows { ty, .. }
                 | Structure::Group { ty, .. }
                 | Structure::Selection { ty, .. }
                 | Structure::KeySet { ty, .. } => *ty = request.ty.clone(),
@@ -224,6 +220,8 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 Structure::Read { .. }
                 | Structure::Repr { .. }
                 | Structure::Stage { .. }
+                | Structure::Dedup { .. }
+                | Structure::HeadDedup { .. }
                 | Structure::Share { .. } => {
                     unreachable!("read, repr, stage and share entries carry no provider type")
                 }

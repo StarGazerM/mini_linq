@@ -199,7 +199,7 @@ mod merged {
         S: &'a BTreeMap<(Value,), Vec<(Value,)>>,
     ) -> std::collections::BTreeSet<(&'a Value, &'a Value)> {
         ::core::iter::Iterator::collect(
-            ::mini_linq::compile! { pipeline { physical = [::core_pass_fixtures::merged]; structures = [::core_pass_fixtures::ordered_dedup]; }
+            ::mini_linq::compile! { pipeline { physical = [::core_pass_fixtures::merged]; }
                 struct Chain;
                 relation L(a: Value);
                 relation R(a: Value, b: Value);

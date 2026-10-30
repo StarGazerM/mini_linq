@@ -11,7 +11,7 @@ fn fold_at_noncollaborative_device_is_rejected() {
         }
         structures {
             r host scan = Reader [];
-            r canon = Canon;
+            r canon = sort;
         }
         sequence {
             input = store rows r;
@@ -34,7 +34,7 @@ fn rust_below_host_requires_identity_representation() {
         }
         structures {
             r host scan = Reader [];
-            bound canon = Canon;
+            bound canon = sort;
             bound rows = Rows;
         }
         sequence { result = store map bound rows r; }
@@ -91,7 +91,7 @@ fn scalar_fold_host_code_parses() {
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns [];
-                r canon = Canon;
+                r canon = sort;
             }
             sequence {
                 input = store rows r;
@@ -133,7 +133,7 @@ fn host_choice_of_expanded_rows_preserves_upstream_range_translation() {
             q host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
             p = ::cq_gpu_sequence_runtime::RangeProvider [a];
             q = ::cq_gpu_sequence_runtime::RangeProvider [b];
-            answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
         }
         sequence {
             input = store rows r;

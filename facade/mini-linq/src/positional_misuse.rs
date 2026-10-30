@@ -31,7 +31,7 @@
 //!         s keyset = NoInterval<_> [x] owned base R lineage{x -> b,z -> c};
 //!         t read = positional base L lineage{x -> a} column a
 //!             marker ::cq_load::ColumnAt<0> predicate membership s[x] summary exact;
-//!         out canon = ::std::collections::HashSet<_>;
+//!         out canon = sort;
 //!     }
 //! }.collect();
 //! ```

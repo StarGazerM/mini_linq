@@ -115,7 +115,7 @@ fn borrowed_keysets_preserve_positive_and_negative_membership() {
                     r host scan = ::core::iter::Map<_,_> [];
                     s rows = ::std::vec::Vec<_>;
                     s keyset = ::cq_storage::AdaptiveKeySet<_,::cq_storage::BorrowedI64TupleCodec,$budget> [x] borrowed base R lineage{x -> b};
-                    out canon = ::std::collections::HashSet<_>;
+                    out canon = sort;
                 }
             }.map(|(x,)| *x).collect::<BTreeSet<_>>()
         };

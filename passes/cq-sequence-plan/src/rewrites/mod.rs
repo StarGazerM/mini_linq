@@ -27,18 +27,6 @@ pub use group::{group_without_canon, group_without_canon_in};
 mod key_partition;
 pub use key_partition::{KeyPartition, key_partition, key_partition_in};
 
-mod adaptive;
-pub use adaptive::{
-    AdaptiveCandidate, adaptive, adaptive_candidates, adaptive_candidates_in, adaptive_choose,
-    adaptive_filter, apply_adaptive, apply_adaptive_in, select_filter,
-};
-
-mod lookup_first;
-pub use lookup_first::{
-    LookupFirst, LookupPlan, lookup_first, lookup_first_advice, lookup_first_advice_in,
-    lookup_first_in, lookup_plan,
-};
-
 mod kw {
     syn::custom_keyword!(items);
     syn::custom_keyword!(at);

@@ -108,9 +108,8 @@
 //! Step/site advice preserves occurrences with CQ `no_reduce`, and runs the
 //! ordinary WF-VO, selected CK-Le, PH-Smallest and PH-KeyProjection checks.
 //! Unsupported backend decisions fail rather than falling back silently.
-//! To preserve these orders in GPU experiments, use `cq_gpu_sequence::decompose`
-//! rather than the automatic `cq_gpu_sequence::plan` in the decomposition
-//! phase: automatic Sequence planning can transform the earlier CQ decisions.
+//! GPU experiments preserve these orders with `cq_gpu_sequence::decompose`
+//! in the decomposition phase; Sequence does not replan relational decisions.
 //!
 //! Select streaming push holes with
 //! `cq = pipeline { print = ::cq_datalog::passes::print_push; print_input = structures; };`.
@@ -143,9 +142,9 @@
 //!     round = [cq_datalog_hasher::hasher_round(keyed)];
 //! }
 //! ```
-//! Explicit `hasher(fx)` and `hasher_round(fx)` remain available. Do not add
-//! `retype(dedup => ...)` to the discharged hole pipeline: it has no dedup
-//! representation to retype. MiniLinq core defaults are unchanged.
+//! Explicit `hasher(fx)` and `hasher_round(fx)` remain available. CQ canonical
+//! boundaries use sort strategies rather than retypable set providers; discharged
+//! holes require no additional canonicalization strategy.
 //!
 //! Round evaluation waves can be selected with a direct `cq-datalog-schedule`
 //! dependency and `round = [cq_datalog_schedule::schedule(by_head)]`.

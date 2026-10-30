@@ -7,7 +7,7 @@ Structures ::= Physical structures { Entry* }
 Entry ::= r = Type [K]... [supports [Support,...]]
               [membership] [payload[P] constants{c = term, ...}];
         | r host ReaderRef = Type [K]... [supports [Support,...]];
-        | r rows = Type; | r canon = Type; | r head = Type;
+        | r rows = Type; | r canon = CanonStrategy; | r head = CanonStrategy;
         | r group = Type;
         | r selection = Type base H lineage{a -> c, ...}
               summary (none | per_block);
@@ -24,6 +24,7 @@ Entry ::= r = Type [K]... [supports [Support,...]]
 Predicate ::= physical | membership s [K] summary (exact | row)
 ReaderRef ::= scan | candidates | membership | result(Ident)
 Support ::= retain | expand | keys
+CanonStrategy ::= sort [using Type] | ordered
 \end{lstlisting}
 
 \paragraph{Contract.} $\mathsf{Entries}(t,A)$ checks the embedded Physical and:
@@ -170,7 +171,7 @@ Uniqueness: Unit has the empty key; a rename of a certified or discharged
 \code{host_set} has its full heading as key, and other host renames have none; join needs both
 keys and unions them; semi/anti keep the left key; union infers none;
 selections, guards and binds preserve it; projection preserves it only if no key
-column is dropped; a canon flag gives the full heading through its dedup type.
+column is dropped; a canon flag gives the full heading through its checked strategy.
 A built structure alone proves no uniqueness.
 An explicit \code{membership} modifier on a single-level filtered build proves
 that every downstream observation is a supplied key or reconstructed constant.
@@ -285,16 +286,47 @@ bounds at generated uses; the laws are tested, not derived.
 
 \paragraph{Recorded decisions.} Every concrete type and its selected-layout
 support: built indexes and levels, per-reader host fallbacks, keyed group
-accumulator tables, retained rows, dedup state, filtered payloads and constants,
+accumulator tables, retained rows, canonicalization strategies, filtered payloads and constants,
 positional bases and column lineage, mask-summary policy, column markers,
 keyset ownership/codec/budget and exact versus row-only read summaries.
 Positions identify base occurrences without becoming logical columns. A selection
 is not Canonical or OrderedRead. Nothing is substituted at print time.
 
+\paragraph{Canonicalization strategies.}
+Structures records \code{CanonStrategy::Sort} or \code{CanonStrategy::Ordered},
+not an arbitrary per-element dedup-provider type. Sequence carries that
+decision to the target. Sort may additionally record \code{using Type},
+an explicit target sort/unique implementation such as \code{WideCanon};
+plain \code{sort} uses the CPU comparison-sort runtime.
+Default selection writes \code{canon = sort;} and \code{head = sort;},
+including computed heads that may collapse distinct valuations.
+\begin{mathpar}
+\Rule{STR-Canon}{s=\mathsf{Sort}\ \lor\
+ (s=\mathsf{Ordered}\land\mathsf{directHostScan}(r)
+ \land\mathsf{loadVerifiedPrefixCarrier}(r))}
+ {\mathsf{canonStrategy}(r,s)\text{ is admissible}}
+\end{mathpar}
+The Ordered carrier pairs immutable rows with the exact prefix comparison
+verified at load. Rust checks the carrier capability; the compiler checks the
+direct host-scan shape, never a Rust type spelling. No projection, filter,
+join, computed head or other downstream operator inherits this evidence.
+Full-row equality must imply equal prefixes. Equal-prefix runs are still
+sorted and uniqued by complete-row identity: prefix order never establishes
+uniqueness. Host Sort collects the complete boundary stream, uses Rust
+\code{Ord} comparison via \code{sort\_unstable\_by}, then adjacent unique;
+Tasks uses parallel comparison sort, followed by adjacent unique.
+Compared fields may be opaque user Rust types, and wide rows need not
+implement a tuple-level \code{Ord} or \code{Hash}. The order/identity laws
+remain representation premises. The former \code{retype(dedup => Type)}
+selector is removed. Catalog selection may refine Sort's explicit
+\code{using} provider, but never turn Ordered into Sort. Membership indexes
+and retained row buffers remain separate choices.
+
+
 \paragraph{Default hash representations.} Selection records
-\code{::cq_storage::HashSet<_>} for general built membership, candidate-key
-enumeration, canonicalization and head deduplication; membership-only projections
-use the adaptive provider above.
+\code{::cq_storage::HashSet<_>} for general built membership and candidate-key
+enumeration; membership-only projections use the adaptive provider above.
+These sets answer consumer membership probes, not self-deduplication.
 This alias names
 \code{std::collections::HashSet<K, cq_storage::HashState>};
 \code{HashState} uses keyed aHash. Payload reads record
@@ -306,12 +338,10 @@ whose key set uses that state. Trie levels and the staging and hash forms of
 runtime type. The printer passes recorded provider tokens to capability
 construction without choosing the resulting Rust implementation; retyping to
 \code{std::collections::HashSet<_>} retains the standard hasher.
-Dedup construction imports \code{HashSetConstructor} for hash sets with an
-explicit state, preserving the existing \code{new()} protocol and inherent
-constructors of custom providers. It does not replace a recorded type.
 Counter builds retain their deterministic measurement collections and fixed
-seeds; their hash-finish counts cover runtime internal collections, not every
-canonicalization or host hash operation.
+seeds; their hash-finish counts cover runtime internal collections and host
+hash operations, not sort canonicalization. CPU Datalog's
+\textsc{DL-InsertNew} hash-seen admission is outside this strategy cutover.
 
 \code{HashIndex} stores exact keys and arena slots in a hashbrown Swiss table
 using the recorded keyed hash state, plus a contiguous arena of first payloads.

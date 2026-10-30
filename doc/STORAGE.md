@@ -553,12 +553,25 @@ GPU reduction/dedup overhead and CPU h01's dominant cost must be profiled
 4. **Widths**: every GPU TPC-H input column fits 32 bits at SF1/SF10
    (`doc/DECODE-COLUMNS.md`); keys never decode; 64/128-bit widths only for
    accumulators sized by value bits + log₂ rows, and for authored Rust types.
-5. **Deduplication is sort-based, never a hash set**: self-dedup = parallel
-   (radix) sort + parallel adjacent unique (bandwidth-bound); dedup against
-   full = merge/search against sorted plain runs (§8). The GPU Datalog
-   admission already does this (`experiments/gpu/datalog-runtime/src/runs.rs:163-233`);
-   CQ queries (hash `Dedup` set) and CPU Datalog (DL-InsertNew hash `seen`,
-   `features/datalog/print/src/lib.rs:703`) do not. h01 SF1 t1: hash DISTINCT
+5. **Self-deduplication is sort-based, not a hash set.** Canonicalization is
+   a Structures/Sequence strategy, not a provider retype: `canon = sort;`
+   and `head = sort;` are the defaults, including computed heads.
+   On CPU, Sort collects the whole boundary stream, uses `sort_unstable_by` with
+   Rust `Ord` comparisons of the fields, then removes adjacent equal rows.
+   Tasks uses `par_sort_unstable_by`; its adjacent-unique pass is sequential.
+   Device Sort may record `sort using Type`, naming an explicit device
+   sort/unique implementation such as `WideCanon`. Catalog selection may
+   refine that implementation but cannot replace Ordered with Sort. This
+   does not restore the obsolete `retype(dedup => Type)` hash-set interface.
+   No Rust type spelling selects a comparison, codec, or uniqueness fact;
+   opaque authored types supply their ordering through Rust traits.
+   Membership indexes remain hash-based where consumers probe membership:
+   building such an index is not this self-dedup operation.
+   Dedup against full data remains a separate merge/search operation on
+   sorted plain runs (§8). GPU Datalog admission already uses that scheme
+   (`experiments/gpu/datalog-runtime/src/runs.rs`). CPU Datalog's
+   DL-InsertNew hash `seen` admission is explicitly outside this CQ strategy
+   cutover and remains unchanged. Historical h01 SF1 t1: hash DISTINCT
    2542 ms (95% of the query; 36% of cycles in rehash hashing) vs DuckDB 819 ms.
    M6b (`experiments/storage-bench/results/cpu-h01-decomposition-2026-10-29.md`,
    exact vs DuckDB, t1 / t24):
@@ -574,8 +587,17 @@ GPU reduction/dedup overhead and CPU h01's dominant cost must be profiled
    The load-time order check costs 21–23 ms once. Our general radix sort is
    far from bandwidth-bound (≈330 ms t1 for 94 MB of keys): an untuned
    implementation, not evidence against sort-based dedup. Sort width and
-   digit choice are open measurement work. Recorded order turns self-dedup
-   into a streaming pass.
+   digit choice are open measurement work; this migration uses comparison
+   sort, not a type-selected radix implementation.
+   `ordered` is an explicit alternative only for a direct host scan of an
+   immutable load-verified prefix-order carrier. The carrier retains the
+   exact checked prefix comparator with its rows, exposes no mutable row
+   access, and discards the witness when rows are recovered for mutation.
+   Full-row equality must imply equal prefixes. Ordered sorts and uniques
+   **within every equal-prefix run**; equal prefixes never imply unique rows.
+   The borrowed path collects references, not cloned owned rows. This is not
+   a promise of allocation-free streaming or unchecked order propagation:
+   projection, filtering, joins and computed heads do not inherit the witness.
 6. **Uniqueness is never assumed.** Only properties checked by construction
    (e.g. sortedness verified in one load pass, recorded with the data) may
    remove work.
@@ -624,8 +646,8 @@ SQL pair identity even when one pair has several qualifying comments;
 it does not assume an input key or add an intermediate CQ DISTINCT.
 Default keyed aggregate maps record
 `std::collections::HashMap<_, AccTuple, cq_storage::HashState>` in Structures,
-matching the engine hash state used by deduplication. Authored provider
-types retain their own hashers.
+matching the engine hash state used by membership indexes. Canonicalization
+does not use a hasher. Authored provider types retain their own hashers.
 
 Final string answers alone use `Dictionaries::publish`; intermediates,
 grouping, and joins remain coded. The explicit load-time predicate reads

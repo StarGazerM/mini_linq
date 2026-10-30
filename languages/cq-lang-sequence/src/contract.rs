@@ -268,18 +268,6 @@ fn analyze_in(
         prefix: &prefix,
         support: &context.support,
     };
-    for name in &program.sequence.optional_filters {
-        let definition = checker.physical(name)?;
-        if !matches!(definition.operator, Operator::Semi(..))
-            || ModeKind::from(&definition.mode) != ModeKind::Pipe
-        {
-            return fail(
-                name,
-                "PL-OptionalFilter",
-                "optional filter requires a positive pipelined semijoin",
-            );
-        }
-    }
     let mut publication_facts = BTreeMap::new();
     for definition in &program.sequence.definitions {
         let name = symbol_name(&definition.name);
@@ -1123,13 +1111,26 @@ impl Checked<'_> {
             Term::Canon(inner) => {
                 // Formal rule BE-Canon: Canonicalize innermost rows; providers remain trait obligations.
                 let mut fact = self.term(inner, owner)?;
-                let ty = match &fact.meaning {
+                let strategy = match &fact.meaning {
                     Meaning::Result(name) => self.analysis.structures.dedup.get(name).cloned(),
                     _ => None,
                 };
+                // Formal rule BE-CanonOrdered: the proof carrier belongs to this
+                // direct source, not to an arbitrary stream with the same schema.
+                if matches!(
+                    strategy,
+                    Some(cq_lang_structures::CanonStrategy::Ordered(_))
+                ) && !matches!(inner.as_ref(), Term::Rows(_))
+                {
+                    return fail(
+                        term,
+                        "BE-CanonOrdered",
+                        "ordered canon requires direct source rows",
+                    );
+                }
                 self.analysis.obligations.push(Obligation::Canon {
                     result: owner.into(),
-                    ty,
+                    strategy,
                 });
                 self.analysis.obligations.push(Obligation::Codec {
                     columns: self.heading(&fact.meaning),
@@ -1574,7 +1575,7 @@ mod tests {
             }
             structures {
                 r host scan = Reader [];
-                r canon = Canon;
+                r canon = sort;
                 grouped rows = Rows;
                 grouped group = ::std::collections::HashMap<_, (usize,)>;
             }
@@ -1604,7 +1605,7 @@ mod tests {
                 output = pipe canon project r keep {a};
                 return output as answer(a);
             }
-            structures { r host scan = Reader []; output canon = Canon; }
+            structures { r host scan = Reader []; output canon = sort; }
             sequence {
                 a_view = canon rows r;
                 before = rows r;

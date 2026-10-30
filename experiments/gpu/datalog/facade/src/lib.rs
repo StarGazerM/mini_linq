@@ -2,7 +2,7 @@
 //!
 //! Configure `storage_rewrites = [::cq_gpu_datalog::device_storage]`, then
 //! `cq = pipeline { structures = [::cq_gpu_datalog::bind_inputs,
-//! ::cq_gpu_sequence::bind_runs]; decompose = [::cq_gpu_sequence::plan];
+//! ::cq_gpu_sequence::bind_runs]; decompose = [::cq_gpu_sequence::decompose];
 //! stage = ::cq_gpu_sequence::stage;
 //! grade = ::cq_gpu_sequence::machine_grade;
 //! print = ::cq_gpu_sequence::translate_arena; };`, register

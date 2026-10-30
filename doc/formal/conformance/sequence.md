@@ -28,12 +28,10 @@ The relevant inventory entries are `doc/formal/rules.tsv:221-229,237-247,249-259
 | PL-Resident | `doc/formal/backend_ir.tex` (`PL-Resident`) | `passes/cq-sequence-plan/src/catalog.rs` (`provider_available`, `resident_host_reads_require_explicit_complete_catalog_facts`); `experiments/gpu/sequence/core/src/lib.rs` (`catalog`) | A pipe-host handle is read below host. | Requires an explicitly recorded Resident token, plus matching type, elements, read capabilities and read levels; only the native DeviceLayout GPU token declares residency. Positive native and negative ordinary-adapter/missing-capability/wrong-level/type/element tests exercise the boundary. | **exact**, structural | Residency is target-authored evidence, not Rust type-name inference |
 | PL-Cost | `doc/formal/backend_ir.tex:473-478` | `passes/cq-sequence-plan/src/cost.rs:166,800-829` | Admissible candidates preserving authored decisions; compare `(W,I,S,B,stores,dispatches)` using checked Group mode. | Group evaluation consumes constructor-preorder `Analysis.partial_groups`; layer facts supply geometry only. | **exact**, structural | Cost describes the checked candidate |
 | BE-KeyPartProvider | `doc/formal/backend_ir.tex` (`BE-KeyPartProvider`) | `languages/cq-lang-sequence/src/contract.rs`; `passes/cq-sequence-plan/src/key_partition.rs`; `passes/cq-sequence-plan/src/rewrites/key_partition.rs` | A key partition; lookup key determines routing key, with routing projection `h`; each part builds its provider. | Language checking accepts routing-key containment. The provider rewrite additionally requires the complete outer key in order. Selection and explicit rewriting exclude fused-arm providers whose real prefix-local constructor does not consume the rewritten Store. | **stronger** in the rewrite | Build and lookup use identical routing; a provider type cannot claim routing absent from its actual constructor |
-| EXT-SeqAdaptive | `doc/formal/backend_ir.tex:850-853` | `passes/cq-sequence-plan/src/rewrites/adaptive.rs:93-133` | Published filtered store; equal-support alternatives; threshold is advice. | Also requires a positive threshold, earlier publication and alternatives with different work. | **stronger** | Runtime selection cannot change support |
 | EXT-SeqChoose | `doc/formal/backend_ir.tex:763` | `passes/cq-sequence-plan/src/rewrites/mod.rs:234-275` | Equal-support alternatives; exhaustive guards. | Public advice parser only accepts a single `len x < k` or worker guard plus `else`, naming earlier definitions. General `Term::Choose` is broader. | **stronger** | Choice arms preserve support |
 | EXT-SeqOutput | `doc/formal/backend_ir.tex:797` | `passes/cq-sequence-plan/src/rewrites/mod.rs:281-294` | Protocol belongs to `{count,reserve,reserve_previous,bounded}`; bounded requires declared capacity. | Accepts the explicit protocol enum; arena obligations remain target-owned. | Original **weaker** finding was specification drift; rule corrected, runtime behavior unchanged | Output strategy is explicit |
 | BE-Code | `doc/formal/backend_ir.tex:120-122` | `languages/cq-lang-sequence/src/contract.rs:1253-1269` | Injective codec on equality keys; monotone encoding on ordered columns. | Records `Obligation::Codec`; explicitly does not prove these laws statically. Inventory marks this abstract. | **unimplemented** statically, intentionally delegated | Encoded operations preserve row semantics |
 | BE-Abort | `doc/formal/backend_ir.tex:310-311` | `languages/cq-lang-sequence/src/grading.rs:216-220,1015-1018` | Failure below host. | Records a failure-channel obligation. This layer does not establish once-set flag behavior or prohibit runtime truncated success. | **weaker** locally, intentionally delegated to translations/runtime | Failure never becomes truncated success |
-| PL-OptionalFilter | `doc/formal/backend_ir.tex:887-889` | `languages/cq-lang-sequence/src/lib.rs:83`; `passes/cq-sequence-plan/src/rewrites/adaptive_candidates.rs:84-122` | Checked positive pipelined semijoin provenance; preparation proves published provider and covering joins. | lookup_first records printable optional-filter identities; adaptive discovery reads them without generated-prefix or default-lowering equality gates. | **exact**, structural | Semantic eligibility does not depend on spelling |
 | No formal rule: placement candidate topology | —; governing prose at `doc/formal/backend_ir.tex:665-667` | `passes/cq-sequence-plan/src/placement.rs:181-204,345-360` | Prose promises deepest admissible placement. | Considers the first root child, its first child and host, rather than all admissible machine levels. | **no-rule** | Machine data determines legal placement alternatives |
 | BE-RustRepresentation | `doc/formal/backend_ir.tex` (`BE-RustRepresentation`) | `passes/cq-sequence-plan/src/placement.rs`; `languages/cq-lang-sequence/src/grading.rs` | Machine host_rust capability; recorded identity read columns and closed captures. | Representation facts replace type-spelling policy. | **unverified** | Target eligibility is not a Rust semantic classification. |
 
@@ -45,7 +43,9 @@ The relevant inventory entries are `doc/formal/rules.tsv:221-229,237-247,249-259
 | BE-Bind | `doc/formal/backend_ir.tex:106-107` | `passes/cq-sequence-lowering/src/lib.rs:47-70`; `languages/cq-lang-sequence/src/contract.rs:1170-1269` | No additional premise in the displayed probe equation. | Records Lookup plus expansion or membership Compact; derives provider capability obligations. | exact, structural | Probe expansion preserves join support |
 | BE-Partition | `doc/formal/backend_ir.tex:109-111` | `languages/cq-lang-sequence/src/contract.rs:804-820,1053-1071` | Disjoint, covering parts; commutative monoid. | Requires positive tile/items sizes; derives covering tile shape; uses the closed built-in monoid syntax. | exact, structural | Every input position belongs to one part |
 | BE-Offsets | `doc/formal/backend_ir.tex:113-114` | `languages/cq-lang-sequence/src/contract.rs:922-944` | Offsets equal the exclusive scan of inner lengths. | Requires nested positions and records symbolic scan length; actual scan realization is a translation obligation. | exact, structural | Flatten indexes the concatenated nested domain |
-| BE-Canon | `doc/formal/backend_ir.tex:116-118` | `languages/cq-lang-sequence/src/contract.rs:1073-1105` | `αt=B`. | Records canon/codec obligations and checked uniqueness at valid global/key-disjoint boundaries. | exact, structural | Canon produces support of complete valuations |
+| BE-Canon | `doc/formal/backend_ir.tex` (BE-Canon) | `languages/cq-lang-sequence/src/contract.rs` | `αt=B`; complete boundary or checked key-disjoint cover. | Carries the Structures strategy and codec obligations; a local canonicalizer alone does not establish cross-part uniqueness. | exact structurally; focused integration exercised | Canon produces support of complete valuations |
+| BE-CanonSort | `doc/formal/backend_ir.tex` (BE-CanonSort) | `runtime/cq-storage/src/dedup.rs` (`sort`, `par_sort`); `passes/cq-physical-realization/src/lib.rs` | Rust field order is total and consistent with complete-row identity. | Collects a whole boundary stream, comparison-sorts and removes adjacent equal complete rows; Tasks parallelizes sorting. | exact under order laws; focused runtime/Pull/Tasks coverage passed | Nonadjacent duplicates and duplicates crossing task boundaries are removed without Hash or Clone bounds |
+| BE-CanonOrdered; STR-Canon | `doc/formal/backend_ir.tex` (BE-CanonOrdered); `doc/formal/ir_structures.tex` (STR-Canon) | `languages/cq-lang-structures/src/lib.rs`; `runtime/cq-storage/src/dedup.rs` (`PrefixOrdered`, `ordered`, `ordered_ref`) | Direct host scan of immutable load-verified prefix carrier; full-row equality implies equal prefixes. | Checks direct source shape; the carrier retains checked rows and comparator; each equal-prefix run is sorted and uniqued. No downstream order propagation or uniqueness assumption. | exact under order laws; focused load/runtime/direct-source coverage passed | Prefix evidence justifies run boundaries, never duplicate suppression by itself |
 | BE-Choose | `doc/formal/backend_ir.tex:124-126` | `languages/cq-lang-sequence/src/contract.rs:1124-1165,1297-1331` | Equal support; exhaustive length/worker guards. | Checks meaning equivalence, guard availability/exhaustiveness and positive worker bounds; joins shape and size facts. | exact, structural | Every selected alternative has equal support |
 | BE-KeyPart | `doc/formal/backend_ir.tex:163-168` | `languages/cq-lang-sequence/src/contract.rs:774-802`; `languages/cq-lang-sequence/src/grading.rs:473-517` | Positive parts; routing columns available; strict ancestor store; count is one or pool width. | Checks all those structural premises, flat input, distinct routing columns and a suitable separated pool. | exact, structural | Key-disjoint parts cover every occurrence |
 | BE-KeyPartCanon | `doc/formal/backend_ir.tex:170-173` | `languages/cq-lang-sequence/src/contract.rs:1089-1105` | A key partition; complete valuation determines routing key. | Requires routing columns in the complete heading before certifying global uniqueness. | exact, structural | Equal valuations cannot survive in different parts |
@@ -65,7 +65,6 @@ The relevant inventory entries are `doc/formal/rules.tsv:221-229,237-247,249-259
 | EXT-SeqStore | `doc/formal/backend_ir.tex:759` | `passes/cq-sequence-plan/src/rewrites/mod.rs:93-117` | Selected definition is Flatten. | `store_level` checks selected flatten definitions and preserves support. General `store`/`publish` APIs extend beyond this displayed rule. | exact for `store_level` | Stored flatten preserves support and offsets |
 | EXT-SeqTile | `doc/formal/backend_ir.tex:761` | `passes/cq-sequence-plan/src/rewrites/mod.rs:187-220` | Positive tile; selected definition is not an unbounded unknown-length Store. | Rejects that Store shape, then uses structural checking to reject nonpositive geometry. | exact | Tiling preserves the covered domain |
 | EXT-SeqGrade | `doc/formal/backend_ir.tex:767` | `passes/cq-sequence-plan/src/rewrites/mod.rs:325-381` | Named machine and placement assignments. | Checks names/duplicates/machine consistency; changes grading only and defers machine validation. | exact | Placement advice does not change construction |
-| EXT-SeqLookup | `doc/formal/backend_ir.tex` (`EXT-SeqLookup`) | `passes/cq-sequence-plan/src/rewrites/lookup_first.rs`; `languages/cq-lang-sequence/src/lookup_semantics.rs` | Equal support, unchanged Rust payloads/bindings and recorded placement. | Support equivalence does not grant downstream planning authority. | **unverified** | Refinements preserve the recorded plan. |
 | PL-Evidence | `doc/formal/backend_ir.tex:855-858` | `passes/cq-sequence-plan/src/rewrites/evidence.rs:12-30`; `languages/cq-lang-sequence/src/contract.rs:1365-1380` | Well-formed evidence; asserted keys true; planner invocation. | Records evidence separately; rejects structural rewrites inventing new key premises. Key truth remains author responsibility. | exact, conditional on asserted keys | Estimates cannot become semantic proof premises |
 | BE-Group | `doc/formal/backend_ir.tex:1114-1118` | `languages/cq-lang-sequence/src/contract.rs:966-1049` | Complete distinct valuation store; each group enumerated exactly once. | Checks Physical Group provenance, uniqueness and valid flat/key-disjoint/partial shape. | exact, structural | Aggregates consume complete distinct valuations |
 | BE-GroupKey | `doc/formal/backend_ir.tex:1130-1132` | `languages/cq-lang-sequence/src/contract.rs:422-469` | Asserted unique physical keys; valuation determines atom keys. | Transfers keys through rename and existing Physical inherited-key analysis. | exact, conditional on asserted keys | Removing canon cannot introduce duplicate valuations |
@@ -238,3 +237,57 @@ left to integration.
 The dominant problem is not that Tile/Store interpretation is wholly absent: `Analysis.tilings`, publication kinds and dispatch producer levels already record much of it.
 The remaining leaks are duplicated semantic analyses, syntax/name-based eligibility, and target/topology policy embedded in shared planning.
 The highest-risk correction is to make allocation admissibility consume checked size facts; the largest maintainability gains come from consuming recorded Group modes and explicit capability/provenance data.
+
+## Canon strategy regression cases (focused coverage exercised)
+
+Integration reported passing focused Structures, Sequence, selection, planner,
+physical realization, Pull, storage and load suites. Pull translation passed
+17/17 after correcting a stale assertion. Feature suites passed: own-dialect
+239, rewrites 195, storage counters 137, Tasks 63 with one ignored, and
+cq-workloads build plus 49 tests. These are focused acceptance results,
+not final combined gates, SF1 execution, GPU acceptance, or benchmark evidence.
+This documentation worker did not rerun them.
+
+- `runtime/cq-storage/tests/dedup.rs`:
+  `whole_stream_sort_removes_nonadjacent_duplicates`,
+  `wide_rows_and_opaque_ord_fields_need_no_row_traits`,
+  `verified_prefix_runs_still_sort_and_remove_duplicates`, and
+  `run_boundaries_are_not_duplicate_identity` cover complete-stream and
+  complete-row identity, opaque field ordering, and repeated rows inside
+  equal-prefix runs.
+- `runtime/cq-load/tests/prefix_order.rs`:
+  `load_check_visits_each_adjacent_pair_once_without_reordering`,
+  `unsorted_prefixes_reject_at_the_first_descending_pair`,
+  `equal_prefixes_never_imply_unique_rows`, and
+  `recovering_rows_discards_the_order_witness` cover load verification and
+  witness lifetime. The `PrefixOrdered` compile-fail doctest in
+  `runtime/cq-storage/src/dedup.rs` prevents public-field witness forgery.
+- `runtime/cq-storage/tests/counters.rs`:
+  `sort_canonicalization_does_not_count_hashing_or_set_insertions` keeps
+  hash and set-insertion instrumentation specific to actual membership work.
+- `features/sequence-tasks/tests/conformance.rs`:
+  `canon_sorts_the_whole_stream_across_task_boundaries`;
+  `features/sequence-tasks/tests/grading.rs`:
+  `tasks_canon_shapes_use_parallel_sort_and_remove_cross_part_duplicates`,
+  `tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds`, and
+  `tasks_wide_valuation_canon_compares_every_field` cover parallel sorting,
+  global versus per-part boundaries, computed heads, and wide valuations.
+- `features/own-dialect/tests/queries.rs`:
+  `consumer_observes_recorded_whole_stream_canon_barriers` checks that push
+  callbacks observe the recorded whole-stream Sort barrier, rather than a
+  printer-local per-element hash exception.
+
+Hash membership indexes still serve probes. CPU Datalog's DL-InsertNew
+hash-seen admission and its consumer-canonical context are unchanged;
+these cases do not claim an engine-wide Datalog admission migration.
+
+Parent-owned integration cases:
+`languages/cq-lang-structures/tests/structures_language.rs` names
+`canon_strategy_rejects_legacy_provider_syntax` and
+`ordered_canon_requires_complete_direct_source`;
+`passes/cq-sequence-pull/tests/translation.rs` names
+`ordered_canon_consumes_verified_source_without_hashing`.
+These parser/direct-source regressions are included in the reported focused
+coverage. Sort's optional `using Type` is a recorded target
+sort/unique implementation; catalog refinement preserves the strategy and
+cannot turn Ordered into Sort.

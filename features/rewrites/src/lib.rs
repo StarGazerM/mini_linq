@@ -56,7 +56,6 @@
 //! let answer: Vec<_> = mini_linq::compile! {
 //!     pipeline {
 //!         physical = [cq_rewrites::canon_prefixes];
-//!         structures = [cq_rewrites::retype(dedup => ::std::collections::BTreeSet<_>)];
 //!     }
 //!     struct Project;
 //!     relation R(x: i32, y: i32) = (rows);
@@ -153,12 +152,13 @@
 //! | `membership` | Built and host entries answering a semijoin, plus supplemental membership fallbacks |
 //! | `ordered` | Built and host entries answering a merge |
 //! | `trie` | Built entries with multiple written key levels |
-//! | `dedup` | Canonical-boundary and computed-head dedup state |
 //! | `rows` | Recorded retained row collections |
 //! | `group` | Keyed Group accumulator tables; providers implement empty `Default`, `entry/or_insert_with`, and owned `IntoIterator` finite-map operations |
 //! | `selection` | Immutable positional selections, preserving base, lineage and summary policy |
 //! | `keyset` | Exact key-only builds, also matched by `membership` |
 //! | `join_filter` | Conservative filters with a mandatory covering exact probe |
+//!
+//! Canonical boundaries use explicit `sort` strategies, not retypable set providers.
 //!
 //! `retype(rN join_filter => T)` selects only that scan's join-filter entry.
 //! The type must implement `Build` and `ConservativeMembership`; the printer

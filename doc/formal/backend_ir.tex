@@ -128,6 +128,21 @@ one part; a separated store publishes the concatenation of its outer parts.
  {\alpha(\mathsf{canon}\,t)=\iota(\mathrm{supp}\,B)\quad
   \mathsf{canon}(\textstyle\biguplus_kB_k)=\mathsf{canon}(\textstyle\biguplus_k\mathsf{canon}\,B_k)}
 
+\Rule{BE-CanonSort}{\alpha t=B\quad
+ \preceq\text{ is Rust Ord on the complete valuation, consistent with identity}}
+ {\alpha(\mathsf{unique}_{=}
+   (\mathsf{sortUnstable}_{\preceq}(\mathsf{collect}(t))))
+   =\iota(\mathrm{supp}\,B)}
+
+\Rule{BE-CanonOrdered}{t=\mathsf{directHostScan}(W)\quad
+ W\text{ is immutable and load-verified nondecreasing under prefix }p\\
+ x=y\Longrightarrow p(x)=p(y)\quad
+ \preceq\text{ is a total complete-row order consistent with identity}\\
+ [R_i]_i\text{ are the maximal equal-prefix runs of }W}
+ {\alpha\big(\textstyle\mathsf{concat}_i
+   \mathsf{unique}_{=}(\mathsf{sortUnstable}_{\preceq}(R_i))\big)
+   =\iota(\mathrm{supp}\,\alpha t)}
+
 \Rule{BE-Code}{\mathsf{dec}\text{ injective on }K\text{ (both sides)}\quad
  \mathsf{enc}\text{ monotone on }c}
  {\text{equality, hashing and canon on }K\text{, and order reads on }c\text{, act on codes}}
@@ -163,6 +178,25 @@ collective participation, supplies no size evidence, and does not change
 support; a final \code{else} covers the remaining worker counts. Pull supplies
 one worker; target-hook translations receive an explicit worker expression,
 with Tasks supplying \code{rayon::current\_num\_threads()}.
+
+Canonicalization strategy belongs to Structures/Sequence, not to a provider
+name or a per-element hash-insert law. Sort is the default, including
+computed heads; it collects the whole stream at that boundary before
+sorting and adjacent unique. Tasks realizes the sort with parallel comparison
+sorting and then an in-place adjacent-unique pass. Comparisons use Rust
+\code{Ord} on borrowed fields, including opaque user types and wide rows.
+Ordered consumes only a direct proof-carrying host scan: the load check
+retains the exact prefix comparison with immutable rows. No downstream
+projection, predicate, join or computed head propagates that witness.
+It proves order, never uniqueness; every equal-prefix run still requires
+complete-row sort and unique. A borrowed realization may collect row
+references without copying owned rows. Consumer membership indexes remain
+separate, and CPU Datalog's \textsc{DL-InsertNew} hash-seen admission is
+outside this cutover.
+Push consumers obey the same recorded whole-stream Sort barrier: publication
+callbacks begin only after its input is collected and canonicalized. A push
+printer may not substitute per-element hash insertion to preserve earlier
+callback timing; that would ignore the recorded execution strategy.
 
 \paragraph{Key-disjoint partitions.}
 Let $B=\alpha t$ be a bag of complete valuations $V$, $K$ a tuple of
@@ -271,7 +305,8 @@ through \code{lookup} and the term records only what the read requires:
 exact bucket, contiguous range (rangeCursor), membership, order. Its type
 is an opaque token discharged by runtime traits, as Structures does today
 (STR-Key, STR-SortedRun); the same holds for codecs (BE-Code's premises
-are trait obligations, like Leibniz admissibility) and for \code{canon}.
+are trait obligations, like Leibniz admissibility). Canonicalization instead
+records the checked Sort or Ordered strategy; runtime order laws remain premises.
 
 \subsection{Placement: a grading over a machine parameter}
 \begin{definition}[Machine model]
@@ -484,7 +519,7 @@ publication record, and the interpreter may not infer a new scheduling guard.
 \subsection{Decomposition}
 A planner is an advice generator, not another interpretation of Sequence.
 Its inputs are a Sequence program $t$, a machine $M$, and an ordered catalog
-$K$ of target-supplied provider, codec and canon tokens with capabilities
+$K$ of target-supplied providers, codecs and canon-strategy support with capabilities
 and admissible levels. The catalog is data: shared planning and checking
 do not depend on a target implementation. A successful result is a graded
 program together with a replayable trace of the existing Sequence rewrites.
@@ -545,8 +580,8 @@ resident tokens must also satisfy every type, element, read and level obligation
 
 PL-Closure inherits its value laws from BE-* and the Sequence extension
 rewrites; it adds no new equality of values. PL-Precedence preserves
-authored grades, tiles, stores, choices, output protocols and codec/canon
-tokens: planning fills missing decisions rather than optimizing them away.
+authored grades, tiles, stores, choices, output protocols, codecs and canon
+strategies: planning fills missing decisions rather than optimizing them away.
 PL-Det includes rejection when no catalog token satisfies a recorded
 obligation. PL-Cost uses the work and span of the preceding Cost paragraph,
 not a semantic preference. Here $\prec$ is provable strict lexicographic
@@ -669,13 +704,15 @@ remain the source of spans and opaque Rust equality; proof comparison does
 not require rendering those trees to token strings.
 
 PL-Select is an explicit Structures selection operation before decomposition,
-not an implicit override by PL-Precedence. It visits built indexes, sets,
-row buffers and canon providers in recorded entry order. Provider catalog
-order is explicitly stable-partitioned per entry: tokens matching its recorded
-representation precede all other tokens, retaining catalog order within both
-classes. The first eligible token wins. This preserves admitted native keyed
-ABIs instead of replacing them with generic row providers; canon tokens retain
-their original order. Host scan adapters are unchanged.
+not an implicit override by PL-Precedence. It visits built indexes, sets
+and row buffers in recorded entry order. Provider catalog order is explicitly
+stable-partitioned per entry: tokens matching its recorded representation
+precede all other tokens, retaining catalog order within both classes.
+The first eligible token wins. This preserves admitted native keyed ABIs
+instead of replacing them with generic row providers. Sort may record an
+explicit \code{using Type} device sort/unique implementation selected by the
+catalog; this refinement preserves Sort and never replaces Ordered with Sort.
+The old dedup-provider retype selector is removed. Host scan adapters are unchanged.
 Unsupported integral keyed host stream reads first use the checked Physical
 \code{build\_host\_reads} retention rewrite, then receive a built index
 checked by Structures. Obsolete keyed host fallback entries are removed;
@@ -699,9 +736,11 @@ their keyed fallbacks replaced by built indexes. The dedicated
 \code{check\_retention\_rewrite} checks both endpoints and the Physical
 rewrite contract, requiring identical non-mode Physical syntax and order,
 original host scans, existing key layouts and canonical boundaries.
-Provider, retained-row, membership-state and canon implementation types
-may change. Ordinary Structures rewrites still require exact Physical
-syntax; neither boundary permits replacing an opaque reader or predicate.
+Provider, retained-row and membership-state types may change, as may Sort's
+explicit \code{using} implementation. The canonicalization strategy itself
+is preserved, particularly Ordered's verified-carrier requirement.
+Ordinary Structures rewrites still require exact Physical syntax; neither
+boundary permits replacing an opaque reader or predicate.
 When catalog selection follows Sequence lowering, each newly retained
 rename also receives an explicit Sequence store, so its provider is built
 before lookup emission. Native provider preservation matches result and
@@ -752,8 +791,9 @@ protocols are filled: count when the final length depends only on input
 lengths, otherwise reserve; a bounded protocol requires an authored
 capacity. Reported provider, canon and codec obligations are validated
 against catalog capabilities at their levels. Structures already records
-provider and canon types; planning does not replace them or add selection
-syntax. Codec laws remain abstract runtime premises; planning validates
+provider types and canon strategies, including any explicit Sort implementation.
+Catalog support may refine that implementation without changing the strategy.
+Codec laws remain abstract runtime premises; planning validates
 catalog support, not those laws. Every proposed rewrite and the resulting
 grade are checked; no emitter decision is introduced.
 
@@ -785,7 +825,7 @@ grading, lengths and views.
   \mathsf{flatten}\mapsto\text{iterator concatenation},\
   \mathsf{tile}\mapsto\text{contiguous groups},\
   \mathsf{choose}\mapsto\text{else arm unless a worker guard requires first-match evaluation},\
-  \mathsf{fold}\mapsto\oplus,\ \mathsf{canon}\mapsto\text{the recorded provider},\
+  \mathsf{fold}\mapsto\oplus,\ \mathsf{canon}\mapsto\text{the recorded Sort/Ordered strategy},\
   \mathsf{store}\mapsto\text{intermediate }\code{Vec}\text{ or final count iterator}}
 \end{mathpar}
 BE-TaskProducer records stable producer identities; an active producer is
@@ -864,88 +904,14 @@ them. A stored filtered relation with an indexed provider carries the
 forward phase across a publication boundary. No additional Sequence
 constructor is introduced.
 
-The join graph is extracted from checked Physical dependencies, using
-shared attribute equivalence classes as edge weights. LargestRoot constructs
-a maximum-weight spanning tree, rooted at the largest relation according to
-available count evidence \cite[Section~3.1, Lemma~3.2]{paper-rpt}.
-Unknown sizes retain deterministic syntax order, not invented cardinalities.
-A projected index need not forbid its relation from becoming this root.
-When its unfrozen Physical producer is a rename or a selection (including
-point and range), and every consumer belongs to the replaced join region,
-the rewrite can recover that producer's full-row stream using its existing
-scan adapters. It removes the now-unread projected index and rebuilds any
-opposite-side provider through the same catalog selection. It does not scan
-or reinterpret the projected payload. Independently consumed, frozen and
-union index producers retain their representation and remain ineligible for
-this recovery. Structures liveness and the full support certificate are
-checked again after the orientation change.
-Among equally weighted parents the deepest parent wins, the chaining
-forward-tree tie-break of ATP \cite[Section~3]{paper-rpt-plus}.
-The forward phase retains predicate-bearing relations and bridge relations,
-filtering before building the next provider. This restricted transfer
-heuristic does not claim full semijoin reduction without its premises.
-The scan root retains its authored streaming mode unless a keyed consumer
-or displaced native keyed adapter requires retention. Replacing a merge
-under the same consumer name records a retained-row transition before
-removing that root's ordered host reader; it cannot silently discard an
-authored adapter while leaving the root a pipe. Root forward filters also stream: each has exactly
-one consumer and never supplies a keyed child provider. Nonroot forward
-filters remain retained for those provider builds. Resource decomposition
-may subsequently introduce checked publications. Along a positive left spine, an existing
-join or semijoin against the same named provider on all requested keys already
-witnesses membership. The scheduler omits a repeated forward or Lookup filter
-there, without dropping the later Expand. This local optimization stops at
-opaque operators and never uses estimated keys, counts or selectivities as
-proof. The complete rewritten construction still satisfies
-\textsc{EXT-SeqLookup}.
-If eliminating witnessed Lookups leaves the complete Physical program
-unchanged, this ordering pass returns the original checked Sequence and
-Structures verbatim. It does not use a no-op ordering decision to prune or
-replace authored provider entries: representation-only rewrites remain
-outside the join-reexpression certificate.
-Provider reconstruction preserves \textsc{STR-Range}: only stream-key demands
-justify a built keyed structure. Constant point and range demands keep their
-direct or retained-row scan/filter path, including shared prefixes of union
-arms; retaining a result does not turn those demands into stream probes.
-
-Expands are placed at the first consumer requiring the payload.
-Cycle-closing lookups wait for the Expands that supply their keys
-\cite[Section~4.2]{paper-diamond}; a spanning tree of a cyclic graph is
-not asserted to be a join tree. In the acyclic case, tree-connected
-subjoins satisfy the SafeSubjoin criterion
-\cite[Section~3.2]{paper-rpt}. Evidence may prefer early Expand or a
-different Lookup order but is never used to delete a required join.
-Rust nodes retain their recorded placement, payloads and free-variable bindings.
-A provider requiring another key layout may name a fresh retained identity
-projection after that recorded prefix. Keeping the complete checked input
-heading preserves support and positions; the support certificate treats only
-such full-heading projections as transparent aliases. Other projections
-remain opaque certificate nodes. Each provider name then has one recorded
-layout, without requiring an interpreter to choose among layouts.
-In particular, a predicate-bearing leaf is authored by putting its
-predicate after that atom, not by a planner asserting the predicate total.
-
-Optional filtering lookups carry printable \code{optional\_filter} provenance
-in Sequence. Discovery consumes that identity regardless of generated spelling
-or unrelated scheduling advice; replay separately checks covering joins and
-equal-support alternatives. Applying the decision consumes its provenance.
+Join order, Lookup/Expand order and relational filtering are recorded by
+upstream planning, not rediscovered from Physical dependencies by Sequence.
+Decomposition preserves that construction and chooses checked execution shape.
+Author-supplied \code{choose} advice and key-partition alternatives remain
+governed by \textsc{BE-Choose}; they do not authorize automatic relational
+replanning or optional-filter discovery.
 
 \begin{mathpar}
-\Rule{EXT-SeqLookup}{t,t'\text{ checked}\quad
- \text{join/semijoin constructions have equal support}\quad
- \text{recorded Rust placement and free-variable bindings preserved}}
- {t\rightsquigarrow_{\mathsf{lookup\_first}}t'
-  \quad\text{(Motion, BE-Offsets, BE-Scope)}}
-
-\Rule{PL-OptionalFilter}{f\text{ is a checked positive pipelined semijoin introduced by lookup planning}}
- {f\in t.\mathsf{optionalFilters}\quad
- \mathsf{adaptiveEligible}(f)\Rightarrow\text{checked published provider and covering joins}}
-
-\Rule{EXT-SeqAdaptive}{s\text{ is a published filtered store}\quad
- \mathrm{supp}(\alpha(a))=\mathrm{supp}(\alpha(b))\quad k\text{ is advice}}
- {d:=\mathsf{choose}[
-   \mathsf{len}(s)<k\Rightarrow a,\ \mathsf{else}\Rightarrow b]}
-
 \Rule{PL-Evidence}{E\text{ is syntactically well-formed advice}\quad
  E_{\rm key}\text{ holds}\quad (t',\rho)=\mathsf{plan}(t,M,K,E)}
  {\mathrm{supp}(\alpha(t'))=\mathrm{supp}(\alpha(t))\quad
@@ -955,20 +921,14 @@ equal-support alternatives. Applying the decision consumes its provenance.
 Evidence records row counts, keys, foreign keys, selectivities, bounds and
 sortedness beside analysis obligations. Keys are explicit author assertions
 of physical uniqueness, not estimates; a false key can change grouped answers.
-All other facts remain nonsemantic estimates. Their consumers select the root,
-Lookup order, early Expand, and whether a
-transfer filter is worth its cost. The RPT+ selective-filter heuristic
-\cite[Sections~3.6 and~5]{paper-rpt-plus} uses static selectivity evidence
-when present; otherwise a \code{choose} reads an already-published count.
-The alternatives retain the exact joins, so false estimates change execution
-time only. This is a boundary-count adaptation, not a claim to implement
-RPT+'s in-flight sampling or cancellation.
+All other facts remain nonsemantic estimates used by checked execution-shape
+selection. They do not authorize changing the recorded relational plan.
 
 The \code{Planner} interface accepts $(t,M,K,E)$ and returns a program and
 replayable advice trace. Serialized author advice and generated advice use
 the same checked operations. The facade's Sequence-input \code{plan = path}
-phase may replace the rule-based implementation with an ordinary custom
-pass; PL-Closure and the conformance harness remain unchanged.
+phase may select an ordinary custom pass; the default is order-preserving
+decomposition. PL-Closure and the conformance harness remain unchanged.
 
 \subsection{The three machines as interpretations}
 \begin{center}
@@ -1119,11 +1079,14 @@ little-endian lanes, where $b$ is computed from its checked setup bounds.
 \end{mathpar}
 This is an instance of BE-Canon: successive stable least-significant-lane
 passes establish a total complete-key order, and adjacent equality compares
-every lane. The catalog tries \code{PackedCanon} (at most 128 bits) before
-\code{WideCanon} (no fixed width limit), using the complete declared scalar
-domains, never statistical evidence, as conservative obligations. Actual lane
-counts use recorded codec bounds at setup. Both providers publish the same
-device-resident count, failure ancestors, and decoded column protocol.
+every lane. The target's \code{PackedCanon} (at most 128 bits) and
+\code{WideCanon} (no fixed width limit) are device implementations of
+sort/unique, recorded as \code{sort using Type}, not interchangeable hash-set
+canonicalizers.
+Complete declared domains, never statistical evidence, supply conservative
+width obligations; actual lane counts use codec bounds at setup. Both
+implementations publish the same device-resident count, failure ancestors,
+and decoded column protocol.
 
 The CUDA machine bounds block shared storage by 101,376 bytes. Its single
 layout implementation starts with 48 bytes, records each materialized lookup's
@@ -1325,7 +1288,7 @@ may read resident columns directly and evaluate only the group arguments;
 it does not decide whether a key premise holds.
 
 \paragraph{GPU machine instance of BE-Group.}
-The recorded canonical provider publishes the distinct complete valuations
+The target canonicalization implementation publishes the distinct complete valuations
 before the grouped boundary. Stable radix ordering of their key codes gives
 a permutation $\pi$; adjacent unequal keys mark owner offsets. Thus each
 half-open segment of $\pi$ enumerates exactly $D_k$, and the same BE-Group

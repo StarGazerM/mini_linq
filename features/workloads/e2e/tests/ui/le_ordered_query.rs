@@ -15,7 +15,7 @@ macro_rules! d85_unordered_merge {
                 pipeline {
                     plan = cq_planners::order(le);
                     physical = [cq_rewrites::canon_prefixes, cq_rewrites::lazy_semijoins, cq_rewrites::merge_joins];
-                    structures = [cq_workload_passes::ordered_dedup, $($runs,)* cq_workload_passes::sorted_payload];
+                    structures = [$($runs,)* cq_workload_passes::sorted_payload];
                 }
                 pub struct RetailD85Program;
                 relation RetailD85WebSales(c0: i32, c1: i32, c2: i32, c3: i32);

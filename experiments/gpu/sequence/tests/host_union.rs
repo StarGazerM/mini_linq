@@ -17,7 +17,7 @@ fn host_union_concatenates_published_dispatches_before_optional_canon() {
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
                 s host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
-                answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 answer rows = ::cq_gpu_runtime::DeviceColumns<'static,(u32,)>;
             }
             sequence {

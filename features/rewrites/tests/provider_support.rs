@@ -279,7 +279,7 @@ fn unit_key_support_preserves_cartesian_occurrences() {
             s share = lookup r [] first s force p;
             s repr = tuples witness { r [] at s as _ };
             p stage = batch 2 expand;
-            out canon = ::std::collections::HashSet<_>;
+            out canon = sort;
         }
     }
     .map(|(x, y)| (*x, *y))

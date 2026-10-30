@@ -9,8 +9,8 @@
 compile_error!("select at most one advice experiment, using the factored SRD query");
 
 // Baseline and individually authored P3.2 experiments share the same pipeline.
-macro_rules! engine_planned {
-    ($planner:path; $($advice:tt)*) => {
+macro_rules! engine {
+    ($($advice:tt)*) => {
 srd_doop_shared::srd_doop_engine!(run, incremental(driver(delta_first); $($advice)*), pipeline {
     storage_rewrites = [::cq_gpu_datalog::device_storage];
     cq = pipeline {
@@ -20,7 +20,7 @@ srd_doop_shared::srd_doop_engine!(run, incremental(driver(delta_first); $($advic
         sequence = ::mini_linq::passes::sequence;
         // Reuse only each arena hole's last validated count as a capacity hint.
         decompose = [
-            $planner,
+            ::cq_gpu_sequence::decompose,
             ::cq_sequence_rewrites::output(reserve_previous),
         ];
         grade = ::cq_gpu_sequence::machine_grade;
@@ -30,15 +30,6 @@ srd_doop_shared::srd_doop_engine!(run, incremental(driver(delta_first); $($advic
     round = [::cq_gpu_datalog::bind_round(binding = 5)];
     print = ::cq_gpu_datalog::print_rounds;
 });
-    };
-}
-
-macro_rules! engine {
-    ($($advice:tt)*) => {
-        #[cfg(not(feature = "decompose-only"))]
-        engine_planned!(::cq_gpu_sequence::plan; $($advice)*);
-        #[cfg(feature = "decompose-only")]
-        engine_planned!(::cq_gpu_sequence::decompose; $($advice)*);
     };
 }
 

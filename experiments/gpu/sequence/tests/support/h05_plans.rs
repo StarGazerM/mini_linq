@@ -52,7 +52,7 @@ pub fn b() -> Program {
             supplier host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
             r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
             r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-            answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             customer rows = ::cq_gpu_sequence_runtime::RangeProvider;
             orders = ::cq_gpu_sequence_runtime::RangeProvider [customer];
             lineitem = ::cq_gpu_sequence_runtime::RangeProvider [order];

@@ -20,7 +20,7 @@ fn computed_head_images_are_sets_after_projection() {
         answer((*x + *y) % 2) :- R(x, y);
     }
     .collect();
-    assert_eq!(collapsed, [(1,), (0,)]);
+    assert_eq!(collapsed, [(0,), (1,)]);
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn literal_and_arithmetic_keys_use_owned_host_fallbacks() {
     .collect();
     assert_eq!(computed, [(1, 10), (2, 20)].into());
 
-    #[derive(PartialEq, Eq, Hash)]
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
     struct Payload(i32);
     let Words = [(2, Payload(10))];
     let borrowed: Vec<_> = ::mini_linq::mini_linq! {
@@ -334,5 +334,4 @@ macro_rules! wide_distinct_regressions {
         }
     };
 }
-wide_distinct_regressions!(wide_hash, core_pass_fixtures::identity_structures);
-wide_distinct_regressions!(wide_ordered, core_pass_fixtures::ordered_dedup);
+wide_distinct_regressions!(wide_sort, core_pass_fixtures::identity_structures);

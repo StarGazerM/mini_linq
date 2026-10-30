@@ -16,18 +16,18 @@ inventory::collect!(Entry);
 macro_rules! pipeline_configuration {
     ($case:ident, $name:ident; planner: [le_runs]; merge: $merge:tt;
      canon: $canon:tt; intersection: $intersection:tt;
-     host: $host:tt $view:ident $advice:tt; dedup: $dedup:tt;
+     host: $host:tt $view:ident $advice:tt;
      payload: [$($payload:tt)*]; membership: $membership:tt; $(print_input: $print_input:ident;)? printer: $printer:path;) => {
         pipeline_configuration! { $case, $name; planner: [le]; merge: $merge;
             canon: $canon; intersection: $intersection; host: $host $view $advice;
-            dedup: $dedup; payload: [cq_rewrites::sorted_runs, $($payload)*];
+            payload: [cq_rewrites::sorted_runs, $($payload)*];
             membership: $membership; $(print_input: $print_input;)? printer: $printer;
         }
     };
     ($case:ident, $name:ident; planner: [$($plan:tt)*]; merge: [$($merge:tt)*];
      canon: [$($canon:tt)*]; intersection: [$($intersection:tt)*];
      host: [$load:ident] $view:ident [$($advice:ident)?];
-     dedup: [$($dedup:tt)*]; payload: [$($payload:tt)*];
+     payload: [$($payload:tt)*];
      membership: [$($membership:tt)*]; $(print_input: $print_input:ident;)? printer: $printer:path;) => {
         inventory::submit! {
             crate::conformance::Entry {
@@ -37,7 +37,7 @@ macro_rules! pipeline_configuration {
                     $case, [$($advice)?], $load, {
                         plan = cq_planners::order($($plan)*);
                         physical = [$($canon)* $($intersection)* $($membership)* $($merge)*];
-                        structures = [$($dedup)* $($payload)*];
+                        structures = [$($payload)*];
                     }
                 },
             }

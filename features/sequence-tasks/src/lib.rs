@@ -3,7 +3,9 @@
 //! Generated expressions require `rayon`, `cq-storage` and this crate (its
 //! [`combine`] runtime) in the consumer. The
 //! caller supplies facts checked against [`machine`]; translation never repeats
-//! analysis. Host and task-local constructors reuse the sequential interpreter.
+//! analysis. Host and task-local constructors reuse the sequential interpreter,
+//! with whole-stream and answer-head canonicalization explicitly targeting
+//! parallel sort and adjacent unique.
 //! Shared indexed dispatch keeps Rayon plumbing out of generated pipelines.
 //! Pool chunks publish owned buffers in order; task panics propagate to the join.
 //! Key-disjoint partitions support local canon and keyed folds; global monoids
@@ -380,7 +382,7 @@ pub fn select_providers(
 // DO NOT recover ownership from generated tokens, replan joins, or insert unrecorded stores/choices.
 /// Translate checked partitions into joined, owned output.
 // Formal rule T-Tasks: shared indexed task dispatch publishes ordered task-local
-// buffers before monoidal reductions and local then global canonicalization.
+// buffers before monoidal reductions and whole-stream sort canonicalization.
 pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
     translate_with(program, analysis, Config::default())
 }
@@ -447,6 +449,7 @@ fn translate_mode(
         program,
         analysis,
         syn::parse_quote!(__cq_task_workers),
+        cq_sequence_pull::CanonTarget::Parallel,
         |term: &Term,
          emitter: &mut cq_sequence_pull::Emitter<'_>,
          child: Option<&cq_sequence_pull::Value>,

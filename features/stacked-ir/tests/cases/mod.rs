@@ -216,7 +216,7 @@ mod merged {
         S: &'a BTreeMap<(Value,), Vec<(Value,)>>,
     ) -> std::collections::BTreeSet<(&'a Value, &'a Value)> {
         ::core::iter::Iterator::collect(
-            compile_case! { pipeline { physical = [::stacked_ir_test_passes::merged]; structures = [::stacked_ir_test_passes::ordered_dedup]; }
+            compile_case! { pipeline { physical = [::stacked_ir_test_passes::merged]; }
                 struct Chain;
                 relation L(a: Value);
                 relation R(a: Value, b: Value);

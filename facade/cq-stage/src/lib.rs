@@ -40,8 +40,8 @@
 //!   result = ::cq_storage::HashIndex<'_, _, _> [key];
 //!   host_result host result(reader) = ::cq_storage::dispatch::KeySet<_> [key];
 //!   host_result host scan = ::core::iter::Map<_, _> [];
-//!   result canon = ::std::collections::HashSet<_>;
-//!   returned head = ::std::collections::HashSet<_>;
+//!   result canon = sort;
+//!   returned head = sort;
 //!   retained rows = ::std::vec::Vec<_>;
 //! }
 //! ```

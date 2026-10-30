@@ -15,8 +15,6 @@
 //! | `grade` | `machine, d at host.device, ...` | Add/update placements; preserve other grades on the same machine. |
 //! | `evidence` | `evidence { ... }` | Record estimates and author-asserted key premises. False keys can change grouped answers. |
 //! | `group_without_canon` | group definition | Remove valuation canon only with checked positional uniqueness. |
-//! | `lookup_first` | `using Provider, order [...], transfer [...], early [...]` | Checked LargestRoot/ATP Lookup-before-Expand family; every decision is replayable. |
-//! | `adaptive` | selected filter plus published-count decision | Choose checked optional-filter and exact-join alternatives from the same family. |
 //!
 //! Every pass checks the source, target and construction-based support equality.
 //! Grading records advice only: it neither resolves the machine nor certifies
@@ -27,14 +25,6 @@
 //! It requires an arena terminal: the arena/hole's last validated count seeds
 //! initial capacity (zero on first invocation), not an output bound. Full counter
 //! and BE-Abort checks and overflow replay must succeed before publication.
-//!
-//! Lookup-first preserves live smallest-intersection candidate and membership
-//! adapters, removing them only when their intersection is reexpressed. Movable
-//! full-row providers with distinct key layouts use separate identity-projection
-//! stores over shared retained rows, following Structures' full-key-before-prefix
-//! selection rule. Rust prefixes, candidate-pair identities and authored projected
-//! union representations remain pinned. Translators consume these recorded
-//! decisions; they do not choose an index layout or a new join order.
 //!
 //! The macro protocol is `arguments { advice }; pipeline { next, ... };` followed
 //! by a complete Sequence program. Core dependencies are public packaged APIs;
@@ -57,7 +47,7 @@ macro_rules! sequence_rewrite {
             "        r = pipe canon rename R@0 {a -> a};\n",
             "        return r as answer(a);\n",
             "    }\n",
-            "    structures { r host scan = Reader []; r canon = Canon; }\n",
+            "    structures { r host scan = Reader []; r canon = sort; }\n",
             "    sequence { a = rows r; b = flatten tile 8 a; d = store a; }\n",
             "}\n",
             "```"
@@ -84,5 +74,3 @@ sequence_rewrite!(output, bounded);
 sequence_rewrite!(grade, custom, missing at host);
 sequence_rewrite!(evidence, evidence { count missing = 1; });
 sequence_rewrite!(group_without_canon, missing);
-sequence_rewrite!(lookup_first, missing);
-sequence_rewrite!(adaptive, missing);

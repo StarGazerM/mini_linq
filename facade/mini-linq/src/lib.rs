@@ -32,8 +32,8 @@
 //! `mini_linq::passes::plan_sequential`). Earlier advice retains precedence;
 //! the target-owned macro supplies its exported machine and catalog.
 //! With a complete Sequence program as input, `compile!` starts at Sequence
-//! planning instead: `plan = ::mini_linq::passes::plan` uses the robust
-//! Lookup/Expand default, while `plan = ::other::custom_plan` selects an ordinary
+//! decomposition instead: `plan = ::mini_linq::passes::plan` preserves its
+//! relational order, while `plan = ::other::custom_plan` selects an ordinary
 //! checked Sequence pass implementing `cq_sequence_plan::Planner`. That pass
 //! supplies its machine/catalog and returns a program with a replayable advice
 //! trace; evidence is planning advice, never a semantic premise. `decompose`
@@ -42,12 +42,12 @@
 //! With CQ input, `plan` retains its CQ-to-RA ordering/reduction meaning;
 //! `plan(order(R, S), no_reduce)` selects an explicit checked relation order.
 //! `plan(target::plan)` remains available in either Sequence planning position.
-//! Automatic is the robust default (no CE); performance plans are authored
-//! through the advisory. Explicit ordering, selection, Physical/Structures,
-//! realization and staging advice retain order. `plan(preserve_order)` or
-//! `plan_sequential(preserve_order)` explicitly requests that policy.
-//! Target adapters use `cq_sequence_plan::decompose` to preserve order and
-//! `cq_sequence_plan::plan` for the robust two-phase Lookup/Expand rule.
+//! Sequence planning preserves authored relational order; performance plans
+//! are authored through checked advice. Explicit ordering, selection,
+//! Physical/Structures, realization and staging decisions remain recorded.
+//! Target adapters use `cq_sequence_plan::decompose` to preserve authored order.
+//! `plan(preserve_order)` and `plan_sequential(preserve_order)` retain the explicit
+//! authored policy; it is also the default.
 //! A Structures printer declares `print_input = structures` to replace the
 //! default Sequence target; its path or alias does not select a language.
 //! ```

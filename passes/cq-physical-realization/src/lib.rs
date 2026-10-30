@@ -122,6 +122,7 @@ pub fn sources_with<'a>(
         consumer: None,
         input: None,
         partitioned: false,
+        canon_target: CanonTarget::Sequential,
     };
     printer.certify_host_sets(module);
     let definitions = &module.physical.program.definitions;
@@ -161,6 +162,14 @@ pub fn sources_with<'a>(
     Ok(printer.context)
 }
 
+/// Execution target for the recorded canonicalization strategy.
+/// Tasks supplies Parallel explicitly; row types never choose a strategy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CanonTarget {
+    Sequential,
+    Parallel,
+}
+
 /// Single-operator adapters shared with the Sequence translation.
 ///
 /// The caller supplies checked layouts and operand representations; this API
@@ -178,6 +187,7 @@ impl<'a> RowEmitter<'a> {
                 active_prefixes: BTreeMap::new(),
                 input: None,
                 partitioned: false,
+                canon_target: CanonTarget::Sequential,
             },
         }
     }
@@ -188,6 +198,14 @@ impl<'a> RowEmitter<'a> {
 
     pub fn context_mut(&mut self) -> &mut Context<'a> {
         &mut self.printer.context
+    }
+
+    pub fn canon_target(&self) -> CanonTarget {
+        self.printer.canon_target
+    }
+
+    pub fn set_canon_target(&mut self, target: CanonTarget) {
+        self.printer.canon_target = target;
     }
 
     /// Emit exactly one operator, reading caller-supplied operand streams.
@@ -330,33 +348,84 @@ impl<'a> RowEmitter<'a> {
         self.printer.head(name, head, rows)
     }
 
-    /// Canonicalize flat rows with the recorded set provider. Wide equality keys
-    /// are grouped without changing the iterator's row layout.
-    pub fn canon(ty: &syn::Type, rows: TokenStream, width: usize) -> TokenStream {
-        // Std implements tuple Eq/Hash/Ord only through arity twelve. Clone
-        // grouped fields because the set retains keys after each row is yielded.
-        let key = if width <= 12 {
-            quote!(__cq_row)
-        } else {
-            let fields = (0..width)
-                .map(|field| {
-                    let field = index(field);
-                    quote!(::core::clone::Clone::clone(&__cq_row.#field))
-                })
-                .collect::<Vec<_>>();
-            let nested = cq_print::group(&fields);
-            quote!(&#nested)
+    /// Compare complete logical rows, grouping wide tuples without copying.
+    /// Rust resolves Ord at the generated call site; column types stay opaque.
+    pub fn canon_comparator(width: usize) -> TokenStream {
+        let key = |name: TokenStream| {
+            if width <= 12 {
+                name
+            } else {
+                let fields = (0..width)
+                    .map(|field| {
+                        let field = index(field);
+                        quote!(&#name.#field)
+                    })
+                    .collect::<Vec<_>>();
+                let nested = cq_print::group(&fields);
+                quote!(&#nested)
+            }
         };
-        let constructor = cq_print::canonical_set(ty);
-        quote! {{
-            #[allow(unused_imports)]
-            use ::cq_storage::HashSetConstructor as _;
-            let mut __cq_seen = #constructor;
-            ::core::iter::Iterator::filter(#rows, move |__cq_row| {
-                ::cq_storage::require::leibniz(#key);
-                __cq_seen.insert(::core::clone::Clone::clone(#key))
-            })
-        }}
+        let left = key(quote!(__cq_left));
+        let right = key(quote!(__cq_right));
+        quote!(|__cq_left, __cq_right| {
+            ::cq_storage::require::leibniz(#left);
+            ::core::cmp::Ord::cmp(#left, #right)
+        })
+    }
+
+    /// Lower a recorded strategy for the explicitly selected execution target.
+    pub fn canon_with_target(
+        target: CanonTarget,
+        strategy: &structures::CanonStrategy,
+        rows: TokenStream,
+        width: usize,
+    ) -> TokenStream {
+        match strategy {
+            structures::CanonStrategy::Sort(_) => match target {
+                CanonTarget::Sequential => Self::canon(strategy, rows, width),
+                CanonTarget::Parallel => {
+                    let compare = Self::canon_comparator(width);
+                    if let Some(provider) = strategy.provider() {
+                        quote!(<#provider>::par_sort(#rows, #compare))
+                    } else {
+                        quote!(::cq_storage::dedup::par_sort(#rows, #compare))
+                    }
+                }
+            },
+            structures::CanonStrategy::Ordered(_) => {
+                unreachable!("ordered canon consumes its checked source carrier")
+            }
+        }
+    }
+
+    /// Execute the recorded whole-stream sort canonicalization.
+    pub fn canon(
+        strategy: &structures::CanonStrategy,
+        rows: TokenStream,
+        width: usize,
+    ) -> TokenStream {
+        assert!(matches!(strategy, structures::CanonStrategy::Sort(_)));
+        let compare = Self::canon_comparator(width);
+        if let Some(provider) = strategy.provider() {
+            quote!(<#provider>::sort(#rows, #compare))
+        } else {
+            quote!(::cq_storage::dedup::sort(#rows, #compare))
+        }
+    }
+
+    // DESIGN canon-strategy
+    // STORAGE §13.5/6: only the immutable load-verified carrier licenses runs.
+    // Structures/Sequence checked the direct complete source; no type inspection.
+    pub fn ordered_source(context: &Context<'_>, target: CanonTarget, name: &str) -> TokenStream {
+        let host = &context.hosts[&context.physical_analysis.hosts[name]];
+        let value = &host.value;
+        let compare = Self::canon_comparator(host.layout.len());
+        let rows = match target {
+            CanonTarget::Sequential => quote!(::cq_storage::dedup::ordered_ref(#value, #compare)),
+            CanonTarget::Parallel => quote!(::cq_storage::dedup::par_ordered_ref(#value, #compare)),
+        };
+        let rows = quote!(::core::iter::Iterator::map(#rows, ::cq_storage::rows::Columns::columns));
+        context.host_scan_from(name, Some(rows))
     }
 }
 
@@ -366,6 +435,7 @@ struct Printer<'a> {
     active_prefixes: BTreeMap<String, TokenStream>,
     input: Option<(String, TokenStream)>,
     partitioned: bool,
+    canon_target: CanonTarget,
 }
 impl<'a> std::ops::Deref for Printer<'a> {
     type Target = Context<'a>;
@@ -528,7 +598,7 @@ impl Printer<'_> {
     fn distinct_width(
         &mut self,
         name: &str,
-        ty: &syn::Type,
+        strategy: &structures::CanonStrategy,
         rows: TokenStream,
         width: usize,
     ) -> TokenStream {
@@ -536,8 +606,15 @@ impl Printer<'_> {
         let input = name.strip_suffix(".head").unwrap_or(name);
         let key_columns = self.heading(input).join(",");
         self.profile_label(&dedup, "DEDUP", &key_columns, vec![input.into()]);
-        let rows = self.profile_inserting(&dedup, rows);
-        let result = RowEmitter::canon(ty, rows, width);
+        let result = match strategy {
+            structures::CanonStrategy::Sort(_) => {
+                let rows = self.profile_inserting(&dedup, rows);
+                RowEmitter::canon_with_target(self.canon_target, strategy, rows, width)
+            }
+            structures::CanonStrategy::Ordered(_) => {
+                RowEmitter::ordered_source(&self.context, self.canon_target, input)
+            }
+        };
         self.profile_stream(&dedup, result)
     }
 

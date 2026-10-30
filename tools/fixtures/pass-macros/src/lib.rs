@@ -124,13 +124,6 @@ pub fn lazy_anti(input: TokenStream) -> TokenStream {
     .into()
 }
 #[proc_macro]
-pub fn ordered_dedup(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| {
-        cq_testkit::rewrites::ordered_dedup(source)
-    })
-    .into()
-}
-#[proc_macro]
 pub fn ordered_indexes(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| {
         let mut target = source.clone();
@@ -201,7 +194,7 @@ pub fn identity_structures(input: TokenStream) -> TokenStream {
 }
 
 /// A real alternative policy: prefer reserve when no output protocol is authored.
-/// Every other decision is left to the shared rule-based planner.
+/// Every other decision is left to order-preserving decomposition.
 struct ReservePlanner;
 
 impl cq_sequence_plan::Planner for ReservePlanner {
@@ -212,25 +205,25 @@ impl cq_sequence_plan::Planner for ReservePlanner {
         catalog: &cq_lang_sequence::Catalog,
         evidence: &cq_lang_sequence::Evidence,
     ) -> syn::Result<cq_sequence_plan::Planned> {
-        if source.sequence.output.is_some() {
-            return cq_sequence_plan::Planner::plan(
-                &cq_sequence_plan::RuleBased,
-                source,
-                machine,
-                catalog,
-                evidence,
-            );
+        let evidence_advice = cq_sequence_plan::Advice::Evidence(evidence.clone());
+        let recorded = evidence_advice.apply(source)?;
+        let output_advice =
+            source
+                .sequence
+                .output
+                .is_none()
+                .then_some(cq_sequence_plan::Advice::Output(
+                    cq_lang_sequence::OutputProtocol::Reserve,
+                ));
+        let advised = match &output_advice {
+            Some(advice) => advice.apply(&recorded)?,
+            None => recorded,
+        };
+        let mut planned = cq_sequence_plan::decompose(&advised, machine, catalog)?;
+        if let Some(advice) = output_advice {
+            planned.trace.insert(0, advice);
         }
-        let advice = cq_sequence_plan::Advice::Output(cq_lang_sequence::OutputProtocol::Reserve);
-        let advised = advice.apply(source)?;
-        let mut planned = cq_sequence_plan::Planner::plan(
-            &cq_sequence_plan::RuleBased,
-            &advised,
-            machine,
-            catalog,
-            evidence,
-        )?;
-        planned.trace.insert(0, advice);
+        planned.trace.insert(0, evidence_advice);
         Ok(planned)
     }
 }

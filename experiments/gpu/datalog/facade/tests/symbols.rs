@@ -51,7 +51,7 @@ engine!(gpu, {
         structures = [resident_inputs, ::cq_gpu_sequence::bind_runs];
         sequence = ::mini_linq::passes::sequence;
         stage = ::cq_gpu_sequence::stage;
-        decompose = [::cq_gpu_sequence::plan];
+        decompose = [::cq_gpu_sequence::decompose];
         grade = ::cq_gpu_sequence::machine_grade;
         print = ::cq_gpu_sequence::translate_arena;
     };

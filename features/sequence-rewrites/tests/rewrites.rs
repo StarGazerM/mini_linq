@@ -12,7 +12,7 @@ fn program(body: TokenStream) -> Program {
             r = pipe canon rename R@0 {a -> a};
             return r as answer(a);
         }
-        structures { r host scan = Reader []; r canon = Canon; }
+        structures { r host scan = Reader []; r canon = sort; }
         sequence { #body }
     })
     .unwrap()
@@ -268,7 +268,7 @@ fn grouped_key_premises_remove_only_proven_valuation_canon() {
             grouped = let group r by [] { total: i64 = sum(value); };
             return grouped as answer(total);
         }
-        structures { r host scan = Reader []; r canon = Canon; grouped rows = Rows; }
+        structures { r host scan = Reader []; r canon = sort; grouped rows = Rows; }
         sequence { values = store canon rows r; answer = store group grouped values; }
     };
     assert!(cq_sequence_plan::rewrites::group_without_canon(&source, quote!(answer)).is_err());
@@ -315,7 +315,7 @@ fn grouped_join_requires_keys_for_every_enumerated_atom() {
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r = Provider [a]; j rows = Rows; j canon = Canon; grouped rows = Rows;
+            r = Provider [a]; j rows = Rows; j canon = sort; grouped rows = Rows;
         }
         sequence {
             l = rows l; r = store rows r;

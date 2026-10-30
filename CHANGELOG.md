@@ -7,6 +7,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- P3.3-lite: remove `lookup_first`, adaptive optional-filter advice/provenance,
+  and automatic Sequence relational replanning. Default and GPU automatic
+  routes now use order-preserving decomposition with existing grading.
+  Authored Sequence recipes, `choose`, key partitions, evidence and the custom
+  `Planner` interface remain supported; the advised GPU path is unchanged.
+  Retire EXT-SeqLookup, EXT-SeqAdaptive and PL-OptionalFilter; retain BE-Choose.
 - P3.1 hand planning: default `plan(order(...))` accepts explicit
   `R@k(cols)` lookup/Fine subatoms alongside full `R@k` expansions. WF-VO
   and a shared CK-Le checker validate dependencies, occurrence phases,

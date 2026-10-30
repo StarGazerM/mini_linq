@@ -1,4 +1,4 @@
-use cq_storage::counters::{self, DistinctSet, Snapshot};
+use cq_storage::counters::{self, Snapshot};
 use cq_storage::rows::Rows;
 use cq_storage::{Build, HashIndex, IndexRead};
 
@@ -38,13 +38,18 @@ fn counters_are_isolated_per_thread() {
 }
 
 #[test]
-fn distinct_insertions_include_rejected_duplicates() {
+fn membership_hashing_is_counted_without_logical_distinct_insertions() {
     counters::reset();
-    let mut seen = DistinctSet::new();
-    assert!(seen.insert(1));
-    assert!(!seen.insert(1));
-    assert!(seen.insert(2));
-    assert_eq!(counters::snapshot().distinct_insertions, 3);
+    // Retained hash use is a membership probe, not whole-stream canonicalization.
+    let mut members = counters::HashSet::default();
+    assert!(members.insert(1));
+    assert!(members.insert(2));
+    let built = counters::snapshot().hash_computations;
+    assert!(built > 0);
+    assert!(members.contains(&1));
+    assert!(!members.contains(&3));
+    assert!(counters::snapshot().hash_computations > built);
+    assert_eq!(counters::snapshot().distinct_insertions, 0);
 }
 
 #[test]
@@ -95,4 +100,25 @@ fn singleton_cursor_needs_no_retained_allocation_and_count_does_not_walk_bags() 
     assert_eq!(counted.index_builds, 1);
     assert_eq!(counted.rows_copied, 3);
     assert_eq!(counted.cursor_steps, 0);
+}
+
+#[test]
+fn sort_canonicalization_does_not_count_hashing_or_set_insertions() {
+    use cq_storage::dedup::{ordered, ordered_ref, par_sort, sort, verify_prefix_order};
+
+    counters::reset();
+    assert_eq!(sort([2, 1, 2], Ord::cmp).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(par_sort([2, 1, 2], Ord::cmp).collect::<Vec<_>>(), [1, 2]);
+    let checked = verify_prefix_order(vec![(1, 2), (1, 1), (1, 2)], |a, b| a.0.cmp(&b.0)).unwrap();
+    assert_eq!(
+        ordered_ref(&checked, Ord::cmp).copied().collect::<Vec<_>>(),
+        [(1, 1), (1, 2)]
+    );
+    assert_eq!(
+        ordered(checked, Ord::cmp).collect::<Vec<_>>(),
+        [(1, 1), (1, 2)]
+    );
+    let counts = counters::snapshot();
+    assert_eq!(counts.hash_computations, 0);
+    assert_eq!(counts.distinct_insertions, 0);
 }

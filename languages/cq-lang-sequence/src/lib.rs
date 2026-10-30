@@ -61,7 +61,6 @@ mod kw {
     syn::custom_keyword!(len);
     syn::custom_keyword!(workers);
     syn::custom_keyword!(output);
-    syn::custom_keyword!(optional_filter);
     syn::custom_keyword!(reserve);
     syn::custom_keyword!(reserve_previous);
     syn::custom_keyword!(bounded);
@@ -142,9 +141,6 @@ impl ToTokens for Representation {
 pub struct Sequence {
     pub definitions: Vec<Definition>,
     pub output: Option<OutputProtocol>,
-    /// Formal rule PL-OptionalFilter: Record positive lookup-filter provenance;
-    /// the checker validates Physical identity and adaptive preparation proves coverage.
-    pub optional_filters: Vec<Ident>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -403,7 +399,7 @@ pub enum Obligation {
     },
     Canon {
         result: String,
-        ty: Option<syn::Type>,
+        strategy: Option<structures::CanonStrategy>,
     },
     Failure {
         dispatch: usize,
@@ -538,7 +534,6 @@ impl Parse for Sequence {
         braced!(body in input);
         let mut definitions = Vec::new();
         let mut output = None;
-        let mut optional_filters = Vec::new();
         while !body.is_empty() {
             if body.peek(kw::output) && !body.peek2(Token![=]) {
                 body.parse::<kw::output>()?;
@@ -547,10 +542,6 @@ impl Parse for Sequence {
                 if !body.is_empty() {
                     return Err(body.error("output must be the final statement in sequence"));
                 }
-            } else if body.peek(kw::optional_filter) && !body.peek2(Token![=]) {
-                body.parse::<kw::optional_filter>()?;
-                optional_filters.push(body.parse()?);
-                body.parse::<Token![;]>()?;
             } else {
                 definitions.push(body.parse()?);
             }
@@ -558,7 +549,6 @@ impl Parse for Sequence {
         Ok(Self {
             definitions,
             output,
-            optional_filters,
         })
     }
 }
@@ -566,13 +556,12 @@ impl Parse for Sequence {
 impl ToTokens for Sequence {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let definitions = &self.definitions;
-        let optional_filters = &self.optional_filters;
         let output = self
             .output
             .as_ref()
             .map(|protocol| quote! { output #protocol; });
         tokens.extend(quote! { sequence {
-            #(#definitions)* #(optional_filter #optional_filters;)* #output
+            #(#definitions)* #output
         } });
     }
 }

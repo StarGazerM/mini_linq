@@ -373,19 +373,14 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
 }
 
 #[test]
-fn canon_uses_the_recorded_set_constructor_without_requiring_build() {
-    let mut program = simple(quote!(out = store canon rows r;));
-    for entry in &mut program.structures.structures.entries {
-        if let cq_lang_structures::Structure::Dedup { ty, .. } = &mut entry.structure {
-            *ty = syn::parse_quote!(::std::collections::BTreeSet<_>);
-        }
-    }
+fn canon_sorts_and_uniques_without_requiring_build() {
+    let program = simple(quote!(out = store canon rows r;));
     let analysis = contract::check(&program).unwrap();
     let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
     run(quote!(
         fn main() {
             let R = vec![(2i32,), (1,), (2,)];
-            assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&2,), (&1,)]);
+            assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&1,), (&2,)]);
         }
     ));
 }
@@ -522,7 +517,7 @@ fn canonical_consumer_preserves_internal_canon() {
     let analysis = contract::check(&sequence).unwrap();
     let output = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
     let printed = output.to_token_stream().to_string();
-    assert_eq!(printed.matches("let mut __cq_seen").count(), 1, "{printed}");
+    assert_eq!(printed.matches("dedup :: sort").count(), 1, "{printed}");
     run(quote! {
         fn main() {
             let R = [(1i32, 10i32), (1, 10), (1, 20)];
@@ -530,4 +525,39 @@ fn canonical_consumer_preserves_internal_canon() {
             assert_eq!(rows, vec![(&1i32,), (&1i32,)]);
         }
     });
+}
+
+#[test]
+fn ordered_canon_consumes_verified_source_without_hashing() {
+    let structures: cq_lang_structures::Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32,b:i32);
+            r = pipe canon rename R@0 {a -> x,b -> y};
+            return r as answer(x,y);
+        }
+        structures {
+            r host scan = ::core::iter::Map<_,_> [];
+            r canon = ordered;
+        }
+    };
+    let program = cq_sequence_lowering::compile(&structures).unwrap();
+    let analysis = contract::check(&program).unwrap();
+    let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
+    let printed = output.to_token_stream().to_string();
+    assert!(printed.contains("ordered_ref"), "{printed}");
+    assert!(!printed.contains("HashSet"), "{printed}");
+    run(quote! {
+        fn main() {
+            let R = cq_storage::dedup::verify_prefix_order(
+                vec![(1i32, 9i32), (1, 3), (1, 9), (2, 4), (2, 4)],
+                |left, right| left.0.cmp(&right.0),
+            ).unwrap();
+            let rows: Vec<_> = (#output).collect();
+            assert_eq!(rows, vec![(&1, &3), (&1, &9), (&2, &4)]);
+            assert_eq!(R.len(), 5);
+        }
+    });
+    let mut detached = program.clone();
+    detached.sequence.definitions[0].term = syn::parse_quote!(canon store rows r);
+    assert!(contract::check(&detached).is_err());
 }

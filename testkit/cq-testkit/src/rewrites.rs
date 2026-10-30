@@ -5,7 +5,6 @@
 //! compare execution with their independent reference.
 //! `merged` also adjusts retention modes for the rewritten readers.
 use cq_lang_physical::{self as physical, Choice, Mode, Operator};
-use cq_lang_structures::Structure;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Replace keyed probes with merges and adjust retention for their readers.
@@ -61,22 +60,6 @@ pub fn smallest(source: &physical::Program) -> syn::Result<physical::Program> {
             if let Operator::Probe(_, k) = &mut target.program.definitions[i].operator {
                 k.choice = Some(Choice::Smallest(Default::default()));
             }
-        }
-    }
-    Ok(target)
-}
-
-/// Replace deduplication state types with a native ordered set.
-pub fn ordered_dedup(
-    source: &cq_lang_structures::Program,
-) -> syn::Result<cq_lang_structures::Program> {
-    let mut target = source.clone();
-    for entry in &mut target.structures.entries {
-        match &mut entry.structure {
-            Structure::Dedup { ty, .. } | Structure::HeadDedup { ty, .. } => {
-                *ty = syn::parse_quote!(::std::collections::BTreeSet<_>)
-            }
-            _ => {}
         }
     }
     Ok(target)

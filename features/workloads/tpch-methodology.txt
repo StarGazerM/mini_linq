@@ -58,8 +58,8 @@ Every retail query compiles the same authored clauses in these configurations:
 - radix and radix_retained: the same-plan provider comparisons described below;
 - transfer: the CQ planner's exact forward/backward semijoin schedule, rooted
   at the written outer stream, over its Masks reductions. This configuration
-  does not select the separate Sequence lookup_first family, a vectorized
-  blocked-Bloom RPT implementation, or RPT+ in-flight adaptive cancellation;
+  is not a vectorized blocked-Bloom RPT implementation and does not implement
+  RPT+ in-flight adaptive cancellation;
 - le: the Lookup & Expand planner;
 - le_runs: Lookup & Expand with sorted_runs and retain_lookups Structures rewrites;
 - advised: checked stage-local CPU order/reduction advice. Most advice follows

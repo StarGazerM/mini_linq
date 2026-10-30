@@ -10,5 +10,5 @@ structures { r2 = :: cq_storage :: HashSet < _ > [c];
  r3 host scan = :: core :: iter :: Map < _ , _ > [];
  r4 rows = :: std :: vec :: Vec < _ >;
  r5 host scan = :: core :: iter :: Map < _ , _ > [];
- r13 canon = :: cq_storage :: HashSet < _ >;
+ r13 canon = sort;
  }

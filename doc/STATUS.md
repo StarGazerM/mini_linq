@@ -506,7 +506,8 @@ approval.
 - `translate_pull` codegen still triggers `clippy::unused_unit` in workloads
   (GPU-side note).
 - Sequence conformance: 31 crates (one per classic/retail case, pairwise
-  triangle matrix per planner, 310 kernel rows instead of 2,848). Tasks code
+  triangle matrix per planner, 310 kernel rows instead of the current 1,424-row
+  executable product after removal of the ordered-dedup axis). Tasks code
   reaches Rayon only through non-generic `cq_storage::parallel` helpers. A full
   rebuild after a compiler change takes 143 s wall (1,355 s CPU, 3.7 GB peak
   RSS); running all 31 takes seconds.

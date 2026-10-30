@@ -6,9 +6,7 @@ functions and contracts, with their dependencies and acceptance criteria.
 Nothing here names a data structure or an algorithm; implementations live in
 runtime crates behind traits.
 
-Set `CQ_SEQUENCE_PLAN_TIMING=1` while compiling query macros to report each
-rule-based Sequence planning invocation in seconds. GPU TPC-H build reports
-also record `generation_seconds` per query, scale, and mode.
+GPU TPC-H build reports record `generation_seconds` per query, scale, and mode.
 
 `cq_lang_sequence::contract::Checker` owns proof reuse for one planning
 invocation. Its `check`, `check_rewrite_in`, and `check_grading` methods retain
@@ -425,15 +423,16 @@ The `sequence_conformance_*` integration tests compare Sequential and Tasks
 translations of the same corpus programs: one crate per classic case (10), one
 per retail case (10), and eleven triangle-kernel planner families. Classic and
 retail reuse the executable corpus's pairwise configuration lists. The kernel
-crates do not replay the executable 2,848-row product: they keep the full
+crates do not replay the executable 1,424-row product: they keep the full
 product only over choices that change the compared program (planner x join x
-intersection) and cover host representation and the four rewrite axes pairwise
+intersection) and cover host representation and the three rewrite axes pairwise
 (`tests/support/sequence_matrix.rs`, 26 or 32 rows per planner; printer rows
 are omitted because conformance replaces the printer). Registration,
 comparison and reporting stay in `tests/support/sequence_conformance.rs`. Run
 them from `features/workloads` with
 `cargo test -p cq-workload-corpus --test 'sequence_conformance*' -- --nocapture`.
-Compile cost, not execution, dominated: one 224/320-row kernel crate took over
+Historical compile cost, before removal of the ordered-dedup axis, was dominated
+by compilation rather than execution: one 224/320-row kernel crate took over
 20 minutes in rustc (24 GB RSS for the former single retail crate, of which
 codegen 45%, monomorphization 24%, borrow checking 20%, macro expansion 15%).
 Tasks programs cost about four times a Sequential program in monomorphization
@@ -464,7 +463,7 @@ are removed.
 ## [10] `passes/cq-sequence-plan` (decomposition planner; P-Decompose)
 
 The planner is an advice generator over Sequence, exposed as
-`cq_sequence_plan::plan(program: &Program, machine: &Machine, catalog: &Catalog)
+`cq_sequence_plan::decompose(program: &Program, machine: &Machine, catalog: &Catalog)
 -> syn::Result<Planned>`, where `Planned { program, trace: Vec<Advice> }`.
 `Program` and the target-data-only `Catalog` belong to `cq-lang-sequence`;
 target crates export their catalogs without introducing target dependencies
@@ -620,19 +619,12 @@ were respectively 4.28% and 5.13% above their authored references, within the
 
 ## [11] Lookup & Expand planning, evidence advice, swappable planners
 
-**automatic = unadvised rule-based plan; performance plans are authored through the advisory.**
-Unadvised Sequence planning (`cq_sequence_plan::plan`) runs `lookup_first`
-(GYO/LargestRoot order, exact-semijoin `transfer` forwards, filtering Lookups
-before Expands, each Expand re-probing its provider), then `adaptive`
-alternatives, then segmentation-first resource recovery. This is not the
-L&E two-phase plan; see "What our implementation does instead" below.
-Explicit ordering, selection, Physical/Structures, realization, staging and decomposition advice retain precedence;
-`plan(preserve_order)` also requests order-preserving decomposition explicitly.
-The 31 `sequence_conformance_*` crates exercise the automatic rule. GPU suite
-automatic entries are **opt-in** (`CQ_GPU_TPCH_AUTOMATIC=1`,
-`experiments/gpu/tpch/build.rs`). Handoff gates are exact SF1/SF10 execution of all 14 supported entries,
-all-crate conformance agreement, and scoped API/lint/formal checks. Timings are reported,
-not compared against an automatic-versus-advised performance gate.
+Sequence decomposition preserves the recorded relational construction.
+Automatic `lookup_first` replanning and adaptive optional-filter discovery
+have been removed (P3.3-lite). Authored Sequence recipes, `choose`, and checked
+key partitions remain supported. GPU suite `automatic` entries are opt-in
+(`CQ_GPU_TPCH_AUTOMATIC=1`) and now use decomposition plus existing grading;
+the advised path is unchanged.
 
 Sources: Birler, Kemper, Neumann, "Robust Join Processing with Diamond
 Hardened Joins" (VLDB 2024); Zhao et al., "Debunking the Myth of Join
@@ -652,7 +644,7 @@ memory):
 - RPT transfers predicates with Bloom filters; it does not store reduced
   relations.
 
-What our implementation does instead (verified in code and dumps):
+What the retired Sequence replanner did (historical code and dumps):
 - `transfer` / forward steps are **exact semijoins** (`semi eager`); in `let`
   mode they lower to a stored `compact` plus a new `RangeProvider`. This is
   neither L&E SIP nor RPT (`STATUS.md`: "not the paper's vectorized Bloom
@@ -674,20 +666,9 @@ What our implementation does instead (verified in code and dumps):
   cutover in [6] measures 114.355 ms automatic and 8.562 ms advised, exact.
   The remaining automatic/advised gap has not been attributed here.
 
-Rewrites (checked by `check_rewrite`; laws Motion, BE-Offsets, BE-Scope):
-1. `lookup_first`: derive the join graph and deterministic GYO/LargestRoot
-   transfer order, with the deepest-parent chain tie break. Predicate-bearing
-   relations and bridges filter before keyed provider builds. Scan-only roots
-   and their one-consumer forward filters stream; nonroot keyed forwards retain
-   rows. Schedule filtering Lookups before growth and place Expands at their
-   first required consumer. Cyclic keys become available only after their
-   required preceding Expand. The untested restricted-expansion-root experiment
-   is not part of the default; explicit order and early-Expand advice remain
-   available through the advisory.
-2. `choose` on the published count of a filtered store when no evidence
-   says the filter is selective (RPT+ §5 dynamic pipeline; our BE-Choose).
-3. PL-Cost prefers Lookup-before-Expand (shrinking before growing) at
-   equal work.
+Current rewrites are checked by `check_rewrite` (Motion, BE-Offsets, BE-Scope).
+They select execution shape without rediscovering relational order.
+Authored `choose` alternatives remain subject to BE-Choose equal support.
 
 Evidence advice: estimation is not part of the query. An `evidence { … }`
 advice block carries facts about data (row counts, keys, foreign keys,
@@ -695,9 +676,8 @@ selectivities, bounds, sortedness), hand-written or generated (build.rs
 from a manifest, DuckDB statistics, a sampling pass). Recorded in the
 Analysis beside obligations. Law PL-Evidence: estimates select among checked
 candidates; a wrong estimate costs time, not answers. Keys are explicit author
-assertions: false keys can change answers through BE-GroupKey. Consumers: Lookup order and early Expand placement (L&E §4
-`earlyExpand`), the transfer-tree root (LargestRoot sizes), static
-filter-worthiness (RPT+ threshold) instead of `choose`.
+assertions: false keys can change answers through BE-GroupKey. Decomposition
+uses evidence for checked execution shape, not relational replanning.
 
 Evidence syntax (a complete advice block, also serialized in a planner trace):
 
@@ -721,28 +701,6 @@ integrity, or a codec law for correctness checking. `Program.evidence` and
 `tile(name, n, items m)`, `partition(name, n)`, `segment(name, n, items m)`,
 `output(reserve)`, and `grade(gpu, name at host.device)` are the same
 replayable operations as generated trace entries.
-Lookup ordering uses
-`lookup_first(using Provider, order [r, s, t], transfer [s], early [t])`:
-all relation names denote checked Physical leaves, and omitted ordering
-decisions are filled from the join graph and evidence. Generated traces freeze
-those decisions explicitly. Runtime filter advice is
-`adaptive(filter, published_store, threshold)`; an optional
-`, select true` or `, select false` freezes a static evidence-based choice.
-Both arms retain the exact joins and are independently checked.
-
-`cq_sequence_plan::plan` obtains and replays `LookupFirst`, freezes the complete
-adaptive candidate list before inserting any choices, replays every entry in
-that list, then decomposes the result and prepends the ordering/adaptive trace.
-Discovery reads recorded `Sequence.optional_filters` provenance. Replaying an
-adaptive decision consumes that provider/key class's provenance, not unrelated
-pending candidates; after every frozen decision is replayed, none are rediscovered.
-The separate `decompose` entry preserves authored relational order. Retained
-forward filters and multiply indexed/scanned leaves have explicit row providers;
-the Lookup-first index provider must support Exact and Membership. Retained rows
-use the generic Structures collection carrier, independently of keyed indexes. Adaptive
-arms duplicate only pure pipe prefixes back to a publication or reusable host
-scan, never opaque Rust or retained results. Reexpression preserves live host
-adapters, while obsolete keyed host fallbacks become explicit retained indexes.
 
 The Step 0 SF10 gate used one warmup and five measured runs: generic advised
 H05 was **10.208480 ms**, versus authored R **10.308352 ms**, with all 72,983
@@ -758,10 +716,8 @@ Predicate-bearing relational leaves use explicit `where`, never recognized Rust.
 
 Swappable planner: `cq_sequence_plan::Planner` trait,
 `plan(program, machine, catalog, evidence) -> Planned { program, trace }`;
-the facade phase `plan = ::mini_linq::passes::plan` preserves authored order
-by default; explicit `plan(lookup_first)` enables the rule-based planner.
-`plan = ::other::dp_plan` swaps in a DP/Cascades search over
-Lookup orders written as an ordinary pass. Any planner is tested by the
+the facade phase `plan = ::mini_linq::passes::plan` preserves authored order.
+`plan = ::other::dp_plan` selects an ordinary authored pass. Any planner is tested by the
 same replayable trace and the conformance harness.
 
 Not covered: Expand3 (worst-case optimal cyclic joins), eager aggregation
@@ -893,7 +849,8 @@ fixture scenarios, independent DuckDB goldens, and a direct existential
 reference check that does not invoke the compiler.
 Full-key intersection shapes exclude native HashMap merge (no OrderedRead)
 and own-push merge (unsupported); the two anti-only cores retain the full
-list, and the combined corpus still checks all 367 axis pairs.
+list, and the combined corpus requires coverage of all 311 remaining axis pairs
+after removal of the ordered-dedup axis. This count update is not a new test result.
 
 The exporter discovers the added date, comment, and phone projections from
 the authored declarations and records derived-relation names, exact
@@ -1045,8 +1002,6 @@ in the replayable trace. Partition/segment construction returns its already
 checked program instead of immediately replaying the same rewrite list a second
 time. Resource alternatives first use nested `segment` stores and tiles;
 named `store_level` and choice publications split dispatches only as a last resort.
-`CQ_SEQUENCE_PLAN_TIMING` additionally reports ordering, adaptive-choice and
-decomposition times; these are measured stages, not estimates.
 
 Generated keyed tokens account for their reader layouts as well as provider
 payloads: a String-carrying host reader requires a host-capable catalog token.

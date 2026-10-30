@@ -2,8 +2,7 @@ use cq_lang_sequence::{
     Analysis, CanonToken, Capability, Catalog, CodecToken, Guard, Len, LevelNode, Machine,
     OutputProtocol, Program, ProviderToken, Term, check_grading, check_rewrite,
 };
-use cq_sequence_plan::rewrites::{adaptive_candidates, lookup_first_advice};
-use cq_sequence_plan::{Advice, Planned, decompose, plan};
+use cq_sequence_plan::{Advice, Planned, decompose};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -117,7 +116,7 @@ fn catalog(machine: &Machine) -> Catalog {
             levels: levels.clone(),
         }],
         canons: vec![CanonToken {
-            ty: syn::parse_quote!(Canonical),
+            ty: syn::parse_quote!(::cq_storage::dedup::Sort),
             levels,
             max_packed_bits: None,
         }],
@@ -131,7 +130,7 @@ fn scan(sequence: TokenStream) -> Program {
             r = pipe canon rename R@0 {a -> a};
             return r as answer(a);
         }
-        structures { r host scan = Reader []; r canon = Canonical; }
+        structures { r host scan = Reader []; r canon = sort; }
         sequence { #sequence }
     })
     .unwrap()
@@ -150,7 +149,7 @@ fn join() -> Program {
             l host scan = Reader [];
             r host scan = Reader [];
             r = Index [a];
-            j canon = Canonical;
+            j canon = sort;
         }
         sequence {
             provider = store rows r;
@@ -182,7 +181,7 @@ fn filtered_multi_join() -> Program {
             l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
             q host scan = Reader []; q host result(qf) = Reader [qtag]; qf = Index [a];
             r host result(rf) = Reader [rtag]; s host result(sf) = Reader [stag];
-            rf = Index [a]; sf = Index [a]; result canon = Canonical;
+            rf = Index [a]; sf = Index [a]; result canon = sort;
         }
     };
     cq_sequence_lowering::compile(&structures).unwrap()
@@ -201,51 +200,10 @@ fn reorderable_multi_join() -> Program {
         }
         structures {
             l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
-            r = Index [a]; s = Index [a]; result canon = Canonical;
+            r = Index [a]; s = Index [a]; result canon = sort;
         }
     };
     cq_sequence_lowering::compile(&structures).unwrap()
-}
-
-#[test]
-fn lookup_rechecks_optional_join_filter_covering_certificates() {
-    let structures = syn::parse_quote! {
-        physical {
-            relation L(a:i32); relation R(a:i32); relation S(a:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a};
-            s = let rename S@2 {a -> a};
-            jr = pipe probe first [a] l,r;
-            result = pipe canon probe first [a] jr,s;
-            return result as answer(a);
-        }
-        structures {
-            l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
-            r = ::cq_storage::HashIndex<'_, _, _> [a] supports [keys];
-            s = ::cq_storage::HashIndex<'_, _, _> [a];
-            l join_filter = ::cq_storage::AdaptiveKeySet<i32, ::cq_storage::NoDense, 64>
-                build r [a] covering jr marker ::cq_load::ColumnAt<0>;
-            result canon = Canonical;
-        }
-    };
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
-    let rewritten = cq_sequence_plan::rewrites::lookup_first(
-        &source,
-        quote!(using ::cq_storage::HashIndex<'_, _, _>, order [s,r,l]),
-    )
-    .unwrap();
-    assert_ne!(rewritten.structures.physical, source.structures.physical);
-    cq_lang_sequence::contract::check(&rewritten).unwrap();
-    assert!(
-        rewritten.structures.structures.entries.iter().all(|entry| {
-            !matches!(
-                entry.structure,
-                cq_lang_sequence::structures::Structure::JoinFilter { .. }
-            )
-        }),
-        "a removed covering join cannot certify an optional scan filter"
-    );
-    check_rewrite(&source, &rewritten).unwrap();
 }
 
 fn replay(source: &Program, machine: &Machine, planned: &Planned) -> Analysis {
@@ -267,107 +225,7 @@ fn replay(source: &Program, machine: &Machine, planned: &Planned) -> Analysis {
 }
 
 #[test]
-fn plan_replays_lookup_then_every_frozen_adaptive_candidate_then_decomposition() {
-    let source = filtered_multi_join();
-    let before = source.clone();
-    assert!(adaptive_candidates(&source).unwrap().is_empty());
-    let mut common_prefix = None;
-    for machine in machines() {
-        let available = catalog(&machine);
-        let lookup = Advice::LookupFirst(Box::new(
-            lookup_first_advice(&source, &available).unwrap().unwrap(),
-        ));
-        let mut prepared = lookup.apply(&source).unwrap();
-        check_rewrite(&source, &prepared).unwrap();
-        let frozen = adaptive_candidates(&prepared).unwrap();
-        assert_eq!(
-            frozen.len(),
-            2,
-            "both selected providers need adaptive advice"
-        );
-        assert_eq!(
-            frozen
-                .iter()
-                .map(|candidate| candidate.published.to_string())
-                .collect::<Vec<_>>(),
-            ["__lookup_forward", "sf"]
-        );
-        let mut prefix = vec![lookup];
-        for (index, candidate) in frozen.iter().enumerate() {
-            assert_eq!(
-                candidate.select, None,
-                "this fixture needs real runtime branches"
-            );
-            let advice = Advice::Adaptive(candidate.clone());
-            let next = advice.apply(&prepared).unwrap();
-            check_rewrite(&prepared, &next).unwrap();
-            prepared = next;
-            prefix.push(advice);
-            // Replay consumes only this provider/key class's recorded provenance;
-            // later candidates remain discoverable until their own decisions replay.
-            assert!(
-                !prepared
-                    .sequence
-                    .optional_filters
-                    .contains(&candidate.filter)
-            );
-            assert_eq!(adaptive_candidates(&prepared).unwrap(), frozen[index + 1..],);
-        }
-        let guards: std::collections::BTreeSet<_> = prepared
-            .sequence
-            .definitions
-            .iter()
-            .filter_map(|definition| {
-                let Term::Choose(arms) = &definition.term else {
-                    return None;
-                };
-                let Guard::Lt(Len::Input(name), _) = &arms[0].0 else {
-                    return None;
-                };
-                Some(name.as_str())
-            })
-            .collect();
-        assert_eq!(
-            guards,
-            std::collections::BTreeSet::from(["__lookup_forward", "sf"])
-        );
-        if let Some(previous) = &common_prefix {
-            assert_eq!(
-                &prefix, previous,
-                "relational advice is machine independent"
-            );
-        } else {
-            common_prefix = Some(prefix.clone());
-        }
-
-        let decomposed = decompose(&prepared, &machine, &available).unwrap();
-        assert!(
-            !decomposed.trace.is_empty(),
-            "decomposition must follow preparation"
-        );
-        assert!(
-            !decomposed
-                .trace
-                .iter()
-                .any(|advice| { matches!(advice, Advice::LookupFirst(_) | Advice::Adaptive(_)) })
-        );
-        let mut expected_trace = prefix.clone();
-        expected_trace.extend(decomposed.trace);
-        let planned = plan(&source, &machine, &available).unwrap();
-        assert_eq!(&planned.trace[..prefix.len()], prefix.as_slice());
-        assert_eq!(planned.trace, expected_trace);
-        assert_eq!(planned.program, decomposed.program);
-        replay(&source, &machine, &planned);
-        assert_eq!(plan(&source, &machine, &available).unwrap(), planned);
-        assert_eq!(
-            source, before,
-            "planning leaves the lowered source untouched"
-        );
-    }
-}
-
-#[test]
-fn plan_uses_count_evidence_to_freeze_a_different_lookup_root() {
+fn decomposition_preserves_join_order_with_count_evidence() {
     let source = reorderable_multi_join();
     let mut estimated = source.clone();
     estimated.evidence = syn::parse_quote!(evidence {
@@ -375,48 +233,33 @@ fn plan_uses_count_evidence_to_freeze_a_different_lookup_root() {
     });
     for machine in machines() {
         let available = catalog(&machine);
-        let ordinary = plan(&source, &machine, &available).unwrap();
-        let advised = plan(&estimated, &machine, &available).unwrap();
-        for (planned, expected_order) in [(&ordinary, ["l", "r", "s"]), (&advised, ["s", "r", "l"])]
-        {
-            let Some(Advice::LookupFirst(lookup)) = planned.trace.first() else {
-                panic!("plain lowered joins must start with frozen LookupFirst advice")
-            };
-            assert_eq!(
-                lookup
-                    .order
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>(),
-                expected_order
-            );
-        }
-        assert_ne!(
+        let ordinary = decompose(&source, &machine, &available).unwrap();
+        let advised = decompose(&estimated, &machine, &available).unwrap();
+        assert_eq!(
             ordinary.program.structures.physical,
-            advised.program.structures.physical
+            source.structures.physical
+        );
+        assert_eq!(
+            advised.program.structures.physical,
+            source.structures.physical
         );
         assert_eq!(advised.program.evidence, estimated.evidence);
         replay(&source, &machine, &ordinary);
         replay(&estimated, &machine, &advised);
-        assert_eq!(plan(&estimated, &machine, &available).unwrap(), advised);
+        assert_eq!(
+            decompose(&estimated, &machine, &available).unwrap(),
+            advised
+        );
     }
 }
 
 #[test]
-fn authored_sequence_and_decompose_preserve_join_order_and_skip_adaptive_preparation() {
+fn decomposition_preserves_authored_sequence_and_join_order() {
     let source = filtered_multi_join();
     let authored = Advice::Store(syn::parse_quote!(jr)).apply(&source).unwrap();
     for machine in machines() {
         let available = catalog(&machine);
-        assert!(
-            lookup_first_advice(&authored, &available)
-                .unwrap()
-                .is_none()
-        );
-        let planned = plan(&authored, &machine, &available).unwrap();
-        assert_eq!(planned, decompose(&authored, &machine, &available).unwrap());
+        let planned = decompose(&authored, &machine, &available).unwrap();
         assert_eq!(
             planned.program.structures.physical,
             authored.structures.physical
@@ -432,35 +275,14 @@ fn authored_sequence_and_decompose_preserve_join_order_and_skip_adaptive_prepara
                 .term,
             Term::Store { .. }
         ));
-        assert!(
-            !planned
-                .trace
-                .iter()
-                .any(|advice| { matches!(advice, Advice::LookupFirst(_) | Advice::Adaptive(_)) })
-        );
         replay(&authored, &machine, &planned);
 
-        // decompose is also the explicit authored-order entry for plain lowering
-        // and for a caller that supplied its own LookupFirst phase.
-        let reordered = Advice::LookupFirst(Box::new(
-            lookup_first_advice(&source, &available).unwrap().unwrap(),
-        ))
-        .apply(&source)
-        .unwrap();
-        assert_eq!(adaptive_candidates(&reordered).unwrap().len(), 2);
-        for ordered in [&source, &reordered] {
-            let decomposed = decompose(ordered, &machine, &available).unwrap();
-            assert_eq!(
-                decomposed.program.structures.physical,
-                ordered.structures.physical
-            );
-            assert!(
-                !decomposed.trace.iter().any(|advice| {
-                    matches!(advice, Advice::LookupFirst(_) | Advice::Adaptive(_))
-                })
-            );
-            replay(ordered, &machine, &decomposed);
-        }
+        let decomposed = decompose(&source, &machine, &available).unwrap();
+        assert_eq!(
+            decomposed.program.structures.physical,
+            source.structures.physical
+        );
+        replay(&source, &machine, &decomposed);
     }
 }
 
@@ -468,7 +290,7 @@ fn authored_sequence_and_decompose_preserve_join_order_and_skip_adaptive_prepara
 fn pl_closure_replays_every_intermediate_rewrite_and_final_grading() {
     for machine in machines() {
         for source in [scan(quote!(input = rows r; result = input;)), join()] {
-            let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+            let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
             assert!(
                 !planned.trace.is_empty(),
                 "unauthored scheduling needs advice"
@@ -492,9 +314,9 @@ fn pl_det_repeated_inputs_produce_identical_programs_and_traces() {
         let catalog = catalog(&machine);
         for source in [scan(quote!(input = rows r; result = input;)), join()] {
             let before = source.clone();
-            let first = plan(&source, &machine, &catalog).unwrap();
+            let first = decompose(&source, &machine, &catalog).unwrap();
             for _ in 0..4 {
-                assert_eq!(plan(&source, &machine, &catalog).unwrap(), first);
+                assert_eq!(decompose(&source, &machine, &catalog).unwrap(), first);
             }
             assert_eq!(source, before, "planning must not mutate its input");
         }
@@ -509,7 +331,7 @@ fn pl_precedence_keeps_authored_grades_while_filling_missing_grades() {
         source.graded =
             Some(syn::parse2(quote!(graded #machine_name { result at host; })).unwrap());
         let authored = source.graded.as_ref().unwrap().grades[0].clone();
-        let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+        let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
         let grades = &planned.program.graded.as_ref().unwrap().grades;
         assert_eq!(
             grades
@@ -537,7 +359,7 @@ fn pl_precedence_keeps_authored_tile_width_and_items() {
             result = store tile 7 items 3 input;
         });
         let authored = source.sequence.definitions[1].term.clone();
-        let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+        let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
         assert_eq!(planned.program.sequence.definitions[1].term, authored);
         assert!(!planned.trace.iter().any(|advice| matches!(advice,
             Advice::Tile { name, .. } | Advice::Partition { name, .. } | Advice::Segment { name, .. }
@@ -560,7 +382,7 @@ fn pl_precedence_keeps_each_authored_output_protocol_and_capacity() {
                 result = store capacity 123 input;
             });
             source.sequence.output = Some(protocol.clone());
-            let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+            let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
             assert_eq!(planned.program.sequence.output, Some(protocol));
             assert!(matches!(
                 planned.program.sequence.definitions.last().unwrap().term,
@@ -601,7 +423,7 @@ fn pl_precedence_fully_authored_schedule_is_an_exact_fixed_point() {
             })
             .unwrap(),
         );
-        let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+        let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
         assert_eq!(planned.program, source);
         assert!(
             planned.trace.is_empty(),
@@ -616,7 +438,7 @@ fn pl_precedence_rejects_replacing_an_authored_machine() {
     for machine in machines() {
         let mut source = scan(quote!(result = store rows r;));
         source.graded = Some(syn::parse_quote!(graded other_machine { result at host; }));
-        let error = plan(&source, &machine, &catalog(&machine))
+        let error = decompose(&source, &machine, &catalog(&machine))
             .unwrap_err()
             .to_string();
         assert!(error.contains("PL-Precedence"), "{error}");
@@ -629,10 +451,12 @@ fn catalog_rejection_identifies_the_unmet_provider_obligation() {
     let source = join();
     for machine in machines() {
         let mut available = catalog(&machine);
-        plan(&source, &machine, &available)
+        decompose(&source, &machine, &available)
             .expect("the complete local catalog discharges the lookup");
         available.providers.clear();
-        let error = plan(&source, &machine, &available).unwrap_err().to_string();
+        let error = decompose(&source, &machine, &available)
+            .unwrap_err()
+            .to_string();
         assert!(
             error.contains("unmet catalog obligation Provider"),
             "{error}"
@@ -648,7 +472,9 @@ fn catalog_rejection_identifies_the_unmet_codec_obligation() {
     for machine in machines() {
         let mut available = catalog(&machine);
         available.codecs.clear();
-        let error = plan(&source, &machine, &available).unwrap_err().to_string();
+        let error = decompose(&source, &machine, &available)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("unmet catalog obligation Codec"), "{error}");
         assert!(error.contains("columns: [\"a\"]"), "{error}");
     }
@@ -659,10 +485,12 @@ fn catalog_rejection_identifies_the_unmet_canon_obligation() {
     let source = scan(quote!(input = store rows r; result = store canon input;));
     for machine in machines() {
         let mut available = catalog(&machine);
-        plan(&source, &machine, &available)
+        decompose(&source, &machine, &available)
             .expect("the complete local catalog discharges canonicalization");
         available.canons.clear();
-        let error = plan(&source, &machine, &available).unwrap_err().to_string();
+        let error = decompose(&source, &machine, &available)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("unmet catalog obligation Canon"), "{error}");
         assert!(error.contains("result: \"result\""), "{error}");
     }
@@ -676,7 +504,7 @@ fn no_provider_catalog_still_supports_a_simple_scan() {
         available.providers.clear();
         available.canons.clear();
         assert_eq!(available.codecs[0].ty, syn::parse_quote!(Identity));
-        let planned = plan(&source, &machine, &available).unwrap();
+        let planned = decompose(&source, &machine, &available).unwrap();
         replay(&source, &machine, &planned);
     }
 }
@@ -687,14 +515,14 @@ fn catalog_provider_scope_is_the_read_level_not_the_host_store() {
     let source = join();
     let mut available = catalog(&machine);
     available.providers[0].levels = vec![vec!["host".into()]];
-    let planned = plan(&source, &machine, &available).unwrap();
+    let planned = decompose(&source, &machine, &available).unwrap();
     let analysis = replay(&source, &machine, &planned);
     assert_eq!(analysis.levels["result"], ["host"]);
     // An unauthored read can move to host; an explicitly authored descendant
     // read remains a catalog error rather than silently changing its grade.
     let authored =
         cq_sequence_plan::rewrites::grade(&source, quote!(gpu, result at device)).unwrap();
-    let error = plan(&authored, &machine, &available)
+    let error = decompose(&authored, &machine, &available)
         .unwrap_err()
         .to_string();
     assert!(
@@ -702,7 +530,7 @@ fn catalog_provider_scope_is_the_read_level_not_the_host_store() {
         "{error}"
     );
     available.providers[0].levels = vec![vec!["host".into(), "device".into(), "block".into()]];
-    let planned = plan(&source, &machine, &available).unwrap();
+    let planned = decompose(&source, &machine, &available).unwrap();
     let analysis = replay(&source, &machine, &planned);
     assert_eq!(analysis.levels["provider"], ["host"]);
     assert!(!analysis.dispatches.is_empty());
@@ -716,7 +544,7 @@ fn host_views_are_not_materialized_before_an_existing_host_store() {
             retained = store input;
             result = store retained;
         });
-        let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+        let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
         assert!(matches!(
             planned.program.sequence.definitions[0].term,
             cq_lang_sequence::Term::Rows(_)
@@ -748,7 +576,7 @@ fn distinct_union_drivers_publish_in_deterministic_separate_dispatches() {
         structures {
             l host scan = Reader []; r host scan = Reader [];
             p host scan = Reader []; p = Index [a];
-            joined rows = Index; answer canon = Canonical;
+            joined rows = Index; answer canon = sort;
         }
         sequence {
             l = store rows l; r = store rows r; p = store rows p;
@@ -759,10 +587,10 @@ fn distinct_union_drivers_publish_in_deterministic_separate_dispatches() {
         }
     };
     let machine = machines().pop().unwrap();
-    let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
     assert_eq!(
         planned,
-        plan(&source, &machine, &catalog(&machine)).unwrap()
+        decompose(&source, &machine, &catalog(&machine)).unwrap()
     );
     let analysis = replay(&source, &machine, &planned);
     assert_eq!(analysis.levels["joined"], ["host"]);
@@ -802,7 +630,7 @@ fn rust_without_identity_facts_and_its_feeds_stay_host() {
         structures {
             l host scan = Reader []; r host scan = Reader [];
             s host scan = Reader []; r = Index [a]; s = Index [b];
-            answer canon = Canonical;
+            answer canon = sort;
         }
         sequence {
             l = rows l; r = store rows r;
@@ -813,13 +641,8 @@ fn rust_without_identity_facts_and_its_feeds_stay_host() {
             result = store canon map answer after;
         }
     };
-    assert!(
-        cq_sequence_plan::rewrites::lookup_plan(&source)
-            .unwrap()
-            .is_some()
-    );
     let machine = machines().pop().unwrap();
-    let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
     let analysis = replay(&source, &machine, &planned);
     for name in ["l", "joined", "selected"] {
         assert_eq!(analysis.levels[name], ["host"], "{name}");
@@ -849,7 +672,7 @@ fn relational_string_predicates_do_not_imply_host_placement() {
             answer = pipe canon project numeric keep {a};
             return answer as answer(a);
         }
-        structures { r host scan = Reader []; answer canon = Canonical; }
+        structures { r host scan = Reader []; answer canon = sort; }
         sequence {
             input = rows r;
             selected = compact selected input;
@@ -858,7 +681,7 @@ fn relational_string_predicates_do_not_imply_host_placement() {
         }
     };
     let machine = machines().pop().unwrap();
-    let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
     let analysis = replay(&source, &machine, &planned);
     assert!(analysis.levels["selected"].len() > 1);
     assert!(analysis.levels["numeric"].len() > 1);
@@ -948,11 +771,11 @@ fn automatic_h09_keeps_retained_dependencies_in_their_read_extent() {
         count Part = 200000; count Orders = 1500000; count Lineitem = 6001215;
         count PartSupp = 800000; count Supplier = 10000; count Nation = 25;
     });
-    let planned = plan(&source, &machine, &available).unwrap();
-    assert!(matches!(
-        planned.trace.first(),
-        Some(Advice::LookupFirst(_))
-    ));
+    let planned = decompose(&source, &machine, &available).unwrap();
+    assert_eq!(
+        planned.program.structures.physical,
+        source.structures.physical
+    );
     let analysis = replay(&source, &machine, &planned);
     assert_eq!(analysis.levels["p"], ["host"]);
     assert_eq!(analysis.levels["green"], ["host"]);
@@ -973,7 +796,7 @@ fn host_predicate_publishes_a_retained_lookup_without_moving_its_producer() {
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r = Index [a]; joined rows = Index; answer canon = Canonical;
+            r = Index [a]; joined rows = Index; answer canon = sort;
         }
         sequence {
             l = rows l; r = store rows r;
@@ -1071,7 +894,7 @@ fn retained_row_comparisons_publish_before_provider_lookup() {
                 driver host scan = Reader [];
                 provider host scan = Reader [];
                 selected = Index [a];
-                answer canon = Canonical;
+                answer canon = sort;
             }
             sequence {
                 input = rows driver;
@@ -1125,7 +948,7 @@ fn expanding_resource_fixture() -> Program {
             l host scan = Reader []; r host scan = Reader [];
             s host scan = Reader []; t host scan = Reader [];
             r = Index [a]; s = Index [b]; t = Index [c];
-            m canon = Canonical;
+            m canon = sort;
         } sequence {
             l = rows l; r = store rows r; s = store rows s; t = store rows t;
             j = flatten lookup r [a] l;
@@ -1257,38 +1080,6 @@ fn resource_rejection_reports_every_candidate_and_nested_diagnostic() {
     );
     assert!(errors.iter().any(|error| error.contains("stage=1")));
     assert!(errors.iter().any(|error| error.contains("stage=2")));
-}
-
-#[test]
-fn resource_recovery_publishes_growing_adaptive_choices_at_host() {
-    let source = filtered_multi_join();
-    let mut machine = machines().pop().unwrap();
-    machine.root.children[0].children[0].shared_bytes = Some(1);
-    machine.layout = Some(|shape| {
-        Ok(shape
-            .chains
-            .iter()
-            .flatten()
-            .filter(|allocation| {
-                matches!(
-                    allocation,
-                    cq_lang_sequence::ResourceAllocation::Payload { .. }
-                )
-            })
-            .count())
-    });
-    let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
-    let analysis = replay(&source, &machine, &planned);
-    let growing = analysis
-        .stores
-        .iter()
-        .filter(|(_, length)| matches!(length, Len::Unknown(None)))
-        .map(|(name, _)| name)
-        .collect::<Vec<_>>();
-    assert!(!growing.is_empty());
-    for name in growing {
-        assert_eq!(analysis.levels[name], ["host"]);
-    }
 }
 
 #[test]

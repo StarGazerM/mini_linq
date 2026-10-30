@@ -627,8 +627,9 @@ source RA, and modes only change evaluation.
 
 \subsection{Structure selection: Physical $\to$ Structures}
 The default constructor copies Physical and records default types for every
-built level, host reader fallback, retained collection and dedup boundary,
-including support for the selected keyed layouts;
+built level, host reader fallback and retained collection, including support
+for the selected keyed layouts; dedup and computed-head boundaries record
+the Sort strategy rather than a provider type;
 compatible membership prefixes may share a curried structure; a smallest
 intersection records two candidate levels per retained side; const/range
 supplies never justify a build. This restriction concerns predicate reads,

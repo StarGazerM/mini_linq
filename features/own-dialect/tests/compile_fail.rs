@@ -263,7 +263,7 @@ fn positions_representation_is_explicitly_refused() {
                 }
                 structures {
                     r host scan = ::core::iter::Map<_,_> [];
-                    out canon = ::std::collections::HashSet<_>;
+                    out canon = sort;
                     r repr = positions { R lineage {x -> a,y -> b} } owned [];
                 }
             }"#,
@@ -303,7 +303,7 @@ fn lookup_witness_and_expansion_are_refused_by_name() {
                 l host scan = ::core::iter::Map<_,_> [];
                 r host scan = ::core::iter::Map<_,_> [];
                 r = ::cq_storage::SortedRun<_,_> [k] supports [expand];
-                out canon = ::std::collections::HashSet<_>;
+                out canon = sort;
                 {decision}
             }}
         }}"#

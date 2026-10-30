@@ -13,7 +13,7 @@ fn chain() -> structures::Program {
         }
         structures {
             l host scan = ::core::iter::Map<_, _> [];
-            c canon = ::std::collections::HashSet<_>;
+            c canon = sort;
         }
     }
 }
@@ -52,7 +52,7 @@ fn joins_and_opaque_binds_end_the_positional_chain() {
             l host scan = ::core::iter::Map<_, _> [];
             r host scan = ::core::iter::Map<_, _> [];
             r = UserIndex [k]; r rows = ::std::vec::Vec<_>;
-            c canon = ::std::collections::HashSet<_>;
+            c canon = sort;
         }
     };
     let target = cq_represent::compile_with(&source, quote!(positions)).unwrap();

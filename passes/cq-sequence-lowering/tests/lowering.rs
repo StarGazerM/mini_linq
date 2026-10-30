@@ -50,7 +50,7 @@ fn probe_shape_and_structural_checker_reject_mutations() {
             return out as answer(b);
         } structures {
             l host scan = Reader []; r host scan = Reader [];
-            r = Provider [a]; out canon = Canon;
+            r = Provider [a]; out canon = sort;
         }
     };
     let target = accept(&source);
@@ -86,7 +86,7 @@ fn correspondence_accepts_authored_output_names_but_not_another_result() {
             return u as answer(a);
         } structures {
             r host scan = Reader []; s host scan = Reader [];
-            r canon = Canon; s canon = Canon; u canon = Canon;
+            r canon = sort; s canon = sort; u canon = sort;
         }
     };
     let target: Program = syn::parse_quote! {
@@ -114,7 +114,7 @@ fn output_name_is_fresh_and_return_canon_is_preserved() {
             return canon __sequence_output as answer(a);
         } structures {
             __sequence_output host scan = Reader [];
-            __sequence_output head = Canon;
+            __sequence_output head = sort;
         }
     };
     let target = accept(&source);

@@ -29,7 +29,7 @@ fn canonical_projection() {
                 }
                 structures {
                     scan host scan = ::cq_gpu_runtime::DeviceColumns<'_, (i64,i64)> [];
-                    output canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                    output canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 }
                 sequence {
                     source = store rows scan;
@@ -99,7 +99,7 @@ fn repeated_head_projection() {
         }
         structures {
             scan host scan = ::cq_gpu_runtime::DeviceColumns<'_, (i64,i64)> [];
-            output canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            output canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
         }
         sequence {
             source = store rows scan;

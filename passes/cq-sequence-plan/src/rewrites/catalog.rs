@@ -286,6 +286,14 @@ fn select(
                 required.push(Capability::Membership);
                 "set"
             }
+            Structure::Dedup {
+                strategy: structures::CanonStrategy::Ordered(_),
+                ..
+            }
+            | Structure::HeadDedup {
+                strategy: structures::CanonStrategy::Ordered(_),
+                ..
+            } => continue,
             Structure::Dedup { .. } | Structure::HeadDedup { .. } => "canon",
             Structure::Host { .. }
             | Structure::Group { .. }
@@ -301,12 +309,28 @@ fn select(
             _ => Vec::new(),
         };
         let selected = if kind == "canon" {
+            let provider = match &entry.structure {
+                Structure::Dedup { strategy, .. } | Structure::HeadDedup { strategy, .. } => {
+                    strategy.provider()
+                }
+                _ => unreachable!(),
+            };
+            let recorded = |token: &&cq_lang_sequence::CanonToken| {
+                provider.is_some_and(|provider| crate::catalog::matches_type(&token.ty, provider))
+            };
             // Packed bounds are runtime codec facts, never inferred from Rust types.
             catalog
                 .canons
                 .iter()
+                .filter(recorded)
+                .chain(catalog.canons.iter().filter(|token| !recorded(token)))
                 .find(|token| !token.levels.is_empty() && token.max_packed_bits.is_none())
-                .map(|token| (&token.ty, None))
+                .map(|token| {
+                    let ty = provider
+                        .filter(|provider| crate::catalog::matches_type(&token.ty, provider))
+                        .unwrap_or(&token.ty);
+                    (ty, None)
+                })
         } else {
             let recorded = |token: &&cq_lang_sequence::ProviderToken| match &entry.structure {
                 Structure::Built { keyed, .. } => {
@@ -371,6 +395,20 @@ fn select(
                 ),
             ));
         };
+        if let Structure::Dedup { strategy, .. } | Structure::HeadDedup { strategy, .. } =
+            &mut target.structures.entries[index].structure
+        {
+            // Selection fills only the implementation of the recorded sort.
+            // It never changes an ordered proof strategy into an unchecked sort.
+            if let structures::CanonStrategy::Sort(sort) = strategy {
+                sort.provider = if crate::catalog::canon_matches_type(ty, None) {
+                    None
+                } else {
+                    Some(syn::parse_quote!(using #ty))
+                };
+            }
+            continue;
+        }
         let index = syn::LitInt::new(&index.to_string(), entry.name.span());
         match cq_structure_selection::retype(&target, quote!(entry(#index) => #ty #supports)) {
             Ok(selected) => target = selected,

@@ -76,7 +76,7 @@ macro_rules! query {
                 s share = lookup r [x] first s force p;
                 s repr = tuples witness { r [x] at s as _ };
                 p stage = batch 2 expand;
-                out canon = ::std::collections::HashSet<_>;
+                out canon = sort;
             }
         }
     };

@@ -44,7 +44,7 @@ pub fn planned_h05(input: TokenStream) -> TokenStream {
         let source = cq_sequence_lowering::compile(&authored.structures)?;
         let source = cq_gpu_sequence_core::runs::record_representation(&source)?;
         let machine = cq_gpu_sequence::machine();
-        let planned = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog())?;
+        let planned = cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog())?;
         let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
         cq_gpu_sequence::translate(&planned.program, &analysis)
     })();
@@ -142,7 +142,7 @@ fn arena_hole(
     let source = cq_sequence_lowering::compile(&structures)?;
     let source = cq_gpu_sequence_core::runs::record_representation(&source)?;
     let machine = cq_gpu_sequence::machine();
-    let mut planned = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog())?;
+    let mut planned = cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog())?;
     let terminal = planned.program.sequence.definitions.last_mut().unwrap();
     let cq_lang_sequence::Term::Store { capacity, .. } = &mut terminal.term else {
         return Err(syn::Error::new_spanned(name, "expected a planned terminal store"));

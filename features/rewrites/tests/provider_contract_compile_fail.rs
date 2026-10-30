@@ -419,7 +419,7 @@ mini_linq::passes::sequence! {
         r host scan = ::core::iter::Map<_,_> [];
         selected read = positional base R lineage {a -> a,b -> b}
             column a marker MarkerAlias predicate physical;
-        out canon = ::std::collections::HashSet<_>;
+        out canon = sort;
     }
 }"#;
     let filtered = r#"{
@@ -441,7 +441,7 @@ mini_linq::passes::sequence! {
                 r = ::cq_storage::RadixRun<_,_> [k] supports [keys];
                 l join_filter = ::cq_storage::AdaptiveKeySet<i64,::cq_storage::I64Codec,64>
                     build r [k] covering joined marker MarkerAlias;
-                out canon = ::std::collections::HashSet<_>;
+                out canon = sort;
             }
         }.map(|(k,p,v)| (*k,*p,*v)).collect::<Vec<_>>().into_iter()
     }"#;

@@ -14,7 +14,7 @@ fn translates_grouped_canonical_publication() {
         }
         structures {
             r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
-            r canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            r canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             grouped rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
             grouped group = ::std::collections::HashMap<_, (usize, i64, Option<i64>, Option<i64>)>;
         }
@@ -60,7 +60,7 @@ fn gpu_grouped_counts_sums_extrema_and_canonical_valuations() -> Result<()> {
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
-                r canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                r canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 grouped rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
                 grouped group = ::std::collections::HashMap<_, (usize, i64, Option<i64>, Option<i64>)>;
             }
@@ -114,7 +114,7 @@ fn gpu_keyed_group_reads_resident_columns_and_filters_before_folding() -> Result
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
-                f canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                f canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 grouped rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
                 grouped group = ::std::collections::HashMap<_, (usize, i64, Option<i64>, Option<i64>)>;
             }
@@ -158,7 +158,7 @@ fn whole_input_fold_combines_block_partials_including_empty_identity() -> Result
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
-                r canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                r canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 input = store rows r;

@@ -1,29 +1,14 @@
 use quote::{ToTokens, quote};
 
 #[test]
-fn native_canon_counts_actual_inserts_without_wrapping_custom_providers() {
-    for ty in [
-        syn::parse_quote!(::cq_storage::HashSet<_>),
-        syn::parse_quote!(::std::collections::HashSet<_, CustomHashState>),
-    ] {
-        let rows = cq_physical_realization::RowEmitter::canon(&ty, quote!(rows), 1);
-        syn::parse2::<syn::Expr>(rows.clone()).unwrap();
-        let printed = rows.to_string();
-        assert!(printed.contains("profile_select"), "{printed}");
-        assert!(printed.contains("DistinctSet :: from_set"), "{printed}");
-        let constructor = quote!(<#ty>::new()).to_string();
-        assert_eq!(printed.matches(&constructor).count(), 2, "{printed}");
-    }
-    for ty in [
-        syn::parse_quote!(::cq_storage::counters::DistinctSet<_>),
-        syn::parse_quote!(crate::tpch_runtime::Dedup<_>),
-        syn::parse_quote!(::std::collections::BTreeSet<_>),
-    ] {
-        let rows = cq_physical_realization::RowEmitter::canon(&ty, quote!(rows), 1);
-        let printed = rows.to_string();
-        assert!(!printed.contains("from_set"), "{printed}");
-        assert!(!printed.contains("profile_select"), "{printed}");
-    }
+fn native_canon_emits_sort_without_set_provider_state() {
+    let strategy = syn::parse_quote!(sort);
+    let rows = cq_physical_realization::RowEmitter::canon(&strategy, quote!(rows), 1);
+    syn::parse2::<syn::Expr>(rows.clone()).unwrap();
+    let printed = rows.to_string();
+    assert!(printed.contains("cq_storage :: dedup :: sort"), "{printed}");
+    assert!(!printed.contains("from_set"), "{printed}");
+    assert!(!printed.contains("HashSet"), "{printed}");
 }
 
 fn source_tokens(module: &cq_lang_structures::Program) -> syn::Result<proc_macro2::TokenStream> {
@@ -178,7 +163,7 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
             s share = lookup r [k] first s force p;
             s repr = tuples witness { r [k] at s as AuthoredBookmark<'_, _> };
             p stage = batch 4 expand;
-            out canon = ::std::collections::HashSet<_>;
+            out canon = sort;
         }
     };
     let analysis = cq_lang_structures::contract::check(&program).unwrap();
@@ -256,7 +241,7 @@ fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected()
             s = ForeignDirectory [a][c] supports [retain, expand];
             r rows = ::std::vec::Vec<_>;
             s rows = ::std::vec::Vec<_>;
-            checked canon = ::std::collections::HashSet<_>;
+            checked canon = sort;
             pre_r share = lookup r [b] first pre_r force candidate;
             pre_s share = lookup s [a] first pre_s force candidate;
             pre_r repr = tuples witness { r [b] at pre_r as ::cq_storage::RunCursor<'_, _> };
@@ -329,7 +314,7 @@ fn retained_host_uses_borrowed_dispatch_and_consumes_the_same_cursor() {
             s share = lookup r [x] first s force p;
             s repr = tuples witness { r [x] at s as _ };
             p stage = batch 4 expand;
-            p canon = ::std::collections::HashSet<_>;
+            p canon = sort;
         }
     };
     let printed = source_tokens(&program).unwrap().to_string();

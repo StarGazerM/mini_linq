@@ -5,9 +5,9 @@
 //! `translate_pull`; direct comparisons must supply that complete pass queue.
 //!
 //! The complete checked Structures program is the only compiler input. Its
-//! Physical operators and concrete read, build, retention and canonical state
-//! types are preserved. `push` collects nested-loop results into a Vec endpoint;
-//! `push_into` invokes its consumer immediately without an endpoint buffer.
+//! Physical operators and concrete read, build, retention and canonicalization
+//! strategies are preserved. `push` collects results into a Vec endpoint;
+//! `push_into` invokes its consumer after any recorded canonicalization barrier.
 //! Retained construction shares the recorded Build, FromIterator and Selection
 //! providers with pull. Positional pipes fetch survivors directly into their sink.
 //!
@@ -24,7 +24,7 @@
 //! the admissible scalar bound rather than being refused.
 
 //! Push realizes standalone union/anti loops and consumes the prepared fused-dependent pipe once before pushing tuples to its sink.
-//! Recorded canonical providers and any/all witness choices are retained.
+//! Recorded canonicalization strategies and any/all witness choices are retained.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
@@ -79,7 +79,8 @@ impl syn::parse::Parse for Consumer {
 ///
 /// Select `print_input = structures; print = own_push::push_into(consumer { callback };)`
 /// or use `arguments { consumer { callback }; };` at a direct pass entry.
-/// Consumer evaluation happens once; no result Vec or iterator is constructed.
+/// Consumer evaluation happens once. Whole-stream canon buffers before callbacks;
+/// paths without a canon barrier invoke the callback as rows become available.
 #[proc_macro]
 pub fn push_into(input: TokenStream) -> TokenStream {
     cq_stage::pass::<structures::Program, syn::Expr>(input.into(), |source, arguments| {
@@ -179,17 +180,27 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
     let returned = &module.physical.program.returned;
     let name = symbol_name(returned);
     let out = temporary("out", &name);
+    let head_rows = temporary("head_rows", &name);
+    let canonical_head = analysis.head_dedup.get(&name);
     let body = push.head(
         &name,
         &module.physical.program.head,
-        &out,
-        consumer.is_some(),
+        if canonical_head.is_some() { &head_rows } else { &out },
+        canonical_head.is_none() && consumer.is_some(),
     );
     let body = push.emit(&name, body)?;
-    let head_state = analysis.head_dedup.get(&name).map(|ty| {
-        let seen = temporary("head_seen", &name);
-        let constructor = cq_print::canonical_set(ty);
-        quote!(let mut #seen = #constructor;)
+    let head_state = canonical_head.map(|_| quote!(let mut #head_rows = ::std::vec::Vec::new();));
+    let head_publish = canonical_head.map(|strategy| {
+        let rows = cq_physical_realization::RowEmitter::canon(
+            strategy,
+            quote!(#head_rows),
+            module.physical.program.head.args.len(),
+        );
+        if consumer.is_some() {
+            quote!(for __push_answer in #rows { (#out)(__push_answer); })
+        } else {
+            quote!(#out.extend(#rows);)
+        }
     });
     let statements = &push.statements;
     let (endpoint, result) = match consumer {
@@ -200,12 +211,11 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
         ),
     };
     let mut expression = syn::parse2(quote!({
-        #[allow(unused_imports)]
-        use ::cq_storage::HashSetConstructor as _;
         #(#statements)*
         #endpoint
         #head_state
         #body
+        #head_publish
         #result
     }))?;
     cq_print::own_captures(&mut expression, &push.owned);
@@ -216,13 +226,6 @@ fn temporary(role: &str, result: &str) -> syn::Ident {
     format_ident!("__push_{}_{}", role, result, span = Span::mixed_site())
 }
 
-fn cloned_key(fields: impl Iterator<Item = Tokens>) -> Tokens {
-    cq_print::group(
-        &fields
-            .map(|field| quote!(::core::clone::Clone::clone(&#field)))
-            .collect::<Vec<_>>(),
-    )
-}
 
 /// The supported stage is one uninterrupted selection spine over a host scan.
 fn selection_chain(
@@ -293,18 +296,7 @@ impl Push<'_> {
         } else {
             quote!(#out.push((#(#fields,)*));)
         };
-        let insert = if self.analysis.head_dedup.contains_key(result) {
-            let seen = temporary("head_seen", result);
-            let key = cloned_key(fields.iter().cloned());
-            quote! {
-                let __push_key = #key;
-                ::cq_storage::require::leibniz(&__push_key);
-                if #seen.insert(__push_key) { #emit }
-            }
-        } else {
-            emit
-        };
-        quote! { #evaluations #insert }
+        quote! { #evaluations #emit }
     }
 
     // Shared preparation preserves fused branches and recorded built-probe
@@ -396,24 +388,25 @@ impl Push<'_> {
             );
         }
         if definition.canon.is_some() {
-            let seen = temporary("seen", result);
-            let key = cloned_key(
-                self.heading(result)
-                    .iter()
-                    .map(|column| self.access(result, column)),
+            let strategy = &self.analysis.dedup[result];
+            let pattern = self.bind_columns(result, self.carried(result), false);
+            if matches!(strategy, structures::CanonStrategy::Ordered(_)) {
+                let rows = cq_physical_realization::RowEmitter::ordered_source(
+                    &self.context, cq_physical_realization::CanonTarget::Sequential, result,
+                );
+                return Ok(quote!(for #pattern in #rows { #sink }));
+            }
+            let buffer = temporary("canon_rows", result);
+            let row = self.carrier(result, |column| self.access(result, column));
+            let rows = cq_physical_realization::RowEmitter::canon(
+                strategy, quote!(#buffer), self.carried(result).len(),
             );
-            let ty = &self.analysis.dedup[result];
-            let constructor = cq_print::canonical_set(ty);
-            let initialize = quote!(let mut #seen = #constructor;);
-            let body = self.operator(
-                result,
-                quote! {
-                    let __push_key = #key;
-                    ::cq_storage::require::leibniz(&__push_key);
-                    if #seen.insert(__push_key) { #sink }
-                },
-            )?;
-            return Ok(quote!({ #initialize #body }));
+            let body = self.operator(result, quote!(#buffer.push(#row);))?;
+            return Ok(quote!({
+                let mut #buffer = ::std::vec::Vec::new();
+                #body
+                for #pattern in #rows { #sink }
+            }));
         }
         self.operator(result, sink)
     }

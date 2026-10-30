@@ -179,6 +179,7 @@ flat!([T] Vec<T>);
 flat!([T, S] HashSet<T, S>);
 flat!([T] BTreeSet<T>);
 flat!([T] Answers<T>);
+flat!([T, P] crate::dedup::PrefixOrdered<T, P>);
 macro_rules! grouped {
     ([$($g:tt)*] $ty:ty) => {
         impl<'a, $($g)*> Rows for &'a $ty where

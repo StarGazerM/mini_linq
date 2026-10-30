@@ -2,7 +2,7 @@
 // Push has only probe/first; merge and smallest are public UI rejection cases.
 // Coarse/hypergraph/LE merge reads native leading keys, so it needs a BTreeMap.
 // Fine planners retain ordered structures and allow every host representation.
-// Seven planners have 224 rows; four fine planners have 320: 2,848 total.
+// Seven planners have 112 rows; four fine planners have 160: 1,424 total.
 macro_rules! matrix_branch {
     ($case:ident; [$($chosen:tt)*]; [$($next:tt)*]; $rest:tt) => {
         matrix_product!($case; [$($chosen)* $($next)*]; $rest);
@@ -17,16 +17,15 @@ macro_rules! matrix_product {
     };
 }
 
-// The four independent rewrite/representation axes contribute 2^4 = 16 rows.
+// The three independent rewrite/representation axes contribute 2^3 = 8 rows.
 macro_rules! kernel_product {
     ($plan:tt, $join:tt, $intersections:tt, $hosts:tt, $printer:tt) => {
         matrix_product!(run_triangle; [planner: $plan; merge: $join;];
             ({ keep => [canon: [];], canon => [canon: [cq_rewrites::canon_prefixes,];] }
             ($intersections ($hosts
-            ({ hash_dedup => [dedup: [];], ordered_dedup => [dedup: [cq_workload_passes::ordered_dedup,];] }
             ({ default_payload => [payload: [];], sorted => [payload: [cq_workload_passes::sorted_payload,];] }
             ({ eager => [membership: [];], lazy => [membership: [cq_rewrites::lazy_semijoins,];] }
-            ($printer ()))))))));
+            ($printer ())))))));
     };
 }
 macro_rules! kernel_hosts {

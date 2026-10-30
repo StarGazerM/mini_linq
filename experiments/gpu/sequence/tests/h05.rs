@@ -426,7 +426,7 @@ fn semijoin_device_store_builds_provider_after_publication() {
             customer host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
             r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
             r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-            answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
         }
         sequence {
             R1 = store rows r1;

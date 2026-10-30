@@ -91,6 +91,7 @@ pub(crate) use count;
 
 #[cfg(any(feature = "counters", feature = "operator-timing"))]
 pub mod counters;
+pub mod dedup;
 pub mod dispatch;
 pub use dispatch::AutoDense;
 mod hash_index;
@@ -117,7 +118,7 @@ mod trie;
 pub use answers::{Answers, GroupedAnswers, SingleGroup};
 pub use candidates::{Candidates, Keys};
 pub use hash_index::{BucketCursor, Build, HashIndex, IndexRead};
-pub use hash_state::{HashSet, HashSetConstructor, HashState};
+pub use hash_state::{HashSet, HashState};
 pub use membership::{ConservativeMembership, ExactMembership};
 pub use ordered::{
     GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by,

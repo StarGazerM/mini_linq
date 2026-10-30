@@ -43,7 +43,7 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
-//! Structures records union dedup providers and anti membership representations.
+//! Structures records canonicalization strategies and anti membership representations.
 //! A derived union used only by a shared-key index streams its chained scan directly into the filtered build path, without a retained row buffer.
 //!
 //! Core blocks denote sets: `{ B1 } | { B2 }` unions projected answers;
@@ -69,6 +69,9 @@ pub mod kw {
     syn::custom_keyword!(result);
     syn::custom_keyword!(group);
     syn::custom_keyword!(canon);
+    syn::custom_keyword!(sort);
+    syn::custom_keyword!(ordered);
+    syn::custom_keyword!(using);
     syn::custom_keyword!(head);
     syn::custom_keyword!(rows);
     syn::custom_keyword!(payload);
@@ -135,6 +138,47 @@ pub struct Entry {
     pub name: Ident,
     pub structure: Structure,
     pub semi_token: Token![;],
+}
+
+/// Recorded implementation of whole-stream set canonicalization.
+/// Ordered consumes a load-verified prefix-order carrier, never a uniqueness claim.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum CanonStrategy {
+    #[parse(peek = kw::sort)]
+    Sort(SortCanon),
+    #[parse(peek = kw::ordered)]
+    Ordered(kw::ordered),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct SortCanon {
+    pub sort_token: kw::sort,
+    #[parse(parse_canon_provider)]
+    pub provider: Option<CanonProvider>,
+}
+
+/// A target catalog's implementation of the recorded sort strategy.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct CanonProvider {
+    pub using_token: kw::using,
+    pub ty: syn::Type,
+}
+
+fn parse_canon_provider(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<CanonProvider>> {
+    if input.peek(kw::using) {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+impl CanonStrategy {
+    pub fn provider(&self) -> Option<&syn::Type> {
+        match self {
+            Self::Sort(sort) => sort.provider.as_ref().map(|provider| &provider.ty),
+            Self::Ordered(_) => None,
+        }
+    }
 }
 
 /// Host roles occupy a different namespace from Physical result identifiers.
@@ -280,13 +324,13 @@ pub enum Structure {
     Dedup {
         canon_token: kw::canon,
         eq_token: Token![=],
-        ty: syn::Type,
+        strategy: CanonStrategy,
     },
     #[parse(peek = kw::head)]
     HeadDedup {
         head_token: kw::head,
         eq_token: Token![=],
-        ty: syn::Type,
+        strategy: CanonStrategy,
     },
     #[parse(peek = kw::rows)]
     Rows {
@@ -529,8 +573,8 @@ pub struct Analysis {
     pub groups: BTreeMap<String, syn::Type>,
     built_support: BTreeMap<(String, Vec<Vec<String>>), ProviderSupport>,
     host_support: BTreeMap<(String, ReaderRef<String>, Vec<String>), ProviderSupport>,
-    pub dedup: BTreeMap<String, syn::Type>,
-    pub head_dedup: BTreeMap<String, syn::Type>,
+    pub dedup: BTreeMap<String, CanonStrategy>,
+    pub head_dedup: BTreeMap<String, CanonStrategy>,
     pub retained: BTreeMap<String, syn::Type>,
     /// Explicit projections and constant bindings of index-only selections.
     pub filtered: BTreeMap<String, Filtered>,
@@ -821,10 +865,10 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
                 continue;
             }
-            Structure::Dedup { ty, .. }
-            | Structure::HeadDedup { ty, .. }
-            | Structure::Rows { ty, .. } => {
-                concrete_type(ty)?;
+            Structure::Dedup { strategy, .. } | Structure::HeadDedup { strategy, .. } => {
+                if let Some(provider) = strategy.provider() {
+                    concrete_type(provider)?;
+                }
                 let map = match &entry.structure {
                     Structure::Dedup { .. } => {
                         if !analysis.physical.canon.contains(&name) {
@@ -832,7 +876,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                         }
                         &mut analysis.dedup
                     }
-                    Structure::HeadDedup { .. } => {
+                    _ => {
                         if name != symbol_name(&program.physical.program.returned)
                             || !head_needs_dedup(&program.physical, &analysis.physical)
                         {
@@ -841,19 +885,26 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                                 "head dedup requires a noninjective computed head without a canonical consumer",
                             );
                         }
+                        if matches!(strategy, CanonStrategy::Ordered(_)) {
+                            return error(entry, "computed head has no load-verified prefix order");
+                        }
                         &mut analysis.head_dedup
                     }
-                    _ => {
-                        if analysis.physical.modes[&name] == ModeKind::Pipe {
-                            return error(
-                                entry,
-                                "retained rows require an enumerated let or exists result",
-                            );
-                        }
-                        &mut analysis.retained
-                    }
                 };
-                if map.insert(name, ty.clone()).is_some() {
+                if map.insert(name, strategy.clone()).is_some() {
+                    return error(entry, "duplicate canonicalization strategy");
+                }
+                continue;
+            }
+            Structure::Rows { ty, .. } => {
+                concrete_type(ty)?;
+                if analysis.physical.modes[&name] == ModeKind::Pipe {
+                    return error(
+                        entry,
+                        "retained rows require an enumerated let or exists result",
+                    );
+                }
+                if analysis.retained.insert(name, ty.clone()).is_some() {
                     return error(entry, "duplicate storage decision");
                 }
                 continue;
@@ -1122,7 +1173,31 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             return error(&definition.name, "missing group accumulator type");
         }
         if definition.canon.is_some() && !analysis.dedup.contains_key(&name) {
-            return error(&definition.name, "missing canon dedup type");
+            return error(&definition.name, "missing canon strategy");
+        }
+        // Formal rule STR-Canon: Ordered consumes the verified source carrier
+        // itself. No join, projection, retained buffer, or order guess is a proof.
+        if matches!(analysis.dedup.get(&name), Some(CanonStrategy::Ordered(_))) {
+            let verified_source = match &definition.operator {
+                Operator::Rename(rename) if rename.constants.is_none() => {
+                    analysis.physical.hosts.get(&name).is_some_and(|host| {
+                        analysis.physical.renames[&name]
+                            .values()
+                            .collect::<BTreeSet<_>>()
+                            == analysis.host_layouts[host].iter().collect::<BTreeSet<_>>()
+                    })
+                }
+                _ => false,
+            };
+            if !verified_source
+                || analysis.selections.contains_key(&name)
+                || analysis.join_filters.contains_key(&name)
+            {
+                return error(
+                    &definition.name,
+                    "ordered canon requires a complete direct load-verified host scan",
+                );
+            }
         }
         if (analysis.physical.scanned.contains(&name)
             || analysis
@@ -1202,7 +1277,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     {
         return error(
             &program.physical.program.returned,
-            "missing computed-head dedup type",
+            "missing computed-head canon strategy",
         );
     }
     coalesce_join_filters(program, &mut analysis);
@@ -1300,9 +1375,27 @@ pub fn storage_layout_eq(left: &Entry, right: &Entry) -> bool {
             left.ty = right.ty.clone();
             left.supports = right.supports.clone();
         }
-        (Structure::Dedup { ty: left, .. }, Structure::Dedup { ty: right, .. })
-        | (Structure::HeadDedup { ty: left, .. }, Structure::HeadDedup { ty: right, .. })
-        | (Structure::Rows { ty: left, .. }, Structure::Rows { ty: right, .. })
+        (
+            Structure::Dedup {
+                strategy: CanonStrategy::Sort(left),
+                ..
+            },
+            Structure::Dedup {
+                strategy: CanonStrategy::Sort(right),
+                ..
+            },
+        )
+        | (
+            Structure::HeadDedup {
+                strategy: CanonStrategy::Sort(left),
+                ..
+            },
+            Structure::HeadDedup {
+                strategy: CanonStrategy::Sort(right),
+                ..
+            },
+        ) => left.provider = right.provider.clone(),
+        (Structure::Rows { ty: left, .. }, Structure::Rows { ty: right, .. })
         | (Structure::Group { ty: left, .. }, Structure::Group { ty: right, .. })
         | (Structure::Selection { ty: left, .. }, Structure::Selection { ty: right, .. })
         | (Structure::KeySet { ty: left, .. }, Structure::KeySet { ty: right, .. }) => {

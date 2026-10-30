@@ -580,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_unions_share_the_smallest_proved_support() {
+    fn equivalent_union_arms_share_the_smallest_proved_support() {
         let context = Context::default();
         let mut graph = vec![
             (0, NodeKey::Opaque(vec![10])),

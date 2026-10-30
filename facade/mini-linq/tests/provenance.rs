@@ -47,11 +47,6 @@ fn realize(ra: &cq_lang_ra::Program, decisions: &str) -> TokenStream {
     }
     cq_physical_lowering::check(&ix, &physical).unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let structures = if decisions.contains("ordered_dedup") {
-        authored::ordered_dedup(&structures).unwrap()
-    } else {
-        structures
-    };
     cq_structure_selection::check(&physical, &structures).unwrap();
     let sequence = cq_sequence_lowering::compile(&structures).unwrap();
     cq_sequence_lowering::check(&structures, &sequence).unwrap();
@@ -240,8 +235,8 @@ fn seed_997_normal() -> cq_lang_cq::Program {
 #[test]
 fn seed_997_hypergraph_executes_against_the_written_reference() {
     let (_, reference, target) = hypergraph_programs(&seed_997_normal());
-    let written = realize(&reference, "ordered_dedup");
-    let hypergraph = realize(&target, "ordered_dedup");
+    let written = realize(&reference, "");
+    let hypergraph = realize(&target, "");
     // Saved data.txt is `0 2 3 0 2 0`: both declared inputs are empty.
     let generated = cq_testkit::fuzz::generate(997);
     let inputs = [
@@ -327,8 +322,8 @@ fn seed_997_literal_occurrences_are_preserved_before_rust() {
     cq_lang_ra::contract::check(&changed).unwrap();
     assert!(cq_elaborate::check(&written_vo, &changed).is_err());
     assert!(cq_lang_ra::check_rewrite(&reference, &changed).is_err());
-    let written = realize(&reference, "ordered_dedup");
-    let hypergraph = realize(&target, "ordered_dedup");
+    let written = realize(&reference, "");
+    let hypergraph = realize(&target, "");
     run_cases(&[quote!({
         let r0: &[(i32,i32,i32)] = &[(-3,1,-3)];
         let r1: &[(i32,i32)] = &[(1,0),(7,-3)];

@@ -1,4 +1,4 @@
-//! Joining triangle kernel: lookup-expand with sorted runs (224 configurations).
+//! Joining triangle kernel: lookup-expand with sorted runs (112 configurations).
 #![recursion_limit = "512"]
 #[macro_use]
 mod support;

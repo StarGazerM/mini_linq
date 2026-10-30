@@ -12,10 +12,10 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
                 ty,
                 ..
             } => provider_available(analysis, catalog, provider, capability, ty),
-            Obligation::Canon { result, ty } => {
+            Obligation::Canon { result, strategy } => {
                 let levels = result_levels(program, analysis, result, true);
                 catalog.canons.iter().any(|token| {
-                    ty.as_ref().is_none_or(|ty| matches_type(&token.ty, ty))
+                    canon_matches_type(&token.ty, strategy.as_ref())
                         && levels.iter().all(|level| token.levels.contains(level))
                 })
             }
@@ -47,6 +47,20 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
         }
     }
     Ok(())
+}
+
+/// Match a recorded canonicalization implementation, not a Rust row type.
+/// Unqualified sort and checked ordered runs use the host runtime capability;
+/// a device implementation must be recorded explicitly as `sort using Type`.
+/// Ordered remains a distinct strategy and cannot acquire a device provider.
+pub(crate) fn canon_matches_type(
+    token: &Type,
+    strategy: Option<&cq_lang_sequence::structures::CanonStrategy>,
+) -> bool {
+    match strategy.and_then(cq_lang_sequence::structures::CanonStrategy::provider) {
+        Some(provider) => matches_type(token, provider),
+        None => matches_type(token, &syn::parse_quote!(::cq_storage::dedup::Sort)),
+    }
 }
 
 /// Check the complete target promise, including scheduled read levels and row
@@ -207,7 +221,7 @@ mod tests {
                 l host scan = Reader [];
                 r host scan = OpaqueNative<i32> [];
                 r host result(answer) = OpaqueNative<i32> [a];
-                answer canon = Canon;
+                answer canon = sort;
             }
         };
         let program = cq_sequence_lowering::compile(&structures).unwrap();

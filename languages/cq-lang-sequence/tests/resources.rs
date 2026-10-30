@@ -45,7 +45,7 @@ fn lookup_program(body: proc_macro2::TokenStream, grades: proc_macro2::TokenStre
             l host scan = Reader [];
             r host scan = Reader [];
             r = Provider [a];
-            j canon = Canon;
+            j canon = sort;
         } sequence { #body }
         graded target { #grades }
     })
@@ -83,7 +83,7 @@ fn predicates_survive_projection_without_carrying_dead_columns() {
             l host scan = Reader [];
             r host scan = Reader [];
             r = Provider [a];
-            projected canon = Canon;
+            projected canon = sort;
         } sequence {
             result = store map projected compact selected flatten lookup r [a] rows l;
         } graded target { result at engine; }
@@ -186,7 +186,7 @@ fn membership_reads_do_not_allocate_payload_scratch() {
                 l host scan = Reader [];
                 r host scan = Reader [];
                 r = Provider [a];
-                j canon = Canon;
+                j canon = sort;
             } sequence {
                 result = store tile 8 compact j lookup r [a] rows l;
             } graded target { result at engine; }
@@ -218,7 +218,7 @@ fn later_lookup_keys_are_live_across_an_earlier_payload() {
             s host scan = Reader [];
             r = Provider [a];
             s = Provider [x];
-            projected canon = Canon;
+            projected canon = sort;
         } sequence {
             result = store map projected flatten lookup s [x] flatten lookup r [a] rows l;
         } graded target { result at engine; }
@@ -245,7 +245,7 @@ fn union_retains_every_arm_without_reusing_allocations() {
             r host scan = Reader [];
             r = Provider [a];
             j rows = Rows;
-            out canon = Canon;
+            out canon = sort;
         } sequence {
             result = store capacity 128 union [
                 flatten lookup r [a] rows l,
@@ -277,7 +277,7 @@ fn a_host_consumer_requires_expanded_rows_instead_of_virtual_ranges() {
             r host scan = Reader [];
             r = Provider [a];
             j rows = Rows;
-            j canon = Canon;
+            j canon = sort;
         } sequence {
             view = flatten lookup r [a] rows l;
             first = store view;

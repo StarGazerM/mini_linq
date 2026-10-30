@@ -37,7 +37,8 @@ fn gpu_catalog() -> Catalog {
 fn provider_type(structure: &Structure) -> Option<&syn::Type> {
     match structure {
         Structure::Built { keyed, .. } => Some(&keyed.ty),
-        Structure::Rows { ty, .. } | Structure::Dedup { ty, .. } => Some(ty),
+        Structure::Rows { ty, .. } => Some(ty),
+        Structure::Dedup { strategy, .. } => strategy.provider(),
         _ => None,
     }
 }
@@ -156,7 +157,7 @@ fn one_provider_must_satisfy_all_reads_not_separate_tokens() {
             l host scan = Reader [];
             r host scan = Reader [];
             r = Index [a];
-            answer canon = Canon;
+            answer canon = sort;
         }
     };
     let mut catalog = gpu_catalog();
@@ -190,7 +191,7 @@ fn host_keyed_read() -> structures::Program {
             l host scan = HostColumns [];
             r host scan = HostColumns [];
             r host result(answer) = HostColumns [a];
-            answer canon = Canon;
+            answer canon = sort;
         }
     }
 }
@@ -267,7 +268,7 @@ fn catalog_element_capability_checks_both_built_and_host_fallback_rows() {
                 l host scan = HostColumns [];
                 r host scan = HostColumns [];
                 r host result(answer) = HostColumns [a];
-                answer canon = Canon;
+                answer canon = sort;
             }
         };
         if retained {
@@ -334,7 +335,7 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
             }
             structures {
                 r host scan = HostColumns [];
-                answer canon = Canon;
+                answer canon = sort;
             }
         };
         if !third {
@@ -347,14 +348,14 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
                 }
                 structures {
                     r host scan = HostColumns [];
-                    answer canon = Canon;
+                    answer canon = sort;
                 }
             };
         }
         let selected = select_from_catalog(&source, &gpu_catalog()).unwrap();
         structures::check_rewrite(&source, &selected).unwrap();
         let analysis = structures::contract::check(&selected).unwrap();
-        let syn::Type::Path(ty) = &analysis.dedup["answer"] else {
+        let Some(syn::Type::Path(ty)) = analysis.dedup["answer"].provider() else {
             panic!("provider path")
         };
         assert_eq!(ty.path.segments.last().unwrap().ident, expected);

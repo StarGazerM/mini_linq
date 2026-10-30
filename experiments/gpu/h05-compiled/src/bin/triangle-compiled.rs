@@ -58,7 +58,7 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
             s = ::cq_gpu_sequence_runtime::RangeProvider [a][c];
             r rows = ::cq_gpu_sequence_runtime::RangeProvider;
             s rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            checked canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            checked canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
         }
         sequence {
             Edges = store rows l;

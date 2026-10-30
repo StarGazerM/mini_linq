@@ -25,7 +25,7 @@ doop_shared::doop_engine!(run, pipeline {
         sequence = ::mini_linq::passes::sequence;
         // Each arena hole reuses only its last validated count as a capacity hint.
         decompose = [
-            ::cq_gpu_sequence::plan,
+            ::cq_gpu_sequence::decompose,
             ::cq_sequence_rewrites::output(reserve_previous),
         ];
         stage = ::cq_gpu_sequence::stage;

@@ -42,34 +42,6 @@ pub fn sorted_payload(input: proc_macro::TokenStream) -> proc_macro::TokenStream
     .into()
 }
 
-/// Choose ordered state for every recorded deduplication boundary.
-///
-/// A query without such a boundary has no state to replace. Keeping that
-/// decision here lets the visible test matrix compose the same pass everywhere,
-/// without running compiler analysis in a build script first.
-#[proc_macro]
-pub fn ordered_dedup(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, arguments| {
-        if !arguments.is_empty() {
-            return Err(syn::Error::new_spanned(
-                arguments,
-                "ordered_dedup takes no arguments",
-            ));
-        }
-        let mut target = source.clone();
-        for entry in &mut target.structures.entries {
-            if let cq_lang_structures::Structure::Dedup { ty, .. }
-            | cq_lang_structures::Structure::HeadDedup { ty, .. } = &mut entry.structure
-            {
-                *ty = syn::parse_quote!(::std::collections::BTreeSet<_>);
-            }
-        }
-        cq_lang_structures::check_rewrite(source, &target)?;
-        Ok(target)
-    })
-    .into()
-}
-
 /// Compile both CPU targets for an authored corpus configuration into the test
 /// binary. The returned functions bind the same caller-owned fixture inputs.
 #[proc_macro]

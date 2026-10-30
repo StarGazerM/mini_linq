@@ -26,12 +26,12 @@ fn shared_lookup_expands_ranges_in_scalar_order() {
             s share = lookup r [k] first s force p;
             s repr = tuples witness { r [k] at s as ::cq_storage::RunCursor<'_, _> };
             p stage = batch 2 expand;
-            out canon = ::std::collections::HashSet<_>;
+            out canon = sort;
         }
     }
     .map(|(k, v)| (*k, *v))
     .collect();
-    assert_eq!(result, [(2, 20), (2, 21), (2, 22), (1, 11), (4, 40)]);
+    assert_eq!(result, [(1, 11), (2, 20), (2, 21), (2, 22), (4, 40)]);
     assert_eq!(cq_storage::counters::snapshot().lookups, left.len() as u64);
 }
 
@@ -60,7 +60,7 @@ fn positional_witness_is_consumed_by_scalar_probe() {
             s share = lookup r [k] first s force p;
             s repr = positions { L lineage {k -> k} } owned [] witness { r [k] at s as ::cq_storage::RunCursor<'_, _> };
             kept repr = positions { L lineage {k -> k} } owned [];
-            out canon = ::std::collections::HashSet<_>;
+            out canon = sort;
         }
     }.map(|(k,v)| (*k,*v)).collect();
     assert_eq!(result, [(1, 11), (2, 20), (2, 21)]);

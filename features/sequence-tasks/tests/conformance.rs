@@ -157,14 +157,19 @@ fn semi() {
 }
 
 #[test]
-fn canon_prefilters_parts_then_deduplicates_globally() {
+fn canon_sorts_the_whole_stream_across_task_boundaries() {
     let program = program(syn::parse_quote! {
         physical {
             relation R(a:i32);
             r = pipe canon rename R@0 {a -> a};
             return r as answer(a);
         } structures {}
-        sequence { input = store rows r; result = store canon input; }
+        sequence {
+            input = rows r;
+            parts = tile 64 input;
+            joined = flatten parts;
+            result = store canon joined;
+        }
     });
     // Duplicate rows straddle Rayon partition boundaries.
     let rows: Vec<_> = (0..5000).map(|index| [index % 7]).collect();

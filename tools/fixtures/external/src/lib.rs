@@ -4,7 +4,7 @@ fn packaged_facade_accepts_an_external_rewrite() {
     struct Key(i32);
     let rows = [(Key(1),), (Key(1),), (Key(2),)];
     let answer: Vec<_> = mini_linq::compile! {
-        pipeline { structures = [external_pass_fixture::ordered(a + (b * c))]; }
+        pipeline { structures = [external_pass_fixture::accept_sort(a + (b * c))]; }
         struct Q; relation rows(x: Key); answer(x) :- rows(x);
     }
     .collect();

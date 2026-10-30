@@ -9,7 +9,7 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
             l = pipe rename E@0 {src -> a,dst -> b};
             r = let rename E@1 {src -> b,dst -> c};
             s = let rename E@2 {src -> a,dst -> c};
-            candidate = pipe probe smallest [b] l,r;
+            candidate = pipe probe first [b] l,r;
             checked = pipe canon probe first [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
@@ -17,11 +17,11 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
             l host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
             r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
             s host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-            r = ::cq_gpu_sequence_runtime::RangeProvider [b][c];
+            r = ::cq_gpu_sequence_runtime::RangeProvider [b];
             s = ::cq_gpu_sequence_runtime::RangeProvider [a][c];
             r rows = ::cq_gpu_sequence_runtime::RangeProvider;
             s rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            checked canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            checked canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
         }
         sequence {
             Edges = store rows l;
@@ -46,4 +46,27 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
     assert!(generated.contains("< i64 as :: gpu_datalog_runtime :: Scalar > :: COLUMN"),
         "payload width must come from the recorded scalar provider: {generated}");
     assert_eq!(analysis.results["result"], "checked");
+
+    // An authored smallest probe is not permission to emit a first-probe
+    // fallback. Keep the unsupported target policy visible beside width coverage.
+    let mut smallest = program.clone();
+    smallest.structures.physical.program.definitions[3].operator =
+        syn::parse_quote!(probe smallest [b] l,r);
+    let provider = smallest
+        .structures
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| {
+            entry.name == "r"
+                && matches!(
+                    entry.structure,
+                    cq_lang_sequence::structures::Structure::Built { .. }
+                )
+        })
+        .unwrap();
+    *provider = syn::parse_quote!(r = ::cq_gpu_sequence_runtime::RangeProvider [b][c];);
+    let analysis = check_grading(&smallest, &cq_gpu_sequence::machine()).unwrap();
+    let error = cq_gpu_sequence::translate(&smallest, &analysis).unwrap_err();
+    assert!(error.to_string().contains("probe smallest is not realized"));
 }

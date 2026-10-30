@@ -4,8 +4,8 @@
 use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 use std::collections::BTreeSet;
 
-// Numeric order is the ten-axis contract in matrix.rs, not macro-arm order.
-const AXES: [&[&str]; 10] = [
+// Numeric order is the nine-axis contract in matrix.rs, not macro-arm order.
+const AXES: [&[&str]; 9] = [
     &[
         "written_coarse",
         "written_fine",
@@ -23,7 +23,6 @@ const AXES: [&[&str]; 10] = [
     &["keep", "canon"],
     &["first", "smallest"],
     &["slice", "hashmap", "btreemap"],
-    &["hash_dedup", "ordered_dedup"],
     &["default", "sorted"],
     &["eager", "lazy"],
     &["pull", "push"],
@@ -44,16 +43,16 @@ const PLANNERS: [&str; 11] = [
     "le_runs",
 ];
 
-fn decode_name(name: &str) -> [usize; 10] {
+fn decode_name(name: &str) -> [usize; 9] {
     let mut rest = name;
-    let mut row = [0; 10];
+    let mut row = [0; 9];
     for (axis, values) in AXES.iter().enumerate() {
         let (value, suffix) = values
             .iter()
             .enumerate()
             .filter_map(|(value, spelling)| {
                 let suffix = rest.strip_prefix(spelling)?;
-                if axis == 9 {
+                if axis == 8 {
                     suffix.is_empty().then_some((value, suffix))
                 } else {
                     suffix.strip_prefix('_').map(|suffix| (value, suffix))
@@ -65,7 +64,7 @@ fn decode_name(name: &str) -> [usize; 10] {
         rest = suffix;
     }
     assert!(
-        row[4] == 0 || row[9] == 0,
+        row[4] == 0 || row[8] == 0,
         "{name}: positional advice is unsupported for maps"
     );
     row
@@ -96,27 +95,25 @@ fn assert_tokens(actual: TokenStream, expected: &str, name: &str, part: &str) {
     );
 }
 
-fn expected_expansion(row: [usize; 10]) -> String {
+fn expected_expansion(row: [usize; 9]) -> String {
     let planner = PLANNERS[row[0]];
     let merge = ["", "cq_rewrites::merge_joins,"][row[1]];
     let canon = ["", "cq_rewrites::canon_prefixes,"][row[2]];
     let intersection = ["", "cq_rewrites::smallest_intersections,"][row[3]];
     let host = ["[take] slice", "[take_hash] map", "[take_btree] map"][row[4]];
-    let dedup = ["", "cq_workload_passes::ordered_dedup,"][row[5]];
-    let payload = ["", "cq_workload_passes::sorted_payload,"][row[6]];
-    let membership = ["", "cq_rewrites::lazy_semijoins,"][row[7]];
-    let printer = ["mini_linq::passes::translate_pull", "own_push::push"][row[8]];
-    let print_input = ["", "print_input: structures;"][row[8]];
-    let advice = ["", "positional"][row[9]];
+    let payload = ["", "cq_workload_passes::sorted_payload,"][row[5]];
+    let membership = ["", "cq_rewrites::lazy_semijoins,"][row[6]];
+    let printer = ["mini_linq::passes::translate_pull", "own_push::push"][row[7]];
+    let print_input = ["", "print_input: structures;"][row[7]];
+    let advice = ["", "positional"][row[8]];
     format!(
-        "pub const CONFIG: [usize; 10] = {row:?};
+        "pub const CONFIG: [usize; 9] = {row:?};
          pipeline_configuration! {{ $case, golden_scenarios;
              planner: [{planner}];
              merge: [{merge}];
              canon: [{canon}];
              intersection: [{intersection}];
              host: {host} [{advice}];
-             dedup: [{dedup}];
              payload: [{payload}];
              membership: [{membership}];
              {print_input}
@@ -236,11 +233,10 @@ mod eligibility {
                             merge: row[1] != 0,
                             canon: row[2] != 0,
                             smallest: row[3] != 0,
-                            ordered_dedup: row[5] != 0,
-                            sorted_payload: row[6] != 0,
-                            lazy: row[7] != 0,
-                            push: row[8] != 0,
-                            positional: row[9] != 0,
+                            sorted_payload: row[5] != 0,
+                            lazy: row[6] != 0,
+                            push: row[7] != 0,
+                            positional: row[8] != 0,
                         };
                         if let Some(reason) = pipeline.rejection(&source, row[4]).unwrap() {
                             let name = row.iter().enumerate()

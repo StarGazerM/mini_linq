@@ -9,9 +9,12 @@
 //! Lookups count exact reads, candidate reads/counts and ordered cursor entry.
 //! Cursor steps count attempted next/seek calls at storage boundaries, including
 //! exhaustion; rows count successful scan/cursor items at those boundaries.
-//! Distinct insertions count attempts, including duplicates. Native hash canon
-//! providers are wrapped with `DistinctSet::from_set`, preserving their hasher;
-//! custom providers can use `DistinctSet` directly to expose canonicalization.
+//! Distinct insertions count runtime membership/keyset and candidate insertion
+//! attempts, including duplicates. Ordinary counted hash collections measure
+//! hashing; their callers record insertion attempts at those operator boundaries.
+//! Sort-based whole-stream canonicalization performs neither hash computations
+//! nor set insertions, so it does not increment either counter. These are
+//! representation-specific costs, not counts of logical duplicate elimination.
 //! Retained bytes count runtime-owned capacities (excluding allocator overhead
 //! and heap allocations inside user keys/payloads). Reset starts a new ownership
 //! epoch. Task contexts share that epoch: transferred allocations retain their
@@ -57,7 +60,7 @@ pub struct Snapshot {
     pub rows_enumerated: u64,
     pub distinct_insertions: u64,
     /// Subset of distinct_insertions in runtime candidate enumeration, rather
-    /// than compiler-emitted dedup/keyset builds.
+    /// than membership/keyset builds.
     pub candidate_insertions: u64,
 }
 impl Snapshot {
@@ -291,54 +294,16 @@ impl Hasher for CountingHasher {
     }
 }
 pub type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<CountingHasher>>;
+/// Counted membership storage; whole-stream canonicalization uses `dedup` sorting.
 pub type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<CountingHasher>>;
-
-/// Count actual canonical set insertions without replacing the selected hasher.
-pub struct DistinctSet<K, S = BuildHasherDefault<CountingHasher>>(
-    std::collections::HashSet<K, S>,
-    crate::counters_memory::Allocation,
-);
-impl<K, S: Default> Default for DistinctSet<K, S> {
-    fn default() -> Self {
-        Self(
-            std::collections::HashSet::with_hasher(S::default()),
-            crate::counters_memory::Allocation::new(0),
-        )
-    }
-}
-impl<K, S> DistinctSet<K, S> {
-    /// Instrument a native set independently of operator input-row accounting.
-    /// The set and its hash state are moved, not rebuilt or rehashed.
-    pub fn from_set(set: std::collections::HashSet<K, S>) -> Self {
-        let bytes = set.capacity() * (std::mem::size_of::<K>() + 1);
-        Self(set, crate::counters_memory::Allocation::new(bytes))
-    }
-}
-impl<K: Eq + std::hash::Hash> DistinctSet<K> {
-    pub fn new() -> Self {
-        Self(
-            HashSet::default(),
-            crate::counters_memory::Allocation::new(0),
-        )
-    }
-}
-impl<K: Eq + std::hash::Hash, S: std::hash::BuildHasher> DistinctSet<K, S> {
-    pub fn insert(&mut self, row: K) -> bool {
-        record(|counts| counts.distinct_insertions += 1);
-        let before = self.0.capacity();
-        let inserted = self.0.insert(row);
-        self.1
-            .grow((self.0.capacity() - before) * (std::mem::size_of::<K>() + 1));
-        inserted
-    }
-}
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn instrumented_sets_deduplicate_equal_keys() {
-        let mut seen = super::DistinctSet::new();
-        assert!(seen.insert((7_u64, String::from("x"))));
-        assert!(!seen.insert((7_u64, String::from("x"))));
+    fn instrumented_membership_sets_use_stable_hashes() {
+        let mut members = super::HashSet::default();
+        assert!(members.insert((7_u64, String::from("x"))));
+        assert!(members.contains(&(7_u64, String::from("x"))));
+        assert!(!members.contains(&(8_u64, String::from("x"))));
     }
 }

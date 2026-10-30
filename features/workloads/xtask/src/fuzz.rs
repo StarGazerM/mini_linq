@@ -34,7 +34,6 @@ struct Config {
     canon: bool,
     smallest: bool,
     host: usize,
-    ordered_distinct: bool,
     custom_index: bool,
     lazy: bool,
     push: bool,
@@ -57,14 +56,13 @@ impl Config {
             canon: next(seed, 2) == 1,
             smallest: next(seed, 2) == 1,
             host: next(seed, 3),
-            ordered_distinct: next(seed, 2) == 1,
             custom_index: next(seed, 2) == 1,
             lazy: next(seed, 2) == 1,
             push: next(seed, 2) == 1,
             reference: false,
         }
     }
-    fn axes(self) -> [(&'static str, &'static str); 9] {
+    fn axes(self) -> [(&'static str, &'static str); 8] {
         [
             (
                 "plan",
@@ -83,14 +81,6 @@ impl Config {
                 if self.smallest { "apply" } else { "omit" },
             ),
             ("host", ["slice", "hashmap", "btreemap"][self.host]),
-            (
-                "structures/ordered_dedup",
-                if self.ordered_distinct {
-                    "ordered-dedup"
-                } else {
-                    "default"
-                },
-            ),
             (
                 "structures/sorted_payload",
                 if self.custom_index { "apply" } else { "omit" },
@@ -115,7 +105,6 @@ impl Config {
             merge: self.merge,
             canon: self.canon,
             smallest: self.smallest,
-            ordered_dedup: self.ordered_distinct,
             sorted_payload: self.custom_index,
             lazy: self.lazy,
             push: self.push,

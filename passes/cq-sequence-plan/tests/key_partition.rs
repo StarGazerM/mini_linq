@@ -72,7 +72,7 @@ fn catalog() -> Catalog {
             levels: levels.clone(),
         }],
         canons: vec![CanonToken {
-            ty: syn::parse_quote!(Canonical),
+            ty: syn::parse_quote!(::cq_storage::dedup::Sort),
             levels,
             max_packed_bits: None,
         }],
@@ -114,7 +114,7 @@ fn grouped(global: bool) -> Program {
         }
         structures {
             lineitem host scan = Reader [];
-            lineitem canon = Canonical;
+            lineitem canon = sort;
             #accumulator
         }
         sequence {
@@ -356,7 +356,7 @@ fn canon_partition_and_machine_width_are_explicit() {
             r = pipe canon rename R@0 {a -> a,b -> b};
             return r as answer(a,b);
         }
-        structures { r host scan = Reader []; r canon = Canonical; }
+        structures { r host scan = Reader []; r canon = sort; }
         sequence { input = store rows r; result = store canon input; }
     };
     for parts in [1, 3, 16] {
@@ -407,7 +407,7 @@ fn provider_program() -> Program {
             joined = pipe canon probe first [a] l,r;
             return joined as answer(a,b);
         }
-        structures { l host scan = Reader []; r host scan = Reader []; r = Index [a]; joined canon = Canonical; }
+        structures { l host scan = Reader []; r host scan = Reader []; r = Index [a]; joined canon = sort; }
         sequence {
             provider = store rows r;
             input = store rows l;
@@ -923,7 +923,7 @@ fn exact_membership_provider_supports_runtime_partition_choice() {
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r = Index [a]; j canon = Canonical;
+            r = Index [a]; j canon = sort;
         }
         sequence {
             provider = store rows r;
@@ -999,7 +999,7 @@ fn smallest_candidate_directories_keep_their_native_two_level_providers() {
         structures {
             l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
             r = Index [b][c]; s = Index [a][c];
-            checked canon = Canonical;
+            checked canon = sort;
         }
     };
     let source = cq_sequence_lowering::compile(&structures).unwrap();
@@ -1046,7 +1046,7 @@ fn filtered_provider_retains_valid_single_level_routing() {
         structures {
             l host scan = Reader []; r host scan = Reader [];
             r = Index [a] payload [a,b] constants {};
-            answer canon = Canonical;
+            answer canon = sort;
         }
         sequence {
             provider = store rows r;
@@ -1152,7 +1152,7 @@ fn provider_rewrite_preserves_shared_flat_rows_and_published_length_guards() {
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r = Index [a]; selected = Index [a]; final_rows canon = Canonical;
+            r = Index [a]; selected = Index [a]; final_rows canon = sort;
             r rows = ::std::vec::Vec<_>;
         }
         sequence {
@@ -1641,7 +1641,7 @@ fn adaptive_provider_publication_preserves_task_owned_pipe_execution() {
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            selected = Index [a]; joined canon = Canonical;
+            selected = Index [a]; joined canon = sort;
         }
         sequence {
             raw = store rows r;
@@ -1738,7 +1738,7 @@ fn filtered_provider_uses_host_layout_bound_before_demanding_input_count() {
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            selected = Index [a]; joined canon = Canonical;
+            selected = Index [a]; joined canon = sort;
         }
         sequence {
             r = store rows r;
@@ -1792,7 +1792,7 @@ fn expanding_provider_join_requires_exact_count_without_a_host_shortcut() {
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r = Index [a]; joined = Index [a]; final_rows canon = Canonical;
+            r = Index [a]; joined = Index [a]; final_rows canon = sort;
         }
         sequence {
             right = store rows r;
@@ -1935,7 +1935,7 @@ fn automatic_probe_chain_preserves_filtered_shared_index_contracts() {
             r5 = Index [c] payload [c] constants {};
             r7 = Index [a,b] payload [o,a,b] constants {};
             r9 = Index [o] payload [o] constants {};
-            r11 canon = Canonical;
+            r11 canon = sort;
         }
     };
     let source = cq_sequence_lowering::compile(&structures).unwrap();
@@ -1946,23 +1946,10 @@ fn automatic_probe_chain_preserves_filtered_shared_index_contracts() {
     available.providers[1]
         .capabilities
         .push(Capability::Membership);
-    let mut prepared = source.clone();
-    assert!(
-        cq_sequence_plan::rewrites::lookup_first_advice(&source, &available)
-            .unwrap()
-            .is_none()
+    let planned = decompose(&source, &machine(Some(4)), &available).unwrap();
+    assert_eq!(
+        planned.program.structures.physical,
+        source.structures.physical
     );
-    let error = cq_sequence_plan::rewrites::lookup_first(&source, quote!(using Index)).unwrap_err();
-    assert!(
-        error.to_string().contains("authored filtered index"),
-        "{error}"
-    );
-    for advice in cq_sequence_plan::rewrites::adaptive_candidates(&prepared).unwrap() {
-        prepared = Advice::Adaptive(advice)
-            .apply(&prepared)
-            .unwrap_or_else(|error| panic!("adaptive advice: {error}"));
-    }
-    decompose(&prepared, &machine(Some(4)), &available).unwrap();
-    let planned = cq_sequence_plan::plan(&source, &machine(Some(4)), &available).unwrap();
     replay(&source, &planned);
 }

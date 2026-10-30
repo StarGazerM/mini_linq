@@ -672,13 +672,16 @@ fn reads_at(
         }
         Term::Canon(inner) => {
             facts.obligations.iter().all(|obligation| {
-                let Obligation::Canon { result: name, ty } = obligation else {
+                let Obligation::Canon {
+                    result: name,
+                    strategy,
+                } = obligation
+                else {
                     return true;
                 };
                 result != Some(name.as_str())
                     || catalog.canons.iter().any(|token| {
-                        ty.as_ref()
-                            .is_none_or(|ty| crate::catalog::matches_type(&token.ty, ty))
+                        crate::catalog::canon_matches_type(&token.ty, strategy.as_ref())
                             && token
                                 .levels
                                 .iter()
@@ -895,7 +898,7 @@ mod tests {
             }
             structures {
                 l host scan = Reader []; r host scan = Reader [];
-                r = Index [a]; answer rows = ::std::vec::Vec<_>; answer canon = Canon;
+                r = Index [a]; answer rows = ::std::vec::Vec<_>; answer canon = sort;
             }
         };
         cq_sequence_lowering::compile(&structures).unwrap()
@@ -911,7 +914,7 @@ mod tests {
                 elements: None,
             }],
             canons: vec![cq_lang_sequence::CanonToken {
-                ty: syn::parse_quote!(Canon),
+                ty: syn::parse_quote!(::cq_storage::dedup::Sort),
                 levels: vec![
                     vec!["host".into()],
                     vec!["host".into(), "device".into()],
@@ -935,7 +938,7 @@ mod tests {
                 answer = pipe canon project selected keep {a};
                 return answer as answer(a);
             }
-            structures { r host scan = Reader []; answer canon = Canon; }
+            structures { r host scan = Reader []; answer canon = sort; }
             sequence {
                 input = store rows r;
                 selected = compact selected input;
@@ -958,7 +961,7 @@ mod tests {
                     answer = pipe canon project selected keep {a};
                     return answer as answer(a);
                 }
-                structures { r host scan = Reader []; answer canon = Canon; }
+                structures { r host scan = Reader []; answer canon = sort; }
                 sequence {
                     input = store rows r;
                     result = store canon map answer input;

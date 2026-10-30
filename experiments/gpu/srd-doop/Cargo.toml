@@ -7,12 +7,11 @@ publish = false
 [features]
 # Run SRDatalog's default DOOP formulation instead of field-flow.
 default-query = ["srd-doop-shared/default-query"]
-# Decomposition-only baseline, and individually authored experiments on it.
-decompose-only = []
-advice-aipt = ["decompose-only"]
-advice-load = ["decompose-only"]
-advice-fieldflow = ["decompose-only"]
-advice-dispatch = ["decompose-only"]
+# Individually authored experiments on the order-preserving decomposition.
+advice-aipt = []
+advice-load = []
+advice-fieldflow = []
+advice-dispatch = []
 
 [dependencies]
 srd-doop-shared = { path = "../../../features/datalog/doop/srd" }

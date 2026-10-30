@@ -117,7 +117,7 @@ per-route siblings listed below.
 | `cq-elaborate` | predicate binder choice, branch join topology | record in VO or keep as pure refinement |
 | CQ `normalize` | computed head becomes `Bind` | retain original Rust; placement uses free variables, not expression classification (contract 7) |
 | `cq-physical-lowering` | probe first / eager / point-range / Let vs Pipe | representation only; allowed |
-| `cq-sequence-plan lookup_first` | reorders and deletes joins after lowering; freezes on any Bind/Guard | demote to representation (retained leaves, providers); ordering comes from VO |
+| Sequence decomposition | preserves recorded relational construction | P3.3-lite removes automatic replanning; ordering belongs to VO |
 | `cq_planners::order(le)` | Lookup = dropped-column subatom, phase not recorded | fold into the default planner with recorded phases |
 | GPU emitter | tile defaults, virtual-range publication, retry protocol | representation; document |
 | Datalog `fork` | independent CQ plan after incremental permutation | pass order advice (contract 5) |
@@ -131,7 +131,7 @@ sit where a representation is introduced.**
 | Layer | Owns (decisions) | Semantics / laws | Contracts | State |
 |---|---|---|---|---|
 | CQ surface | atoms, `where` relational predicates, opaque total Rust `if/let/for` | set denotation; `where` = selection by representation Eq/Ord; Rust placed by free variables | 7 | implemented; expanded-Rust audit in progress |
-| CQ → VO → RA (planning) | join order, reductions, **Lookup/Expand order and Expand placement** (L&E §4), block placement | VO/RA refinement of the written order | 1, 2, 5 | order + Datalog advice done; L&E still lives in Sequence `lookup_first` (P3) |
+| CQ → VO → RA (planning) | join order, reductions, **Lookup/Expand order and Expand placement** (L&E §4), block placement | VO/RA refinement of the written order | 1, 2, 5 | order + Datalog advice done; Sequence replanning removed (P3.3-lite); evidence-driven L&E remains P3.3 |
 | Structures (representation) | provider role (scan column vs index run), codec, summaries, grouped runs, copy vs read, join filters (exact / min-max / Bloom), positions | α abstraction laws: decode, enclosure, factorization, bounded-error directory, preserved ops | 8 (`doc/STORAGE.md`) | designed; type-blind provider dispatch partly implemented |
 | Sequence + grading (execution shape) | tiles aligned to vectors/blocks, deferred ranges from stored offsets, launch/scan/fold/sync facts, adaptive choose from evidence | positions and sizes; BE-* rules | translator-decides-nothing, 7 (representation facts) | launch facts done; storage-aware shape open |
 | Translators (pull, Rayon, CUDA, Metal) | nothing | per-construct correctness | T-Pull/T-Tasks/T-Gpu | audit violations fixed; anchors pending |
@@ -214,8 +214,8 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
       slower on CPU SF1 (retained memory 5 MB → 133 MB). R's win is its
       Sequence schedule: a retained Customer prefix and segmented
       Orders/Lineitem fan-out; a 1-row Region root tile has no parallelism.
-    - The automatic Sequence planner (`plan(machine)`, `lookup_first`)
-      re-plans authored CQ orders. On DOOP, decomposition-only beats the
+    - The retired automatic Sequence planner (`plan(machine)`, `lookup_first`)
+      re-planned authored CQ orders. On DOOP, decomposition-only beat the
       default by 1.070x [1.064, 1.124] (xalan) and 1.234x [1.231, 1.238]
       (batik), all 40/40 exact.
     - GPU `probe smallest` was silently emitted as sequential range
@@ -225,7 +225,7 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
       choose targets.
     Diagnosis (2026-10-30): answers are exact in every variant; the
     semantics (VO/RA meaning, L&E as subatom phases) hold. The losses are
-    implementation: our `lookup_first` is an exact-semijoin adaptation of
+    implementation: the retired `lookup_first` was an exact-semijoin adaptation of
     RPT (doc/formal/passes.tex, order(transfer)), not RPT's cheap Bloom
     pipeline. It materializes stored transfers, probes again, replicates
     adaptive alternatives and runs on cyclic queries and per-iteration
@@ -234,20 +234,102 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     makes plans slower than no transfer (DOOP 1.07x/1.23x, H05) indicates
     a wrong realization. Fixed by P3.3 (delete re-planning) and P7
     (filters built during builds).
-  - **P3.3** Default planner emits L&E phases from evidence; delete
-    `lookup_first`/automatic Sequence re-planning first (measured win on
-    DOOP); grading learns R's schedule shapes (retained small prefixes,
-    segmented fan-out) from recorded evidence;
-    `lookup_first` and EXT-SeqLookup; GPU match-set carrier after P4.
+  - **P3.3-lite** Remove `lookup_first` and automatic Sequence replanning,
+    including adaptive optional-filter advice/provenance and their formal rules.
+    GPU automatic routes use decomposition plus existing grading; authored
+    Sequence recipes, `choose` and key partitions remain.
+  - **P3.3** Default planner emits L&E phases from evidence; grading learns
+    R's schedule shapes (retained small prefixes, segmented fan-out) from
+    recorded evidence; GPU match-set carrier follows P4.
 - **P3b Profile the engine gaps** (`doc/STORAGE.md` §12.4): GPU h06
   reduce/dedup at 16–74× a hand kernel; CPU h01 at ~140× a String-grouping
   microbenchmark. Profiles (perf, nsys/ncu) decide whether these come before
   the storage slices.
 - **P3c Engine-wide storage rules** (`doc/STORAGE.md` §13): intern strings
-  at input for the CPU catalog as on GPU; sort-based dedup (self: radix
-  sort + unique; against full: merge with sorted runs) replacing hash `Dedup`
-  sets in CQ printers and DL-InsertNew in CPU Datalog; remove V decode sites
-  (`doc/DECODE-AUDIT.md`), measured per target.
+  at input for the CPU catalog as on GPU; remove V decode sites
+  (`doc/DECODE-AUDIT.md`), measured per target. The uncommitted sort-canon
+  work (`canon = sort`, whole-stream collect/sort/unique, push callbacks waiting
+  at the barrier) is superseded by P3d: it treated duplicate state as a buffer
+  rather than an index, so it lost laziness and reimplemented index work.
+- **P3d Distinct and admission are anti-joins against an ordinary index**
+  (decided 2026-10-30; replaces CQ `seen`/sort canon and Datalog `seen`/`all`).
+  - **Problem.** CQ canon (`__cq_seen` hash set, then whole-stream sort) and
+    Datalog admission (CPU `seen` beside `all`,
+    `features/datalog/print/src/lib.rs:703-718`; GPU `DeviceRuns::admit` fused
+    with maintenance, `experiments/gpu/datalog-runtime/src/runs.rs:163-177`)
+    each keep duplicate state outside the index machinery. The result: shadow
+    copies, contention, lost laziness, and index work (selection, maintenance,
+    providers, lazy merge) redone ad hoc in each printer.
+  - **One semantics.** No layer's semantics contains sorting or a seen set,
+    only RA. Distinct over a stream produced in batches `B_1 … B_n` is an
+    incremental anti-join against the output relation O:
+    `δ(⊎_k B_k) = ⊎_k (δ(B_k) ▷ O_{k-1})`, `O_k = O_{k-1} ⊎ (δ(B_k) ▷ O_{k-1})`
+    (L5, independent of granularity). A batch of one row needs no inner δ,
+    which gives streaming. One batch is the whole stream. A Datalog round is
+    the same operator with `O = R` and one batch per round:
+    `Δ_{r+1} = δ(⊎_{h: head R} π_x̄ Q_h(A_r, Δ_r)) ▷_x̄ R@A_r`,
+    `A_{r+1} = A_r ⊎ Δ_{r+1}`. CQ canon and Datalog admission are therefore one
+    construct, `admit`, over an ordinary relation and its ordinary indices.
+  - **Laws:** L1 `(⊎Q_h)▷A = ⊎(Q_h▷A)`; L2 `δ(X)▷A = δ(X▷A)`;
+    L3 `δ(X⊎Y) = δ(δX⊎δY)` (partial/per-task distinct); L4 in a rule,
+    `¬O(x̄)` is an ordinary negated subatom at the VO level where the last
+    head variable binds (predicate transfer to the deepest join layer). Levels
+    below it become E-Check witnesses. It reads the committed version, like a
+    delta occurrence: not recursion through negation, and
+    `A_r ∪ (Q▷A_r) = A_r ∪ Q`. L5 as above.
+  - **Canonical is an ordinary index, chosen by index selection.** O's
+    indices form one set derived by the index-selection pass (CQ Structures
+    built providers; Datalog Storage layouts) from every read of O, including
+    the anti-join. Each access pattern is completed to a full column
+    permutation, so every index holds complete rows and can answer full-row
+    membership. The pass records which member of that set is
+    **canonical**: a reference to one ordinary index, not a separate store,
+    provider kind or type. Policy (SRDatalog
+    `ir/hir/index.py:select_indices/canonical_index`): prefer a complete index
+    whose full version is already read by joins, so no dead index is
+    maintained; else the first complete index; else the identity order
+    (Ascent's fallback: its `relations_full_indices` is an ordinary
+    `IrRelation` in the same set, shared with any body read in that order,
+    `ascent_hir.rs:230-252`). Advice may pin the choice; the checker verifies
+    the record names a complete member of the set. The canonical index alone
+    has three duties: admission builds the batch in its order and anti-joins
+    against its full version (`fresh`); the other indices derive their deltas
+    from the canonical delta by permutation (SRDatalog
+    `RebuildIndexFromIndex`); and it is always maintained in full. Every other
+    index keeps a full version only if some join reads it as full (SRDatalog
+    `full_needed`). Every index is maintained by its provider's merge ⊕_L, with
+    law reads(⊕(V,D)) = reads(V) ⊎ D; reads are stable between publications;
+    lazy merge is allowed (Ascent's `RelIndexMerge` + `freeze`). How a provider
+    deduplicates a batch (hash, sorted-run merge, radix) is its own business;
+    sorting is never a semantic step or a strategy name. No `seen` or `all`
+    store exists: a full scan reads any complete index.
+  - **Ownership** (multi-stage, each boundary checked, never by rerunning a
+    producer): Incremental/CQ = obligation; RA planning = placement of the
+    anti-join per rule (in-plan at level k, or at `admit`) and the
+    existential E-Check levels; Round/Sequence = `admit` granularity (row,
+    `batch(n)`, whole/round) and the residual δ, checked so every producer of
+    O discharges ▷O exactly once; index selection = O's indices like any
+    relation's; publication = ⊕ per index. Printers print recorded facts only.
+  - **Advice** (pinned choices, planner fills the rest):
+    `plan(L, …, known(at(level k)))`, `plan(L, known(admit))`,
+    `admit(O, granularity(batch(n)), partial(per_task))`; index advice as for
+    any read.
+  - **GPU printers print recorded providers** (CUDA audit 2026-10-30,
+    `agent://CudaProviderAudit`): built providers ignore `Keyed.ty` (always
+    `RangeBuilder`, `experiments/gpu/sequence/core/src/rows.rs:696-777,1090-1196`);
+    the printer invents a permuted sorted provider (`rows.rs:615-637`);
+    terminal grouping ignores the recorded accumulator (`emit.rs:1640-1659`);
+    Datalog rebuilds relation/view types and literal `DeviceRuns`
+    (`experiments/gpu/datalog/src/print.rs:16-18,280`) and overrides
+    `KeySet.provider` and `next` (`print.rs:32-37,329-345,447-449`).
+    The key codec, flat vs packed publication and the directory policy need IR
+    records (`emit.rs:1573-1607,1931-1974`; `rows.rs:48-106`).
+  - **Removes** CQ `CanonStrategy`/`dedup::sort` canon, `__cq_seen` and
+    callback barriers; CPU Datalog `seen`/`all` (hash, `ShardedSeen`, `RunSeen`
+    seeds), DL-InsertNew/DL-ShardedAdmission; GPU fused admission. Verified
+    by laziness tests (the first answer after the first batch), expansion
+    counters (candidates before/after ▷O), exact oracle/TPC-H/DOOP, and paired
+    timing.
 - **P4 Index runs.** RadixRun as the index-role provider: one order-
   preserving key law (merge `KeyCodec`, `DenseOrdinal`, `RadixKey`), narrow
   offsets, columnar items, key predicates as group ranges, membership/count/
@@ -407,6 +489,20 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   key bounds, because `DeviceLayout` supplies only primitive type ranges
   (`experiments/gpu/sequence/core/src/rows.rs`, `sequence-runtime`);
   catalog matching accepts wildcard native tokens and preserves concrete
-  native keyed layouts (`cq-sequence-plan/src/rewrites/{catalog,lookup_first}.rs`).
-- Open: `lookup_first` demotion (then revisit contract 4), and the `delta=k`
-  SRDatalog plan translation that regressed batik.
+  native keyed layouts (`cq-sequence-plan/src/catalog.rs`).
+- P3.3-lite removes automatic Sequence replanning rather than demoting its
+  ordering authority. Open: revisit contract 4 and the `delta=k` SRDatalog
+  plan translation that regressed batik.
+- M0 baseline (P3.3-lite + transitional P3c sort canon), 2026-10-30.
+  Expanded gate vs `0072f5fb`: every target differs, 518 hunks, all in the
+  canon realization (`__cq_seen` HashSet → `dedup::sort`); P3.3-lite adds no
+  CPU hunks. Root workspace tests pass; two first-answer streaming tests are
+  `#[ignore]`d with owner P3d track A. Regressions 119/119. CPU TPC-H SF1:
+  all 29 configurations exact vs DuckDB. Timing is **unpaired** (3 runs vs
+  `cpu_final_sf1_paired.tsv`): h13 0.55, q06 0.66, h15 1.60, h20 1.33,
+  h01 1.15; paired timing is owed by track A, which replaces this
+  realization. GPU H04 SF1 automatic 1.213 [1.169, 1.225] is accepted: the
+  deleted `lookup_first` hid it; the preserved order materializes filtered
+  Lineitem (dispatches 1 → 2). Recovering it belongs to P3.3 grading, not to a
+  revived transfer. `cq_storage::dedup::sort` defers work to the first
+  `next()`, so an undemanded result evaluates nothing.

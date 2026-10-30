@@ -9,10 +9,10 @@
 //! is 151 files; xtask uses cq-testkit for independent SQL evaluation, strict
 //! byte comparisons and seeded abstract fuzz queries.
 //!
-//! Corpus tests compose named public pipelines: all nine planner passes,
+//! Corpus tests compose named public pipelines: all eleven planner choices,
 //! Physical merge/canonical-prefix/smallest/lazy rewrites, recorded Structures
 //! types, supported pull/push printers, and slice/HashMap/BTreeMap hosts.
-//! One joining triangle kernel uses all 2,400 supported configurations; every
+//! One joining triangle kernel uses all 1,424 supported configurations; every
 //! catalog case also runs visible pairwise rows. Positional advice is slice-only.
 //! UI fixtures pin unsupported printer/host choices and malformed retained layouts.
 //! Pull configurations use checked Sequence lowering, host-only grading and pull
@@ -23,7 +23,7 @@
 //! The corpus's `sequence_conformance` tests replay the pairwise configuration
 //! tables and, for the triangle kernel, planner x join x intersection with host
 //! and rewrite axes covered pairwise (26 or 32 rows per planner, not the
-//! 2,848-row executable product), over every existing fixture scenario. It
+//! 1,424-row executable product), over every existing fixture scenario. It
 //! preserves planner, rewrite, representation and host choices, and explicitly
 //! stores the final producer with a checked Sequence rewrite before comparing
 //! Sequential and Tasks on identical terms. Only Tasks grading rejections are

@@ -84,5 +84,7 @@ fn staged_positional_conjunctions_feed_later_column_reads() {
         .filter(|x| (2..=5).contains(&(x % 7)) && x % 11 < 4)
         .map(|x| (x, (x % 7) * (x % 11)))
         .collect();
-    assert_eq!(actual, expected);
+    // Canonical answers are a set; their sort order is not part of the contract.
+    let actual: std::collections::BTreeSet<_> = actual.into_iter().collect();
+    assert_eq!(actual, expected.into_iter().collect());
 }

@@ -44,7 +44,7 @@ pub fn plan_with_catalog(
         Target::Tasks => cq_sequence_tasks::select_providers(program, &catalog)?,
         Target::Sequential => program.clone(),
     };
-    let planned = cq_sequence_plan::plan(&source, &machine, &catalog)?;
+    let planned = cq_sequence_plan::decompose(&source, &machine, &catalog)?;
     let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
     Ok((planned.program, analysis))
 }

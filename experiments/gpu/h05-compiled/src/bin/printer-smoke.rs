@@ -31,7 +31,7 @@ fn main() {
             }
             structures {
                 scan host scan = ::cq_gpu_runtime::DeviceColumns<'_, (i64,)> [];
-                answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
             }
             sequence {
                 source = store rows scan;
