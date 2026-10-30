@@ -161,16 +161,69 @@ set before it, and $\delta R_t$ the accepted fresh set.
 \end{mathpar}
 A mutable staging set can implement both candidate self-deduplication and
 membership against $R_{t-1}$, but readers of this round must continue to see
-the old committed version. This may fuse physical operations; it does not
-erase their distinct semantic obligations. Cost includes processing the
-candidate bag, not only the accepted delta. A lawful maintained index needs
-work proportional to its update/merge algorithm; no universal
-$O(|\delta R_t|)$ round bound follows from these equations.
-CPU Datalog's existing hash-seen realization of \textsc{DL-InsertNew} remains
-outside the CQ Sort/Ordered canonicalization cutover. Its membership against
-the committed relation is not the Structures self-dedup strategy, and the
-insertion law here does not authorize a per-element hash canonicalizer in
-CQ or Sequence.
+the old committed version. Both obligations are discharged by the index
+protocol below, never by a store outside the relation's recorded indices.
+Cost includes processing the candidate bag, not only the accepted delta; no
+universal $O(|\delta R_t|)$ round bound follows from these equations.
+(Transitional: CPU Datalog's hash \code{seen} and CQ's sort canon still
+realize these obligations outside the index protocol; P3d removes both.)
+
+\paragraph{Admission is an anti-join against an ordinary index (P3d).}
+Let $O$ be an output relation (a CQ result or a Datalog IDB) and let its
+candidates arrive in batches $B_1,\ldots,B_n$. Distinct is the incremental
+anti-join
+\begin{mathpar}
+\Rule{ADM-Batch}{O_0=\emptyset\quad
+ F_k=\delta(B_k)\triangleright O_{k-1}\quad O_k=O_{k-1}\mathbin{\dot\cup}F_k}
+ {\delta\Big(\biguplus_k B_k\Big)=\mathop{\dot\bigcup}_k F_k=O_n}
+\end{mathpar}
+Every partition of the stream into batches yields the same set; a one-row
+batch needs no inner $\delta$, so row granularity streams, and one batch is
+the whole stream. A Datalog round is one batch per head starting from
+$R_{t-1}$, so \textsc{DL-InsertNew} is an instance of \textsc{ADM-Batch}.
+Supporting laws:
+\begin{mathpar}
+\Rule{ADM-Union}{}{\Big(\biguplus_h Q_h\Big)\triangleright A=\biguplus_h(Q_h\triangleright A)}
+
+\Rule{ADM-Commute}{}{\delta(X)\triangleright A=\delta(X\triangleright A)}
+
+\Rule{ADM-Partial}{}{\delta(X\uplus Y)=\delta(\delta X\uplus\delta Y)}
+
+\Rule{ADM-InPlan}{\text{every head variable }\bar x\text{ bound at VO level }k\quad
+ O\text{ read at its committed version}}
+ {Q\triangleright_{\bar x}O=Q\text{ with }\neg O(\bar x)\text{ placed at level }k}
+\end{mathpar}
+\textsc{ADM-InPlan} reads a committed version, like a delta occurrence: it is
+not recursion through negation, and $A\cup(Q\triangleright A)=A\cup Q$. Each
+producer of $O$ discharges $\triangleright O$ exactly once, in its plan or at
+admission; $\delta$ of the batch is always discharged at admission.
+
+\paragraph{Index protocol.}
+The anti-join reads the \emph{canonical} index $V$ of $O$: one ordinary member
+of $O$'s index set, every member a complete column permutation, recorded by
+the index-selection pass (preferring a member whose full version joins
+already read). It is typed, recorded and maintained like every other member.
+Every index $V_L$ of $O$ is maintained by its provider's publication;
+non-canonical deltas are derived from the canonical delta by permutation. For
+provider operations $\mathsf{contains}$ (\code{ExactMembership}),
+$\mathsf{fresh}$ (\code{Fresh}) and $\mathsf{publish}$ (\code{Publish}):
+\begin{mathpar}
+\Rule{IX-Fresh}{V\text{ represents }O}
+ {\mathrm{set}(\mathsf{fresh}(V,B))=\mathrm{supp}(B)\setminus O\quad
+  \mathsf{fresh}(V,B)\text{ has no duplicates}\quad V\text{ unchanged}}
+
+\Rule{IX-Publish}{V_L\text{ represents }L(O)\quad F\cap O=\emptyset\quad F\text{ duplicate-free}}
+ {\mathsf{publish}(V_L,L(F))\text{ represents }L(O\mathbin{\dot\cup}F)}
+
+\Rule{IX-Stable}{\text{no publication between two reads}}
+ {\text{both reads observe the same represented relation}}
+\end{mathpar}
+How $\mathsf{fresh}$ deduplicates within a batch (hash insertion, sorted-run
+merge, radix sort) and when $\mathsf{publish}$ physically combines storage
+(eagerly or lazily, as leveled runs) are provider choices under these laws;
+sorting is never a semantic step or a recorded strategy name. Readers of a
+round see the committed version: all publications of a round follow its last
+reader (\textsc{DL-PublishAfterReaders}).
 
 \paragraph{Maintained device runs.}
 Let $V_L$ retain the complete row in the recorded permutation $L$.

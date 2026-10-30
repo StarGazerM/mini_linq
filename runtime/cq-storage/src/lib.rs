@@ -97,9 +97,11 @@ pub use dispatch::AutoDense;
 mod hash_index;
 mod hash_state;
 mod join_filter;
+pub mod maintain;
 pub use join_filter::{
     JoinFilterEligibility, JoinFilterKey, JoinFilterPredicate, NoJoinFilter, selective_build,
 };
+pub use maintain::{Fresh, Publish};
 mod host;
 mod instrument;
 mod membership;

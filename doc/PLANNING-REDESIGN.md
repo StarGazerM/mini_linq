@@ -330,6 +330,27 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     by laziness tests (the first answer after the first batch), expansion
     counters (candidates before/after ▷O), exact oracle/TPC-H/DOOP, and paired
     timing.
+  - **Parallel tracks** (decided 2026-10-30). M0 (`e189e296` baseline plus the
+    contract commit: `cq_storage::maintain::{Fresh, Publish}` with
+    `ExactMembership`; ADM-*/IX-* in `incremental.tex`) is serial on main.
+    Each track then works in its own worktree
+    `/data/mini_linq-wt/<track>` on branch `codex/p3d-<track>`, rebases on
+    main after each milestone and never merges sideways. Agents never commit;
+    the main session merges with full gates (expanded gate with reviewed
+    classes, workspace tests, regressions, formal check, exactness, paired
+    timing; GPU timing one track at a time).
+
+    | Track | Scope | Directories | Model |
+    |---|---|---|---|
+    | A CQ admit | Replace canon/`__cq_seen`/sort barrier by `admit` (anti-join against the canonical built index of O, publish to O's indices, recorded granularity); canonical selection in Structures index selection; restore first-answer streaming | `languages/cq-lang-{structures,sequence}`, `passes/cq-{physical-lowering,structure-selection,sequence-lowering,sequence-plan,physical-realization}`, `features/rewrites`, facade tests | Claude |
+    | B Datalog CPU admit | Storage index selection over all reads incl. the anti-join, completed permutations, recorded canonical (SRDatalog policy); Round `admit` = fresh on canonical (δ within round + ▷R) then publish to every layout; remove `seen`/`all`/`ShardedSeen`/`RunSeen` seeds | `features/datalog/*`, `features/datalog-parallel/*` | Claude |
+    | C GPU conformance | Printers print recorded providers (CUDA audit list); then GPU Datalog admission split into fresh/publish over Round records from B | `experiments/gpu/{sequence/core,sequence-runtime,datalog,datalog-runtime}` | GPT (task default) |
+    | D Index providers | `Fresh`/`Publish` for existing providers and P4 runs (RadixRun index role, order-preserving key law, merge-path, lazy leveled publish) | `runtime/cq-storage` providers, runs, key codecs | GPT (task default) |
+
+    Merge order: M1 = C's provider printing, then A; M2 = B (rebased on A)
+    and D's providers; M3 = C's Datalog admission (needs B's Round records);
+    then P3.3 planner work (touches `cq-sequence-plan`, after A). Main and
+    milestone reviews run on Claude.
 - **P4 Index runs.** RadixRun as the index-role provider: one order-
   preserving key law (merge `KeyCodec`, `DenseOrdinal`, `RadixKey`), narrow
   offsets, columnar items, key predicates as group ranges, membership/count/

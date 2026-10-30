@@ -318,3 +318,11 @@ GPU-LAUNCH-OCCUPANCY	implementation	experiments/gpu/printer-runtime/src/lib.rs	/
 GPU-OffsetScan	implementation	experiments/gpu/sequence-runtime/src/offsets.rs	/// Formal rule GPU-OffsetScan:	Device-wide exclusive scan completes deferred range offsets; adjacent-prefix wrapping and existing failures reject publication before consumers.
 GPU-FoldCompletion	implementation	experiments/gpu/sequence/core/src/emit.rs	/// Formal rule GPU-FoldCompletion:	Whole-input folds write block partials and publish only after a recorded stream-ordered combine; empty input retains the identity.
 SQ-ExpansionCounters	implementation	experiments/gpu/sequence/core/src/emit.rs	// Formal rule SQ-ExpansionCounters:	Opt-in preclosing child observations preserve checked Sequence execution; block leaders sum children, failed capacity attempts are discarded, and Datalog attributes unique fresh output against pre-round state.
+ADM-Batch	abstract	-	-	Distinct over batches is the incremental anti-join against the output relation; any batch partition yields the same set. Realized by P3d tracks A (CQ) and B (Datalog); unimplemented.
+ADM-Union	abstract	-	-	Anti-join distributes over bag union of producers.
+ADM-Commute	abstract	-	-	Distinct commutes with anti-join.
+ADM-Partial	abstract	-	-	Partial distinct of parts preserves the distinct of the union (per-task distinct).
+ADM-InPlan	abstract	-	-	The anti-join may be placed in a plan as a negated subatom at the level where every head variable is bound, reading the committed version; unimplemented.
+IX-Fresh	implementation	runtime/cq-storage/src/maintain.rs	/// Formal rule IX-Fresh:	Trait only; provider implementations arrive with P3d tracks A, B and D.
+IX-Publish	implementation	runtime/cq-storage/src/maintain.rs	/// Formal rule IX-Publish:	Trait only; provider implementations arrive with P3d tracks A, B and D.
+IX-Stable	abstract	-	-	Reads between publications observe one represented relation; providers may merge lazily.
