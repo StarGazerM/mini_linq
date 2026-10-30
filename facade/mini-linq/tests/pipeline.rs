@@ -13,6 +13,38 @@ fn defaults_and_surface_expansion_before_the_cq_contract_agree() {
 }
 
 #[test]
+fn hand_lookup_expand_and_fine_orders_preserve_default_answers() {
+    let seed = [(1,), (2,), (3,)];
+    let r = [(1, 10, 100), (1, 11, 101), (2, 20, 200), (2, 20, 200)];
+    let s = [(1, 10, 1000), (1, 12, 1200), (2, 20, 2000)];
+    let default: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q;
+        relation seed(a:i32); relation r(a:i32,x:i32,y:i32); relation s(a:i32,x:i32,z:i32);
+        answer(a,x,y,z) :- seed(a), r(a,x,y), s(a,x,z);
+    }
+    .map(|(a, x, y, z)| (*a, *x, *y, *z))
+    .collect();
+    let lookup: std::collections::BTreeSet<_> = mini_linq::compile! {
+        pipeline { plan = mini_linq::passes::plan(no_reduce, order(seed, r@1(a), s@2(a), r@1, s@2)); }
+        struct Q;
+        relation seed(a:i32); relation r(a:i32,x:i32,y:i32); relation s(a:i32,x:i32,z:i32);
+        answer(a,x,y,z) :- seed(a), r(a,x,y), s(a,x,z);
+    }.map(|(a,x,y,z)| (*a,*x,*y,*z)).collect();
+    let fine: std::collections::BTreeSet<_> = mini_linq::compile! {
+        pipeline { plan = mini_linq::passes::plan(no_reduce, order(seed, r@1(a,x), s@2(a,x), r@1, s@2)); }
+        struct Q;
+        relation seed(a:i32); relation r(a:i32,x:i32,y:i32); relation s(a:i32,x:i32,z:i32);
+        answer(a,x,y,z) :- seed(a), r(a,x,y), s(a,x,z);
+    }.map(|(a,x,y,z)| (*a,*x,*y,*z)).collect();
+    assert_eq!(
+        default,
+        std::collections::BTreeSet::from([(1, 10, 100, 1000), (2, 20, 200, 2000)])
+    );
+    assert_eq!(lookup, default);
+    assert_eq!(fine, default);
+}
+
+#[test]
 fn exists_retains_nonemptiness_and_consumes_its_entire_source() {
     let seen = std::cell::Cell::new(0);
     let retained: cq_storage::Exists = [(), (), ()]

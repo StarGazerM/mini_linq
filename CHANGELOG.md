@@ -7,6 +7,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- P3.1 hand planning: default `plan(order(...))` accepts explicit
+  `R@k(cols)` lookup/Fine subatoms alongside full `R@k` expansions. WF-VO
+  and a shared CK-Le checker validate dependencies, occurrence phases,
+  written ownership and outer stream; no-advice planning is unchanged.
+  Physical `smallest_intersections` gains checked k-way and per-site
+  `smallest(R@a, S@b, ...)` advice.
 - Contract 7 (doc/PLANNING-REDESIGN.md): every Rust `if`/`let`/`for` is one
   opaque, pure, total-by-premise expression placed by its free variables;
   relational predicates are written `where P` (`where x in lo..hi`,

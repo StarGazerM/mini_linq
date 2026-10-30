@@ -11,7 +11,7 @@ use syn::{Ident, Token};
 /// Arguments shared by facade, build-time and diagnostic Plan-Prefix callers.
 #[derive(Default)]
 pub struct PlanOptions {
-    /// An explicit source-body relation order, checked by the ordinary ordering pass.
+    /// An explicit occurrence/subatom order, checked by WF-VO and lookup-phase obligations.
     pub order: Option<Vec<cq_order::OrderAtom>>,
     pub no_reduce: bool,
     /// `(target, support)` atom selectors to add, in advice order.
@@ -229,6 +229,77 @@ pub fn compile_prefix(source: &cq::Program, options: &PlanOptions) -> syn::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn step_advice_elaborates_lookup_and_expand_on_the_same_occurrence() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation Seed(x:i32);
+            relation R(x:i32,y:i32);
+            answer(x,y) :- Seed(x), R(x,y);
+        };
+        let options: PlanOptions = syn::parse_quote!(no_reduce, order(Seed, R@1(x), R@1));
+        let plan = compile_prefix(&source, &options).unwrap();
+        let (lookup_index, lookup) = plan
+            .plan
+            .definitions
+            .iter()
+            .enumerate()
+            .find_map(|(i, definition)| match &definition.operator {
+                ra::Operator::Semijoin(join) => Some((i, join)),
+                _ => None,
+            })
+            .expect("lookup is E-Check semijoin");
+        let (expand_index, expand) = plan
+            .plan
+            .definitions
+            .iter()
+            .enumerate()
+            .find_map(|(i, definition)| match &definition.operator {
+                ra::Operator::NaturalJoin(join) if join.right == lookup.right => Some((i, join)),
+                _ => None,
+            })
+            .expect("expansion joins the exact same occurrence relation");
+        assert!(lookup_index < expand_index);
+        assert_eq!(expand.left, plan.plan.definitions[lookup_index].result);
+    }
+
+    #[test]
+    fn subatom_selectors_survive_normalization_inserted_clauses() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation Seed(tag:i32,x:i32);
+            relation R(x:i32,y:i32);
+            answer(x,y) :- Seed({ wanted_tag },x), R(x,y);
+        };
+        let options: PlanOptions = syn::parse_quote!(no_reduce, order(Seed, R@1(x), R@1));
+        let plan = prefix_valuation(&source, &options).unwrap();
+        let occurrence = plan
+            .cq
+            .query
+            .body
+            .iter()
+            .position(
+                |item| matches!(item, cq::BodyItem::Positive { atom } if atom.relation == "R"),
+            )
+            .unwrap();
+        assert_ne!(
+            occurrence, 1,
+            "normalization inserts Seed's closed-operand constraint"
+        );
+        let reads: Vec<_> = plan
+            .valuation
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                vo::Step::Atom(atom, _) if atom.relation == "R" => {
+                    Some((atom.clause(), atom.variables().count()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reads, [(occurrence, 1), (occurrence, 2)]);
+    }
 
     #[test]
     fn authored_selectors_survive_closed_atom_restrictions() {

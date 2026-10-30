@@ -11,8 +11,8 @@
 //!
 //! Sequence and explicit push printers use these adapters to preserve the physical
 //! operator graph and storage choices while choosing Rust control flow and layout.
-//! When Physical records `probe smallest`, supported adjacent probe/check pairs enumerate the smaller runtime candidate
-//! set without changing RA/VO order.
+//! When Physical records `probe smallest`, an adjacent k-way intersection enumerates
+//! the smallest runtime candidate set without changing RA/VO order.
 //!
 //! Rows borrow declared host columns and retain owned computed columns. The
 //! adapters bind hosts once and dispatch reusable host reads by type. Leading
@@ -139,23 +139,18 @@ pub fn sources_with<'a>(
         }
         if matches!(&definitions[position].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
         {
-            let Some(second) = definitions.get(position + 1) else {
-                return error(
-                    &definitions[position].name,
-                    "smallest requires its adjacent check",
-                );
-            };
-            if !printer.intersection(&definitions[position], second, true)? {
+            let consumed = printer.intersection(&definitions[position..], true)?;
+            if consumed == 0 {
                 return error(
                     &definitions[position].name,
                     "Structures does not discharge smallest candidate reads",
                 );
             }
-            for definition in &definitions[position..position + 2] {
+            for definition in &definitions[position..position + consumed] {
                 let name = symbol_name(&definition.name);
                 prepared(&name, &printer.reprs[&name]);
             }
-            position += 2;
+            position += consumed;
         } else {
             printer.define(&definitions[position])?;
             let name = symbol_name(&definitions[position].name);
@@ -252,26 +247,47 @@ impl<'a> RowEmitter<'a> {
         result
     }
 
-    /// Emit the recorded smallest candidate pair at its consuming boundary.
+    /// Emit a recorded smallest intersection at its final consuming boundary.
     /// Canon and storage remain the surrounding Sequence constructors.
     pub fn intersection(&mut self, name: &str) -> syn::Result<Option<TokenStream>> {
-        let second = self.printer.physical[name];
-        let Some(input) = second.operator.input() else {
-            return Ok(None);
-        };
-        let first = self.printer.physical[&symbol_name(input)];
-        if !matches!(&first.operator, Operator::Probe(_, keyed)
-            if matches!(keyed.choice, Some(physical::Choice::Smallest(_))))
-        {
+        if !self.printer.intersect {
             return Ok(None);
         }
-        if !self.printer.intersection(first, second, false)? {
+        let definitions = self.printer.physical_definitions;
+        let Some((position, count)) =
+            definitions
+                .iter()
+                .enumerate()
+                .find_map(|(position, first)| {
+                    if !matches!(&first.operator, Operator::Probe(_, keyed)
+                if matches!(keyed.choice, Some(physical::Choice::Smallest(_))))
+                    {
+                        return None;
+                    }
+                    let intersection = physical::intersection(
+                        &definitions[position..],
+                        self.printer.physical_analysis,
+                    )?;
+                    let count = intersection.keys.len();
+                    (symbol_name(&definitions[position + count - 1].name) == name)
+                        .then_some((position, count))
+                })
+        else {
+            return Ok(None);
+        };
+        if self
+            .printer
+            .intersection(&definitions[position..position + count], false)?
+            == 0
+        {
             return error(
-                &first.name,
+                &definitions[position].name,
                 "Structures does not discharge smallest candidate reads",
             );
         }
-        self.printer.scan(&second.name).map(Some)
+        self.printer
+            .scan(&definitions[position + count - 1].name)
+            .map(Some)
     }
 
     /// Read a representation already installed by the caller.

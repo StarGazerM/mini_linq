@@ -20,6 +20,136 @@ fn normal(tokens: proc_macro2::TokenStream) -> cq::Program {
 }
 
 #[test]
+fn step_order_records_bound_lookups_then_owned_expansions() {
+    let source = normal(quote! {
+        struct Q;
+        relation Seed(x:i32);
+        relation R(x:i32,y:i32);
+        relation S(x:i32,z:i32);
+        answer(x,y,z) :- Seed(x), R(x,y), S(x,z);
+    });
+    let advised = cq_order::compile_explicit(
+        &source,
+        &[
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(x)),
+            syn::parse_quote!(S@2(x)),
+            syn::parse_quote!(R@1),
+            syn::parse_quote!(S@2),
+        ],
+    )
+    .unwrap();
+    let analysis = valuation::contract::check(&advised).unwrap();
+    assert_eq!(
+        analysis.introduces,
+        vec![vec!["x"], vec![], vec![], vec!["y"], vec!["z"],]
+    );
+    cq_order::le::check(&source, &advised).unwrap();
+}
+
+#[test]
+fn lookup_checker_rejects_an_unbound_column_but_fine_advice_can_introduce_it() {
+    let source = normal(quote! {
+        struct Q;
+        relation Seed(x:i32);
+        relation R(x:i32,y:i32,z:i32);
+        answer(x,y,z) :- Seed(x), R(x,y,z);
+    });
+    let fine = cq_order::compile_explicit(
+        &source,
+        &[
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(x,y)),
+            syn::parse_quote!(R@1),
+        ],
+    )
+    .unwrap();
+    valuation::contract::check(&fine).unwrap();
+    // The same WF-VO subatom cannot be certified as a Lookup: y is unbound.
+    let error = cq_order::le::check(&source, &fine).unwrap_err();
+    assert!(error.to_string().contains("non-introducing lookup"));
+}
+
+#[test]
+fn fine_step_order_can_bind_then_check_an_intersection_variable() {
+    let source = normal(quote! {
+        struct Q;
+        relation Seed(a:i32);
+        relation R(a:i32,x:i32,y:i32);
+        relation S(a:i32,x:i32,z:i32);
+        answer(a,x,y,z) :- Seed(a), R(a,x,y), S(a,x,z);
+    });
+    let advised = cq_order::compile_explicit(
+        &source,
+        &[
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(a,x)),
+            syn::parse_quote!(S@2(a,x)),
+            syn::parse_quote!(R@1),
+            syn::parse_quote!(S@2),
+        ],
+    )
+    .unwrap();
+    let analysis = valuation::contract::check(&advised).unwrap();
+    assert_eq!(analysis.introduces[1], ["x"]);
+    assert!(analysis.introduces[2].is_empty());
+    assert_eq!(analysis.introduces[3], ["y"]);
+    assert_eq!(analysis.introduces[4], ["z"]);
+}
+
+#[test]
+fn step_order_rejects_invalid_columns_phases_ownership_and_outer() {
+    let source = normal(quote! {
+        struct Q;
+        relation Seed(x:i32);
+        relation R(x:i32,y:i32,z:i32);
+        relation S(y:i32);
+        answer(x,y,z) :- Seed(x), R(x,y,z), S(y);
+    });
+    for order in [
+        vec![
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(missing)),
+            syn::parse_quote!(R@1),
+        ],
+        vec![
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1),
+            syn::parse_quote!(R@1(x)),
+        ],
+        vec![
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(x)),
+            syn::parse_quote!(S),
+            syn::parse_quote!(R@1),
+        ],
+        vec![
+            syn::parse_quote!(S),
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(x,y)),
+            syn::parse_quote!(R@1),
+        ],
+        vec![
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(y,z)),
+            syn::parse_quote!(R@1),
+        ],
+        vec![
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(x)),
+            syn::parse_quote!(R@1(x)),
+            syn::parse_quote!(R@1),
+        ],
+        vec![syn::parse_quote!(Seed), syn::parse_quote!(R@1(x))],
+    ] {
+        assert!(
+            cq_order::compile_explicit(&source, &order).is_err(),
+            "{order:?}"
+        );
+    }
+}
+
+#[test]
 fn explicit_order_rejects_dependency_conflicts_instead_of_ignoring_advice() {
     let source = normal(quote! {
         struct Q;

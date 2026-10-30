@@ -177,7 +177,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         }
     }
 
-    // The binary smallest-candidate rewrite also reads each relation at
+    // The k-way smallest-candidate rewrite also reads each relation at
     // prefix + new-column for membership. Keep these two-level demands
     // local: host reads, other keys and ordered reads retain their paths.
     let candidate_keys: BTreeSet<_> = candidates

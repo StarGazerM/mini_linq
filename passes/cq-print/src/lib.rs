@@ -96,6 +96,7 @@ pub struct Context<'a> {
     pub physical_analysis: &'a physical::Analysis,
     pub infos: BTreeMap<String, physical::Row>,
     pub physical: BTreeMap<String, &'a physical::Definition>,
+    pub physical_definitions: &'a [physical::Definition],
     pub hosts: BTreeMap<String, Host>,
     pub parameters: BTreeMap<String, Ident>,
     /// Whether generator item types can require host key annotations.
@@ -363,6 +364,7 @@ impl<'a> Context<'a> {
         let mut context = Context {
             profile: None,
             physical_analysis: &analysis.physical,
+            physical_definitions: &module.physical.program.definitions,
             analysis,
             providers: &module.structures,
             infos: analysis.physical.rows.clone(),

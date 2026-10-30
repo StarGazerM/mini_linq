@@ -86,6 +86,53 @@ raw Cargo. Cubins target the configured GPU architecture rather than providing
 the runtime PTX bridge to other architectures; rebuild with the appropriate
 `--arch` when changing GPUs.
 
+### Lookup/Expand child counters
+
+Build with `CQ_EXPANSION_COUNTERS=1` to instrument GPU Sequence and CPU pull
+expansions. This is a **compile-time** opt-in; build scripts track its presence,
+so rebuilding without it restores the uninstrumented generated code. Do not
+use a counter build for timings. No Rust expression or Rust type is inspected.
+
+```sh
+CQ_EXPANSION_COUNTERS=1 cargo oxide build --arch sm_89 -- --release -p srd-doop-gpu
+# Run the usual xalan command, saving stderr as counters.log.
+python3 ../../tools/expansion_report.py < counters.log
+```
+
+GPU counters sum `u64` children at each fused range expansion **before**
+downstream closing predicates/lookups. The block leader adds the collective
+child count, never one atomic per lane/child. Deferred range publication counts
+the same children without materializing them. Only the successful capacity
+attempt is reported; overflow attempts are not observations. Static IDs are
+the checked Sequence program/module, publication definition, and expansion
+ordinal in its emitted chains. Datalog adds its checked hole name and delta
+variant, and the runtime round number; no new scheduling advice is inferred.
+
+`cq_expansion` stderr records contain `rule`, `variant`, `iteration`, `program`,
+`definition`, `stage`, and `children`. `cq_expansion_output` contains the
+definition's closing output and `admitted`. For Datalog, `admitted` is the
+rule's distinct output absent from the **pre-round** accepted relation, measured
+on-device without mutating admission state. Two rules can contribute the same
+fresh tuple, so these per-rule counts must not be summed as relation growth.
+This diagnostic adds sort/subtraction work; ordinary admission is unchanged.
+Outside Datalog (including GPU TPC-H), reporting is automatic after each
+successful dispatch and the denominator is that definition's closing output
+before any separate canonicalization or later host aggregation.
+
+The report tool sums each rule/variant/definition/stage across iterations and
+prints JSON, including `largest_preclosing`, `admitted`, and
+`largest_preclosing_per_output` (`null` for zero output). It does not add
+duplicate admission copies from different definitions.
+
+For CPU pull, also enable the consuming crate's `cq-storage/counters` feature.
+Call `cq_storage::counters::reset()` before the query, fully exhaust/drop its
+iterator, then print `cq_storage::counters::render_expansions()` or inspect
+`expansions()`. Stage labels are `Sequence-definition/Physical-result`; the
+`output` counter is the final query iterator. Counts occur on child production
+before closing consumers, including exact/range/intersection expansions.
+Without the storage feature the wrappers are identity functions; without
+`CQ_EXPANSION_COUNTERS` the printer emits no wrappers at all.
+
 ### Packed Datalog runtime
 
 `gpu-datalog-runtime` provides `Packing`/`Column` encodings and `DeviceRuns<W>`

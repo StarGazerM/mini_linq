@@ -467,6 +467,23 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], sc
                 };
                 quote!(let #binding = &#source;)
             });
+            let counter_scope = std::env::var_os("CQ_EXPANSION_COUNTERS").is_some().then(|| quote! {
+                let __cq_expansion_capture = ::cq_gpu_runtime::expansions::Capture::begin();
+            });
+            let counter_report = if std::env::var_os("CQ_EXPANSION_COUNTERS").is_some() {
+                let variant = rule.variant;
+                let state = local("state", rule.head);
+                let packed = local("packing", rule.head);
+                let word = crate::storage::word_type(&schemas[rule.head])?;
+                let rule_name = format!("{}/{}", head_name, program.holes[hole].cq.name);
+                Some(quote! {
+                    let __cq_expansion_candidates = ::gpu_datalog_runtime::concatenate_batches::<#word>(
+                        __cq_gpu_pool.clone(), &#packed, ::core::slice::from_ref(&__cq_gpu_batch))?;
+                    let __cq_expansion_admitted = #state.count_fresh(
+                        &__cq_expansion_candidates, __cq_expansion_candidates.len())?;
+                    __cq_expansion_capture.report(#rule_name, #variant, __cq_gpu_round, __cq_expansion_admitted);
+                })
+            } else { None };
             launches.push(quote!({
                 #scan
                 if __cq_gpu_trace_memory {
@@ -475,7 +492,9 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], sc
                         #index, #phase, #hole, #head_name, memory.current_bytes, memory.reserved_bytes, #arena.allocated_bytes());
                 }
                 let __cq_gpu_arena = &mut #arena;
+                #counter_scope
                 let __cq_gpu_batch = #invocation;
+                #counter_report
                 if __cq_gpu_trace_memory {
                     ::std::eprintln!("gpu_datalog_hole_result\tstratum={}\tphase={}\thole={}\trows={}\tcapacity={}\tbytes={}",
                         #index, #phase, #hole, __cq_gpu_batch.len(), __cq_gpu_batch.reserved_capacity(), __cq_gpu_batch.allocated_bytes());

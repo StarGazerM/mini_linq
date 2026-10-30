@@ -52,11 +52,57 @@ $\mathsf{reads}(r)$ the operand and return uses of $r$:
 A reusable host is a noncanonical host rename without literal bindings;
 literal-bearing renames retain their filtered relation. Linear-or-fused means one read,
 or only shared prefix reads inside a checked fused group. \code{exists} needs an
-empty heading. \code{probe smallest} needs an adjacent admissible intersection.
+empty heading. \code{probe smallest} needs an adjacent admissible intersection
+of $k\ge2$ providers, as specified by \textsc{PH-Smallest}.
 Lazy semi/anti needs a reusable host read only lazily on that key. A witness
 union (\code{any}) has an empty interface; a fused union names its prefix and
 every arm depends on it; cross-arm canon on a statically disjoint union is
 rejected. Physical checks neither IX demands nor canonical return evidence.
+
+\paragraph{Smallest candidate intersection.}
+Let $p$ be the outer valuation and $v$ one new column. An introducing probe
+and its maximal adjacent chain of probe/semijoin membership checks read
+providers $R_1,\ldots,R_k$ with headings $K_i\cup\{v\}$, where
+$\varnothing\ne K_i\subseteq\mathsf{heading}(p)$ and
+$v\notin\mathsf{heading}(p)$. Each provider is retained or a reusable host.
+The introducing key is $K_1$; subsequent keys are $K_i\cup\{v\}$.
+Every intermediate result is a noncanonical pipe, consumed by the next check.
+The final result retains its written mode and canonicalization.
+\begin{mathpar}
+\Rule{PH-Smallest}{k\ge2\quad C_i(p)=\{v\mid(p[K_i],v)\in R_i\}\\
+ j=\mathop{\mathrm{arg\,min}}_{1\le i\le k}|C_i(p)|}
+ {\bigcap_{i=1}^{k}C_i(p)
+   =\{v\in C_j(p)\mid\forall i\ne j,\ v\in C_i(p)\}}
+
+\Rule{PH-KeyProjection}{J=K\cup\{v\}\subseteq\mathsf{heading}(R)\quad
+ R_J=\pi_J(R)\ \text{retained}\\
+ R_J\text{ is private to one smallest membership edge}}
+ {p\ltimes_J R=p\ltimes_J R_J}
+\end{mathpar}
+The opt-in \code{smallest_intersections} rewrite records this choice without
+altering keys or Rust payloads. Explicit occurrence advice may additionally
+retain the exact key projection of a membership provider with extra payload,
+by PH-KeyProjection. Later full reads still use the original provider.
+The correspondence checker permits only these private projections, used once
+by a selected smallest semijoin, and erases them back to the original named
+graph. Ordinary empty/\code{all}/result selections do not introduce key views.
+Independent interposed relational definitions may move before the entire chain in stable dependency order;
+Rust nodes and dependencies on intermediate results block this exposure.
+Empty/\code{all}/result-name advice retains its existing selection meaning.
+Occurrence advice \code{smallest(R@a,S@b,...)} names every provider of exactly
+one complete admissible site, through rename or unary relational provenance.
+Repeated, missing, partial, ambiguous or blocked sites are rejected, not widened.
+The public Physical contract and rewrite correspondence check the result.
+Selection uses only recorded columns and provenance, never Rust type inspection.
+Structures supplies a candidate directory and full-key membership access for
+every provider; native execution counts each set once and enumerates the minimum
+(written-order ties) without allocating a candidate collection per valuation.
+In an advised VO intersection, the first Fine subatom introduces $v$ and
+subsequent adjacent subatoms check it; they do not independently bind $v$.
+E-Check correctly emits semijoins against their full occurrence relations.
+PH-KeyProjection supplies candidate-only views for these semijoin sides
+without losing payload correlation at later full expansions.
+
 
 \paragraph{Retained streams.}
 The opt-in Physical rewrite \code{cq_rewrites::retain_streams(r,...)} changes

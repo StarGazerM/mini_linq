@@ -111,6 +111,12 @@ equality-class map and $s_i=|\kappa(O_i)\cap\kappa(B)|$:
 \Rule{O-WrittenBlocks}{t=\mathsf{WrittenCoarse}(s)}
  {\mathsf{compileWritten}_{order}(s)=
  t[\forall b\text{ recursively}.\ b.placement:=\mathsf{correlated}]}
+
+\Rule{O-StepAdvice}{n=N(q)\quad t=\mathsf{authorSteps}(n,A)\quad
+ \mathsf{erase}(t)=n\\
+ \mathsf{WF}_{VO}(t)\quad
+ (L\ne\varnothing\Rightarrow\mathsf{CK\text{-}Le}(n,t,L))}
+ {\mathsf{orderAdvice}(q,A)=t}
 \end{mathpar}
 Ready constraints rank $(0,0,0,i)$, other nonatoms $(0,0,1,i)$; Auto is
 GreedyWidth; Elimination uses reverse maximum-cardinality search on the primal
@@ -132,6 +138,22 @@ $2$ for a derived domain, relational predicate or finite relational block,
 and $3$ otherwise. Equality classes determine locality; Rust guards never
 improve a rank, regardless of their syntax or types. This is a syntax-only priority, not a cardinality
 estimate. Written remains available to explicit planner clients.
+
+Step advice extends the occurrence selectors with \code{R@i(cols)}: the listed
+query variables are the exact retained columns, including every already-bound
+column of that occurrence. A bare \code{R@i} reads the full correlated row.
+Partial reads introducing a variable are Fine steps (at most one new variable);
+adjacent reads of different occurrences on that variable expose intersection
+points, without choosing a Physical implementation. A non-introducing explicit
+partial read before any Fine read of that occurrence selects it into $L$, the checked
+lookup/expand set. Each selected occurrence must then have exactly one later
+full expansion with written ownership. An unbound listed variable denotes
+a Fine introduction, not an unchecked lookup. Duplicate/foreign columns,
+reads after expansion, incomplete rows and unsatisfied dependencies reject.
+Ready nonatoms are placed by free-variable readiness, constraints first;
+unnamed occurrences follow in written priority, while named partial occurrences
+must be completed explicitly. Without step advice, ordinary coarse advice
+and the default planner remain unchanged.
 \[
 \Rule{H-FilterRank}{P_i=\text{local explicit relational predicates on }\kappa(O_i)\quad
  L_i=\{0\mid O_i\text{ has a literal argument}\}}
@@ -847,10 +869,11 @@ passing them to the normal-IR ordering API; unqualified selectors are unchanged.
  {\code{cq_planners::order(le)}(q)=E(\mathsf{le}(w))}
 
 \Rule{CK-Le}{\mathsf{erase}(t)=n\quad
- \forall R.\ \mathsf{lookup}(R)<\mathsf{expand}(R)\ \text{exactly once each}\\
- \mathsf{columnsOwned}(t)=\mathsf{columnsOwned}(n)\quad \mathsf{outer}(t)=\mathsf{outer}(w)\\
- \text{WF-VO}(t)\quad \mathsf{check}^{Masks}(t)}
- {\mathsf{check}^{Le}(q,t)\Downarrow\ok}
+ \forall R\in L.\ \mathsf{lookup}(R)<\mathsf{expand}(R)\ \text{exactly once each}\\
+ \mathsf{columnsOwned}_{L}(t)=\mathsf{columnsOwned}_{L}(n)\quad
+ \mathsf{outer}(t)=\mathsf{outer}(w)\\
+ \text{WF-VO}(t)}
+ {\mathsf{check}^{Le}(q,t,L)\Downarrow\ok}
 \end{mathpar}
 The \code{no_reduce} option disables implicit Masks reductions, not explicit
 \code{reduce(T with S)} advice. Such advice therefore composes with the empty
@@ -887,6 +910,14 @@ or scope exit permits, so acyclic scopes form two-phase plans.
 Expansions are coarse full rows under an explicit CK-Le obligation, not Fine
 subatoms. Whether a later probe reuses the lookup's cursor is a Structures
 representation decision, not part of this plan.
+The phase checker is shared by \code{cq_order} and the external planner, rather
+than reimplemented by the facade. For Plan-Le, $L$ is every inner occurrence
+in each scope, the outer has one full read with written ownership, and the
+caller additionally checks Masks reductions. For step advice, $L$ is only the
+explicit lookup occurrences at the top level; unselected Fine/coarse reads and
+unchanged nested scopes retain WF-VO obligations. CK-Le then requires the
+written outer stream whenever $L$ is nonempty. The phase check runs before
+optional reduction advice.
 
 \code{plan} is left-deep in written order and defaults to checked Masks
 reduction: every scope, acyclic or cyclic, reduces its inner clauses along the

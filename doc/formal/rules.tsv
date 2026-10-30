@@ -38,6 +38,8 @@ WF-Physical	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule
 PH-Pipe	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Pipe:	Require one stream read for a derived pipe; only noncanonical unfiltered host renames are reusable, and literal-bearing renames retain filtered data.
 PH-Let	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Let:	Require every let to be read.
 PH-HostSet	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-HostSet:	A rename of a certified host set has its full heading as uniqueness key.
+PH-Smallest	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Smallest:	Enumerate a minimum-size candidate set and test all remaining providers; every prefix is nonempty and binds the same column.
+PH-KeyProjection	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-KeyProjection:	Explicit smallest advice may retain an exact private membership-key projection; correspondence erases only single-use views on selected smallest semijoins.
 IF-HostSet	implementation	passes/cq-print/src/lib.rs	    /// Formal rule IF-HostSet:	Certify exact full-row host distinctness before query execution; duplicate inputs fail with a named error.
 STR-Key	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Key:	Answer reads by reusable host dispatch or a built level prefix.
 STR-Range	implementation	languages/cq-lang-structures/src/lib.rs	// Formal rule STR-Range:	Const/range reads have direct or scan/filter implementations and never justify a build.
@@ -48,6 +50,7 @@ SEL-Group	implementation	passes/cq-structure-selection/src/lib.rs	/// Formal rul
 P-GroupState	implementation	passes/cq-physical-realization/src/operators.rs	/// Formal rule P-GroupState:	Realize keyed folds with the recorded accumulator provider, without substituting a concrete map.
 WF-Structures	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule WF-Structures:	Check entries, read coverage and inferred canonical return.
 CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Check unchanged CQ, free-variable dependencies, coverage, Written order and recorded choices.
+O-StepAdvice	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-StepAdvice:	Check authored full and partial occurrence reads with WF-VO and shared CK-Le on selected lookups; keep dependency readiness and unnamed written priority.
 CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check branch-preserving erasure, no optional reducer for independent branches, otherwise filtered support versions, tree obligations and exact block cuts.
 CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check VO occurrences, reductions, relational constraints, unchanged Rust payloads and free-variable bindings.
 E-BlockPlacement	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-BlockPlacement:	Consume recorded Hoisted or Correlated placement independently of predicate optimization mode.
@@ -109,7 +112,7 @@ Plan-Graph	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-
 Plan-Transfer	implementation	features/planners/plan/src/lib.rs	/// Formal rule Plan-Transfer:	Robust predicate transfer on the written order: Masks forward pass, the stream's forward reductions by filtered children, then the backward pass from filtered sides, parents first, all before the stream.
 CK-Transfer	implementation	features/planners/plan/src/lib.rs	// Formal rule CK-Transfer:	The transfer schedule equals the one recomputed from the erased plan.
 Plan-Le	implementation	features/planners/plan/src/le.rs	// Formal rule Plan-Le:	Record lookup/expand phases with free-variable demand, scope exit and Masks reductions.
-CK-Le	implementation	features/planners/plan/src/le.rs	// Formal rule CK-Le:	Independently check normalized CQ identity, one non-introducing lookup before one coarse full expansion per inner occurrence, written column ownership, outer identity, recursive block contracts and Masks reductions.
+CK-Le	implementation	passes/cq-order/src/le.rs	// Formal rule CK-Le:	Shared normalized-CQ, ordered lookup/expand, full-row ownership and outer-stream checker; automatic plans check every inner occurrence recursively, hand advice only selected top-level lookup occurrences.
 ST-Entry	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Entry:	Start the resolved checked queue unchanged; default sequential planning is selected during configuration resolution.
 ST-Next	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Next:	Parse and transform a payload, then emit the selected next macro invocation.
 ST-Context	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Context:	Checked pass invocations expand in their enclosing Rust context; rustc checks closing bindings.
@@ -313,3 +316,4 @@ GPU-Launch	implementation	languages/cq-lang-sequence/src/gpu.rs	/// Formal rule 
 GPU-LAUNCH-OCCUPANCY	implementation	experiments/gpu/printer-runtime/src/lib.rs	/// Formal rule GPU-LAUNCH-OCCUPANCY:	Query device SM count and actual kernel resident blocks at prepare time; cap grid by domain tile count.
 GPU-OffsetScan	implementation	experiments/gpu/sequence-runtime/src/offsets.rs	/// Formal rule GPU-OffsetScan:	Device-wide exclusive scan completes deferred range offsets; adjacent-prefix wrapping and existing failures reject publication before consumers.
 GPU-FoldCompletion	implementation	experiments/gpu/sequence/core/src/emit.rs	/// Formal rule GPU-FoldCompletion:	Whole-input folds write block partials and publish only after a recorded stream-ordered combine; empty input retains the identity.
+SQ-ExpansionCounters	implementation	experiments/gpu/sequence/core/src/emit.rs	// Formal rule SQ-ExpansionCounters:	Opt-in preclosing child observations preserve checked Sequence execution; block leaders sum children, failed capacity attempts are discarded, and Datalog attributes unique fresh output against pre-round state.

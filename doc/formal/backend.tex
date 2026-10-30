@@ -177,8 +177,8 @@ prefix shapes it cannot realize. The CUDA Sequence terminal rejects native
 Structures witnesses, staging and join filters rather than treating them as
 ordinary device lookups. Legacy provider names grant no exception.
 A Smallest intersection records expansion only at its introducing probe.
-Its forcing read is part of that same total intersection, not an independent
-cursor; subsequent staged probes may cross it without adding a force-stage.
+Its membership checks are part of that same total intersection, not independent
+cursors; subsequent staged probes may cross them without adding a force-stage.
 \begin{lemma}[Segmented flatten]
 Flattening $N$ finite ranges is total and length-known: with exclusive
 offsets $o_i=\sum_{j<i}|R_j|$, its length is $M=\sum_i|R_i|$.

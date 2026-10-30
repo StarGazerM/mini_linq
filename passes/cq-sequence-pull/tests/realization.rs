@@ -432,6 +432,19 @@ fn mixed_smallest_checks() -> Vec<proc_macro2::TokenStream> {
         reversed.structures.entries.reverse();
         for target in [target, reversed] {
             let expression = sequence_rows(&target).unwrap();
+            let emitted = text(&expression);
+            assert!(
+                emitted.contains("__cq_choose_a"),
+                "binary emission keeps its existing selector"
+            );
+            assert!(
+                !emitted.contains("__cq_choice"),
+                "k-way selector must not change binary plans"
+            );
+            assert!(
+                !emitted.contains("if true &&"),
+                "binary membership has no added conjunction"
+            );
             let assertions = fixtures.iter().enumerate().map(|(case, (inputs, expected))| {
                     let bindings = ["L", "R", "S"].into_iter().zip(inputs).map(|(name, rows)| {
                         let name = syn::Ident::new(name, proc_macro2::Span::call_site());
@@ -943,4 +956,40 @@ fn grouped_folds_share_full_named_valuations_and_empty_identities() {
     let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../runtime/cq-storage/src/lib.rs");
     cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
+
+#[test]
+#[ignore = "run with CQ_EXPANSION_COUNTERS=1 to enable diagnostic translation"]
+fn expansion_counters_measure_children_before_closing_predicates() {
+    assert!(std::env::var_os("CQ_EXPANSION_COUNTERS").is_some());
+    let physical = syn::parse_quote!(physical {
+        relation keys(k:i32); relation payload(k:i32,v:i32);
+        left = pipe rename keys@0 {k -> k};
+        right = let rename payload@1 {k -> k,v -> v};
+        joined = pipe probe first [k] left,right;
+        closed = pipe guard joined if (*v >= 30);
+        result = pipe canon project closed keep {k,v};
+        return result as answer(k,v);
+    });
+    let selected = cq_structure_selection::compile(&physical).unwrap();
+    let expression = sequence_rows(&selected).unwrap();
+    let source = quote! {
+        fn main() {
+            let keys = &[(1i32,), (2,)];
+            let payload = &[(1i32,10i32), (1,20), (2,30), (2,40)];
+            ::cq_storage::counters::reset();
+            let actual = (#expression).map(|(k,v)| (*k,*v))
+                .collect::<::std::collections::BTreeSet<_>>();
+            assert_eq!(actual, ::std::collections::BTreeSet::from([(2,30),(2,40)]));
+            let counts = ::cq_storage::counters::expansions();
+            let children = counts.iter().filter(|record| record.stage != "output")
+                .map(|record| record.children).max().unwrap();
+            let output = counts.iter().find(|record| record.stage == "output").unwrap();
+            assert_eq!(children, 4, "count before the closing predicate, not after");
+            assert_eq!(output.children, 2);
+        }
+    };
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime, true).run(&source.to_string());
 }

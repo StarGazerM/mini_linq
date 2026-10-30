@@ -49,6 +49,44 @@ fn conform(source: ir::Program, expected: &str, rewrite: Rewrite, case_name: &st
 }
 
 #[test]
+fn occurrence_smallest_projects_lookup_keys_and_preserves_full_expansions() {
+    let source: ir::Program = syn::parse_quote!(physical {
+        relation L(a:i32); relation R(a:i32,x:i32);
+        relation S(a:i32,x:i32,z:i32); relation T(a:i32,x:i32,w:i32);
+        l = pipe rename L@0 {a -> a};
+        r = pipe rename R@1 {a -> a,x -> x};
+        candidate = pipe probe first [a] l,r;
+        s = pipe rename S@2 {a -> a,x -> x,z -> z};
+        check_s = pipe semi eager [a,x] candidate,s;
+        t = pipe rename T@3 {a -> a,x -> x,w -> w};
+        check_t = pipe semi eager [a,x] check_s,t;
+        expand_s = pipe probe first [a,x] check_t,s;
+        out = pipe canon probe first [a,x] expand_s,t;
+        return out as answer(a,x,z,w);
+    });
+    assert_eq!(smallest_intersections(&source, quote!()).unwrap(), source);
+    let target = smallest_intersections(&source, quote!(smallest(R@1,S@2,T@3))).unwrap();
+    ir::check_rewrite(&source, &target).unwrap();
+    let facts = ir::contract::check(&target).unwrap();
+    assert_eq!(ir::candidate_prefixes(&target, &facts)[0].sides.len(), 3);
+    cq_structure_selection::compile(&target).unwrap();
+    assert_eq!(smallest_intersections(&target, quote!(smallest(R@1,S@2,T@3))).unwrap(), target);
+    for name in ["expand_s", "out"] {
+        assert_eq!(
+            source.program.definitions.iter().find(|d| d.name == name).unwrap(),
+            target.program.definitions.iter().find(|d| d.name == name).unwrap(),
+        );
+    }
+    let mut wrong_provider = target.clone();
+    let projection = wrong_provider.program.definitions.iter_mut().find_map(|d| {
+        if let Operator::Project(project) = &mut d.operator { Some(project) } else { None }
+    }).unwrap();
+    projection.input = syn::parse_quote!(r);
+    ir::contract::check(&wrong_provider).unwrap();
+    assert!(ir::check_rewrite(&source, &wrong_provider).is_err());
+}
+
+#[test]
 fn merge_output_is_pinned_and_named_selection_is_exact() {
     let source = scenario("intersection").parse_physical().unwrap();
     let expected = include_str!("fixtures/merge.physical");
@@ -172,6 +210,84 @@ fn smallest_output_is_pinned_for_adjacent_and_hoisted_corpus_pairs() {
 }
 
 #[test]
+fn smallest_three_way_occurrence_advice_is_exact_and_checked() {
+    let source: ir::Program = syn::parse_str(include_str!("fixtures/three_way.physical")).unwrap();
+    let expected: ir::Program = syn::parse_str(include_str!("fixtures/three_way_smallest.physical")).unwrap();
+    for args in [
+        quote!(), quote!(all), quote!(candidate),
+        quote!(smallest(R@1, S@2, T@3)),
+        quote!(smallest(T@3, r#R@1, S@2,)),
+    ] {
+        let target = smallest_intersections(&source, args.clone()).unwrap();
+        assert_eq!(target, expected);
+        assert_eq!(smallest_intersections(&target, args).unwrap(), target);
+        ir::check_rewrite(&source, &target).unwrap();
+        let facts = ir::contract::check(&target).unwrap();
+        let candidates = ir::candidate_prefixes(&target, &facts);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].sides, vec![
+            ("r".into(), vec!["a".into()]), ("s".into(), vec!["a".into()]),
+            ("t".into(), vec!["a".into()]),
+        ]);
+        let selected = cq_structure_selection::compile(&target).unwrap();
+        cq_testkit::structures::contract::check(&selected).unwrap();
+    }
+    // The rewrite neither infers nor alters Rust representations.
+    let opaque: ir::Program = syn::parse_str(
+        &include_str!("fixtures/three_way.physical").replace("i32", "OpaqueColumn")
+    ).unwrap();
+    assert!(smallest_intersections(&opaque, quote!(smallest(R@1,S@2,T@3))).is_ok());
+    assert!(!source.program.definitions.iter().any(|definition| matches!(
+        &definition.operator, Operator::Probe(_, key) if matches!(key.choice, Some(Choice::Smallest(_)))
+    )));
+}
+
+#[test]
+fn smallest_occurrence_advice_rejects_missing_ambiguous_and_inadmissible_sites() {
+    let source: ir::Program = syn::parse_str(include_str!("fixtures/three_way.physical")).unwrap();
+    for args in [
+        quote!(smallest()), quote!(smallest(R@1)), quote!(smallest(R@1,R@1)),
+        quote!(smallest(R@1,S@2)), quote!(smallest(R@1,S@2,T@9)),
+        quote!(smallest(R@1,S@2,Missing@3)), quote!(smallest(L@0,R@1,S@2,T@3)),
+        quote!(smallest(R@1,S@2,T@3),smallest(T@3,S@2,R@1)),
+        quote!(smallest(R@1,S@2,T@3),candidate), quote!(smallest(R,S,T)),
+    ] {
+        let error = smallest_intersections(&source, args).unwrap_err().to_string();
+        assert!(!error.is_empty());
+    }
+    for index in [2, 4] {
+        let mut blocked = source.clone();
+        // An intermediate materialization/canon ends the admissible chain.
+        blocked.program.definitions[index].canon = Some(Default::default());
+        assert!(smallest_intersections(&blocked, quote!(smallest(R@1,S@2,T@3))).is_err());
+    }
+    let mut ambiguous = source.clone();
+    // Two independent sites reuse the same recorded occurrence provenance.
+    let mut other = source.clone();
+    for definition in &mut other.program.definitions {
+        definition.name = quote::format_ident!("{}_other", definition.name);
+        if let Operator::Probe(_, key) | Operator::Semi(_, key) = &mut definition.operator {
+            key.left = quote::format_ident!("{}_other", key.left);
+            key.right = quote::format_ident!("{}_other", key.right);
+        }
+    }
+    ambiguous.program.definitions.extend(other.program.definitions);
+    // A union keeps both independently named sites live.
+    let union: ir::Program = syn::parse_quote!(physical {
+        relation X(a:i32,v:i32);
+        result = pipe rename X@0 {a -> a,v -> v};
+        result_other = pipe rename X@1 {a -> a,v -> v};
+        both = pipe canon union result,result_other;
+        return both as answer(a,v);
+    });
+    ambiguous.program.definitions.push(union.program.definitions[2].clone());
+    ambiguous.program.returned = syn::parse_quote!(both);
+    ir::contract::check(&ambiguous).unwrap();
+    assert!(smallest_intersections(&ambiguous, quote!(smallest(R@1,S@2,T@3)))
+        .unwrap_err().to_string().contains("matched 2"));
+}
+
+#[test]
 fn smallest_rejects_mutations_of_its_local_premises() {
     let source: ir::Program = syn::parse_str(include_str!("fixtures/adjacent.physical")).unwrap();
     let target = smallest_intersections(&source, quote!()).unwrap();
@@ -285,12 +401,17 @@ fn smallest_visits_independent_pairs_hoisted_before_the_current_candidate() {
         smallest_intersections(&source, quote!(candidate, inner)).unwrap(),
         target
     );
+    assert_eq!(
+        smallest_intersections(&source, quote!(smallest(R@1,S@5),smallest(V@3,W@4))).unwrap(),
+        target
+    );
     assert_eq!(smallest_intersections(&target, quote!()).unwrap(), target);
     ir::check_rewrite(&source, &target).unwrap();
     cq_structure_selection::compile(&target).unwrap();
     let named = smallest_intersections(&source, quote!(candidate)).unwrap();
     assert!(named.program.definitions.iter().any(|d| d.name == "inner"
         && matches!(&d.operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::First(_))))));
+    assert_eq!(smallest_intersections(&source, quote!(smallest(S@5,R@1))).unwrap(), named);
 }
 
 #[test]
@@ -333,6 +454,7 @@ fn smallest_never_moves_interposed_rust_guards_or_bindings() {
         assert!(ir::binary_intersection(candidate, checked, &facts).is_some());
         assert_eq!(smallest_intersections(&source, quote!()).unwrap(), source);
         assert!(smallest_intersections(&source, quote!(candidate)).is_err());
+        assert!(smallest_intersections(&source, quote!(smallest(R@1,S@2))).is_err());
     }
 }
 

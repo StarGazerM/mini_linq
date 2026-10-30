@@ -417,7 +417,7 @@ pub fn check_valuation(
     }
     erase_reductions(&mut erased.valuation.steps);
     if planner == Planner::Le {
-        le::check(&normal, &erased)?;
+        cq_order::le::check(&normal, &erased)?;
     } else {
         cq_order::check(&normal, &erased, &planner.ordering())?;
     }

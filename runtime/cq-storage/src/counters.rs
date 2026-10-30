@@ -20,7 +20,9 @@
 //! sum of worker peaks. Keyset staging peak is the largest individual staging
 //! set estimate, not simultaneous staging memory.
 //! Fixture construction and independent BTreeSet oracles are not query costs.
+mod expansions;
 mod operators;
+pub use expansions::{ExpansionRecord, expansion, expansions, render_expansions};
 #[cfg(feature = "counters")]
 pub(crate) use operators::build_cardinality;
 pub(crate) use operators::{DeferredBuild, defer_build};
@@ -88,6 +90,8 @@ struct SharedCounts {
     memory: Mutex<(u64, u64)>,
     build: Mutex<BuildWall>,
     operators: Mutex<Vec<Arc<operators::State>>>,
+    #[cfg(feature = "counters")]
+    expansions: Mutex<std::collections::BTreeMap<(&'static str, &'static str), u64>>,
 }
 #[derive(Default)]
 struct BuildWall {

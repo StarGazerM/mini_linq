@@ -37,6 +37,7 @@ and spot-checked only where marked.
 | R-Placement (`passes.tex:265-267`) | exact: reducer graphs exclude explicitly correlated VO blocks before tree analysis | `passes/cq-reduce/src/lib.rs:75-91` (`R-Placement`) | only independently available relations are reduction operands | ✓ |
 | CK-DL-Fork, P-DL-Gpu | stronger: reject execution certificates / observers / phase timing not named in the premises | `features/datalog/passes/fork/src/lib.rs:89-100`; `experiments/gpu/datalog/src/print.rs:151-162` | checked Round subset | |
 | O-Leaf, O-Join, L-Retention, BE-Code, BE-Abort | abstract: no executable checker (documented as premises) | — | join-tree coverage; codec laws; failure never truncates | |
+| SQ-ExpansionCounters (`backend_ir.tex`) | unverified: opt-in preclosing child counts and rule output attribution | `experiments/gpu/sequence/core/src/emit.rs`; `experiments/gpu/printer-runtime/src/expansions.rs`; `experiments/gpu/datalog/src/print.rs`; `passes/cq-sequence-pull/src/lib.rs`; `runtime/cq-storage/src/counters/expansions.rs` | no schedule changes; one atomic per block expansion; capacity retries excluded; per-rule fresh outputs may overlap | |
 
 ## Decisions with no governing rule (the missing rules)
 

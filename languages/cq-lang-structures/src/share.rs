@@ -74,7 +74,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
     let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
     let mut result = BTreeMap::new();
     // ST-Share: Immutable payload lookups preserve their keys until the force.
-    // A recorded Smallest probe can force either candidate's directory prefix.
+    // A recorded Smallest probe can force any candidate's directory prefix.
     for entry in &program.structures.entries {
         let Structure::Share {
             build,

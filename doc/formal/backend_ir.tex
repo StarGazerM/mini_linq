@@ -1410,3 +1410,23 @@ rows before a host consumer is an alternative under BE-Scope and PL-Precedence,
 not an exception to the catalog premise. Resource-rejected dispatches may
 instead publish named inner flatten levels using EXT-SeqStore; every resulting
 tile/item candidate still satisfies BE-Resource before PL-Cost selection.
+
+\subsection{Nonsemantic expansion observations}
+\Rule{SQ-ExpansionCounters}
+ {s\text{ is a checked Sequence expansion site}\quad
+  C_s=\sum_{p\in\mathsf{parents}(s)}|\mathsf{children}_s(p)|}
+ {\mathsf{observe}(s)=C_s\quad
+  \erase{\mathsf{instrument}(P)}=\erase P}
+An opt-in observation names the program, Sequence definition and expansion
+stage; a Datalog invocation adds its checked rule variant and round.
+Count children before downstream closing filters or lookups, not surviving
+children. GPU block leaders add collective child totals using 64-bit atomics;
+pull iterators count successful child production. Only a successful publication
+attempt contributes: capacity retries are discarded. Observations never change
+join order, predicates, providers or output, and disabling instrumentation emits
+the original program. Pull measurements describe demand actually consumed.
+For Datalog, report each rule's distinct candidate set minus the pre-round
+accepted set without mutating it; overlapping rule contributions are not
+additive. Ordinary Sequence dispatches report closing output before any separate
+canonicalization. The largest stage count divided by the corresponding output
+is diagnostic evidence, not a correctness premise or scheduling decision.

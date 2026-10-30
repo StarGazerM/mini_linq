@@ -165,6 +165,19 @@ added. `physical = [cq_rewrites::smallest_intersections]` remains the public
 intersection hook; this coarse planner does not manufacture Fine ranges or
 claim a worst-case-optimal join bound.
 
+The default planner also accepts hand-authored step advice:
+`plan(order(Seed, R@1(x), S@2(x), R@1, S@2))`. Parentheses list the exact
+retained query columns (all bound columns must remain); bare selectors expand
+the full occurrence. A bound-only partial read is a lookup; an introducing
+partial read is Fine and may bind one variable. For example
+`order(Seed, R@1(a,x), S@2(a,x), R@1, S@2)` exposes an intersection on `x`.
+Named partial occurrences require an explicit complete read; unnamed
+occurrences retain written priority. The existing CK-Le checker now lives in
+`cq-order`, shared by both entry points: selected lookup occurrences require
+one lookup before one full expansion, written column ownership, and the written
+outer stream. WF-VO checks every read and dependency. No advice keeps the
+existing default path unchanged; advice does not infer Rust types or expressions.
+
 The retail runtime registers `le` and `le_runs`. The e2e corpus carries both
 as planner axes (538 new accepted configurations; the two D85 `merge_joins`
 + HashMap witnesses are excluded by the existing accepted-domain policy and

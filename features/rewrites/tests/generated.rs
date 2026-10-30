@@ -86,6 +86,60 @@ fn generated_triangle_and_fan_answers_match_cq_oracle_with_duplicates_and_empty_
     }
 }
 
+macro_rules! three_way_query {
+    ($seed:ident, $r:ident, $s:ident, $t:ident; $($options:tt)*) => {
+        mini_linq::compile! {
+            pipeline {
+                plan = mini_linq::passes::plan(no_reduce, order(
+                    Seed, R@1(a,x), S@2(a,x), T@3(a,x), R@1, S@2, T@3
+                ));
+                $($options)*
+            }
+            struct ThreeWayAdvice;
+            relation Seed(a:i32) = ($seed);
+            relation R(a:i32,x:i32,y:i32) = ($r);
+            relation S(a:i32,x:i32,z:i32) = ($s);
+            relation T(a:i32,x:i32,w:i32) = ($t);
+            answer(a,x,y,z,w) :- Seed(a), R(a,x,y), S(a,x,z), T(a,x,w);
+        }
+    };
+}
+
+#[test]
+fn step_order_and_occurrence_smallest_advice_reach_three_provider_execution() {
+    let source: structures::Program = syn::parse_str(three_way_query! {
+        seed,r,s,t;
+        print_input = structures;
+        print = cq_rewrite_test_driver::capture_structures;
+    }).unwrap();
+    let target: structures::Program = syn::parse_str(three_way_query! {
+        seed,r,s,t;
+        physical = [cq_rewrites::smallest_intersections(smallest(R@1,S@2,T@3))];
+        print_input = structures;
+        print = cq_rewrite_test_driver::capture_structures;
+    }).unwrap();
+    physical::check_rewrite(&source.physical, &target.physical).unwrap();
+    let facts = structures::contract::check(&target).unwrap();
+    assert!(physical::candidate_prefixes(&source.physical, &facts.physical).is_empty());
+    let sites = physical::candidate_prefixes(&target.physical, &facts.physical);
+    assert_eq!(sites.len(), 1);
+    assert_eq!(sites[0].sides.len(), 3);
+    let seed = [(1,)];
+    let r = [(1, 7, 10), (1, 7, 11), (1, 8, 12), (1, 7, 10)];
+    let s = [(1, 7, 20), (1, 9, 21)];
+    let t = [(1, 7, 30), (1, 7, 31), (1, 10, 32)];
+    let expected: Rows = [vec![1,7,10,20,30], vec![1,7,10,20,31],
+        vec![1,7,11,20,30], vec![1,7,11,20,31]].into_iter().collect();
+    let baseline: Rows = three_way_query! { seed,r,s,t; }
+        .map(|(a,x,y,z,w)| vec![*a,*x,*y,*z,*w]).collect();
+    let advised: Rows = three_way_query! {
+        seed,r,s,t;
+        physical = [cq_rewrites::smallest_intersections(smallest(R@1,S@2,T@3))];
+    }.map(|(a,x,y,z,w)| vec![*a,*x,*y,*z,*w]).collect();
+    assert_eq!(baseline, expected);
+    assert_eq!(advised, expected);
+}
+
 fn nonzero(value: &i32) -> bool {
     *value != 0
 }

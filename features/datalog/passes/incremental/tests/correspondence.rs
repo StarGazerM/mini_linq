@@ -217,6 +217,8 @@ fn plan_advice_orders_the_named_version_with_cq_selectors() {
         quote!((Step, Edge @ 0)),
         quote!((Step, @Edge@0, Edge@0)),
         quote!((Helper, @Super, Super)),
+        quote!((Helper, Alloc@0(h))),
+        quote!((Step, @Reach@1(y), Reach@1)),
         quote!((Helper, Super)(Helper, Component)),
     ] {
         assert!(

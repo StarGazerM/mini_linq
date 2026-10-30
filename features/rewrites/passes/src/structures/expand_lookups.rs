@@ -33,7 +33,7 @@ impl Parse for Advice {
 }
 
 /// Record `stage = batch N expand` at each unstaged probe whose recorded provider
-/// declares finite, exact-size expansion support, including both candidate
+/// declares finite, exact-size expansion support, including all candidate
 /// providers of a Smallest intersection and explicitly supported host reads.
 /// Each candidate is kept only if the language's stage contract
 /// (ST-Expand/ST-Stage) accepts it; Physical and provider decisions are unchanged.

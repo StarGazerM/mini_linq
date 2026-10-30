@@ -239,7 +239,7 @@ impl Context<'_> {
     }
 
     /// Cursor consumed for this exact build and prefix at a recorded force.
-    /// A Smallest force can consume independent cursors from both candidate sides.
+    /// A Smallest force can consume independent cursors from every candidate side.
     pub fn forcing_witness(&self, result: &str, build: &str, keys: &[String]) -> Option<Ident> {
         self.analysis
             .witnesses

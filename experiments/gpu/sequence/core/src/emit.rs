@@ -669,6 +669,8 @@ struct Kernel<'c, 'p> {
     sink: Option<TokenStream>,
     scalar_output: bool,
     combine: Option<TokenStream>,
+    expansion_counters: bool,
+    expansion_stages: usize,
 }
 
 struct StripeInput {
@@ -904,7 +906,18 @@ impl Kernel<'_, '_> {
                         .all(|op| matches!(op, Operation::Flatten | Operation::Store))
                 {
                     let finish = row.rewrite(self.finish()?)?;
-                    return Ok(quote!(#lookup __live = __live && __begin < __end; #finish));
+                    let stage = self.expansion_stages;
+                    self.expansion_stages += usize::from(self.expansion_counters);
+                    let count = self.expansion_counters.then(|| quote! {
+                        let (_, __children) = ::cq_gpu_sequence_runtime::device::checked_scan(
+                            if __live { __end - __begin } else { 0 }, __scratch, __meta.add(2));
+                        if __tid == 0 {
+                            ::cuda_device::atomic::DeviceAtomicU64::from_ptr(__cq_expansions.add(#stage))
+                                .fetch_add(__children as u64, ::cuda_device::atomic::AtomicOrdering::Relaxed);
+                        }
+                        ::cuda_device::thread::sync_threads();
+                    });
+                    return Ok(quote!(#lookup #count __live = __live && __begin < __end; #finish));
                 }
                 if !rest.iter().any(|op| matches!(op, Operation::Flatten)) {
                     return Err(error(
@@ -954,6 +967,16 @@ impl Kernel<'_, '_> {
                     child.0.insert(*slot, quote!(*#id.add(#owner)));
                 }
                 let tiles = local_tiles(rest);
+                // Formal rule SQ-ExpansionCounters: count children before closing
+                // operators, once per block collective, not once per lane.
+                let stage = self.expansion_stages;
+                self.expansion_stages += usize::from(self.expansion_counters);
+                let count_children = self.expansion_counters.then(|| quote! {
+                    if __tid == 0 {
+                        ::cuda_device::atomic::DeviceAtomicU64::from_ptr(__cq_expansions.add(#stage))
+                            .fetch_add(__children as u64, ::cuda_device::atomic::AtomicOrdering::Relaxed);
+                    }
+                });
                 let tile = tiles.first().map_or(256, |tile| tile.0);
                 let items = tiles.last().map_or(1, |tile| tile.1);
                 let payload = self.compiler.payload(provider, quote!(__child_position))?;
@@ -985,6 +1008,7 @@ impl Kernel<'_, '_> {
                     if __tid == 0 { *__abort_slot = *__meta.add(2); }
                     ::cuda_device::thread::sync_threads();
                     if *__abort_slot != 0 { return; }
+                    #count_children
                     let mut __child_base = 0u64;
                     while __child_base < __children as u64 {
                         let __partition_begin = __child_base;
@@ -1432,6 +1456,15 @@ pub(crate) fn translate_impl(
     program: &Program,
     analysis: &Analysis,
     arena: Option<&syn::Expr>,
+) -> syn::Result<syn::Expr> {
+    translate_observed(program, analysis, arena, std::env::var_os("CQ_EXPANSION_COUNTERS").is_some())
+}
+
+fn translate_observed(
+    program: &Program,
+    analysis: &Analysis,
+    arena: Option<&syn::Expr>,
+    expansion_counters: bool,
 ) -> syn::Result<syn::Expr> {
     if program
         .graded
@@ -2281,6 +2314,10 @@ pub(crate) fn translate_impl(
         }
         parameters.push(quote!(__cq_key_lanes:usize));
         arguments.push(quote!(__cq_key_lanes));
+        if expansion_counters {
+            parameters.push(quote!(__cq_expansions: *mut u64));
+            arguments.push(quote!(__cq_expansions.ptr()));
+        }
         let mut generator = Kernel {
             compiler: &compiler,
             shared: crate::layout::SharedLayout::new(),
@@ -2303,6 +2340,8 @@ pub(crate) fn translate_impl(
             sink: None,
             scalar_output: false,
             combine: None,
+            expansion_counters,
+            expansion_stages: 0,
         };
         let mut bodies = Vec::new();
         let mut host_domains = Vec::new();
@@ -2606,6 +2645,16 @@ pub(crate) fn translate_impl(
                 Some(quote!(let __cq_counts=#store_meta.to_host()?;)),
             cq_lang_sequence::gpu::Synchronization::RangeOffsets => None,
         }).ok_or_else(|| error("GPU-Launch: output protocol lacks a count/failure synchronization"))?;
+        let expansion_stages = generator.expansion_stages;
+        let allocate_expansions = expansion_counters.then(|| quote! {
+            let __cq_expansions = ::cq_gpu_runtime::Buffer::<u64>::zeroed(
+                __cq_pool.clone(), #expansion_stages)?;
+        });
+        let report_expansions = expansion_counters.then(|| quote! {
+            ::cq_gpu_runtime::expansions::publish(
+                stringify!(#module_name), #publication,
+                &__cq_expansions.to_host()?, __cq_required as u64);
+        });
         launches.push(quote! {
             #packing_setup
             #(#host_domains)*
@@ -2621,6 +2670,7 @@ pub(crate) fn translate_impl(
                 #allocations
                 #key_allocation
                 let #store_meta=::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),#meta_words)?;
+                #allocate_expansions
                 __cq_module.#kernel_name(__cq_pool.stream(),&__cq_prepared,#(#arguments,)*
                     #pointers #key_pointer,
                     __cq_capacity as u32,#store_meta.ptr(),__cq_partials.ptr(),__cq_grid)?;
@@ -2634,6 +2684,7 @@ pub(crate) fn translate_impl(
                     __cq_capacity=__cq_required;
                     continue;
                 }
+                #report_expansions
                 let __cq_logical = #complete_offsets;
                 break (#stores #output_keys,#store_meta,__cq_logical);
             };
@@ -2771,6 +2822,8 @@ pub(crate) fn translate_impl(
                 sink: None,
                 scalar_output: false,
                 combine: None,
+                expansion_counters: false,
+                expansion_stages: 0,
             };
             let write = row.rewrite(generator.output_write()?)?;
             let kernel = format_ident!("__cq_host_output_{module_name}");
@@ -2929,6 +2982,45 @@ fn identifiers(tokens: TokenStream, names: &mut BTreeSet<String>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn expansion_counters_are_opt_in_block_collectives_before_closing() {
+        let program: cq_lang_sequence::Program = syn::parse_quote! {
+            physical {
+                relation Driver(b:i32) = (&data.driver);
+                relation R(a:i32,b:i32) = (&data.r);
+                d = pipe rename Driver@0 {b -> b};
+                r = let rename R@1 {a -> a,b -> b};
+                joined = pipe probe first [b] d,r;
+                result = pipe canon project joined keep {a,b};
+                return result as answer(a,b);
+            }
+            structures {
+                d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
+                r host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
+                r = ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
+                result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            }
+            sequence {
+                input = store rows d;
+                index = store rows r;
+                result_rows = store canon map result flatten lookup r [b] flatten tile 256 input;
+                output count;
+            }
+            graded gpu { input at host; index at host; result_rows at host.device; }
+        };
+        let program = crate::runs::record_representation(&program).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let plain = super::translate_observed(&program, &analysis, None, false).unwrap();
+        let observed = super::translate_observed(&program, &analysis, None, true).unwrap();
+        let plain = quote::quote!(#plain).to_string();
+        let observed = quote::quote!(#observed).to_string();
+        assert!(!plain.contains("__cq_expansions"));
+        assert!(observed.contains("if __tid == 0 { :: cuda_device :: atomic :: DeviceAtomicU64"));
+        assert!(observed.find("DeviceAtomicU64").unwrap() < observed.find("let mut __child_base").unwrap());
+        assert!(observed.find("__cq_required > __cq_capacity").unwrap()
+            < observed.find("expansions :: publish").unwrap());
+    }
+
     use super::*;
     use quote::ToTokens;
 
@@ -3498,6 +3590,8 @@ mod tests {
                         sink: None,
                         scalar_output: false,
                         combine: None,
+                        expansion_counters: false,
+                        expansion_stages: 0,
                     };
                     let (declare, body, finish, whole) = kernel
                         .partition_rows(

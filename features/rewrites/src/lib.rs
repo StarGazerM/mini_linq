@@ -72,21 +72,36 @@
 //! inadmissible. Reapplying a rewrite is idempotent. A projection already known
 //! to preserve a key needs no additional canonical boundary.
 //!
+//! `smallest_intersections(smallest(R@1, S@2, T@3))` instead selects one
+//! complete intersection site by relation occurrence; two or more distinct
+//! occurrences are required. Multiple sites are comma-separated `smallest(...)`
+//! clauses. Their list order is immaterial; each must match exactly one admissible
+//! site, including every candidate provider. Missing, duplicate, ambiguous,
+//! partial, or blocked selections are errors. Positional paths such as `R@1.0.2`
+//! preserve nested-branch provenance. Unary relational filters/projections retain
+//! occurrence identity; opaque Rust and multi-input providers do not invent it.
+//! For an explicit site, a semijoin side with extra payload receives a retained
+//! projection of exactly its membership keys. This private candidate view does
+//! not replace the complete occurrence used by later expansions; Physical
+//! correspondence checks its input, columns and unique smallest consumer.
+//! No advice means no change to default planning or generated code.
+//!
 //! | Pass | Decision written | Admissibility |
 //! |---|---|---|
 //! | `merge_joins` | `probe` becomes `merge` | Nonempty Ord key; each side is retained, a reusable host, or a merge stream ordered on that same key. Native ordered host reads still require `OrderedRead` from rustc. |
 //! | `canon_prefixes` | Adds `canon` on a projection | Drops columns without retaining an inferred uniqueness key; retained columns satisfy the language's Leibniz checks. Existing canonical boundaries remain. |
 //! | `host_sets(E, ...)` | Records `host_set E;` and removes canon implied by full-heading keys | Names used host relations. Every printer checks exact input distinctness before execution and fails on duplicates; this is not an unchecked promise. Dropping a key still needs canon. |
-//! | `smallest_intersections` | Hoists independent relational definitions and records `probe smallest` | The public Physical `binary_intersection` predicate accepts the probe/check pair, and every interposed definition can move before the probe without moving Rust or breaking dependencies. |
+//! | `smallest_intersections` | Hoists independent relational definitions and records `probe smallest` | The public Physical `intersection` law accepts a maximal k-way probe/check chain, k >= 2, and every interposed definition can move before the chain without moving Rust or breaking dependencies. |
 //! | `lazy_semijoins` | `semi eager` becomes `semi lazy` | The right input is a reusable host and all readers sharing its key are lazy membership reads after the rewrite. Named selections must include every eager peer. |
 //! | `build_host_reads` | Reusable host rename becomes retained `let` | Has keyed stream reads, including an empty Cartesian key, and no lazy membership reader. Keys and predicates are unchanged; selection records providers afterwards and rustc checks key capabilities. Const-only point/range scans remain host scans. |
 //! | `hoist(r, ...)` | Moves selected relational producers and their dependency closure before other definitions | Explicit names only; stable dependency order; opaque Rust dependencies reject; Physical correspondence checks branch scope and Before obligations. |
 //!
-//! Except for `build_host_reads` and `retain_streams`' explicit retention decisions, these passes
-//! preserve the operator graph, declarations, keys, modes, return head, and
-//! opaque Rust expressions. `smallest_intersections` moves interposed
+//! Except for `build_host_reads`/`retain_streams` retention and explicit
+//! `smallest(...)` private membership-key views, these passes preserve the
+//! operator graph, declarations, keys, modes, return head, and opaque Rust
+//! expressions. `smallest_intersections` moves interposed
 //! relational definitions earlier, preserving their dependency order, to make
-//! the candidate probe and its check adjacent. This includes reusable host
+//! the candidate probe and all its membership checks adjacent. This includes reusable host
 //! renames and retained relational chains. Bind/guard nodes stay at their original
 //! positions with the same payloads. An interposed Rust node or a consumer of the
 //! candidate blocks the rewrite; an explicit named selection then reports an
@@ -96,6 +111,12 @@
 //! `smallest_intersections` currently has Set semantics. For future bag/K-relation
 //! semantics, discarding candidate multiplicity additionally requires the checked
 //! `host_set` fact (or a derived uniqueness key); bag gating is not implicit here.
+//! Every provider binds the same one new column from a nonempty prefix. Retained
+//! providers receive two-level candidate directories; reusable hosts dispatch
+//! through their declared candidate/membership capabilities. At each prefix the
+//! native terminal counts all k candidate sets once, enumerates a smallest one
+//! (written-order ties), and tests membership in every other provider. It uses
+//! stack-local scalar choices and iterator chains, not a per-row allocation.
 //!
 //! The generated generic-fine triangle and the corpus `fine_triangle` both get
 //! an active smallest choice. For example:

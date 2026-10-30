@@ -1137,15 +1137,11 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
     }
     for (position, definition) in program.definitions.iter().enumerate() {
         if matches!(&definition.operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::Smallest(_))))
-            && program
-                .definitions
-                .get(position + 1)
-                .and_then(|next| binary_intersection(definition, next, &analysis))
-                .is_none()
+            && intersection(&program.definitions[position..], &analysis).is_none()
         {
             return error(
                 &definition.name,
-                "smallest requires an admissible adjacent binary intersection",
+                "smallest requires an admissible adjacent intersection of at least two providers",
             );
         }
         if let Operator::Semi(_, k) | Operator::Anti(_, k) = &definition.operator {
@@ -1223,12 +1219,8 @@ pub fn ordinals(analysis: &Analysis, result: &str, columns: &[String]) -> Vec<us
         .collect()
 }
 
-/// The local binary intersection recognized by selection and realization:
-/// one pipe probe introduces one column, immediately followed by a probe
-/// or semijoin that only checks it. Both candidate relations are materialized,
-/// the prefixes are nonempty, and the new column completes each heading.
-/// This intentionally excludes wider intersections, intervening operators,
-/// canonicalization of the intermediate pipe, and host-only access.
+/// The two-provider instance of the public smallest-intersection law.
+/// One pipe probe introduces one column and the next probe/semi checks it.
 pub fn binary_intersection<'a>(
     first: &'a Definition,
     second: &'a Definition,
@@ -1237,22 +1229,70 @@ pub fn binary_intersection<'a>(
     let Operator::Probe(_, a) = &first.operator else {
         return None;
     };
-    let (Operator::Probe(_, b) | Operator::Semi(_, b)) = &second.operator else {
+    let b = intersection_extension(first, first, second, analysis)?;
+    let left = &analysis.headings[&symbol_name(&a.left)];
+    let column = analysis.headings[&symbol_name(&a.right)]
+        .iter()
+        .find(|c| !left.contains(c))?;
+    Some((a, b, column.clone()))
+}
+
+/// Admit one membership check after an introducing probe and its existing
+/// checks. Intermediate results must remain uncanonicalized linear pipes.
+pub fn intersection_extension<'a>(
+    first: &Definition,
+    previous: &Definition,
+    next: &'a Definition,
+    analysis: &Analysis,
+) -> Option<&'a Keyed> {
+    intersection_extension_impl(first, previous, next, analysis, false)
+}
+
+/// Formal rule PH-KeyProjection: A smallest membership side may retain its
+/// exact join-key projection without changing the later full occurrence read.
+pub fn intersection_key_projection(
+    first: &Definition,
+    previous: &Definition,
+    next: &Definition,
+    analysis: &Analysis,
+) -> bool {
+    matches!(next.operator, Operator::Semi(..))
+        && intersection_extension_impl(first, previous, next, analysis, true).is_some()
+}
+
+fn intersection_extension_impl<'a>(
+    first: &Definition,
+    previous: &Definition,
+    next: &'a Definition,
+    analysis: &Analysis,
+    project_membership: bool,
+) -> Option<&'a Keyed> {
+    let Operator::Probe(_, a) = &first.operator else {
         return None;
     };
-    if !matches!(first.mode, Mode::Pipe(_)) || first.canon.is_some() || b.left != first.name {
+    let (Operator::Probe(_, b) | Operator::Semi(_, b)) = &next.operator else {
+        return None;
+    };
+    if !matches!(previous.mode, Mode::Pipe(_))
+        || previous.canon.is_some()
+        || b.left != previous.name
+    {
         return None;
     }
     let left = &analysis.headings[&symbol_name(&a.left)];
     let ah = &analysis.headings[&symbol_name(&a.right)];
-    let bh = &analysis.headings[&symbol_name(&b.right)];
+    let bk: Vec<_> = b.columns.iter().map(symbol_name).collect();
+    let bh = if project_membership {
+        &bk
+    } else {
+        &analysis.headings[&symbol_name(&b.right)]
+    };
     let added: Vec<_> = ah.iter().filter(|c| !left.contains(c)).collect();
     if added.len() != 1 {
         return None;
     }
     let v = added[0];
     let ak: Vec<_> = a.columns.iter().map(symbol_name).collect();
-    let bk: Vec<_> = b.columns.iter().map(symbol_name).collect();
     if ak.is_empty()
         || bk.len() < 2
         || !bk.contains(v)
@@ -1266,7 +1306,34 @@ pub fn binary_intersection<'a>(
     {
         return None;
     }
-    Some((a, b, v.clone()))
+    Some(b)
+}
+
+/// A maximal adjacent chain implementing one variable's set intersection.
+#[derive(Clone, Debug)]
+pub struct Intersection<'a> {
+    /// Introducing probe followed by membership checks, in written order.
+    pub keys: Vec<&'a Keyed>,
+    pub column: String,
+}
+
+/// Formal rule PH-Smallest: Enumerate a minimum-size candidate set and test
+/// all remaining providers; every prefix is nonempty and binds the same column.
+pub fn intersection<'a>(
+    definitions: &'a [Definition],
+    analysis: &Analysis,
+) -> Option<Intersection<'a>> {
+    let first = definitions.first()?;
+    let second = definitions.get(1)?;
+    let (a, b, column) = binary_intersection(first, second, analysis)?;
+    let mut keys = vec![a, b];
+    for pair in definitions[1..].windows(2) {
+        let Some(key) = intersection_extension(first, &pair[0], &pair[1], analysis) else {
+            break;
+        };
+        keys.push(key);
+    }
+    Some(Intersection { keys, column })
 }
 
 /// Candidate prefixes for a recorded smallest intersection.
@@ -1274,7 +1341,7 @@ pub fn binary_intersection<'a>(
 pub struct CandidatePrefixes<'a> {
     pub reader: &'a Ident,
     pub column: String,
-    pub sides: [(String, Vec<String>); 2],
+    pub sides: Vec<(String, Vec<String>)>,
 }
 
 /// Read the smallest decisions of a checked Physical program in definition order.
@@ -1282,18 +1349,19 @@ pub fn candidate_prefixes<'a>(
     program: &'a Program,
     analysis: &Analysis,
 ) -> Vec<CandidatePrefixes<'a>> {
-    program.program.definitions.windows(2).filter_map(|pair| {
-        if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::Smallest(_)))) {
+    program.program.definitions.iter().enumerate().filter_map(|(position, first)| {
+        if !matches!(&first.operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::Smallest(_)))) {
             return None;
         }
-        let (a, b, column) = binary_intersection(&pair[0], &pair[1], analysis)?;
-        let mut left: Vec<_> = a.columns.iter().map(symbol_name).collect();
-        let mut right: Vec<_> = b.columns.iter().map(symbol_name).filter(|c| *c != column).collect();
-        left.sort(); right.sort();
-        Some(CandidatePrefixes {
-            reader: &pair[0].name, column,
-            sides: [(symbol_name(&a.right), left), (symbol_name(&b.right), right)],
-        })
+        let Intersection { keys, column } =
+            intersection(&program.program.definitions[position..], analysis)?;
+        let sides = keys.iter().map(|key| {
+            let mut prefix: Vec<_> = key.columns.iter().map(symbol_name)
+                .filter(|c| c != &column).collect();
+            prefix.sort();
+            (symbol_name(&key.right), prefix)
+        }).collect();
+        Some(CandidatePrefixes { reader: &first.name, column, sides })
     }).collect()
 }
 
@@ -1343,6 +1411,8 @@ pub fn inherited_key(
 /// declarations, operands, relational predicates and Rust payloads remain fixed.
 /// Definitions may commute in dependency order. Rust expressions retain their
 /// payload and free-variable dependencies, without additional ordering barriers.
+/// PH-KeyProjection additionally permits a private retained key view on a
+/// smallest membership edge; erasing that view restores the exact named graph.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     let source_facts = contract::check(source)?;
     let target_facts = contract::check(target)?;
@@ -1352,16 +1422,78 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         .iter()
         .map(|definition| (symbol_name(&definition.name), definition))
         .collect();
+    let source_definitions: BTreeMap<_, _> = source
+        .program
+        .definitions
+        .iter()
+        .map(|definition| (symbol_name(&definition.name), definition))
+        .collect();
+    let mut key_views = BTreeSet::new();
+    let mut projected_memberships = BTreeSet::new();
+    for (position, definition) in target.program.definitions.iter().enumerate() {
+        if !matches!(&definition.operator, Operator::Probe(_, key)
+            if matches!(key.choice, Some(Choice::Smallest(_))))
+        {
+            continue;
+        }
+        let Some(site) = intersection(&target.program.definitions[position..], &target_facts)
+        else {
+            continue;
+        };
+        for offset in 1..site.keys.len() {
+            let member = &target.program.definitions[position + offset];
+            let Operator::Semi(_, key) = &member.operator else {
+                continue;
+            };
+            let view_name = symbol_name(&key.right);
+            if source_definitions.contains_key(&view_name) {
+                continue;
+            }
+            let view = target_definitions[&view_name];
+            let Operator::Project(project) = &view.operator else {
+                continue;
+            };
+            let Some(original) = source_definitions.get(&symbol_name(&member.name)) else {
+                continue;
+            };
+            let Operator::Semi(_, original_key) = &original.operator else {
+                continue;
+            };
+            let columns: BTreeSet<_> = key.columns.iter().map(symbol_name).collect();
+            let projected: BTreeSet<_> = project.attributes.iter().map(symbol_name).collect();
+            if !matches!(view.mode, Mode::Let(_))
+                || project.input != original_key.right
+                || key.left != original_key.left
+                || key.columns != original_key.columns
+                || projected != columns
+                || target
+                    .program
+                    .definitions
+                    .iter()
+                    .flat_map(|d| d.operator.operands())
+                    .filter(|operand| **operand == view.name)
+                    .count()
+                    != 1
+            {
+                continue;
+            }
+            key_views.insert(view_name);
+            projected_memberships.insert(symbol_name(&member.name));
+        }
+    }
     if source.program.declarations != target.program.declarations
         || source_facts.discharged_host_sets != target_facts.discharged_host_sets
         || source_facts.consumer_canonical != target_facts.consumer_canonical
         || source.program.head != target.program.head
         || source.program.returned != target.program.returned
-        || source.program.definitions.len() != target.program.definitions.len()
+        || source.program.definitions.len() + key_views.len() != target.program.definitions.len()
         || source.program.definitions.iter().any(|definition| {
             target_definitions
                 .get(&symbol_name(&definition.name))
-                .is_none_or(|target| !same_logical_operator(&definition.operator, &target.operator))
+                .is_none_or(|target| {
+                    !same_logical_operator(&definition.operator, &target.operator)
+                        && !projected_memberships.contains(&symbol_name(&definition.name))
+                })
         })
     {
         return error(

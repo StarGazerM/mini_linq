@@ -64,6 +64,9 @@ fn admit_against_cpu<W: Word>(
     let input = Buffer::from_host(pool.clone(), values)?;
     let batch: BTreeSet<_> = values.iter().copied().collect();
     let expected_delta: Vec<_> = batch.difference(accepted).copied().collect();
+    let before = state.len();
+    assert_eq!(state.count_fresh(&input, values.len())?, expected_delta.len());
+    assert_eq!(state.len(), before, "counter observation must not admit rows");
     let fresh = state.admit(&input, values.len())?;
     assert_eq!(fresh.len(), expected_delta.len());
     assert_eq!(fresh.buffer().to_host_prefix(fresh.len())?, expected_delta);

@@ -63,6 +63,17 @@ pub fn adjacent_triangle(input: TokenStream) -> TokenStream {
     })())
 }
 
+/// Load a mixed host/retained three-provider intersection through public passes.
+#[proc_macro]
+pub fn three_way(input: TokenStream) -> TokenStream {
+    let pipeline = syn::parse_macro_input!(input as Pipeline);
+    finish((|| {
+        let source: cq_testkit::physical::Program =
+            syn::parse_str(include_str!("../../tests/fixtures/three_way.physical"))?;
+        pipeline.start(source.to_token_stream())
+    })())
+}
+
 /// A test printer which captures the exact checked IR before Rust realization.
 #[proc_macro]
 pub fn capture_physical(input: TokenStream) -> TokenStream {

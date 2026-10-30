@@ -1,0 +1,12 @@
+physical {
+    relation L(a:i32); relation R(a:i32,v:i32);
+    relation S(a:i32,v:i32); relation T(a:i32,v:i32);
+    l = pipe rename L@0 {a -> a};
+    r = let rename R@1 {a -> a,v -> v};
+    candidate = pipe probe first [a] l,r;
+    s = pipe rename S@2 {a -> a,v -> v};
+    checked = pipe semi eager [a,v] candidate,s;
+    t = let rename T@3 {a -> a,v -> v};
+    result = pipe canon probe first [a,v] checked,t;
+    return result as answer(a,v);
+}

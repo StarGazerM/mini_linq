@@ -175,6 +175,11 @@ fn resolve_plans(
         let changing = &analysis.changing_positions[rule];
         let delta = match &plan.delta {
             Some(selector) => {
+                ensure(
+                    selector.columns.is_none(),
+                    &selector.relation,
+                    "delta advice selects a whole occurrence, not subatom columns",
+                )?;
                 let position = selector.resolve_in(&query.body)?;
                 ensure(
                     changing.contains(&position),
@@ -195,6 +200,11 @@ fn resolve_plans(
         let prefix = positive_prefix(query);
         let mut order = Vec::with_capacity(query.body.len());
         for selector in &plan.order {
+            ensure(
+                selector.columns.is_none(),
+                &selector.relation,
+                "incremental order advice is an occurrence permutation; use CQ plan order for subatoms",
+            )?;
             let position = selector.resolve_in(&query.body)?;
             ensure(
                 matches!(query.body[position], BodyItem::Positive { .. })

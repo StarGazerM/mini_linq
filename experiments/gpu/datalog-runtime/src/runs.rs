@@ -176,6 +176,16 @@ impl<W: Word> DeviceRuns<W> {
         self.mark(3)?;
         Ok(fresh)
     }
+    /// SQ-ExpansionCounters: observe this rule's unique fresh output without
+    /// admitting it. All rules in a round compare against the same accepted set.
+    pub fn count_fresh(&self, candidates: &Buffer<W>, rows: usize) -> Result<usize> {
+        let unique = self.sort_unique(candidates, rows)?;
+        if self.accepted.is_empty() || unique.is_empty() {
+            Ok(unique.len())
+        } else {
+            Ok(self.subtract(&unique)?.len())
+        }
+    }
     fn mark(&self, phase: usize) -> Result<()> {
         if let Some(timing) = &self.timing { timing.record(phase, &self.pool)?; }
         Ok(())

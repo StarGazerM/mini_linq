@@ -361,7 +361,7 @@ fn smallest_expansion_requires_support_on_both_selected_candidates() {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("expand support on both selected two-level candidate builds"),
+            error.contains("expand support on every selected two-level candidate build"),
             "{error}"
         );
         missing.structures.entries.pop();

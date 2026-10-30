@@ -242,6 +242,30 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    /// SQ-ExpansionCounters: decorate only the producer's child iterator, before
+    /// closing maps/compacts consume it. Disabled translation is token-identical.
+    fn expansion(&self, rows: TokenStream, stage: &str) -> TokenStream {
+        if std::env::var_os("CQ_EXPANSION_COUNTERS").is_none() {
+            return rows;
+        }
+        let definition = self
+            .program
+            .structures
+            .physical
+            .program
+            .returned
+            .to_string();
+        let stage = if stage == "output" {
+            stage.to_owned()
+        } else {
+            format!("{}/{}", self.owner, stage)
+        };
+        quote!(::cq_storage::profile_select! {
+            plain { #rows }
+            counters { ::cq_storage::counters::expansion(#rows, #definition, #stage) }
+        })
+    }
+
     pub fn context(&self) -> &Context<'a> {
         self.adapters.context()
     }
@@ -523,6 +547,13 @@ impl<'a> Emitter<'a> {
                 definition.operator,
                 Operator::Probe(..) | Operator::Merge(..)
             );
+        let fanout = nested
+            || matches!(&definition.operator, Operator::Bind(bind) if bind.for_token.is_some());
+        let rows = if fanout {
+            self.expansion(rows, &result)
+        } else {
+            rows
+        };
         Ok(Value {
             rows: if nested {
                 quote!(::core::iter::once(#rows))
@@ -754,6 +785,7 @@ impl<'a> Emitter<'a> {
                 syn::Error::new_spanned(provider, "lookup has no checked result layout")
             })?;
         if let Some(rows) = self.adapters.intersection(&result)? {
+            let rows = self.expansion(rows, &result);
             return Ok(Value {
                 rows: quote!(::core::iter::once(#rows)),
                 result: Some(result),
@@ -849,6 +881,7 @@ impl<'a> Emitter<'a> {
         let rows = context.profile_input(&result, input.rows);
         let output = quote!(::core::iter::Iterator::map(#lookup, move |__cq_payload| #row));
         let output = context.profile_stream(&result, output);
+        let output = self.expansion(output, &result);
         Ok(Value {
             rows: quote!({
                 #setup
@@ -1126,6 +1159,7 @@ impl<'a> Emitter<'a> {
             }
         }
         rows = self.context().profile_stream(&answer, rows);
+        rows = self.expansion(rows, "output");
         // Target interpreters eagerly join their answer. Measure preparation
         // and final evaluation at the host, never by adding concurrent spans.
         let phases = if !self.pull && self.context().profile.is_some() {

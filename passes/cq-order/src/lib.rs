@@ -31,6 +31,8 @@ use syn::LitInt;
 mod branch_check;
 mod branches;
 
+pub mod le;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Options {
     pub heuristic: Heuristic,
@@ -639,6 +641,8 @@ pub fn compile_written(source: &cq::Program) -> syn::Result<valuation::Program> 
 pub struct OrderAtom {
     pub relation: syn::Ident,
     pub occurrence: Option<usize>,
+    /// Explicit subatom columns; absent means the complete occurrence.
+    pub columns: Option<Vec<syn::Ident>>,
 }
 
 impl syn::parse::Parse for OrderAtom {
@@ -650,9 +654,22 @@ impl syn::parse::Parse for OrderAtom {
         } else {
             None
         };
+        let columns = if input.peek(syn::token::Paren) {
+            let content;
+            syn::parenthesized!(content in input);
+            Some(
+                content
+                    .parse_terminated(|input| input.parse::<syn::Ident>(), syn::Token![,])?
+                    .into_iter()
+                    .collect(),
+            )
+        } else {
+            None
+        };
         Ok(Self {
             relation,
             occurrence,
+            columns,
         })
     }
 }
@@ -705,6 +722,12 @@ impl OrderAtom {
 
     /// Reduction endpoints are positive atoms, not whole block frontiers.
     pub fn positive_clause(&self, source: &cq::Program) -> syn::Result<usize> {
+        if self.columns.is_some() {
+            return Err(syn::Error::new_spanned(
+                &self.relation,
+                "reduction endpoints select whole occurrences, not subatom columns",
+            ));
+        }
         let clause = self.resolve(source)?;
         if !matches!(source.query.body[clause], BodyItem::Positive { .. }) {
             return Err(syn::Error::new_spanned(
@@ -716,17 +739,23 @@ impl OrderAtom {
     }
 }
 
-/// Author a coarse top-level relation order without rewriting the query.
+/// Author a top-level occurrence or subatom order without rewriting the query.
 /// Unqualified relations must occur exactly once; `R@i` selects the positive
 /// atom named R at normal-body clause i, including non-atom clauses in the
 /// numbering. `block@i` selects a block as a unit. Unnamed clauses retain
 /// written priority after named atoms/blocks. Rust obeys free-variable readiness;
 /// nested blocks keep their internal order.
+/// `R@i(cols)` retains exactly those columns: a bound-only partial read is
+/// a lookup, otherwise a partial read may introduce one variable (Fine).
+/// Named partial occurrences must be explicitly completed by a full read.
 pub fn compile_explicit(
     source: &cq::Program,
     relations: &[OrderAtom],
 ) -> syn::Result<valuation::Program> {
     cq::normal::check(source)?;
+    if relations.iter().any(|selector| selector.columns.is_some()) {
+        return compile_steps(source, relations);
+    }
     let context = BTreeSet::new();
     let clauses = clauses(&source.query.body, &context);
     let mut priorities = BTreeMap::new();
@@ -777,6 +806,182 @@ pub fn compile_explicit(
         },
     )?;
     Ok(program)
+}
+
+/// Formal rule O-StepAdvice: Preserve authored subatom order, place ready dependencies, and check WF-VO plus selected CK-Le phases.
+fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<valuation::Program> {
+    let context = BTreeSet::new();
+    let clauses = clauses(&source.query.body, &context);
+    let mut program = compile(source, &Options::default())?;
+    let mut ordinary: Vec<_> = program.valuation.steps.into_iter().map(Some).collect();
+    let mut pending = Vec::new();
+    let mut named = BTreeSet::new();
+    for selector in selectors {
+        let clause = selector.resolve(source)?;
+        named.insert(clause);
+        let mut step = ordinary[clause].as_ref().expect("source clause").clone();
+        if let Some(columns) = &selector.columns {
+            let valuation::Step::Atom(atom, _) = &mut step else {
+                return Err(syn::Error::new_spanned(
+                    &selector.relation,
+                    "subatom advice requires a positive atom, not a block",
+                ));
+            };
+            let mut selected = BTreeSet::new();
+            for column in columns {
+                let name = symbol_name(column);
+                if !atom.variables().any(|(_, v)| symbol_name(v) == name) {
+                    return Err(syn::Error::new_spanned(
+                        column,
+                        "order subatom column does not belong to this occurrence",
+                    ));
+                }
+                if !selected.insert(name) {
+                    return Err(syn::Error::new_spanned(
+                        column,
+                        "duplicate order subatom column",
+                    ));
+                }
+            }
+            atom.columns = atom
+                .columns
+                .iter()
+                .map(|column| match column {
+                    valuation::Column::Variable(v) if selected.contains(&symbol_name(v)) => {
+                        column.clone()
+                    }
+                    _ => valuation::Column::Dropped(Default::default()),
+                })
+                .collect();
+        }
+        pending.push((clause, step, selector.columns.is_some()));
+    }
+    // Partial occurrences must be completed explicitly. Only entirely unnamed
+    // occurrences retain the old written-priority completion.
+    for (clause, facts) in clauses.iter().enumerate() {
+        if facts.atom.is_some() && !named.contains(&clause) {
+            pending.push((clause, ordinary[clause].take().unwrap(), false));
+        }
+    }
+    let mut waiting: BTreeSet<_> = clauses
+        .iter()
+        .enumerate()
+        .filter_map(|(i, facts)| facts.atom.is_none().then_some(i))
+        .collect();
+    let mut bound = BTreeSet::new();
+    let mut steps = Vec::new();
+    let mut lookups = BTreeSet::new();
+    let mut fine = BTreeSet::new();
+    let mut completed = BTreeSet::new();
+    for (clause, step, explicit_columns) in pending {
+        place_ready_advice(
+            &clauses,
+            &mut ordinary,
+            &mut waiting,
+            &mut bound,
+            &mut steps,
+        );
+        let dependencies_ready = match &step {
+            valuation::Step::Atom(atom, _) => clauses[clause]
+                .requires
+                .iter()
+                .filter(|name| atom.variables().any(|(_, v)| symbol_name(v) == **name))
+                .all(|name| bound.contains(name)),
+            _ => ready(&clauses, &bound, clause),
+        };
+        if !dependencies_ready {
+            return Err(syn::Error::new_spanned(
+                &source.query,
+                "order advice conflicts with clause dependencies",
+            ));
+        }
+        match &step {
+            valuation::Step::Atom(atom, _) => {
+                let introduced: Vec<_> = atom
+                    .variables()
+                    .map(|(_, v)| symbol_name(v))
+                    .filter(|name| !bound.contains(name))
+                    .collect();
+                if completed.contains(&clause) {
+                    return Err(syn::Error::new_spanned(
+                        atom,
+                        "order advice places a lookup or another expansion after expansion",
+                    ));
+                }
+                let partial = atom.variables().count() < atom.columns.len();
+                if explicit_columns && partial && introduced.is_empty() && !fine.contains(&clause) {
+                    lookups.insert(clause);
+                } else if explicit_columns && partial {
+                    if introduced.len() > 1 {
+                        return Err(syn::Error::new_spanned(
+                            atom,
+                            "fine order subatoms may introduce at most one new variable; lookup columns must already be bound",
+                        ));
+                    }
+                    fine.insert(clause);
+                }
+                if !partial {
+                    completed.insert(clause);
+                }
+                bound.extend(introduced);
+            }
+            valuation::Step::Block(_, _) => {
+                if !completed.insert(clause) {
+                    return Err(syn::Error::new_spanned(
+                        &source.query,
+                        "duplicate block occurrence in order advice",
+                    ));
+                }
+                bound.extend(clauses[clause].provides.iter().cloned());
+            }
+            _ => unreachable!("advice selects positive atoms or blocks"),
+        }
+        steps.push(step);
+    }
+    place_ready_advice(
+        &clauses,
+        &mut ordinary,
+        &mut waiting,
+        &mut bound,
+        &mut steps,
+    );
+    if !waiting.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &source.query,
+            "order advice leaves clause dependencies unbound",
+        ));
+    }
+    program.valuation.steps = steps;
+    le::check_advice(source, &program, &lookups)?;
+    Ok(program)
+}
+
+fn place_ready_advice(
+    clauses: &[Clause<'_>],
+    ordinary: &mut [Option<valuation::Step>],
+    waiting: &mut BTreeSet<usize>,
+    bound: &mut BTreeSet<String>,
+    steps: &mut Vec<valuation::Step>,
+) {
+    loop {
+        let next = waiting
+            .iter()
+            .copied()
+            .filter(|&clause| ready(clauses, bound, clause))
+            .min_by_key(|&clause| {
+                (
+                    usize::from(!matches!(
+                        clauses[clause].item,
+                        BodyItem::Constraint(_) | BodyItem::Negation(_)
+                    )),
+                    clause,
+                )
+            });
+        let Some(clause) = next else { break };
+        waiting.remove(&clause);
+        bound.extend(clauses[clause].provides.iter().cloned());
+        steps.push(ordinary[clause].take().expect("unplaced source clause"));
+    }
 }
 
 /// Formal rule O-BlockPlacement: Ordinary ordering hoists Rust-free blocks and correlates blocks containing Rust steps.

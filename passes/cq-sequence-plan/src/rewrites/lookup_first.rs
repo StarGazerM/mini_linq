@@ -670,7 +670,7 @@ fn separate_provider_layouts(
     });
     let candidates: BTreeSet<_> = physical::candidate_prefixes(&target.physical, physical)
         .into_iter()
-        .flat_map(|candidate| candidate.sides.map(|(name, _)| name))
+        .flat_map(|candidate| candidate.sides.into_iter().map(|(name, _)| name))
         .collect();
     let mut built = BTreeMap::<String, Vec<usize>>::new();
     for (index, entry) in target.structures.entries.iter().enumerate() {

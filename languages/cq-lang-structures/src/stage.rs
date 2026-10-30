@@ -73,17 +73,19 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
     // ST-Expand: The selected provider declares finite, exact-size retained
     // cursors. This law does not confer ordering or contiguous range placement.
     let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
-    let smallest_forces: BTreeSet<_> = program
-        .physical
-        .program
-        .definitions
-        .windows(2)
-        .filter(|pair| {
-            candidates
+    let ordered = &program.physical.program.definitions;
+    let smallest_forces: BTreeSet<_> = ordered
+        .iter()
+        .enumerate()
+        .flat_map(|(position, first)| {
+            let count = candidates
                 .iter()
-                .any(|candidate| candidate.reader == &pair[0].name)
+                .find(|candidate| candidate.reader == &first.name)
+                .map_or(1, |candidate| candidate.sides.len());
+            ordered[position + 1..position + count]
+                .iter()
+                .map(|definition| symbol_name(&definition.name))
         })
-        .map(|pair| symbol_name(&pair[1].name))
         .collect();
     for name in &expands {
         let definition = definitions[name];
@@ -113,7 +115,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             if !range {
                 return error(
                     definition,
-                    "expand smallest requires declared expand support on both selected two-level candidate builds",
+                    "expand smallest requires declared expand support on every selected two-level candidate build",
                 );
             }
         } else {

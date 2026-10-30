@@ -88,58 +88,211 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     Ok(target)
 }
 
-/// Expose binary intersections by hoisting independent relational definitions
-/// before their candidate probe, then record smallest. Rust nodes stay pinned.
-/// Admissibility and correspondence belong to the public language checks.
-/// In bag semantics, choosing a membership intersection also requires checked
-/// host_set facts (or derived keys) on candidate sources: multiplicities cannot
-/// be discarded. This language currently denotes Set; K-relation gating is separate.
+/// Expose k-way intersections by hoisting independent relational definitions
+/// before their candidate probe. Empty/all/result advice retains its existing
+/// meaning; `smallest(R@a, S@b, ...)` selects one exact occurrence site.
+/// Admissibility and correspondence belong to the public Physical Set law.
 pub fn smallest_intersections(
     source: &ir::Program,
     arguments: TokenStream,
 ) -> syn::Result<ir::Program> {
     let facts = ir::contract::check(source)?;
-    let selected = Results::parse(arguments)?;
-    let mut target = source.clone();
+    let selection: SmallestSelection = syn::parse2(arguments)?;
+    let definitions = &source.program.definitions;
+    let mut plans = Vec::new();
     let mut matched = BTreeSet::new();
-    // Visit source names, rather than positions that change during hoisting,
-    // so independent candidate pairs in a moved interval are still visited.
-    for definition in &source.program.definitions {
-        if !selected.includes(&definition.name)
-            || !matches!(definition.operator, Operator::Probe(..))
-        {
+    let mut site_matches = match &selection {
+        SmallestSelection::Sites(sites) => vec![0; sites.len()],
+        SmallestSelection::Results(_) => Vec::new(),
+    };
+    for (position, first) in definitions.iter().enumerate() {
+        if !matches!(first.operator, Operator::Probe(..)) {
             continue;
         }
-        let name = symbol_name(&definition.name);
-        let definitions = &mut target.program.definitions;
-        let position = definitions
-            .iter()
-            .position(|d| symbol_name(&d.name) == name)
-            .expect("rewrite retains every result");
-        let Some(offset) = definitions[position + 1..].iter().position(|check| {
-            ir::binary_intersection(&definitions[position], check, &facts).is_some()
-        }) else {
+        let mut chain = vec![position];
+        loop {
+            let previous = *chain.last().unwrap();
+            let Some(next) = (previous + 1..definitions.len()).find(|&next| {
+                ir::intersection_extension(first, &definitions[previous], &definitions[next], &facts)
+                    .is_some()
+                    || matches!(selection, SmallestSelection::Sites(_))
+                        && ir::intersection_key_projection(
+                            first, &definitions[previous], &definitions[next], &facts,
+                        )
+            }) else {
+                break;
+            };
+            if !definitions[previous + 1..next].iter().all(|definition| {
+                chain.iter().all(|&member| independent_relational(
+                    &definition.operator, &symbol_name(&definitions[member].name),
+                ))
+            }) {
+                break;
+            }
+            chain.push(next);
+        }
+        if chain.len() < 2 {
             continue;
+        }
+        let selected = match &selection {
+            SmallestSelection::Results(results) => results.includes(&first.name),
+            SmallestSelection::Sites(sites) => {
+                let origins: Option<BTreeSet<_>> = chain.iter().map(|&index| {
+                    let (Operator::Probe(_, key) | Operator::Semi(_, key)) =
+                        &definitions[index].operator else { unreachable!() };
+                    provider_occurrence(definitions, &key.right)
+                }).collect();
+                let mut selected = false;
+                for (index, site) in sites.iter().enumerate() {
+                    if origins.as_ref() == Some(site) && site.len() == chain.len() {
+                        site_matches[index] += 1;
+                        selected = true;
+                    }
+                }
+                selected
+            }
         };
-        let check_position = position + 1 + offset;
-        if !definitions[position + 1..check_position]
-            .iter()
-            .all(|d| independent_relational(&d.operator, &name))
-        {
-            continue;
-        }
-        // The source is topological. Preserving the interval's order and
-        // excluding references to the candidate also preserves its transitive
-        // dependencies. This interval contains no Rust node to move across.
-        definitions[position..check_position].rotate_left(1);
-        if let Operator::Probe(_, key) = &mut definitions[check_position - 1].operator {
-            key.choice = Some(Choice::Smallest(Default::default()));
-            matched.insert(name);
+        if selected {
+            matched.insert(symbol_name(&first.name));
+            plans.push(chain);
         }
     }
-    selected.require_matches(&matched)?;
+    match &selection {
+        SmallestSelection::Results(results) => results.require_matches(&matched)?,
+        SmallestSelection::Sites(sites) => {
+            for (site, count) in sites.iter().zip(site_matches) {
+                if count != 1 {
+                    return Err(syn::Error::new(
+                        proc_macro2::Span::call_site(),
+                        format!("smallest({}) must identify exactly one admissible complete intersection site; matched {count}",
+                            site.iter().map(|(relation, occurrence)| format!("{relation}@{occurrence}"))
+                                .collect::<Vec<_>>().join(", ")),
+                    ));
+                }
+            }
+        }
+    }
+    let mut target = source.clone();
+    for chain in plans {
+        let first_name = &definitions[chain[0]].name;
+        for pair in chain.windows(2) {
+            let member = &definitions[pair[1]];
+            if ir::intersection_extension(
+                &definitions[chain[0]], &definitions[pair[0]], member, &facts,
+            ).is_some() {
+                continue;
+            }
+            let Operator::Semi(_, key) = &member.operator else {
+                unreachable!("only membership sides need a key projection");
+            };
+            let mut suffix = 0;
+            let view = loop {
+                let name = syn::Ident::new(
+                    &format!("__cq_smallest_{}_{}", member.name, suffix),
+                    member.name.span(),
+                );
+                if !target.program.definitions.iter().any(|d| d.name == name) {
+                    break name;
+                }
+                suffix += 1;
+            };
+            let provider = &key.right;
+            let columns = key.columns.iter();
+            let projection: ir::Definition =
+                syn::parse_quote!(#view = let project #provider keep {#(#columns),*};);
+            let position = target.program.definitions.iter()
+                .position(|d| d.name == member.name).unwrap();
+            let Operator::Semi(_, key) = &mut target.program.definitions[position].operator else {
+                unreachable!("source membership preserved");
+            };
+            key.right = view;
+            target.program.definitions.insert(position, projection);
+        }
+        for (length, &next) in chain.iter().enumerate().skip(1) {
+            let start = target.program.definitions.iter().position(|d| &d.name == first_name).unwrap();
+            let end = target.program.definitions.iter()
+                .position(|d| d.name == definitions[next].name).unwrap();
+            // Stable hoisting preserves the source's topological order. No
+            // interval contains Rust or references to an intersection result.
+            target.program.definitions[start..end].rotate_left(length);
+        }
+        let first = target.program.definitions.iter_mut().find(|d| &d.name == first_name).unwrap();
+        if let Operator::Probe(_, key) = &mut first.operator {
+            key.choice = Some(Choice::Smallest(Default::default()));
+        }
+    }
     ir::check_rewrite(source, &target)?;
     Ok(target)
+}
+
+type OccurrenceSite = BTreeSet<(String, ir::syntax::Occurrence)>;
+
+enum SmallestSelection {
+    Results(Results),
+    Sites(Vec<OccurrenceSite>),
+}
+
+impl syn::parse::Parse for SmallestSelection {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        use syn::{Ident, Token};
+        let fork = input.fork();
+        let is_site = fork.parse::<Ident>().is_ok() && fork.peek(syn::token::Paren);
+        if !is_site {
+            return input.parse().map(Self::Results);
+        }
+        let mut sites = Vec::new();
+        while !input.is_empty() {
+            let name: Ident = input.parse()?;
+            if name != "smallest" {
+                return Err(syn::Error::new_spanned(name, "expected smallest(R@a, S@b, ...)"));
+            }
+            let content;
+            syn::parenthesized!(content in input);
+            let mut site = BTreeSet::new();
+            while !content.is_empty() {
+                let relation: Ident = content.parse()?;
+                content.parse::<Token![@]>()?;
+                let occurrence: ir::syntax::Occurrence = content.parse()?;
+                occurrence.check()?;
+                if !site.insert((symbol_name(&relation), occurrence)) {
+                    return Err(syn::Error::new_spanned(relation, "duplicate smallest occurrence"));
+                }
+                if !content.is_empty() {
+                    content.parse::<Token![,]>()?;
+                }
+            }
+            if site.len() < 2 {
+                return Err(syn::Error::new_spanned(name, "smallest requires at least two distinct occurrences"));
+            }
+            if sites.contains(&site) {
+                return Err(syn::Error::new_spanned(name, "duplicate smallest site"));
+            }
+            sites.push(site);
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(Self::Sites(sites))
+    }
+}
+
+/// Follow only unary relational provenance, never infer a relation from Rust.
+fn provider_occurrence(
+    definitions: &[ir::Definition],
+    result: &syn::Ident,
+) -> Option<(String, ir::syntax::Occurrence)> {
+    let mut result = result;
+    loop {
+        let definition = definitions.iter().find(|definition| &definition.name == result)?;
+        result = match &definition.operator {
+            Operator::Rename(rename) => {
+                return Some((symbol_name(&rename.relation), rename.occurrence.clone()));
+            }
+            Operator::Project(project) => &project.input,
+            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => &select.input,
+            _ => return None,
+        };
+    }
 }
 
 fn independent_relational(operator: &Operator, candidate: &str) -> bool {
