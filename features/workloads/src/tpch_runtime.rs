@@ -28,6 +28,26 @@ macro_rules! configuration {
             grade = ::cq_sequence_tasks_macros::tasks;
             print = ::cq_sequence_tasks_macros::translate_tasks;
         }, { $($body)* });
+        crate::tpch_runtime::configuration!(@named par_radix, $d, {
+            $($stages)*
+            decompose = [::cq_sequence_tasks_macros::plan];
+            grade = ::cq_sequence_tasks_macros::tasks;
+            print = ::cq_sequence_tasks_macros::translate_tasks;
+        }, [::cq_rewrites::radix_runs], { $($body)* });
+        crate::tpch_runtime::configuration!(@named par_built_hash, $d, {
+            $($stages)*
+            physical = [::cq_rewrites::build_host_reads];
+            decompose = [::cq_sequence_tasks_macros::plan];
+            grade = ::cq_sequence_tasks_macros::tasks;
+            print = ::cq_sequence_tasks_macros::translate_tasks;
+        }, { $($body)* });
+        crate::tpch_runtime::configuration!(@named par_built_radix, $d, {
+            $($stages)*
+            physical = [::cq_rewrites::build_host_reads];
+            decompose = [::cq_sequence_tasks_macros::plan];
+            grade = ::cq_sequence_tasks_macros::tasks;
+            print = ::cq_sequence_tasks_macros::translate_tasks;
+        }, [::cq_rewrites::radix_runs], { $($body)* });
         crate::tpch_runtime::configuration!(@named no_reduce, $d, {
             plan = ::mini_linq::passes::plan(no_reduce);
             $($stages)*
@@ -76,7 +96,7 @@ pub(crate) use configuration;
 /// Each `query!` carries stage-local advice; only the advised variant applies it.
 macro_rules! standalone_configs {
     ($d:tt; $($body:tt)*) => {
-        pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "no-reduce", "transfer", "le", "le_runs", "advised"];
+        pub const CONFIGS: &[&str] = &["default", "par", "par_radix", "par_built_hash", "par_built_radix", "radix", "radix_retained", "no-reduce", "transfer", "le", "le_runs", "advised"];
         crate::tpch_runtime::standalone_configuration!(default, $d, {}, [], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(radix, $d, {}, [::cq_rewrites::radix_runs], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(radix_retained, $d, {}, [::cq_rewrites::radix_runs, ::cq_rewrites::retain_lookups], { $($body)* });
@@ -85,6 +105,23 @@ macro_rules! standalone_configs {
             grade = ::cq_sequence_tasks_macros::tasks;
             print = ::cq_sequence_tasks_macros::translate_tasks;
         }, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(par_radix, $d, {
+            decompose = [::cq_sequence_tasks_macros::plan];
+            grade = ::cq_sequence_tasks_macros::tasks;
+            print = ::cq_sequence_tasks_macros::translate_tasks;
+        }, [::cq_rewrites::radix_runs], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(par_built_hash, $d, {
+            physical = [::cq_rewrites::build_host_reads];
+            decompose = [::cq_sequence_tasks_macros::plan];
+            grade = ::cq_sequence_tasks_macros::tasks;
+            print = ::cq_sequence_tasks_macros::translate_tasks;
+        }, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(par_built_radix, $d, {
+            physical = [::cq_rewrites::build_host_reads];
+            decompose = [::cq_sequence_tasks_macros::plan];
+            grade = ::cq_sequence_tasks_macros::tasks;
+            print = ::cq_sequence_tasks_macros::translate_tasks;
+        }, [::cq_rewrites::radix_runs], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(no_reduce, $d, {
             plan = ::mini_linq::passes::plan(no_reduce);
         }, [], { $($body)* });
@@ -102,6 +139,9 @@ macro_rules! standalone_configs {
             match config {
                 "default" => default::run(data, config),
                 "par" => par::run(data, config),
+                "par_radix" => par_radix::run(data, config),
+                "par_built_hash" => par_built_hash::run(data, config),
+                "par_built_radix" => par_built_radix::run(data, config),
                 "radix" => radix::run(data, config),
                 "radix_retained" => radix_retained::run(data, config),
                 "no-reduce" => no_reduce::run(data, config),
@@ -200,7 +240,7 @@ macro_rules! retail_kernel {
     ) => {
         pub const NAME: &str = $name;
         pub const SQL: &str = $sql;
-        pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
+        pub const CONFIGS: &[&str] = &["default", "par", "par_radix", "par_built_hash", "par_built_radix", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
         pub const EXPORTS: &[(&str, &str)] = &[$(
             (stringify!($table), concat!(stringify!($first) $(, ",", stringify!($column))*)),
         )*];
@@ -323,6 +363,9 @@ macro_rules! retail_kernel {
                 "built_hash" => built_hash::run(data),
                 "built_radix" => built_radix::run(data),
                 "par" => par::run(data),
+                "par_radix" => par_radix::run(data),
+                "par_built_hash" => par_built_hash::run(data),
+                "par_built_radix" => par_built_radix::run(data),
                 "no-reduce" => no_reduce::run(data),
                 "transfer" => transfer::run(data),
                 "le" => le::run(data),

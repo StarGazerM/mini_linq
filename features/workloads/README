@@ -1,9 +1,11 @@
 TPC-H-shaped retail CPU configurations
 ======================================
 
-Every retail source exposes default, par, radix, radix_retained, no-reduce,
-transfer, le, le_runs, and advised. Kernel and full-query shells also retain
-the matched built_hash/built_radix materialization comparison.
+Every retail source exposes default, par, par_radix, par_built_hash,
+par_built_radix, radix, radix_retained, no-reduce, transfer, le, le_runs, and
+advised. The par_built_* pair compares parallel hash and eligible RadixRun
+providers under identical explicit host-index materialization. Kernel and
+full-query shells also retain the sequential built_hash/built_radix comparison.
 Standalone/staged runners use standalone_configs! and compile the entire authored
 runner for each configuration; the same CQ is not copied between configurations.
 Only advised applies stage-local query! advice. Transfer applies
@@ -12,6 +14,15 @@ the same preprocessing, materialization, aggregate heads, and answer contracts.
 Most advice follows experiments/gpu/tpch/src/advice.rs; H05 retains its CPU
 cycle-closing order and H09 its connected Part-first written order.
 See tpch-methodology.txt for pipeline, timing, and correctness semantics.
+
+For a matched parallel provider comparison, run from this directory:
+
+  RAYON_NUM_THREADS=16 cargo xtask bench --tpch --sf 1 --runs 5 \
+    --query retail_h09 --config par_built_hash,par_built_radix
+
+Repeat with RAYON_NUM_THREADS=1 for a single-worker control. Archive reports
+between thread counts: the standard report filenames do not encode pool size.
+Times include query-local index builds; these are not prepared-index probe times.
 
 All 29 entries in src/tpch.rs CASES expose default and transfer: 27 retail-derived
 cases plus full tpch_q06 and tpch_q19, which retain their own configuration shells.

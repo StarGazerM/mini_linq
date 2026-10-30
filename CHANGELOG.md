@@ -7,6 +7,14 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Add TPC-H-derived parallel RadixRun configurations using the existing Tasks
+  backend, including matched hash/RadixRun variants with identical explicit
+  host-index materialization. Preserve authored queries and compiler/runtime
+  implementations; document thread controls and query timing boundaries.
+- Record matched SF1 H03/H05/H09/H19 CPU query timings at 1/12/16 workers:
+  exact DuckDB answers for both providers, generated-plan provider checks, and
+  uninstrumented samples separate from counters. Retain the H19 parallel slowdown
+  and hash-provider wins rather than inferring a universal RadixRun advantage.
 - Reconcile the canonical MCCL tree with its standalone upstream, preserving
   ordered GPU hashmap, blocked Bloom filter and multiset-difference APIs alongside
   shared-relation indexes and GPU RadixRun. Publish identical source trees from

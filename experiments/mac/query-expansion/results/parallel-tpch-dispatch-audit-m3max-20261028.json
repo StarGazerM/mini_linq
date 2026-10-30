@@ -1,0 +1,3178 @@
+{
+  "date": "2026-10-28",
+  "sf": "1",
+  "requested_rayon_threads": 16,
+  "purpose": "Audit effective join parallelism, not timing; all runs untimed and checked against retained full DuckDB witnesses.",
+  "method": "Temporary standalone crate reuses unchanged authored queries and workload pipelines. Reexports the original runtime through cq_storage/cq_sequence_tasks aliases; blanket IndexRead proxy records lookup provider, current Rayon slot and active fold/map scope before delegating. fold_tiles/map_parts proxies record callback workers and counts while delegating unchanged runtime scheduling. Slot 0 is the calling thread outside the pool; slots 1..16 are Rayon workers. No compiler/runtime source modifications.",
+  "source_fingerprints_match_benchmark": true,
+  "diagnostic_source": "use std::cell::Cell;\nuse std::collections::BTreeMap;\nuse std::sync::{LazyLock, Mutex};\nuse std::sync::atomic::{AtomicUsize, Ordering};\n\nthread_local! { static SCOPE: Cell<usize> = const { Cell::new(0) }; }\nstatic NEXT: AtomicUsize = AtomicUsize::new(1);\nstatic EVENTS: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());\ntype ProbeMap = BTreeMap<(usize, &'static str), u64>;\nstatic PROBES: LazyLock<Vec<Mutex<ProbeMap>>> = LazyLock::new(|| (0..rayon::current_num_threads()+1).map(|_| Mutex::new(BTreeMap::new())).collect());\n\nfn slot() -> usize { rayon::current_thread_index().map_or(0, |n| n + 1) }\nfn scoped<T>(scope: usize, f: impl FnOnce() -> T) -> T {\n    SCOPE.with(|s| { let old = s.replace(scope); let result = f(); s.set(old); result })\n}\nfn probe<I: ?Sized>() {\n    let maps = &*PROBES;\n    let key = (SCOPE.with(Cell::get), std::any::type_name::<I>());\n    *maps[slot()].lock().unwrap().entry(key).or_default() += 1;\n}\n\npub trait IndexRead: Clone {\n    type Key;\n    type Item: Copy;\n    type Cursor: Iterator<Item=Self::Item>;\n    fn lookup(&self, key: &Self::Key) -> Self::Cursor;\n    fn probe<const N: usize, I, F>(self, source: I, key: F) -> impl Iterator<Item=(I::Item,Self::Item)>\n    where I: Iterator, I::Item: Copy, F: FnMut(&I::Item)->Self::Key;\n}\nimpl<T: cq_storage_original::IndexRead> IndexRead for T {\n    type Key = T::Key;\n    type Item = T::Item;\n    type Cursor = T::Cursor;\n    fn lookup(&self, key: &Self::Key) -> Self::Cursor {\n        probe::<T>();\n        cq_storage_original::IndexRead::lookup(self, key)\n    }\n    fn probe<const N: usize,I,F>(self, source:I, key:F)->impl Iterator<Item=(I::Item,Self::Item)>\n    where I:Iterator, I::Item:Copy, F:FnMut(&I::Item)->Self::Key {\n        cq_storage_original::IndexRead::probe::<N,_,_>(self,source,key)\n    }\n}\n\npub mod combine {\n    pub use cq_sequence_tasks_original::combine::*;\n    use super::*;\n    pub fn fold_tiles<P: Tiles, T: Send>(parts: P, body: &(dyn Fn(&mut Vec<T>, P::Tile) + Sync)) -> Vec<Vec<T>> {\n        let id=NEXT.fetch_add(1,Ordering::Relaxed);\n        let tiles=parts.len();\n        let slots: Vec<AtomicUsize>=(0..rayon::current_num_threads()+1).map(|_| AtomicUsize::new(0)).collect();\n        let out=cq_sequence_tasks_original::combine::fold_tiles(parts,&|buffer,tile| {\n            slots[slot()].fetch_add(1,Ordering::Relaxed);\n            scoped(id,|| body(buffer,tile));\n        });\n        EVENTS.lock().unwrap().push(serde_json::json!({\"id\":id,\"kind\":\"fold_tiles\",\"tiles\":tiles,\"coarse_bodies\":out.len(),\"callbacks_by_slot\":slots.iter().map(|a|a.load(Ordering::Relaxed)).collect::<Vec<_>>() }));\n        out\n    }\n    pub fn map_parts<R:Send,O:Send>(parts:Vec<Vec<R>>, map:&(dyn Fn(Vec<R>)->Vec<O>+Sync))->Vec<Vec<O>> {\n        let id=NEXT.fetch_add(1,Ordering::Relaxed);\n        let count=parts.len();\n        let slots: Vec<AtomicUsize>=(0..rayon::current_num_threads()+1).map(|_|AtomicUsize::new(0)).collect();\n        let out=cq_sequence_tasks_original::combine::map_parts(parts,&|part| {\n            slots[slot()].fetch_add(1,Ordering::Relaxed);\n            scoped(id,||map(part))\n        });\n        EVENTS.lock().unwrap().push(serde_json::json!({\"id\":id,\"kind\":\"map_parts\",\"parts\":count,\"callbacks_by_slot\":slots.iter().map(|a|a.load(Ordering::Relaxed)).collect::<Vec<_>>() }));\n        out\n    }\n}\n\npub fn finish() -> serde_json::Value {\n    let probes=PROBES.iter().enumerate().flat_map(|(slot,m)|m.lock().unwrap().iter().map(|((scope,ty),count)|serde_json::json!({\"slot\":slot,\"scope\":scope,\"provider_type\":ty,\"lookups\":count})).collect::<Vec<_>>()).collect::<Vec<_>>();\n    serde_json::json!({\"effective_workers\":rayon::current_num_threads(),\"slot_zero\":\"caller thread outside Rayon pool\",\"events\":EVENTS.lock().unwrap().clone(),\"probes\":probes})\n}\n",
+  "diagnostic_h09_entrypoint": "#![recursion_limit = \"512\"]\n#![allow(unused_imports, unused_macros, dead_code, ambiguous_glob_reexports)]\nextern crate self as cq_storage;\nextern crate self as cq_sequence_tasks;\npub use cq_storage_original::*;\npub use cq_sequence_tasks_original::*;\nmod audit;\npub use audit::{combine, IndexRead};\n#[path = \"/Users/stargazermiao/workspace/mini_linq/features/workloads/src/tpch_runtime.rs\"] mod tpch_runtime;\n#[path = \"/Users/stargazermiao/workspace/mini_linq/features/workloads/src/queries/retail/tpch/retail_h09.rs\"] mod query;\n#[path = \"/Users/stargazermiao/workspace/mini_linq/features/workloads/xtask/src/tpch/comparison.rs\"] mod comparison;\nfn main() -> Result<(), Box<dyn std::error::Error>> {\n    let config=std::env::args().nth(1).expect(\"configuration\");\n    let destination=std::env::args().nth(2).expect(\"audit output\");\n    let base=std::path::Path::new(\"/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench\");\n    let data=query::load(&base.join(\"data/tpch-1\").join(query::NAME),&config)?;\n    let answers=query::run(&data,&config);\n    let witness:serde_json::Value=serde_json::from_slice(&std::fs::read(base.join(\"parallel-radix-20261028/t16\").join(query::NAME).join(\"raw\").join(&config).join(\"oracle.json\"))?)?;\n    let decimals=serde_json::from_value(witness[\"decimal_columns\"].clone())?;\n    let expected: std::collections::BTreeSet<Vec<String>>=serde_json::from_value(witness[\"rows\"].clone())?;\n    let actual=comparison::normalize_set(query::canonical(&answers),&decimals);\n    assert_eq!(actual,expected,\"full DuckDB answer equality\");\n    let mut result=audit::finish();\n    result[\"query\"]=query::NAME.into();\n    result[\"configuration\"]=config.into();\n    result[\"answer_rows\"]=actual.len().into();\n    result[\"exact_answer\"]=true.into();\n    std::fs::write(destination,serde_json::to_vec_pretty(&result)?)?;\n    println!(\"{}: exact answers; pool {}\",query::NAME,rayon::current_num_threads());\n    Ok(())\n}\n",
+  "diagnostic_manifest": "[package]\nname = \"dispatch-audit\"\nversion = \"0.0.0\"\nedition = \"2024\"\nrust-version = \"1.85.1\"\n[workspace]\n[profile.release.build-override]\nopt-level = 3\n[features]\ncounters = [\"cq-storage-original/counters\"]\nprofile = [\"cq-storage-original/operator-timing\"]\n[dependencies]\nmini-linq = { version = \"=0.1.0\", path = \"/Users/stargazermiao/workspace/mini_linq/facade/mini-linq\" }\ncq-load = { version = \"=0.1.0\", path = \"/Users/stargazermiao/workspace/mini_linq/runtime/cq-load\" , features = [\"parquet\"] }\ncq-storage-original = { package = \"cq-storage\", version = \"=0.1.0\", path = \"/Users/stargazermiao/workspace/mini_linq/runtime/cq-storage\" }\ncq-planners = { version = \"=0.1.0\", path = \"/Users/stargazermiao/workspace/mini_linq/features/planners\" }\ncq-rewrites = { version = \"=0.1.0\", path = \"/Users/stargazermiao/workspace/mini_linq/features/rewrites\" }\ncq-join-filters = { version = \"=0.1.0\", path = \"/Users/stargazermiao/workspace/mini_linq/features/join-filters\" }\ncq-ext-aggregate = { version = \"=0.1.0\", path = \"/Users/stargazermiao/workspace/mini_linq/features/extensions/cq-ext-aggregate\" }\ncq-ext-correlated = { version = \"=0.1.0\", path = \"/Users/stargazermiao/workspace/mini_linq/features/extensions/cq-ext-correlated\" }\ncq-sequence-tasks-original = { package = \"cq-sequence-tasks\", version = \"=0.1.0\", path = \"/Users/stargazermiao/workspace/mini_linq/features/sequence-tasks\" }\ncq-sequence-tasks-macros = { version = \"=0.1.0\", path = \"/Users/stargazermiao/workspace/mini_linq/features/sequence-tasks/macros\" }\nserde_json = \"1\"\nrayon = \"1\"\n\n[[bin]]\nname = \"audit-h03\"\npath = \"src/h03.rs\"\n\n[[bin]]\nname = \"audit-h05\"\npath = \"src/h05.rs\"\n\n[[bin]]\nname = \"audit-h09\"\npath = \"src/h09.rs\"\n\n[[bin]]\nname = \"audit-h19\"\npath = \"src/h19.rs\"\n",
+  "summary": [
+    {
+      "query": "retail_h03",
+      "configuration": "par_built_hash",
+      "effective_pool_workers": 16,
+      "join_kind": "fold_tiles",
+      "join_tiles": 93769,
+      "join_coarse_dispatch_bodies": 64,
+      "join_probe_worker_slots": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "join_lookup_calls": 61038,
+      "exact_answer": true
+    },
+    {
+      "query": "retail_h03",
+      "configuration": "par_built_radix",
+      "effective_pool_workers": 16,
+      "join_kind": "fold_tiles",
+      "join_tiles": 93769,
+      "join_coarse_dispatch_bodies": 64,
+      "join_probe_worker_slots": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "join_lookup_calls": 61038,
+      "exact_answer": true
+    },
+    {
+      "query": "retail_h05",
+      "configuration": "par_built_hash",
+      "effective_pool_workers": 16,
+      "join_kind": "fold_tiles",
+      "join_tiles": 93769,
+      "join_coarse_dispatch_bodies": 64,
+      "join_probe_worker_slots": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "join_lookup_calls": 736328,
+      "exact_answer": true
+    },
+    {
+      "query": "retail_h05",
+      "configuration": "par_built_radix",
+      "effective_pool_workers": 16,
+      "join_kind": "fold_tiles",
+      "join_tiles": 93769,
+      "join_coarse_dispatch_bodies": 64,
+      "join_probe_worker_slots": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "join_lookup_calls": 736328,
+      "exact_answer": true
+    },
+    {
+      "query": "retail_h09",
+      "configuration": "par_built_hash",
+      "effective_pool_workers": 16,
+      "join_kind": "fold_tiles",
+      "join_tiles": 167,
+      "join_coarse_dispatch_bodies": 64,
+      "join_probe_worker_slots": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "join_lookup_calls": 1288280,
+      "exact_answer": true
+    },
+    {
+      "query": "retail_h09",
+      "configuration": "par_built_radix",
+      "effective_pool_workers": 16,
+      "join_kind": "fold_tiles",
+      "join_tiles": 167,
+      "join_coarse_dispatch_bodies": 64,
+      "join_probe_worker_slots": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "join_lookup_calls": 1288280,
+      "exact_answer": true
+    },
+    {
+      "query": "retail_h19",
+      "configuration": "par_built_hash",
+      "effective_pool_workers": 16,
+      "join_kind": "caller-thread iterator",
+      "join_tiles": null,
+      "join_coarse_dispatch_bodies": null,
+      "join_probe_worker_slots": [
+        0
+      ],
+      "join_lookup_calls": 214377,
+      "exact_answer": true
+    },
+    {
+      "query": "retail_h19",
+      "configuration": "par_built_radix",
+      "effective_pool_workers": 16,
+      "join_kind": "caller-thread iterator",
+      "join_tiles": null,
+      "join_coarse_dispatch_bodies": null,
+      "join_probe_worker_slots": [
+        0
+      ],
+      "join_lookup_calls": 214377,
+      "exact_answer": true
+    }
+  ],
+  "runs": [
+    {
+      "answer_rows": 11620,
+      "configuration": "par_built_hash",
+      "effective_workers": 16,
+      "events": [
+        {
+          "callbacks_by_slot": [
+            0,
+            2197,
+            1098,
+            2200,
+            1466,
+            1466,
+            1465,
+            1099,
+            1465,
+            1464,
+            1464,
+            1465,
+            1099,
+            1098,
+            1464,
+            1464,
+            1464
+          ],
+          "coarse_bodies": 64,
+          "id": 1,
+          "kind": "fold_tiles",
+          "tiles": 23438
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            4396,
+            4395,
+            7325,
+            7327,
+            4396,
+            7326,
+            7326,
+            5860,
+            4396,
+            5860,
+            5860,
+            5860,
+            5861,
+            5861,
+            5860,
+            5860
+          ],
+          "coarse_bodies": 64,
+          "id": 2,
+          "kind": "fold_tiles",
+          "tiles": 93769
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            5,
+            5,
+            1,
+            2,
+            4,
+            2,
+            2,
+            5,
+            5,
+            4,
+            5,
+            5,
+            5,
+            5,
+            4,
+            5
+          ],
+          "id": 3,
+          "kind": "map_parts",
+          "parts": 64
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            14,
+            4,
+            15,
+            18,
+            9,
+            21,
+            12,
+            12,
+            9,
+            8,
+            5,
+            12,
+            11,
+            18,
+            11,
+            3
+          ],
+          "coarse_bodies": 64,
+          "id": 4,
+          "kind": "fold_tiles",
+          "tiles": 182
+        }
+      ],
+      "exact_answer": true,
+      "probes": [
+        {
+          "lookups": 1310,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 1
+        },
+        {
+          "lookups": 1310,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 1
+        },
+        {
+          "lookups": 1281,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 2
+        },
+        {
+          "lookups": 1281,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 2
+        },
+        {
+          "lookups": 2337,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 3
+        },
+        {
+          "lookups": 2337,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 3
+        },
+        {
+          "lookups": 2479,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 4
+        },
+        {
+          "lookups": 2479,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 4
+        },
+        {
+          "lookups": 1465,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 5
+        },
+        {
+          "lookups": 1465,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 5
+        },
+        {
+          "lookups": 2327,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 6
+        },
+        {
+          "lookups": 2327,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 6
+        },
+        {
+          "lookups": 2500,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 7
+        },
+        {
+          "lookups": 2500,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 7
+        },
+        {
+          "lookups": 1967,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 8
+        },
+        {
+          "lookups": 1967,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 8
+        },
+        {
+          "lookups": 1330,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 9
+        },
+        {
+          "lookups": 1330,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 9
+        },
+        {
+          "lookups": 1872,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 10
+        },
+        {
+          "lookups": 1872,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 10
+        },
+        {
+          "lookups": 1979,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 11
+        },
+        {
+          "lookups": 1979,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 11
+        },
+        {
+          "lookups": 1891,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 12
+        },
+        {
+          "lookups": 1891,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 12
+        },
+        {
+          "lookups": 1970,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 13
+        },
+        {
+          "lookups": 1970,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 13
+        },
+        {
+          "lookups": 2000,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 14
+        },
+        {
+          "lookups": 2000,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 14
+        },
+        {
+          "lookups": 2002,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 15
+        },
+        {
+          "lookups": 2002,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 15
+        },
+        {
+          "lookups": 1809,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 16
+        },
+        {
+          "lookups": 1809,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h03::query::par_built_hash::run::{{closure}}>",
+          "scope": 2,
+          "slot": 16
+        }
+      ],
+      "query": "retail_h03",
+      "slot_zero": "caller thread outside Rayon pool"
+    },
+    {
+      "answer_rows": 11620,
+      "configuration": "par_built_radix",
+      "effective_workers": 16,
+      "events": [
+        {
+          "callbacks_by_slot": [
+            0,
+            1466,
+            1464,
+            1464,
+            1465,
+            1464,
+            1098,
+            733,
+            1466,
+            1466,
+            1465,
+            1098,
+            1098,
+            1466,
+            1466,
+            1464,
+            3295
+          ],
+          "coarse_bodies": 64,
+          "id": 1,
+          "kind": "fold_tiles",
+          "tiles": 23438
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            5861,
+            5861,
+            5860,
+            5860,
+            5862,
+            5861,
+            5861,
+            5860,
+            4396,
+            5860,
+            5861,
+            5860,
+            4395,
+            4395,
+            4395,
+            11721
+          ],
+          "coarse_bodies": 64,
+          "id": 2,
+          "kind": "fold_tiles",
+          "tiles": 93769
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            5,
+            5,
+            2,
+            5,
+            5,
+            4,
+            4,
+            2,
+            5,
+            5,
+            5,
+            4,
+            5,
+            2,
+            2,
+            4
+          ],
+          "id": 3,
+          "kind": "map_parts",
+          "parts": 64
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            24,
+            12,
+            10,
+            23,
+            5,
+            14,
+            20,
+            6,
+            18,
+            6,
+            12,
+            6,
+            9,
+            6,
+            6,
+            5
+          ],
+          "coarse_bodies": 64,
+          "id": 4,
+          "kind": "fold_tiles",
+          "tiles": 182
+        }
+      ],
+      "exact_answer": true,
+      "probes": [
+        {
+          "lookups": 1784,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 1
+        },
+        {
+          "lookups": 1784,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 1
+        },
+        {
+          "lookups": 2012,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 2
+        },
+        {
+          "lookups": 2012,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 2
+        },
+        {
+          "lookups": 1822,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 3
+        },
+        {
+          "lookups": 1822,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 3
+        },
+        {
+          "lookups": 1958,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 4
+        },
+        {
+          "lookups": 1958,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 4
+        },
+        {
+          "lookups": 1775,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 5
+        },
+        {
+          "lookups": 1775,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 5
+        },
+        {
+          "lookups": 2024,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 6
+        },
+        {
+          "lookups": 2024,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 6
+        },
+        {
+          "lookups": 1952,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 7
+        },
+        {
+          "lookups": 1952,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 7
+        },
+        {
+          "lookups": 2016,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 8
+        },
+        {
+          "lookups": 2016,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 8
+        },
+        {
+          "lookups": 1429,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 9
+        },
+        {
+          "lookups": 1429,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 9
+        },
+        {
+          "lookups": 1898,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 10
+        },
+        {
+          "lookups": 1898,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 10
+        },
+        {
+          "lookups": 1852,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 11
+        },
+        {
+          "lookups": 1852,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 11
+        },
+        {
+          "lookups": 1887,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 12
+        },
+        {
+          "lookups": 1887,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 12
+        },
+        {
+          "lookups": 1396,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 13
+        },
+        {
+          "lookups": 1396,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 13
+        },
+        {
+          "lookups": 1398,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 14
+        },
+        {
+          "lookups": 1398,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 14
+        },
+        {
+          "lookups": 1452,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 15
+        },
+        {
+          "lookups": 1452,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 15
+        },
+        {
+          "lookups": 3864,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 16
+        },
+        {
+          "lookups": 3864,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h03::query::par_built_radix::run::{{closure}}>",
+          "scope": 2,
+          "slot": 16
+        }
+      ],
+      "query": "retail_h03",
+      "slot_zero": "caller thread outside Rayon pool"
+    },
+    {
+      "answer_rows": 7242,
+      "configuration": "par_built_hash",
+      "effective_workers": 16,
+      "events": [
+        {
+          "callbacks_by_slot": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "coarse_bodies": 1,
+          "id": 1,
+          "kind": "fold_tiles",
+          "tiles": 1
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            0,
+            258,
+            328,
+            145,
+            37,
+            37,
+            37,
+            146,
+            37,
+            37,
+            110,
+            256,
+            110,
+            259,
+            291,
+            256
+          ],
+          "coarse_bodies": 64,
+          "id": 2,
+          "kind": "fold_tiles",
+          "tiles": 2344
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            2931,
+            1831,
+            2928,
+            733,
+            734,
+            1466,
+            1099,
+            1098,
+            732,
+            1830,
+            1831,
+            1098,
+            1831,
+            1098,
+            1099,
+            1099
+          ],
+          "coarse_bodies": 64,
+          "id": 3,
+          "kind": "fold_tiles",
+          "tiles": 23438
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            7326,
+            4395,
+            5860,
+            5861,
+            7326,
+            7326,
+            2931,
+            5861,
+            5861,
+            7326,
+            5860,
+            4395,
+            2930,
+            4395,
+            5860,
+            10256
+          ],
+          "coarse_bodies": 64,
+          "id": 4,
+          "kind": "fold_tiles",
+          "tiles": 93769
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            2,
+            5,
+            5,
+            4,
+            2,
+            5,
+            5,
+            5,
+            2,
+            6,
+            5,
+            4,
+            5,
+            3,
+            4,
+            2
+          ],
+          "id": 5,
+          "kind": "map_parts",
+          "parts": 64
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            7,
+            6,
+            13,
+            5,
+            7,
+            2,
+            6,
+            15,
+            6,
+            6,
+            8,
+            5,
+            11,
+            7,
+            4,
+            6
+          ],
+          "coarse_bodies": 64,
+          "id": 6,
+          "kind": "fold_tiles",
+          "tiles": 114
+        }
+      ],
+      "exact_answer": true,
+      "probes": [
+        {
+          "lookups": 14401,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 1
+        },
+        {
+          "lookups": 14401,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 1
+        },
+        {
+          "lookups": 14401,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 1
+        },
+        {
+          "lookups": 14401,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 1
+        },
+        {
+          "lookups": 8571,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 2
+        },
+        {
+          "lookups": 8571,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 2
+        },
+        {
+          "lookups": 8571,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 2
+        },
+        {
+          "lookups": 8571,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 2
+        },
+        {
+          "lookups": 11182,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 3
+        },
+        {
+          "lookups": 11182,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 3
+        },
+        {
+          "lookups": 11182,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 3
+        },
+        {
+          "lookups": 11182,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 3
+        },
+        {
+          "lookups": 11444,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 4
+        },
+        {
+          "lookups": 11444,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 4
+        },
+        {
+          "lookups": 11444,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 4
+        },
+        {
+          "lookups": 11444,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 4
+        },
+        {
+          "lookups": 14220,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 5
+        },
+        {
+          "lookups": 14220,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 5
+        },
+        {
+          "lookups": 14220,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 5
+        },
+        {
+          "lookups": 14220,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 5
+        },
+        {
+          "lookups": 14357,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 6
+        },
+        {
+          "lookups": 14357,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 6
+        },
+        {
+          "lookups": 14357,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 6
+        },
+        {
+          "lookups": 14357,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 6
+        },
+        {
+          "lookups": 6133,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 7
+        },
+        {
+          "lookups": 6133,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 7
+        },
+        {
+          "lookups": 6133,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 7
+        },
+        {
+          "lookups": 6133,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 7
+        },
+        {
+          "lookups": 11469,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 8
+        },
+        {
+          "lookups": 11469,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 8
+        },
+        {
+          "lookups": 11469,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 8
+        },
+        {
+          "lookups": 11469,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 8
+        },
+        {
+          "lookups": 11206,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 9
+        },
+        {
+          "lookups": 11206,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 9
+        },
+        {
+          "lookups": 11206,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 9
+        },
+        {
+          "lookups": 11206,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 9
+        },
+        {
+          "lookups": 14632,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 10
+        },
+        {
+          "lookups": 14632,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 10
+        },
+        {
+          "lookups": 14632,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 10
+        },
+        {
+          "lookups": 14632,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 10
+        },
+        {
+          "lookups": 11658,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 11
+        },
+        {
+          "lookups": 11658,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 11
+        },
+        {
+          "lookups": 11658,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 11
+        },
+        {
+          "lookups": 11658,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 11
+        },
+        {
+          "lookups": 8569,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 12
+        },
+        {
+          "lookups": 8569,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 12
+        },
+        {
+          "lookups": 8569,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 12
+        },
+        {
+          "lookups": 8569,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 12
+        },
+        {
+          "lookups": 5828,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 13
+        },
+        {
+          "lookups": 5828,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 13
+        },
+        {
+          "lookups": 5828,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 13
+        },
+        {
+          "lookups": 5828,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 13
+        },
+        {
+          "lookups": 8781,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 14
+        },
+        {
+          "lookups": 8781,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 14
+        },
+        {
+          "lookups": 8781,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 14
+        },
+        {
+          "lookups": 8781,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 14
+        },
+        {
+          "lookups": 11498,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 15
+        },
+        {
+          "lookups": 11498,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 15
+        },
+        {
+          "lookups": 11498,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 15
+        },
+        {
+          "lookups": 11498,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 15
+        },
+        {
+          "lookups": 20133,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 16
+        },
+        {
+          "lookups": 20133,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 16
+        },
+        {
+          "lookups": 20133,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 16
+        },
+        {
+          "lookups": 20133,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64,)>, audit_h05::query::par_built_hash::run::{{closure}}>",
+          "scope": 4,
+          "slot": 16
+        }
+      ],
+      "query": "retail_h05",
+      "slot_zero": "caller thread outside Rayon pool"
+    },
+    {
+      "answer_rows": 7242,
+      "configuration": "par_built_radix",
+      "effective_workers": 16,
+      "events": [
+        {
+          "callbacks_by_slot": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "coarse_bodies": 1,
+          "id": 1,
+          "kind": "fold_tiles",
+          "tiles": 1
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            185,
+            183,
+            184,
+            184,
+            184,
+            184,
+            184,
+            220,
+            180,
+            36,
+            182,
+            36,
+            183,
+            36,
+            0,
+            183
+          ],
+          "coarse_bodies": 64,
+          "id": 2,
+          "kind": "fold_tiles",
+          "tiles": 2344
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            3663,
+            1465,
+            1464,
+            732,
+            1466,
+            1465,
+            1099,
+            1465,
+            1465,
+            1466,
+            1466,
+            1464,
+            1098,
+            1464,
+            1464,
+            732
+          ],
+          "coarse_bodies": 64,
+          "id": 3,
+          "kind": "fold_tiles",
+          "tiles": 23438
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            11722,
+            4395,
+            10255,
+            5861,
+            5861,
+            4396,
+            4396,
+            5861,
+            5861,
+            5860,
+            4395,
+            4395,
+            2931,
+            4395,
+            5860,
+            7325
+          ],
+          "coarse_bodies": 64,
+          "id": 4,
+          "kind": "fold_tiles",
+          "tiles": 93769
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            1,
+            4,
+            2,
+            4,
+            2,
+            5,
+            4,
+            5,
+            6,
+            5,
+            4,
+            6,
+            5,
+            4,
+            5,
+            2
+          ],
+          "id": 5,
+          "kind": "map_parts",
+          "parts": 64
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            2,
+            6,
+            2,
+            10,
+            11,
+            10,
+            8,
+            12,
+            3,
+            4,
+            8,
+            8,
+            6,
+            6,
+            6,
+            12
+          ],
+          "coarse_bodies": 64,
+          "id": 6,
+          "kind": "fold_tiles",
+          "tiles": 114
+        }
+      ],
+      "exact_answer": true,
+      "probes": [
+        {
+          "lookups": 23060,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 1
+        },
+        {
+          "lookups": 23060,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 1
+        },
+        {
+          "lookups": 23060,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 1
+        },
+        {
+          "lookups": 23060,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 1
+        },
+        {
+          "lookups": 8681,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 2
+        },
+        {
+          "lookups": 8681,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 2
+        },
+        {
+          "lookups": 8681,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 2
+        },
+        {
+          "lookups": 8681,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 2
+        },
+        {
+          "lookups": 19996,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 3
+        },
+        {
+          "lookups": 19996,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 3
+        },
+        {
+          "lookups": 19996,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 3
+        },
+        {
+          "lookups": 19996,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 3
+        },
+        {
+          "lookups": 11282,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 4
+        },
+        {
+          "lookups": 11282,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 4
+        },
+        {
+          "lookups": 11282,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 4
+        },
+        {
+          "lookups": 11282,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 4
+        },
+        {
+          "lookups": 11179,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 5
+        },
+        {
+          "lookups": 11179,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 5
+        },
+        {
+          "lookups": 11179,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 5
+        },
+        {
+          "lookups": 11179,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 5
+        },
+        {
+          "lookups": 8674,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 6
+        },
+        {
+          "lookups": 8674,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 6
+        },
+        {
+          "lookups": 8674,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 6
+        },
+        {
+          "lookups": 8674,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 6
+        },
+        {
+          "lookups": 8940,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 7
+        },
+        {
+          "lookups": 8940,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 7
+        },
+        {
+          "lookups": 8940,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 7
+        },
+        {
+          "lookups": 8940,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 7
+        },
+        {
+          "lookups": 11027,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 8
+        },
+        {
+          "lookups": 11027,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 8
+        },
+        {
+          "lookups": 11027,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 8
+        },
+        {
+          "lookups": 11027,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 8
+        },
+        {
+          "lookups": 11515,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 9
+        },
+        {
+          "lookups": 11515,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 9
+        },
+        {
+          "lookups": 11515,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 9
+        },
+        {
+          "lookups": 11515,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 9
+        },
+        {
+          "lookups": 11886,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 10
+        },
+        {
+          "lookups": 11886,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 10
+        },
+        {
+          "lookups": 11886,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 10
+        },
+        {
+          "lookups": 11886,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 10
+        },
+        {
+          "lookups": 8677,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 11
+        },
+        {
+          "lookups": 8677,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 11
+        },
+        {
+          "lookups": 8677,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 11
+        },
+        {
+          "lookups": 8677,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 11
+        },
+        {
+          "lookups": 8532,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 12
+        },
+        {
+          "lookups": 8532,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 12
+        },
+        {
+          "lookups": 8532,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 12
+        },
+        {
+          "lookups": 8532,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 12
+        },
+        {
+          "lookups": 5902,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 13
+        },
+        {
+          "lookups": 5902,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 13
+        },
+        {
+          "lookups": 5902,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 13
+        },
+        {
+          "lookups": 5902,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 13
+        },
+        {
+          "lookups": 8889,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 14
+        },
+        {
+          "lookups": 8889,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 14
+        },
+        {
+          "lookups": 8889,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 14
+        },
+        {
+          "lookups": 8889,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 14
+        },
+        {
+          "lookups": 11582,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 15
+        },
+        {
+          "lookups": 11582,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 15
+        },
+        {
+          "lookups": 11582,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 15
+        },
+        {
+          "lookups": 11582,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 15
+        },
+        {
+          "lookups": 14260,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 16
+        },
+        {
+          "lookups": 14260,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 16
+        },
+        {
+          "lookups": 14260,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64,)>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 16
+        },
+        {
+          "lookups": 14260,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32, &i64), ()>, audit_h05::query::par_built_radix::run::{{closure}}>",
+          "scope": 4,
+          "slot": 16
+        }
+      ],
+      "query": "retail_h05",
+      "slot_zero": "caller thread outside Rayon pool"
+    },
+    {
+      "answer_rows": 319402,
+      "configuration": "par_built_hash",
+      "effective_workers": 16,
+      "events": [
+        {
+          "callbacks_by_slot": [
+            0,
+            11,
+            8,
+            12,
+            11,
+            11,
+            11,
+            12,
+            9,
+            8,
+            12,
+            11,
+            7,
+            10,
+            10,
+            12,
+            12
+          ],
+          "coarse_bodies": 64,
+          "id": 1,
+          "kind": "fold_tiles",
+          "tiles": 167
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            5,
+            5,
+            1,
+            5,
+            2,
+            4,
+            5,
+            4,
+            5,
+            5,
+            5,
+            2,
+            5,
+            5,
+            4,
+            2
+          ],
+          "id": 2,
+          "kind": "map_parts",
+          "parts": 64
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            312,
+            312,
+            234,
+            234,
+            312,
+            312,
+            234,
+            234,
+            311,
+            312,
+            312,
+            78,
+            312,
+            234,
+            234,
+            1014
+          ],
+          "coarse_bodies": 64,
+          "id": 3,
+          "kind": "fold_tiles",
+          "tiles": 4991
+        }
+      ],
+      "exact_answer": true,
+      "probes": [
+        {
+          "lookups": 21168,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 1
+        },
+        {
+          "lookups": 21168,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 1
+        },
+        {
+          "lookups": 21168,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 1
+        },
+        {
+          "lookups": 704,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 1
+        },
+        {
+          "lookups": 21168,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 1
+        },
+        {
+          "lookups": 15153,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 2
+        },
+        {
+          "lookups": 15153,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 2
+        },
+        {
+          "lookups": 15153,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 2
+        },
+        {
+          "lookups": 512,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 2
+        },
+        {
+          "lookups": 15153,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 2
+        },
+        {
+          "lookups": 22842,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 3
+        },
+        {
+          "lookups": 22842,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 3
+        },
+        {
+          "lookups": 22842,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 3
+        },
+        {
+          "lookups": 768,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 3
+        },
+        {
+          "lookups": 22842,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 3
+        },
+        {
+          "lookups": 21244,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 4
+        },
+        {
+          "lookups": 21244,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 4
+        },
+        {
+          "lookups": 21244,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 4
+        },
+        {
+          "lookups": 704,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 4
+        },
+        {
+          "lookups": 21244,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 4
+        },
+        {
+          "lookups": 21225,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 5
+        },
+        {
+          "lookups": 21225,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 5
+        },
+        {
+          "lookups": 21225,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 5
+        },
+        {
+          "lookups": 704,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 5
+        },
+        {
+          "lookups": 21225,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 5
+        },
+        {
+          "lookups": 21154,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 6
+        },
+        {
+          "lookups": 21154,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 6
+        },
+        {
+          "lookups": 21154,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 6
+        },
+        {
+          "lookups": 704,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 6
+        },
+        {
+          "lookups": 21154,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 6
+        },
+        {
+          "lookups": 22910,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 7
+        },
+        {
+          "lookups": 22910,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 7
+        },
+        {
+          "lookups": 22910,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 7
+        },
+        {
+          "lookups": 768,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 7
+        },
+        {
+          "lookups": 22910,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 7
+        },
+        {
+          "lookups": 17179,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 8
+        },
+        {
+          "lookups": 17179,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 8
+        },
+        {
+          "lookups": 17179,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 8
+        },
+        {
+          "lookups": 576,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 8
+        },
+        {
+          "lookups": 17179,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 8
+        },
+        {
+          "lookups": 15191,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 9
+        },
+        {
+          "lookups": 15191,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 9
+        },
+        {
+          "lookups": 15191,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 9
+        },
+        {
+          "lookups": 512,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 9
+        },
+        {
+          "lookups": 15191,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 9
+        },
+        {
+          "lookups": 23006,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 10
+        },
+        {
+          "lookups": 23006,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 10
+        },
+        {
+          "lookups": 23006,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 10
+        },
+        {
+          "lookups": 768,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 10
+        },
+        {
+          "lookups": 23006,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 10
+        },
+        {
+          "lookups": 21230,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 11
+        },
+        {
+          "lookups": 21230,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 11
+        },
+        {
+          "lookups": 21230,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 11
+        },
+        {
+          "lookups": 704,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 11
+        },
+        {
+          "lookups": 21230,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 11
+        },
+        {
+          "lookups": 13440,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 12
+        },
+        {
+          "lookups": 13440,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 12
+        },
+        {
+          "lookups": 13440,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 12
+        },
+        {
+          "lookups": 448,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 12
+        },
+        {
+          "lookups": 13440,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 12
+        },
+        {
+          "lookups": 18523,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 13
+        },
+        {
+          "lookups": 18523,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 13
+        },
+        {
+          "lookups": 18523,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 13
+        },
+        {
+          "lookups": 616,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 13
+        },
+        {
+          "lookups": 18523,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 13
+        },
+        {
+          "lookups": 19157,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 14
+        },
+        {
+          "lookups": 19157,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 14
+        },
+        {
+          "lookups": 19157,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 14
+        },
+        {
+          "lookups": 640,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 14
+        },
+        {
+          "lookups": 19157,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 14
+        },
+        {
+          "lookups": 22935,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 15
+        },
+        {
+          "lookups": 22935,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 15
+        },
+        {
+          "lookups": 22935,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 15
+        },
+        {
+          "lookups": 768,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 15
+        },
+        {
+          "lookups": 22935,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 15
+        },
+        {
+          "lookups": 23047,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i32,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 16
+        },
+        {
+          "lookups": 23047,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 16
+        },
+        {
+          "lookups": 23047,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i32,)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 16
+        },
+        {
+          "lookups": 768,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 16
+        },
+        {
+          "lookups": 23047,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), ()>, audit_h09::query::par_built_hash::run::{{closure}}>",
+          "scope": 1,
+          "slot": 16
+        }
+      ],
+      "query": "retail_h09",
+      "slot_zero": "caller thread outside Rayon pool"
+    },
+    {
+      "answer_rows": 319402,
+      "configuration": "par_built_radix",
+      "effective_workers": 16,
+      "events": [
+        {
+          "callbacks_by_slot": [
+            0,
+            13,
+            9,
+            12,
+            12,
+            13,
+            9,
+            13,
+            12,
+            6,
+            12,
+            7,
+            12,
+            11,
+            7,
+            7,
+            12
+          ],
+          "coarse_bodies": 64,
+          "id": 1,
+          "kind": "fold_tiles",
+          "tiles": 167
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            5,
+            4,
+            5,
+            5,
+            5,
+            2,
+            5,
+            5,
+            2,
+            5,
+            4,
+            5,
+            5,
+            1,
+            1,
+            5
+          ],
+          "id": 2,
+          "kind": "map_parts",
+          "parts": 64
+        },
+        {
+          "callbacks_by_slot": [
+            0,
+            468,
+            390,
+            390,
+            78,
+            390,
+            390,
+            312,
+            78,
+            468,
+            390,
+            390,
+            467,
+            312,
+            0,
+            78,
+            390
+          ],
+          "coarse_bodies": 64,
+          "id": 3,
+          "kind": "fold_tiles",
+          "tiles": 4991
+        }
+      ],
+      "exact_answer": true,
+      "probes": [
+        {
+          "lookups": 24598,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 1
+        },
+        {
+          "lookups": 24598,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 1
+        },
+        {
+          "lookups": 832,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 1
+        },
+        {
+          "lookups": 24598,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 1
+        },
+        {
+          "lookups": 24598,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 1
+        },
+        {
+          "lookups": 17008,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 2
+        },
+        {
+          "lookups": 17008,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 2
+        },
+        {
+          "lookups": 576,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 2
+        },
+        {
+          "lookups": 17008,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 2
+        },
+        {
+          "lookups": 17008,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 2
+        },
+        {
+          "lookups": 22888,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 3
+        },
+        {
+          "lookups": 22888,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 3
+        },
+        {
+          "lookups": 768,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 3
+        },
+        {
+          "lookups": 22888,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 3
+        },
+        {
+          "lookups": 22888,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 3
+        },
+        {
+          "lookups": 23106,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 4
+        },
+        {
+          "lookups": 23106,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 4
+        },
+        {
+          "lookups": 768,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 4
+        },
+        {
+          "lookups": 23106,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 4
+        },
+        {
+          "lookups": 23106,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 4
+        },
+        {
+          "lookups": 24924,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 5
+        },
+        {
+          "lookups": 24924,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 5
+        },
+        {
+          "lookups": 832,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 5
+        },
+        {
+          "lookups": 24924,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 5
+        },
+        {
+          "lookups": 24924,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 5
+        },
+        {
+          "lookups": 17309,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 6
+        },
+        {
+          "lookups": 17309,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 6
+        },
+        {
+          "lookups": 576,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 6
+        },
+        {
+          "lookups": 17309,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 6
+        },
+        {
+          "lookups": 17309,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 6
+        },
+        {
+          "lookups": 25052,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 7
+        },
+        {
+          "lookups": 25052,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 7
+        },
+        {
+          "lookups": 832,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 7
+        },
+        {
+          "lookups": 25052,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 7
+        },
+        {
+          "lookups": 25052,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 7
+        },
+        {
+          "lookups": 23017,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 8
+        },
+        {
+          "lookups": 23017,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 8
+        },
+        {
+          "lookups": 768,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 8
+        },
+        {
+          "lookups": 23017,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 8
+        },
+        {
+          "lookups": 23017,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 8
+        },
+        {
+          "lookups": 11417,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 9
+        },
+        {
+          "lookups": 11417,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 9
+        },
+        {
+          "lookups": 384,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 9
+        },
+        {
+          "lookups": 11417,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 9
+        },
+        {
+          "lookups": 11417,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 9
+        },
+        {
+          "lookups": 22838,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 10
+        },
+        {
+          "lookups": 22838,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 10
+        },
+        {
+          "lookups": 768,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 10
+        },
+        {
+          "lookups": 22838,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 10
+        },
+        {
+          "lookups": 22838,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 10
+        },
+        {
+          "lookups": 13466,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 11
+        },
+        {
+          "lookups": 13466,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 11
+        },
+        {
+          "lookups": 448,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 11
+        },
+        {
+          "lookups": 13466,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 11
+        },
+        {
+          "lookups": 13466,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 11
+        },
+        {
+          "lookups": 23383,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 12
+        },
+        {
+          "lookups": 23383,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 12
+        },
+        {
+          "lookups": 768,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 12
+        },
+        {
+          "lookups": 23383,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 12
+        },
+        {
+          "lookups": 23383,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 12
+        },
+        {
+          "lookups": 21230,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 13
+        },
+        {
+          "lookups": 21230,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 13
+        },
+        {
+          "lookups": 704,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 13
+        },
+        {
+          "lookups": 21230,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 13
+        },
+        {
+          "lookups": 21230,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 13
+        },
+        {
+          "lookups": 13410,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 14
+        },
+        {
+          "lookups": 13410,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 14
+        },
+        {
+          "lookups": 448,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 14
+        },
+        {
+          "lookups": 13410,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 14
+        },
+        {
+          "lookups": 13410,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 14
+        },
+        {
+          "lookups": 12829,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 15
+        },
+        {
+          "lookups": 12829,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 15
+        },
+        {
+          "lookups": 424,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 15
+        },
+        {
+          "lookups": 12829,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 15
+        },
+        {
+          "lookups": 12829,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 15
+        },
+        {
+          "lookups": 22929,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i32,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 16
+        },
+        {
+          "lookups": 22929,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i32,)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 16
+        },
+        {
+          "lookups": 768,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&i64, &i64)>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 16
+        },
+        {
+          "lookups": 22929,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 16
+        },
+        {
+          "lookups": 22929,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64, &i64), ()>, audit_h09::query::par_built_radix::run::{{closure}}>",
+          "scope": 1,
+          "slot": 16
+        }
+      ],
+      "query": "retail_h09",
+      "slot_zero": "caller thread outside Rayon pool"
+    },
+    {
+      "answer_rows": 1,
+      "configuration": "par_built_hash",
+      "effective_workers": 16,
+      "events": [
+        {
+          "callbacks_by_slot": [
+            0,
+            3,
+            0,
+            8,
+            4,
+            9,
+            3,
+            4,
+            0,
+            0,
+            10,
+            9,
+            0,
+            0,
+            6,
+            8,
+            0
+          ],
+          "id": 1,
+          "kind": "map_parts",
+          "parts": 64
+        },
+        {
+          "callbacks_by_slot": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "coarse_bodies": 1,
+          "id": 2,
+          "kind": "fold_tiles",
+          "tiles": 1
+        }
+      ],
+      "exact_answer": true,
+      "probes": [
+        {
+          "lookups": 214377,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::sharded::Index<(&i64,), (&u32, &u32, &i32)>, audit_h19::query::par_built_hash::run::{{closure}}>",
+          "scope": 0,
+          "slot": 0
+        }
+      ],
+      "query": "retail_h19",
+      "slot_zero": "caller thread outside Rayon pool"
+    },
+    {
+      "answer_rows": 1,
+      "configuration": "par_built_radix",
+      "effective_workers": 16,
+      "events": [
+        {
+          "callbacks_by_slot": [
+            0,
+            0,
+            8,
+            9,
+            0,
+            8,
+            8,
+            0,
+            0,
+            0,
+            0,
+            8,
+            3,
+            6,
+            4,
+            0,
+            10
+          ],
+          "id": 1,
+          "kind": "map_parts",
+          "parts": 64
+        },
+        {
+          "callbacks_by_slot": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "coarse_bodies": 1,
+          "id": 2,
+          "kind": "fold_tiles",
+          "tiles": 1
+        }
+      ],
+      "exact_answer": true,
+      "probes": [
+        {
+          "lookups": 214377,
+          "provider_type": "&cq_storage::sharded::Sharded<cq_storage::radix_run::RadixRun<(&i64,), (&u32, &u32, &i32)>, audit_h19::query::par_built_radix::run::{{closure}}>",
+          "scope": 0,
+          "slot": 0
+        }
+      ],
+      "query": "retail_h19",
+      "slot_zero": "caller thread outside Rayon pool"
+    }
+  ],
+  "interpretation": [
+    "H03/H05/H09 final join probes executed on all 16 Rayon workers for both providers.",
+    "H19 performed all 214377 Part lookups on the caller thread; provider building and post-join aggregation remain parallel-capable.",
+    "Recorded expansions retain width-64 row tiles; no width-one geometry fallback is visible in these compilations.",
+    "Planner accumulates failed candidate errors and returns a later successful candidate without exposing rejected errors. This audit does not attribute H19 host placement to a specific failed candidate.",
+    "Logical tile width, coarse dispatch count, pool size, and observed worker participation are distinct quantities."
+  ]
+}

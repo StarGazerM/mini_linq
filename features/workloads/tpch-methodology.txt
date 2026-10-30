@@ -55,6 +55,10 @@ Every retail query compiles the same authored clauses in these configurations:
 - no-reduce: the written planner with implicit semijoin reduction disabled;
 - par: the same authored query with Sequence Tasks decomposition, grading and
   translation, retaining stage-local evidence;
+- par_radix: the same Tasks pipeline plus radix_runs on eligible existing built
+  indexes; host fallbacks can remain unchanged;
+- par_built_hash and par_built_radix: the same Tasks pipeline and explicit
+  build_host_reads policy; only par_built_radix additionally selects radix_runs;
 - radix and radix_retained: the same-plan provider comparisons described below;
 - transfer: the CQ planner's exact forward/backward semijoin schedule, rooted
   at the written outer stream, over its Masks reductions. This configuration
@@ -139,6 +143,47 @@ against default when attributing a difference to the provider. Unsupported
 composite payload keys remain hashed in both. The handwritten grouped-only
 wrappers do not advertise these additional configurations. Report real provider
 switches separately from advisory no-ops, using emitted builds and counters.
+
+Parallel provider comparison
+RAYON_NUM_THREADS=16 cargo xtask bench --tpch --sf 1 --runs 5 \
+  --query retail_h09 --config par_built_hash,par_built_radix
+selects the matched materialized Tasks pair, also available in standalone/staged
+shells. Both retain the same authored query, reductions, and task-planner defaults.
+Eligible RadixRun providers survive Tasks selection and can be wrapped by
+Sharded<RadixRun>; composite and membership-only providers can remain hash-backed.
+Inspect each configuration's expanded module to establish which providers change.
+
+Use the same explicit Rayon thread count for both providers; repeat with one
+worker to assess scaling. The runtime's recorded guards can choose different
+partition branches at one versus multiple workers, so this is execution-policy
+scaling, not a fixed-layout thread-only experiment. Pool size does not pin workers
+to a particular core class. Run timings without concurrent builds or benchmarks.
+The existing harness uses one warmup and an odd number of timed runs per
+configuration, checking complete answers against DuckDB outside each timer.
+Query time includes index construction and answer materialization, not loading,
+answer serialization/comparison, or final answer destruction. Report files omit
+Rayon pool size; copy them and raw worker artifacts before changing thread counts.
+
+Recorded 2026-10-28 M3 Max SF1 comparison: H03, H05, H09, and H19 at 1, 12,
+and 16 Rayon threads, one warmup plus five samples. All 24 configuration/thread
+cases and 120 timed answers matched DuckDB exactly. Expanded plans were identical
+after replacing only the module name and eligible provider type; RadixRun replaced
+2, 3, 4, and 1 payload indexes respectively. H05/H09 retained a composite hash
+index. Hash had the lower median in every measured pair; H03's multicore gap was
+small. H03/H05/H09 improved with multiple workers, while H19 became slower for
+both providers. A subsequent untimed dispatch audit found that H03/H05/H09
+actually execute final join probes on all 16 workers, but H19 performs all 214,377
+Part lookups on the caller thread before parallel DISTINCT/SUM. H19 is therefore
+not a parallel-join comparison. Its one-tile final publication copies the scalar
+aggregate answer; it is not the join dispatch. The emitted row tile width remains
+64, not 1. The audit does not identify a rejected planner candidate responsible
+for H19's host placement. All eight diagnostic answers matched DuckDB exactly.
+This is one fixed hash-then-radix timing sweep, not randomized trials or an
+isolated lookup benchmark. No universal provider ranking follows.
+Raw samples, hardware, source/expansion hashes, counters and limitations:
+../../experiments/mac/query-expansion/results/parallel-tpch-sf1-m3max-20261028.json
+Dispatch audit, including diagnostic source and observed per-worker probes:
+../../experiments/mac/query-expansion/results/parallel-tpch-dispatch-audit-m3max-20261028.json
 
 H09 order selection on the Mac branch
 The opaque Part substring guard remains first. Local SF1 DuckDB cardinalities
