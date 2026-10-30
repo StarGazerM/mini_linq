@@ -469,14 +469,31 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], sc
             });
             let counter_scope = std::env::var_os("CQ_EXPANSION_COUNTERS").is_some().then(|| quote! {
                 let __cq_expansion_capture = ::cq_gpu_runtime::expansions::Capture::begin();
+                let __cq_expansion_previous_timing = ::cq_gpu_runtime::arena_timing_enabled();
+                if ::gpu_datalog_runtime::trace_kernels() {
+                    ::cq_gpu_runtime::enable_arena_timing(true);
+                }
             });
             let counter_report = if std::env::var_os("CQ_EXPANSION_COUNTERS").is_some() {
                 let variant = rule.variant;
                 let state = local("state", rule.head);
                 let packed = local("packing", rule.head);
                 let word = crate::storage::word_type(&schemas[rule.head])?;
-                let rule_name = format!("{}/{}", head_name, program.holes[hole].cq.name);
+                let source_rule = program.storage.incremental.variants[variant].rule;
+                let delta = program.storage.incremental.variants[variant].delta
+                    .map_or_else(|| "seed".to_owned(), |position| position.to_string());
+                let rule_name = program.storage.incremental.strata.source.labels[source_rule]
+                    .as_ref().map(ToString::to_string)
+                    .unwrap_or_else(|| format!("{}/{}", head_name, program.holes[hole].cq.name));
                 Some(quote! {
+                    if ::gpu_datalog_runtime::trace_kernels() {
+                        if let Some(timing) = ::cq_gpu_runtime::take_last_timings() {
+                            ::std::eprintln!("gpu_datalog_hole_timing\trule={}\tvariant={}\tdelta={}\titeration={}\thole={}\tkernel_ms={:.6}\ttotal_ms={:.6}\twall_ms={:.6}",
+                                #rule_name, #variant, #delta, __cq_gpu_round, #hole,
+                                timing.kernel_ms, timing.total_ms, timing.wall_ms);
+                        }
+                        ::cq_gpu_runtime::enable_arena_timing(__cq_expansion_previous_timing);
+                    }
                     let __cq_expansion_candidates = ::gpu_datalog_runtime::concatenate_batches::<#word>(
                         __cq_gpu_pool.clone(), &#packed, ::core::slice::from_ref(&__cq_gpu_batch))?;
                     let __cq_expansion_admitted = #state.count_fresh(

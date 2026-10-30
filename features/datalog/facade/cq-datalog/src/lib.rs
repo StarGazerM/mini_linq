@@ -91,12 +91,26 @@
 //!
 //! Per-rule join orders use CQ `plan(order(...))` selectors on labelled rules.
 //! A rule is labelled as `Label: head :- body;`. The incremental pass accepts
-//! `plan(Label, order(R, S@2, ...));` for a rule's non-recursive version and
-//! `plan(Label, delta(R@k), order(...));` for the semi-naive version whose
-//! changing occurrence is clause k. Named atoms run first in the given order,
-//! unnamed ones follow in written order; only the first contiguous positive
-//! prefix may move. Unadvised versions keep `driver(..)`. The resulting
-//! occurrence permutation is checked exactly like a `delta_first` one.
+//! `plan(Label, order(R, S@2, ...));` for every version of a rule and
+//! `plan(Label, delta(R@k), order(...));` to override one semi-naive version.
+//! Selectors use original rule-body clause numbers, before delta or layout
+//! renaming. Named whole atoms run first; unnamed atoms retain written order.
+//! Only the first contiguous positive prefix may be named. Unadvised versions
+//! keep `driver(..)` and their original CQ planning behavior.
+//!
+//! Step entries use the same CQ syntax: `R@k(bound_columns)` is a lookup,
+//! a partial read introducing one variable is a Fine subatom, and `R@k` is
+//! the full read. Every named partial occurrence needs an explicit full read.
+//! For example `plan(Step, order(R@0, S@1(y), S@1, T@2));`.
+//! Add exact intersection sites with
+//! `plan(Step, order(...), smallest(S@1, T@2));`; multiple `smallest(...)`
+//! sites are accepted. This requires a direct `cq-rewrites` dependency.
+//! Step/site advice preserves occurrences with CQ `no_reduce`, and runs the
+//! ordinary WF-VO, selected CK-Le, PH-Smallest and PH-KeyProjection checks.
+//! Unsupported backend decisions fail rather than falling back silently.
+//! To preserve these orders in GPU experiments, use `cq_gpu_sequence::decompose`
+//! rather than the automatic `cq_gpu_sequence::plan` in the decomposition
+//! phase: automatic Sequence planning can transform the earlier CQ decisions.
 //!
 //! Select streaming push holes with
 //! `cq = pipeline { print = ::cq_datalog::passes::print_push; print_input = structures; };`.
@@ -335,7 +349,7 @@ pub mod __codegen {
 /// Direct checked entries, each consuming its source IR and a continuation.
 pub mod passes {
     pub use cq_datalog_macros::{
-        fork, incremental, print_rounds, storage, stratify, surface_if_let,
+        fork, incremental, print_rounds, smallest_before, storage, stratify, surface_if_let,
     };
     pub use own_push::push_into as print_push;
 }

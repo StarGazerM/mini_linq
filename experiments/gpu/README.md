@@ -105,8 +105,9 @@ child count, never one atomic per lane/child. Deferred range publication counts
 the same children without materializing them. Only the successful capacity
 attempt is reported; overflow attempts are not observations. Static IDs are
 the checked Sequence program/module, publication definition, and expansion
-ordinal in its emitted chains. Datalog adds its checked hole name and delta
-variant, and the runtime round number; no new scheduling advice is inferred.
+ordinal in its emitted chains. Datalog uses the source rule label when present
+(otherwise head/hole), plus the checked delta variant and runtime round number;
+no new scheduling advice is inferred.
 
 `cq_expansion` stderr records contain `rule`, `variant`, `iteration`, `program`,
 `definition`, `stage`, and `children`. `cq_expansion_output` contains the
@@ -124,7 +125,14 @@ prints JSON, including `largest_preclosing`, `admitted`, and
 `largest_preclosing_per_output` (`null` for zero output). It does not add
 duplicate admission copies from different definitions.
 
-For CPU pull, also enable the consuming crate's `cq-storage/counters` feature.
+In counter builds only, `GPU_DATALOG_TRACE_KERNELS=1` also enables existing
+arena event timing around each hole and emits `gpu_datalog_hole_timing` records
+with rule/variant/iteration/hole, kernel, total GPU, and wall milliseconds.
+The previous arena timing mode is restored after each hole. These fenced,
+instrumented timings support attribution, not the uninstrumented paired
+`GPU_DATALOG_PHASES=1` fixpoint comparisons.
+
+For CPU pull and Tasks, also enable the consuming crate's `cq-storage/counters` feature.
 Call `cq_storage::counters::reset()` before the query, fully exhaust/drop its
 iterator, then print `cq_storage::counters::render_expansions()` or inspect
 `expansions()`. Stage labels are `Sequence-definition/Physical-result`; the
@@ -132,6 +140,149 @@ iterator, then print `cq_storage::counters::render_expansions()` or inspect
 before closing consumers, including exact/range/intersection expansions.
 Without the storage feature the wrappers are identity functions; without
 `CQ_EXPANSION_COUNTERS` the printer emits no wrappers at all.
+Operator profiling can be enabled at the same time: child producers remain
+ordinary expressions visible to closure ownership analysis, so nested pull
+closures and Tasks workers retain their own profile/provider handles.
+
+### Authored Datalog Lookup/Expand experiments
+
+The SRD GPU engine offers `decompose-only` (no automatic Sequence relational
+replanning) and mutually exclusive `advice-aipt`, `advice-load`,
+`advice-fieldflow`, and `advice-dispatch` features. Each advice feature includes
+`decompose-only`; the no-feature engine retains its existing automatic plan.
+Compare default, decomposition-only, and decomposition-only plus one advice
+separately: automatic `cq_gpu_sequence::plan` may replan a CQ order, whereas
+`cq_gpu_sequence::decompose` only realizes its decomposition. This is an
+experiment-level whole-program switch, not per-hole precedence metadata.
+
+`advice-aipt` requests an intersection of source heaps with compatible heaps
+(and the symmetric baseheap site in the source-heap delta variant). `advice-load` moves VarType and
+the baseheap intersection before array contents only in the Reachable-delta
+variant. The controls add membership lookups before full expansion: FieldFlow
+on its ReachableLoadInstanceField/VarPointsTo deltas, virtual dispatch on its
+ReachableInstruction delta. True smallest controls are rejected by the current
+packed-layout prefix contract: FieldFlow needs a field-first candidate prefix;
+dispatch's canonical `(descriptor, simplename, heap)` prefix differs from its
+packed `(simplename, descriptor, heap)` order. No layout or type is inferred.
+
+**GPU smallest is currently unsupported.** This experiment exposed a silent
+fallback: the GPU emitter lowered a smallest probe to one provider's range
+followed by membership, without per-tuple minimum-candidate selection.
+Both the GPU Structures entry and terminal now reject it with
+`T-Gpu: probe smallest is not realized by this target`.
+Thus `advice-aipt` and `advice-load` are reproducible rejection cases until P4
+grouped-run ranges realize the decision. CPU smallest support is unchanged.
+
+Build each variant separately, e.g.
+`cargo oxide build --arch sm_89 -- --release -p srd-doop-gpu --features advice-fieldflow`.
+For timing, omit `CQ_EXPANSION_COUNTERS`, set `GPU_DATALOG_PHASES=1`, and use the
+`phase<TAB>fixpoint` record rather than the harness's outer evaluation total.
+Counter builds are separate; relation counts must match all 40 reference
+relations on every run (the factored program also exposes three helper outputs).
+
+#### P3.2 DOOP measurements (2026-10-30)
+
+Five interleaved process-isolated pairs per comparison and dataset, alternating
+AB/BA; `nvidia-smi` confirmed no competing compute process before every run.
+Every run matched all 40 reference counts in
+`/data/doop-bench/srd-{xalan,batik}-fullclock/*/report.json`.
+Times below are uninstrumented fixpoint milliseconds, median [95% percentile
+bootstrap CI, 20,000 resamples, seed 3202]. Advice speedups are medians of paired
+ratios against the **decomposition-only** baseline, not against automatic plans.
+
+**The AIPT and array-load timing rows below are historical measurements of the
+pre-rejection sequential fallback, not measurements of realized smallest
+intersections.** The supported lookup-only controls and the two baseline
+configurations remain valid. The counter discrepancy below is why the target
+was changed to reject smallest rather than silently accept it.
+
+| Whole-program baseline comparison | xalan ms | batik ms |
+|---|---:|---:|
+| Current automatic Sequence plan | 1587.5 [1585.1,1669.9] | 5401.7 [5396.7,5420.9] |
+| Decomposition-only, no rule advice | 1489.6 [1482.2,1493.4] | 4380.6 [4368.2,4385.1] |
+| Paired automatic/decomposition-only speedup | 1.070 [1.064,1.124] | 1.234 [1.231,1.238] |
+
+Each row below is a separate paired experiment; its local decomposition-only
+baseline is reported rather than hiding between-batch variation. Together with
+the automatic baseline above these expose all three configurations.
+
+| Advised rule(s) | Dataset | Decomposition-only baseline ms | Advised ms | Paired speedup [95% CI] |
+|---|---|---:|---:|---:|
+| AIPT_Store | xalan | 1485.5 [1483.9,1491.4] | 1525.1 [1523.9,1528.0] | 0.974 [0.971,0.978] |
+| AIPT_Store | batik | 4377.4 [4364.9,4378.1] | 4457.6 [4453.2,4466.3] | 0.981 [0.980,0.982] |
+| VPT_LoadArray, Reachable delta only | xalan | 1481.2 [1479.0,1484.1] | 1484.0 [1480.8,1486.6] | 0.998 [0.995,1.002] |
+| VPT_LoadArray, Reachable delta only | batik | 4361.8 [4359.6,4371.6] | 4369.4 [4365.0,4374.4] | 0.998 [0.997,1.001] |
+| FieldFlow lookup-only control | xalan | 1488.7 [1487.4,1492.5] | 1500.9 [1497.3,1503.6] | 0.992 [0.989,0.997] |
+| FieldFlow lookup-only control | batik | 4383.4 [4373.4,4411.3] | 4419.7 [4405.5,4428.2] | 0.993 [0.990,0.996] |
+| VirtualDispatch_MultiHead_0/1/2 lookup-only control | xalan | 1483.4 [1481.5,1488.4] | 1495.0 [1487.4,1496.0] | 0.992 [0.991,1.001] |
+| VirtualDispatch_MultiHead_0/1/2 lookup-only control | batik | 4379.8 [4361.1,4381.8] | 4383.9 [4378.9,4400.8] | 0.997 [0.995,1.001] |
+
+The three virtual-dispatch heads are changed together, so their fixpoint timing
+is one shared treatment, not three independent timings. The supported controls
+are neutral/slightly slower. The historical AIPT slowdown and array-load neutral
+result cannot establish the performance of a real minimum-candidate
+intersection. Do not automate the offline skew estimates on this evidence.
+
+An explicitly exploratory earlier run kept automatic Sequence planning and
+applied the array-load order to **every** delta variant: xalan 1587.8→1520.0 ms,
+paired 1.051 [1.039,1.070]; batik 5433.1→3239.4 ms, paired
+1.679 [1.662,1.935]. That result changes delta drivers and permits subsequent
+replanning; it is not evidence for the isolated Reachable-delta intersection.
+
+Counter totals below are identical in default, decomposition-only, and the
+corresponding pre-rejection advised/control configuration. “Largest” sums each
+variant's largest stage total over iterations; “fresh” sums per-variant distinct
+output absent from the pre-round state, **not** additive relation growth.
+
+| Rule | Dataset | Largest preclosing (all three configurations) | Fresh output | Largest/fresh |
+|---|---|---:|---:|---:|
+| AIPT_Store | xalan | 58,410 | 2,426 | 24.08 |
+| AIPT_Store | batik | 4,716,422 | 6,461 | 729.98 |
+| VPT_LoadArray | xalan | 451,014 | 44,459 | 10.14 |
+| VPT_LoadArray | batik | 35,709,707 | 1,636,178 | 21.83 |
+| FieldFlow_rule | xalan | 612,069 | 30,685 | 19.95 |
+| FieldFlow_rule | batik | 3,762,782 | 256,357 | 14.68 |
+| VirtualDispatch_MultiHead_0 | xalan | 948,814 | 64,013 | 14.82 |
+| VirtualDispatch_MultiHead_0 | batik | 9,778,922 | 333,602 | 29.31 |
+| VirtualDispatch_MultiHead_1 | xalan | 948,814 | 14,359 | 66.08 |
+| VirtualDispatch_MultiHead_1 | batik | 9,778,922 | 71,981 | 135.85 |
+| VirtualDispatch_MultiHead_2 | xalan | 948,814 | 2,277 | 416.69 |
+| VirtualDispatch_MultiHead_2 | batik | 9,778,922 | 11,757 | 831.75 |
+
+AIPT's actual stage children, summed over iterations, explain the failed
+prediction. Delta positions 0/1/2 are ReachableSortedIndex/base VarPointsTo/source
+VarPointsTo; global variant IDs are 101/102/103. The historical advised stages
+equal the automatic stages; decomposition-only omits their final closing stage.
+
+| Dataset | Delta | Current / historical advised stage children | Decomposition-only stage children | Fresh | Traced GPU total ms: current / decompose / historical advice |
+|---|---:|---|---|---:|---|
+| xalan | 0 | 5,558; 1,829; 506 | 5,558; 1,829 | 506 | 7.483 / 6.860 / 6.913 |
+| xalan | 1 | 8,772; 3,789; 560 | 8,772; 3,789 | 555 | 11.000 / 10.244 / 35.269 |
+| xalan | 2 | 28,195; 44,080; 2,277 | 28,195; 44,080 | 1,365 | 14.459 / 13.394 / 14.135 |
+| batik | 0 | 23,560; 5,759; 831 | 23,560; 5,759 | 824 | 12.115 / 11.384 / 11.440 |
+| batik | 1 | 29,129; 2,606,058; 26,664 | 29,129; 2,606,058 | 1,062 | 123.583 / 109.614 / 169.092 |
+| batik | 2 | 739,438; 2,086,804; 42,361 | 739,438; 2,086,804 | 4,575 | 50.594 / 47.168 / 48.236 |
+
+In instrumented decomposition-only runs, AIPT accounts for 30.50/2888.65 ms
+(1.06%) of xalan's traced fixpoint and 168.17/6535.08 ms (2.57%) of batik's.
+Historical fallback advice raises those to 56.32/2934.41 ms (1.92%) and
+228.77/6632.42 ms (3.45%). Even eliminating AIPT's whole GPU hole cost would
+therefore remove only about 2.6% of the **traced** batik fixpoint, holding the
+rest fixed; this is not a bound on uninstrumented wall time. The sourceheap
+visit count did not fall by the offline 4.8×/15.4× estimate.
+
+The targeted VPT_LoadArray Reachable-delta variant (75) produces zero fresh
+output on both datasets: baseline stages are `[1434,0,0,0]` / `[3766,0,0,0]`;
+historical advice adds the VarType stage, yielding `[1434,1434,0,0,0]` /
+`[3766,3766,0,0,0]`. The large batik work is in variants 76/77, not this site.
+
+Complete per-rule/per-variant stage totals, each iteration's children/largest/
+fresh output, traced GPU milliseconds and fixpoint shares, paired raw timings,
+confidence intervals, and the explicitly labelled exploratory runs are in
+[`compare/p32-doop-advice.json`](compare/p32-doop-advice.json).
+[`compare/p32-doop-llvm-identity.json`](compare/p32-doop-llvm-identity.json)
+records final no-advice LLVM identity (6,250,872 bytes before and after; exact
+normalized equality without reordering instructions).
 
 ### Packed Datalog runtime
 
@@ -898,6 +1049,104 @@ If the dataset directory is absent, it prints an explicit `SKIP` before CUDA
 initialization; loading or CUDA failures with the directory present fail the
 test. It also runs in the default `cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence`
 suite without feature flags; only the standalone example requires `cuda-oracle`.
+
+### H05 step-order experiment (P3.2)
+
+The opt-in workload configurations `step_r`, `step_r_lookups`, and
+`step_r_retained` leave existing configurations unchanged. `step_r` requests
+`no_reduce, order(Region, Nation, Customer, Orders, Lineitem, Supplier)`.
+The final Supplier read introduces no variable: it checks the full
+`(nation_key, supplier_key)` cycle key. There is no k-way intersection in R.
+`step_r_lookups` first checks Customer and Supplier on `nation_key`, then
+expands Customer and completes Supplier after Lineitem.
+
+GPU overrides are [`tpch/h05_step_r.json`](tpch/h05_step_r.json) and
+[`tpch/h05_step_r_lookups.json`](tpch/h05_step_r_lookups.json), selected with
+`TPCH_GPU_ADVICE` while compiling only H05 (`CQ_GPU_TPCH_QUERIES=h05`).
+Both use default Sequence decomposition, not an authored Sequence or a second
+`plan(machine)` reorder, so the CQ-advised R traversal is preserved.
+The lookup variant additionally needs `build_host_reads()`; without it,
+catalog selection rejects `r6: missing retained rows type`.
+
+On RTX 6000 Ada, five interleaved forward/reverse blocks gave the following
+median milliseconds [95% percentile-bootstrap CI of block medians].
+GPU blocks contain five measured runs after one warmup; CPU blocks contain
+one measured run after one warmup with the default worker and one Rayon
+thread. Every measured answer was checked exactly (7,242 SF1 / 72,983 SF10).
+Input loading is excluded; query index/provider builds are included.
+
+| Variant | CPU SF1 | GPU SF1 | GPU SF10 |
+|---|---:|---:|---:|
+| Automatic/default | 39.918 [39.325, 41.375] | 7.413 [7.403, 7.430] | 68.714 [68.644, 68.821] |
+| Existing advised R recipe | not a CPU configuration | 1.190 [1.186, 1.216] | 8.617 [8.515, 8.917] |
+| Existing CPU `advised` (Lineitem-first, **not R**) | 37.851 [35.791, 38.471] | — | — |
+| Step-order R | 387.729 [381.005, 392.901] | 10.005 [9.998, 10.015] | 124.022 [123.751, 124.270] |
+| Step-order R + early cycle lookups | 395.083 [386.620, 402.455] | 14.081 [14.076, 14.094] | 176.169 [175.951, 176.228] |
+| Step-order R + `retain_lookups` | 395.679 [387.584, 397.264] | CPU-only | CPU-only |
+| Step-order R + Lineitem `join_filter` | rejected: no covering exact probe/semijoin | CPU-only | CPU-only |
+
+The filter rejection is intentional evidence, not a fallback: R materializes
+Lineitem as a keyed right-hand provider, rather than a scan covered by a
+downstream scalar probe. Changing its order to make a filter admissible would
+measure a different variant. Likewise, the existing CPU `advised` configuration
+must not be mislabeled as the GPU R recipe.
+
+The timing result rules out CQ order alone as the explanation for the
+automatic-versus-R GPU gap. Preserving R without its scheduling recipe is
+slower than automatic: its Sequence tiles the Region root (five rows, one
+ASIA survivor), with all later fan-outs nested underneath. The existing
+R recipe instead stores the Customer prefix, then segments Orders and
+Lineitem expansion into independent work. This placement of parallel work,
+plus provider/materialization choices and full-key Supplier membership,
+distinguishes the fast R recipe; the experiment does not individually
+attribute the remaining cost to each choice. Early cycle lookups prune no
+selected nation here. On CPU, disabling reductions and building the R-side
+indexes is substantially worse than the default reduced plan. No automatic
+planning policy is changed on the basis of this result.
+
+A diagnostic run with `recipe.automatic=true` is retained separately in the
+evidence: it invokes `plan(machine)` after CQ advice and rewrites R into a
+Lineitem/date-root schedule. Its SF10 medians were 59.269 ms (R advice) and
+61.732 ms (R+lookups), **not** timings of the preserved R traversal.
+
+Separate CPU expansion-count runs report the same largest preclosing stage,
+184,082 children / 7,242 distinct outputs = **25.419**, for all five measured
+CPU configurations. R's expansion stages are Nation 5, Customer 30,183,
+Orders 46,008, and Lineitem 184,082; the cycle closes at 7,243 rows before
+distinct. Its early Customer/Supplier nation lookups both retain all five
+nations. This is not a CPU fan-out reduction: the default already uses the
+ASIA/date reductions. Legacy operator counters instead show peak retained
+bytes increasing from 5,172,200 (default/advised) to 132,807,464 (R and
+R+retention), or 133,104,440 (R+lookups). That difference corroborates the
+index-build/materialization explanation for the CPU regression.
+
+The GPU's largest individual preclosing stage and final closing **bag**
+output per invocation are below. Counter ratios use bag output, unlike the
+CPU final-iterator counter above; distinct GPU answers remain 7,242/72,983.
+All values come from separate `CQ_EXPANSION_COUNTERS=1` builds, not timings.
+
+| Variant | GPU SF1 children / closing output (ratio) | GPU SF10 children / closing output (ratio) |
+|---|---:|---:|
+| Automatic | 36,718 / 7,243 (5.069) | 366,425 / 72,985 (5.021) |
+| Existing advised R recipe | 184,082 / 7,243 (25.415) | 1,825,856 / 72,985 (25.017) |
+| Preserved step-order R | 184,082 / 7,243 (25.415) | 1,825,856 / 72,985 (25.017) |
+| Preserved R + early lookups | 184,082 / 7,243 (25.415) | 1,825,856 / 72,985 (25.017) |
+
+For preserved R, the stages are Nation 5/5, Customer 30,183/300,270,
+Orders 46,008/456,771, and Lineitem 184,082/1,825,856 (SF1/SF10).
+The lookup variant adds a final 7,243/72,985 stage but does not reduce any
+earlier stage. Automatic's forward-provider rewrites produce smaller
+individual expansion stages yet run much slower than the R recipe:
+minimizing the largest fan-out alone is not a valid GPU cost model here.
+
+[Raw samples, bootstrap intervals, exactness, all per-stage counts, plans,
+and reproduction commands](compare/h05_step_advice.results.json) retain
+both the preserved-order experiment and the automatic-rescheduling diagnostic.
+GPU counter reports aggregate six invocations and include normalized
+per-invocation values. Intermediate definition outputs count publication
+units, which need not equal flattened tuples (the R Customer-prefix store
+reports five units although its child counter is 30,183 at SF1); only the
+final closing output is used in the ratios above.
 
 ## Authored advice and rejection boundaries
 

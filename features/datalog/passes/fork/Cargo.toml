@@ -21,6 +21,7 @@ cq-datalog-storage.workspace = true
 cq-datalog-stratify.workspace = true
 cq-datalog-incremental.workspace = true
 cq-datalog-print.workspace = true
+cq-order.workspace = true
 
 [package.metadata.cq]
 source = "cq-lang-datalog-storage"

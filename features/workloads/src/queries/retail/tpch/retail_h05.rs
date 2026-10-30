@@ -14,7 +14,7 @@ JOIN nation n ON n.n_nationkey = s.s_nationkey
 JOIN region r ON r.r_regionkey = n.n_regionkey
 WHERE r.r_name = 'ASIA' AND o.o_orderdate >= DATE '1994-01-01'
 AND o.o_orderdate < DATE '1995-01-01'"#;
-pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", "generic_smallest", "advised"];
+pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", "generic_smallest", "advised", "step_r", "step_r_lookups", "step_r_retained"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("customer", "c_custkey,c_nationkey"),
     ("orders", "o_orderkey,o_custkey,o_orderdate"),
@@ -146,6 +146,18 @@ runner!($; tuned, {
 // Checked order advice keeps the written date-guard prerequisites intact.
 runner!($; advised, { plan = ::mini_linq::passes::plan(order(Lineitem, Orders, Customer, Supplier, Nation, Region)); }, []);
 
+// P3.2: explicit CQ steps for the ASIA-first R order. The final Supplier
+// read binds no variable and therefore closes the nation/supplier cycle.
+runner!($; step_r, {
+    plan = ::mini_linq::passes::plan(no_reduce, order(Region, Nation, Customer, Orders, Lineitem, Supplier));
+}, []);
+runner!($; step_r_lookups, {
+    plan = ::mini_linq::passes::plan(no_reduce, order(Region, Nation, Customer(nation_key), Supplier(nation_key), Customer, Orders, Lineitem, Supplier));
+}, []);
+runner!($; step_r_retained, {
+    plan = ::mini_linq::passes::plan(no_reduce, order(Region, Nation, Customer, Orders, Lineitem, Supplier));
+}, [::cq_rewrites::retain_lookups]);
+
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {
         "default" => default::run(data),
@@ -160,6 +172,9 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
         "le_runs" => le_runs::run(data),
         "generic_smallest" => tuned::run(data),
         "advised" => advised::run(data),
+        "step_r" => step_r::run(data),
+        "step_r_lookups" => step_r_lookups::run(data),
+        "step_r_retained" => step_r_retained::run(data),
         _ => panic!("unknown configuration {}", config),
     }
 }

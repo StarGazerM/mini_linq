@@ -232,3 +232,16 @@ fn configuration_records_batch_terminal_through_fork() {
     let replay: cq_lang_datalog_round::Program = syn::parse2(quote!(#target)).unwrap();
     assert_eq!(target, replay);
 }
+
+#[test]
+fn incremental_accepts_step_and_smallest_advice() {
+    use syn::parse::Parser;
+    let parsed = incremental_arguments.parse2(quote!(
+        plan(Step, order(R@0, S@1(y), S@1, T@2), smallest(S@1, T@2));
+        plan(Step, delta(R@0), order(R@0, T@2, S@1));
+    )).unwrap();
+    assert_eq!(parsed.plans.len(), 2);
+    assert_eq!(parsed.plans[0].order[1].columns.as_ref().unwrap()[0], "y");
+    assert_eq!(parsed.plans[0].smallest[0].len(), 2);
+    assert_eq!(parsed.plans[1].delta.as_ref().unwrap().occurrence, Some(0));
+}

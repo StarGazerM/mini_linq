@@ -27,6 +27,8 @@ pub mod kw {
     syn::custom_keyword!(seed);
     syn::custom_keyword!(order);
     syn::custom_keyword!(authored);
+    syn::custom_keyword!(steps);
+    syn::custom_keyword!(smallest);
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
@@ -43,7 +45,37 @@ pub struct Variant {
     /// The order is authored advice, not a driver policy: the hole's CQ plan
     /// keeps it as an explicit atom order instead of choosing its own.
     pub authored: bool,
+    /// Explicit CQ steps, referring to original rule-body occurrences.
+    pub steps: Vec<AdviceStep>,
+    /// Exact Physical intersection sites, in original occurrence numbering.
+    pub smallest: Vec<Vec<usize>>,
     pub query: Query,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdviceStep {
+    pub occurrence: usize,
+    pub columns: Option<Vec<Ident>>,
+}
+impl Parse for AdviceStep {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let occurrence = number(input)?;
+        let columns = if input.peek(syn::token::Paren) {
+            let columns;
+            syn::parenthesized!(columns in input);
+            Some(columns.parse_terminated(Ident::parse, Token![,])?.into_iter().collect())
+        } else {
+            None
+        };
+        Ok(Self { occurrence, columns })
+    }
+}
+impl ToTokens for AdviceStep {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let occurrence = syn::Index::from(self.occurrence);
+        let columns = self.columns.as_ref().map(|columns| quote!((#(#columns),*)));
+        tokens.extend(quote!(#occurrence #columns));
+    }
 }
 /// A fresh delta relation inheriting the named IDB's ordered columns.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,6 +136,21 @@ impl Parse for Program {
             if authored {
                 body.parse::<kw::authored>()?;
             }
+            let steps = if body.peek(kw::steps) {
+                body.parse::<kw::steps>()?;
+                let steps;
+                syn::bracketed!(steps in body);
+                steps.parse_terminated(AdviceStep::parse, Token![,])?.into_iter().collect()
+            } else {
+                Vec::new()
+            };
+            let mut smallest = Vec::new();
+            while body.peek(kw::smallest) {
+                body.parse::<kw::smallest>()?;
+                let site;
+                syn::parenthesized!(site in body);
+                smallest.push(site.parse_terminated(number, Token![,])?.into_iter().collect());
+            }
             let query;
             syn::braced!(query in body);
             variants.push(Variant {
@@ -111,6 +158,8 @@ impl Parse for Program {
                 delta,
                 order,
                 authored,
+                steps,
+                smallest,
                 query: query.parse()?,
             });
             if !query.is_empty() {
@@ -143,7 +192,15 @@ impl ToTokens for Program {
                 syn::LitInt::new(&position.to_string(), proc_macro2::Span::call_site())
             });
             let authored = v.authored.then(|| quote!(authored));
-            quote!(variant #rule #kind order [#(#order),*] #authored { #query })
+            let steps = (!v.steps.is_empty()).then(|| {
+                let steps = &v.steps;
+                quote!(steps [#(#steps),*])
+            });
+            let smallest = v.smallest.iter().map(|site| {
+                let site = site.iter().map(|&i| syn::Index::from(i));
+                quote!(smallest(#(#site),*))
+            });
+            quote!(variant #rule #kind order [#(#order),*] #authored #steps #(#smallest)* { #query })
         });
         let deltas = deltas.iter().map(|d| {
             let Delta { relation, name } = d;
@@ -193,6 +250,19 @@ fn check_variants(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         // Check complete declared schemas and CQ scope independently of erasure.
         checker.check(&v.query)?;
         let order = variant_order(&p.rules[v.rule], &v.order)?;
+        // Formal rule DL-StepAdvice: advice is occurrence metadata, never a
+        // replacement for the checked semi-naive cover or its erased query.
+        ensure(v.authored || (v.steps.is_empty() && v.smallest.is_empty()), p,
+            "step advice requires an authored variant")?;
+        for occurrence in v.steps.iter().map(|step| step.occurrence)
+            .chain(v.smallest.iter().flatten().copied()) {
+            ensure(matches!(p.rules[v.rule].body.get(occurrence), Some(BodyItem::Positive { .. })),
+                p, "step advice names no source positive occurrence")?;
+        }
+        for site in &v.smallest {
+            ensure(site.len() >= 2 && site.iter().collect::<BTreeSet<_>>().len() == site.len(),
+                p, "smallest requires distinct positive occurrences")?;
+        }
         ensure(
             v.query.body.len() == order.len(),
             &v.query,

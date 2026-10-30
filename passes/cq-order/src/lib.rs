@@ -874,12 +874,19 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
     let mut fine = BTreeSet::new();
     let mut completed = BTreeSet::new();
     for (clause, step, explicit_columns) in pending {
+        let demand: BTreeSet<String> = match &step {
+            valuation::Step::Atom(atom, _) => {
+                atom.variables().map(|(_, v)| symbol_name(v)).collect()
+            }
+            _ => clauses[clause].requires.iter().cloned().collect(),
+        };
         place_ready_advice(
             &clauses,
             &mut ordinary,
             &mut waiting,
             &mut bound,
             &mut steps,
+            Some(&demand),
         );
         let dependencies_ready = match &step {
             valuation::Step::Atom(atom, _) => clauses[clause]
@@ -944,6 +951,7 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
         &mut waiting,
         &mut bound,
         &mut steps,
+        None,
     );
     if !waiting.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -956,18 +964,31 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
     Ok(program)
 }
 
+/// Place ready unadvised clauses before the next advised step. Filters
+/// (constraints, negations, guards) go as early as possible. A Rust binding is
+/// pure and total, so it may sit anywhere after its free variables and before
+/// its first use (WF-VO): it waits until the next advised step demands one of
+/// its bindings, or until the end. This keeps advised steps adjacent, e.g. an
+/// intersection site, when a head copy would otherwise separate them.
 fn place_ready_advice(
     clauses: &[Clause<'_>],
     ordinary: &mut [Option<valuation::Step>],
     waiting: &mut BTreeSet<usize>,
     bound: &mut BTreeSet<String>,
     steps: &mut Vec<valuation::Step>,
+    demand: Option<&BTreeSet<String>>,
 ) {
     loop {
         let next = waiting
             .iter()
             .copied()
             .filter(|&clause| ready(clauses, bound, clause))
+            .filter(|&clause| {
+                let provides = &clauses[clause].provides;
+                demand.is_none_or(|demand| {
+                    provides.is_empty() || provides.iter().any(|name| demand.contains(name))
+                })
+            })
             .min_by_key(|&clause| {
                 (
                     usize::from(!matches!(

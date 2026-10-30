@@ -141,6 +141,7 @@ fn plans(tokens: proc_macro2::TokenStream) -> Vec<seminaive::RulePlan> {
                 rule,
                 delta,
                 order: order.into_iter().collect(),
+                smallest: Vec::new(),
             });
         }
         Ok(plans)
@@ -214,10 +215,8 @@ fn plan_advice_orders_the_named_version_with_cq_selectors() {
         quote!((Helper, Alloc)),
         quote!((Helper, Super, Super)),
         quote!((Helper, Alloc @ 1, Alloc @ 1)),
-        quote!((Step, Edge @ 0)),
         quote!((Step, @Edge@0, Edge@0)),
         quote!((Helper, @Super, Super)),
-        quote!((Helper, Alloc@0(h))),
         quote!((Step, @Reach@1(y), Reach@1)),
         quote!((Helper, Super)(Helper, Component)),
     ] {

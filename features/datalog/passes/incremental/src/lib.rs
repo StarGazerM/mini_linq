@@ -1,6 +1,6 @@
 //! Record the exact Boolean semi-naive cover without storage decisions.
 use cq_datalog_support::{Fresh, ensure};
-use cq_lang_datalog_incremental::{Delta, Program, Variant, contract};
+use cq_lang_datalog_incremental::{AdviceStep, Delta, Program, Variant, contract};
 use cq_lang_datalog_strata as strata;
 /// CQ `plan(order(...))` atom selectors, shared by rule plan advice.
 pub use cq_order::OrderAtom;
@@ -15,19 +15,21 @@ pub enum DriverPolicy {
     /// Lead with delta, then prefer connected reads in the first positive prefix.
     DeltaFirst,
 }
-/// Authored join order for one version of one labelled rule.
+/// Authored CQ step order and Physical sites for a labelled rule or one version.
 ///
 /// The selectors and ordering meaning are CQ `plan(order(...))` advice:
 /// `Relation` or `Relation@clause` names a positive atom by its source-body
 /// clause, named atoms run first in the given order, and unnamed atoms keep
 /// written priority after them. `delta` selects the semi-naive version whose
-/// changing occurrence is that atom; without it the advice targets the
-/// rule's only, non-recursive version.
+/// changing occurrence is that atom; without it the advice targets every
+/// version of the rule. A version-specific plan overrides a rule-wide plan.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RulePlan {
     pub rule: syn::Ident,
     pub delta: Option<OrderAtom>,
     pub order: Vec<OrderAtom>,
+    /// Exact occurrence sets; each must name an admissible intersection after CQ lowering.
+    pub smallest: Vec<Vec<OrderAtom>>,
 }
 pub fn compile(source: &strata::Program) -> syn::Result<Program> {
     compile_with_driver(source, DriverPolicy::WrittenOrder)
@@ -70,12 +72,14 @@ pub fn compile_with_advice(
         let identity: Vec<_> = (0..query.body.len()).collect();
         if positions.is_empty() {
             let authored = plans.get(&(rule, None));
-            let order = authored.cloned().unwrap_or_else(|| identity.clone());
+            let order = authored.map(|plan| plan.order.clone()).unwrap_or_else(|| identity.clone());
             variants.push(Variant {
                 rule,
                 delta: None,
                 query: permuted(query.clone(), &order),
                 authored: authored.is_some(),
+                steps: authored.map_or_else(Vec::new, |plan| plan.steps.clone()),
+                smallest: authored.map_or_else(Vec::new, |plan| plan.smallest.clone()),
                 order,
             });
         }
@@ -85,9 +89,9 @@ pub fn compile_with_advice(
                 unreachable!("checked changing position")
             };
             atom.relation = names[&symbol_name(&atom.relation)].clone();
-            let authored = plans.get(&(rule, Some(position)));
+            let authored = plans.get(&(rule, Some(position))).or_else(|| plans.get(&(rule, None)));
             let order = match authored {
-                Some(order) => order.clone(),
+                Some(plan) => plan.order.clone(),
                 None => match driver_policy {
                     DriverPolicy::WrittenOrder => identity.clone(),
                     DriverPolicy::DeltaFirst => delta_first_order(&query, position),
@@ -99,6 +103,8 @@ pub fn compile_with_advice(
                 delta: Some(position),
                 order,
                 authored: authored.is_some(),
+                steps: authored.map_or_else(Vec::new, |plan| plan.steps.clone()),
+                smallest: authored.map_or_else(Vec::new, |plan| plan.smallest.clone()),
                 query,
             });
         }
@@ -145,13 +151,19 @@ fn positive_prefix(query: &Query) -> std::ops::Range<usize> {
     first..end
 }
 
-/// Resolve advice to complete source-occurrence permutations keyed by
-/// `(rule, delta position)`. The incremental contract checks the result.
+struct ResolvedPlan {
+    order: Vec<usize>,
+    steps: Vec<AdviceStep>,
+    smallest: Vec<Vec<usize>>,
+}
+
+/// Resolve advice to source-occurrence certificates keyed by `(rule, delta
+/// position)`. Incremental checks erasure; CQ checks the eventual step plan.
 fn resolve_plans(
     source: &strata::Program,
     analysis: &strata::Analysis,
     plans: &[RulePlan],
-) -> syn::Result<BTreeMap<(usize, Option<usize>), Vec<usize>>> {
+) -> syn::Result<BTreeMap<(usize, Option<usize>), ResolvedPlan>> {
     let mut resolved = BTreeMap::new();
     for plan in plans {
         let rule = source
@@ -188,23 +200,15 @@ fn resolve_plans(
                 )?;
                 Some(position)
             }
-            None => {
-                ensure(
-                    changing.is_empty(),
-                    &plan.rule,
-                    "this rule has delta versions; select one with delta(Relation@clause)",
-                )?;
-                None
-            }
+            None => None,
         };
         let prefix = positive_prefix(query);
         let mut order = Vec::with_capacity(query.body.len());
+        let explicit_steps = plan.order.iter().any(|selector| selector.columns.is_some());
+        let mut steps = Vec::new();
         for selector in &plan.order {
-            ensure(
-                selector.columns.is_none(),
-                &selector.relation,
-                "incremental order advice is an occurrence permutation; use CQ plan order for subatoms",
-            )?;
+            // Whole-occurrence advice retains its established permutation.
+            // Step advice stays attached to original positions until CQ lowering.
             let position = selector.resolve_in(&query.body)?;
             ensure(
                 matches!(query.body[position], BodyItem::Positive { .. })
@@ -212,19 +216,37 @@ fn resolve_plans(
                 &selector.relation,
                 "plan order can only name atoms of the rule's first contiguous positive prefix",
             )?;
-            ensure(
-                !order.contains(&position),
-                &selector.relation,
-                "duplicate atom occurrence in order advice",
-            )?;
-            order.push(position);
+            if !explicit_steps {
+                ensure(
+                    !order.contains(&position),
+                    &selector.relation,
+                    "duplicate atom occurrence in order advice",
+                )?;
+                order.push(position);
+            }
+            steps.push(AdviceStep { occurrence: position, columns: selector.columns.clone() });
         }
         let mut complete: Vec<_> = (0..prefix.start).collect();
         complete.extend(&order);
         complete.extend(prefix.clone().filter(|position| !order.contains(position)));
         complete.extend(prefix.end..query.body.len());
+        if !explicit_steps {
+            steps.clear();
+        }
+        let smallest = plan.smallest.iter().map(|site| {
+            ensure(site.len() >= 2, &plan.rule, "smallest requires at least two occurrences")?;
+            let mut positions = Vec::new();
+            for selector in site {
+                ensure(selector.columns.is_none(), &selector.relation, "smallest selects whole occurrences")?;
+                let position = selector.resolve_in(&query.body)?;
+                ensure(prefix.contains(&position), &selector.relation, "smallest requires positive prefix occurrences")?;
+                ensure(!positions.contains(&position), &selector.relation, "duplicate smallest occurrence")?;
+                positions.push(position);
+            }
+            Ok(positions)
+        }).collect::<syn::Result<Vec<_>>>()?;
         ensure(
-            resolved.insert((rule, delta), complete).is_none(),
+            resolved.insert((rule, delta), ResolvedPlan { order: complete, steps, smallest }).is_none(),
             &plan.rule,
             "duplicate plan advice for this rule version",
         )?;

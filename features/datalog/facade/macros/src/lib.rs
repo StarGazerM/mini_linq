@@ -12,6 +12,7 @@ mod kw {
     syn::custom_keyword!(plan);
     syn::custom_keyword!(delta);
     syn::custom_keyword!(order);
+    syn::custom_keyword!(context);
 }
 
 struct Entry {
@@ -128,10 +129,18 @@ fn rule_plan(input: ParseStream<'_>) -> syn::Result<cq_datalog_incremental::Rule
     if order.is_empty() {
         return Err(input.error("plan order(...) names no atom"));
     }
-    if !input.is_empty() {
-        return Err(input.error("expected plan(Label, [delta(..),] order(..))"));
+    let mut smallest = Vec::new();
+    while !input.is_empty() {
+        input.parse::<Token![,]>()?;
+        let name: syn::Ident = input.parse()?;
+        if name != "smallest" {
+            return Err(syn::Error::new_spanned(name, "expected smallest(Relation@clause, ...)"));
+        }
+        let site;
+        syn::parenthesized!(site in input);
+        smallest.push(site.parse_terminated(cq_datalog_incremental::OrderAtom::parse, Token![,])?.into_iter().collect());
     }
-    Ok(cq_datalog_incremental::RulePlan { rule, delta, order })
+    Ok(cq_datalog_incremental::RulePlan { rule, delta, order, smallest })
 }
 
 fn incremental_arguments(input: ParseStream<'_>) -> syn::Result<IncrementalArguments> {
@@ -274,3 +283,38 @@ pub fn print_rounds(input: TokenStream) -> TokenStream {
 
 #[cfg(test)]
 mod tests;
+
+/// Preserve the recorded queue ordinals while running a per-hole Physical
+/// rewrite immediately before its original first post-lowering invocation.
+#[proc_macro]
+pub fn smallest_before(input: TokenStream) -> TokenStream {
+    use quote::quote;
+    use syn::parse::Parser;
+    let parser = |input: ParseStream<'_>| -> syn::Result<proc_macro2::TokenStream> {
+        input.parse::<kw::arguments>()?;
+        let arguments;
+        syn::braced!(arguments in input);
+        let next: cq_stage::Invocation = arguments.parse()?;
+        arguments.parse::<Token![;]>()?;
+        let sites: proc_macro2::TokenStream = arguments.parse()?;
+        input.parse::<Token![;]>()?;
+        let context = if input.peek(kw::context) {
+            input.parse::<kw::context>()?;
+            let body;
+            syn::braced!(body in input);
+            let body: proc_macro2::TokenStream = body.parse()?;
+            input.parse::<Token![;]>()?;
+            quote!(context { #body };)
+        } else {
+            proc_macro2::TokenStream::new()
+        };
+        let mut pipeline: cq_stage::Pipeline = input.parse()?;
+        input.parse::<Token![;]>()?;
+        let program: proc_macro2::TokenStream = input.parse()?;
+        pipeline.passes.insert(0, next);
+        Ok(quote!(::cq_rewrites::smallest_intersections! {
+            arguments { #sites }; #context #pipeline; #program
+        }))
+    };
+    parser.parse2(input.into()).unwrap_or_else(syn::Error::into_compile_error).into()
+}

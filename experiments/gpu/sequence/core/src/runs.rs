@@ -123,7 +123,11 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
         let keys = keyed.level_names().concat();
         let layout = &analysis.host_layouts[&origin.host];
         if keys.len() > layout.len() || keys.iter().enumerate().any(|(i,key)| origin.columns.get(key) != layout.get(i)) {
-            return Err(syn::Error::new_spanned(&entry.name, "GPU-Runs: lookup key must be a leading prefix of the sorted packed layout"));
+            return Err(syn::Error::new_spanned(&entry.name, format!(
+                "GPU-Runs: lookup key {:?} (source columns {:?}) must be a leading prefix of sorted packed layout {:?} for input {}",
+                keys, keys.iter().map(|key| origin.columns.get(key)).collect::<Vec<_>>(),
+                layout, origin.host,
+            )));
         }
         keyed.ty = ty.clone();
     }

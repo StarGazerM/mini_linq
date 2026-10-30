@@ -2254,3 +2254,71 @@ fn fused_fallback_providers_keep_their_prefix_local_constructor() {
         }
     });
 }
+
+#[test]
+#[ignore = "run with CQ_EXPANSION_COUNTERS=1 and cq-storage/counters"]
+fn expansion_counters_preserve_profile_handles_in_nested_tasks() {
+    assert!(std::env::var_os("CQ_EXPANSION_COUNTERS").is_some());
+    assert!(cq_storage::counters::STORAGE_COUNTERS_ENABLED);
+    let physical = syn::parse_quote! {
+        physical {
+            relation keys(k:i32); relation payload(k:i32,v:i32);
+            relation closing(v:i32,w:i32);
+            left = pipe rename keys@0 {k -> k};
+            right = let rename payload@1 {k -> k,v -> v};
+            last = let rename closing@2 {v -> v,w -> w};
+            joined = pipe probe first [k] left,right;
+            expanded = pipe probe first [v] joined,last;
+            selected = pipe guard expanded if (*w >= 30);
+            result = pipe canon project selected keep {k,v,w};
+            return result as answer(k,v,w);
+        }
+    };
+    let mut structures = cq_structure_selection::compile(&physical).unwrap();
+    // Shared task probes need a Sync provider, as in segment_program.
+    for entry in &mut structures.structures.entries {
+        if let cq_lang_sequence::structures::Structure::Built { keyed, .. } = &mut entry.structure {
+            keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_, _>);
+        }
+    }
+    let program: Program = syn::parse_quote! {
+        #structures
+        sequence {
+            right = store rows right;
+            last = store rows last;
+            input = store rows left;
+            parts = store flatten map result map selected
+                flatten lookup last [v] flatten lookup right [k] tile 2 input;
+            joined_rows = store parts;
+            output_rows = store canon joined_rows;
+        }
+        graded tasks {
+            right at host; last at host; input at host;
+            parts at pool; joined_rows at host; output_rows at host;
+        }
+    };
+    let facts = check_grading(&program, &machine()).unwrap();
+    let expression = cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
+    assert!(!worker_bodies(&expression).is_empty());
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let keys = &[(1i32,), (2,)];
+            let payload = &[(1i32,10i32), (1,20), (2,30), (2,40)];
+            let closing = &[(10i32,0i32), (10,1), (20,2), (30,30), (40,40)];
+            for threads in [1,4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                pool.install(|| {
+                    cq_storage::counters::reset();
+                    let actual = (#expression).into_iter().map(|(k,v,w)| (*k,*v,*w))
+                        .collect::<std::collections::BTreeSet<_>>();
+                    assert_eq!(actual, std::collections::BTreeSet::from([(2,30,30),(2,40,40)]));
+                    let counts = cq_storage::counters::expansions();
+                    let children = counts.iter().filter(|record| record.stage != "output")
+                        .map(|record| record.children).max().unwrap();
+                    assert_eq!(children, 5);
+                    assert_eq!(counts.iter().find(|record| record.stage == "output").unwrap().children, 2);
+                });
+            }
+        }
+    });
+}

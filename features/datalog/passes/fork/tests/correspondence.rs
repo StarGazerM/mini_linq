@@ -931,6 +931,7 @@ fn authored_variant_orders_become_explicit_plan_advice_on_their_holes() {
         cq_datalog_incremental::RulePlan {
             rule: syn::parse_quote!(Helper),
             delta: None,
+            smallest: Vec::new(),
             order: vec![
                 syn::parse_quote!(Super),
                 syn::parse_quote!(Component),
@@ -940,6 +941,7 @@ fn authored_variant_orders_become_explicit_plan_advice_on_their_holes() {
         cq_datalog_incremental::RulePlan {
             rule: syn::parse_quote!(Step),
             delta: Some(syn::parse_quote!(Reach)),
+            smallest: Vec::new(),
             order: vec![syn::parse_quote!(Reach), syn::parse_quote!(Alloc@2)],
         },
     ];
@@ -1009,4 +1011,103 @@ fn authored_variant_orders_become_explicit_plan_advice_on_their_holes() {
         cq_datalog_fork::compile_with(&storage, quote!(cq = #conflicting; lower = 2; plan = 0;))
             .is_err()
     );
+}
+
+#[test]
+fn step_advice_remaps_delta_occurrences_and_uses_cq_checkers() {
+    use cq_datalog_incremental::{DriverPolicy, RulePlan};
+    let source = syn::parse_quote! {
+        struct Advice;
+        relation E(x:i32,y:i32) = (edges);
+        relation R(x:i32,y:i32);
+        output R;
+        R(*x,*y) :- E(x,y);
+        Step: R(*x,*z) :- R(x,y), R(y,z), E(x,z);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let generic = RulePlan {
+        rule: syn::parse_quote!(Step), delta: None,
+        order: vec![syn::parse_quote!(R@0), syn::parse_quote!(R@1(y)),
+            syn::parse_quote!(R@1), syn::parse_quote!(E)],
+        smallest: Vec::new(),
+    };
+    let specific = RulePlan {
+        delta: Some(syn::parse_quote!(R@1)),
+        order: vec![syn::parse_quote!(R@0), syn::parse_quote!(E(x)),
+            syn::parse_quote!(R@1), syn::parse_quote!(E)],
+        ..generic.clone()
+    };
+    let incremental = cq_datalog_incremental::compile_with_advice(
+        &strata, DriverPolicy::DeltaFirst, &[generic, specific]).unwrap();
+    assert_eq!(incremental.variants[1].steps[1].occurrence, 1);
+    assert_eq!(incremental.variants[2].steps[1].occurrence, 2);
+    let fork = compile(&schedule(&incremental).unwrap()).unwrap();
+    let restored: Fork = syn::parse2(fork.to_token_stream()).unwrap();
+    assert_eq!(restored, fork);
+    for hole in fork.holes.iter().filter(|hole|
+        !hole.pipeline.passes[hole.plan.unwrap()].arguments.is_empty()) {
+        use syn::parse::{Parse, Parser};
+        let parser = |input: syn::parse::ParseStream<'_>| {
+            let no_reduce: syn::Ident = input.parse()?;
+            assert_eq!(no_reduce, "no_reduce");
+            input.parse::<syn::Token![,]>()?;
+            let _: syn::Ident = input.parse()?;
+            let entries;
+            syn::parenthesized!(entries in input);
+            entries.parse_terminated(cq_order::OrderAtom::parse, syn::Token![,])
+        };
+        let args = hole.pipeline.passes[hole.plan.unwrap()].arguments.clone();
+        let selectors = parser.parse2(args).unwrap().into_iter().collect::<Vec<_>>();
+        let normal = cq_lang_datalog_round::cq::normal::normalize(&hole.cq).unwrap();
+        // compile_explicit runs WF-VO and the selected CK-Le phases.
+        cq_order::compile_explicit(&normal, &selectors).unwrap();
+        let mut incomplete = selectors.clone();
+        incomplete.remove(if incomplete[1].occurrence == Some(1) { 2 } else { 3 });
+        assert!(cq_order::compile_explicit(&normal, &incomplete).is_err());
+        let mut invalid = selectors.clone();
+        invalid[1].columns = Some(vec![syn::parse_quote!(not_a_column)]);
+        assert!(cq_order::compile_explicit(&normal, &invalid).is_err());
+    }
+    let mut invalid = incremental.clone();
+    invalid.variants[1].steps[0].occurrence = 99;
+    assert!(cq_datalog_incremental::check(&strata, &invalid).is_err());
+}
+
+#[test]
+fn smallest_rule_sites_preserve_recorded_pipeline_ordinals() {
+    use cq_datalog_incremental::{DriverPolicy, RulePlan};
+    let source = syn::parse_quote! {
+        struct Intersection;
+        relation Seed(a:i32) = (seed);
+        relation R(a:i32,x:i32) = (r);
+        relation S(a:i32,x:i32) = (s);
+        relation Out(x:i32);
+        output Out;
+        Join: Out(*x) :- Seed(a), R(a,x), S(a,x);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let baseline = cq_datalog_incremental::compile(&strata).unwrap();
+    let baseline = compile(&schedule(&baseline).unwrap()).unwrap();
+    let advice = RulePlan {
+        rule: syn::parse_quote!(Join), delta: None,
+        order: vec![syn::parse_quote!(Seed), syn::parse_quote!(R(a,x)), syn::parse_quote!(S)],
+        smallest: vec![vec![syn::parse_quote!(R), syn::parse_quote!(S)]],
+    };
+    let incremental = cq_datalog_incremental::compile_with_advice(
+        &strata, DriverPolicy::WrittenOrder, &[advice]).unwrap();
+    let fork = compile(&schedule(&incremental).unwrap()).unwrap();
+    let (before, after) = (&baseline.holes[0], &fork.holes[0]);
+    assert_eq!(before.lower, after.lower);
+    assert_eq!(before.plan, after.plan);
+    assert_eq!(before.pipeline.passes.len(), after.pipeline.passes.len());
+    let wrapper = &after.pipeline.passes[after.lower + 1];
+    assert_eq!(wrapper.path.segments.last().unwrap().ident, "smallest_before");
+    let arguments = wrapper.arguments.to_string();
+    assert!(arguments.contains("smallest"));
+    assert!(arguments.contains(&before.pipeline.passes[before.lower + 1].path.to_token_stream().to_string()));
+    let restored: Fork = syn::parse2(fork.to_token_stream()).unwrap();
+    assert_eq!(restored, fork);
+    let mut invalid = incremental.clone();
+    invalid.variants[0].smallest = vec![vec![1, 1]];
+    assert!(cq_datalog_incremental::check(&strata, &invalid).is_err());
 }

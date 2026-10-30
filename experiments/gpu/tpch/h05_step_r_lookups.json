@@ -1,0 +1,7 @@
+{
+  "h05": {
+    "storage": "tpch_domains",
+    "plan": "no_reduce, order(Region, Nation, Customer(nation_key), Supplier(nation_key), Customer, Orders, Lineitem, Supplier)",
+    "physical": ["build_host_reads()"]
+  }
+}

@@ -260,10 +260,14 @@ impl<'a> Emitter<'a> {
         } else {
             format!("{}/{}", self.owner, stage)
         };
-        quote!(::cq_storage::profile_select! {
-            plain { #rows }
-            counters { ::cq_storage::counters::expansion(#rows, #definition, #stage) }
-        })
+        // Keep producer expressions outside macro token trees: own_captures
+        // must visit their nested closures and clone owned profile/provider
+        // handles. Only the stateless adapter depends on the runtime feature.
+        quote!((::cq_storage::profile_select! {
+            plain { ::core::convert::identity }
+            counters { |__cq_expansion_rows| ::cq_storage::counters::expansion(
+                __cq_expansion_rows, #definition, #stage) }
+        })(#rows))
     }
 
     pub fn context(&self) -> &Context<'a> {

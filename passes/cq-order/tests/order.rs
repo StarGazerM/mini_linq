@@ -98,7 +98,7 @@ fn fine_step_order_can_bind_then_check_an_intersection_variable() {
 }
 
 #[test]
-fn step_order_rejects_invalid_columns_phases_ownership_and_outer() {
+fn step_order_rejects_invalid_columns_and_phases_but_accepts_advised_roots() {
     let source = normal(quote! {
         struct Q;
         relation Seed(x:i32);
@@ -119,18 +119,6 @@ fn step_order_rejects_invalid_columns_phases_ownership_and_outer() {
         ],
         vec![
             syn::parse_quote!(Seed),
-            syn::parse_quote!(R@1(x)),
-            syn::parse_quote!(S),
-            syn::parse_quote!(R@1),
-        ],
-        vec![
-            syn::parse_quote!(S),
-            syn::parse_quote!(Seed),
-            syn::parse_quote!(R@1(x,y)),
-            syn::parse_quote!(R@1),
-        ],
-        vec![
-            syn::parse_quote!(Seed),
             syn::parse_quote!(R@1(y,z)),
             syn::parse_quote!(R@1),
         ],
@@ -146,6 +134,25 @@ fn step_order_rejects_invalid_columns_phases_ownership_and_outer() {
             cq_order::compile_explicit(&source, &order).is_err(),
             "{order:?}"
         );
+    }
+    // Advised schedules choose their own root and column introduction:
+    // another occurrence may bind a column first, and the root need not be the
+    // written outer stream. WF-VO and the lookup/expand phases still hold.
+    for order in [
+        vec![
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(x)),
+            syn::parse_quote!(S),
+            syn::parse_quote!(R@1),
+        ],
+        vec![
+            syn::parse_quote!(S),
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R@1(x,y)),
+            syn::parse_quote!(R@1),
+        ],
+    ] {
+        cq_order::compile_explicit(&source, &order).unwrap();
     }
 }
 
@@ -1466,4 +1473,34 @@ fn branch_policy_accepts_noncanonical_record_order() {
         },
     )
     .unwrap();
+}
+
+#[test]
+fn step_advice_defers_unused_rust_bindings_past_adjacent_advised_steps() {
+    let source = normal(quote! {
+        struct Q;
+        relation Seed(a:i32);
+        relation R(a:i32,x:i32,y:i32);
+        relation S(a:i32,x:i32,z:i32);
+        answer(a,x,y,z,b) :- Seed(a), let b: i32 = a + 1, R(a,x,y), S(a,x,z);
+    });
+    let order: Vec<cq_order::OrderAtom> = vec![
+        syn::parse_quote!(Seed),
+        syn::parse_quote!(R@2(a,x)),
+        syn::parse_quote!(S@3(a,x)),
+        syn::parse_quote!(R@2),
+        syn::parse_quote!(S@3),
+    ];
+    let steps = cq_order::compile_explicit(&source, &order)
+        .unwrap()
+        .valuation
+        .steps;
+    let atoms: Vec<_> = steps
+        .iter()
+        .map(|step| match step {
+            valuation::Step::Atom(atom, _) => atom.relation.to_string(),
+            _ => "rust".to_owned(),
+        })
+        .collect();
+    assert_eq!(atoms, ["Seed", "R", "S", "R", "S", "rust"]);
 }

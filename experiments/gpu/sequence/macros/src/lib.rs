@@ -19,7 +19,7 @@ pub fn stage(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, arguments| {
         no_arguments(arguments)?;
         let analysis = cq_lang_structures::contract::check(source)?;
-        cq_gpu_sequence_core::check_structures(&analysis)?;
+        cq_gpu_sequence_core::check_structures(source, &analysis)?;
         Ok(source.clone())
     })
     .into()
@@ -39,6 +39,20 @@ pub fn plan(input: TokenStream) -> TokenStream {
         .program)
     })
     .into()
+}
+
+/// Decompose a checked authored traversal without automatic relational replanning.
+#[proc_macro]
+pub fn decompose(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, arguments| {
+        no_arguments(arguments)?;
+        let source = cq_gpu_sequence_core::runs::record_representation(source)?;
+        Ok(cq_sequence_plan::decompose(
+            &source,
+            &cq_gpu_sequence_core::machine(),
+            &cq_gpu_sequence_core::catalog(),
+        )?.program)
+    }).into()
 }
 
 /// Check the authored grades against the GPU machine without choosing grades.

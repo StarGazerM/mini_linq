@@ -42,6 +42,17 @@ fn hand_lookup_expand_and_fine_orders_preserve_default_answers() {
     );
     assert_eq!(lookup, default);
     assert_eq!(fine, default);
+    // An advised schedule may root at a non-written occurrence; the written
+    // outer `seed` is then a single bound read and `s` a lookup before its expansion.
+    let rooted: std::collections::BTreeSet<_> = mini_linq::compile! {
+        pipeline { plan = mini_linq::passes::plan(no_reduce, order(r@1, seed@0, s@2(a, x), s@2)); }
+        struct Q;
+        relation seed(a:i32); relation r(a:i32,x:i32,y:i32); relation s(a:i32,x:i32,z:i32);
+        answer(a,x,y,z) :- seed(a), r(a,x,y), s(a,x,z);
+    }
+    .map(|(a, x, y, z)| (*a, *x, *y, *z))
+    .collect();
+    assert_eq!(rooted, default);
 }
 
 #[test]

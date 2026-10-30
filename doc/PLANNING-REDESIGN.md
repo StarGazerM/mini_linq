@@ -207,7 +207,26 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     removed before lookup). Building filters during the hash build, bitmap
     vs Bloom choice and small-to-large filter order stay in P7; revisit
     after P3.2 whether to pull them earlier (decided 2026-10-29).
+    **Results (2026-10-30;** `experiments/gpu/compare/h05_step_advice.results.json`,
+    `experiments/gpu/compare/p32-doop-advice.json`, `experiments/gpu/README.md`):
+    - H05: the CQ order of plan R alone does not explain R. Preserved step R
+      is 124 ms at GPU SF10 (automatic 68.7, authored R recipe 8.6) and 10x
+      slower on CPU SF1 (retained memory 5 MB → 133 MB). R's win is its
+      Sequence schedule: a retained Customer prefix and segmented
+      Orders/Lineitem fan-out; a 1-row Region root tile has no parallelism.
+    - The automatic Sequence planner (`plan(machine)`, `lookup_first`)
+      re-plans authored CQ orders. On DOOP, decomposition-only beats the
+      default by 1.070x [1.064, 1.124] (xalan) and 1.234x [1.231, 1.238]
+      (batik), all 40/40 exact.
+    - GPU `probe smallest` was silently emitted as sequential range
+      enumeration + membership; it is now rejected (T-Gpu) until P4 ranges.
+    - DOOP AIPT_Store is 2.6% of the traced batik fixpoint: skew-heavy rules
+      are not where fixpoint time goes; per-hole time from the counters must
+      choose targets.
   - **P3.3** Default planner emits L&E phases from evidence; delete
+    `lookup_first`/automatic Sequence re-planning first (measured win on
+    DOOP); grading learns R's schedule shapes (retained small prefixes,
+    segmented fan-out) from recorded evidence;
     `lookup_first` and EXT-SeqLookup; GPU match-set carrier after P4.
 - **P3b Profile the engine gaps** (`doc/STORAGE.md` §12.4): GPU h06
   reduce/dedup at 16–74× a hand kernel; CPU h01 at ~140× a String-grouping

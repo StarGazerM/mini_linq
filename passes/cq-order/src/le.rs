@@ -39,7 +39,7 @@ fn check_selected(
     ) -> syn::Result<()> {
         let mut written = context.clone();
         let mut ownership = BTreeMap::new();
-        let outer = body.iter().position(|item| {
+        let written_outer = body.iter().position(|item| {
             matches!(item, cq::BodyItem::Positive { .. } | cq::BodyItem::Block(_))
         });
         for (clause, item) in body.iter().enumerate() {
@@ -73,7 +73,16 @@ fn check_selected(
             vo::Step::Block(b, _) => Some(b.source.clause()),
             _ => None,
         });
-        if selected.is_none_or(|selected| !selected.is_empty()) && first != outer {
+        // Automatic Plan-Le keeps the written outer stream and written column
+        // ownership. An advised schedule may choose its own root: its outer
+        // stream is its first read, and WF-VO alone fixes which columns each
+        // expansion introduces.
+        let outer = if selected.is_some() {
+            first
+        } else {
+            written_outer
+        };
+        if selected.is_none() && first != outer {
             return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
                 "LE must retain the written outer stream",
@@ -93,6 +102,7 @@ fn check_selected(
                         || (full && atom.variables().count() != atom.columns.len())
                         || (!full && !analysis.introduces[index].is_empty())
                         || (full
+                            && selected.is_none()
                             && analysis.introduces[index]
                                 .iter()
                                 .cloned()

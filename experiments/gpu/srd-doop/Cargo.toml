@@ -7,6 +7,12 @@ publish = false
 [features]
 # Run SRDatalog's default DOOP formulation instead of field-flow.
 default-query = ["srd-doop-shared/default-query"]
+# Decomposition-only baseline, and individually authored experiments on it.
+decompose-only = []
+advice-aipt = ["decompose-only"]
+advice-load = ["decompose-only"]
+advice-fieldflow = ["decompose-only"]
+advice-dispatch = ["decompose-only"]
 
 [dependencies]
 srd-doop-shared = { path = "../../../features/datalog/doop/srd" }
@@ -17,6 +23,7 @@ cq-storage = { path = "../../../runtime/cq-storage" }
 cq-gpu-datalog = { path = "../datalog/facade" }
 cq-gpu-sequence = { path = "../sequence" }
 cq-sequence-rewrites = { path = "../../../features/sequence-rewrites" }
+cq-rewrites = { path = "../../../features/rewrites" }
 cq-gpu-sequence-runtime = { path = "../sequence-runtime" }
 cq-gpu-runtime = { path = "../printer-runtime" }
 gpu-datalog-runtime = { path = "../datalog-runtime" }

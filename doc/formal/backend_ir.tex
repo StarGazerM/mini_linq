@@ -1430,3 +1430,9 @@ accepted set without mutating it; overlapping rule contributions are not
 additive. Ordinary Sequence dispatches report closing output before any separate
 canonicalization. The largest stage count divided by the corresponding output
 is diagnostic evidence, not a correctness premise or scheduling decision.
+In instrumented Datalog builds, an additional explicit kernel-trace request may
+enable the existing arena event timers around each hole. Reports use source
+rule labels when present and retain variant, round and hole identities.
+The prior arena-timing mode is restored after each observation. These fenced,
+instrumented event times are diagnostic attribution, not the uninstrumented
+fixpoint measurements used for performance comparisons.

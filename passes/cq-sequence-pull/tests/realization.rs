@@ -964,28 +964,34 @@ fn expansion_counters_measure_children_before_closing_predicates() {
     assert!(std::env::var_os("CQ_EXPANSION_COUNTERS").is_some());
     let physical = syn::parse_quote!(physical {
         relation keys(k:i32); relation payload(k:i32,v:i32);
+        relation closing(v:i32,w:i32);
         left = pipe rename keys@0 {k -> k};
         right = let rename payload@1 {k -> k,v -> v};
         joined = pipe probe first [k] left,right;
-        closed = pipe guard joined if (*v >= 30);
-        result = pipe canon project closed keep {k,v};
-        return result as answer(k,v);
+        last = let rename closing@2 {v -> v,w -> w};
+        expanded = pipe probe first [v] joined,last;
+        closed = pipe guard expanded if (*w >= 30);
+        result = pipe canon project closed keep {k,v,w};
+        return result as answer(k,v,w);
     });
     let selected = cq_structure_selection::compile(&physical).unwrap();
-    let expression = sequence_rows(&selected).unwrap();
+    let program = cq_sequence_lowering::compile(&selected).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&program, &cq_sequence_pull::machine()).unwrap();
+    let expression = cq_sequence_pull::translate_profile(&program, &analysis).unwrap();
     let source = quote! {
         fn main() {
             let keys = &[(1i32,), (2,)];
             let payload = &[(1i32,10i32), (1,20), (2,30), (2,40)];
+            let closing = &[(10i32,0i32), (10,1), (20,2), (30,30), (40,40)];
             ::cq_storage::counters::reset();
-            let actual = (#expression).map(|(k,v)| (*k,*v))
+            let actual = (#expression).into_iter().map(|(k,v,w)| (*k,*v,*w))
                 .collect::<::std::collections::BTreeSet<_>>();
-            assert_eq!(actual, ::std::collections::BTreeSet::from([(2,30),(2,40)]));
+            assert_eq!(actual, ::std::collections::BTreeSet::from([(2,30,30),(2,40,40)]));
             let counts = ::cq_storage::counters::expansions();
             let children = counts.iter().filter(|record| record.stage != "output")
                 .map(|record| record.children).max().unwrap();
             let output = counts.iter().find(|record| record.stage == "output").unwrap();
-            assert_eq!(children, 4, "count before the closing predicate, not after");
+            assert_eq!(children, 5, "count before the closing predicate, not after");
             assert_eq!(output.children, 2);
         }
     };

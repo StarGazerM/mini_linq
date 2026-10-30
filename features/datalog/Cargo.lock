@@ -127,6 +127,7 @@ dependencies = [
  "cq-datalog-support",
  "cq-lang-datalog-round",
  "cq-lang-datalog-storage",
+ "cq-order",
  "cq-stage",
  "cq-syntax",
  "proc-macro2",

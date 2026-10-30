@@ -1476,7 +1476,7 @@ fn translate_observed(
         ));
     }
     // The target-owned Structures stage and terminal enforce the same boundary.
-    crate::check_structures(&analysis.structures)?;
+    crate::check_structures(&program.structures, &analysis.structures)?;
     if arena.is_none()
         && program.sequence.output == Some(OutputProtocol::ReservePrevious)
     {

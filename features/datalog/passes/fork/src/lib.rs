@@ -321,7 +321,7 @@ fn construct(
     // An authored variant order (incremental `plan(..)` advice) reaches the
     // hole's default CQ plan as explicit `order(..)` advice, so the storage
     // layouts (which follow the variant order) and the hole plan agree.
-    let mut authored_orders: Vec<Option<TokenStream>> = Vec::new();
+    let mut authored_orders: Vec<Option<(TokenStream, TokenStream)>> = Vec::new();
     for members in &analysis.components {
         let mut stratum = Stratum {
             members: members.clone(),
@@ -526,20 +526,44 @@ fn construct(
             )?);
             authored_orders.push(if variant.authored {
                 let normal = round::cq::normal::normalize(&holes[hole])?;
-                let atoms = normal
-                    .query
-                    .body
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, item)| {
-                        let BodyItem::Positive { atom } = item else {
-                            return None;
-                        };
-                        let relation = &atom.relation;
+                // Formal rule DL-StepAdvice: retain occurrence identity through
+                // permutation, delta/layout/scan renaming, and CQ normalization.
+                let source_atoms: Vec<_> = variant.query.body.iter().enumerate()
+                    .filter_map(|(position, item)| matches!(item, BodyItem::Positive { .. })
+                        .then_some(variant.order[position])).collect();
+                let normal_atoms: Vec<_> = normal.query.body.iter().enumerate()
+                    .filter_map(|(index, item)| match item {
+                        BodyItem::Positive { atom } => Some((index, &atom.relation)),
+                        _ => None,
+                    }).collect();
+                ensure(source_atoms.len() == normal_atoms.len(), &normal,
+                    "Datalog step advice requires normalization to preserve positive occurrences")?;
+                let mapped: std::collections::BTreeMap<_, _> =
+                    source_atoms.into_iter().zip(normal_atoms.iter().copied()).collect();
+                let selector = |occurrence: usize, columns: &Option<Vec<Ident>>| -> syn::Result<TokenStream> {
+                    let &(index, relation) = mapped.get(&occurrence).ok_or_else(||
+                        syn::Error::new_spanned(&normal, "advice names no positive occurrence"))?;
+                    let index = syn::Index::from(index);
+                    let columns = columns.as_ref().map(|columns| quote!((#(#columns),*)));
+                    Ok(quote!(#relation @ #index #columns))
+                };
+                let atoms = if variant.steps.is_empty() {
+                    normal_atoms.iter().map(|&(index, relation)| {
                         let index = syn::Index::from(index);
-                        Some(quote!(#relation @ #index))
-                    });
-                Some(quote!(order(#(#atoms),*)))
+                        quote!(#relation @ #index)
+                    }).collect::<Vec<_>>()
+                } else {
+                    variant.steps.iter().map(|step| selector(step.occurrence, &step.columns))
+                        .collect::<syn::Result<Vec<_>>>()?
+                };
+                let sites = variant.smallest.iter().map(|site| {
+                    let atoms = site.iter().map(|&occurrence| selector(occurrence, &None))
+                        .collect::<syn::Result<Vec<_>>>()?;
+                    Ok(quote!(smallest(#(#atoms),*)))
+                }).collect::<syn::Result<Vec<_>>>()?;
+                let no_reduce = (!variant.steps.is_empty() || !variant.smallest.is_empty())
+                    .then(|| quote!(no_reduce,));
+                Some((quote!(#no_reduce order(#(#atoms),*)), quote!(#(#sites),*)))
             } else {
                 None
             });
@@ -645,8 +669,16 @@ fn construct(
             };
             let mut pipeline = pipeline.clone();
             pipeline.passes[lower].arguments = facts.to_token_stream();
-            if let (Some(plan), Some(order)) = (plan, authored_order) {
+            if let (Some(plan), Some((order, smallest))) = (plan, authored_order) {
                 pipeline.passes[plan].arguments = order;
+                if !smallest.is_empty() {
+                    let next = &pipeline.passes[lower + 1];
+                    // Keep recorded invocation ordinals stable (notably the
+                    // GPU binding owner) while prepending this checked rewrite.
+                    pipeline.passes[lower + 1] = syn::parse_quote!(
+                        ::cq_datalog::passes::smallest_before(#next; #smallest)
+                    );
+                }
             }
             Hole {
                 cq,

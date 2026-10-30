@@ -835,12 +835,15 @@ DL-OccurrenceOrder: supplied permutations may cross that interval's boundaries
 when the variant's variable dependencies are satisfied.
 
 \paragraph{Authored rule orders.}
-A labelled rule's \code{plan(Label, [delta(R@k),] order(..))} advice resolves
-to the same permutation form and marks the variant \code{authored}.  The mark
-is denoted advice, not a validity premise: DL-OccurrenceOrder checks the
-permutation and dependencies. Fork passes an authored variant's order to its hole's
-recorded planning invocation as explicit \code{order(..)} advice over the
-hole's normalized clause positions. Named configuration resolution records
+A labelled rule's \code{plan(Label, [delta(R@k),] order(..), [smallest(..)])}
+advice marks its variants \code{authored}. Without \code{delta}, it applies to
+every version; a version-specific plan overrides a rule-wide plan. Whole-read
+orders resolve to the existing permutation form. Step orders retain original
+source occurrences and optional columns separately from that permutation.
+The mark is denoted advice, not a validity premise: DL-OccurrenceOrder still
+checks permutation, dependencies and exact erasure. Fork passes the order to
+its hole's recorded planning invocation over normalized clause positions.
+Named configuration resolution records
 that invocation's ordinal; a custom flat queue declares it explicitly.
 An absent owner or nonempty conflicting planner arguments is rejected.
 Unauthored variants leave the hole's CQ planner free to choose its own order.
@@ -852,6 +855,35 @@ Unauthored variants leave the hole's CQ planner free to choose its own order.
 \end{mathpar}
 The conclusion applies to authored variants; unauthored arguments remain
 unchanged. No pass path or relative queue-position heuristic identifies the owner.
+
+\paragraph{Occurrence-preserving step advice.}
+Let $\rho_v$ map an original positive occurrence through the variant's
+permutation, delta replacement, storage-layout and scan renaming, and CQ
+normalization to its hole occurrence. The source and normalized positive
+occurrences must correspond one-to-one in written order. Columns remain
+logical CQ variable names; no Rust type or expression is inspected.
+\begin{mathpar}
+\Rule{DL-StepAdvice}
+ {\mathrm{WF}_{\mathrm{Incremental}}(v)\quad
+  \rho_v\text{ bijects positive occurrences}\quad
+  \mathrm{plan}(\rho_v(A))=o\quad \mathrm{WF}_{\mathrm{VO}}(o)\quad
+  \mathrm{CK\text{-}Le}_{\mathrm{advice}}(o)\quad
+  \forall s\in\rho_v(S).\ \mathrm{PH\text{-}Smallest}(s)}
+ {\mathrm{advice}(v,A,S)=
+  \mathrm{order}(\rho_v(A));\ \mathrm{smallest}(\rho_v(S))}
+\end{mathpar}
+Fork transports selectors; the ordinary CQ planner checks step legality,
+including completion of partial occurrences, WF-VO and selected CK-Le phases.
+Step or smallest advice uses \code{no_reduce}, preserving its named occurrences.
+The ordinary Physical rewrite checks exact smallest sites under PH-Smallest
+and PH-KeyProjection. The rewrite precedes the first post-lowering invocation
+through a continuation wrapper, preserving recorded invocation ordinals and
+the exact context envelope. Unadvised holes retain their original queue.
+Unsupported target realizations fail in their ordinary checked backend rather
+than silently substituting a different order.
+This transport rule does not disable later independently selected relational
+rewrites. GPU measurements therefore select decomposition-only rather than
+automatic Sequence replanning; both configurations remain explicit.
 
 \subsection{Storage: Incremental to Storage}
 Record the existing deterministic concrete providers, initializers, layouts,
