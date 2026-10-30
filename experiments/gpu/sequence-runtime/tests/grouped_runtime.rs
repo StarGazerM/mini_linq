@@ -1,6 +1,6 @@
 use cq_gpu_sequence_runtime::{
     Buffer, Pool, Result,
-    group::{self, Aggregate},
+    group::{self, Aggregate, SegmentedGroup},
 };
 
 fn aggregate(kind: u32) -> Aggregate {
@@ -20,7 +20,7 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
         &[2i64, 1, -7, -7, -7, 1, 1, 5, 5, 5, 1, 1, 5, 5, 5],
     )?;
     let aggregates = [aggregate(0), aggregate(1), aggregate(2), aggregate(3)];
-    let result = unsafe { group::fold(pool.clone(), &data, None, 3, 1, &aggregates, vec![])? }
+    let result = unsafe { SegmentedGroup::fold(pool.clone(), &data, None, 3, 1, &aggregates, vec![])? }
         .with_decoder(|v: &[i64], valid: &[u8]| -> Result<_> { Ok((v.to_vec(), valid.to_vec())) });
     assert_eq!(
         // DECODE P: diagnostic grouped monoids publish host values and validity for exact assertions.
@@ -32,7 +32,7 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
     );
     let live = cuda_core::DeviceBuffer::from_host(pool.stream(), &[0u32, 1, 0])?;
     let selected =
-        unsafe { group::fold(pool.clone(), &data, Some(&live), 3, 1, &aggregates, vec![])? }
+        unsafe { SegmentedGroup::fold(pool.clone(), &data, Some(&live), 3, 1, &aggregates, vec![])? }
             .with_decoder(|v: &[i64], _: &[u8]| -> Result<_> { Ok(v.to_vec()) });
     // DECODE P: diagnostic selected aggregate publishes its final host answer.
     assert_eq!(selected.to_host()?, vec![vec![1, 1, 5, 5, 5]]);
@@ -44,7 +44,7 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
         result.to_host()?,
         vec![(vec![0, 0, 0, 0], vec![1, 1, 0, 0])]
     );
-    let result = unsafe { group::fold(pool.clone(), &empty, None, 0, 1, &aggregates, vec![])? }
+    let result = unsafe { SegmentedGroup::fold(pool.clone(), &empty, None, 0, 1, &aggregates, vec![])? }
         .with_decoder(|v: &[i64], _: &[u8]| -> Result<_> { Ok(v.to_vec()) });
     // DECODE P: diagnostic empty keyed aggregate exposes its empty host answer.
     assert!(result.to_host()?.is_empty());

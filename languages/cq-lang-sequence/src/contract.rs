@@ -249,6 +249,8 @@ fn analyze_in(
             stores: BTreeMap::new(),
             publications: BTreeMap::new(),
             task_execution: Default::default(),
+            gpu_bindings: Default::default(),
+            gpu_publications: BTreeMap::new(),
             host_sources: BTreeMap::new(),
             host_tiles: BTreeMap::new(),
             routed_providers: BTreeMap::new(),

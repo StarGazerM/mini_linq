@@ -540,6 +540,10 @@ pub struct RangeProvider {
     len: u32,
 }
 impl RangeProvider {
+    /// Construction follows the selected provider, including its reusable workspace ABI.
+    pub fn builder(pool: &Arc<Pool>) -> Result<RangeBuilder<'_>> {
+        RangeBuilder::new(pool)
+    }
     pub fn build(pool: Arc<Pool>, descriptor: &RangeDescriptor) -> Result<Self> {
         RangeBuilder::new(&pool)?.build(descriptor)
     }
