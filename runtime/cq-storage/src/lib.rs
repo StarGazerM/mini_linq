@@ -14,14 +14,14 @@
 //! [`build!`] preserves this protocol while selecting optional representation
 //! capabilities through ordinary Rust bounds at the concrete callsite.
 //! [`AdaptiveMembership`] factories return [`DenseMembership`] for
-//! [`DenseOrdinal`] keys and exact hash membership for all other `Eq + Hash`
+//! [`OrderKey`] keys and exact hash membership for all other `Eq + Hash`
 //! keys, without an `Ord` bound.
 //!
 //! [`Answers`], [`GroupedAnswers`] and allocation-free [`SingleGroup`] compose
 //! query outputs as inputs. Grouped keys occupy the leading declared columns.
 //! [`dispatch`] selects direct reads
 //! by type, with one lazy fallback per query read. Host uniqueness is never a
-//! language premise; caller-selected distinct state establishes canonical plans.
+//! language premise; ordinary index admission establishes distinct outputs.
 //!
 //! # Abstraction functions
 //!
@@ -96,7 +96,10 @@ pub mod dispatch;
 pub use dispatch::AutoDense;
 mod hash_index;
 mod hash_state;
+mod item_columns;
+pub use item_columns::ItemColumns;
 mod join_filter;
+mod key;
 pub mod maintain;
 pub use join_filter::{
     JoinFilterEligibility, JoinFilterKey, JoinFilterPredicate, NoJoinFilter, selective_build,
@@ -112,6 +115,7 @@ mod radix_run;
 mod radix_spline;
 pub mod rows;
 pub mod sequence;
+mod set_buckets;
 pub mod sharded;
 mod sorted_run;
 pub use sharded::Sharded;
@@ -120,12 +124,13 @@ mod trie;
 pub use answers::{Answers, GroupedAnswers, SingleGroup};
 pub use candidates::{Candidates, Keys};
 pub use hash_index::{BucketCursor, Build, HashIndex, IndexRead};
-pub use hash_state::{HashSet, HashState};
+pub use hash_state::{HashMap, HashSet, HashState};
+pub use key::{BorrowedI64TupleCodec, I64Codec, KeyCodec, NoDense, OrderKey, OrdinalWord};
 pub use membership::{ConservativeMembership, ExactMembership};
 pub use ordered::{
     GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by,
 };
-pub use radix_run::{RadixKey, RadixRun, RadixRunReadState, RadixRunView};
+pub use radix_run::{RadixCursor, RadixKeys, RadixRun, RadixRunReadState, RadixRunView};
 pub use radix_spline::{RadixSplineMetadata, RadixSplinePoint};
 pub use sorted_run::{RunCursor, SortedRun};
 pub use trie::Trie;
@@ -331,10 +336,7 @@ pub mod fetch;
 pub mod positional;
 pub mod selection;
 pub mod stage;
-pub use adaptive::{
-    AdaptiveKeySet, AdaptiveMembership, BorrowedI64TupleCodec, DenseMembership, DenseOrdinal,
-    I64Codec, KeyCodec, NoDense, OrdinalWord,
-};
+pub use adaptive::{AdaptiveKeySet, AdaptiveMembership, DenseMembership};
 pub use fetch::Fetch;
 pub use positional::{
     BlockId, BlockRead, Column, ColumnSlot, ExactIntervalMembership, Membership, Point,
@@ -355,7 +357,7 @@ pub use retention::{Retention, residual, retain_keys, retain_rows};
 ///
 /// Providers without a supported specialization delegate to `S: Build<I>`.
 /// [`AdaptiveMembership`] returns [`DenseMembership`] when its key implements
-/// [`DenseOrdinal`], keeping ordinal dispatch static in the probe loop.
+/// [`OrderKey`], keeping ordinal dispatch static in the probe loop.
 /// [`SortedRun`] and [`AdaptiveKeySet`] with [`AutoDense`] select
 /// [`BorrowedI64TupleCodec`] and [`I64Codec`], respectively, when those codecs
 /// implement [`KeyCodec`] for their keys, otherwise returning [`NoDense`]

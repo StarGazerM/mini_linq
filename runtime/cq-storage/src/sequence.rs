@@ -15,7 +15,7 @@
 //!   order reads on codes. Existing membership and exact-bucket reads keep
 //!   [`crate::ExactMembership`] and [`crate::IndexRead`].
 
-use crate::{IndexRead, KeyCodec, RadixKey, RadixRun, SortedRun};
+use crate::{IndexRead, KeyCodec, OrderKey, RadixRun, SortedRun};
 
 /// A provider whose bucket for `key` is the contiguous range
 /// `range(key)` of `items()`. Implementations keep items in key order.
@@ -37,7 +37,9 @@ impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> RangeCursor<K> for SortedRun<K, V, 
     }
 }
 
-impl<K: RadixKey, V: Copy> RangeCursor<K> for RadixRun<K, V> {
+impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: crate::ItemColumns<Row = V>> RangeCursor<K>
+    for RadixRun<K, V, C>
+{
     type Item = V;
     fn items(&self) -> &[V] {
         self.items()
@@ -167,7 +169,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adaptive::NoDense;
+    use crate::NoDense;
 
     #[test]
     fn sorted_run_range_equals_lookup_including_absent_keys() {
@@ -178,6 +180,66 @@ mod tests {
         check_range_cursor(&run, &[0, 1, 2, 3, 4]).unwrap();
         assert_eq!(run.range(&3), (2, 4));
         assert_eq!(run.range(&9), (4, 4));
+    }
+
+    #[test]
+    fn canonical_key_order_agrees_across_membership_and_run_readers() {
+        use crate::{
+            AdaptiveKeySet, DenseMembership, ExactIntervalMembership, ExactMembership, I64Codec,
+        };
+
+        fn check<K: OrderKey<Ordinal = u64> + Copy + std::hash::Hash + std::fmt::Debug>(
+            stored: &[K],
+            probes: &[K],
+        ) {
+            let membership = DenseMembership::<_, 256>::from_dense_keys(stored.iter().copied());
+            let intervals =
+                AdaptiveKeySet::<_, _, 256>::from_keys(stored.iter().copied(), I64Codec);
+            let sorted =
+                SortedRun::from_pairs(stored.iter().copied().map(|key| (key, key)), I64Codec);
+            let radix = RadixRun::from_pairs(stored.iter().copied().map(|key| (key, key)));
+            check_range_cursor(&sorted, probes).unwrap();
+            check_range_cursor(&radix, probes).unwrap();
+            for key in probes {
+                let present = stored.contains(key);
+                assert_eq!(membership.contains(key), present);
+                assert_eq!(intervals.contains(key), present);
+                assert_eq!(sorted.contains(key), present);
+                assert_eq!(radix.contains(key), present);
+                assert_eq!(
+                    (&sorted).lookup(key).collect::<Vec<_>>(),
+                    (&radix).lookup(key).collect::<Vec<_>>()
+                );
+                for hi in probes {
+                    assert_eq!(
+                        intervals.any_in(key, hi),
+                        stored.iter().any(|value| key <= value && value <= hi),
+                    );
+                }
+            }
+        }
+
+        check(
+            &[-64i32, -1, 0, 63, -1],
+            &[i32::MIN, -65, -64, -2, -1, 0, 1, 63, 64, i32::MAX],
+        );
+        check(
+            &[i64::MIN, -1, 0, i64::MAX],
+            &[i64::MIN, i64::MIN + 1, -2, -1, 0, 1, i64::MAX],
+        );
+        check(
+            &[0u32, 63, 65, u32::MAX],
+            &[0u32, 1, 63, 64, 65, u32::MAX - 1, u32::MAX],
+        );
+        check(
+            &[0u64, 63, 65, u64::MAX],
+            &[0u64, 1, 63, 64, 65, u64::MAX - 1, u64::MAX],
+        );
+        let values = [-64i32, -1, 0, 63];
+        check(
+            &[(&values[0],), (&values[2],)],
+            &[(&values[0],), (&values[1],), (&values[2],), (&values[3],)],
+        );
     }
 
     #[test]

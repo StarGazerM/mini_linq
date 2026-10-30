@@ -260,7 +260,7 @@ fn selection_is_checked_idempotent_and_preserves_defaults() {
         assert_eq!(source.physical, target.physical);
         assert_eq!(radix_runs(&target, quote!()).unwrap(), target);
         // Recorded singleton layout selects the provider; rustc, not this
-        // rewrite, establishes RadixKey for concrete keys and aliases.
+        // rewrite, establishes OrderKey for concrete keys and aliases.
         assert_eq!(
             cq_rewrite_passes::invoke_structures(
                 &source,

@@ -294,7 +294,7 @@ impl Hasher for CountingHasher {
     }
 }
 pub type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<CountingHasher>>;
-/// Counted membership storage; whole-stream canonicalization uses `dedup` sorting.
+/// Counted ordinary membership storage, also usable for index admission.
 pub type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<CountingHasher>>;
 
 #[cfg(test)]

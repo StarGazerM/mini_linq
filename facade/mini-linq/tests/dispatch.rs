@@ -772,7 +772,7 @@ impl<'a> cq_storage::rows::Columns for IndexedPayload<'a> {
 #[derive(Clone, Copy)]
 struct IndexedCursor<'a> {
     source: &'a [(i32, i32, i32)],
-    rows: cq_storage::RunCursor<'a, usize>,
+    rows: <&'a cq_storage::RadixRun<(i32,), usize> as IndexRead>::Cursor,
 }
 
 impl<'a> Iterator for IndexedCursor<'a> {

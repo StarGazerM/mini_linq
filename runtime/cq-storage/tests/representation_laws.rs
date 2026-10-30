@@ -398,18 +398,18 @@ fn adaptive_membership_respects_span_budget_and_integer_boundaries() {
 
 #[test]
 fn adaptive_membership_supports_integer_and_borrowed_singleton_keys() {
-    use cq_storage::{AdaptiveMembership, DenseOrdinal, ExactMembership};
+    use cq_storage::{AdaptiveMembership, ExactMembership, OrderKey};
 
-    fn native_word<K: DenseOrdinal<Ordinal = u64>>() {}
+    fn native_word<K: OrderKey<Ordinal = u64>>() {}
     native_word::<i64>();
     native_word::<i32>();
     native_word::<u32>();
     native_word::<&i64>();
     native_word::<(&i32,)>();
-    assert_eq!(i64::MIN.dense_ordinal(), 0u64);
-    assert_eq!(i64::MAX.dense_ordinal(), u64::MAX);
+    assert_eq!(i64::MIN.ordinal(), 0u64);
+    assert_eq!(i64::MAX.ordinal(), u64::MAX);
 
-    fn check<K: DenseOrdinal + std::hash::Hash>(keys: [K; 2], absent: K) {
+    fn check<K: OrderKey + std::hash::Hash>(keys: [K; 2], absent: K) {
         let scalar = cq_storage::build!(
             AdaptiveMembership<_, 64>,
             keys.iter().map(|key| (key, ())),
@@ -447,16 +447,16 @@ fn adaptive_membership_supports_integer_and_borrowed_singleton_keys() {
 }
 
 #[test]
-fn adaptive_membership_custom_ordinal_is_exact_without_ordering() {
-    use cq_storage::{AdaptiveMembership, DenseOrdinal, ExactMembership};
+fn adaptive_membership_custom_ordinal_preserves_order_and_full_width() {
+    use cq_storage::{AdaptiveMembership, ExactMembership, OrderKey};
 
-    #[derive(PartialEq, Eq, Hash)]
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
     struct Key(u128);
-    impl DenseOrdinal for Key {
+    impl OrderKey for Key {
         type Ordinal = u128;
 
-        fn dense_ordinal(&self) -> Self::Ordinal {
-            self.0 ^ 63
+        fn ordinal(&self) -> Self::Ordinal {
+            self.0
         }
     }
     let dense = cq_storage::build!(
@@ -472,12 +472,12 @@ fn adaptive_membership_custom_ordinal_is_exact_without_ordering() {
     // A full-width ordinal span cannot wrap into a deceptively small bitmap.
     let overflow = cq_storage::build!(
         AdaptiveMembership<_, 64>,
-        [Key(63), Key(u128::MAX ^ 63)].into_iter().map(|key| (key, ())),
+        [Key(0), Key(u128::MAX)].into_iter().map(|key| (key, ())),
     );
     assert!(!overflow.is_dense());
-    assert!(overflow.contains(&Key(63)));
-    assert!(overflow.contains(&Key(u128::MAX ^ 63)));
-    assert!(!overflow.contains(&Key(0)));
+    assert!(overflow.contains(&Key(0)));
+    assert!(overflow.contains(&Key(u128::MAX)));
+    assert!(!overflow.contains(&Key(1)));
     // Dense windows above u64::MAX retain their high bits, including absent
     // keys with the same low word and windows crossing the u64 boundary.
     for (low, high) in [
@@ -485,17 +485,17 @@ fn adaptive_membership_custom_ordinal_is_exact_without_ordering() {
         (u128::from(u64::MAX) - 31, u128::from(u64::MAX) + 32),
         (u128::MAX - 63, u128::MAX),
     ] {
-        let keys = [Key(low ^ 63), Key(high ^ 63)];
+        let keys = [Key(low), Key(high)];
         let set = cq_storage::build!(
             AdaptiveMembership<_, 64>,
             keys.into_iter().map(|key| (key, ())),
         );
         assert!(set.is_dense());
         assert_eq!(set.retained_bytes(), 8);
-        assert!(set.contains(&Key(low ^ 63)));
-        assert!(set.contains(&Key(high ^ 63)));
-        assert!(!set.contains(&Key((low + 1) ^ 63)));
-        assert!(!set.contains(&Key((high as u64 as u128) ^ 63)));
+        assert!(set.contains(&Key(low)));
+        assert!(set.contains(&Key(high)));
+        assert!(!set.contains(&Key(low + 1)));
+        assert!(!set.contains(&Key(high as u64 as u128)));
     }
 }
 

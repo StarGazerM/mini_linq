@@ -193,18 +193,34 @@ or snapshot publication.
 
 ## 8. Index runs vs scan columns (RadixRun evidence, 2026-10-28)
 
-Source: remote `origin/codex/all-answers` (not yet merged locally):
+Source: merged `origin/codex/all-answers`, extended by P3d provider maintenance:
 `runtime/cq-storage/src/{radix_run,radix_spline}.rs`,
 `experiments/mac/mccl/src/radix.rs`, `doc/MAC-IMPLEMENTATION.md` §§ around
 lines 1530–1700 (M3 Max measurements). RadixSpline: Kipf, van Renen, Stoian
 et al. (aiDM 2020), native port of revision `ab96aa59` (radix12/error32).
 
-`RadixRun<K,V>` = sorted **grouped** keys (`keys: [K]`, one per distinct key),
-`offsets: [usize]` (group starts), `items: [V]` (payload column), a
-**RadixSpline directory** (radix-12 table + spline points, max error 32), and
-a lazily built dense presence bitmap (only when span ≤ 2²⁰ bits and ≤ about one
-byte per key). Keys are stored at their own width `K`; `RadixKey` is an
-injective, order-preserving encoding into `u64` used only to compute.
+`RadixRun<K,V,C=Vec<V>>` retains immutable sorted **grouped** runs:
+`keys: [K]` (one per distinct key), narrow `u32` group offsets when the
+terminal item position fits (otherwise `usize`), explicit payload columns C, and a
+**RadixSpline directory** (radix-12 table + spline points, max error 32).
+A dense presence bitmap is initialized only by membership reads and only
+when span ≤ 2²⁰ bits and ≤ about one byte per key. `OrderKey` is the one
+total injective order-preserving key law, including absent query keys.
+Radix runs require its `u64` ordinal; dense membership may use `u64` or
+`u128`. `KeyCodec` is a sealed policy adapter to that law, not another
+encoding contract; `NoDense` disables numeric directories.
+
+`ItemColumns<Row=V>` is the payload-layout capability. `Vec<V>` keeps the
+existing opaque item column; `(Vec<A>, Vec<B>, …)` stores actual independent
+columns, with tuple layouts supplied through arity twelve. Custom layouts
+implement the same append/position/range-copy law. The selected C is explicit
+in the provider type; compiler index selection records it, never inspects V.
+`from_column_rows(source,ratio)` builds that selected layout.
+`column_groups(key)` returns each matching columns object and position range
+without reconstructing rows, so consumers can read only a needed field.
+`lookup` materializes requested rows one at a time; `items()` materializes a
+contiguous row view only when that compatibility API is requested. Merge-path
+copies each selected column's group slices, not reconstructed payload tuples.
 
 Measured (M3 Max): lookup + expansion, 262,144 distinct keys, 65,536 probes,
 ~50% hits, ms: native RadixRun 2.0–3.4 vs a *packed-occurrence* run with a
@@ -218,7 +234,7 @@ membership 0.056 vs 3.59 (packed) vs 0.52 (hash). GPU build 1.7–11 ms vs CPU
 |---|---|---|
 | payload + summaries built together, never from a decoded copy | directory, min/max, bitmap built with the run; readers borrow slices (`RadixRunView` is allocation-free) | follows |
 | summaries enclose / locate values | the directory is a *positional* summary: a PSMA generalization (D §3.2) with a bounded-error law (every present key lies within ±32 of the predicted rank; an exact search inside the window) | follows; adds a new law, bounded error, which construction must guarantee and tests must check |
-| order-preserving encodings as a recorded law, no type inspection | `RadixKey` trait: injective, monotone; wider/composite domains need another provider, never truncation | follows (trait-provided, contract 7) |
+| order-preserving encodings as a recorded law, no type inspection | `OrderKey<Ordinal = u64>`: injective, monotone; wider domains use other providers, never truncation | follows (trait-provided, contract 7) |
 | merge recomputes summaries per output | partitioned merge of sorted arrays, then rebuild grouping and directory; old cursors stay valid (STR-RunSnapshot) | follows |
 | **codec per block chosen by measured size** | grouping (RLE of the sorted key column) is the only compression; payload stays plain, byte-addressable | **contradicts §2 for index runs** |
 
@@ -241,16 +257,81 @@ structure:
 
 The role is a representation fact chosen by selection from the plan (scan
 vs lookup/expand demand), not by the loader. The same relation may hold both
-(base scan column + index run built from it, reading it in place). This also
-supersedes `AdaptiveKeySet`/`AdaptiveMembership` as the default exact
-membership/interval provider for index roles: the runtime's eager 8 MiB bitmap,
-`Vec<K>` staging and `Arc<K>` fallback become RadixRun's lazy bounded bitmap
-over a grouped run that already exists.
+(base scan column + index run built from it, reading it in place).
+When an index run already exists, its exact key membership uses the run's
+own directory and lazy bounded bitmap: no `AdaptiveKeySet` staging or `Arc`
+copy is introduced. Existing standalone adaptive interval/hash providers
+remain available for their non-Clone and unordered-key callers; replacing
+those provider selections is not a runtime-only decision.
 
-Merging the remote branch is a prerequisite for implementation. It contains a
-provider-contract refactor that also removes RadixRun name-specific checks,
-which overlaps contract 7's type-blind provider selection. Merge after the
-current work is committed, reconciling on the type-blind design.
+### 8.1 Ordinary index publication
+
+`maintain::{Fresh, Publish}` separates read-only admission from publication.
+For relation O, `fresh(B)` returns `supp(B) \ O`, without duplicates or a
+change to O. `publish(F)` requires distinct rows absent from O and extends
+O by exactly F. Repeated reads between publications represent the same O.
+The provider is ordinary: index selection, not its Rust type, records
+whether it is canonical.
+Empty indices are constructed uniformly through `Default`: sets/maps use their
+usual hasher defaults, sorted runs require the selected codec's `Default`,
+radix runs initialize the selected item columns with ratio four, and tries
+begin without constructing any inner provider.
+
+| Complete-row provider | `Fresh::Row` / `Publish::Item` | Admission and publication |
+|---|---|---|
+| std `HashSet<K,S>` / cq `HashSet<K>` | `K` | Exact membership then batch hash distinct; extend |
+| std `BTreeSet<K>` | `K` | Exact membership then ordered batch distinct; extend |
+| std/cq `HashMap<K,Vec<V>,S>` | `(K,V)` | Key lookup plus exact payload equality, batch hash distinct; append to groups |
+| std/cq `HashMap<K,HashSet<V,T>,S>` | `(K,V)` | Two exact hash probes (key then payload), batch hash distinct; insert into set-valued groups |
+| std `BTreeMap<K,Vec<V>>` | `(K,V)` | Key lookup plus exact payload equality, ordered full-row batch distinct (`K,V: Ord`); append to groups |
+| `SortedRun<K,V,C>` | `(K,V)` | Exact group/payload scan, key-grouped batch distinct; stable grouped rebuild |
+| `RadixRun<K,V,C>` | `(K,V)` | Exact group/payload scan across all runs, key-grouped batch distinct; ratio-bounded run publication in the selected item columns |
+| `Trie<K,Inner>` | `(K,Inner::Row)` | Group by prefix, recursively fresh/publish; new inner groups remain lazy |
+
+Set keys require their ordinary `Eq + Hash` or `Ord` capability; grouped
+hash admission additionally requires `V: Eq + Hash`. Sorted/radix payload
+admission requires `Copy + Eq`, not payload ordering. Trie prefixes require
+`Clone` only when constructing fresh rows. `ExactMembership<K>` on grouped
+providers continues to mean key existence; full-row admission additionally
+checks the payload, never confusing a present prefix with a present row.
+
+Vec-bucket maps and the generic sorted/radix providers do not index the payload:
+exact admission costs O(g) comparisons per candidate against an existing
+group of g rows. The Eq-only sorted/radix batch distinct step can require
+O(b²) comparisons within a batch group of b rows; hash/ordered map batches
+use hashing or ordering to deduplicate. Hash admission compacts the original
+batch allocation using borrowed-row hashing and a temporary keep bitmap.
+`HashMap<K,HashSet<V,T>,S>` is an explicit high-fan-out provider: full-row
+admission uses the bucket's exact payload hash lookup, candidate enumeration
+is already distinct, and candidate count reads the bucket length. It supports
+`Rows`, `IndexRead`, `PointLookup`, `Candidates`, key-level `ExactMembership`,
+`Fresh`, and `Publish`. Inner T and outer S hashers are independent; only
+publication requires `T: Default`. Index selection records this layout
+rather than hiding a specialized algorithm inside generic `Fresh`.
+
+`RadixRun::with_ratio(source,k)` records a provider-local ratio (`k ≥ 2`,
+default 4). Publication groups only the incoming delta, appends its run,
+and merges adjacent newest runs until every older run has at least k times
+the next run's item count. Merges use stable merge-path partitions of the
+key directories and copy whole payload groups, rebuilding directories.
+They never reconstruct a `(key,item)` staging array or sort old rows.
+`contains`, `count`, `range`, and `keys` read key directories/offsets without
+items. Copy lookup cursors visit published groups directly, without merging.
+The first run's group is resolved eagerly by `lookup`, so a single-run
+cursor supports copied `len()`/`nth()` expansion without another directory
+search. Later runs are visited lazily. Range probes use each run's
+spline-bounded exact search, including absent-key insertion positions.
+Unique-key scans use a streaming k-way merge with O(number of runs) state,
+never an all-key sort; `len`/`key_count` cache the merged count until publication.
+Legacy `items()` requests a contiguous merged view lazily; publication
+invalidates that cached view. Row scans use the direct cursors in key order.
+Borrowing prevents mutation
+while any cursor or slice remains live.
+
+`tests/maintenance_laws.rs` checks IX-Fresh, IX-Publish, IX-Stable and
+ADM-Batch with fixed-seed duplicates, boundaries, replay and row/bounded/
+whole batches. Radix tests additionally exercise lazy reads, geometric
+transitions, and merge-path boundaries against a stable occurrence oracle.
 
 ## 9. Grouped runs in the compiler's semantics
 
@@ -260,10 +341,11 @@ once, its payloads contiguous. α is the expansion
 `α(keys, offsets, items) = {(keys[g], items[j]) | offsets[g] ≤ j < offsets[g+1]}`
 (a factorized representation in the d-representation sense; L&E §3.3 notes
 hash tables already factorize the build side on the join key). The directory
-is an access summary on top of it. The current layout still spends
-uncompressed width where a byte-addressable encoding would not cost point
-access: `RunRows.offsets` is `Vec<usize>` (8 bytes per group, origin
-`sorted_run.rs:19-23`), and `items: [V]` stores the whole payload row-wise.
+is an access summary on top of it. `RunRows.offsets` now uses four bytes per
+group whenever the terminal position fits `u32`, widening only when needed.
+Keys and payload columns occupy independent arrays. A tuple-of-vector C
+stores multi-field V column-wise without compiler-inspected fields; the
+default `Vec<V>` retains existing opaque payload APIs.
 
 **It is already in the IR's vocabulary.** Sequence's `lookup P [k]` yields a
 match range and `flatten` expands it (BE-Bind). BE-Offsets' offset array
@@ -324,7 +406,7 @@ must keep valid:
 3. Partition routing (key-partition shards, sharded membership, GPU hash
    partitions, MCCL partitions) routes by code. Stable codes keep partitions
    stable across rounds.
-4. Dense structures (bitmaps, `DenseOrdinal`, RadixRun dense membership)
+4. Dense structures (bitmaps, `OrderKey`, RadixRun dense membership)
    need **dense codes** in `[0, n)`. Sharded or gapped code spaces break
    density.
 5. `where` order predicates need order-preserving codes, or they decode
@@ -611,8 +693,8 @@ the complete column's source values before assigning zero-based codes.
 Empty strings, case, and whitespace are preserved. Codes are comparable
 as strings only within the same column dictionary, not across columns.
 
-`StringCode` supplies `DenseOrdinal` with an associated `u64` ordinal word
-and an ordered `KeyCodec` by its stored ordinal. Dense membership stores
+`StringCode` supplies `OrderKey` with an associated `u64` ordinal word;
+sealed directory policies delegate to that same stored ordinal. Dense membership stores
 and probes bounds in that declared word width; custom wide ordinal domains
 may explicitly use `u128`. `STR-FullKey` records existence-only reads when a positive probe
 binds every column of a set relation; `build!` then selects bounded bitmap
