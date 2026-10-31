@@ -288,8 +288,17 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   are already StringCode), addressed in P4 compiler selection below; GPU DOOP
   gaps go to P6b.
 - **P3c Engine-wide storage rules** (`doc/STORAGE.md` §13): intern strings
-  at input for the CPU catalog as on GPU; remove V decode sites
-  (`doc/DECODE-AUDIT.md`), measured per target. The uncommitted sort-canon
+  at input for the CPU catalog as on GPU; retire V decode sites through their
+  owning representation steps, measured per changed target. **Checkpoint
+  2026-10-31:** `doc/DECODE-AUDIT.md` assigns all 96 V sites: P4 owns 5
+  encoded-comparison/index sites, P5 owns 17 columnar-load sites, and P6 owns
+  74 packed-carrier/selective-read sites, with cross-step dependencies recorded.
+  None is a decode call in the CPU CQ/Physical/pull printers; string interning
+  alone demonstrably retires none. Structures records per-column preservation
+  or authorized opaque-Rust/final-host reconstruction, refined into
+  Physical/Sequence and consumed mechanically by printers. R/P decoding stays
+  only with the corresponding recorded read/publication authorization; no
+  unused CPU answer-boundary scaffolding is added. The uncommitted sort-canon
   work (a recorded sort strategy, whole-stream collect/sort/unique, push callbacks waiting
   at the barrier) is superseded by P3d: it treated duplicate state as a buffer
   rather than an index, so it lost laziness and reimplemented index work.

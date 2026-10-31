@@ -2,7 +2,7 @@
 
 ## Contract, scope, and evidence
 
-This is a source audit, not a performance experiment or a behavior change. Runtime/compiler edits in this assignment are comments only. The mechanical checker extension and the TSV/report artifacts are the only executable/documentation additions. Concurrent implementation work by other agents is outside this claim.
+The original inventory is a source audit, not a performance experiment or a behavior change. Its runtime/compiler edits were comments only. The 2026-10-31 P3c checkpoint below adds ownership and prerequisite facts, not decoder removal or new execution evidence. Concurrent implementation work is outside this claim.
 
 Authority: `STORAGE.md` §1 (preserved operations), §§10–12, and `PLANNING-REDESIGN.md` contract 7. R is reconstruction required by an opaque authored Rust read; P is logical answer publication on the host after device download; V is premature reconstruction with relational consumers (the comment names P4/P5/P6); I is immediate decode/re-encode reorganization, with avoidability stated; ? means a generic primitive, mixed-use boundary, or diagnostic invocation lacks enough consumer evidence for an unconditional R/P/V classification. **? does not authorize decoding.** Runtime call attribution and per-column read facts are still required at those sites.
 
@@ -34,6 +34,57 @@ Decode sites: R=9, P=252, V=96, I=16, ?=123 (496 registered comments).
 
 No build, Rust test, formatter, benchmark, profiler, or new GPU execution was run.
 
+## P3c checkpoint: disposition and required facts (2026-10-31)
+
+The 96 registered V sites are **not** 96 CPU printer String inversions.
+None is in `passes/cq-print`, `cq-physical-realization`, or
+`cq-sequence-pull`. Those printers project their carried values; the inspected
+`columns::access`, physical `head`, and pull `finish` boundaries contain no
+explicit codec inverse. Input string interning does not by itself remove
+the listed numeric reconstruction, eager row loading, or packed GPU expansion.
+
+Disposition: **0 demonstrated removable solely by string interning; 96 need
+recorded representation/consumer facts; 0 are justified permanent V sites.**
+The per-site owner column below assigns 5 sites to P4, 17 to P5, and 74 to P6,
+retaining cross-step dependencies. These are ownership assignments, not a
+claim that any implementation is complete. Original source line numbers are
+snapshot locators; `DECODE-SITES.tsv` exact markers remain authoritative.
+
+Required facts (names below describe contracts, not newly implemented IR):
+
+* **Index (P4):** encoded key domain, preserved equality/order/prefix operations,
+  translated probe/bounds, and recorded index key/payload carrier widths.
+  Equality-preserving packed bits alone do not authorize ordered comparison.
+  Directory offsets use their recorded index representation, not an implicit
+  logical-value inverse. P6 callers consume these laws rather than invent them.
+* **Load (P5):** per-column encoded payload and summaries built together,
+  preserved-op predicate translation, demanded survivor positions, and retained
+  source ownership. CSV hash/btree grouping also requires P4 encoded index keys.
+* **Carrier (P6):** retained packed/narrow field representation and domain across
+  scans, joins, grouping, intermediate storage and device/host transport;
+  encoded-domain summaries for bounds discovery; no whole-layout widening merely
+  because a consumer may eventually publish an answer.
+* **Read (Structures, refined into Physical/Sequence):** per-column action
+  `PreserveCarrier` or reconstruction via a recorded codec/provider for an
+  identified `OpaqueRustRead` or `FinalHostAnswer` consumer. Record lineage,
+  demanded fields and boundary; checking validates these facts without rerunning
+  the producer. Printers render the action, never infer it from a type name,
+  expression spelling, output shape, or the presence of a host transfer.
+
+The existing **R** sites stay where authored opaque Rust actually demands the
+logical value, with recorded free-variable/read authorization and the authored
+expression unchanged. Existing **P** sites stay at explicit final host answer
+or diagnostic publication boundaries, with recorded publication authorization.
+An intermediate host tuple, resident output adapter, or downloaded input to
+another relational stage is not P. Diagnostic P does not authorize production
+intermediate decoding. Generic **?** primitives still need caller authorization;
+this checkpoint does not relabel them or erase any V marker.
+
+Main approved documenting these dependencies instead of adding an unused CPU
+answer fact or duplicating P4/P5/P6 implementation. No new root/regression,
+TPC-H, expanded-code gate, timing, or formal-check result is claimed here.
+
+
 ## Violations ranked by likely cost
 
 **[INFERENCE]** This ranking is an investigation order, not measured site timings. Whole-relation materialization and string allocation rank above scalar reconstruction; actual invocation counts/selectivity can reverse the order. Existing storage evidence (§12) motivates prioritizing encoded execution, but does not establish a speedup for any individual site below. Diagnostic-only paths are ranked last regardless of their small-fixture implementation cost.
@@ -46,104 +97,104 @@ No build, Rust test, formatter, benchmark, profiler, or new GPU execution was ru
 
 Every V marker is listed below, sorted by those tiers and then path; ties are not an asserted cost ordering.
 
-| Priority tier | File:line | Class | Reason / plan step |
-|---|---|---|---|
-| 1 | `runtime/cq-load/src/csv_source.rs:135` | V | Loader::csv_hash/csv_btree group these decoded rows; P4 keeps index keys encoded and P5 builds scan columns directly. |
-| 1 | `runtime/cq-load/src/loader.rs:44` | V | CSV batch decoding precedes hash grouping; P4 builds indexes over retained representations and P5 loads columnar scans directly. |
-| 1 | `runtime/cq-load/src/loader.rs:57` | V | CSV batch decoding precedes ordered grouping; P4 retains encoded index keys and P5 avoids eager logical scan tuples. |
-| 1 | `runtime/cq-load/src/parquet_source.rs:117` | V | zone_tpch feeds these owned decoded tuples to membership scans; P5 must retain columnar payloads and materialize late. |
-| 1 | `runtime/cq-load/src/zone.rs:214` | V | consuming Csv/Parquet batches drives eager tuple decoding before summary scans; P5 must build encoded columns and materialize survivors. |
-| 2 | `experiments/gpu/sequence-runtime/src/canon.rs:565` | V | into_columns invokes device expansion before host publication; P6 preserve the packed view. |
-| 2 | `experiments/gpu/sequence-runtime/src/canon.rs:584` | V | packed_rows wrapper dispatches device expansion before publication; P6 defer logical inversion. |
-| 2 | `experiments/gpu/sequence-runtime/src/canon.rs:661` | V | canonical output adapter expands packed values before possible chained relations; P6 retain encoded fields. |
-| 2 | `experiments/gpu/sequence-runtime/src/canon.rs:682` | V | output adapter materializes full i64 columns before their consumers; P6 keep packed values resident. |
-| 2 | `experiments/gpu/sequence-runtime/src/canon.rs:840` | V | packed FOR base-plus-offset inversion precedes host publication and may feed chaining; P6 delay reconstruction. |
-| 2 | `experiments/gpu/sequence-runtime/src/lib.rs:354` | V | measuring a computed packed publication reconstructs values before provider planning; P6 reuse recorded summaries. |
-| 2 | `experiments/gpu/sequence/core/src/emit.rs:1366` | V | P6 intermediate host publication reconstructs packed FOR fields for the whole stored layout. |
-| 2 | `experiments/gpu/sequence/core/src/emit.rs:1377` | V | P6 intermediate host fallback resolves symbols and logical values before more engine operators, not final answers. |
-| 2 | `experiments/gpu/sequence/core/src/emit.rs:1987` | V | P6 canonical union output expands FOR fields on device before host download; retain packed publication. |
-| 2 | `experiments/gpu/sequence/core/src/emit.rs:1992` | V | P6 noncanonical union output expands FOR fields on device before host download. |
-| 2 | `experiments/gpu/sequence/core/src/emit.rs:2354` | V | P6 stored intermediates reconstruct FOR fields before downstream relational operators instead of retaining codes. |
-| 2 | `experiments/gpu/sequence/core/src/emit.rs:2647` | V | P6 canonical output adapter reconstructs device i64 columns before final host publication. |
-| 2 | `experiments/gpu/sequence/core/src/emit.rs:2652` | V | P6 packed output adapter reconstructs device i64 columns before final host publication. |
-| 2 | `experiments/gpu/sequence/core/src/emit.rs:2816` | V | P6 host-origin canonical output is reuploaded then expanded on device, rather than decoded at host publication. |
-| 2 | `experiments/gpu/sequence/core/src/emit.rs:2822` | V | P6 host-origin packed output expands device columns before the user's host download. |
-| 2 | `experiments/gpu/sequence/core/src/rows.rs:1431` | V | P6 host fallback reconstructs the complete run layout, not only opaque-Rust rust_reads columns. |
-| 2 | `experiments/gpu/sequence/core/src/rows.rs:1437` | V | P6 host fallback materializes complete logical tuples before further relational processing, not final publication. |
-| 2 | `experiments/gpu/tpch/build.rs:717` | V | P6 staged host execution downloads entire logical input tuples before subsequent relational operators; retain codes outside rust_reads. |
-| 3 | `experiments/gpu/datalog-runtime/src/layout.rs:369` | V | packed inverse feeds compare_prefix and generated relational reads; P6 compare encoded fields. |
-| 3 | `experiments/gpu/datalog-runtime/src/layout.rs:435` | V | prefix lookup reconstructs packed fields during binary search; P6 encode probes and compare packed prefixes. |
-| 3 | `experiments/gpu/device-columns/src/device.rs:114` | V | narrowed source reconstruction feeds Sequence sorting/indexing; P6 retain encoded keys. |
-| 3 | `experiments/gpu/device-columns/src/device.rs:117` | V | ordinary source decode precedes key sorting; P6 avoid pre-sort expansion. |
-| 3 | `experiments/gpu/device-columns/src/device.rs:120` | V | packed source decode precedes key sorting; P6 compare recorded packed fields. |
-| 3 | `experiments/gpu/sequence-runtime/src/canon.rs:807` | V | unpack_field constructs device logical columns before possible relational consumers; P6 preserve packed fields. |
-| 3 | `experiments/gpu/sequence-runtime/src/device.rs:59` | V | lower directory offset FOR inversion precedes range expansion; P6 use plain index directories. |
-| 3 | `experiments/gpu/sequence-runtime/src/device.rs:61` | V | upper directory offset FOR inversion precedes range expansion; P6 avoid compressed random-access directories. |
-| 3 | `experiments/gpu/sequence-runtime/src/device.rs:79` | V | binary membership probe reconstructs each midpoint; P6 compare code-domain keys or use plain indexes. |
-| 3 | `experiments/gpu/sequence-runtime/src/device.rs:86` | V | final membership comparison reconstructs the candidate; P6 retain encoded comparison operands. |
-| 3 | `experiments/gpu/sequence-runtime/src/kernels.rs:61` | V | index key extraction reconstructs values before sorting; P6 sort recorded codes or keep index runs plain. |
-| 3 | `experiments/gpu/sequence-runtime/src/kernels.rs:75` | V | multi-key index build expands each column before lexicographic sorting; P6 retain encoded keys. |
-| 3 | `experiments/gpu/sequence-runtime/src/kernels.rs:86` | V | permutation gather reconstructs keys for a later sort; P6 compare encoded fields. |
-| 3 | `experiments/gpu/sequence-runtime/src/kernels.rs:105` | V | range selection decodes before relational comparison; P6 translate bounds into the encoded domain. |
-| 3 | `experiments/gpu/sequence-runtime/src/lib.rs:813` | V | index selection launch reconstructs values before range comparison; P6 translate predicates to codes. |
-| 3 | `experiments/gpu/sequence-runtime/src/lib.rs:928` | V | multi-key index build launches full column reconstruction before sorting; P6 sort retained encoded fields. |
-| 3 | `experiments/gpu/sequence-runtime/src/lib.rs:967` | V | leading-key reconstruction follows tuple sort for directory building; P6 retain encoded key order. |
-| 3 | `experiments/gpu/sequence-runtime/src/lib.rs:981` | V | single-key reconstruction precedes radix sort; P6 sort recorded codes or use plain indexes. |
-| 3 | `experiments/gpu/sequence-runtime/src/selected.rs:68` | V | selection launches value reconstruction before range comparison; P6 evaluate translated encoded predicates. |
-| 3 | `experiments/gpu/sequence/core/src/emit.rs:556` | V | P4 run membership prefix_range reconstructs packed signed fields through compare_prefix solely for key comparison. |
-| 3 | `experiments/gpu/sequence/core/src/emit.rs:566` | V | P4 run lookup prefix_range reconstructs packed signed fields through compare_prefix instead of comparing encoded keys. |
-| 3 | `experiments/gpu/sequence/core/src/emit.rs:609` | V | P4 lower-bound key search reconstructs FOR values solely for ordered relational comparison. |
-| 3 | `experiments/gpu/sequence/core/src/emit.rs:618` | V | P4 upper-bound key search reconstructs FOR values solely for ordered relational comparison. |
-| 3 | `experiments/gpu/sequence/core/src/emit.rs:642` | V | P4 run-provider payload unpack widens keys and code-only fields before relational consumers. |
-| 3 | `experiments/gpu/sequence/core/src/reduce.rs:186` | V | P6 grouped input reconstructs packed FOR fields before relational grouping and aggregation. |
-| 3 | `experiments/gpu/sequence/core/src/rows.rs:1034` | V | P6 run scans unpack every demanded field before relational consumers; retain narrow codes unless rust_reads requires identity. |
-| 3 | `experiments/gpu/sequence/core/src/rows.rs:1055` | V | P6 source scans reconstruct FOR values into i64 even for code-only joins and predicates. |
-| 3 | `experiments/gpu/sequence/core/src/rows.rs:1286` | V | P6 relational Select/Point/Range reconstructs Scalar values; preserved-op predicates must compare codes. |
-| 4 | `experiments/gpu/datalog-runtime/src/layout.rs:381` | V | signed ordinal inversion precedes prefix comparisons; P6 translate probes to packed order. |
-| 4 | `experiments/gpu/datalog-runtime/src/layout.rs:444` | V | lower-bound comparison invokes field inversion before ordering; P6 compare encoded prefixes. |
-| 4 | `experiments/gpu/datalog-runtime/src/layout.rs:453` | V | upper-bound comparison invokes field inversion before ordering; P6 retain packed prefix comparisons. |
-| 4 | `experiments/gpu/datalog-runtime/src/layout.rs:462` | V | tuple prefix comparison reconstructs each numeric field; P6 compare encoded field order directly. |
-| 4 | `experiments/gpu/datalog-runtime/src/layout.rs:468` | V | prefix search decodes each compared field; P6 compare encoded prefixes directly. |
-| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:557` | V | packed answers expand into resident columns usable by chained queries; P6 retain packed fields until an allowed read. |
-| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:575` | V | packed_rows wrapper eagerly expands into device columns before consumers; P6 retain packed resident fields. |
-| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:623` | V | packed adapter expands the live prefix before possible chained relations; P6 keep its encoded view. |
-| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:647` | V | packed_columns expands every field into device buffers; P6 defer inversion until logical reads. |
-| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:670` | V | canonical unpack delegates eager device expansion; P6 publish a packed resident view. |
-| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:724` | V | per-field unpack launch expands all live rows before chaining; P6 decode only at the allowed consumer. |
-| 4 | `experiments/gpu/sequence-runtime/src/kernels.rs:21` | V | bound reduction reconstructs every source value before index planning; P6 reuse recorded encoded-domain bounds. |
-| 4 | `experiments/gpu/sequence-runtime/src/lib.rs:381` | V | bounds discovery launches source reconstruction before index building; P6 consume recorded summaries instead. |
-| 4 | `experiments/gpu/sequence/core/src/emit.rs:652` | V | P6 provider payload reconstructs FOR values without restricting decode to rust_reads columns. |
-| 5 | `experiments/gpu/datalog-runtime/tests/layout_arena.rs:173` | V | diagnostic prefix inversion precedes relational lookup; P6 compare the encoded prefix instead. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:101` | V | both FOR directory offsets are reconstructed before join expansion; P6 use plain index directories. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:112` | V | binary membership reconstructs each midpoint before comparison; P6 compare encoded keys. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:119` | V | final membership reconstructs the candidate before equality; P6 retain code-domain operands. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:171` | V | full key column expands before radix sorting; P6 sort encoded keys or use plain index runs. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:193` | V | selected keys expand before the next sorting pass; P6 preserve recorded code representations. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:209` | V | column decoder materializes all index keys before sort; P6 keep keys encoded. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:216` | V | gathered key reconstruction feeds lexicographic sort; P6 compare retained codes. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:237` | V | date/region selection decodes before relational comparison; P6 translate range constants. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:262` | V | compressed region directory endpoint controls further expansion; P6 use plain index directories. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:266` | V | region ID FOR inverse precedes the nation join; P6 retain plain/code-domain index keys. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:271` | V | nation ID FOR inverse precedes the customer join; P6 avoid compressed index payload probes. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:352` | V | customer ID FOR inverse precedes the orders join; P6 retain index keys without expansion. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:381` | V | order ID FOR inverse precedes the lineitem join; P6 avoid compressed random-access index payloads. |
-| 5 | `experiments/gpu/h05-reference/src/kernels.rs:420` | V | supplier ID FOR inverse precedes membership probing; P6 compare retained encoded keys. |
-| 5 | `experiments/gpu/h05-reference/src/main.rs:156` | V | reference selection launches decode-before-range filtering; P6 translate predicates to the encoded domain. |
-| 5 | `experiments/gpu/h05-reference/src/main.rs:190` | V | full index key reconstruction precedes sorting; P6 retain encoded keys. |
-| 5 | `experiments/gpu/h05-reference/src/main.rs:192` | V | selected index key reconstruction precedes sorting; P6 compare recorded codes. |
-| 5 | `experiments/gpu/h05-reference/src/main.rs:217` | V | index builder launches whole-key decode before lexicographic sort; P6 retain encoded keys. |
-| 5 | `runtime/cq-load/examples/zone_tpch.rs:13` | V | this benchmark decoder materializes lineitem before membership selection; P5 requires encoded scan columns and late materialization. |
-| 5 | `runtime/cq-load/examples/zone_tpch.rs:16` | V | order keys are decoded before membership tests; P5 evaluates preserved predicates in the scan representation. |
-| 5 | `runtime/cq-load/examples/zone_tpch.rs:19` | V | part keys are materialized before row selection despite no query read; P5 must retain them encoded. |
-| 5 | `runtime/cq-load/examples/zone_tpch.rs:21` | V | supplier keys are materialized before membership selection; P5 materializes only demanded survivor columns. |
-| 5 | `runtime/cq-load/examples/zone_tpch.rs:44` | V | the benchmark loads all logical tuples before zone pruning; P5 must replace eager row loading with columnar scan storage. |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:15` | V | the zone diagnostic builds logical tuples before relational selections; P5 must build summaries with encoded scan columns. |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:18` | V | the zone diagnostic reconstructs id before Point selection; P5 keeps preserved predicates in the encoded scan domain. |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:21` | V | the zone diagnostic reconstructs dates before building bounds; P5 builds payload and summaries together. |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:23` | V | the zone diagnostic reconstructs Decimal before building bounds; P5 requires columnar payload plus summaries. |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:25` | V | the zone diagnostic owns strings before subsequent selection; P5 delays reconstruction to demanded survivors. |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:89` | V | this test consumes decoding batches before zone predicates; P5 retains encoded columns through selection. |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:91` | V | the expected zone host also eagerly loads tuples before relational reads; P5 builds scan payload and bounds together. |
+| Priority tier | File:line | Class | Reason / plan step | Owner / required recorded fact |
+|---|---|---|---|---|
+| 1 | `runtime/cq-load/src/csv_source.rs:135` | V | Loader::csv_hash/csv_btree group these decoded rows; P4 keeps index keys encoded and P5 builds scan columns directly. | P5 / Load+Read (P4 / Index also for csv_hash/csv_btree) |
+| 1 | `runtime/cq-load/src/loader.rs:44` | V | CSV batch decoding precedes hash grouping; P4 builds indexes over retained representations and P5 loads columnar scans directly. | P5 / Load+Read (P4 / Index also for csv_hash/csv_btree) |
+| 1 | `runtime/cq-load/src/loader.rs:57` | V | CSV batch decoding precedes ordered grouping; P4 retains encoded index keys and P5 avoids eager logical scan tuples. | P5 / Load+Read (P4 / Index also for csv_hash/csv_btree) |
+| 1 | `runtime/cq-load/src/parquet_source.rs:117` | V | zone_tpch feeds these owned decoded tuples to membership scans; P5 must retain columnar payloads and materialize late. | P5 / Load+Read |
+| 1 | `runtime/cq-load/src/zone.rs:214` | V | consuming Csv/Parquet batches drives eager tuple decoding before summary scans; P5 must build encoded columns and materialize survivors. | P5 / Load+Read |
+| 2 | `experiments/gpu/sequence-runtime/src/canon.rs:565` | V | into_columns invokes device expansion before host publication; P6 preserve the packed view. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence-runtime/src/canon.rs:584` | V | packed_rows wrapper dispatches device expansion before publication; P6 defer logical inversion. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence-runtime/src/canon.rs:661` | V | canonical output adapter expands packed values before possible chained relations; P6 retain encoded fields. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence-runtime/src/canon.rs:682` | V | output adapter materializes full i64 columns before their consumers; P6 keep packed values resident. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence-runtime/src/canon.rs:840` | V | packed FOR base-plus-offset inversion precedes host publication and may feed chaining; P6 delay reconstruction. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence-runtime/src/lib.rs:354` | V | measuring a computed packed publication reconstructs values before provider planning; P6 reuse recorded summaries. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence/core/src/emit.rs:1366` | V | P6 intermediate host publication reconstructs packed FOR fields for the whole stored layout. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence/core/src/emit.rs:1377` | V | P6 intermediate host fallback resolves symbols and logical values before more engine operators, not final answers. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence/core/src/emit.rs:1987` | V | P6 canonical union output expands FOR fields on device before host download; retain packed publication. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence/core/src/emit.rs:1992` | V | P6 noncanonical union output expands FOR fields on device before host download. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence/core/src/emit.rs:2354` | V | P6 stored intermediates reconstruct FOR fields before downstream relational operators instead of retaining codes. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence/core/src/emit.rs:2647` | V | P6 canonical output adapter reconstructs device i64 columns before final host publication. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence/core/src/emit.rs:2652` | V | P6 packed output adapter reconstructs device i64 columns before final host publication. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence/core/src/emit.rs:2816` | V | P6 host-origin canonical output is reuploaded then expanded on device, rather than decoded at host publication. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence/core/src/emit.rs:2822` | V | P6 host-origin packed output expands device columns before the user's host download. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence/core/src/rows.rs:1431` | V | P6 host fallback reconstructs the complete run layout, not only opaque-Rust rust_reads columns. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/sequence/core/src/rows.rs:1437` | V | P6 host fallback materializes complete logical tuples before further relational processing, not final publication. | P6 / Carrier+Read |
+| 2 | `experiments/gpu/tpch/build.rs:717` | V | P6 staged host execution downloads entire logical input tuples before subsequent relational operators; retain codes outside rust_reads. | P6 / Carrier+Read |
+| 3 | `experiments/gpu/datalog-runtime/src/layout.rs:369` | V | packed inverse feeds compare_prefix and generated relational reads; P6 compare encoded fields. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/datalog-runtime/src/layout.rs:435` | V | prefix lookup reconstructs packed fields during binary search; P6 encode probes and compare packed prefixes. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/device-columns/src/device.rs:114` | V | narrowed source reconstruction feeds Sequence sorting/indexing; P6 retain encoded keys. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/device-columns/src/device.rs:117` | V | ordinary source decode precedes key sorting; P6 avoid pre-sort expansion. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/device-columns/src/device.rs:120` | V | packed source decode precedes key sorting; P6 compare recorded packed fields. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/canon.rs:807` | V | unpack_field constructs device logical columns before possible relational consumers; P6 preserve packed fields. | P6 / Carrier+Read |
+| 3 | `experiments/gpu/sequence-runtime/src/device.rs:59` | V | lower directory offset FOR inversion precedes range expansion; P6 use plain index directories. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/device.rs:61` | V | upper directory offset FOR inversion precedes range expansion; P6 avoid compressed random-access directories. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/device.rs:79` | V | binary membership probe reconstructs each midpoint; P6 compare code-domain keys or use plain indexes. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/device.rs:86` | V | final membership comparison reconstructs the candidate; P6 retain encoded comparison operands. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/kernels.rs:61` | V | index key extraction reconstructs values before sorting; P6 sort recorded codes or keep index runs plain. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/kernels.rs:75` | V | multi-key index build expands each column before lexicographic sorting; P6 retain encoded keys. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/kernels.rs:86` | V | permutation gather reconstructs keys for a later sort; P6 compare encoded fields. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/kernels.rs:105` | V | range selection decodes before relational comparison; P6 translate bounds into the encoded domain. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/lib.rs:813` | V | index selection launch reconstructs values before range comparison; P6 translate predicates to codes. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/lib.rs:928` | V | multi-key index build launches full column reconstruction before sorting; P6 sort retained encoded fields. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/lib.rs:967` | V | leading-key reconstruction follows tuple sort for directory building; P6 retain encoded key order. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/lib.rs:981` | V | single-key reconstruction precedes radix sort; P6 sort recorded codes or use plain indexes. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence-runtime/src/selected.rs:68` | V | selection launches value reconstruction before range comparison; P6 evaluate translated encoded predicates. | P6 / Carrier+Read; P4 / Index law |
+| 3 | `experiments/gpu/sequence/core/src/emit.rs:556` | V | P4 run membership prefix_range reconstructs packed signed fields through compare_prefix solely for key comparison. | P4 / Index |
+| 3 | `experiments/gpu/sequence/core/src/emit.rs:566` | V | P4 run lookup prefix_range reconstructs packed signed fields through compare_prefix instead of comparing encoded keys. | P4 / Index |
+| 3 | `experiments/gpu/sequence/core/src/emit.rs:609` | V | P4 lower-bound key search reconstructs FOR values solely for ordered relational comparison. | P4 / Index |
+| 3 | `experiments/gpu/sequence/core/src/emit.rs:618` | V | P4 upper-bound key search reconstructs FOR values solely for ordered relational comparison. | P4 / Index |
+| 3 | `experiments/gpu/sequence/core/src/emit.rs:642` | V | P4 run-provider payload unpack widens keys and code-only fields before relational consumers. | P4 / Index+Read |
+| 3 | `experiments/gpu/sequence/core/src/reduce.rs:186` | V | P6 grouped input reconstructs packed FOR fields before relational grouping and aggregation. | P6 / Carrier+Read |
+| 3 | `experiments/gpu/sequence/core/src/rows.rs:1034` | V | P6 run scans unpack every demanded field before relational consumers; retain narrow codes unless rust_reads requires identity. | P6 / Carrier+Read |
+| 3 | `experiments/gpu/sequence/core/src/rows.rs:1055` | V | P6 source scans reconstruct FOR values into i64 even for code-only joins and predicates. | P6 / Carrier+Read |
+| 3 | `experiments/gpu/sequence/core/src/rows.rs:1286` | V | P6 relational Select/Point/Range reconstructs Scalar values; preserved-op predicates must compare codes. | P6 / Carrier+Read; P4 / Index law |
+| 4 | `experiments/gpu/datalog-runtime/src/layout.rs:381` | V | signed ordinal inversion precedes prefix comparisons; P6 translate probes to packed order. | P6 / Carrier+Read; P4 / Index law |
+| 4 | `experiments/gpu/datalog-runtime/src/layout.rs:444` | V | lower-bound comparison invokes field inversion before ordering; P6 compare encoded prefixes. | P6 / Carrier+Read; P4 / Index law |
+| 4 | `experiments/gpu/datalog-runtime/src/layout.rs:453` | V | upper-bound comparison invokes field inversion before ordering; P6 retain packed prefix comparisons. | P6 / Carrier+Read; P4 / Index law |
+| 4 | `experiments/gpu/datalog-runtime/src/layout.rs:462` | V | tuple prefix comparison reconstructs each numeric field; P6 compare encoded field order directly. | P6 / Carrier+Read; P4 / Index law |
+| 4 | `experiments/gpu/datalog-runtime/src/layout.rs:468` | V | prefix search decodes each compared field; P6 compare encoded prefixes directly. | P6 / Carrier+Read; P4 / Index law |
+| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:557` | V | packed answers expand into resident columns usable by chained queries; P6 retain packed fields until an allowed read. | P6 / Carrier+Read |
+| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:575` | V | packed_rows wrapper eagerly expands into device columns before consumers; P6 retain packed resident fields. | P6 / Carrier+Read |
+| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:623` | V | packed adapter expands the live prefix before possible chained relations; P6 keep its encoded view. | P6 / Carrier+Read |
+| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:647` | V | packed_columns expands every field into device buffers; P6 defer inversion until logical reads. | P6 / Carrier+Read |
+| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:670` | V | canonical unpack delegates eager device expansion; P6 publish a packed resident view. | P6 / Carrier+Read |
+| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:724` | V | per-field unpack launch expands all live rows before chaining; P6 decode only at the allowed consumer. | P6 / Carrier+Read |
+| 4 | `experiments/gpu/sequence-runtime/src/kernels.rs:21` | V | bound reduction reconstructs every source value before index planning; P6 reuse recorded encoded-domain bounds. | P6 / Carrier+Read |
+| 4 | `experiments/gpu/sequence-runtime/src/lib.rs:381` | V | bounds discovery launches source reconstruction before index building; P6 consume recorded summaries instead. | P6 / Carrier+Read |
+| 4 | `experiments/gpu/sequence/core/src/emit.rs:652` | V | P6 provider payload reconstructs FOR values without restricting decode to rust_reads columns. | P6 / Carrier+Read |
+| 5 | `experiments/gpu/datalog-runtime/tests/layout_arena.rs:173` | V | diagnostic prefix inversion precedes relational lookup; P6 compare the encoded prefix instead. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:101` | V | both FOR directory offsets are reconstructed before join expansion; P6 use plain index directories. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:112` | V | binary membership reconstructs each midpoint before comparison; P6 compare encoded keys. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:119` | V | final membership reconstructs the candidate before equality; P6 retain code-domain operands. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:171` | V | full key column expands before radix sorting; P6 sort encoded keys or use plain index runs. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:193` | V | selected keys expand before the next sorting pass; P6 preserve recorded code representations. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:209` | V | column decoder materializes all index keys before sort; P6 keep keys encoded. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:216` | V | gathered key reconstruction feeds lexicographic sort; P6 compare retained codes. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:237` | V | date/region selection decodes before relational comparison; P6 translate range constants. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:262` | V | compressed region directory endpoint controls further expansion; P6 use plain index directories. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:266` | V | region ID FOR inverse precedes the nation join; P6 retain plain/code-domain index keys. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:271` | V | nation ID FOR inverse precedes the customer join; P6 avoid compressed index payload probes. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:352` | V | customer ID FOR inverse precedes the orders join; P6 retain index keys without expansion. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:381` | V | order ID FOR inverse precedes the lineitem join; P6 avoid compressed random-access index payloads. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/kernels.rs:420` | V | supplier ID FOR inverse precedes membership probing; P6 compare retained encoded keys. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/main.rs:156` | V | reference selection launches decode-before-range filtering; P6 translate predicates to the encoded domain. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/main.rs:190` | V | full index key reconstruction precedes sorting; P6 retain encoded keys. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/main.rs:192` | V | selected index key reconstruction precedes sorting; P6 compare recorded codes. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `experiments/gpu/h05-reference/src/main.rs:217` | V | index builder launches whole-key decode before lexicographic sort; P6 retain encoded keys. | P6 / Carrier+Read; P4 / Index law |
+| 5 | `runtime/cq-load/examples/zone_tpch.rs:13` | V | this benchmark decoder materializes lineitem before membership selection; P5 requires encoded scan columns and late materialization. | P5 / Load+Read |
+| 5 | `runtime/cq-load/examples/zone_tpch.rs:16` | V | order keys are decoded before membership tests; P5 evaluates preserved predicates in the scan representation. | P5 / Load+Read |
+| 5 | `runtime/cq-load/examples/zone_tpch.rs:19` | V | part keys are materialized before row selection despite no query read; P5 must retain them encoded. | P5 / Load+Read |
+| 5 | `runtime/cq-load/examples/zone_tpch.rs:21` | V | supplier keys are materialized before membership selection; P5 materializes only demanded survivor columns. | P5 / Load+Read |
+| 5 | `runtime/cq-load/examples/zone_tpch.rs:44` | V | the benchmark loads all logical tuples before zone pruning; P5 must replace eager row loading with columnar scan storage. | P5 / Load+Read |
+| 5 | `runtime/cq-load/tests/zone_parquet.rs:15` | V | the zone diagnostic builds logical tuples before relational selections; P5 must build summaries with encoded scan columns. | P5 / Load+Read |
+| 5 | `runtime/cq-load/tests/zone_parquet.rs:18` | V | the zone diagnostic reconstructs id before Point selection; P5 keeps preserved predicates in the encoded scan domain. | P5 / Load+Read |
+| 5 | `runtime/cq-load/tests/zone_parquet.rs:21` | V | the zone diagnostic reconstructs dates before building bounds; P5 builds payload and summaries together. | P5 / Load+Read |
+| 5 | `runtime/cq-load/tests/zone_parquet.rs:23` | V | the zone diagnostic reconstructs Decimal before building bounds; P5 requires columnar payload plus summaries. | P5 / Load+Read |
+| 5 | `runtime/cq-load/tests/zone_parquet.rs:25` | V | the zone diagnostic owns strings before subsequent selection; P5 delays reconstruction to demanded survivors. | P5 / Load+Read |
+| 5 | `runtime/cq-load/tests/zone_parquet.rs:89` | V | this test consumes decoding batches before zone predicates; P5 retains encoded columns through selection. | P5 / Load+Read |
+| 5 | `runtime/cq-load/tests/zone_parquet.rs:91` | V | the expected zone host also eagerly loads tuples before relational reads; P5 builds scan payload and bounds together. | P5 / Load+Read |
 
 ## Nineteen i64 input columns
 
