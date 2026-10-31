@@ -497,11 +497,13 @@ fn task_hasher(canonical: &round::Layout) -> TokenStream {
 }
 
 /// Formal rule DL-ShardedAdmission: subtract the committed canonical layout
-/// from every candidate chunk (in parallel above the threshold), then build the
-/// round's NEW canonical version from the survivors and return each row once.
-/// A sharded canonical layout fills NEW by `extend_from` and enumerates its
-/// distinct keys; a sorted-run canonical layout's NEW is the sorted, deduplicated
-/// survivor vector. Only existing provider operations are used.
+/// from every candidate chunk and keep each survivor once, building the
+/// round's NEW canonical version from them. A sharded canonical layout hashes
+/// and routes chunks in parallel, then one task per shard checks the committed
+/// shard and inserts into the NEW shard (`ShardedLayout::admit`, which takes
+/// the committed hasher so one hash serves both); the per-shard results are
+/// concatenated. A sorted-run canonical layout subtracts per chunk (in parallel
+/// above the threshold) and its NEW is the sorted, deduplicated survivor vector.
 fn admit_chunks(
     context: &RoundContext,
     head: usize,
@@ -526,27 +528,10 @@ fn admit_chunks(
             quote!(::core::clone::Clone::clone(&row.#column))
         })
         .collect();
-    let (probe, key, row) = if identity {
-        (
-            quote!(row),
-            quote!(::core::clone::Clone::clone(row)),
-            quote!(::core::clone::Clone::clone(key)),
-        )
+    let (probe, key) = if identity {
+        (quote!(row), quote!(::core::clone::Clone::clone(row)))
     } else {
-        let row = (0..canonical.columns.len()).map(|column| {
-            let position = canonical
-                .columns
-                .iter()
-                .position(|&c| c == column)
-                .expect("checked complete canonical permutation");
-            let position = syn::Index::from(position);
-            quote!(::core::clone::Clone::clone(&key.#position))
-        });
-        (
-            quote!(&(#(#columns,)*)),
-            quote!((#(#columns,)*)),
-            quote!((#(#row,)*)),
-        )
+        (quote!(&(#(#columns,)*)), quote!((#(#columns,)*)))
     };
     let rows = Ident::new("__cq_admit_chunks", Span::mixed_site());
     let count = Ident::new("__cq_admit_count", Span::mixed_site());
@@ -555,6 +540,26 @@ fn admit_chunks(
         let total = cq_datalog_print::candidate_count();
         quote!(#total.fetch_add(#count, ::core::sync::atomic::Ordering::Relaxed);)
     });
+    let (name, _) = provider_parts(canonical);
+    if name != "RunLayout" {
+        let admitted = Ident::new("__cq_admit_rows", Span::mixed_site());
+        let fresh = Ident::new("__cq_admit_new", Span::mixed_site());
+        let sharded_count = counted.as_ref().map_or_else(TokenStream::new, |counted| {
+            quote!(let #count = #rows.iter().map(::std::vec::Vec::len).sum::<usize>(); #counted)
+        });
+        return quote!({
+            let #rows = #chunks;
+            #sharded_count
+            let (#fresh, #admitted) = ::cq_datalog_parallel_runtime::ShardedLayout::admit(
+                #committed,
+                #rows,
+                |row| #key,
+                #threshold,
+            );
+            *#new = #fresh;
+            #admitted
+        });
+    }
     let subtract = quote!(
         let mut #rows = #chunks;
         let #membership = #committed;
@@ -571,35 +576,23 @@ fn admit_chunks(
             });
         }
     );
-    let (name, _) = provider_parts(canonical);
-    if name == "RunLayout" {
-        let survivors = Ident::new("__cq_admit_rows", Span::mixed_site());
-        return quote!({
-            #subtract
-            let mut #survivors = ::std::vec::Vec::with_capacity(
-                #rows.iter().map(::std::vec::Vec::len).sum::<usize>(),
-            );
-            for chunk in #rows {
-                #survivors.extend(chunk);
-            }
-            if #survivors.len() < #threshold || ::rayon::current_num_threads() == 1 {
-                #survivors.sort_unstable();
-            } else {
-                use ::rayon::prelude::*;
-                #survivors.par_sort_unstable();
-            }
-            #survivors.dedup();
-            #survivors
-        });
-    }
+    let survivors = Ident::new("__cq_admit_rows", Span::mixed_site());
     quote!({
         #subtract
-        for chunk in &#rows {
-            #new.extend_from(chunk, |row| #key, |_| ());
+        let mut #survivors = ::std::vec::Vec::with_capacity(
+            #rows.iter().map(::std::vec::Vec::len).sum::<usize>(),
+        );
+        for chunk in #rows {
+            #survivors.extend(chunk);
         }
-        ::cq_storage::Keys::distinct_keys(&*#new)
-            .map(|key| #row)
-            .collect::<::std::vec::Vec<_>>()
+        if #survivors.len() < #threshold || ::rayon::current_num_threads() == 1 {
+            #survivors.sort_unstable();
+        } else {
+            use ::rayon::prelude::*;
+            #survivors.par_sort_unstable();
+        }
+        #survivors.dedup();
+        #survivors
     })
 }
 
