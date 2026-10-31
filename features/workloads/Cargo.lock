@@ -519,10 +519,12 @@ dependencies = [
 name = "cq-load"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "arrow-array",
  "arrow-schema",
  "cq-storage",
  "csv",
+ "hashbrown 0.15.5",
  "parquet",
 ]
 

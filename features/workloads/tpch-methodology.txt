@@ -23,6 +23,20 @@ Cargo timing reports, answer witnesses and output reports live under target/benc
 Exports contain only declared columns, in declaration order, without filters,
 preaggregation or casts. Typed relation_loaders! read the Parquet schemas into
 Vec hosts. The file cache is local and engine-version/projection keyed.
+Interned loaders borrow Arrow string cells directly into column-local hash
+tables. Each source cell is hashed once; table growth reuses cached hashes.
+Only distinct dictionary entries allocate text. After input is exhausted,
+distinct entries are sorted lexicographically and temporary integer IDs are
+remapped, preserving the previous exact codes independently of row/batch order.
+Input, sorting, and remapping remain load_ms work; query execution is unchanged.
+Column state is sequential for bounded streaming memory, not because final codes
+depend on encounter order. Parallel chunk tables would require duplicate text
+storage and a merge/remap; that tradeoff is not imposed on small columns.
+The byte-scan throughput is a lower-work reference, not an attainable guarantee:
+exact sorted codes additionally require deduplication, dictionary allocation,
+distinct-value ordering, and integer output writes. The cq-load `intern` release
+example reports five interleaved former/new passes and byte scans over a retained
+Parquet column, excluding I/O/decompression, and asserts exact row codes.
 H01 and H13 author physical-row key evidence in their shared query sources,
 independent of configuration. H01 retains Lineitem(l_orderkey,l_linenumber);
 H13 retains Customer(c_custkey) and QualifiedOrders(order_key), the latter

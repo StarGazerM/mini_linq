@@ -49,9 +49,11 @@
 //! sorted per-column [`Dictionaries`] and return rows with [`StringCode`] fields.
 //! Opt in with `mini_linq::interned_relation_loaders!`, which accepts the same
 //! declarations as the unchanged plain `relation_loaders!` macro. It selects
-//! source types through [`InternedField`]: codes load from input-only strings;
-//! ordinary [`Load`] types remain unchanged.
-//! Source strings are discarded before the encoded relation is returned.
+//! source conversion through [`InternedField`]: codes borrow input strings into
+//! column-local state; ordinary [`Load`] types remain unchanged. Each source cell
+//! is hashed once, and only distinct dictionary entries allocate owned strings.
+//! Finalization sorts distinct entries and remaps integer IDs in the loaded rows.
+//! No source text is hashed or searched again during that remapping.
 //! Existing plain CSV/Parquet readers retain their original behavior.
 //!
 //! Codes preserve exact lexicographic string order within one column only.
@@ -84,7 +86,8 @@ mod parquet_source;
 pub use cq_storage::dedup::{PrefixOrderError, PrefixOrdered, verify_prefix_order};
 pub use csv_source::{Csv, CsvOptions, read_csv};
 pub use intern::{
-    Dictionaries, InternedField, InternedRelation, StringCode, StringDictionary, dictionary_where,
+    Dictionaries, InternedField, InternedRelation, StringCode, StringDictionary, StringInterner,
+    dictionary_where,
 };
 pub use loader::{Group, Loader};
 pub use scalar::{Date, Decimal};
@@ -190,6 +193,41 @@ impl Batch<'_> {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Visit borrowed source text while its batch is alive. The closure returns
+    /// only an encoded value; no string allocation is needed for string arrays.
+    fn strings<T>(&self, index: usize, mut encode: impl FnMut(&str) -> T) -> Result<Vec<T>> {
+        let Some((&_column, &source)) = self.columns.get(index).zip(self.mapping.get(index)) else {
+            return Err(Error::new(
+                self.file,
+                0,
+                "<schema>",
+                index.to_string(),
+                "column index outside schema",
+            ));
+        };
+        match self.data {
+            BatchData::Csv(records) => Ok(records
+                .iter()
+                .map(|record| encode(&record[source]))
+                .collect()),
+            #[cfg(feature = "parquet")]
+            BatchData::Parquet(batch, first_row) => {
+                parquet_source::string_values(batch.column(source).as_ref(), |value| {
+                    Ok(encode(value))
+                })
+                .map_err(|error| {
+                    Error::new(
+                        self.file,
+                        first_row + error.row as u64,
+                        _column,
+                        error.value,
+                        error.message,
+                    )
+                })
+            }
+        }
     }
 
     /// Decode a declaration column, reporting the original field on failure.

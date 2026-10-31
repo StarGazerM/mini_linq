@@ -88,20 +88,27 @@ impl<S: crate::InternedRelation> Loader<S> {
         S::intern(rows, dictionaries)
     }
 
-    /// Load input-only source rows, prepare sorted per-column dictionaries, and
-    /// return encoded relation rows. Temporary source strings are then dropped.
+    /// Borrow source string cells directly into per-column dictionaries and
+    /// retain only temporary integer codes in rows during loading.
     ///
-    /// All source batches are loaded before interning so codes are independent
-    /// of batch size and source row order. A source error leaves dictionaries
-    /// unchanged. Retain `dictionaries` for literal translation and publication.
+    /// Finalization sorts distinct entries and remaps codes, making them
+    /// independent of batch size, source order and hash-table layout. Source
+    /// errors leave dictionaries unchanged. Retain `dictionaries` for literals
+    /// and publication.
     #[cfg(feature = "parquet")]
     pub fn parquet_interned(
         path: impl AsRef<Path>,
         options: crate::ParquetOptions,
         dictionaries: &mut crate::Dictionaries,
     ) -> Result<Vec<S::Row>> {
-        let rows = crate::read_parquet::<S::Source>(path, options)?;
-        Ok(Self::intern(rows, dictionaries))
+        let mut source = crate::Parquet::<S::Source>::open(path, options)?;
+        let mut state = S::state();
+        let mut rows = Vec::new();
+        while let Some(batch) = source.next_with(|batch| S::decode(batch, &mut state)) {
+            rows.extend(batch?);
+        }
+        S::finish(&mut rows, state, dictionaries);
+        Ok(rows)
     }
 }
 

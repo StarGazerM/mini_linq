@@ -84,10 +84,11 @@ impl<S: Relation> Parquet<S> {
     }
 }
 
-impl<S: Relation> Iterator for Parquet<S> {
-    type Item = Result<Vec<S::Row>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+impl<S: Relation> Parquet<S> {
+    pub(crate) fn next_with<T>(
+        &mut self,
+        decode: impl FnOnce(&Batch<'_>) -> Result<T>,
+    ) -> Option<Result<T>> {
         if self.finished {
             return None;
         }
@@ -115,12 +116,20 @@ impl<S: Relation> Iterator for Parquet<S> {
             data: BatchData::Parquet(&batch, self.next_row),
         };
         // DECODE V: zone_tpch feeds these owned decoded tuples to membership scans; P5 must retain columnar payloads and materialize late.
-        let decoded = S::decode(&source);
+        let decoded = decode(&source);
         self.next_row += batch.num_rows() as u64;
         if decoded.is_err() {
             self.finished = true;
         }
         Some(decoded)
+    }
+}
+
+impl<S: Relation> Iterator for Parquet<S> {
+    type Item = Result<Vec<S::Row>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_with(S::decode)
     }
 }
 
@@ -150,7 +159,7 @@ pub(crate) fn native_values<T>(
 // DECODE ?: string_values invokes caller parsing over Arrow strings without a recorded logical consumer.
 pub(crate) fn string_values<T>(
     column: &dyn Array,
-    parse: impl Fn(&str) -> std::result::Result<T, String>,
+    mut parse: impl FnMut(&str) -> std::result::Result<T, String>,
 ) -> std::result::Result<Vec<T>, ColumnError> {
     macro_rules! string_column {
         ($array:ty) => {
@@ -181,7 +190,7 @@ pub(crate) fn string_values<T>(
 // DECODE ?: parse_arrow is a generic logical reconstruction adapter, not an established publication boundary.
 pub(crate) fn parse_arrow<T>(
     column: &dyn Array,
-    parse: impl Fn(&str) -> std::result::Result<T, String>,
+    parse: impl FnMut(&str) -> std::result::Result<T, String>,
 ) -> std::result::Result<Vec<T>, ColumnError> {
     // DECODE ?: parse_arrow forwards to string_values without adding caller-use evidence.
     string_values(column, parse)
@@ -190,7 +199,7 @@ pub(crate) fn parse_arrow<T>(
 // DECODE ?: parse_arrow_nonstring reconstructs logical values for arbitrary Load implementations.
 fn parse_arrow_nonstring<T>(
     column: &dyn Array,
-    parse: impl Fn(&str) -> std::result::Result<T, String>,
+    mut parse: impl FnMut(&str) -> std::result::Result<T, String>,
 ) -> std::result::Result<Vec<T>, ColumnError> {
     macro_rules! primitive {
         ($($array:ident),* $(,)?) => {$ (
