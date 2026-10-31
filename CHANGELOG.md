@@ -7,6 +7,14 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- `HashIndex` initialization reserves the remaining source rows once its first
+  65,536 rows carry distinct keys, instead of doubling through a chain of
+  Swiss tables and arenas. Large unique-key builds (H12's 1.5M-key Orders
+  directory) no longer rehash, and no longer allocate, fault in and free the
+  intermediate tables on every run: CPU TPC-H SF1 H12 drops from 22.4K to 8.7K
+  page faults and from 368M to 286M instructions per query. Sources with
+  repeated keys in the prefix keep doubling growth.
+
 - P3d track A, canonical reference cutover: a canon result is stored in its
   canonical index, an ordinary index chosen by index selection. Structures
   records `r canon = rows | [cols] | host` (STR-Canon) and `r head = Type`;

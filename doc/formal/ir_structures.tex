@@ -430,6 +430,10 @@ hash operations, not sort canonicalization. CPU Datalog's
 using the recorded keyed hash state, plus a contiguous arena of first payloads.
 Hash collisions always require full key equality.
 Only keys with additional occurrences allocate a shared tail.
+The directory and arena grow by doubling; once the first $2^{16}$ source rows
+carry distinct keys, initialization reserves the source's remaining lower size
+bound at once. That reservation never exceeds the footprint of the same rows
+with distinct keys, and the stored keys, slots and buckets are unchanged.
 Initialization consumes the source once, on first access, and is shared by
 cloned handles. A standalone lookup cursor copies the first payload and owns
 its tail; it survives dropping the index and advances independently.

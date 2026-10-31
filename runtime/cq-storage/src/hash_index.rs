@@ -129,6 +129,13 @@ struct Bucket<V> {
     tail: Option<Rc<RetainedVec<V>>>,
 }
 
+// A build whose first UNIQUE_PREFIX rows carry distinct keys reserves the rest
+// of the source's lower size bound at once: no further rehash, and no chain of
+// doubled tables to fault in and free on every build. The reservation never
+// exceeds what the same rows would occupy with all keys distinct; sources with
+// frequent repeats show them in the prefix and keep doubling growth.
+const UNIQUE_PREFIX: usize = 1 << 16;
+
 // Swiss-table control groups retain fast scalar misses. Batched access hashes
 // first, visits control groups to prefetch candidate buckets, then resolves with
 // full equality. A prefetch is only a cache hint, never a membership decision.
@@ -158,6 +165,12 @@ impl<K: Eq + Hash> Directory<K> {
                 (slot, true)
             }
         }
+    }
+    /// Room for `additional` more keys, so inserting them never rehashes.
+    fn reserve(&mut self, additional: usize) {
+        let hasher = &self.hasher;
+        self.table
+            .reserve(additional, |(stored, _)| Self::hash_with(hasher, stored));
     }
     #[inline]
     fn hash_with(hasher: &crate::HashState, key: &K) -> u64 {
@@ -277,7 +290,7 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
             #[cfg(any(feature = "counters", feature = "operator-timing"))]
             let _profile = self.state.profile.as_ref().map(|p| p.start());
             crate::count!(index_builds);
-            let source = self
+            let mut source = self
                 .state
                 .source
                 .borrow_mut()
@@ -285,8 +298,10 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
                 .expect("the source is consumed only by this initialization");
             let mut index = Directory::new();
             let mut values: Vec<Bucket<V>> = Vec::new();
-            for (key, value) in source {
+            let mut rows = 0usize;
+            while let Some((key, value)) = source.next() {
                 crate::count!(rows_copied);
+                rows += 1;
                 let (slot, fresh) = index.entry(key);
                 if fresh {
                     values.push(Bucket {
@@ -299,6 +314,11 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
                     Rc::get_mut(tail)
                         .expect("unpublished bucket is uniquely owned")
                         .push(value);
+                }
+                if rows == UNIQUE_PREFIX && values.len() == rows {
+                    let rest = source.size_hint().0;
+                    index.reserve(rest);
+                    values.reserve_exact(rest);
                 }
             }
             #[cfg(feature = "counters")]
@@ -645,5 +665,31 @@ mod tests {
         let rows = cursor.collect::<Vec<_>>();
         assert!(std::ptr::eq(rows[0], &values[0]));
         assert!(std::ptr::eq(rows[1], &values[1]));
+    }
+
+    #[test]
+    fn distinct_prefix_reserves_the_remaining_rows_once() {
+        let n = UNIQUE_PREFIX * 3;
+        // Repeats after the prefix still extend the buckets of earlier keys.
+        let rows = (0..n).map(|i| (i, i)).chain((0..5).map(|i| (i, n + i)));
+        let index = HashIndex::build(rows);
+        let buckets = index.buckets();
+        assert_eq!(buckets.index.table.len(), n);
+        assert_eq!(buckets.values.capacity(), n + 5);
+        assert!(buckets.index.table.capacity() >= n + 5);
+        assert_eq!(index.lookup(&3).collect::<Vec<_>>(), [3, n + 3]);
+        assert_eq!(index.lookup(&(n - 1)).collect::<Vec<_>>(), [n - 1]);
+        assert_eq!(index.lookup(&n).next(), None);
+    }
+
+    #[test]
+    fn repeated_prefix_keeps_doubling_growth() {
+        let n = UNIQUE_PREFIX * 3;
+        let index = HashIndex::build((0..n).map(|i| (i % 1000, i)));
+        let buckets = index.buckets();
+        assert_eq!(buckets.index.table.len(), 1000);
+        assert!(buckets.index.table.capacity() < UNIQUE_PREFIX);
+        assert!(buckets.values.capacity() < UNIQUE_PREFIX);
+        assert_eq!(index.lookup(&999).count(), n / 1000);
     }
 }
