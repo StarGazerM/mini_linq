@@ -65,7 +65,7 @@ macro_rules! query {
                 s = pipe semi eager [x] l,r;
                 p = pipe probe first [x] s,r;
                 observed = pipe guard p if ({ $visits.borrow_mut().push((*x, *y)); true });
-                out = pipe canon project observed keep {x,y};
+                out = let canon project observed keep {x,y};
                 return out as answer(x,y);
             }
             structures {
@@ -76,7 +76,7 @@ macro_rules! query {
                 s share = lookup r [x] first s force p;
                 s repr = tuples witness { r [x] at s as _ };
                 p stage = batch 2 expand;
-                out canon = sort;
+                out rows = ::cq_storage::dedup::Sort; out canon = rows;
             }
         }
     };

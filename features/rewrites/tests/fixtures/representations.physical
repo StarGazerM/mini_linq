@@ -13,6 +13,6 @@ physical {
     p = pipe probe first [x] n, r;
     m = pipe semi eager [x] p, s;
     q = pipe probe first [x, y] m, t;
-    out = pipe canon project q keep { x, y };
+    out = let canon project q keep { x, y };
     return out as answer(x, y);
 }

@@ -35,9 +35,9 @@ fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream)
     syn::parse2(quote::quote! {
         physical {
             relation R(a:i32);
-            r = pipe canon rename R@0 {a -> a};
+            r = let canon rename R@0 {a -> a};
             return r as answer(a);
-        } structures { r host scan = ::core::iter::Map<_, _> []; r canon = sort; }
+        } structures { r host scan = ::core::iter::Map<_, _> []; r rows = ::cq_storage::dedup::Sort; r canon = rows; }
         sequence { #sequence }
         graded tasks { #grades }
     })
@@ -84,8 +84,11 @@ fn tasks_canon_shapes_use_parallel_sort_and_remove_cross_part_duplicates() {
         )
         .unwrap();
         let rendered = expression.to_token_stream().to_string();
-        assert!(rendered.contains("dedup :: par_sort"), "{rendered}");
-        assert!(!rendered.contains("dedup :: sort"), "{rendered}");
+        assert!(
+            rendered.contains("dedup :: Sort > :: par_sort"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("dedup :: Sort > :: sort"), "{rendered}");
         assert!(!rendered.contains("HashSetConstructor"), "{rendered}");
         assert!(!rendered.contains("__cq_seen"), "{rendered}");
         checks.push(quote::quote! {
@@ -115,7 +118,9 @@ fn tasks_canon_shapes_use_parallel_sort_and_remove_cross_part_duplicates() {
 
 #[test]
 fn tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds() {
-    let columns: Vec<_> = (0..16).map(|index| quote::format_ident!("h{index}")).collect();
+    let columns: Vec<_> = (0..16)
+        .map(|index| quote::format_ident!("h{index}"))
+        .collect();
     let expressions = columns.iter().map(|_| quote::quote!(OnlyOrd(*a % 3)));
     let mut checks = Vec::new();
     for (head, project, collect, expected) in [
@@ -143,7 +148,11 @@ fn tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds() {
         ),
     ] {
         let projection = project.then(|| quote::quote!(p = pipe project r keep {a};));
-        let returned = if project { quote::quote!(p) } else { quote::quote!(r) };
+        let returned = if project {
+            quote::quote!(p)
+        } else {
+            quote::quote!(r)
+        };
         let output = if project {
             quote::quote!(map p canonical)
         } else {
@@ -152,7 +161,7 @@ fn tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds() {
         let physical = syn::parse2(quote::quote! {
             physical {
                 relation R(a:i32,b:i32);
-                r = pipe canon rename R@0 {a -> a,b -> b};
+                r = let canon rename R@0 {a -> a,b -> b};
                 #projection
                 return canon #returned as answer(#head);
             }
@@ -175,13 +184,21 @@ fn tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds() {
         })
         .unwrap();
         let facts = check_grading(&program, &machine()).unwrap();
-        assert!(facts.structures.head_dedup.contains_key(&returned.to_string()));
+        assert!(
+            facts
+                .structures
+                .head_dedup
+                .contains_key(&returned.to_string())
+        );
         let expression = translate(&program, &facts).unwrap();
         let profiled = cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
         for expression in [expression, profiled] {
             let rendered = expression.to_token_stream().to_string();
-            assert!(rendered.matches("dedup :: par_sort").count() >= 2, "{rendered}");
-            assert!(!rendered.contains("dedup :: sort"), "{rendered}");
+            assert!(
+                rendered.matches("dedup :: Sort > :: par_sort").count() >= 2,
+                "{rendered}"
+            );
+            assert!(!rendered.contains("dedup :: Sort > :: sort"), "{rendered}");
             checks.push(quote::quote! {
                 #expected
                 let actual = pool.install(|| (#expression).#collect);
@@ -208,8 +225,12 @@ fn tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds() {
 
 #[test]
 fn tasks_wide_valuation_canon_compares_every_field() {
-    let left: Vec<_> = (0..8).map(|index| quote::format_ident!("a{index}")).collect();
-    let right: Vec<_> = (0..8).map(|index| quote::format_ident!("b{index}")).collect();
+    let left: Vec<_> = (0..8)
+        .map(|index| quote::format_ident!("a{index}"))
+        .collect();
+    let right: Vec<_> = (0..8)
+        .map(|index| quote::format_ident!("b{index}"))
+        .collect();
     let columns: Vec<_> = left.iter().chain(&right).collect();
     let physical = syn::parse2(quote::quote! {
         physical {
@@ -217,7 +238,7 @@ fn tasks_wide_valuation_canon_compares_every_field() {
             relation R(a0:i32,#(#right:i32),*);
             l = pipe rename L@0 {#(#left -> #left),*};
             r = let rename R@1 {a0 -> a0,#(#right -> #right),*};
-            j = pipe canon probe first [a0] l,r;
+            j = let canon probe first [a0] l,r;
             return j as answer(#(#columns),*);
         }
     })
@@ -236,9 +257,12 @@ fn tasks_wide_valuation_canon_compares_every_field() {
     let facts = check_grading(&program, &machine()).unwrap();
     let expression = translate(&program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
-    assert!(rendered.contains("dedup :: par_sort"), "{rendered}");
+    assert!(
+        rendered.contains("dedup :: Sort > :: par_sort"),
+        "{rendered}"
+    );
     assert!(rendered.contains("__cq_left . 15"), "{rendered}");
-    assert!(!rendered.contains("dedup :: sort"), "{rendered}");
+    assert!(!rendered.contains("dedup :: Sort > :: sort"), "{rendered}");
     run_partition_fixture(quote::quote! {
         fn main() {
             let populated = vec![(1i32,0i32,0i32,0i32,0i32,0i32,0i32,0i32); 129];
@@ -566,7 +590,7 @@ fn grouped_program(global: bool) -> Program {
     let physical = syn::parse2(quote::quote! {
         physical {
             relation rows(k:i32, witness:i32, value:i64);
-            r = pipe canon rename rows@0 {k -> k, witness -> witness, value -> value};
+            r = let canon rename rows@0 {k -> k, witness -> witness, value -> value};
             grouped = pipe group r by [#keys] {
                 n: usize = count();
                 total: i64 = sum(value);
@@ -1004,7 +1028,7 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             r = pipe rename R@1 {a -> a,b -> b};
             s = let rename S@2 {b -> b,c -> c};
             joined = pipe probe first [a] l,r;
-            result = pipe canon probe first [b] joined,s;
+            result = let canon probe first [b] joined,s;
             return result as answer(a,b,c);
         }
         structures {
@@ -1014,7 +1038,7 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             s host scan = Reader [];
             s = ::cq_storage::SortedRun<_, _, _> [b];
             s rows = ::std::vec::Vec<_>;
-            result canon = sort;
+            result rows = ::cq_storage::dedup::Sort; result canon = rows;
         }
         sequence {
             l = rows l;
@@ -1227,7 +1251,12 @@ fn raw_full_key_host_membership_is_published_before_shared_task_reads() {
     let facts = check_grading(&target, &machine()).unwrap();
     let tasks = translate(&target, &facts).unwrap();
     assert_eq!(worker_bodies(&tasks).len(), 1);
-    assert!(!tasks.to_token_stream().to_string().contains("dispatch :: Lazy"));
+    assert!(
+        !tasks
+            .to_token_stream()
+            .to_string()
+            .contains("dispatch :: Lazy")
+    );
     let mut sequential = target;
     sequential.graded = Some(syn::parse_quote! {
         graded tasks {
@@ -1963,7 +1992,7 @@ fn late_covering_program(input: proc_macro2::TokenStream) -> Program {
             s = pipe range select r if (z > 1);
             b = let project s keep {x,z};
             j = pipe probe first [x] l,b;
-            out = pipe canon project j keep {x,y,z};
+            out = let canon project j keep {x,y,z};
             return out as answer(x,y,z);
         }
     };
@@ -2271,7 +2300,7 @@ fn flattened_key_covers_restore_positional_reads() {
             relation R(a:i64);
             r = pipe rename R@0 {a -> a};
             selected = pipe range select r if (a > 1);
-            out = pipe canon project selected keep {a};
+            out = let canon project selected keep {a};
             return out as answer(a);
         }
     };
@@ -2429,7 +2458,7 @@ fn fused_fallback_providers_keep_their_prefix_local_constructor() {
             negative = pipe bind absent with b:i64 = (0);
             answer = pipe union fused positive,negative
                 block @1 free [a] interface [b] fallback over r;
-            valuations = pipe canon project answer keep {a,b};
+            valuations = let canon project answer keep {a,b};
             grouped = pipe group valuations by [] { n:usize = count(); total:i64 = sum(b); };
             return grouped as answer(n,total);
         }
@@ -2451,10 +2480,17 @@ fn fused_fallback_providers_keep_their_prefix_local_constructor() {
     let catalog = cq_sequence_tasks::catalog();
     let source = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
     let facts = cq_lang_sequence::contract::check(&source).unwrap();
-    assert!(facts.structures.physical.fused["answer"].members.contains("positive"));
+    assert!(
+        facts.structures.physical.fused["answer"]
+            .members
+            .contains("positive")
+    );
     let error = cq_sequence_plan::rewrites::key_partition(
-        &source, quote::quote!(positive, staged, [a], 64),
-    ).unwrap_err().to_string();
+        &source,
+        quote::quote!(positive, staged, [a], 64),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("fused arm's provider"), "{error}");
     let planned = cq_sequence_plan::decompose(&source, &machine(), &catalog).unwrap();
     assert!(!planned.trace.iter().any(|advice| matches!(advice,
@@ -2492,7 +2528,7 @@ fn expansion_counters_preserve_profile_handles_in_nested_tasks() {
             joined = pipe probe first [k] left,right;
             expanded = pipe probe first [v] joined,last;
             selected = pipe guard expanded if (*w >= 30);
-            result = pipe canon project selected keep {k,v,w};
+            result = let canon project selected keep {k,v,w};
             return result as answer(k,v,w);
         }
     };

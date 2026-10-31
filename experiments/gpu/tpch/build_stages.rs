@@ -52,19 +52,26 @@ pub fn compile(
                 program.preprocessing.iter().find(|p| p.name == input.name)
             {
                 types.insert(name.clone(), preprocess.columns.clone());
-                publications.insert(name, crate::Publication {
-                    placement: advice::Placement::Host,
-                    nullable: vec![false; preprocess.columns.len()],
-                    domains: vec![None; preprocess.columns.len()],
-                });
+                publications.insert(
+                    name,
+                    crate::Publication {
+                        placement: advice::Placement::Host,
+                        nullable: vec![false; preprocess.columns.len()],
+                        domains: vec![None; preprocess.columns.len()],
+                    },
+                );
                 dependencies.push(preprocess.name.clone());
             }
         }
         let mut kernel = program.kernel(index, &types).map_err(&reject)?;
-        kernel.published_origins = publications.iter()
+        kernel.published_origins = publications
+            .iter()
             .map(|(name, publication)| (name.clone(), publication.domains.clone()))
             .collect();
-        kernel.evidence.facts.extend(advice::Pipeline::staged_keys(query, index));
+        kernel
+            .evidence
+            .facts
+            .extend(advice::Pipeline::staged_keys(query, index));
         let mut pipeline = if let Some(pipeline) = override_pipeline {
             pipeline.clone()
         } else if mode == "automatic" {
@@ -75,12 +82,8 @@ pub fn compile(
         if override_pipeline.is_none() {
             pipeline.publication = advice::Placement::Automatic;
         }
-        let (code, mut artifact) = compile_stage(
-            &kernel,
-            manifest,
-            &pipeline,
-            Some(&publications),
-        )?;
+        let (code, mut artifact) =
+            compile_stage(&kernel, manifest, &pipeline, Some(&publications))?;
         artifact["stage"] = json!(index);
         artifact["cpu_query"] = json!(kernel.cpu_query().to_string());
         artifact["dependencies"] = json!(
@@ -99,8 +102,10 @@ pub fn compile(
                 .collect::<syn::Result<_>>()
                 .map_err(|error| reject(Box::new(error)))?,
         );
-        publication_facts.push(serde_json::from_value(artifact["publication_facts"].clone())
-            .map_err(|error| reject(Box::new(error)))?);
+        publication_facts.push(
+            serde_json::from_value(artifact["publication_facts"].clone())
+                .map_err(|error| reject(Box::new(error)))?,
+        );
         artifacts.push(artifact);
         let module = format_ident!("stage_{index}");
         let data = format_ident!("data_{index}");

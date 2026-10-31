@@ -10,7 +10,10 @@ pub use super::bindings::ColumnBounds;
 pub enum FieldBounds {
     /// Copied from `Bindings::bounds`; every packing of this field renders it.
     Column(ColumnBounds),
-    Inclusive { min: i64, max: i64 },
+    Inclusive {
+        min: i64,
+        max: i64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,51 +110,113 @@ struct Facts<'a> {
 
 impl<'a> Facts<'a> {
     fn new(program: &'a Program, analysis: &'a Analysis) -> syn::Result<Self> {
-        let definitions: BTreeMap<_, _> = program.sequence.definitions.iter()
-            .map(|definition| (symbol_name(&definition.name), &definition.term)).collect();
-        let dispatches: BTreeSet<_> = analysis.dispatches.iter().filter_map(|dispatch| {
-            dispatch.inner_stores.iter().rev().find(|name| {
-                matches!(definitions.get(*name), Some(Term::Store { .. }))
-            }).cloned()
-        }).collect();
+        let definitions: BTreeMap<_, _> = program
+            .sequence
+            .definitions
+            .iter()
+            .map(|definition| (symbol_name(&definition.name), &definition.term))
+            .collect();
+        let dispatches: BTreeSet<_> = analysis
+            .dispatches
+            .iter()
+            .filter_map(|dispatch| {
+                dispatch
+                    .inner_stores
+                    .iter()
+                    .rev()
+                    .find(|name| matches!(definitions.get(*name), Some(Term::Store { .. })))
+                    .cloned()
+            })
+            .collect();
         let mut materialized = dispatches.clone();
         materialized.extend(definitions.iter().filter_map(|(name, term)| {
             (matches!(term, Term::Store { .. })
-                && analysis.levels.get(name).is_some_and(|level| level.len() == 1))
-                .then_some(name.clone())
+                && analysis
+                    .levels
+                    .get(name)
+                    .is_some_and(|level| level.len() == 1))
+            .then_some(name.clone())
         }));
-        let terminal = analysis.output.as_ref().map(|(name, _)| name.clone())
-            .or_else(|| program.sequence.definitions.last().map(|d| symbol_name(&d.name)))
+        let terminal = analysis
+            .output
+            .as_ref()
+            .map(|(name, _)| name.clone())
+            .or_else(|| {
+                program
+                    .sequence
+                    .definitions
+                    .last()
+                    .map(|d| symbol_name(&d.name))
+            })
             .ok_or_else(|| error("missing terminal publication"))?;
-        let output = program.structures.physical.program.head.args.iter().map(|arg| {
-            cq_lang_structures::syntax::rust::variable(arg).map(symbol_name)
-                .ok_or_else(|| error("output requires recorded code columns"))
-        }).collect::<syn::Result<Vec<_>>>()?;
-        let carrier = analysis.structures.physical.headings.values()
-            .flatten().cloned().collect::<BTreeSet<_>>().into_iter().collect();
-        Ok(Self { analysis, definitions, dispatches, materialized, terminal, output, carrier })
+        let output = program
+            .structures
+            .physical
+            .program
+            .head
+            .args
+            .iter()
+            .map(|arg| {
+                cq_lang_structures::syntax::rust::variable(arg)
+                    .map(symbol_name)
+                    .ok_or_else(|| error("output requires recorded code columns"))
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
+        let carrier = analysis
+            .structures
+            .physical
+            .headings
+            .values()
+            .flatten()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Ok(Self {
+            analysis,
+            definitions,
+            dispatches,
+            materialized,
+            terminal,
+            output,
+            carrier,
+        })
     }
 
     fn term(&self, name: &str) -> syn::Result<&'a Term> {
-        self.definitions.get(name).copied().ok_or_else(|| error("unknown publication"))
+        self.definitions
+            .get(name)
+            .copied()
+            .ok_or_else(|| error("unknown publication"))
     }
 
     fn flat(&self) -> FlatRows {
-        FlatRows { columns: self.carrier.clone(), width: self.carrier.len().max(1) }
+        FlatRows {
+            columns: self.carrier.clone(),
+            width: self.carrier.len().max(1),
+        }
     }
 
-    /// The canon strategy recorded for this publication's result.
+    /// The provider of the canonical rows record of this publication's result.
     fn sort_provider(&self, publication: &str) -> Option<&'a syn::Type> {
         let analysis = self.analysis;
-        analysis.obligations.iter().find_map(|obligation| match obligation {
-            crate::Obligation::Canon { result, strategy: Some(strategy) }
-                if result == publication => strategy.provider(),
-            _ => None,
-        }).or_else(|| {
-            analysis.results.get(publication)
-                .and_then(|result| analysis.structures.dedup.get(result))
-                .and_then(|strategy| strategy.provider())
-        })
+        analysis
+            .obligations
+            .iter()
+            .find_map(|obligation| match obligation {
+                crate::Obligation::Canon {
+                    result,
+                    canonical: Some(canonical),
+                } if result == publication => canonical.rows_provider(),
+                _ => None,
+            })
+            .or_else(|| {
+                analysis
+                    .results
+                    .get(publication)
+                    .and_then(|result| analysis.structures.canonical.get(result))
+                    .and_then(|canonical| canonical.rows_provider())
+            })
     }
 }
 
@@ -173,7 +238,9 @@ impl<'a> Context<'a> {
     fn fold<'b>(&'b self, term: &'b Term) -> Option<&'b Monoid> {
         match term {
             Term::Fold(monoid, _) => Some(monoid),
-            Term::Canon(inner) | Term::Flatten(inner) | Term::Store { inner, .. } => self.fold(inner),
+            Term::Canon(inner) | Term::Flatten(inner) | Term::Store { inner, .. } => {
+                self.fold(inner)
+            }
             Term::Ref(name) => self.fold(self.facts.definitions[&symbol_name(name)]),
             _ => None,
         }
@@ -200,8 +267,12 @@ impl<'a> Context<'a> {
                 !self.facts.materialized.contains(&name)
                     && self.dispatch_canon(self.facts.definitions[&name])
             }
-            Term::Union(arms) => !arms.is_empty() && arms.iter().all(|arm| self.dispatch_canon(arm)),
-            Term::Choose(arms) => !arms.is_empty() && arms.iter().all(|(_, arm)| self.dispatch_canon(arm)),
+            Term::Union(arms) => {
+                !arms.is_empty() && arms.iter().all(|arm| self.dispatch_canon(arm))
+            }
+            Term::Choose(arms) => {
+                !arms.is_empty() && arms.iter().all(|(_, arm)| self.dispatch_canon(arm))
+            }
             _ => false,
         }
     }
@@ -211,16 +282,26 @@ impl<'a> Context<'a> {
         match term {
             Term::Canon(_) => true,
             Term::Store { inner, .. } => self.alias_canon(inner),
-            Term::Ref(name) => self.facts.definitions.get(&symbol_name(name))
+            Term::Ref(name) => self
+                .facts
+                .definitions
+                .get(&symbol_name(name))
                 .is_some_and(|term| self.alias_canon(term)),
             _ => false,
         }
     }
 
     fn host_union(&self, name: &str, term: &Term) -> Option<bool> {
-        (matches!(term, Term::Store { .. }) && !self.facts.dispatches.contains(name)
-            && self.facts.analysis.levels.get(name).is_some_and(|level| level.len() == 1))
-            .then(|| self.union(term)).flatten()
+        (matches!(term, Term::Store { .. })
+            && !self.facts.dispatches.contains(name)
+            && self
+                .facts
+                .analysis
+                .levels
+                .get(name)
+                .is_some_and(|level| level.len() == 1))
+        .then(|| self.union(term))
+        .flatten()
     }
 
     fn canonical(&self, name: &str, term: &Term) -> bool {
@@ -234,9 +315,10 @@ impl<'a> Context<'a> {
     }
 
     fn packed(&self, name: &str, term: &Term) -> bool {
-        !self.group(term) && (name == self.facts.terminal
-            || (self.facts.dispatches.contains(name) && self.dispatch_canon(term))
-            || self.host_union(name, term) == Some(true))
+        !self.group(term)
+            && (name == self.facts.terminal
+                || (self.facts.dispatches.contains(name) && self.dispatch_canon(term))
+                || self.host_union(name, term) == Some(true))
     }
 
     fn columns(&self, name: &str, term: &Term) -> syn::Result<&[String]> {
@@ -249,19 +331,36 @@ impl<'a> Context<'a> {
             }
             Ok(&facts.output)
         } else {
-            facts.analysis.results.get(name)
+            facts
+                .analysis
+                .results
+                .get(name)
                 .and_then(|result| facts.analysis.structures.physical.headings.get(result))
-                .map(Vec::as_slice).ok_or_else(|| error("publication lacks a checked row heading"))
+                .map(Vec::as_slice)
+                .ok_or_else(|| error("publication lacks a checked row heading"))
         }
     }
 
     fn bounds(&self, column: &str, monoid: Option<&Monoid>) -> syn::Result<FieldBounds> {
         Ok(match monoid {
-            None => FieldBounds::Column(self.facts.analysis.gpu_bindings.bounds.get(column)
-                .cloned().ok_or_else(|| error("packed column lacks a recorded bounds source"))?),
-            Some(Monoid::Count) => FieldBounds::Inclusive { min: 0, max: i64::MAX },
+            None => FieldBounds::Column(
+                self.facts
+                    .analysis
+                    .gpu_bindings
+                    .bounds
+                    .get(column)
+                    .cloned()
+                    .ok_or_else(|| error("packed column lacks a recorded bounds source"))?,
+            ),
+            Some(Monoid::Count) => FieldBounds::Inclusive {
+                min: 0,
+                max: i64::MAX,
+            },
             Some(Monoid::Or) => FieldBounds::Inclusive { min: 0, max: 1 },
-            Some(Monoid::Sum(_)) => FieldBounds::Inclusive { min: i64::MIN, max: i64::MAX },
+            Some(Monoid::Sum(_)) => FieldBounds::Inclusive {
+                min: i64::MIN,
+                max: i64::MAX,
+            },
         })
     }
 }
@@ -270,8 +369,13 @@ impl<'a> Context<'a> {
 /// including host-only terminal publications which have no device dispatch.
 /// Formal rule GPU-PublicationStorage: upstream records own carrier layout,
 /// ordered FOR recipes with their bounds sources, and equality granularity.
-pub fn derive(program: &Program, analysis: &Analysis) -> syn::Result<BTreeMap<String, PublicationRecord>> {
-    let context = Context { facts: Facts::new(program, analysis)? };
+pub fn derive(
+    program: &Program,
+    analysis: &Analysis,
+) -> syn::Result<BTreeMap<String, PublicationRecord>> {
+    let context = Context {
+        facts: Facts::new(program, analysis)?,
+    };
     let facts = &context.facts;
     let mut records = BTreeMap::new();
     for definition in &program.sequence.definitions {
@@ -282,9 +386,16 @@ pub fn derive(program: &Program, analysis: &Analysis) -> syn::Result<BTreeMap<St
         }
         let storage = if context.packed(&name, term) {
             let fold = context.fold(term);
-            let fields = context.columns(&name, term)?.iter().map(|column| Ok(KeyField {
-                column: column.clone(), bounds: context.bounds(column, fold)?,
-            })).collect::<syn::Result<_>>()?;
+            let fields = context
+                .columns(&name, term)?
+                .iter()
+                .map(|column| {
+                    Ok(KeyField {
+                        column: column.clone(),
+                        bounds: context.bounds(column, fold)?,
+                    })
+                })
+                .collect::<syn::Result<_>>()?;
             let granularity = if context.canonical(&name, term) {
                 Granularity::Canonical {
                     provider: facts.sort_provider(&name).cloned().ok_or_else(|| {
@@ -301,10 +412,13 @@ pub fn derive(program: &Program, analysis: &Analysis) -> syn::Result<BTreeMap<St
         } else {
             PublicationStorage::FlatRows(facts.flat())
         };
-        records.insert(name.clone(), PublicationRecord {
-            storage,
-            union_staging: context.host_union(&name, term).map(|_| facts.flat()),
-        });
+        records.insert(
+            name.clone(),
+            PublicationRecord {
+                storage,
+                union_staging: context.host_union(&name, term).map(|_| facts.flat()),
+            },
+        );
     }
     Ok(records)
 }
@@ -313,7 +427,11 @@ pub fn derive(program: &Program, analysis: &Analysis) -> syn::Result<BTreeMap<St
 /// Refs, union/choice arms): `(some path, every path)`. A Ref to a materialized
 /// publication ends its path unless `crossing`.
 fn root_canon(facts: &Facts, term: &Term, crossing: bool) -> (bool, bool) {
-    fn arms<'t>(facts: &Facts, arms: impl Iterator<Item = &'t Term>, crossing: bool) -> (bool, bool) {
+    fn arms<'t>(
+        facts: &Facts,
+        arms: impl Iterator<Item = &'t Term>,
+        crossing: bool,
+    ) -> (bool, bool) {
         arms.map(|arm| root_canon(facts, arm, crossing))
             .fold(None, |paths: Option<(bool, bool)>, (some, every)| {
                 Some(paths.map_or((some, every), |(any, all)| (any || some, all && every)))
@@ -326,8 +444,9 @@ fn root_canon(facts: &Facts, term: &Term, crossing: bool) -> (bool, bool) {
         Term::Ref(name) => {
             let name = symbol_name(name);
             match facts.definitions.get(&name) {
-                Some(term) if crossing || !facts.materialized.contains(&name) =>
-                    root_canon(facts, term, crossing),
+                Some(term) if crossing || !facts.materialized.contains(&name) => {
+                    root_canon(facts, term, crossing)
+                }
                 _ => (false, false),
             }
         }
@@ -342,8 +461,11 @@ fn root_canon(facts: &Facts, term: &Term, crossing: bool) -> (bool, bool) {
 fn root<'a>(facts: &Facts<'a>, term: &'a Term) -> &'a Term {
     match term {
         Term::Store { inner, .. } | Term::Canon(inner) => root(facts, inner),
-        Term::Ref(name) => facts.definitions.get(&symbol_name(name))
-            .copied().map_or(term, |term| root(facts, term)),
+        Term::Ref(name) => facts
+            .definitions
+            .get(&symbol_name(name))
+            .copied()
+            .map_or(term, |term| root(facts, term)),
         _ => term,
     }
 }
@@ -352,9 +474,14 @@ fn root<'a>(facts: &Facts<'a>, term: &'a Term) -> &'a Term {
 fn root_fold<'a>(facts: &Facts<'a>, term: &'a Term) -> Option<&'a Monoid> {
     match term {
         Term::Fold(monoid, _) => Some(monoid),
-        Term::Store { inner, .. } | Term::Canon(inner) | Term::Flatten(inner) => root_fold(facts, inner),
-        Term::Ref(name) => facts.definitions.get(&symbol_name(name))
-            .copied().and_then(|term| root_fold(facts, term)),
+        Term::Store { inner, .. } | Term::Canon(inner) | Term::Flatten(inner) => {
+            root_fold(facts, inner)
+        }
+        Term::Ref(name) => facts
+            .definitions
+            .get(&symbol_name(name))
+            .copied()
+            .and_then(|term| root_fold(facts, term)),
         _ => None,
     }
 }
@@ -369,11 +496,16 @@ pub fn check(
     records: &BTreeMap<String, PublicationRecord>,
 ) -> syn::Result<()> {
     let facts = Facts::new(program, analysis)?;
-    let publications: BTreeSet<_> = facts.definitions.iter()
+    let publications: BTreeSet<_> = facts
+        .definitions
+        .iter()
         .filter(|(name, term)| matches!(term, Term::Store { .. }) || **name == facts.terminal)
-        .map(|(name, _)| name).collect();
+        .map(|(name, _)| name)
+        .collect();
     if !records.keys().eq(publications.iter().copied()) {
-        return Err(error("publication record coverage differs from Sequence stores"));
+        return Err(error(
+            "publication record coverage differs from Sequence stores",
+        ));
     }
     let flat = facts.flat();
     for (name, record) in records {
@@ -402,7 +534,9 @@ pub fn check(
                     return Err(error("flat storage contradicts carrier facts"));
                 }
                 if terminal && !grouped {
-                    return Err(error("terminal output adapter requires recorded packed keys"));
+                    return Err(error(
+                        "terminal output adapter requires recorded packed keys",
+                    ));
                 }
             }
             PublicationStorage::PackedKeys(PackedKeys { codec, granularity }) => {
@@ -412,15 +546,21 @@ pub fn check(
                 match granularity {
                     // Consumers of nonterminal packed keys read canonical owners.
                     Granularity::Rows if !terminal => {
-                        return Err(error("nonterminal packed keys require a canonical publication"));
+                        return Err(error(
+                            "nonterminal packed keys require a canonical publication",
+                        ));
                     }
                     Granularity::Rows => {}
                     Granularity::Canonical { provider } => {
                         if root_canon(&facts, term, true) != (true, true) {
-                            return Err(error("canonical granularity lacks a Canon on every root path"));
+                            return Err(error(
+                                "canonical granularity lacks a Canon on every root path",
+                            ));
                         }
                         if facts.sort_provider(name) != Some(provider) {
-                            return Err(error("canonical provider differs from the recorded sort strategy"));
+                            return Err(error(
+                                "canonical provider differs from the recorded sort strategy",
+                            ));
                         }
                     }
                 }
@@ -428,13 +568,20 @@ pub fn check(
             }
         }
         if let Some(dispatch) = analysis.dispatches.iter().find(|dispatch| {
-            dispatch.inner_stores.iter().rev().find(|name| {
-                matches!(facts.definitions.get(*name), Some(Term::Store { .. }))
-            }).is_some_and(|publication| publication == name)
+            dispatch
+                .inner_stores
+                .iter()
+                .rev()
+                .find(|name| matches!(facts.definitions.get(*name), Some(Term::Store { .. })))
+                .is_some_and(|publication| publication == name)
         }) {
             if dispatch.gpu.as_ref().is_some_and(|execution| {
-                matches!(execution.publication, super::Publication::DeferredRange { .. })
-            }) && record.storage.codec().is_some() {
+                matches!(
+                    execution.publication,
+                    super::Publication::DeferredRange { .. }
+                )
+            }) && record.storage.codec().is_some()
+            {
                 return Err(error("deferred ranges cannot publish packed row keys"));
             }
         }
@@ -446,23 +593,34 @@ pub fn check(
 /// program output for terminal and scalar-fold publications, otherwise the
 /// checked result heading. Column bounds equal the bound column record; fold
 /// bounds contain every value of the fold.
-fn check_codec<'a>(facts: &Facts<'a>, name: &str, term: &'a Term, codec: &KeyCodec) -> syn::Result<()> {
+fn check_codec<'a>(
+    facts: &Facts<'a>,
+    name: &str,
+    term: &'a Term,
+    codec: &KeyCodec,
+) -> syn::Result<()> {
     let fold = root_fold(facts, term);
     let heading = if name == facts.terminal || fold.is_some() {
         Some(facts.output.as_slice())
     } else {
-        facts.analysis.results.get(name)
+        facts
+            .analysis
+            .results
+            .get(name)
             .and_then(|result| facts.analysis.structures.physical.headings.get(result))
             .map(Vec::as_slice)
     };
     let fields = codec.fields();
     if heading.is_none_or(|heading| !fields.iter().map(|field| &field.column).eq(heading.iter())) {
-        return Err(error("codec field order contradicts the publication heading"));
+        return Err(error(
+            "codec field order contradicts the publication heading",
+        ));
     }
     for field in fields {
         let sound = match (&field.bounds, fold) {
-            (FieldBounds::Column(bounds), None) =>
-                facts.analysis.gpu_bindings.bounds.get(&field.column) == Some(bounds),
+            (FieldBounds::Column(bounds), None) => {
+                facts.analysis.gpu_bindings.bounds.get(&field.column) == Some(bounds)
+            }
             (FieldBounds::Inclusive { min, max }, Some(monoid)) => {
                 let (low, high) = match monoid {
                     Monoid::Count => (0, i64::MAX),
@@ -474,12 +632,17 @@ fn check_codec<'a>(facts: &Facts<'a>, name: &str, term: &'a Term, codec: &KeyCod
             _ => false,
         };
         if !sound {
-            return Err(error("codec bounds contradict the column record or fold range"));
+            return Err(error(
+                "codec bounds contradict the column record or fold range",
+            ));
         }
     }
     Ok(())
 }
 
 fn error(message: &str) -> syn::Error {
-    syn::Error::new(proc_macro2::Span::call_site(), format!("GPU-PublicationStorage: {message}"))
+    syn::Error::new(
+        proc_macro2::Span::call_site(),
+        format!("GPU-PublicationStorage: {message}"),
+    )
 }

@@ -28,7 +28,7 @@ fn zero_heading_exists_can_be_scanned_and_probed_against_itself() {
         relation rows(a:i32);
         r = pipe rename rows@0 {a -> a};
         p = exists project r keep {};
-        out = pipe canon semi eager [] p,p;
+        out = let canon semi eager [] p,p;
         return out as answer();
     });
     let selected = cq_structure_selection::compile(&physical).unwrap();
@@ -60,7 +60,7 @@ fn equal_support_choice_reheads_before_a_downstream_projection() {
         no = pipe probe first [a] r,s;
         combined = pipe union yes,no;
         observed = pipe guard combined if ({ visits.set(visits.get() + 1); true });
-        out = pipe canon project observed keep {b};
+        out = let canon project observed keep {b};
         return out as answer(b);
     });
     let selected = cq_structure_selection::compile(&physical).unwrap();
@@ -109,7 +109,7 @@ fn worker_guards_use_serial_or_explicit_target_worker_counts() {
     use cq_lang_sequence::Term;
     let physical = syn::parse_quote!(physical {
         relation input(a:i32);
-        r = pipe canon rename input@0 {a -> a};
+        r = let canon rename input@0 {a -> a};
         return r as answer(a);
     });
     let selected = cq_structure_selection::compile(&physical).unwrap();
@@ -200,7 +200,7 @@ fn projected_membership_probes_keep_flat_rows_inside_outer_tiles() {
                     t = let rename payload@3 {b -> b,c -> c};
                     member = pipe probe first [a] l,r;
                     expanded = pipe probe first [b] member,t;
-                    out = pipe canon project expanded keep {a,b,c};
+                    out = let canon project expanded keep {a,b,c};
                     return out as answer(a,b,c);
                 }
             };
@@ -402,7 +402,7 @@ fn mixed_smallest_checks() -> Vec<proc_macro2::TokenStream> {
                 relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
                 l = pipe rename L@0 {{a -> a,b -> b}}; {r} {s}
                 candidate = pipe probe smallest [b] l,r;
-                checked = pipe canon semi eager [a,c] candidate,s;
+                checked = let canon semi eager [a,c] candidate,s;
                 return checked as answer(a,b,c);
             }}"
         ))
@@ -423,7 +423,7 @@ fn mixed_smallest_checks() -> Vec<proc_macro2::TokenStream> {
             ordered = let merge[b,c] r,r;
             l = pipe semi eager [b] l2,ordered;
             candidate = pipe probe smallest [b] l,r;
-            checked = pipe canon semi eager [a,c] candidate,s;
+            checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
         }),
     ));
@@ -522,7 +522,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
                     keys = pipe project j keep {{k}};
                     members = pipe semi eager [k] keys,f;
                     shared = pipe probe first [k] members,f;
-                    out = pipe canon project shared keep {{{kept}}}; return out as answer(a,k,v);
+                    out = let canon project shared keep {{{kept}}}; return out as answer(a,k,v);
                 }}"
                 ))
                 .unwrap();
@@ -564,7 +564,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
             l = pipe rename L@0 {{a -> a,k -> k}}; r = pipe rename R@1 {{a -> a,k -> k}};
             f = let point select r if (a = 7);
             j = pipe probe first [{key}] l,f;
-            out = pipe canon semi eager [{key}] j,f; return out as answer(a,k);
+            out = let canon semi eager [{key}] j,f; return out as answer(a,k);
         }}"
         ))
         .unwrap_or_else(|e| panic!("{e}"));
@@ -575,7 +575,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
                 l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a,k -> k};
                 f = let point select r if (a = 7);
                 j = pipe probe first [a] l,f;
-                out = pipe canon project j keep {a,k}; return out as answer(a,k);
+                out = let canon project j keep {a,k}; return out as answer(a,k);
             })
         } else {
             source
@@ -598,7 +598,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
         relation L(k:i32); relation R(tag:String,k:i32);
         l = pipe rename L@0 {k -> k}; r = pipe rename R@1 {tag -> tag,k -> k};
         f = let point select r if (tag = "a");
-        j = pipe canon probe first [k] l,f; return j as answer(k,tag);
+        j = let canon probe first [k] l,f; return j as answer(k,tag);
     });
     let expression = sequence_rows(&cq_structure_selection::compile(&source).unwrap()).unwrap();
     checks.push(quote!({
@@ -613,7 +613,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
             relation L(k:i32); relation R(tag:{ty},k:i32);
             l = pipe rename L@0 {{k -> k}}; r = pipe rename R@1 {{tag -> tag,k -> k}};
             f = let point select r if (tag = \"a\");
-            j = pipe canon probe first [k] l,f; return j as answer(k,tag);
+            j = let canon probe first [k] l,f; return j as answer(k,tag);
         }}"
         ))
         .unwrap();
@@ -639,8 +639,8 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
 fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
     let mut checks = Vec::new();
     for reader in [
-        quote!(j = pipe canon probe first [x] l,r;),
-        quote!(j = pipe canon semi eager [x] l,r;),
+        quote!(j = let canon probe first [x] l,r;),
+        quote!(j = let canon semi eager [x] l,r;),
     ] {
         let source: structures::physical::Program = syn::parse2(quote! { physical {
             relation L(a:i32); relation R(tag:i32,a:i32);
@@ -668,13 +668,13 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         l = pipe rename L@0 {a -> x};
         r = let rename R@1 {a -> x,b -> y,unused -> z} constants {tag = -7};
         p = pipe probe first [x] l,r;
-        j = pipe canon project p keep {x,y};
+        j = let canon project p keep {x,y};
         return j as answer(x,y);
     } structures {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         r = ::cq_storage::HashIndex<'_,_,_> [x];
-        j canon = sort;
+        j rows = ::cq_storage::dedup::Sort; j canon = rows;
     }};
     let expression = sequence_rows(&authored).unwrap();
     checks.push(quote!({
@@ -691,7 +691,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         r = let rename R@1 {a -> x,b -> y} constants {tag = -7};
         p = pipe probe first [x] l,r;
         q = pipe project p keep {y};
-        j = pipe canon probe first [y] q,r;
+        j = let canon probe first [y] q,r;
         return j as answer(x,y);
     }};
     let selected = cq_structure_selection::compile(&source).unwrap();
@@ -710,7 +710,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
     let source: structures::physical::Program = syn::parse_quote! { physical {
         relation R(tag:String,a:i32,b:bool);
         r = let rename R@0 {a -> tag} constants {tag = "yes", b = true};
-        g = pipe canon guard r if (*tag > 1);
+        g = let canon guard r if (*tag > 1);
         return g as answer(tag);
     }};
     let selected = cq_structure_selection::compile(&source).unwrap();
@@ -804,7 +804,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     let unordered: structures::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32);
         l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a};
-        j = pipe canon merge[a] l,r; return j as answer(a);
+        j = let canon merge[a] l,r; return j as answer(a);
     } structures {});
     let complete = cq_structure_selection::compile(&unordered.physical).unwrap();
     let expression = sequence_rows(&complete).unwrap();
@@ -834,7 +834,7 @@ fn point_prints_build_free_dispatch_and_canonical_lets_use_sort() {
     assert_eq!(text.matches("Lazy :: new").count(), 0);
     assert!(text.contains("dispatch :: PointHost"));
     assert!(text.contains(". point ("));
-    assert!(text.contains("cq_storage :: dedup :: sort"));
+    assert!(text.contains("cq_storage :: dedup :: Sort > :: sort"));
     assert!(text.contains("(y , x ,)"));
 }
 
@@ -844,7 +844,7 @@ fn adapter_carriers_drop_columns_after_their_last_reader() {
         relation R(a:i32,b:i32,dead:i32);
         r = pipe rename R@0 {a -> a,b -> b,dead -> dead};
         s = pipe select r if (a = 7);
-        p = pipe canon project s keep {b};
+        p = let canon project s keep {b};
         return p as answer(b);
     });
     let module = cq_structure_selection::compile(&physical).unwrap();
@@ -911,7 +911,7 @@ fn grouped_folds_share_full_named_valuations_and_empty_identities() {
     let prefix = quote! {
         relation rows(k:i32, witness:i32, value:i64, anonymous:i32);
         raw = pipe rename rows@0 {k -> k, witness -> witness, value -> value, anonymous -> anonymous};
-        valuations = pipe canon project raw keep {k, witness, value};
+        valuations = let canon project raw keep {k, witness, value};
     };
     let aggregates = quote! {
         n: usize = count();
@@ -974,7 +974,7 @@ fn expansion_counters_measure_children_before_closing_predicates() {
         last = let rename closing@2 {v -> v,w -> w};
         expanded = pipe probe first [v] joined,last;
         closed = pipe guard expanded if (*w >= 30);
-        result = pipe canon project closed keep {k,v,w};
+        result = let canon project closed keep {k,v,w};
         return result as answer(k,v,w);
     });
     let selected = cq_structure_selection::compile(&physical).unwrap();

@@ -5,9 +5,13 @@ struct TestSymbol(u32);
 
 struct TestCodec;
 impl gpu_datalog_runtime::SymbolCodec<TestSymbol> for TestCodec {
-    fn code(value: &TestSymbol) -> u32 { value.0 }
+    fn code(value: &TestSymbol) -> u32 {
+        value.0
+    }
     // DECODE P: diagnostic final datalog answers reconstruct TestSymbol handles for host assertions.
-    fn decode(code: u32) -> TestSymbol { TestSymbol(code) }
+    fn decode(code: u32) -> TestSymbol {
+        TestSymbol(code)
+    }
 }
 
 fn sym(value: &str) -> TestSymbol {
@@ -18,7 +22,11 @@ fn sym(value: &str) -> TestSymbol {
     }
 }
 
-type Answers = (BTreeSet<(TestSymbol,)>, BTreeSet<(TestSymbol,)>, BTreeSet<(TestSymbol, TestSymbol, TestSymbol, TestSymbol, TestSymbol)>);
+type Answers = (
+    BTreeSet<(TestSymbol,)>,
+    BTreeSet<(TestSymbol,)>,
+    BTreeSet<(TestSymbol, TestSymbol, TestSymbol, TestSymbol, TestSymbol)>,
+);
 
 macro_rules! engine {
     ($name:ident, {$($pipeline:tt)*}) => {

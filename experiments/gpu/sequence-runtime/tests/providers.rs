@@ -21,13 +21,17 @@ fn column(pool: &Arc<Pool>, values: &[u32]) -> Result<ColumnDescriptor> {
 fn query_scope_releases_each_hook_once_on_return_and_unwind() {
     use cq_gpu_sequence_runtime::{register_query_cleanup, QueryScope};
     thread_local! { static RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
-    fn release() { RELEASED.with(|count| count.set(count.get() + 1)); }
+    fn release() {
+        RELEASED.with(|count| count.set(count.get() + 1));
+    }
     for unwind in [false, true] {
         let result = std::panic::catch_unwind(|| {
             let _scope = QueryScope::new();
             register_query_cleanup(release);
             register_query_cleanup(release);
-            if unwind { panic!("exercise query cleanup"); }
+            if unwind {
+                panic!("exercise query cleanup");
+            }
         });
         assert_eq!(result.is_err(), unwind);
     }
@@ -45,10 +49,17 @@ fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()
         Ok(())
     })?;
     // DECODE P: diagnostic typed numeric upload round trip publishes logical host values for exact assertions.
-    assert_eq!(values.to_host()?, [(i64::MIN, u32::MAX, false), (7, 3, true), (7, 3, true)]);
+    assert_eq!(
+        values.to_host()?,
+        [(i64::MIN, u32::MAX, false), (7, 3, true), (7, 3, true)]
+    );
     // Reusing capacity must not reuse old rows, even when the new input is empty.
     // DECODE P: diagnostic empty reused upload publishes logical host values for exact assertions.
-    assert!(upload_numeric_columns::<(i64,), _>(pool.clone(), |_| Ok(()))?.to_host()?.is_empty());
+    assert!(
+        upload_numeric_columns::<(i64,), _>(pool.clone(), |_| Ok(()))?
+            .to_host()?
+            .is_empty()
+    );
     let changed = upload_numeric_columns::<(i64,), _>(pool.clone(), |columns| {
         columns[0].push(-9);
         Ok(())
@@ -61,14 +72,21 @@ fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()
         columns[0][300_002] = i64::MAX;
         Ok(())
     })?;
-    assert_eq!(large.storage().columns[0].bounds(), Bounds::Inclusive { min: i64::MIN, max: i64::MAX });
+    assert_eq!(
+        large.storage().columns[0].bounds(),
+        Bounds::Inclusive {
+            min: i64::MIN,
+            max: i64::MAX
+        }
+    );
     // DECODE P: diagnostic large signed maximum publishes logical host values for exact assertions.
     assert_eq!(large.to_host()?[300_002], (i64::MAX,));
     assert!(upload_numeric_columns::<(), _>(pool.clone(), |_| Ok(())).is_err());
     assert!(upload_numeric_columns::<(i64, i64), _>(pool, |columns| {
         columns[0].push(1);
         Ok(())
-    }).is_err());
+    })
+    .is_err());
     Ok(())
 }
 
@@ -83,8 +101,16 @@ fn packed_canon_selects_lanes_from_recorded_heading() -> Result<()> {
     }
     assert!(PackedCanon::key_lanes(129).is_err());
     let heading = [
-        PackedField { shift: 0, bits: 40, base: 0 },
-        PackedField { shift: 40, bits: 40, base: 0 },
+        PackedField {
+            shift: 0,
+            bits: 40,
+            base: 0,
+        },
+        PackedField {
+            shift: 40,
+            bits: 40,
+            base: 0,
+        },
     ];
     assert_eq!(PackedCanon::field_lanes(&heading)?, 2);
     Ok(())
@@ -94,14 +120,25 @@ fn packed_canon_selects_lanes_from_recorded_heading() -> Result<()> {
 fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
     let pool = Pool::new(0, 1 << 20, 128 << 20)?;
     let rows = [(7i64, 1i64 << 35), (7, 3), (7, 1 << 35), (9, 3)];
-    let lanes = rows.iter().flat_map(|&(a, b)| {
-        let key = (a as u128) | ((b as u128) << 40);
-        [key as u64, (key >> 64) as u64]
-    }).collect::<Vec<_>>();
+    let lanes = rows
+        .iter()
+        .flat_map(|&(a, b)| {
+            let key = (a as u128) | ((b as u128) << 40);
+            [key as u64, (key >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
     let input = Buffer::from_host(pool.clone(), &lanes)?;
     let fields = [
-        PackedField { shift: 0, bits: 40, base: 0 },
-        PackedField { shift: 40, bits: 40, base: 0 },
+        PackedField {
+            shift: 0,
+            bits: 40,
+            base: 0,
+        },
+        PackedField {
+            shift: 40,
+            bits: 40,
+            base: 0,
+        },
     ];
     let mut canon = PackedCanon::new(&pool, rows.len())?;
     let keys = unsafe { canon.canonicalize(&input, rows.len(), 80)? };
@@ -109,18 +146,41 @@ fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
     assert_eq!(keys.capacity(), rows.len());
     assert_eq!(keys.logical_count()?, 3);
     let source = unsafe {
-        ColumnDescriptor::from_packed(keys.keys().clone(), 3, 2, fields[1],
-            Bounds::Inclusive { min: 0, max: (1i64 << 40) - 1 })?
+        ColumnDescriptor::from_packed(
+            keys.keys().clone(),
+            3,
+            2,
+            fields[1],
+            Bounds::Inclusive {
+                min: 0,
+                max: (1i64 << 40) - 1,
+            },
+        )?
     };
     let constant = unsafe {
-        ColumnDescriptor::from_packed(keys.keys().clone(), 3, 2,
-            PackedField { shift: 80, bits: 0, base: 0 }, Bounds::singleton(0))?
+        ColumnDescriptor::from_packed(
+            keys.keys().clone(),
+            3,
+            2,
+            PackedField {
+                shift: 80,
+                bits: 0,
+                base: 0,
+            },
+            Bounds::singleton(0),
+        )?
     };
     let gathered = RangeBuilder::new(&pool)?.build(&RangeDescriptor {
         directory_entries: 2,
-        key: vec![KeyDescriptor { column: constant, domain_size: 1 }],
+        key: vec![KeyDescriptor {
+            column: constant,
+            domain_size: 1,
+        }],
         selection: None,
-        payload: vec![PayloadDescriptor { column: source, kind: PayloadKind::I64 }],
+        payload: vec![PayloadDescriptor {
+            column: source,
+            kind: PayloadKind::I64,
+        }],
     })?;
     // DECODE P: diagnostic gathered wide payload publishes logical host values for exact assertions.
     assert_eq!(gathered.payload()[0].to_host()?, [3, 3, 1i64 << 35]);
@@ -130,21 +190,36 @@ fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
     // DECODE P: diagnostic canonical packed tuples publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, [(7, 3), (9, 3), (7, 1 << 35)]);
     // DECODE P: diagnostic noncanonical tuple adapter reconstructs packed fields solely for the following host oracle.
-    let output = packed_columns::<(i64, i64)>(input, rows.len(), &fields, dictionary.clone(), vec![])?;
+    let output =
+        packed_columns::<(i64, i64)>(input, rows.len(), &fields, dictionary.clone(), vec![])?;
     // DECODE P: diagnostic noncanonical packed tuples publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, rows);
 
     // Both lanes participate in equality, including the most significant bit.
-    let input = Buffer::from_host(pool.clone(), &[0u64, 0, 0, 1u64 << 63, 0, 0, u64::MAX, u64::MAX])?;
+    let input = Buffer::from_host(
+        pool.clone(),
+        &[0u64, 0, 0, 1u64 << 63, 0, 0, u64::MAX, u64::MAX],
+    )?;
     let keys = unsafe { canon.canonicalize(&input, 4, 128)? };
     let fields = [
-        PackedField { shift: 0, bits: 64, base: i64::MIN },
-        PackedField { shift: 64, bits: 64, base: i64::MIN },
+        PackedField {
+            shift: 0,
+            bits: 64,
+            base: i64::MIN,
+        },
+        PackedField {
+            shift: 64,
+            bits: 64,
+            base: i64::MIN,
+        },
     ];
     // DECODE P: diagnostic signed-boundary adapter reconstructs packed fields solely for the following host oracle.
     let output = keys.into_columns::<(i64, i64)>(&fields, dictionary, vec![])?;
     // DECODE P: diagnostic full-width signed tuple boundaries publishes logical host values for exact assertions.
-    assert_eq!(output.to_host()?, [(i64::MIN, i64::MIN), (i64::MIN, 0), (i64::MAX, i64::MAX)]);
+    assert_eq!(
+        output.to_host()?,
+        [(i64::MIN, i64::MIN), (i64::MIN, 0), (i64::MAX, i64::MAX)]
+    );
     Ok(())
 }
 
@@ -594,7 +669,11 @@ fn keyless_provider_preserves_one_complete_segment() -> Result<()> {
     assert!(complete.offsets().to_host()?.is_empty());
     // DECODE P: diagnostic keyless complete payload publishes logical host values for exact assertions.
     assert_eq!(complete.payload()[0].to_host()?, [7, 2, 7, 4]);
-    descriptor.selection = Some(RangeSelection { column: values, start: 4, end: 8 });
+    descriptor.selection = Some(RangeSelection {
+        column: values,
+        start: 4,
+        end: 8,
+    });
     let selected = builder.build_with_workspace(&descriptor, &mut workspace)?;
     // DECODE P: diagnostic keyless selected payload publishes logical host values for exact assertions.
     assert_eq!(selected.payload()[0].to_host()?, [7, 7, 4]);

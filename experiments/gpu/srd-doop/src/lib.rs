@@ -1,10 +1,28 @@
 #![recursion_limit = "2048"]
 
 #[cfg(any(
-    all(feature = "advice-aipt", any(feature = "advice-load", feature = "advice-fieldflow", feature = "advice-dispatch")),
-    all(feature = "advice-load", any(feature = "advice-fieldflow", feature = "advice-dispatch")),
+    all(
+        feature = "advice-aipt",
+        any(
+            feature = "advice-load",
+            feature = "advice-fieldflow",
+            feature = "advice-dispatch"
+        )
+    ),
+    all(
+        feature = "advice-load",
+        any(feature = "advice-fieldflow", feature = "advice-dispatch")
+    ),
     all(feature = "advice-fieldflow", feature = "advice-dispatch"),
-    all(feature = "default-query", any(feature = "advice-aipt", feature = "advice-load", feature = "advice-fieldflow", feature = "advice-dispatch"))
+    all(
+        feature = "default-query",
+        any(
+            feature = "advice-aipt",
+            feature = "advice-load",
+            feature = "advice-fieldflow",
+            feature = "advice-dispatch"
+        )
+    )
 ))]
 compile_error!("select at most one advice experiment, using the factored SRD query");
 
@@ -33,8 +51,12 @@ srd_doop_shared::srd_doop_engine!(run, incremental(driver(delta_first); $($advic
     };
 }
 
-#[cfg(not(any(feature = "advice-aipt", feature = "advice-load",
-    feature = "advice-fieldflow", feature = "advice-dispatch")))]
+#[cfg(not(any(
+    feature = "advice-aipt",
+    feature = "advice-load",
+    feature = "advice-fieldflow",
+    feature = "advice-dispatch"
+)))]
 engine!();
 
 #[cfg(feature = "advice-aipt")]

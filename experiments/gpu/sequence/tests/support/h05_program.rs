@@ -37,7 +37,7 @@ pub fn program_with_capacity(capacity: usize) -> Program {
             rnco = pipe probe first [customer] rnc,orders_index;
             rncol = pipe probe first [order] rnco,lineitem_index;
             matched = pipe semi eager [nation,supplier] rncol,supplier_index;
-            answer = pipe canon project matched keep {order,supplier,nation};
+            answer = let canon project matched keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
         structures {
@@ -54,7 +54,8 @@ pub fn program_with_capacity(capacity: usize) -> Program {
             lineitem_index = ::cq_gpu_sequence_runtime::RangeProvider [order];
             supplier_index = ::cq_gpu_sequence_runtime::RangeProvider [nation][supplier];
             rnc rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer canon = rows;
         }
         sequence {
             RegionASIA = store map region_asia compact region_selected rows region_base;

@@ -34,9 +34,12 @@ fn rewritten_corpus_physical_flows_into_the_default_selector() {
         syn::parse_str(include_str!("fixtures/canon.physical")).unwrap()
     );
     let facts = cq_testkit::structures::contract::check(&output).unwrap();
-    assert_eq!(facts.dedup.len(), 2);
-    for strategy in facts.dedup.values() {
-        assert_eq!(*strategy, syn::parse_quote!(sort));
+    assert_eq!(facts.canonical.len(), 2);
+    for canonical in facts.canonical.values() {
+        assert_eq!(
+            *canonical,
+            cq_testkit::structures::CanonSource::Rows(syn::parse_quote!(::cq_storage::dedup::Sort))
+        );
     }
 }
 

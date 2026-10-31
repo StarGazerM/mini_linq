@@ -266,72 +266,44 @@ those provider selections is not a runtime-only decision.
 
 ### 8.1 Ordinary index publication
 
-`maintain::{Fresh, Publish}` separates read-only admission from publication.
-For relation O, `fresh(B)` returns `supp(B) \ O`, without duplicates or a
-change to O. `publish(F)` requires distinct rows absent from O and extends
-O by exactly F. Repeated reads between publications represent the same O.
-The provider is ordinary: index selection, not its Rust type, records
-whether it is canonical.
-Empty indices are constructed uniformly through `Default`: sets/maps use their
-usual hasher defaults, sorted runs require the selected codec's `Default`,
-radix runs initialize the selected item columns with ratio four, and tries
-begin without constructing any inner provider.
+There is no separate admission/publication protocol or maintenance trait.
+A relation's canonical index is an ordinary member of its index set, chosen
+by index selection (SRDatalog `select_indices`/`canonical_index`); its Rust
+type never records that it is canonical. CQ builds the canonical index once
+from the whole stream through a provider with the `Distinct` capability
+(PL-Distinct; default `dedup::Sort`, see §13.5). Ordinary providers keep
+their own construction and read traits (`Rows`, `IndexRead`, `PointLookup`,
+`Candidates`, `ExactMembership`); `ExactMembership<K>` on grouped providers
+means key existence, never a present complete row.
 
-| Complete-row provider | `Fresh::Row` / `Publish::Item` | Admission and publication |
-|---|---|---|
-| std `HashSet<K,S>` / cq `HashSet<K>` | `K` | Exact membership then batch hash distinct; extend |
-| std `BTreeSet<K>` | `K` | Exact membership then ordered batch distinct; extend |
-| std/cq `HashMap<K,Vec<V>,S>` | `(K,V)` | Key lookup plus exact payload equality, batch hash distinct; append to groups |
-| std/cq `HashMap<K,HashSet<V,T>,S>` | `(K,V)` | Two exact hash probes (key then payload), batch hash distinct; insert into set-valued groups |
-| std `BTreeMap<K,Vec<V>>` | `(K,V)` | Key lookup plus exact payload equality, ordered full-row batch distinct (`K,V: Ord`); append to groups |
-| `SortedRun<K,V,C>` | `(K,V)` | Exact group/payload scan, key-grouped batch distinct; stable grouped rebuild |
-| `RadixRun<K,V,C>` | `(K,V)` | Exact group/payload scan across all runs, key-grouped batch distinct; ratio-bounded run publication in the selected item columns |
-| `Trie<K,Inner>` | `(K,Inner::Row)` | Group by prefix, recursively fresh/publish; new inner groups remain lazy |
-
-Set keys require their ordinary `Eq + Hash` or `Ord` capability; grouped
-hash admission additionally requires `V: Eq + Hash`. Sorted/radix payload
-admission requires `Copy + Eq`, not payload ordering. Trie prefixes require
-`Clone` only when constructing fresh rows. `ExactMembership<K>` on grouped
-providers continues to mean key existence; full-row admission additionally
-checks the payload, never confusing a present prefix with a present row.
-
-Vec-bucket maps and the generic sorted/radix providers do not index the payload:
-exact admission costs O(g) comparisons per candidate against an existing
-group of g rows. The Eq-only sorted/radix batch distinct step can require
-O(b²) comparisons within a batch group of b rows; hash/ordered map batches
-use hashing or ordering to deduplicate. Hash admission compacts the original
-batch allocation using borrowed-row hashing and a temporary keep bitmap.
-`HashMap<K,HashSet<V,T>,S>` is an explicit high-fan-out provider: full-row
-admission uses the bucket's exact payload hash lookup, candidate enumeration
-is already distinct, and candidate count reads the bucket length. It supports
-`Rows`, `IndexRead`, `PointLookup`, `Candidates`, key-level `ExactMembership`,
-`Fresh`, and `Publish`. Inner T and outer S hashers are independent; only
-publication requires `T: Default`. Index selection records this layout
-rather than hiding a specialized algorithm inside generic `Fresh`.
+`HashMap<K,HashSet<V,T>,S>` is an explicit high-fan-out provider: complete-row
+membership is the bucket's exact payload hash lookup, candidate enumeration
+is already distinct, and candidate count reads the bucket length. Inner T and
+outer S hashers are independent. Index selection records this layout rather
+than hiding a specialized algorithm inside a generic provider.
 
 `RadixRun::with_ratio(source,k)` records a provider-local ratio (`k ≥ 2`,
-default 4). Publication groups only the incoming delta, appends its run,
-and merges adjacent newest runs until every older run has at least k times
-the next run's item count. Merges use stable merge-path partitions of the
-key directories and copy whole payload groups, rebuilding directories.
+default 4). The inherent `RadixRun::merge(delta)` (rule IX-RunMerge) is the
+provider's maintenance merge and a multiset union: afterwards reads observe
+the old occurrences plus every delta occurrence, `reads(V ⊕ D) = reads(V) ⊎ D`;
+no disjointness is required. It groups only the incoming delta, appends its
+run, and merges adjacent newest runs until every older run has at least k
+times the next run's item count. Merges use stable merge-path partitions of
+the key directories and copy whole payload groups, rebuilding directories.
 They never reconstruct a `(key,item)` staging array or sort old rows.
 `contains`, `count`, `range`, and `keys` read key directories/offsets without
-items. Copy lookup cursors visit published groups directly, without merging.
+items. Copy lookup cursors visit every run directly, without merging.
 The first run's group is resolved eagerly by `lookup`, so a single-run
 cursor supports copied `len()`/`nth()` expansion without another directory
 search. Later runs are visited lazily. Range probes use each run's
 spline-bounded exact search, including absent-key insertion positions.
 Unique-key scans use a streaming k-way merge with O(number of runs) state,
-never an all-key sort; `len`/`key_count` cache the merged count until publication.
-Legacy `items()` requests a contiguous merged view lazily; publication
+never an all-key sort; `len`/`key_count` cache the merged count until the next merge.
+Legacy `items()` requests a contiguous merged view lazily; `merge`
 invalidates that cached view. Row scans use the direct cursors in key order.
-Borrowing prevents mutation
-while any cursor or slice remains live.
-
-`tests/maintenance_laws.rs` checks IX-Fresh, IX-Publish, IX-Stable and
-ADM-Batch with fixed-seed duplicates, boundaries, replay and row/bounded/
-whole batches. Radix tests additionally exercise lazy reads, geometric
-transitions, and merge-path boundaries against a stable occurrence oracle.
+Borrowing prevents mutation while any cursor or slice remains live.
+Unit tests in `radix_run.rs` exercise lazy reads, geometric transitions, and
+merge-path boundaries against a stable occurrence oracle.
 
 ## 9. Grouped runs in the compiler's semantics
 
@@ -635,15 +607,23 @@ GPU reduction/dedup overhead and CPU h01's dominant cost must be profiled
 4. **Widths**: every GPU TPC-H input column fits 32 bits at SF1/SF10
    (`doc/DECODE-COLUMNS.md`); keys never decode; 64/128-bit widths only for
    accumulators sized by value bits + log₂ rows, and for authored Rust types.
-5. **Self-deduplication is sort-based, not a hash set.** Canonicalization is
-   a Structures/Sequence strategy, not a provider retype: `canon = sort;`
-   and `head = sort;` are the defaults, including computed heads.
-   On CPU, Sort collects the whole boundary stream, uses `sort_unstable_by` with
+5. **Self-deduplication is sort-based, not a hash set.** A canon result is
+   stored in its canonical index, an ordinary index named by a canonical
+   reference (STR-Canon), never a strategy or a separate store:
+   `r canon = rows;` names the result's rows record, typed by the sorted-array
+   provider `::cq_storage::dedup::Sort` (PL-Distinct: its build yields the
+   stream's distinct complete rows); `r canon = host;` names the
+   load-verified host carrier of a direct complete host rename;
+   `r canon = [cols];` names an existence-only complete Built index that is
+   the result's only storage (its build need not be duplicate-free).
+   `ret head = ::cq_storage::dedup::Sort` types the answer's identity index,
+   including computed heads.
+   On CPU, `dedup::Sort` collects the whole boundary stream, uses `sort_unstable_by` with
    Rust `Ord` comparisons of the fields, then removes adjacent equal rows.
    Tasks uses `par_sort_unstable_by`; its adjacent-unique pass is sequential.
-   Device Sort may record `sort using Type`, naming an explicit device
-   sort/unique implementation such as `WideCanon`. Catalog selection may
-   refine that implementation but cannot replace Ordered with Sort. This
+   On device, catalog selection retypes the rows record to a `Distinct`
+   provider (`PackedCanon` up to 128 packed bits, `WideCanon` otherwise),
+   but never turns a `host` reference into `rows`. This
    does not restore the obsolete `retype(dedup => Type)` hash-set interface.
    No Rust type spelling selects a comparison, codec, or uniqueness fact;
    opaque authored types supply their ordering through Rust traits.
@@ -671,11 +651,11 @@ GPU reduction/dedup overhead and CPU h01's dominant cost must be profiled
    implementation, not evidence against sort-based dedup. Sort width and
    digit choice are open measurement work; this migration uses comparison
    sort, not a type-selected radix implementation.
-   `ordered` is an explicit alternative only for a direct host scan of an
+   `canon = host` (runtime `dedup::ordered`) applies only to a direct host scan of an
    immutable load-verified prefix-order carrier. The carrier retains the
    exact checked prefix comparator with its rows, exposes no mutable row
    access, and discards the witness when rows are recovered for mutation.
-   Full-row equality must imply equal prefixes. Ordered sorts and uniques
+   Full-row equality must imply equal prefixes. It sorts and uniques
    **within every equal-prefix run**; equal prefixes never imply unique rows.
    The borrowed path collects references, not cloned owned rows. This is not
    a promise of allocation-free streaming or unchecked order propagation:

@@ -7,7 +7,7 @@ fn scan() -> structures::Program {
             relation R(x:i32);
             r = pipe rename R@0 {x -> x};
             s = pipe select r if (x >= 0);
-            b = pipe canon bind s with y: i32 = (*x + 1);
+            b = let canon bind s with y: i32 = (*x + 1);
             return b as answer(x,y);
         }
     })
@@ -36,7 +36,7 @@ fn default_records_only_the_eligible_built_probe_outer() {
             relation L(k:i32); relation R(k:i32,v:i32);
             l = pipe rename L@0 {k -> k};
             r = let rename R@1 {k -> k,v -> v};
-            j = pipe canon probe first [k] l,r;
+            j = let canon probe first [k] l,r;
             return j as answer(k,v);
         }
     })
@@ -88,7 +88,7 @@ fn retained_rows_start_a_new_total_segment() {
             relation R(x:i32);
             r = let rename R@0 {x -> x};
             s = pipe select r if (x >= 0);
-            b = pipe canon bind s with y:i32 = (*x + 1);
+            b = let canon bind s with y:i32 = (*x + 1);
             return b as answer(x,y);
         }
     };

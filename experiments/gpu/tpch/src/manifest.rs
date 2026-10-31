@@ -47,12 +47,16 @@ pub trait DictionaryLiteral {
 }
 
 impl DictionaryLiteral for u32 {
-    fn dictionary_code(&self, _: &[&str]) -> u32 { *self }
+    fn dictionary_code(&self, _: &[&str]) -> u32 {
+        *self
+    }
 }
 
 impl DictionaryLiteral for str {
     fn dictionary_code(&self, dictionary: &[&str]) -> u32 {
-        dictionary.iter().position(|entry| *entry == self)
+        dictionary
+            .iter()
+            .position(|entry| *entry == self)
             .map(|index| u32::try_from(index).expect("validated dictionary size"))
             .unwrap_or(u32::MAX)
     }
@@ -103,7 +107,9 @@ impl HostValue for u32 {
 
 impl HostValue for cq_load::StringCode {
     fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
-        manifest.read_column(table, column)?.into_iter()
+        manifest
+            .read_column(table, column)?
+            .into_iter()
             .map(|value| u32::try_from(value).map(Self).map_err(Into::into))
             .collect()
     }
@@ -112,7 +118,9 @@ impl HostValue for cq_load::StringCode {
 impl HostValue for cq_load::Date {
     fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
         // DECODE ?: Date HostValue reconstruction serves typed host inputs; caller rust_reads versus reference-only use determines necessity.
-        manifest.read_column(table, column)?.into_iter()
+        manifest
+            .read_column(table, column)?
+            .into_iter()
             .map(|value| Ok(Self::from_days(i32::try_from(value)?)))
             .collect()
     }
@@ -121,10 +129,14 @@ impl HostValue for cq_load::Date {
 impl<const SCALE: u32> HostValue for cq_load::Decimal<SCALE> {
     fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
         if manifest.column(table, column)?.scale != Some(SCALE) {
-            return Err(format!("{table}.{column}: decimal scale differs from loader contract").into());
+            return Err(
+                format!("{table}.{column}: decimal scale differs from loader contract").into(),
+            );
         }
         // DECODE ?: Decimal HostValue reconstructs a whole typed input column; requires caller rust_reads evidence, not its type alone.
-        manifest.read_column(table, column)?.into_iter()
+        manifest
+            .read_column(table, column)?
+            .into_iter()
             .map(|value| Self::from_scaled(value).map_err(Into::into))
             .collect()
     }

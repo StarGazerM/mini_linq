@@ -17,7 +17,7 @@ macro_rules! execute {
                 r = let rename R@1 {a -> x,b -> y};
                 s = pipe semi eager[x] l,r;
                 p = pipe probe first[x] s,r;
-                out = pipe canon project p keep {x,y};
+                out = let canon project p keep {x,y};
                 return out as answer(x,y);
             }
         }.map(|(key, value)| (*key, *value)).collect::<BTreeSet<_>>()

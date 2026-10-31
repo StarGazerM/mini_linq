@@ -7,6 +7,6 @@ physical {
     s = pipe rename S@2 {a -> a,v -> v};
     checked = pipe semi eager [a,v] candidate,s;
     t = let rename T@3 {a -> a,v -> v};
-    result = pipe canon probe first [a,v] checked,t;
+    result = let canon probe first [a,v] checked,t;
     return result as answer(a,v);
 }

@@ -52,7 +52,11 @@ pub trait Scalar: sealed::Scalar + 'static {
     // DECODE ?: Scalar inverse lacks a caller-level opaque-read/publication requirement.
     fn decode(value: i128) -> Self::Logical;
     const COLUMN: Column;
-    const MIN: i128 = if Self::COLUMN.is_signed() { -(1i128 << (Self::COLUMN.bits() - 1)) } else { 0 };
+    const MIN: i128 = if Self::COLUMN.is_signed() {
+        -(1i128 << (Self::COLUMN.bits() - 1))
+    } else {
+        0
+    };
     const MAX: i128 = (1i128 << Self::COLUMN.bits()) - 1 + Self::MIN;
 }
 /// Encode an identity-domain scalar without naming its Rust type in generated code.
@@ -81,18 +85,26 @@ scalars!(usize => U64, isize => I64);
 impl sealed::Scalar for bool {}
 impl Scalar for bool {
     type Logical = bool;
-    fn encode(value: &bool) -> i64 { *value as i64 }
+    fn encode(value: &bool) -> i64 {
+        *value as i64
+    }
     // DECODE ?: boolean Scalar inverse needs caller evidence rather than type spelling.
-    fn decode(value: i128) -> bool { value != 0 }
+    fn decode(value: i128) -> bool {
+        value != 0
+    }
     const COLUMN: Column = Column::U8;
     const MAX: i128 = 1;
 }
 impl<T: 'static, C: crate::SymbolCodec<T> + 'static> sealed::Scalar for crate::Symbol<T, C> {}
 impl<T: 'static, C: crate::SymbolCodec<T> + 'static> Scalar for crate::Symbol<T, C> {
     type Logical = T;
-    fn encode(value: &T) -> i64 { C::code(value) as i64 }
+    fn encode(value: &T) -> i64 {
+        C::code(value) as i64
+    }
     // DECODE ?: Symbol Scalar delegates dictionary inversion without a caller publication fact.
-    fn decode(value: i128) -> T { C::decode(value as u32) }
+    fn decode(value: i128) -> T {
+        C::decode(value as u32)
+    }
     const COLUMN: Column = Column::U32;
 }
 
@@ -105,10 +117,14 @@ impl<const SCALE: u32> Scalar for cq_load::Decimal<SCALE> {
         assert!(SCALE <= 18, "Decimal scale must be at most 18");
         Column::I64
     };
-    fn encode(value: &Self) -> i64 { value.scaled() }
+    fn encode(value: &Self) -> i64 {
+        value.scaled()
+    }
     // DECODE ?: Decimal construction needs caller read evidence despite identity storage.
     fn decode(value: i128) -> Self {
-        const { assert!(SCALE <= 18, "Decimal scale must be at most 18"); }
+        const {
+            assert!(SCALE <= 18, "Decimal scale must be at most 18");
+        }
         // SAFETY: Decimal is transparent over i64; every coefficient is valid
         // at the supported scale. Avoid the host constructor's String error path.
         unsafe { core::mem::transmute::<i64, Self>(value as i64) }
@@ -118,9 +134,13 @@ impl sealed::Scalar for cq_load::Date {}
 impl Scalar for cq_load::Date {
     type Logical = Self;
     const COLUMN: Column = Column::I32;
-    fn encode(value: &Self) -> i64 { value.days_since_epoch() as i64 }
+    fn encode(value: &Self) -> i64 {
+        value.days_since_epoch() as i64
+    }
     // DECODE ?: epoch-day Date construction carries no caller read or publication fact.
-    fn decode(value: i128) -> Self { Self::from_days(value as i32) }
+    fn decode(value: i128) -> Self {
+        Self::from_days(value as i32)
+    }
 }
 
 /// A tuple of scalar columns in recorded layout order, including `()`.
@@ -129,7 +149,9 @@ pub trait ScalarTuple: sealed::Tuple + 'static {
     const COLUMNS: &'static [Column];
 }
 impl sealed::Tuple for () {}
-impl ScalarTuple for () { const COLUMNS: &'static [Column] = &[]; }
+impl ScalarTuple for () {
+    const COLUMNS: &'static [Column] = &[];
+}
 macro_rules! tuples {
     ($first:ident $(, $rest:ident)*) => {
         impl<$first: Scalar, $($rest: Scalar),*> sealed::Tuple for ($first, $($rest,)*) {}
@@ -157,7 +179,9 @@ struct LayoutStorage {
 
 impl LayoutStorage {
     fn from_runs<W: Word + 'static>(
-        pool: Arc<Pool>, packing: Packing, runs: Vec<Run<W>>,
+        pool: Arc<Pool>,
+        packing: Packing,
+        runs: Vec<Run<W>>,
     ) -> Result<Arc<Self>> {
         if packing.bits() > W::BITS {
             return Err("device layout packing exceeds its run word width".into());
@@ -170,30 +194,46 @@ impl LayoutStorage {
             if !Arc::ptr_eq(&pool, run.buffer().pool()) {
                 return Err("device layout runs belong to a different pool".into());
             }
-            let len = u32::try_from(run.len()).map_err(|_| "device layout run length exceeds u32")?;
-            rows = rows.checked_add(run.len()).ok_or("device layout row count overflow")?;
-            allocated_run_bytes = allocated_run_bytes.checked_add(run.allocated_bytes())
+            let len =
+                u32::try_from(run.len()).map_err(|_| "device layout run length exceeds u32")?;
+            rows = rows
+                .checked_add(run.len())
+                .ok_or("device layout row count overflow")?;
+            allocated_run_bytes = allocated_run_bytes
+                .checked_add(run.allocated_bytes())
                 .ok_or("device layout allocation byte count overflow")?;
             if rows > u32::MAX as usize {
                 return Err("device layout row count exceeds u32".into());
             }
-            descriptors.push(PackedRunView { ptr: run.view().ptr.cast(), len, ms_first: W::MS_FIRST as u32 });
+            descriptors.push(PackedRunView {
+                ptr: run.view().ptr.cast(),
+                len,
+                ms_first: W::MS_FIRST as u32,
+            });
         }
         let fields = packing.packed_fields().collect::<Vec<_>>();
         let device_descriptors = Buffer::from_host_async(pool.clone(), &descriptors)?;
         if crate::trace_kernels() {
-            eprint!("gpu_datalog_layout\tdescriptors={:p}\trows={rows}\trun_lengths=", device_descriptors.ptr());
+            eprint!(
+                "gpu_datalog_layout\tdescriptors={:p}\trows={rows}\trun_lengths=",
+                device_descriptors.ptr()
+            );
             for (index, descriptor) in descriptors.iter().enumerate() {
-                if index != 0 { eprint!(","); }
+                if index != 0 {
+                    eprint!(",");
+                }
                 eprint!("{}", descriptor.len);
             }
             eprintln!();
         }
         let fields = Buffer::from_host_async(pool, &fields)?;
         fn download<W: Word + 'static>(
-            owner: &dyn Any, packing: &Packing, rows: usize,
+            owner: &dyn Any,
+            packing: &Packing,
+            rows: usize,
         ) -> Result<Vec<Vec<i128>>> {
-            let runs = owner.downcast_ref::<Vec<Run<W>>>()
+            let runs = owner
+                .downcast_ref::<Vec<Run<W>>>()
                 .expect("layout download matches its retained run word type");
             let mut result = Vec::with_capacity(rows);
             for run in runs {
@@ -205,16 +245,21 @@ impl LayoutStorage {
             Ok(result)
         }
         fn permute<W: Word + 'static>(
-            storage: &LayoutStorage, order: &[usize],
+            storage: &LayoutStorage,
+            order: &[usize],
         ) -> Result<Arc<LayoutStorage>> {
             let packing = storage.packing.permute(order)?;
             let pool = storage.runs.pool().clone();
-            let source = storage._owner.downcast_ref::<Vec<Run<W>>>()
+            let source = storage
+                ._owner
+                .downcast_ref::<Vec<Run<W>>>()
                 .expect("layout permutation matches its retained run word type");
             let sorter = crate::DeviceRuns::<W>::new(pool.clone(), 4)?;
             let mut runs = Vec::with_capacity(source.len());
             for run in source {
-                let values = storage.packing.permute_device(run.buffer(), run.len(), order)?;
+                let values = storage
+                    .packing
+                    .permute_device(run.buffer(), run.len(), order)?;
                 // SAFETY: a column permutation is injective, and each retained
                 // immutable Run already contains pairwise distinct rows.
                 runs.push(unsafe { sorter.sort_known_unique(&values, run.len())? });
@@ -222,16 +267,26 @@ impl LayoutStorage {
             LayoutStorage::from_runs(pool, packing, runs)
         }
         Ok(Arc::new(Self {
-            runs: device_descriptors, fields, packing, rows, word_bits: W::BITS, allocated_run_bytes,
-            _owner: Box::new(runs), download: download::<W>, permute: permute::<W>,
+            runs: device_descriptors,
+            fields,
+            packing,
+            rows,
+            word_bits: W::BITS,
+            allocated_run_bytes,
+            _owner: Box::new(runs),
+            download: download::<W>,
+            permute: permute::<W>,
         }))
     }
 
     fn view(&self) -> RunsView {
         RunsView {
-            runs: self.runs.ptr(), fields: self.fields.ptr(),
-            run_count: self.runs.len() as u32, field_count: self.fields.len() as u32,
-            word_bits: self.word_bits, bits: self.packing.bits(),
+            runs: self.runs.ptr(),
+            fields: self.fields.ptr(),
+            run_count: self.runs.len() as u32,
+            field_count: self.fields.len() as u32,
+            word_bits: self.word_bits,
+            bits: self.packing.bits(),
         }
     }
 }
@@ -243,8 +298,12 @@ pub struct PackedProvider {
     storage: Arc<LayoutStorage>,
 }
 impl PackedProvider {
-    pub fn view(&self) -> RunsView { self.storage.view() }
-    pub fn owner(&self) -> Arc<dyn Any> { self.storage.clone() }
+    pub fn view(&self) -> RunsView {
+        self.storage.view()
+    }
+    pub fn owner(&self) -> Arc<dyn Any> {
+        self.storage.clone()
+    }
 }
 
 /// An immutable device layout whose key tuple precedes its value tuple.
@@ -258,13 +317,20 @@ pub struct DeviceLayout<K: ScalarTuple, V: ScalarTuple> {
 }
 impl<K: ScalarTuple, V: ScalarTuple> Clone for DeviceLayout<K, V> {
     fn clone(&self) -> Self {
-        Self { storage: self.storage.clone(), marker: PhantomData }
+        Self {
+            storage: self.storage.clone(),
+            marker: PhantomData,
+        }
     }
 }
 impl<K: ScalarTuple, V: ScalarTuple> DeviceLayout<K, V> {
     pub fn derive_packing() -> Result<Packing> {
-        Packing::build(K::COLUMNS.iter().chain(V::COLUMNS)
-            .map(|column| (column.bits(), column.is_signed())))
+        Packing::build(
+            K::COLUMNS
+                .iter()
+                .chain(V::COLUMNS)
+                .map(|column| (column.bits(), column.is_signed())),
+        )
     }
 
     /// Retain already sorted, immutable runs with exactly this tuple schema.
@@ -288,9 +354,15 @@ impl<K: ScalarTuple, V: ScalarTuple> DeviceLayout<K, V> {
         })
     }
 
-    pub fn pool(&self) -> &Arc<Pool> { self.storage.runs.pool() }
-    pub fn len(&self) -> usize { self.storage.rows }
-    pub fn is_empty(&self) -> bool { self.storage.rows == 0 }
+    pub fn pool(&self) -> &Arc<Pool> {
+        self.storage.runs.pool()
+    }
+    pub fn len(&self) -> usize {
+        self.storage.rows
+    }
+    pub fn is_empty(&self) -> bool {
+        self.storage.rows == 0
+    }
     /// Initialized packed-row bytes, excluding descriptors and spare capacity.
     pub fn live_bytes(&self) -> usize {
         self.storage.rows * (self.storage.word_bits / 8) as usize
@@ -306,13 +378,20 @@ impl<K: ScalarTuple, V: ScalarTuple> DeviceLayout<K, V> {
     pub fn descriptor_bytes(&self) -> usize {
         self.storage.runs.allocated_bytes() + self.storage.fields.allocated_bytes()
     }
-    pub fn packing(&self) -> &Packing { &self.storage.packing }
-    pub fn owner(&self) -> Arc<dyn Any> { self.storage.clone() }
+    pub fn packing(&self) -> &Packing {
+        &self.storage.packing
+    }
+    pub fn owner(&self) -> Arc<dyn Any> {
+        self.storage.clone()
+    }
     /// Download rows in physical run order, retaining encoded symbol codes.
     // DECODE P: explicit diagnostic host publication unpacks numeric fields, not symbol dictionaries.
     pub fn to_host_codes(&self) -> Result<Vec<Vec<i128>>> {
         (self.storage.download)(
-            self.storage._owner.as_ref(), &self.storage.packing, self.storage.rows)
+            self.storage._owner.as_ref(),
+            &self.storage.packing,
+            self.storage.rows,
+        )
     }
     pub fn view(&self) -> RunsView {
         self.storage.view()
@@ -320,11 +399,17 @@ impl<K: ScalarTuple, V: ScalarTuple> DeviceLayout<K, V> {
     /// Materialize a sorted lookup provider without changing the source runs.
     /// `order[destination]` is the source column at that destination.
     pub fn permuted_provider(&self, order: &[usize]) -> Result<PackedProvider> {
-        Ok(PackedProvider { storage: (self.storage.permute)(&self.storage, order)? })
+        Ok(PackedProvider {
+            storage: (self.storage.permute)(&self.storage, order)?,
+        })
     }
     /// Check the emitter's fixed physical column order without device readback.
     pub fn validate(&self, columns: &[Column]) -> Result<()> {
-        if columns.iter().copied().eq(K::COLUMNS.iter().chain(V::COLUMNS).copied()) {
+        if columns
+            .iter()
+            .copied()
+            .eq(K::COLUMNS.iter().chain(V::COLUMNS).copied())
+        {
             Ok(())
         } else {
             Err("device layout columns differ from the recorded input schema".into())
@@ -344,8 +429,16 @@ pub mod device {
     pub unsafe fn lane(view: RunsView, run: u32, row: u32, lane: u32) -> u64 {
         let descriptor = unsafe { *view.runs.add(run as usize) };
         let lanes = view.word_bits / 64;
-        let physical = if descriptor.ms_first != 0 { lanes - 1 - lane } else { lane };
-        unsafe { *descriptor.ptr.add(row as usize * lanes as usize + physical as usize) }
+        let physical = if descriptor.ms_first != 0 {
+            lanes - 1 - lane
+        } else {
+            lane
+        };
+        unsafe {
+            *descriptor
+                .ptr
+                .add(row as usize * lanes as usize + physical as usize)
+        }
     }
 
     /// Read a packed word without assuming native u128 alignment.
@@ -395,7 +488,9 @@ pub mod device {
         while run < view.run_count {
             // SAFETY: run is bounded by the caller-provided descriptor count.
             let len = unsafe { (*view.runs.add(run as usize)).len };
-            if global_row < len { return (run, global_row); }
+            if global_row < len {
+                return (run, global_row);
+            }
             global_row -= len;
             run += 1;
         }
@@ -415,13 +510,21 @@ pub mod device {
         let mut end = len;
         while begin < end {
             let middle = begin + (end - begin) / 2;
-            if unsafe { word::<W>(view, run, middle) } < lo { begin = middle + 1; } else { end = middle; }
+            if unsafe { word::<W>(view, run, middle) } < lo {
+                begin = middle + 1;
+            } else {
+                end = middle;
+            }
         }
         let first = begin;
         end = len;
         while begin < end {
             let middle = begin + (end - begin) / 2;
-            if unsafe { word::<W>(view, run, middle) } <= hi { begin = middle + 1; } else { end = middle; }
+            if unsafe { word::<W>(view, run, middle) } <= hi {
+                begin = middle + 1;
+            } else {
+                end = middle;
+            }
         }
         (first, begin)
     }
@@ -434,7 +537,10 @@ pub mod device {
     #[inline(always)]
     // DECODE V: prefix lookup reconstructs packed fields during binary search; P6 encode probes and compare packed prefixes.
     pub unsafe fn prefix_range(
-        view: RunsView, run: u32, prefix: *const i64, columns: u32,
+        view: RunsView,
+        run: u32,
+        prefix: *const i64,
+        columns: u32,
     ) -> (u32, u32) {
         let len = unsafe { (*view.runs.add(run as usize)).len };
         let mut begin = 0;
@@ -444,7 +550,9 @@ pub mod device {
             // DECODE V: lower-bound comparison invokes field inversion before ordering; P6 compare encoded prefixes.
             if unsafe { compare_prefix(view, run, middle, prefix, columns) } < 0 {
                 begin = middle + 1;
-            } else { end = middle; }
+            } else {
+                end = middle;
+            }
         }
         let first = begin;
         end = len;
@@ -453,7 +561,9 @@ pub mod device {
             // DECODE V: upper-bound comparison invokes field inversion before ordering; P6 retain packed prefix comparisons.
             if unsafe { compare_prefix(view, run, middle, prefix, columns) } <= 0 {
                 begin = middle + 1;
-            } else { end = middle; }
+            } else {
+                end = middle;
+            }
         }
         (first, begin)
     }
@@ -461,7 +571,11 @@ pub mod device {
     #[inline(always)]
     // DECODE V: tuple prefix comparison reconstructs each numeric field; P6 compare encoded field order directly.
     unsafe fn compare_prefix(
-        view: RunsView, run: u32, row: u32, prefix: *const i64, columns: u32,
+        view: RunsView,
+        run: u32,
+        row: u32,
+        prefix: *const i64,
+        columns: u32,
     ) -> i32 {
         let mut column = 0;
         while column < columns {
@@ -470,7 +584,11 @@ pub mod device {
             let target = unsafe { *prefix.add(column as usize) };
             if value != target {
                 let signed = unsafe { (*view.fields.add(column as usize)).signed } != 0;
-                let less = if signed { value < target } else { (value as u64) < target as u64 };
+                let less = if signed {
+                    value < target
+                } else {
+                    (value as u64) < target as u64
+                };
                 return if less { -1 } else { 1 };
             }
             column += 1;
@@ -503,7 +621,10 @@ mod tests {
         assert_eq!(align_of::<Amount>(), align_of::<i64>());
         assert_eq!(size_of::<Date>(), size_of::<i32>());
         assert_eq!(align_of::<Date>(), align_of::<i32>());
-        assert_eq!(<(Amount, Date) as ScalarTuple>::COLUMNS, &[Column::I64, Column::I32]);
+        assert_eq!(
+            <(Amount, Date) as ScalarTuple>::COLUMNS,
+            &[Column::I64, Column::I32]
+        );
         for coefficient in [i64::MIN, -12345, 0, 12345, i64::MAX] {
             // DECODE P: diagnostic Decimal fixture constructs the expected coefficient answer.
             let amount = Amount::from_scaled(coefficient).unwrap();
@@ -516,7 +637,10 @@ mod tests {
         // DECODE P: diagnostic scale-18 fixture constructs the expected fractional answer.
         let fine = Decimal::<18>::from_scaled(-1).unwrap();
         // DECODE P: diagnostic fine-scale round trip exposes a reconstructed Decimal.
-        assert_eq!(<Decimal<18> as Scalar>::decode(encode_scalar(&fine) as i128), fine);
+        assert_eq!(
+            <Decimal<18> as Scalar>::decode(encode_scalar(&fine) as i128),
+            fine
+        );
         for days in [i32::MIN, -1, 0, 1, i32::MAX] {
             // DECODE P: diagnostic Date fixture constructs the expected epoch-day answer.
             let date = Date::from_days(days);
@@ -536,10 +660,17 @@ mod tests {
         assert_eq!(size_of::<PackedField>(), 12);
         assert_eq!(size_of::<RunsView>(), 32);
         assert_eq!(align_of::<RunsView>(), 8);
-        assert_eq!(DeviceLayout::<(i32,), (u64, u16)>::derive_packing().unwrap(),
-            Packing::with_columns(&[Column::I32, Column::U64, Column::U16]).unwrap());
+        assert_eq!(
+            DeviceLayout::<(i32,), (u64, u16)>::derive_packing().unwrap(),
+            Packing::with_columns(&[Column::I32, Column::U64, Column::U16]).unwrap()
+        );
         assert_eq!(DeviceLayout::<(), ()>::derive_packing().unwrap().bits(), 0);
-        assert_eq!(DeviceLayout::<(u64, u64), (u8,)>::derive_packing().unwrap().word_bits(), 192);
+        assert_eq!(
+            DeviceLayout::<(u64, u64), (u8,)>::derive_packing()
+                .unwrap()
+                .word_bits(),
+            192
+        );
     }
 
     #[test]
@@ -547,16 +678,28 @@ mod tests {
         let columns = [Column::I8, Column::U64, Column::I32];
         let packing = Packing::with_columns(&columns).unwrap();
         let fields = packing.packed_fields().collect::<Vec<_>>();
-        let rows = [[-128, u64::MAX as i128, i32::MIN as i128],
-            [127, 0, i32::MAX as i128]];
+        let rows = [
+            [-128, u64::MAX as i128, i32::MIN as i128],
+            [127, 0, i32::MAX as i128],
+        ];
         let mut lanes = Vec::new();
         for row in rows {
             let word = packing.pack::<u128>(&row).unwrap();
             lanes.extend([word as u64, (word >> 64) as u64]);
         }
-        let runs = [PackedRunView { ptr: lanes.as_ptr(), len: 2, ms_first: 0 }];
-        let view = RunsView { runs: runs.as_ptr(), fields: fields.as_ptr(), run_count: 1,
-            field_count: 3, word_bits: 128, bits: packing.bits() };
+        let runs = [PackedRunView {
+            ptr: lanes.as_ptr(),
+            len: 2,
+            ms_first: 0,
+        }];
+        let view = RunsView {
+            runs: runs.as_ptr(),
+            fields: fields.as_ptr(),
+            run_count: 1,
+            field_count: 3,
+            word_bits: 128,
+            bits: packing.bits(),
+        };
         // SAFETY: the same pointer-only helpers can read these live host arrays.
         unsafe {
             // DECODE P: diagnostic cross-lane i8 minimum inverse exposes the expected host value.
@@ -574,11 +717,23 @@ mod tests {
         }
         let signed = Packing::with_columns(&[Column::I64]).unwrap();
         let fields = signed.packed_fields().collect::<Vec<_>>();
-        let words = [signed.pack::<u64>(&[i64::MIN as i128]).unwrap(),
-            signed.pack::<u64>(&[i64::MAX as i128]).unwrap()];
-        let runs = [PackedRunView { ptr: words.as_ptr(), len: 2, ms_first: 0 }];
-        let view = RunsView { runs: runs.as_ptr(), fields: fields.as_ptr(), run_count: 1,
-            field_count: 1, word_bits: 64, bits: 64 };
+        let words = [
+            signed.pack::<u64>(&[i64::MIN as i128]).unwrap(),
+            signed.pack::<u64>(&[i64::MAX as i128]).unwrap(),
+        ];
+        let runs = [PackedRunView {
+            ptr: words.as_ptr(),
+            len: 2,
+            ms_first: 0,
+        }];
+        let view = RunsView {
+            runs: runs.as_ptr(),
+            fields: fields.as_ptr(),
+            run_count: 1,
+            field_count: 1,
+            word_bits: 64,
+            bits: 64,
+        };
         // SAFETY: both words and the field descriptor remain live for each call.
         unsafe {
             // DECODE P: diagnostic full-width signed minimum inverse exposes the expected host value.
@@ -591,10 +746,28 @@ mod tests {
     #[test]
     fn locate_empty_runs_and_search_full_width_bounds() {
         let words = [0_u64, 0, 0, 1, u64::MAX, u64::MAX];
-        let empty = PackedRunView { ptr: words.as_ptr(), len: 0, ms_first: 0 };
-        let runs = [empty, PackedRunView { ptr: words.as_ptr(), len: 3, ms_first: 0 }, empty];
-        let view = RunsView { runs: runs.as_ptr(), fields: std::ptr::null(), run_count: 3,
-            field_count: 0, word_bits: 128, bits: 128 };
+        let empty = PackedRunView {
+            ptr: words.as_ptr(),
+            len: 0,
+            ms_first: 0,
+        };
+        let runs = [
+            empty,
+            PackedRunView {
+                ptr: words.as_ptr(),
+                len: 3,
+                ms_first: 0,
+            },
+            empty,
+        ];
+        let view = RunsView {
+            runs: runs.as_ptr(),
+            fields: std::ptr::null(),
+            run_count: 3,
+            field_count: 0,
+            word_bits: 128,
+            bits: 128,
+        };
         // SAFETY: the local arrays contain three sorted u128 values in u64 lanes.
         unsafe {
             assert_eq!(device::locate(view, 0), (1, 0));
@@ -612,32 +785,53 @@ mod tests {
     fn wide_decode<W: Word>(columns: &[Column], rows: &[Vec<i128>]) {
         let packing = Packing::with_columns(columns).unwrap();
         let fields = packing.packed_fields().collect::<Vec<_>>();
-        let words = rows.iter().map(|row| packing.pack::<W>(row).unwrap()).collect::<Vec<_>>();
-        let runs = [PackedRunView { ptr: words.as_ptr().cast(), len: rows.len() as u32,
-            ms_first: W::MS_FIRST as u32 }];
-        let view = RunsView { runs: runs.as_ptr(), fields: fields.as_ptr(), run_count: 1,
-            field_count: fields.len() as u32, word_bits: W::BITS, bits: packing.bits() };
+        let words = rows
+            .iter()
+            .map(|row| packing.pack::<W>(row).unwrap())
+            .collect::<Vec<_>>();
+        let runs = [PackedRunView {
+            ptr: words.as_ptr().cast(),
+            len: rows.len() as u32,
+            ms_first: W::MS_FIRST as u32,
+        }];
+        let view = RunsView {
+            runs: runs.as_ptr(),
+            fields: fields.as_ptr(),
+            run_count: 1,
+            field_count: fields.len() as u32,
+            word_bits: W::BITS,
+            bits: packing.bits(),
+        };
         for (index, row) in rows.iter().enumerate() {
             for (column, &expected) in row.iter().enumerate() {
                 // SAFETY: descriptors borrow these initialized local arrays.
                 // DECODE P: diagnostic wide-word field inverse exposes each expected logical scalar.
-                assert_eq!(unsafe { device::decode(view, 0, index as u32, column as u32) }, expected as i64);
+                assert_eq!(
+                    unsafe { device::decode(view, 0, index as u32, column as u32) },
+                    expected as i64
+                );
             }
             let prefix = row.iter().map(|&value| value as i64).collect::<Vec<_>>();
             for length in 0..=row.len() {
                 let first = rows.partition_point(|candidate| candidate[..length] < row[..length]);
                 let end = rows.partition_point(|candidate| candidate[..length] <= row[..length]);
                 // SAFETY: the sorted words and leading prefix are initialized.
-                assert_eq!(unsafe { device::prefix_range(view, 0, prefix.as_ptr(), length as u32) },
-                    (first as u32, end as u32));
+                assert_eq!(
+                    unsafe { device::prefix_range(view, 0, prefix.as_ptr(), length as u32) },
+                    (first as u32, end as u32)
+                );
                 let bounds = packing.prefix_range::<W>(&row[..length]).unwrap();
-                assert_eq!(unsafe { device::range(view, 0, *bounds.start(), *bounds.end()) },
-                    (first as u32, end as u32));
+                assert_eq!(
+                    unsafe { device::range(view, 0, *bounds.start(), *bounds.end()) },
+                    (first as u32, end as u32)
+                );
             }
         }
         let absent = [256_i64];
-        assert_eq!(unsafe { device::prefix_range(view, 0, absent.as_ptr(), 1) },
-            (rows.len() as u32, rows.len() as u32));
+        assert_eq!(
+            unsafe { device::prefix_range(view, 0, absent.as_ptr(), 1) },
+            (rows.len() as u32, rows.len() as u32)
+        );
     }
 
     #[test]
@@ -650,10 +844,13 @@ mod tests {
         ];
         // DECODE P: diagnostic three-lane inverse helper exposes reconstructed tuples for exact assertions.
         wide_decode::<[u64; 3]>(&[Column::U8, Column::I64, Column::U64], &rows);
-        let rows = rows.into_iter().map(|mut row| {
-            row.push(u64::MAX as i128 - row[0]);
-            row
-        }).collect::<Vec<_>>();
+        let rows = rows
+            .into_iter()
+            .map(|mut row| {
+                row.push(u64::MAX as i128 - row[0]);
+                row
+            })
+            .collect::<Vec<_>>();
         // DECODE P: diagnostic four-lane inverse helper exposes reconstructed tuples for exact assertions.
         wide_decode::<[u64; 4]>(&[Column::U8, Column::I64, Column::U64, Column::U64], &rows);
     }

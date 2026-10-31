@@ -21,7 +21,8 @@
 //! query outputs as inputs. Grouped keys occupy the leading declared columns.
 //! [`dispatch`] selects direct reads
 //! by type, with one lazy fallback per query read. Host uniqueness is never a
-//! language premise; ordinary index admission establishes distinct outputs.
+//! language premise; the canonical index recorded by index selection establishes
+//! distinct outputs.
 //!
 //! # Abstraction functions
 //!
@@ -100,11 +101,9 @@ mod item_columns;
 pub use item_columns::ItemColumns;
 mod join_filter;
 mod key;
-pub mod maintain;
 pub use join_filter::{
     JoinFilterEligibility, JoinFilterKey, JoinFilterPredicate, NoJoinFilter, selective_build,
 };
-pub use maintain::{Fresh, Publish};
 mod host;
 mod instrument;
 mod membership;

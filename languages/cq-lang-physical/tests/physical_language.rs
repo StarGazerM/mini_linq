@@ -32,7 +32,7 @@ const SOURCE: &str = "physical {
     r = pipe rename R@0 {a -> x,b -> y}; s = let rename S@1 {b -> y,c -> z};
     j = pipe probe first [y] r,s; f = pipe guard j if (*x < *z);
     e = pipe bind f with w:i32 = (*x + *z);
-    p = pipe canon project e keep {x,w}; return p as answer(x,w);
+    p = let canon project e keep {x,w}; return p as answer(x,w);
 }";
 #[test]
 fn complete_program_round_trip_and_analysis() {
@@ -95,14 +95,14 @@ const HASH_CHAIN: &str = "physical {
     l = let canon rename L@0 {a -> a};
     r = let canon rename R@1 {a -> a, b -> b};
     s = let canon rename S@2 {b -> b, c -> c};
-    j0 = pipe canon probe first [a] l, r;
-    j1 = pipe canon probe first [b] j0, s;
-    x = pipe canon semi eager [a] j1, l;
-    p = pipe canon project x keep {a, c}; return p as answer(a, c);
+    j0 = let canon probe first [a] l, r;
+    j1 = let canon probe first [b] j0, s;
+    x = let canon semi eager [a] j1, l;
+    p = let canon project x keep {a, c}; return p as answer(a, c);
 }";
 
 #[test]
-fn intermediate_lets_and_pipes_admit_canon_and_semijoins_record_key_reads() {
+fn intermediate_lets_admit_canon_and_semijoins_record_key_reads() {
     let source: physical::Program = syn::parse_str(HASH_CHAIN).unwrap();
     let analysis = physical::contract::check(&source).unwrap();
     assert_eq!(
@@ -125,7 +125,7 @@ fn a_merge_result_read_by_key_stays_materialized() {
         j0 = let merge[a] l, r;
         j1 = let merge[b] j0, s;
         x = pipe semi eager [a] l, j1;
-        p = pipe canon project x keep {a}; return p as answer(a);
+        p = let canon project x keep {a}; return p as answer(a);
     }};
     let analysis = physical::contract::check(&source).unwrap();
     assert_eq!(analysis.modes["j1"], physical::ModeKind::Let);
@@ -140,10 +140,10 @@ fn a_merge_result_read_by_key_stays_materialized() {
 fn point_reads_require_literal_keys_and_canon_host_pipes_require_linear_reads() {
     let mut p: physical::Program = syn::parse_quote!(physical {
         relation R(a:i32,b:i32); r = pipe rename R@0 {a -> x,b -> y};
-        w = pipe canon point select r if (x = 2); return w as answer(x,y);
+        w = let canon point select r if (x = 2); return w as answer(x,y);
     });
     physical::contract::check(&p).unwrap();
-    p.program.definitions[1] = syn::parse_quote!(w = pipe canon point select r if (x = y););
+    p.program.definitions[1] = syn::parse_quote!(w = let canon point select r if (x = y););
     assert!(
         physical::contract::check(&p)
             .unwrap_err()
@@ -168,7 +168,7 @@ fn rust_branches_are_independent_and_types_are_host_obligations() {
     physical::contract::check(&p).unwrap();
     let p: physical::Program = syn::parse_quote!(physical {
         relation R(price:f64); r = pipe rename R@0 {price -> price};
-        p = pipe canon point select r if (price = 0.0); return p as answer(price);
+        p = let canon point select r if (price = 0.0); return p as answer(price);
     });
     physical::contract::check(&p).unwrap();
     assert!(

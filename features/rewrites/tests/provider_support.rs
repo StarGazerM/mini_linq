@@ -73,7 +73,7 @@ fn source() -> ir::Program {
         r = let rename R@1 {a -> x,b -> y};
         s = pipe semi eager [x] l,r;
         p = pipe probe first [x] s,r;
-        out = pipe canon project p keep {x,y};
+        out = let canon project p keep {x,y};
         return out as answer(x,y);
     }})
     .unwrap()
@@ -200,7 +200,7 @@ macro_rules! query {
                 s = pipe semi eager [x] l,r;
                 p = pipe probe first [x] s,r;
                 observed = pipe guard p if ({ $visits.borrow_mut().push((*x, *y)); true });
-                out = pipe canon project observed keep {x,y};
+                out = let canon project observed keep {x,y};
                 return out as answer(x,y);
             }
         }
@@ -269,7 +269,7 @@ fn unit_key_support_preserves_cartesian_occurrences() {
             s = pipe semi eager [] l,r;
             p = pipe probe first [] s,r;
             observed = pipe guard p if ({ visits.borrow_mut().push((*x,*y)); true });
-            out = pipe canon project observed keep {x,y};
+            out = let canon project observed keep {x,y};
             return out as answer(x,y);
         }
         structures {
@@ -279,7 +279,7 @@ fn unit_key_support_preserves_cartesian_occurrences() {
             s share = lookup r [] first s force p;
             s repr = tuples witness { r [] at s as _ };
             p stage = batch 2 expand;
-            out canon = sort;
+            out rows = ::cq_storage::dedup::Sort; out canon = rows;
         }
     }
     .map(|(x, y)| (*x, *y))

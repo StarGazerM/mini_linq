@@ -51,7 +51,25 @@ fn main() {{
             ("cq_storage", "rlib"),
             ("cq_load", "rlib"),
         ] {
-            let path = artifact(&self.dependencies, name, extension);
+            // Runtime providers must share the exact Cargo-linked trait identity,
+            // even when another feature workspace built a newer artifact.
+            let path = match name {
+                "cq_storage" => {
+                    cq_testkit::rustc::linked_dependency::<cq_storage::Exists>(
+                        name,
+                        "cq_storage::Exists",
+                    )
+                    .1
+                }
+                "cq_load" => {
+                    cq_testkit::rustc::linked_dependency::<cq_load::ColumnAt<0>>(
+                        name,
+                        "cq_load::ColumnAt<0>",
+                    )
+                    .1
+                }
+                _ => artifact(&self.dependencies, name, extension),
+            };
             rustc
                 .arg("--extern")
                 .arg(format!("{name}={}", path.display()));
@@ -178,7 +196,7 @@ mini_linq::passes::select! {{
         r = let rename R@1 {{a -> x,b -> y}};
         {semi}
         p = pipe {operator} [x] {outer},r;
-        out = pipe canon project p keep {{x,y}};
+        out = let canon project p keep {{x,y}};
         return out as answer(x,y);
     }}
 }}
@@ -281,7 +299,7 @@ mini_linq::passes::select! {{
         relation L(a:i64) = (&left); relation R(a:i64,b:i64) = (&right);
         l = pipe rename L@0 {{a -> x}};
         r = pipe rename R@1 {{a -> x,b -> y}};
-        p = pipe canon merge [x] l,r;
+        p = let canon merge [x] l,r;
         return p as answer(x,y);
     }}
 }}.map(|(x,y)| (*x,*y)).collect::<Vec<_>>().into_iter()
@@ -326,7 +344,7 @@ mini_linq::passes::select! {{
                 t = let semi eager [x] l,s;
                 u = pipe semi eager [x] s,t;
                 j = pipe probe first [x] u,t;
-                out = pipe canon project j keep {{x,y}};
+                out = let canon project j keep {{x,y}};
                 return out as answer(x,y);
             }}
         }}.map(|(x,y)| (*x,*y)).collect::<Vec<_>>().into_iter()
@@ -380,7 +398,7 @@ fn candidate_directory_requires_candidates_not_just_matching_level_syntax() {
                 r = let rename R@1 {{b -> b,c -> c}};
                 s = let rename S@2 {{a -> a,c -> c}};
                 candidate = pipe probe smallest [b] l,r;
-                checked = pipe canon semi eager [a,c] candidate,s;
+                checked = let canon semi eager [a,c] candidate,s;
                 return checked as answer(a,b,c);
             }}
         }}.map(|(a,b,c)| (*a,*b,*c)).collect::<Vec<_>>().into_iter()
@@ -412,14 +430,14 @@ mini_linq::passes::sequence! {
         relation R(a:i64,b:i64) = (&right);
         r = pipe rename R@0 {a -> a,b -> b};
         selected = pipe point select r if (a = 1);
-        out = pipe canon project selected keep {a,b};
+        out = let canon project selected keep {a,b};
         return out as answer(a,b);
     }
     structures {
         r host scan = ::core::iter::Map<_,_> [];
         selected read = positional base R lineage {a -> a,b -> b}
             column a marker MarkerAlias predicate physical;
-        out canon = sort;
+        out rows = ::cq_storage::dedup::Sort; out canon = rows;
     }
 }"#;
     let filtered = r#"{
@@ -432,7 +450,7 @@ mini_linq::passes::sequence! {
                 l = pipe rename L@0 {k -> k,payload -> p};
                 r = let rename R@1 {k -> k,v -> v};
                 joined = pipe probe first [k] l,r;
-                out = pipe canon project joined keep {k,p,v};
+                out = let canon project joined keep {k,p,v};
                 return out as answer(k,p,v);
             }
             structures {
@@ -441,7 +459,7 @@ mini_linq::passes::sequence! {
                 r = ::cq_storage::RadixRun<_,_> [k] supports [keys];
                 l join_filter = ::cq_storage::AdaptiveKeySet<i64,::cq_storage::I64Codec,64>
                     build r [k] covering joined marker MarkerAlias;
-                out canon = sort;
+                out rows = ::cq_storage::dedup::Sort; out canon = rows;
             }
         }.map(|(k,p,v)| (*k,*p,*v)).collect::<Vec<_>>().into_iter()
     }"#;

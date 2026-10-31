@@ -17,8 +17,8 @@ pub fn record_readback() {
 
 /// Enable descriptor and dispatch diagnostics without downloading candidate rows.
 pub fn trace_kernels() -> bool {
-    static ENABLED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(||
-        std::env::var_os("GPU_DATALOG_TRACE_KERNELS").is_some());
+    static ENABLED: std::sync::LazyLock<bool> =
+        std::sync::LazyLock::new(|| std::env::var_os("GPU_DATALOG_TRACE_KERNELS").is_some());
     *ENABLED
 }
 
@@ -42,11 +42,12 @@ pub fn trace_memory(pool: &crate::Pool, stage: &str, relations: &[MemoryUse]) {
     eprintln!("gpu_datalog_memory\tstage={stage}\tcurrent_bytes={}\tpeak_bytes={}\treserved_bytes={}\tcached_bytes={}",
         stats.current_bytes, stats.peak_bytes, stats.reserved_bytes, stats.cached_bytes);
     let mut ordered: Vec<_> = relations.iter().collect();
-    ordered.sort_unstable_by_key(|relation| std::cmp::Reverse(
-        relation.accepted_bytes + relation.layout_bytes + relation.arena_bytes));
-    for relation in ordered.into_iter().filter(|relation|
-        relation.accepted_bytes + relation.layout_bytes + relation.arena_bytes != 0)
-    {
+    ordered.sort_unstable_by_key(|relation| {
+        std::cmp::Reverse(relation.accepted_bytes + relation.layout_bytes + relation.arena_bytes)
+    });
+    for relation in ordered.into_iter().filter(|relation| {
+        relation.accepted_bytes + relation.layout_bytes + relation.arena_bytes != 0
+    }) {
         eprintln!("gpu_datalog_owner\tstage={stage}\trelation={}\trows={}\taccepted_live_bytes={}\taccepted_bytes={}\tlayout_live_bytes={}\tlayout_bytes={}\tarena_bytes={}",
             relation.name, relation.rows, relation.accepted_live_bytes, relation.accepted_bytes,
             relation.layout_live_bytes, relation.layout_bytes, relation.arena_bytes);

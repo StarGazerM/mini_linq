@@ -107,7 +107,7 @@ fn borrowed_keysets_preserve_positive_and_negative_membership() {
                     relation L(a:i64) = ($left); relation R(b:i64) = ($right);
                     l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {b -> x};
                     s = let project r keep {x};
-                    out = pipe canon $operator eager [x] l,s;
+                    out = let canon $operator eager [x] l,s;
                     return out as answer(x);
                 }
                 structures {
@@ -115,7 +115,7 @@ fn borrowed_keysets_preserve_positive_and_negative_membership() {
                     r host scan = ::core::iter::Map<_,_> [];
                     s rows = ::std::vec::Vec<_>;
                     s keyset = ::cq_storage::AdaptiveKeySet<_,::cq_storage::BorrowedI64TupleCodec,$budget> [x] borrowed base R lineage{x -> b};
-                    out canon = sort;
+                    out rows = ::cq_storage::dedup::Sort; out canon = rows;
                 }
             }.map(|(x,)| *x).collect::<BTreeSet<_>>()
         };

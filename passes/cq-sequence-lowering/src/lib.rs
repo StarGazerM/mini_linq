@@ -85,7 +85,7 @@ pub fn compile(source: &cq_lang_structures::Program) -> syn::Result<Program> {
         if definition.canon.is_some() {
             term = Term::Canon(Box::new(term));
         }
-        if ModeKind::from(&definition.mode) != ModeKind::Pipe {
+        if retained(&analysis, definition) {
             term = Term::Store {
                 capacity: None,
                 inner: Box::new(term),
@@ -157,7 +157,7 @@ pub fn check(source: &cq_lang_structures::Program, target: &Program) -> syn::Res
         }
         let term = lowering_body(
             &lowered.term,
-            ModeKind::from(&definition.mode) != ModeKind::Pipe,
+            retained(&analysis, definition),
             definition.canon.is_some(),
         )
         .ok_or_else(invalid)?;
@@ -241,6 +241,17 @@ pub fn check(source: &cq_lang_structures::Program, target: &Program) -> syn::Res
         return Err(invalid());
     }
     Ok(())
+}
+
+/// Physical retention, except STR-RowsByValue: a canon `let` whose canonical
+/// rows record is bound by value is not storage. Like a canon pipe, its
+/// distinct-row build streams into its single reader.
+fn retained(
+    analysis: &cq_lang_structures::Analysis,
+    definition: &cq_lang_structures::physical::Definition,
+) -> bool {
+    ModeKind::from(&definition.mode) != ModeKind::Pipe
+        && !(definition.canon.is_some() && analysis.rows_by_value(&symbol_name(&definition.name)))
 }
 
 fn lowering_body(mut term: &Term, retained: bool, canonical: bool) -> Option<&Term> {

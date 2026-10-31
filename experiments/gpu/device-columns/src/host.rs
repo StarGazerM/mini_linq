@@ -1,6 +1,6 @@
 use crate::{
-    Bounds, Buffer, Codec, ColumnView, DecodeValue, Dictionary, EncodeValue, EncodedColumn, Pool,
-    Result, decode_value, encode_value, failure,
+    decode_value, encode_value, failure, Bounds, Buffer, Codec, ColumnView, DecodeValue,
+    Dictionary, EncodeValue, EncodedColumn, Pool, Result,
 };
 use cuda_core::DeviceCopy;
 use std::{marker::PhantomData, sync::Arc};
@@ -86,9 +86,7 @@ macro_rules! owned_scalar {
         }
     )+};
 }
-owned_scalar!(
-    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, bool
-);
+owned_scalar!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, bool);
 impl OwnedEncodeValue for String {
     fn encode_owned(&self, dictionary: &mut Dictionary<'static>) -> Result<i64> {
         dictionary.intern_owned(self)
@@ -395,13 +393,16 @@ mod tests {
         assert_eq!(<Row as OwnedRowCodec>::WIDTH, expected.len());
         assert_eq!(<Row as RowCodec<'_>>::WIDTH, expected.len());
         let mut values = vec![0; expected.len()];
-        row.encode_owned(&mut Dictionary::default(), &mut values).unwrap();
+        row.encode_owned(&mut Dictionary::default(), &mut values)
+            .unwrap();
         assert_eq!(values, expected);
         let dictionary = Dictionary::default();
         // DECODE I: diagnostic inverse is immediately re-encoded for round-trip checking; the reorganization is avoidable.
         let decoded = <Row as RowCodec<'_>>::decode(&values, &dictionary).unwrap();
         let mut encoded = vec![0; expected.len()];
-        decoded.encode_owned(&mut Dictionary::default(), &mut encoded).unwrap();
+        decoded
+            .encode_owned(&mut Dictionary::default(), &mut encoded)
+            .unwrap();
         assert_eq!(encoded, expected);
     }
 
@@ -416,8 +417,42 @@ mod tests {
     #[test]
     fn sixteen_column_valuation_roundtrips() {
         roundtrip(
-            (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, i64::MIN, i64::MAX),
-            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, i64::MIN, i64::MAX],
+            (
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                i64::MIN,
+                i64::MAX,
+            ),
+            &[
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                i64::MIN,
+                i64::MAX,
+            ],
         );
     }
 }

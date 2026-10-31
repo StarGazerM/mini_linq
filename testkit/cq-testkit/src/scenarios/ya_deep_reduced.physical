@@ -15,6 +15,6 @@ physical { relation R (first : i32 , second : i32);
  r10 = pipe probe first [b] r9 , r8;
  r11 = pipe probe first [c] r10 , r7;
  r12 = pipe probe first [d] r11 , r6;
- r13 = pipe canon project r12 keep { a , e };
+ r13 = let canon project r12 keep { a , e };
  return r13 as answer (a , e);
  }

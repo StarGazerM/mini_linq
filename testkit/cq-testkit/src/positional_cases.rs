@@ -89,7 +89,7 @@ fn empty_positional_left_does_not_force_lazy_semi_rhs() {
             l = pipe rename L@0 {a -> x}; empty = pipe range select l if (x > 100);
             r = pipe rename R@1 {b -> x};
             s = pipe semi lazy [x] empty,r;
-            out = pipe canon project s keep {x}; return out as answer(x);
+            out = let canon project s keep {x}; return out as answer(x);
         }
     }
     .collect();
@@ -110,7 +110,7 @@ fn custom_aliases_and_bare_build_provider_keep_selected_source_contracts() {
             l = pipe rename L@0 {a -> x,b -> y}; r = pipe rename R@1 {c -> x,d -> z};
             s = let point select r if (z = 1); t = let semi eager [x] l,s;
             u = pipe semi eager [x] s,t; j = pipe probe first [x] u,t;
-            out = pipe canon project j keep {x,y}; return out as answer(x,y);
+            out = let canon project j keep {x,y}; return out as answer(x,y);
         }
         structures {
             l host scan = ::core::iter::Map<_,_> [];
@@ -123,7 +123,7 @@ fn custom_aliases_and_bare_build_provider_keep_selected_source_contracts() {
             s read = positional base R lineage{x -> c,z -> d} column d marker ::cq_load::ColumnAt<1> predicate physical;
             t read = positional base L lineage{x -> a,y -> b} column a marker ::cq_load::ColumnAt<0> predicate membership s[x] summary exact;
             u read = positional base R lineage{x -> c,z -> d} column c marker ::cq_load::ColumnAt<0> predicate membership t[x] summary exact;
-            out canon = sort;
+            out rows = ::cq_storage::dedup::Sort; out canon = rows;
         }
     }.map(|(x,y)| (*x,*y)).collect();
     assert_eq!(actual, BTreeSet::from([(1, 10), (1, 20)]));
@@ -159,7 +159,7 @@ fn a_computed_left_key_can_test_an_owned_set_without_becoming_a_selection() {
             s = let point select r if (z = 1);
             t = let semi eager [x] computed,s;
             back = pipe semi eager [x] s,t;
-            out = pipe canon project back keep {x}; return out as answer(x);
+            out = let canon project back keep {x}; return out as answer(x);
         }
     }
     .map(|(x,)| *x)
@@ -211,7 +211,7 @@ macro_rules! positional_reduced {
                 reduced = let semi eager [x] projected, selected;
                 back = pipe semi eager [x] selected, reduced;
                 joined = pipe probe first [x] back, reduced;
-                result = pipe canon project joined keep {x,y};
+                result = let canon project joined keep {x,y};
                 return result as answer(x,y);
             }
         }

@@ -249,7 +249,7 @@ fn simple(body: TokenStream) -> Program {
     let physical = syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = pipe canon rename R@0 {a -> a};
+            r = let canon rename R@0 {a -> a};
             return r as answer(a);
         }
     };
@@ -264,10 +264,20 @@ fn simple(body: TokenStream) -> Program {
 
 #[test]
 fn sequence_owned_store_keeps_independent_row_accounting_live() {
-    let program = simple(quote! {
-        input = store rows r;
-        out = store canon input;
-    });
+    let physical = syn::parse_quote! { physical {
+        relation R(a:i32);
+        r = pipe rename R@0 {a -> a};
+        combined = let canon union r,r;
+        return combined as answer(a);
+    }};
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let program: Program = syn::parse_quote! {
+        #structures
+        sequence {
+            input = store rows r;
+            out = store canon union [input,input];
+        }
+    };
     let analysis = contract::check(&program).unwrap();
     for output in [
         cq_sequence_pull::translate(&program, &analysis).unwrap(),
@@ -335,7 +345,7 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
             relation L(a:i32); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a,b -> b};
-            j = pipe canon probe first [a] l,r;
+            j = let canon probe first [a] l,r;
             return j as answer(a,b);
         }
     };
@@ -393,7 +403,7 @@ fn membership_and_payload_reads_share_the_same_provider() {
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a,b -> b};
             s = pipe semi eager [a] l,r;
-            j = pipe canon probe first [a] s,r;
+            j = let canon probe first [a] s,r;
             return j as answer(a,b);
         }
     };
@@ -416,7 +426,7 @@ fn non_host_exists_is_stored_before_a_membership_read() {
             l = pipe rename L@0 {a -> a};
             r = pipe rename R@1 {b -> b};
             s = exists canon project r keep {};
-            j = pipe canon probe first [] l,s;
+            j = let canon probe first [] l,s;
             return j as answer(a);
         }
     };
@@ -507,7 +517,7 @@ fn canonical_consumer_preserves_internal_canon() {
         physical {
             relation R(a:i32,b:i32);
             consumer canonical;
-            r = pipe canon rename R@0 {a -> a,b -> b};
+            r = let canon rename R@0 {a -> a,b -> b};
             p = pipe project r keep {a};
             return p as answer(a);
         }
@@ -517,7 +527,11 @@ fn canonical_consumer_preserves_internal_canon() {
     let analysis = contract::check(&sequence).unwrap();
     let output = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
     let printed = output.to_token_stream().to_string();
-    assert_eq!(printed.matches("dedup :: sort").count(), 1, "{printed}");
+    assert_eq!(
+        printed.matches("dedup :: Sort > :: sort").count(),
+        1,
+        "{printed}"
+    );
     run(quote! {
         fn main() {
             let R = [(1i32, 10i32), (1, 10), (1, 20)];
@@ -537,7 +551,7 @@ fn ordered_canon_consumes_verified_source_without_hashing() {
         }
         structures {
             r host scan = ::core::iter::Map<_,_> [];
-            r canon = ordered;
+            r canon = host;
         }
     };
     let program = cq_sequence_lowering::compile(&structures).unwrap();

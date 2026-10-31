@@ -8,6 +8,12 @@ use cq_structure_selection::arguments::Results;
 /// Replace selected probes with merges when each side already supplies order
 /// through a retained result, reusable host, or same-key merge stream. Modes
 /// are never changed. Native host reads retain rustc's OrderedRead obligation.
+///
+/// Formal rule EXT-MergeRetained: a `let` side is retained storage unless it
+/// is a canon result with one unkeyed reader. PH-Canon stores such a result
+/// only in its canonical index, whose rows move by value into that reader
+/// (STR-RowsByValue); it is a canonical stream, as a canon pipe was, and a
+/// merge on it would add an ordered index the probe does not need.
 pub fn merge_joins(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let facts = ir::contract::check(source)?;
     let selected = Results::parse(arguments)?;
@@ -30,10 +36,17 @@ pub fn merge_joins(source: &ir::Program, arguments: TokenStream) -> syn::Result<
             continue;
         };
         let columns = sorted(&key.columns);
+        let retained = |name: &str| {
+            facts.modes[name] != ModeKind::Pipe
+                && !(facts.canon.contains(name)
+                    && facts.readers.get(name) == Some(&1)
+                    && facts.keyed_reads.get(name).is_none_or(Vec::is_empty)
+                    && facts.merge_reads.get(name).is_none_or(Vec::is_empty))
+        };
         let admissible = !columns.is_empty()
             && [&key.left, &key.right].iter().all(|side| {
                 let name = symbol_name(side);
-                facts.modes[&name] != ModeKind::Pipe
+                retained(&name)
                     || facts.hosts.contains_key(&name)
                     || ordered.get(&name) == Some(&columns)
             });
@@ -75,6 +88,8 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                     matched.insert(name.clone());
                     if inherited.is_none() {
                         definition.canon = Some(Default::default());
+                        // PH-Canon: a canon result is stored in its canonical index.
+                        definition.mode = ir::Mode::Let(Default::default());
                     }
                 }
             }
@@ -113,19 +128,30 @@ pub fn smallest_intersections(
         loop {
             let previous = *chain.last().unwrap();
             let Some(next) = (previous + 1..definitions.len()).find(|&next| {
-                ir::intersection_extension(first, &definitions[previous], &definitions[next], &facts)
-                    .is_some()
+                ir::intersection_extension(
+                    first,
+                    &definitions[previous],
+                    &definitions[next],
+                    &facts,
+                )
+                .is_some()
                     || matches!(selection, SmallestSelection::Sites(_))
                         && ir::intersection_key_projection(
-                            first, &definitions[previous], &definitions[next], &facts,
+                            first,
+                            &definitions[previous],
+                            &definitions[next],
+                            &facts,
                         )
             }) else {
                 break;
             };
             if !definitions[previous + 1..next].iter().all(|definition| {
-                chain.iter().all(|&member| independent_relational(
-                    &definition.operator, &symbol_name(&definitions[member].name),
-                ))
+                chain.iter().all(|&member| {
+                    independent_relational(
+                        &definition.operator,
+                        &symbol_name(&definitions[member].name),
+                    )
+                })
             }) {
                 break;
             }
@@ -137,11 +163,17 @@ pub fn smallest_intersections(
         let selected = match &selection {
             SmallestSelection::Results(results) => results.includes(&first.name),
             SmallestSelection::Sites(sites) => {
-                let origins: Option<BTreeSet<_>> = chain.iter().map(|&index| {
-                    let (Operator::Probe(_, key) | Operator::Semi(_, key)) =
-                        &definitions[index].operator else { unreachable!() };
-                    provider_occurrence(definitions, &key.right)
-                }).collect();
+                let origins: Option<BTreeSet<_>> = chain
+                    .iter()
+                    .map(|&index| {
+                        let (Operator::Probe(_, key) | Operator::Semi(_, key)) =
+                            &definitions[index].operator
+                        else {
+                            unreachable!()
+                        };
+                        provider_occurrence(definitions, &key.right)
+                    })
+                    .collect();
                 let mut selected = false;
                 for (index, site) in sites.iter().enumerate() {
                     if origins.as_ref() == Some(site) && site.len() == chain.len() {
@@ -164,9 +196,13 @@ pub fn smallest_intersections(
                 if count != 1 {
                     return Err(syn::Error::new(
                         proc_macro2::Span::call_site(),
-                        format!("smallest({}) must identify exactly one admissible complete intersection site; matched {count}",
-                            site.iter().map(|(relation, occurrence)| format!("{relation}@{occurrence}"))
-                                .collect::<Vec<_>>().join(", ")),
+                        format!(
+                            "smallest({}) must identify exactly one admissible complete intersection site; matched {count}",
+                            site.iter()
+                                .map(|(relation, occurrence)| format!("{relation}@{occurrence}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
                     ));
                 }
             }
@@ -178,8 +214,13 @@ pub fn smallest_intersections(
         for pair in chain.windows(2) {
             let member = &definitions[pair[1]];
             if ir::intersection_extension(
-                &definitions[chain[0]], &definitions[pair[0]], member, &facts,
-            ).is_some() {
+                &definitions[chain[0]],
+                &definitions[pair[0]],
+                member,
+                &facts,
+            )
+            .is_some()
+            {
                 continue;
             }
             let Operator::Semi(_, key) = &member.operator else {
@@ -200,8 +241,12 @@ pub fn smallest_intersections(
             let columns = key.columns.iter();
             let projection: ir::Definition =
                 syn::parse_quote!(#view = let project #provider keep {#(#columns),*};);
-            let position = target.program.definitions.iter()
-                .position(|d| d.name == member.name).unwrap();
+            let position = target
+                .program
+                .definitions
+                .iter()
+                .position(|d| d.name == member.name)
+                .unwrap();
             let Operator::Semi(_, key) = &mut target.program.definitions[position].operator else {
                 unreachable!("source membership preserved");
             };
@@ -209,14 +254,28 @@ pub fn smallest_intersections(
             target.program.definitions.insert(position, projection);
         }
         for (length, &next) in chain.iter().enumerate().skip(1) {
-            let start = target.program.definitions.iter().position(|d| &d.name == first_name).unwrap();
-            let end = target.program.definitions.iter()
-                .position(|d| d.name == definitions[next].name).unwrap();
+            let start = target
+                .program
+                .definitions
+                .iter()
+                .position(|d| &d.name == first_name)
+                .unwrap();
+            let end = target
+                .program
+                .definitions
+                .iter()
+                .position(|d| d.name == definitions[next].name)
+                .unwrap();
             // Stable hoisting preserves the source's topological order. No
             // interval contains Rust or references to an intersection result.
             target.program.definitions[start..end].rotate_left(length);
         }
-        let first = target.program.definitions.iter_mut().find(|d| &d.name == first_name).unwrap();
+        let first = target
+            .program
+            .definitions
+            .iter_mut()
+            .find(|d| &d.name == first_name)
+            .unwrap();
         if let Operator::Probe(_, key) = &mut first.operator {
             key.choice = Some(Choice::Smallest(Default::default()));
         }
@@ -244,7 +303,10 @@ impl syn::parse::Parse for SmallestSelection {
         while !input.is_empty() {
             let name: Ident = input.parse()?;
             if name != "smallest" {
-                return Err(syn::Error::new_spanned(name, "expected smallest(R@a, S@b, ...)"));
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "expected smallest(R@a, S@b, ...)",
+                ));
             }
             let content;
             syn::parenthesized!(content in input);
@@ -255,14 +317,20 @@ impl syn::parse::Parse for SmallestSelection {
                 let occurrence: ir::syntax::Occurrence = content.parse()?;
                 occurrence.check()?;
                 if !site.insert((symbol_name(&relation), occurrence)) {
-                    return Err(syn::Error::new_spanned(relation, "duplicate smallest occurrence"));
+                    return Err(syn::Error::new_spanned(
+                        relation,
+                        "duplicate smallest occurrence",
+                    ));
                 }
                 if !content.is_empty() {
                     content.parse::<Token![,]>()?;
                 }
             }
             if site.len() < 2 {
-                return Err(syn::Error::new_spanned(name, "smallest requires at least two distinct occurrences"));
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "smallest requires at least two distinct occurrences",
+                ));
             }
             if sites.contains(&site) {
                 return Err(syn::Error::new_spanned(name, "duplicate smallest site"));
@@ -283,13 +351,17 @@ fn provider_occurrence(
 ) -> Option<(String, ir::syntax::Occurrence)> {
     let mut result = result;
     loop {
-        let definition = definitions.iter().find(|definition| &definition.name == result)?;
+        let definition = definitions
+            .iter()
+            .find(|definition| &definition.name == result)?;
         result = match &definition.operator {
             Operator::Rename(rename) => {
                 return Some((symbol_name(&rename.relation), rename.occurrence.clone()));
             }
             Operator::Project(project) => &project.input,
-            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => &select.input,
+            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+                &select.input
+            }
             _ => return None,
         };
     }

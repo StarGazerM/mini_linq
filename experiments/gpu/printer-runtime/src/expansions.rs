@@ -38,7 +38,12 @@ impl Drop for Capture {
 /// Called only after a successful launch attempt, so capacity retries do not
 /// multiply logical work. Outside Datalog this reports directly (including TPC-H).
 pub fn publish(program: &'static str, definition: &'static str, children: &[u64], output: u64) {
-    let record = Record { program, definition, children: children.to_vec(), output };
+    let record = Record {
+        program,
+        definition,
+        children: children.to_vec(),
+        output,
+    };
     CAPTURE.with(|slot| {
         if let Some(records) = slot.borrow_mut().as_mut() {
             records.push(record);

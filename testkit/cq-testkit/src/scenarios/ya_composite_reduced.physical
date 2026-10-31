@@ -10,6 +10,6 @@ physical { relation R (first : i32 , second : i32 , value : i32);
  r6 = pipe semi eager [a , b] r1 , r5;
  r7 = pipe probe first [a , b] r6 , r5;
  r8 = pipe probe first [b , c] r7 , r4;
- r9 = pipe canon project r8 keep { u , v };
+ r9 = let canon project r8 keep { u , v };
  return r9 as answer (u , v);
  }

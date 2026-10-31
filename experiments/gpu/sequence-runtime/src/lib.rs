@@ -58,7 +58,10 @@ impl Default for QueryScope {
 pub fn register_query_cleanup(release: fn()) {
     QUERY_CLEANUP.with(|cleanup| {
         if let Some(cleanup) = cleanup.borrow_mut().as_mut() {
-            if !cleanup.iter().any(|&existing| std::ptr::fn_addr_eq(existing, release)) {
+            if !cleanup
+                .iter()
+                .any(|&existing| std::ptr::fn_addr_eq(existing, release))
+            {
                 cleanup.push(release);
             }
         }
@@ -85,9 +88,22 @@ pub mod __codegen {
         )*};
     }
     partitions!(
-        partition_0, partition_1, partition_2, partition_3, partition_4, partition_5,
-        partition_6, partition_7, partition_8, partition_9, partition_10, partition_11,
-        partition_12, partition_13, partition_14, partition_15,
+        partition_0,
+        partition_1,
+        partition_2,
+        partition_3,
+        partition_4,
+        partition_5,
+        partition_6,
+        partition_7,
+        partition_8,
+        partition_9,
+        partition_10,
+        partition_11,
+        partition_12,
+        partition_13,
+        partition_14,
+        partition_15,
     );
 }
 
@@ -146,11 +162,14 @@ fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
     if rows > u32::MAX as usize {
         return Err("numeric upload exceeds the u32 row domain".into());
     }
-    let metadata = Arc::new(Buffer::from_host(pool.clone(), &[gpu_device_columns::OutputCount {
-        rows: rows as u64,
-        error: 0,
-        padding: 0,
-    }])?);
+    let metadata = Arc::new(Buffer::from_host(
+        pool.clone(),
+        &[gpu_device_columns::OutputCount {
+            rows: rows as u64,
+            error: 0,
+            padding: 0,
+        }],
+    )?);
     let columns = raw
         .iter()
         .map(|values| {
@@ -165,20 +184,35 @@ fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
             // is needed in a timed provider build.
             unsafe {
                 EncodedColumn::from_device(
-                    pool.clone(), input.ptr(), rows, metadata.clone(), 0, Codec::For, bounds,
-                ).map(Arc::new)
+                    pool.clone(),
+                    input.ptr(),
+                    rows,
+                    metadata.clone(),
+                    0,
+                    Codec::For,
+                    bounds,
+                )
+                .map(Arc::new)
             }
         })
         .collect::<Result<Vec<_>>>()?;
     let bounds = columns.iter().map(|column| column.bounds()).collect();
-    let host_views: Vec<_> = columns.iter().map(|column| unsafe { column.view() }).collect();
+    let host_views: Vec<_> = columns
+        .iter()
+        .map(|column| unsafe { column.view() })
+        .collect();
     let views = Arc::new(Buffer::from_host(pool.clone(), &host_views)?);
     // Columns are initialized on this pool's stream; the table retains every
     // owner and its exact row count. Primitive lanes need no dictionary IDs.
     Ok(unsafe {
         DeviceColumns::from_parts(
             gpu_device_columns::Table {
-                columns, views, metadata, capacity: rows, bounds, statuses: Vec::new(),
+                columns,
+                views,
+                metadata,
+                capacity: rows,
+                bounds,
+                statuses: Vec::new(),
             },
             Arc::new(cq_gpu_runtime::Dictionary::default()),
             pool,
@@ -387,10 +421,11 @@ fn source_bounds(
         partial.ptr(),
     )?;
     let partial = partial.to_host()?;
-    let (min, max) = partial.chunks_exact(2).fold(
-        (i64::MAX, i64::MIN),
-        |(min, max), pair| (min.min(pair[0]), max.max(pair[1])),
-    );
+    let (min, max) = partial
+        .chunks_exact(2)
+        .fold((i64::MAX, i64::MIN), |(min, max), pair| {
+            (min.min(pair[0]), max.max(pair[1]))
+        });
     Ok(Bounds::Inclusive { min, max })
 }
 
@@ -608,7 +643,10 @@ pub fn release_cached_scratch(pool: &Arc<Pool>) {
     canon::release_cached_scratch(pool);
     let scratch = RANGE_RADIX_WORKSPACE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.as_ref().is_some_and(|scratch| Arc::ptr_eq(&scratch.pool, pool)) {
+        if cache
+            .as_ref()
+            .is_some_and(|scratch| Arc::ptr_eq(&scratch.pool, pool))
+        {
             cache.take()
         } else {
             None
@@ -644,7 +682,8 @@ impl Drop for RangeRadixWorkspace {
             let empty = unsafe { DeviceBuffer::uninitialized_async(pool.stream(), 0) }
                 .expect("zero-length device buffer needs no allocation");
             let buffer = std::mem::replace(buffer, empty);
-            pool.context().record_err(unsafe { buffer.drop_async(pool.stream()) });
+            pool.context()
+                .record_err(unsafe { buffer.drop_async(pool.stream()) });
         }
         let (bins, lookback, counters) = self.workspace.__parts_mut();
         release(&self.pool, bins);
@@ -672,7 +711,9 @@ fn with_range_radix_workspace(
             pool.context().bind_to_thread()?;
             *cache = Some(RangeRadixWorkspace {
                 rows,
-                workspace: rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(launch, rows)?,
+                workspace: rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(
+                    launch, rows,
+                )?,
                 pool: pool.clone(),
             });
         }
@@ -812,7 +853,10 @@ impl<'pool> RangeBuilder<'pool> {
                 let flags = temporary::<u32>(stream, base_rows)?;
                 let shape = module.prepare_range_flags(LaunchConfig1D::new(1, 256, 0))?;
                 let blocks = cq_gpu_runtime::launch_grid_for_kernel(
-                    shape.function(), base_rows.div_ceil(256), 256, 0,
+                    shape.function(),
+                    base_rows.div_ceil(256),
+                    256,
+                    0,
                 )?;
                 // DECODE V: index selection launch reconstructs values before range comparison; P6 translate predicates to codes.
                 module.range_flags(
@@ -920,8 +964,12 @@ impl<'pool> RangeBuilder<'pool> {
         let keys_prepared = module.prepare_keys_and_rows(LaunchConfig1D::new(blocks, 256, 0))?;
         if descriptor.key.len() > 1 {
             let shape = module.prepare_sequence_decode_column(LaunchConfig1D::new(1, 256, 0))?;
-            let blocks =
-                cq_gpu_runtime::launch_grid_for_kernel(shape.function(), rows.div_ceil(256), 256, 0)?;
+            let blocks = cq_gpu_runtime::launch_grid_for_kernel(
+                shape.function(),
+                rows.div_ceil(256),
+                256,
+                0,
+            )?;
             let decode_prepared =
                 module.prepare_sequence_decode_column(LaunchConfig1D::new(blocks, 256, 0))?;
             let plain = descriptor

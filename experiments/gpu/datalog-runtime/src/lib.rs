@@ -7,15 +7,18 @@
 pub mod arena;
 pub mod layout;
 pub mod pack;
-pub mod runs;
 pub mod phases;
+pub mod runs;
 mod stats;
-pub use stats::{readback_count, record_readback, trace_kernels, trace_memory, MemoryUse};
+pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
 pub use gpu_device_columns::{Buffer, Pool};
+pub use layout::{
+    device, encode_scalar, DeviceLayout, PackedField, PackedProvider, PackedRunView, RunsView,
+    Scalar, ScalarTuple,
+};
 pub use pack::{Column, Packing, Word};
 pub use runs::{AdmissionTimings, DeviceRuns, Run, RunView};
-pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
-pub use layout::{device, encode_scalar, DeviceLayout, PackedProvider, PackedField, PackedRunView, RunsView, Scalar, ScalarTuple};
+pub use stats::{readback_count, record_readback, trace_kernels, trace_memory, MemoryUse};
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
 /// Host-side bijection between logical symbols and their device integer codes.

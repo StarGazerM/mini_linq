@@ -44,10 +44,10 @@ macro_rules! sequence_rewrite {
             "    pipeline { finish };\n",
             "    physical {\n",
             "        relation R(a:i32);\n",
-            "        r = pipe canon rename R@0 {a -> a};\n",
+            "        r = let canon rename R@0 {a -> a};\n",
             "        return r as answer(a);\n",
             "    }\n",
-            "    structures { r host scan = Reader []; r canon = sort; }\n",
+            "    structures { r host scan = Reader []; r rows = ::cq_storage::dedup::Sort; r canon = rows; }\n",
             "    sequence { a = rows r; b = flatten tile 8 a; d = store a; }\n",
             "}\n",
             "```"

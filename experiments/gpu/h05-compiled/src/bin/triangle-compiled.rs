@@ -47,7 +47,7 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
             r = let rename E@1 {src -> b,dst -> c};
             s = let rename E@2 {src -> a,dst -> c};
             candidate = pipe probe smallest [b] l,r;
-            checked = pipe canon probe first [a,c] candidate,s;
+            checked = let canon probe first [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
         structures {
@@ -58,7 +58,8 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
             s = ::cq_gpu_sequence_runtime::RangeProvider [a][c];
             r rows = ::cq_gpu_sequence_runtime::RangeProvider;
             s rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            checked canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            checked rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            checked canon = rows;
         }
         sequence {
             Edges = store rows l;

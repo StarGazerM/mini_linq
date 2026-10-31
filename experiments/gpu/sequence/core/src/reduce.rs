@@ -116,11 +116,19 @@ pub fn group(
     let keys = columns.len();
     let fold = match (keys, provider) {
         (0, None) => quote!(::cq_gpu_sequence_runtime::group::fold),
-        (0, Some(_)) => return Err(syn::Error::new_spanned(group,
-            "GPU-Group: global fold cannot carry a keyed accumulator provider")),
+        (0, Some(_)) => {
+            return Err(syn::Error::new_spanned(
+                group,
+                "GPU-Group: global fold cannot carry a keyed accumulator provider",
+            ));
+        }
         (_, Some(provider)) => quote!(<#provider>::fold),
-        (_, None) => return Err(syn::Error::new_spanned(group,
-            "GPU-Group: keyed fold lacks a recorded accumulator provider")),
+        (_, None) => {
+            return Err(syn::Error::new_spanned(
+                group,
+                "GPU-Group: keyed fold lacks a recorded accumulator provider",
+            ));
+        }
     };
     let mut arguments = columns.iter().cloned().map(Some).collect::<Vec<_>>();
     let mut descriptors = Vec::new();
@@ -191,7 +199,13 @@ pub fn group(
                 quote!(#fields[#field].shift),
                 quote!(#fields[#field].bits),
             ]);
-            let offset = crate::emit::packed_offset(quote!(packed), quote!(position), quote!(lanes), quote!(#shift), quote!(#bits));
+            let offset = crate::emit::packed_offset(
+                quote!(packed),
+                quote!(position),
+                quote!(lanes),
+                quote!(#shift),
+                quote!(#bits),
+            );
             // DECODE V: P6 grouped input reconstructs packed FOR fields before relational grouping and aggregation.
             writes.push(quote! {
                 let offset = #offset;

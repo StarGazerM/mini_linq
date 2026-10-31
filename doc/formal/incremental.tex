@@ -165,8 +165,9 @@ the old committed version. Both obligations are discharged by the index
 protocol below, never by a store outside the relation's recorded indices.
 Cost includes processing the candidate bag, not only the accepted delta; no
 universal $O(|\delta R_t|)$ round bound follows from these equations.
-(Transitional: CPU Datalog's hash \code{seen} and CQ's sort canon still
-realize these obligations outside the index protocol; P3d removes both.)
+(Transitional: CPU Datalog's hash \code{seen} still realizes these
+obligations outside the index protocol. CQ's canon is the build of its
+canonical index, an ordinary index of the result.)
 
 \paragraph{Admission is an anti-join against an ordinary index (P3d).}
 Let $O$ be an output relation (a CQ result or a Datalog IDB) and let its
@@ -201,52 +202,42 @@ admission; $\delta$ of the batch is always discharged at admission.
 \paragraph{Index protocol.}
 The anti-join reads the \emph{canonical} index $V$ of $O$: one ordinary member
 of $O$'s index set, every member a complete column permutation, recorded by
-the index-selection pass (preferring a member whose full version joins
-already read). It is typed, recorded and maintained like every other member.
-Every index $V_L$ of $O$ is maintained by its provider's publication;
-non-canonical deltas are derived from the canonical delta by permutation. For
-provider operations $\mathsf{contains}$ (\code{ExactMembership}),
-$\mathsf{fresh}$ (\code{Fresh}) and $\mathsf{publish}$ (\code{Publish}):
+the index-selection pass (SRDatalog's \code{select\_indices}/\code{canonical\_index}).
+It is typed, recorded and maintained like every other member; no separate
+membership store, maintenance trait or printer branch exists. For CQ the
+whole stream is one batch: the canonical index is the result's rows record,
+built by a provider with the \code{Distinct} capability
+(\textsc{PL-Distinct}, \textsc{STR-Canon}), so \textsc{ADM-Batch} holds with
+$n=1$ and $O_0=\emptyset$. Readers between maintenance steps observe one
+represented relation:
 \begin{mathpar}
-\Rule{IX-Fresh}{V\text{ represents }O}
- {\mathrm{set}(\mathsf{fresh}(V,B))=\mathrm{supp}(B)\setminus O\quad
-  \mathsf{fresh}(V,B)\text{ has no duplicates}\quad V\text{ unchanged}}
-
-\Rule{IX-Publish}{V_L\text{ represents }L(O)\quad F\cap O=\emptyset\quad F\text{ duplicate-free}}
- {\mathsf{publish}(V_L,L(F))\text{ represents }L(O\mathbin{\dot\cup}F)}
-
-\Rule{IX-Stable}{\text{no publication between two reads}}
+\Rule{IX-Stable}{\text{no maintenance between two reads}}
  {\text{both reads observe the same represented relation}}
 \end{mathpar}
-How $\mathsf{fresh}$ deduplicates within a batch (hash insertion, sorted-run
-merge, radix sort) and when $\mathsf{publish}$ physically combines storage
-(eagerly or lazily, as leveled runs) are provider choices under these laws;
-sorting is never a semantic step or a recorded strategy name. Readers of a
-round see the committed version: all publications of a round follow its last
-reader (\textsc{DL-PublishAfterReaders}).
+How a provider deduplicates (sorted array, hash insertion, radix sort) and
+when maintenance physically combines storage are provider choices; sorting is
+never a recorded strategy name. Readers of a Datalog round see the committed
+version: all maintenance of a round follows its last reader
+(\textsc{DL-PublishAfterReaders}).
 
-The CPU providers implement this protocol for ordinary hash/tree sets,
-grouped hash/ordered maps, sorted/radix runs, and recursively curried tries.
-Grouped membership is exact key existence; full-row admission additionally
-compares the complete payload in that group. A present prefix never proves
-that the complete candidate row is present.
 The explicit \code{HashMap<K,HashSet<V,T>,S>} layout indexes the payload
 within each group: complete-row membership is two exact hash probes,
 candidate enumeration is already distinct, and counting reads the bucket
 length. Its two hasher representations are independent. This remains an
 ordinary index layout and carries no canonical-only storage.
 
-For radix index runs, publication appends a grouped delta and uses stable
-merge-path partitions on adjacent key directories. Runs retain chronological
-order, and payload groups at equal keys concatenate older before newer.
-After publication, adjacent run sizes satisfy $|L_i|\ge k|L_{i+1}|$ for
-provider ratio $k\ge2$. Membership, counts and range offsets read only
-directories; lookup cursors visit every published run without compaction.
-Contiguous legacy item reads may cache a merged view, invalidated at publication.
+For radix index runs, the inherent \code{RadixRun::merge} appends a grouped
+delta and uses stable merge-path partitions on adjacent key directories. It
+is a multiset union: no disjointness is required, and reads afterwards
+observe the old occurrences plus every delta occurrence. Runs retain
+chronological order, and payload groups at equal keys concatenate older
+before newer. After merging, adjacent run sizes satisfy $|L_i|\ge k|L_{i+1}|$
+for provider ratio $k\ge2$. Membership, counts and range offsets read only
+directories; lookup cursors visit every run without compaction.
+Contiguous legacy item reads may cache a merged view, invalidated by merge.
 \begin{mathpar}
-\Rule{IX-RunPublish}{\alpha(\mathcal L)=O\quad F\cap O=\emptyset\quad
- F\text{ duplicate-free}\quad k\ge2}
- {\alpha(\mathsf{publish}_k(\mathcal L,F))=O\mathbin{\dot\cup}F\quad
+\Rule{IX-RunMerge}{\mathrm{reads}(\mathcal L)=V\quad k\ge2}
+ {\mathrm{reads}(\mathsf{merge}_k(\mathcal L,D))=V\uplus D\quad
   \forall i.\ |L_i|\ge k|L_{i+1}|}
 \end{mathpar}
 

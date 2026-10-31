@@ -97,7 +97,8 @@ pub unsafe fn decode_source(source: SourceView, row: u64) -> i64 {
             let shift = source.shift % 64;
             let mut value = unsafe { source.column.data.add(index as usize).read() } >> shift;
             if shift != 0 && source.mask > (u64::MAX >> shift) {
-                value |= unsafe { source.column.data.add(index as usize + 1).read() } << (64 - shift);
+                value |=
+                    unsafe { source.column.data.add(index as usize + 1).read() } << (64 - shift);
             }
             value & source.mask
         };

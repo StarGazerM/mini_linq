@@ -24,7 +24,10 @@ pub(crate) fn release_query_cache() {
 pub(crate) fn release_cached_scratch(pool: &Arc<Pool>) {
     let scratch = CACHED_SCRATCH.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.as_ref().is_some_and(|scratch| Arc::ptr_eq(&scratch.pool, pool)) {
+        if cache
+            .as_ref()
+            .is_some_and(|scratch| Arc::ptr_eq(&scratch.pool, pool))
+        {
             cache.take()
         } else {
             None
@@ -261,19 +264,33 @@ impl<'pool> PackedCanon<'pool> {
         let metadata = Arc::new(Buffer::<OutputCount>::zeroed(self.pool.clone(), 1)?);
         if rows != 0 && lanes == 2 {
             let scratch = self.scratch.as_mut().expect("live packed canon scratch");
-            if scratch.wide.as_ref().is_none_or(|buffer| buffer.len() != rows) {
-                let replacement = unsafe { DeviceBuffer::<u128>::uninitialized_async(self.pool.stream(), rows)? };
+            if scratch
+                .wide
+                .as_ref()
+                .is_none_or(|buffer| buffer.len() != rows)
+            {
+                let replacement =
+                    unsafe { DeviceBuffer::<u128>::uninitialized_async(self.pool.stream(), rows)? };
                 if let Some(previous) = scratch.wide.replace(replacement) {
                     unsafe { previous.drop_async(self.pool.stream())? };
                 }
             }
             let wide = scratch.wide.as_mut().expect("wide canon scratch");
-            let selected = scratch.selected.as_mut().expect("packed canon count scratch");
+            let selected = scratch
+                .selected
+                .as_mut()
+                .expect("packed canon count scratch");
             unsafe {
-                cuda_core::simt::memory::memcpy_dtod_async(wide.cu_deviceptr(), input.cu_deviceptr(),
-                    rows * std::mem::size_of::<u128>(), self.pool.stream().cu_stream())?;
+                cuda_core::simt::memory::memcpy_dtod_async(
+                    wide.cu_deviceptr(),
+                    input.cu_deviceptr(),
+                    rows * std::mem::size_of::<u128>(),
+                    self.pool.stream().cu_stream(),
+                )?;
             }
-            let execution = self.thrust.par_in(self.pool.stream(), self.pool.resource())?;
+            let execution = self
+                .thrust
+                .par_in(self.pool.stream(), self.pool.resource())?;
             wide.sort_unstable_by(&execution, |a: &u128, b: &u128| a.cmp(b))?;
             let output = keys.ptr();
             rccl_thrust::unique_copy_by(
@@ -287,8 +304,12 @@ impl<'pool> PackedCanon<'pool> {
                 |a: u128, b: u128| a == b,
             )?;
             unsafe {
-                cuda_core::simt::memory::memcpy_dtod_async(metadata.cu_deviceptr(), selected.cu_deviceptr(),
-                    std::mem::size_of::<u64>(), self.pool.stream().cu_stream())?;
+                cuda_core::simt::memory::memcpy_dtod_async(
+                    metadata.cu_deviceptr(),
+                    selected.cu_deviceptr(),
+                    std::mem::size_of::<u64>(),
+                    self.pool.stream().cu_stream(),
+                )?;
             }
         } else if rows != 0 {
             let scratch = self.scratch.as_mut().expect("live packed canon scratch");
@@ -455,7 +476,12 @@ impl<'pool> WideCanon<'pool> {
                 .ok_or("wide canon radix buffer extents differ")?;
             let module = module(pool)?;
             let shape = module.prepare_gather_lane(LaunchConfig1D::new(1, 256, 0))?;
-            let grid = cq_gpu_runtime::launch_grid_for_kernel(shape.function(), rows.div_ceil(256), 256, 0)?;
+            let grid = cq_gpu_runtime::launch_grid_for_kernel(
+                shape.function(),
+                rows.div_ceil(256),
+                256,
+                0,
+            )?;
             let prepared = module.prepare_gather_lane(LaunchConfig1D::new(grid, 256, 0))?;
             for lane in 0..lanes {
                 let (values, order) = buffers.current_mut();
@@ -527,7 +553,6 @@ impl CanonicalKeys {
     pub fn capacity(&self) -> usize {
         self.keys.len() / self.lanes
     }
-
 
     pub fn lanes(&self) -> usize {
         self.lanes
@@ -706,15 +731,27 @@ impl PackedColumnsAdapter {
             .iter()
             .map(|field| field.bounds())
             .collect::<Result<Vec<_>>>()?;
-        if fields.iter().any(|field| (field.shift + field.bits) as usize > lanes * 64) {
+        if fields
+            .iter()
+            .any(|field| (field.shift + field.bits) as usize > lanes * 64)
+        {
             return Err("packed field exceeds the stored key width".into());
         }
         let mut columns = Vec::with_capacity(fields.len());
         let prepared = if capacity != 0 && !fields.is_empty() {
-            let shape = self.module.prepare_unpack_field(LaunchConfig1D::new(1, 256, 0))?;
-            let grid =
-                cq_gpu_runtime::launch_grid_for_kernel(shape.function(), capacity.div_ceil(256), 256, 0)?;
-            Some(self.module.prepare_unpack_field(LaunchConfig1D::new(grid, 256, 0))?)
+            let shape = self
+                .module
+                .prepare_unpack_field(LaunchConfig1D::new(1, 256, 0))?;
+            let grid = cq_gpu_runtime::launch_grid_for_kernel(
+                shape.function(),
+                capacity.div_ceil(256),
+                256,
+                0,
+            )?;
+            Some(
+                self.module
+                    .prepare_unpack_field(LaunchConfig1D::new(grid, 256, 0))?,
+            )
         } else {
             None
         };

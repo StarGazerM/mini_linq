@@ -23,7 +23,7 @@ fn only_coarse_total_scans_use_lookahead() {
                 l = pipe rename L@0 {{k -> k}};
                 r = let rename R@1 {{k -> k,v -> v}};
                 {guard}
-                j = pipe canon probe first [k] {outer},r;
+                j = let canon probe first [k] {outer},r;
                 return j as answer(k,v);
             }}"
         ))
@@ -46,7 +46,7 @@ fn recorded_scan_selections_use_chunk_masks_before_rust() {
             l = pipe rename L@0 {k -> k};
             s = pipe select l if (k >= 2);
             t = pipe select s if (k <= 9);
-            g = pipe canon guard t if (*k != 7);
+            g = let canon guard t if (*k != 7);
             return g as answer(k);
         }
     };

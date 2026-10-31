@@ -22,7 +22,8 @@
 //! ```text
 //! Entry ::= Ident ("=" RustType ("[" Ident,* "]")+ [Support]
 //!                | "host" ReaderRef "=" RustType ("[" Ident,* "]")+ [Support]
-//!                | ("rows" | "canon" | "head" | "group") "=" RustType
+//!                | ("rows" | "head" | "group") "=" RustType
+//!                | "canon" "=" ("rows" | "[" Ident,* "]" | "host")
 //!                | "selection" "=" RustType Origin "summary" Summary
 //!                | "keyset" "=" RustType "[" Ident,* "]" Ownership Origin
 //!                | "read" "=" "positional" Origin "column" Ident
@@ -69,9 +70,6 @@ pub mod kw {
     syn::custom_keyword!(result);
     syn::custom_keyword!(group);
     syn::custom_keyword!(canon);
-    syn::custom_keyword!(sort);
-    syn::custom_keyword!(ordered);
-    syn::custom_keyword!(using);
     syn::custom_keyword!(head);
     syn::custom_keyword!(rows);
     syn::custom_keyword!(payload);
@@ -140,43 +138,41 @@ pub struct Entry {
     pub semi_token: Token![;],
 }
 
-/// Recorded implementation of whole-stream set canonicalization.
-/// Ordered consumes a load-verified prefix-order carrier, never a uniqueness claim.
+/// The canonical reference of a `canon` result: one complete ordinary index of
+/// that result, recorded by index selection (SRDatalog `canonical_index`).
+/// `rows` names the result's stored rows record (its identity index: a
+/// complete-row provider whose build yields distinct rows, SRDatalog's sorted
+/// array); `[a, ..]` names an existing one-level Built entry on exactly these
+/// columns that the result's reads already use; `host` names the result's
+/// load-verified host carrier. No store, provider kind or type is introduced:
+/// the referenced index is an ordinary member of the result's storage.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub enum CanonStrategy {
-    #[parse(peek = kw::sort)]
-    Sort(SortCanon),
-    #[parse(peek = kw::ordered)]
-    Ordered(kw::ordered),
+pub enum CanonIndex {
+    #[parse(peek = kw::rows)]
+    Rows(kw::rows),
+    #[parse(peek = kw::host)]
+    Host(kw::host),
+    #[parse(peek = token::Bracket)]
+    Built(Level),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct SortCanon {
-    pub sort_token: kw::sort,
-    #[parse(parse_canon_provider)]
-    pub provider: Option<CanonProvider>,
+/// Checked canonical reference.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CanonSource {
+    /// The stored rows record, of this provider type.
+    Rows(syn::Type),
+    /// The one-level Built entry on these (sorted) complete-row columns.
+    Index(Vec<String>),
+    /// The load-verified host carrier.
+    Host,
 }
 
-/// A target catalog's implementation of the recorded sort strategy.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct CanonProvider {
-    pub using_token: kw::using,
-    pub ty: syn::Type,
-}
-
-fn parse_canon_provider(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<CanonProvider>> {
-    if input.peek(kw::using) {
-        input.parse().map(Some)
-    } else {
-        Ok(None)
-    }
-}
-
-impl CanonStrategy {
-    pub fn provider(&self) -> Option<&syn::Type> {
+impl CanonSource {
+    /// The provider type of a canonical rows record.
+    pub fn rows_provider(&self) -> Option<&syn::Type> {
         match self {
-            Self::Sort(sort) => sort.provider.as_ref().map(|provider| &provider.ty),
-            Self::Ordered(_) => None,
+            Self::Rows(ty) => Some(ty),
+            Self::Index(_) | Self::Host => None,
         }
     }
 }
@@ -324,13 +320,13 @@ pub enum Structure {
     Dedup {
         canon_token: kw::canon,
         eq_token: Token![=],
-        strategy: CanonStrategy,
+        index: CanonIndex,
     },
     #[parse(peek = kw::head)]
     HeadDedup {
         head_token: kw::head,
         eq_token: Token![=],
-        strategy: CanonStrategy,
+        ty: syn::Type,
     },
     #[parse(peek = kw::rows)]
     Rows {
@@ -573,8 +569,10 @@ pub struct Analysis {
     pub groups: BTreeMap<String, syn::Type>,
     built_support: BTreeMap<(String, Vec<Vec<String>>), ProviderSupport>,
     host_support: BTreeMap<(String, ReaderRef<String>, Vec<String>), ProviderSupport>,
-    pub dedup: BTreeMap<String, CanonStrategy>,
-    pub head_dedup: BTreeMap<String, CanonStrategy>,
+    /// The canonical reference of every `canon` result (index selection).
+    pub canonical: BTreeMap<String, CanonSource>,
+    /// Provider of the answer relation's identity index for a computed head.
+    pub head_dedup: BTreeMap<String, syn::Type>,
     pub retained: BTreeMap<String, syn::Type>,
     /// Explicit projections and constant bindings of index-only selections.
     pub filtered: BTreeMap<String, Filtered>,
@@ -609,6 +607,47 @@ impl Analysis {
             .filter_map(|built| prefix_depth(&built.0, &wanted).map(|depth| (built, depth)))
             // Complete keys precede candidate prefixes; ties preserve entry order.
             .min_by_key(|((levels, _), depth)| (levels.len() != *depth, levels.len()))
+    }
+
+    /// Reads of `result` that enumerate its rows: every read except stream
+    /// keyed reads, which a reusable structure answers. Const and range
+    /// supplies may scan and filter the stored rows (STR-Range).
+    pub fn scan_reads(&self, result: &str) -> usize {
+        let keyed = self.physical.keyed_reads.get(result).map_or(0, |reads| {
+            reads
+                .iter()
+                .filter(|(_, _, supply)| *supply == SupplyKind::Stream)
+                .count()
+        });
+        self.physical
+            .readers
+            .get(result)
+            .map_or(0, |reads| reads - keyed)
+    }
+
+    /// Formal rule STR-RowsByValue: a stored `let` result's rows record is
+    /// held as storage only when it has more than one consumer (its scan reads
+    /// plus the Built entries constructed from it). Otherwise its build is
+    /// bound by value and moved into that single consumer: one scan reader, or
+    /// the one Built entry. Filtered builds replay their direct source, so an
+    /// unscanned filtered result never holds rows. Selections and keysets keep
+    /// their own sources.
+    pub fn rows_held(&self, result: &str) -> bool {
+        let scans = self.scan_reads(result);
+        self.physical.modes.get(result) != Some(&ModeKind::Let)
+            || self.selections.contains_key(result)
+            || self.keysets.keys().any(|(name, _)| name == result)
+            || scans + self.built.get(result).map_or(0, Vec::len) > 1
+                && !(scans == 0 && self.filtered.contains_key(result))
+    }
+
+    /// STR-RowsByValue: a `let` result whose rows record is not held and has
+    /// no Built entry is bound by value and moved into its single scan reader.
+    pub fn rows_by_value(&self, result: &str) -> bool {
+        self.physical.modes.get(result) == Some(&ModeKind::Let)
+            && self.retained.contains_key(result)
+            && !self.rows_held(result)
+            && self.built.get(result).is_none_or(Vec::is_empty)
     }
 
     fn selected_candidate(&self, result: &str, prefix: &[String], column: &str) -> Option<&Built> {
@@ -726,7 +765,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         groups: BTreeMap::new(),
         built_support: BTreeMap::new(),
         host_support: BTreeMap::new(),
-        dedup: BTreeMap::new(),
+        canonical: BTreeMap::new(),
         head_dedup: BTreeMap::new(),
         retained: BTreeMap::new(),
         filtered: BTreeMap::new(),
@@ -737,6 +776,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     analysis.lineage = lineages(&program.physical, &analysis.physical);
     let candidates = physical::candidate_prefixes(&program.physical, &analysis.physical);
     let mut seen = BTreeSet::new();
+    let mut references: BTreeMap<String, (&Entry, &CanonIndex)> = BTreeMap::new();
     for entry in &module.entries {
         let name = symbol_name(&entry.name);
         let Some(heading) = analysis.physical.headings.get(&name).cloned() else {
@@ -865,34 +905,27 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
                 continue;
             }
-            Structure::Dedup { strategy, .. } | Structure::HeadDedup { strategy, .. } => {
-                if let Some(provider) = strategy.provider() {
-                    concrete_type(provider)?;
+            Structure::Dedup { index, .. } => {
+                if !analysis.physical.canon.contains(&name) {
+                    return error(entry, "a canonical reference requires a canon boundary");
                 }
-                let map = match &entry.structure {
-                    Structure::Dedup { .. } => {
-                        if !analysis.physical.canon.contains(&name) {
-                            return error(entry, "dedup requires a canon boundary");
-                        }
-                        &mut analysis.dedup
-                    }
-                    _ => {
-                        if name != symbol_name(&program.physical.program.returned)
-                            || !head_needs_dedup(&program.physical, &analysis.physical)
-                        {
-                            return error(
-                                entry,
-                                "head dedup requires a noninjective computed head without a canonical consumer",
-                            );
-                        }
-                        if matches!(strategy, CanonStrategy::Ordered(_)) {
-                            return error(entry, "computed head has no load-verified prefix order");
-                        }
-                        &mut analysis.head_dedup
-                    }
-                };
-                if map.insert(name, strategy.clone()).is_some() {
-                    return error(entry, "duplicate canonicalization strategy");
+                if references.insert(name, (entry, index)).is_some() {
+                    return error(entry, "duplicate canonical reference");
+                }
+                continue;
+            }
+            Structure::HeadDedup { ty, .. } => {
+                concrete_type(ty)?;
+                if name != symbol_name(&program.physical.program.returned)
+                    || !head_needs_dedup(&program.physical, &analysis.physical)
+                {
+                    return error(
+                        entry,
+                        "head dedup requires a noninjective computed head without a canonical consumer",
+                    );
+                }
+                if analysis.head_dedup.insert(name, ty.clone()).is_some() {
+                    return error(entry, "duplicate answer identity index");
                 }
                 continue;
             }
@@ -1172,32 +1205,98 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         {
             return error(&definition.name, "missing group accumulator type");
         }
-        if definition.canon.is_some() && !analysis.dedup.contains_key(&name) {
-            return error(&definition.name, "missing canon strategy");
+        if definition.canon.is_some() && !references.contains_key(&name) {
+            return error(&definition.name, "missing canonical reference");
         }
-        // Formal rule STR-Canon: Ordered consumes the verified source carrier
-        // itself. No join, projection, retained buffer, or order guess is a proof.
-        if matches!(analysis.dedup.get(&name), Some(CanonStrategy::Ordered(_))) {
-            let verified_source = match &definition.operator {
-                Operator::Rename(rename) if rename.constants.is_none() => {
-                    analysis.physical.hosts.get(&name).is_some_and(|host| {
-                        analysis.physical.renames[&name]
-                            .values()
-                            .collect::<BTreeSet<_>>()
-                            == analysis.host_layouts[host].iter().collect::<BTreeSet<_>>()
-                    })
+        // Formal rule STR-Canon: the reference names one complete ordinary
+        // index of the result. Its rows record is a complete-row provider; an
+        // existing Built entry qualifies only when every read of the result
+        // observes existence alone, so its build need not be duplicate-free;
+        // a host carrier must be the complete direct load-verified scan.
+        if let Some((entry, index)) = references.get(&name) {
+            let mode = analysis.physical.modes[&name];
+            let source = match index {
+                CanonIndex::Rows(_) => match analysis.retained.get(&name) {
+                    Some(ty) if mode != ModeKind::Pipe => CanonSource::Rows(ty.clone()),
+                    _ => {
+                        return error(
+                            entry,
+                            "a canonical rows reference requires the stored result's rows record",
+                        );
+                    }
+                },
+                CanonIndex::Built(level) => {
+                    let columns = names(&level.columns);
+                    let mut heading = analysis.physical.headings[&name].clone();
+                    heading.sort();
+                    let existence = analysis
+                        .physical
+                        .keyed_reads
+                        .get(&name)
+                        .into_iter()
+                        .flatten()
+                        .all(|(reader, read, _)| {
+                            *read == columns
+                                && (analysis
+                                    .membership
+                                    .contains(&(name.clone(), columns.clone()))
+                                    || program.physical.program.definitions.iter().any(|d| {
+                                        symbol_name(&d.name) == *reader
+                                            && matches!(
+                                                d.operator,
+                                                Operator::Semi(..) | Operator::Anti(..)
+                                            )
+                                    }))
+                        });
+                    if columns != heading
+                        || mode != ModeKind::Let
+                        || analysis
+                            .built
+                            .get(&name)
+                            .is_none_or(|built| built.len() != 1 || built[0].0 != [columns.clone()])
+                        || !existence
+                        || analysis.physical.scanned.contains(&name)
+                        || analysis.retained.contains_key(&name)
+                        || analysis.selections.contains_key(&name)
+                        || analysis
+                            .physical
+                            .merge_reads
+                            .get(&name)
+                            .is_some_and(|reads| !reads.is_empty())
+                    {
+                        return error(
+                            entry,
+                            "a canonical Built index must be the result's only storage: one complete-row level read only for existence",
+                        );
+                    }
+                    CanonSource::Index(columns)
                 }
-                _ => false,
+                CanonIndex::Host(_) => {
+                    let verified_source = match &definition.operator {
+                        Operator::Rename(rename) if rename.constants.is_none() => {
+                            analysis.physical.hosts.get(&name).is_some_and(|host| {
+                                analysis.physical.renames[&name]
+                                    .values()
+                                    .collect::<BTreeSet<_>>()
+                                    == analysis.host_layouts[host].iter().collect::<BTreeSet<_>>()
+                            })
+                        }
+                        _ => false,
+                    };
+                    if !verified_source
+                        || mode != ModeKind::Pipe
+                        || analysis.selections.contains_key(&name)
+                        || analysis.join_filters.contains_key(&name)
+                    {
+                        return error(
+                            &definition.name,
+                            "a canonical host carrier requires a complete direct load-verified host scan",
+                        );
+                    }
+                    CanonSource::Host
+                }
             };
-            if !verified_source
-                || analysis.selections.contains_key(&name)
-                || analysis.join_filters.contains_key(&name)
-            {
-                return error(
-                    &definition.name,
-                    "ordered canon requires a complete direct load-verified host scan",
-                );
-            }
+            analysis.canonical.insert(name.clone(), source);
         }
         if (analysis.physical.scanned.contains(&name)
             || analysis
@@ -1277,7 +1376,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     {
         return error(
             &program.physical.program.returned,
-            "missing computed-head canon strategy",
+            "missing answer identity index",
         );
     }
     coalesce_join_filters(program, &mut analysis);
@@ -1375,27 +1474,8 @@ pub fn storage_layout_eq(left: &Entry, right: &Entry) -> bool {
             left.ty = right.ty.clone();
             left.supports = right.supports.clone();
         }
-        (
-            Structure::Dedup {
-                strategy: CanonStrategy::Sort(left),
-                ..
-            },
-            Structure::Dedup {
-                strategy: CanonStrategy::Sort(right),
-                ..
-            },
-        )
-        | (
-            Structure::HeadDedup {
-                strategy: CanonStrategy::Sort(left),
-                ..
-            },
-            Structure::HeadDedup {
-                strategy: CanonStrategy::Sort(right),
-                ..
-            },
-        ) => left.provider = right.provider.clone(),
         (Structure::Rows { ty: left, .. }, Structure::Rows { ty: right, .. })
+        | (Structure::HeadDedup { ty: left, .. }, Structure::HeadDedup { ty: right, .. })
         | (Structure::Group { ty: left, .. }, Structure::Group { ty: right, .. })
         | (Structure::Selection { ty: left, .. }, Structure::Selection { ty: right, .. })
         | (Structure::KeySet { ty: left, .. }, Structure::KeySet { ty: right, .. }) => {

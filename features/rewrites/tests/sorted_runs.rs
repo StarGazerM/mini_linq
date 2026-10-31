@@ -79,7 +79,7 @@ fn one_run_answers_both_payload_and_membership_reads() {
             r = let rename R@1 {a -> x,b -> y};
             s = pipe semi eager[x] l,r;
             p = pipe probe first[x] s,r;
-            out = pipe canon project p keep {x,y};
+            out = let canon project p keep {x,y};
             return out as answer(x,y);
         }
     }
@@ -98,7 +98,7 @@ fn closed_owned_probe_key_uses_exact_sorted_run() {
             u = pipe unit;
             l = pipe bind u with x:i64 = (3i64);
             r = let rename R@0 {a -> x,b -> y};
-            p = pipe canon probe first[x] l,r;
+            p = let canon probe first[x] l,r;
             return p as answer(*y);
         }
     }.collect();

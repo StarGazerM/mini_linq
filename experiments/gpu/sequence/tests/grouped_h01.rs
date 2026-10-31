@@ -109,13 +109,14 @@ fn h01_gpu_matches_duckdb(scale: u32) -> Result<()> {
             physical {
                 relation L(orderkey:u32,linenumber:u32,returnflag:u32,linestatus:u32,quantity:i64,price:i64,shipdate:i32)=(&data);
                 l=pipe rename L@0 {orderkey -> orderkey,linenumber -> linenumber,returnflag -> returnflag,linestatus -> linestatus,quantity -> quantity,price -> price,shipdate -> shipdate};
-                filtered=pipe canon select l if (shipdate <= 10471);
+                filtered=let canon select l if (shipdate <= 10471);
                 grouped=let group filtered by [returnflag,linestatus] {sum_quantity:i64=sum(quantity);sum_price:i64=sum(price);count_order:usize=count();};
                 return grouped as answer(returnflag,linestatus,sum_quantity,sum_price,count_order);
             }
             structures {
                 l host scan=::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32,u32,i64,i64,i32)> [];
-                filtered canon=sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                filtered rows=::cq_gpu_sequence_runtime::canon::PackedCanon;
+                filtered canon=rows;
                 grouped rows=::cq_gpu_sequence_runtime::group::GroupedRows<_>;
                 grouped group=::std::collections::HashMap<_, (i64, i64, usize)>;
             }

@@ -174,7 +174,11 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             .map(Vec::as_slice)
             .unwrap_or_default();
         if analysis.physical.modes[name] != ModeKind::Let
-            || (analysis.physical.scanned.contains(name) || analysis.retained.contains_key(name))
+            || (analysis.physical.scanned.contains(name)
+                // Only a canon result's rows record (its canonical index) may
+                // accompany filtered storage, and only while it is not held.
+                || analysis.retained.contains_key(name)
+                    && (analysis.rows_held(name) || !analysis.physical.canon.contains(name)))
                 && !multiple
             || built.len() != 1 && !multiple
             || built
@@ -380,13 +384,13 @@ mod tests {
                 relation R(a:i32, label:String);
                 r = pipe rename R@0 { a -> a, label -> label };
                 selected = let guard r if (label.contains("green"));
-                projected = pipe canon project selected keep {a};
+                projected = let canon project selected keep {a};
                 return projected as answer(a);
             }
             structures {
                 r host scan = Reader [];
                 selected rows = Rows;
-                projected canon = sort;
+                projected rows = ::cq_storage::dedup::Sort; projected canon = rows;
             }
         };
         let facts = crate::contract::check(&source).unwrap();

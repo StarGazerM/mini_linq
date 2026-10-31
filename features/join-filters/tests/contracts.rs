@@ -11,7 +11,7 @@ fn source() -> ir::Program {
         s = pipe range select r if (z > 1);
         b = let project s keep {x,z};
         j = pipe probe first [x] l,b;
-        out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+        out = let canon project j keep {x,y,z}; return out as answer(x,y,z);
     }};
     cq_structure_selection::compile(&p).unwrap()
 }
@@ -210,7 +210,7 @@ fn advice_keeps_all_witnesses_and_is_idempotent_after_coalescing() {
         b = let project s keep {x,z};
         q = pipe semi eager [x] l,b;
         j = pipe probe first [x] q,b;
-        out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+        out = let canon project j keep {x,y,z}; return out as answer(x,y,z);
     }};
     let selected = cq_structure_selection::compile(&source).unwrap();
     let advised = join_filter(&selected, quote!(l)).unwrap();

@@ -288,12 +288,22 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         {
             entries.extend(group_accumulator(ident, group));
         }
+        // Formal rule SEL-Canon: a canon result's storage is its canonical
+        // index. A stored result keeps its rows record, typed by the host
+        // sorted-array provider whose build yields distinct rows; a pipe host
+        // rename's canonical index is its host carrier.
         if definition.canon.is_some() {
-            entries.extend(quote!(#ident canon = sort;));
+            if analysis.modes[&name] == ModeKind::Pipe {
+                entries.extend(quote!(#ident canon = host;));
+            } else {
+                entries.extend(quote!(#ident canon = rows;));
+            }
         }
         if analysis.modes[&name] != ModeKind::Pipe {
             let ty: syn::Type = if analysis.modes[&name] == ModeKind::Exists {
                 syn::parse_quote!(::cq_storage::Exists)
+            } else if definition.canon.is_some() {
+                syn::parse_quote!(::cq_storage::dedup::Sort)
             } else {
                 syn::parse_quote!(::std::vec::Vec<_>)
             };
@@ -383,7 +393,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     }
     if structures::head_needs_dedup(source, &analysis) {
         let returned = &program.returned;
-        entries.extend(quote!(#returned head = sort;));
+        entries.extend(quote!(#returned head = ::cq_storage::dedup::Sort;));
     }
     // Record the storage decision, including its row projection, before any
     // realization. Readers on one key share a single filtered build.
@@ -410,6 +420,48 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         let multi_union = matches!(&definition.operator,Operator::Union(union) if union.origin.as_ref().is_none_or(|origin|origin.over.is_none()));
         if built.is_empty() || built.len() != 1 && !multi_union {
             continue;
+        }
+        // SRDatalog `canonical_index`: prefer a complete index the result's
+        // reads already use. A one-level complete-row index read only for
+        // existence is built from the candidates directly (duplicates do not
+        // change existence), so it is the canonical index and no rows record
+        // is stored. Otherwise the rows record (identity index) stays canonical.
+        if definition.canon.is_some() {
+            let structures::Structure::Built { keyed, .. } = &selected.entries[built[0]].structure
+            else {
+                unreachable!()
+            };
+            let mut heading = analysis.headings[&name].clone();
+            heading.sort();
+            let existence = analysis.keyed_reads.get(&name).into_iter().flatten().all(
+                |(reader, columns, _)| {
+                    *columns == heading
+                        && (keyed.membership.is_some()
+                            || matches!(operators[reader], Operator::Semi(..) | Operator::Anti(..)))
+                },
+            );
+            if built.len() == 1
+                && keyed.levels.len() == 1
+                && keyed.filtered.is_none()
+                && keyed.level_names() == [heading]
+                && existence
+                && !analysis.scanned.contains(&name)
+                && analysis.merge_reads.get(&name).is_none_or(Vec::is_empty)
+            {
+                let level = keyed.levels[0].clone();
+                for entry in &mut selected.entries {
+                    if entry.name == definition.name
+                        && let structures::Structure::Dedup { index, .. } = &mut entry.structure
+                    {
+                        *index = structures::CanonIndex::Built(level.clone());
+                    }
+                }
+                selected.entries.retain(|entry| {
+                    entry.name != definition.name
+                        || !matches!(entry.structure, structures::Structure::Rows { .. })
+                });
+                continue;
+            }
         }
         let select = match &definition.operator {
             Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select)
@@ -504,7 +556,9 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             }
         }
         if built.len()>1 && !built.iter().all(|i|matches!(&selected.entries[*i].structure,structures::Structure::Built {keyed,..} if keyed.filtered.is_some())) { continue; }
-        if analysis.scanned.contains(&name) {
+        // A canonical rows record stays: an unscanned single consumer streams
+        // its distinct-row build into that build (STR-RowsByValue).
+        if analysis.scanned.contains(&name) || definition.canon.is_some() {
             continue;
         }
         selected.entries.retain(|entry| {

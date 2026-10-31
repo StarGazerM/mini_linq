@@ -26,7 +26,7 @@
 //!         s = pipe range select r if (z > 1);
 //!         b = let project s keep {x,z};
 //!         j = pipe probe first [x] l,b;
-//!         out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+//!         out = let canon project j keep {x,y,z}; return out as answer(x,y,z);
 //!     }
 //! }.collect::<Vec<_>>();
 //! ```

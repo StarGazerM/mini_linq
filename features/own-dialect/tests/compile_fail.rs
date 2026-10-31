@@ -7,7 +7,7 @@ physical {
     relation S(a: i32, c: i32);
     l = pipe rename R@0 { a -> a, b -> b };
     r = pipe rename S@1 { a -> a, c -> c };
-    j = pipe canon merge[a] l,r;
+    j = let canon merge[a] l,r;
     return j as answer(a,b,c);
 }"#;
 
@@ -21,7 +21,7 @@ physical {
     t = pipe rename T@2 { b -> b, c -> c };
     j = pipe probe smallest[a] l,r;
     k = pipe semi eager[b,c] j,t;
-    out = pipe canon project k keep { a,b,c };
+    out = let canon project k keep { a,b,c };
     return out as answer(a,b,c);
 }"#;
 
@@ -237,7 +237,7 @@ fn positional_advice_requires_a_positional_host() {
                 relation R(a:i32,b:i32);
                 r = pipe rename R@0 {{a -> x,b -> y}};
                 s = pipe point select r if (y = 2);
-                out = pipe canon project s keep {{x}}; return out as answer(x);
+                out = let canon project s keep {{x}}; return out as answer(x);
             }}
         }}"#
                 ),
@@ -258,12 +258,12 @@ fn positions_representation_is_explicitly_refused() {
                 physical {
                     relation R(a:i32,b:i32);
                     r = pipe rename R@0 {a -> x,b -> y};
-                    out = pipe canon project r keep {x,y};
+                    out = let canon project r keep {x,y};
                     return out as answer(x,y);
                 }
                 structures {
                     r host scan = ::core::iter::Map<_,_> [];
-                    out canon = sort;
+                    out rows = ::cq_storage::dedup::Sort; out canon = rows;
                     r repr = positions { R lineage {x -> a,y -> b} } owned [];
                 }
             }"#,
@@ -296,14 +296,14 @@ fn lookup_witness_and_expansion_are_refused_by_name() {
                 r = let rename S@1 {{a -> k,c -> v}};
                 s = pipe semi eager [k] l,r;
                 p = pipe probe first [k] s,r;
-                out = pipe canon project p keep {{k,v}};
+                out = let canon project p keep {{k,v}};
                 return out as answer(k,v);
             }}
             structures {{
                 l host scan = ::core::iter::Map<_,_> [];
                 r host scan = ::core::iter::Map<_,_> [];
                 r = ::cq_storage::SortedRun<_,_> [k] supports [expand];
-                out canon = sort;
+                out rows = ::cq_storage::dedup::Sort; out canon = rows;
                 {decision}
             }}
         }}"#

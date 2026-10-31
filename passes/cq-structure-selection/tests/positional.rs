@@ -10,7 +10,7 @@ fn physical() -> physical::Program {
         t = let semi eager [x] l,s;
         u = pipe semi eager [x] s,t;
         j = pipe probe first [x] u,t;
-        out = pipe canon project j keep {x,y}; return out as answer(x,y);
+        out = let canon project j keep {x,y}; return out as answer(x,y);
     }}
 }
 fn selected() -> ir::Program {
@@ -39,7 +39,14 @@ fn decisions_roundtrip_and_physical_is_identical() {
             .contains("AdaptiveKeySet < _ , :: cq_storage :: AutoDense , 67108864 >")
     );
     assert_eq!(facts.reads.len(), 3);
-    assert!(facts.retained.is_empty());
+    assert_eq!(
+        facts
+            .retained
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["out"]
+    );
     assert_eq!(
         cq_structure_selection::compile_with(&source, quote!()).unwrap(),
         cq_structure_selection::compile(&source).unwrap()
@@ -160,7 +167,7 @@ fn index_only_rhs_prunes_dependent_candidates_without_changing_the_old_represent
         a = let semi eager [x] l,h;
         r = pipe rename R@2 {d -> x,e -> z};
         t = let semi eager [x] r,a;
-        out = pipe canon project t keep {x,z}; return out as answer(x,z);
+        out = let canon project t keep {x,z}; return out as answer(x,z);
     }};
     let original = cq_structure_selection::compile(&physical).unwrap();
     let selected =
@@ -178,7 +185,7 @@ fn eager_semi_with_joined_support_admits_left_positional_keyset() {
         support = let probe first [x] r,s;
         filtered = let semi eager [x] l,support;
         outer = pipe rename L@3 {a -> x};
-        out = pipe canon semi eager [x] outer,filtered;
+        out = let canon semi eager [x] outer,filtered;
         return out as answer(x);
     }};
     let mut target = cq_structure_selection::compile(&source).unwrap();
@@ -209,7 +216,7 @@ fn join_filter_plan(branch: bool) -> ir::Program {
         s = pipe range select r if (z > 1);
         #build
         j = pipe probe first [x] l,b;
-        out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+        out = let canon project j keep {x,y,z}; return out as answer(x,y,z);
     }})
     .unwrap();
     cq_structure_selection::compile_with(&source, quote!(positional(L, R, H))).unwrap()
@@ -263,7 +270,7 @@ fn membership_provider_selection_is_type_blind_and_has_no_redundant_filter() {
             r = pipe rename R@1 {a -> x,b -> y};
             selected = let range select r if (y > 1);
             joined = pipe probe first [x] l,selected;
-            result = pipe canon project joined keep {x};
+            result = let canon project joined keep {x};
             return result as answer(x);
         }})
         .unwrap();
@@ -338,7 +345,7 @@ fn join_filters_cross_probes_only_on_scan_key_columns() {
             s = pipe range select r if (z > 1);
             b = let project s keep {#key,z};
             j = pipe probe first [#key] p,b;
-            out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+            out = let canon project j keep {x,y,z}; return out as answer(x,y,z);
         }})
         .unwrap();
         let selected =
@@ -383,7 +390,7 @@ fn repeated_filter_plan(distinct_build: bool, distinct_layout: bool) -> ir::Prog
         q = pipe #first [x] l,b;
         #projection
         j = pipe probe first [#key] #input,#build;
-        out = pipe canon project j keep {x,z}; return out as answer(x,z);
+        out = let canon project j keep {x,z}; return out as answer(x,z);
     }})
     .unwrap();
     let selected = cq_structure_selection::compile_with(&source, quote!(positional(L, R))).unwrap();
@@ -469,7 +476,7 @@ fn filters_do_not_share_across_occurrences_of_one_host() {
         b = let range select r if (z > 1);
         p = pipe probe first [x] l,b;
         q = pipe probe first [x] m,b;
-        out = pipe canon union p,q; return out as answer(x,y,z);
+        out = let canon union p,q; return out as answer(x,y,z);
     }};
     let selected = cq_structure_selection::compile_with(&source, quote!(positional(L, R))).unwrap();
     let facts = ir::contract::check(&selected).unwrap();
@@ -487,7 +494,7 @@ fn filters_preserve_distinct_scalar_key_mappings_and_markers() {
         b = let range select r if (y > 1);
         q = pipe semi eager [x,y] l,b;
         j = pipe probe first [x,y] q,b;
-        out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+        out = let canon project j keep {x,y,z}; return out as answer(x,y,z);
     }};
     // Keep a payload demand so the build records an enumerable HashIndex,
     // rather than membership-only HashSet storage.

@@ -63,7 +63,10 @@ pub fn select(pool: Arc<Pool>, selection: &RangeSelection) -> Result<SelectedRow
         let flags = temporary::<u32>(stream, base_rows)?;
         let shape = module.prepare_range_flags(LaunchConfig1D::new(1, 256, 0))?;
         let blocks = cq_gpu_runtime::launch_grid_for_kernel(
-            shape.function(), base_rows.div_ceil(256), 256, 0,
+            shape.function(),
+            base_rows.div_ceil(256),
+            256,
+            0,
         )?;
         // DECODE V: selection launches value reconstruction before range comparison; P6 evaluate translated encoded predicates.
         module.range_flags(

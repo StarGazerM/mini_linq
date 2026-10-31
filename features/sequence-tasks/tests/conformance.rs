@@ -24,7 +24,7 @@ fn named_tile_pipeline_preserves_rows_across_join() {
         physical {
             relation R(a:i32);
             r = pipe rename R@0 {a -> a};
-            out = pipe canon project r keep {a};
+            out = let canon project r keep {a};
             return out as answer(a);
         }
         structures {}
@@ -80,7 +80,7 @@ fn join() {
             relation L(a:i32); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a,b -> b};
-            j = pipe canon probe first [a] l,r;
+            j = let canon probe first [a] l,r;
             return j as answer(a,b);
         } structures { r = ::cq_storage::SortedRun<_, _> [a]; }
         sequence {
@@ -109,7 +109,7 @@ fn chain() {
             r = let rename R@1 {a -> a,b -> b};
             s = let rename S@2 {b -> b,c -> c};
             j = pipe probe first [a] l,r;
-            k = pipe canon probe first [b] j,s;
+            k = let canon probe first [b] j,s;
             return k as answer(a,b,c);
         } structures {
             r = ::cq_storage::SortedRun<_, _> [a];
@@ -140,7 +140,7 @@ fn semi() {
             relation L(a:i32); relation R(a:i32);
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a};
-            j = pipe canon semi eager [a] l,r;
+            j = let canon semi eager [a] l,r;
             return j as answer(a);
         } structures {}
         sequence {
@@ -161,7 +161,7 @@ fn canon_sorts_the_whole_stream_across_task_boundaries() {
     let program = program(syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = pipe canon rename R@0 {a -> a};
+            r = let canon rename R@0 {a -> a};
             return r as answer(a);
         } structures {}
         sequence {
@@ -182,7 +182,7 @@ fn empty_and_partial_tiles_have_equal_answers() {
     let program = program(syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = pipe canon rename R@0 {a -> a};
+            r = let canon rename R@0 {a -> a};
             return r as answer(a);
         } structures {}
         sequence { input = store rows r; result = store tile 2 canon input; }

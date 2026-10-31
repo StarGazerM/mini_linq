@@ -128,7 +128,7 @@ mod tests {
                 r = pipe rename R@1 { key -> k, value -> y };
                 j = pipe merge [k] l, r;
                 s = pipe guard j if (x < y);
-                p = pipe canon project s keep {x, y};
+                p = let canon project s keep {x, y};
                 return p as answer(x, y);
             }
         };
@@ -183,7 +183,7 @@ mod tests {
                 relation L(x: i32); relation R(y: i32);
                 l = pipe rename L@0 {x -> x};
                 r = pipe rename R@1 {y -> y};
-                j = pipe canon probe first [] l, r;
+                j = let canon probe first [] l, r;
                 return j as answer(x, y);
             }
         };

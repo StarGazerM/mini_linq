@@ -189,7 +189,7 @@ mod custom_indexes {
                     l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a, b -> b};
                     s = let rename S@2 {b -> b, c -> c};
                     j = pipe probe first [a] l, r; p = pipe probe first [b] j, s;
-                    out = pipe canon project p keep {a, c}; return out as answer(a, c);
+                    out = let canon project p keep {a, c}; return out as answer(a, c);
                 }
             },
         )

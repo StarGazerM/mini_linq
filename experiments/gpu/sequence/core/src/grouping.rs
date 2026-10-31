@@ -1,6 +1,9 @@
 //! GPU keyed accumulator selection belongs to Structures refinement, not printing.
 
-use cq_lang_structures::{Analysis, Program, Structure, physical::{Operator, symbol_name}};
+use cq_lang_structures::{
+    Analysis, Program, Structure,
+    physical::{Operator, symbol_name},
+};
 
 pub(crate) fn provider() -> syn::Type {
     syn::parse_quote!(::cq_gpu_sequence_runtime::group::SegmentedGroup)
@@ -26,14 +29,26 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
 pub fn check(source: &Program, analysis: &Analysis) -> syn::Result<()> {
     let expected = provider();
     for definition in &source.physical.program.definitions {
-        let Operator::Group(group) = &definition.operator else { continue };
-        if group.keys.is_empty() { continue; }
-        let recorded = analysis.groups.get(&symbol_name(&definition.name)).ok_or_else(|| {
-            syn::Error::new_spanned(&definition.name, "GPU-Group: missing recorded keyed accumulator provider")
-        })?;
+        let Operator::Group(group) = &definition.operator else {
+            continue;
+        };
+        if group.keys.is_empty() {
+            continue;
+        }
+        let recorded = analysis
+            .groups
+            .get(&symbol_name(&definition.name))
+            .ok_or_else(|| {
+                syn::Error::new_spanned(
+                    &definition.name,
+                    "GPU-Group: missing recorded keyed accumulator provider",
+                )
+            })?;
         if recorded != &expected {
-            return Err(syn::Error::new_spanned(recorded,
-                "GPU-Group: keyed accumulator must record ::cq_gpu_sequence_runtime::group::SegmentedGroup; apply GPU grouping binding before translation"));
+            return Err(syn::Error::new_spanned(
+                recorded,
+                "GPU-Group: keyed accumulator must record ::cq_gpu_sequence_runtime::group::SegmentedGroup; apply GPU grouping binding before translation",
+            ));
         }
     }
     Ok(())
@@ -47,14 +62,16 @@ mod tests {
     fn source(keyed: bool) -> Program {
         let keys = keyed.then(|| quote::quote!(key));
         let output_key = keyed.then(|| quote::quote!(key,));
-        let accumulator = keyed.then(|| quote::quote!(
-            grouped group = ::std::collections::HashMap<_, (i64, usize)>;
-        ));
+        let accumulator = keyed.then(|| {
+            quote::quote!(
+                grouped group = ::std::collections::HashMap<_, (i64, usize)>;
+            )
+        });
         syn::parse2(quote::quote! {
             physical {
                 relation R(id:i64,key:i32,value:i64) = (&data.r);
                 r = pipe rename R@0 {id -> id,key -> key,value -> value};
-                valuation = pipe canon project r keep {id,key,value};
+                valuation = let canon project r keep {id,key,value};
                 grouped = pipe group valuation by [#keys] {
                     total:i64=sum(value); rows:usize=count();
                 };
@@ -62,10 +79,12 @@ mod tests {
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
-                valuation canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                valuation rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                valuation canon = rows;
                 #accumulator
             }
-        }).unwrap()
+        })
+        .unwrap()
     }
 
     #[test]
@@ -73,17 +92,30 @@ mod tests {
         let source = source(true);
         let original = source.to_token_stream().to_string();
         let analysis = cq_lang_structures::contract::check(&source).unwrap();
-        assert!(check(&source, &analysis).unwrap_err().to_string().contains("GPU-Group"));
+        assert!(
+            check(&source, &analysis)
+                .unwrap_err()
+                .to_string()
+                .contains("GPU-Group")
+        );
         assert_eq!(source.to_token_stream().to_string(), original);
         let target = bind(&source).unwrap();
         let analysis = cq_lang_structures::contract::check(&target).unwrap();
         assert_eq!(analysis.groups["grouped"], provider());
         check(&target, &analysis).unwrap();
-        assert_eq!(bind(&target).unwrap().to_token_stream().to_string(), target.to_token_stream().to_string());
+        assert_eq!(
+            bind(&target).unwrap().to_token_stream().to_string(),
+            target.to_token_stream().to_string()
+        );
         assert_eq!(source.to_token_stream().to_string(), original);
         let mut missing = analysis;
         missing.groups.remove("grouped");
-        assert!(check(&target, &missing).unwrap_err().to_string().contains("missing recorded"));
+        assert!(
+            check(&target, &missing)
+                .unwrap_err()
+                .to_string()
+                .contains("missing recorded")
+        );
     }
 
     #[test]
@@ -101,7 +133,12 @@ mod tests {
                 }
             }
             let analysis = cq_lang_structures::contract::check(&target).unwrap();
-            assert!(check(&target, &analysis).unwrap_err().to_string().contains("GPU-Group"));
+            assert!(
+                check(&target, &analysis)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("GPU-Group")
+            );
         }
     }
 
@@ -112,6 +149,9 @@ mod tests {
         let analysis = cq_lang_structures::contract::check(&target).unwrap();
         assert!(analysis.groups.is_empty());
         check(&target, &analysis).unwrap();
-        assert_eq!(target.to_token_stream().to_string(), source.to_token_stream().to_string());
+        assert_eq!(
+            target.to_token_stream().to_string(),
+            source.to_token_stream().to_string()
+        );
     }
 }

@@ -7,23 +7,25 @@ mod arena;
 // P3d/T-Gpu: select once into GPU analysis; check recorded facts and print them.
 // Runtime layout algorithms belong to the selected provider, never the emitter.
 mod bindings;
-mod domains;
-mod grouping;
 mod capture;
 pub mod constants;
-pub mod runs;
+mod domains;
 mod emit;
+mod grouping;
 pub mod layout;
 mod reduce;
 mod rows;
+pub mod runs;
 
-pub use emit::translate;
 pub use arena::translate_arena;
+pub use emit::translate;
 
 /// Select target-owned accumulator providers before checking GPU Structures.
 /// The only grouping selection site: pipelines reach it through `stage`, the
 /// TPC-H build before Sequence lowering, and authored fixtures explicitly.
-pub fn bind_structures(source: &cq_lang_structures::Program) -> syn::Result<cq_lang_structures::Program> {
+pub fn bind_structures(
+    source: &cq_lang_structures::Program,
+) -> syn::Result<cq_lang_structures::Program> {
     grouping::bind(source)
 }
 
@@ -51,9 +53,12 @@ fn check_physical(source: &cq_lang_structures::physical::Program) -> syn::Result
     use cq_lang_structures::physical::{Choice, Operator};
     for definition in &source.program.definitions {
         if matches!(&definition.operator,
-            Operator::Probe(_, key) if matches!(key.choice, Some(Choice::Smallest(_)))) {
-            return Err(syn::Error::new_spanned(&definition.name,
-                "T-Gpu: probe smallest is not realized by this target; per-tuple minimum candidate selection requires grouped-run ranges"));
+            Operator::Probe(_, key) if matches!(key.choice, Some(Choice::Smallest(_))))
+        {
+            return Err(syn::Error::new_spanned(
+                &definition.name,
+                "T-Gpu: probe smallest is not realized by this target; per-tuple minimum candidate selection requires grouped-run ranges",
+            ));
         }
     }
     Ok(())
@@ -70,20 +75,25 @@ mod capability_tests {
             r = let rename R@1 {b -> b,c -> c};
             s = let rename S@2 {a -> a,c -> c};
             candidate = pipe probe smallest [b] l,r;
-            checked = pipe canon semi eager [a,c] candidate,s;
+            checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
         });
         physical::contract::check(&source).unwrap();
-        assert!(super::check_physical(&source).unwrap_err().to_string()
-            .contains("T-Gpu: probe smallest is not realized"));
+        assert!(
+            super::check_physical(&source)
+                .unwrap_err()
+                .to_string()
+                .contains("T-Gpu: probe smallest is not realized")
+        );
         let mut ordinary = source;
-        let Operator::Probe(_, key) = &mut ordinary.program.definitions[3].operator else { unreachable!() };
+        let Operator::Probe(_, key) = &mut ordinary.program.definitions[3].operator else {
+            unreachable!()
+        };
         key.choice = Some(Choice::First(Default::default()));
         physical::contract::check(&ordinary).unwrap();
         super::check_physical(&ordinary).unwrap();
     }
 }
-
 
 /// Native constructor identities in the GPU catalog. Generic arguments carry
 /// the concrete schema; neither aliases nor unrelated suffixes imply an ABI.
@@ -109,71 +119,92 @@ impl NativeAbi {
 /// Formal rule GPU-NativeAbi: native ABI and residency follow complete catalog constructor identity.
 pub fn native_abi(ty: &syn::Type) -> Option<NativeAbi> {
     let syn::Type::Path(ty) = ty else { return None };
-    if ty.qself.is_some() { return None; }
-    [NativeAbi::Runs, NativeAbi::Symbol, NativeAbi::Columns, NativeAbi::Range]
-        .into_iter().find(|abi| {
-            let identity = abi.identity();
-            ty.path.segments.len() == identity.segments.len()
-                && ty.path.segments.iter().zip(&identity.segments)
-                    .all(|(actual, expected)| actual.ident == expected.ident)
-                && ty.path.segments.iter().rev().skip(1)
-                    .all(|segment| matches!(segment.arguments, syn::PathArguments::None))
-        })
+    if ty.qself.is_some() {
+        return None;
+    }
+    [
+        NativeAbi::Runs,
+        NativeAbi::Symbol,
+        NativeAbi::Columns,
+        NativeAbi::Range,
+    ]
+    .into_iter()
+    .find(|abi| {
+        let identity = abi.identity();
+        ty.path.segments.len() == identity.segments.len()
+            && ty
+                .path
+                .segments
+                .iter()
+                .zip(&identity.segments)
+                .all(|(actual, expected)| actual.ident == expected.ident)
+            && ty
+                .path
+                .segments
+                .iter()
+                .rev()
+                .skip(1)
+                .all(|segment| matches!(segment.arguments, syn::PathArguments::None))
+    })
 }
 /// Host publication over separated, dynamically scheduled device blocks.
 /// Each block is collaborative; lanes are sequential leaves (no warp level).
 pub fn machine() -> Machine {
-    Machine { gpu: Some(cq_lang_sequence::gpu::Machine {
-        block_threads: 256,
-        bindings: bindings::select,
-        contiguous_range: |ty| native_abi(ty) == Some(NativeAbi::Range),
-    }), name: syn::parse_quote!(gpu),
-    items: 4,
-    key_partition_threshold: 65536,
-    key_partition_cache_threshold: 6 * 1024 * 1024,
-    layout: Some(layout::shared_bytes),
-    root: LevelNode {
-        name: syn::parse_quote!(host),
-        host_rust: true,
-        collaborative: false,
-        dynamic: false,
-        width: None,
-        shared_bytes: None,
-        children: vec![LevelNode {
-            name: syn::parse_quote!(device),
-            host_rust: false,
+    Machine {
+        gpu: Some(cq_lang_sequence::gpu::Machine {
+            block_threads: 256,
+            bindings: bindings::select,
+            contiguous_range: |ty| native_abi(ty) == Some(NativeAbi::Range),
+        }),
+        name: syn::parse_quote!(gpu),
+        items: 4,
+        key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
+        layout: Some(layout::shared_bytes),
+        root: LevelNode {
+            name: syn::parse_quote!(host),
+            host_rust: true,
             collaborative: false,
-            dynamic: true,
+            dynamic: false,
             width: None,
             shared_bytes: None,
             children: vec![LevelNode {
-                name: syn::parse_quote!(block),
+                name: syn::parse_quote!(device),
                 host_rust: false,
-                collaborative: true,
-                dynamic: false,
-                width: Some(256),
-                shared_bytes: Some(101_376),
+                collaborative: false,
+                dynamic: true,
+                width: None,
+                shared_bytes: None,
                 children: vec![LevelNode {
-                    name: syn::parse_quote!(lane),
+                    name: syn::parse_quote!(block),
                     host_rust: false,
-                    collaborative: false,
+                    collaborative: true,
                     dynamic: false,
-                    width: None,
-                    shared_bytes: None,
-                    children: vec![],
+                    width: Some(256),
+                    shared_bytes: Some(101_376),
+                    children: vec![LevelNode {
+                        name: syn::parse_quote!(lane),
+                        host_rust: false,
+                        collaborative: false,
+                        dynamic: false,
+                        width: None,
+                        shared_bytes: None,
+                        children: vec![],
+                    }],
                 }],
             }],
-        }],
-    }, }
+        },
+    }
 }
 
 /// Resident range reads, order-preserving codes and flat packed publication.
 ///
 /// The tokens name runtime implementations without importing the runtime into
-/// this compile-time target. Canonicalization runs at a separated publication,
-/// not inside a collaborative block or lane.
+/// this compile-time target. Distinct providers type a canon result's rows
+/// record; their build (sort/unique) runs at a separated publication, not
+/// inside a collaborative block or lane.
 pub fn catalog() -> cq_lang_sequence::Catalog {
-    use cq_lang_sequence::{CanonToken, Capability, Catalog, CodecToken, ProviderToken};
+    use cq_lang_sequence::{Capability, Catalog, CodecToken, ProviderToken};
 
     let range = NativeAbi::Range.identity();
     let runs = NativeAbi::Runs.identity();
@@ -198,15 +229,22 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                 // codec declarations establish the publication representation.
                 elements: None,
                 levels: levels.clone(),
+                max_packed_bits: None,
             },
             ProviderToken {
                 supports: Vec::new(),
                 ty: syn::parse_quote!(#runs<_, _>),
-                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership, Capability::Resident],
+                capabilities: vec![
+                    Capability::Exact,
+                    Capability::Range,
+                    Capability::Membership,
+                    Capability::Resident,
+                ],
                 // The declared layout checks primitives and Symbol<T, Codec>
                 // columns; logical symbol types do not appear in device rows.
                 elements: None,
                 levels: levels.clone(),
+                max_packed_bits: None,
             },
             ProviderToken {
                 supports: Vec::new(),
@@ -214,6 +252,25 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
                 elements: None,
                 levels: vec![vec!["host".into()]],
+                max_packed_bits: None,
+            },
+            // Formal rule PL-Distinct: the device sort/unique build of a
+            // canonical rows record. Its scan is the publication itself.
+            ProviderToken {
+                supports: Vec::new(),
+                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
+                capabilities: vec![Capability::Distinct],
+                elements: None,
+                levels: levels.clone(),
+                max_packed_bits: Some(128),
+            },
+            ProviderToken {
+                supports: Vec::new(),
+                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
+                capabilities: vec![Capability::Distinct],
+                elements: None,
+                levels: levels.clone(),
+                max_packed_bits: None,
             },
         ],
         codecs: [
@@ -229,17 +286,5 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                 .collect(),
         })
         .collect(),
-        canons: vec![
-            CanonToken {
-                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
-                levels: levels.clone(),
-                max_packed_bits: Some(128),
-            },
-            CanonToken {
-                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
-                levels,
-                max_packed_bits: None,
-            },
-        ],
     }
 }

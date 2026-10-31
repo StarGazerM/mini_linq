@@ -109,7 +109,9 @@ fn timing_random_tc_and_same_generation() {
     // Defaults fit a roughly 4 GiB device; override with GPU_DATALOG_PROBE_NODES,
     // GPU_DATALOG_PROBE_FANOUT and GPU_DATALOG_PROBE_CASES (comma-separated).
     let env = |name: &str, default: usize| {
-        std::env::var(name).ok().map_or(default, |value| value.parse().expect(name))
+        std::env::var(name)
+            .ok()
+            .map_or(default, |value| value.parse().expect(name))
     };
     let nodes = env("GPU_DATALOG_PROBE_NODES", 256) as i32;
     let fanout = env("GPU_DATALOG_PROBE_FANOUT", 4);

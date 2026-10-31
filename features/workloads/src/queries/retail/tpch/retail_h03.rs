@@ -10,17 +10,30 @@ FROM customer c JOIN orders o ON o.o_custkey = c.c_custkey
 JOIN lineitem l ON l.l_orderkey = o.o_orderkey
 WHERE c.c_mktsegment = 'BUILDING' AND o.o_orderdate < DATE '1995-03-15'
 AND l.l_shipdate > DATE '1995-03-15'"#;
-pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", "hypergraph", "advised"];
+pub const CONFIGS: &[&str] = &[
+    "default",
+    "par",
+    "radix",
+    "radix_retained",
+    "built_hash",
+    "built_radix",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "hypergraph",
+    "advised",
+];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("customer", "c_custkey,c_mktsegment"),
     ("orders", "o_orderkey,o_custkey,o_orderdate"),
     ("lineitem", "l_orderkey,l_shipdate"),
 ];
 
-pub type Customer = (i64, cq_load::StringCode,);
-pub type Orders = (i64, i64, Date,);
-pub type Lineitem = (i64, Date,);
-pub type Answer = (i64, i64,);
+pub type Customer = (i64, cq_load::StringCode);
+pub type Orders = (i64, i64, Date);
+pub type Lineitem = (i64, Date);
+pub type Answer = (i64, i64);
 pub struct Data {
     pub customer: Vec<Customer>,
     pub orders: Vec<Orders>,
@@ -122,5 +135,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter().map(|(order_key, customer_key,)| vec![order_key.to_string(), customer_key.to_string()]).collect()
+    rows.iter()
+        .map(|(order_key, customer_key)| vec![order_key.to_string(), customer_key.to_string()])
+        .collect()
 }

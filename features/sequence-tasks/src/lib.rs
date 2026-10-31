@@ -155,12 +155,13 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             ],
             levels: levels.clone(),
             elements: None,
+            max_packed_bits: None,
         },
     );
     // Hash sharding retains exact probes, but not a shard's global ordering.
     // The synchronous pool join publishes native memory to host and task readers.
-    use cq_lang_sequence::{Capability, ProviderToken};
     use cq_lang_sequence::structures::ProviderCapability::Keys;
+    use cq_lang_sequence::{Capability, ProviderToken};
     for (ty, capabilities, supports) in [
         (
             syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::HashSet<_>>),
@@ -235,6 +236,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             supports: supports.clone(),
             levels: levels.clone(),
             elements: None,
+            max_packed_bits: None,
         });
         catalog.providers.push(ProviderToken {
             ty,
@@ -242,12 +244,10 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             supports,
             levels: levels.clone(),
             elements: None,
+            max_packed_bits: None,
         });
     }
     for token in &mut catalog.codecs {
-        token.levels = levels.clone();
-    }
-    for token in &mut catalog.canons {
         token.levels = levels.clone();
     }
     catalog
@@ -761,7 +761,9 @@ fn translate_mode(
                 output.rows = child.expect("checked base store").rows.clone();
                 // Borrowing resident rows does not discharge the recorded
                 // keysets used by downstream positional membership reads.
-                emitter.context_mut().materialize_keysets(result, output.rows.clone());
+                emitter
+                    .context_mut()
+                    .materialize_keysets(result, output.rows.clone());
                 immutable_sources.insert(owner.to_owned());
                 let scan = emitter.context().host_scan(result);
                 emitter.publish_length(

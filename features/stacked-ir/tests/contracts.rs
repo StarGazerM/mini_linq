@@ -90,7 +90,7 @@ fn pass_checks_reject_valid_changes_to_written_decisions() {
         .physical
         .program
         .definitions
-        .last_mut()
+        .first_mut()
         .unwrap()
         .mode = physical::Mode::Let(Default::default());
     changed.check().unwrap();
@@ -110,7 +110,7 @@ fn rust_payloads_are_opaque_and_pinned() {
             a = pipe guard r if (first(x));
             b = pipe bind a with y: i32 = (make(x));
             c = pipe guard b if (second(x, y));
-            out = pipe canon project c keep {x, y};
+            out = let canon project c keep {x, y};
             return out as answer(x, y);
         }
     };

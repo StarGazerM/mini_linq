@@ -77,10 +77,10 @@ pub struct Machine { pub name: Ident, pub items: usize, pub key_partition_thresh
 pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bool, pub host_rust: bool, pub width: Option<usize>, pub children: Vec<LevelNode> }
 
 /// Target catalogs are ordered syntax/capability data, with no target dependency here.
-pub struct Catalog { pub providers: Vec<ProviderToken>, pub codecs: Vec<CodecToken>, pub canons: Vec<CanonToken> }
-pub struct ProviderToken { pub ty: syn::Type, pub capabilities: Vec<Capability>, pub supports: Vec<cq_lang_structures::ProviderCapability>, pub levels: Vec<Vec<String>>, pub elements: Option<Vec<syn::Type>> }
+pub struct Catalog { pub providers: Vec<ProviderToken>, pub codecs: Vec<CodecToken> }
+pub struct ProviderToken { pub ty: syn::Type, pub capabilities: Vec<Capability>, pub supports: Vec<cq_lang_structures::ProviderCapability>, pub levels: Vec<Vec<String>>, pub elements: Option<Vec<syn::Type>>, pub max_packed_bits: Option<u32> }
 pub struct CodecToken { pub ty: syn::Type, pub ordered: bool, pub levels: Vec<Vec<String>> }
-pub struct CanonToken { pub ty: syn::Type, pub levels: Vec<Vec<String>>, pub max_packed_bits: Option<u32> }
+/// Canonical rows records are typed by providers with `Capability::Distinct` (PL-Distinct).
 
 /// Lengths as symbolic expressions (size types).
 pub enum Len { Input(String), Scan(String), Lit(usize), Add(Box<Len>, Box<Len>), CeilDiv(Box<Len>, usize), Unknown(/*capacity*/ Option<usize>) }

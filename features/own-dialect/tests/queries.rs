@@ -69,13 +69,13 @@ fn staged_selection_chain_pushes_only_survivors_into_partial_suffix() {
             t = pipe select s if (y = 7);
             p = pipe project t keep {x,y};
             b = pipe bind p with z: i32 = (12 / *x);
-            out = pipe canon project b keep {y,z};
+            out = let canon project b keep {y,z};
             return out as answer(y,z);
         }
         structures {
             r host scan = ::core::iter::Map<_,_> [];
             p stage = batch 2;
-            out canon = sort;
+            out rows = ::cq_storage::dedup::Sort; out canon = rows;
         }
     }
     .map(|(y, z)| (*y, z))
@@ -137,14 +137,14 @@ fn filtered_storage_reconstructs_constants_in_both_printers() {
                     l = pipe rename L@0 {k -> k}; r = pipe rename R@1 {a -> a,k -> k,value -> value};
                     filtered = let point select r if (a = 7);
                     joined = pipe probe first [k] l,filtered;
-                    out = pipe canon project joined keep {a,k}; return out as answer(a,k);
+                    out = let canon project joined keep {a,k}; return out as answer(a,k);
                 }
                 structures {
                     l host scan = ::core::iter::Map<_,_> [];
                     r host scan = ::core::iter::Map<_,_> [];
                     r host result(filtered) = ::core::iter::Map<_,_> [a];
                     filtered = ::cq_storage::HashIndex<'_,_,_> [k] payload [k] constants {a = 7};
-                    out canon = sort;
+                    out rows = ::cq_storage::dedup::Sort; out canon = rows;
                 }
             }
         };
@@ -217,8 +217,6 @@ fn push_chain_preserves_guard_and_binds_computed_columns_as_references() {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Value(i32);
 
-type Retained<T> = std::collections::VecDeque<T>;
-
 #[test]
 #[allow(non_snake_case)]
 fn authored_structures_control_build_retention_and_nested_canonical_states() {
@@ -237,15 +235,14 @@ fn authored_structures_control_build_retention_and_nested_canonical_states() {
                     r = let canon rename R@0 { a -> a, b -> b };
                     p = pipe project r keep { a };
                     j = pipe probe first[a] p,r;
-                    o = pipe canon project j keep { a,b };
+                    o = let canon project j keep { a,b };
                     return o as answer(b,a);
                 }
                 structures {
                     r host scan = ::core::iter::Map<_,_> [];
                     r = ::std::collections::BTreeMap<_,::std::vec::Vec<_>> [a];
-                    r rows = Retained<_>;
-                    r canon = sort;
-                    o canon = sort;
+                    r rows = ::cq_storage::dedup::Sort; r canon = rows;
+                    o rows = ::cq_storage::dedup::Sort; o canon = rows;
                 }
             }
         };
@@ -287,13 +284,13 @@ fn computed_head_deduplicates_its_image_with_the_recorded_type() {
                 physical {
                     relation R(x: i32);
                     r = pipe rename R@0 { x -> x };
-                    o = pipe canon project r keep { x };
+                    o = let canon project r keep { x };
                     return o as answer(*x % 2);
                 }
                 structures {
                     r host scan = ::core::iter::Map<_,_> [];
-                    o canon = sort;
-                    o head = sort;
+                    o rows = ::cq_storage::dedup::Sort; o canon = rows;
+                    o head = ::cq_storage::dedup::Sort;
                 }
             }
         };
@@ -331,7 +328,7 @@ fn exists_retains_only_nonemptiness_under_total_rust() {
                 }
                 structures {
                     r host scan = ::core::iter::Map<_,_> [];
-                    e canon = sort;
+                    e canon = rows;
                     e rows = ::cq_storage::Exists;
                 }
             }
@@ -455,7 +452,7 @@ fn full_depth_curried_probes_and_prefix_membership_use_written_levels() {
                     m = pipe semi eager[a] p,r;
                     n = pipe probe first[a] m,l;
                     j = pipe probe first[a,b] n,r;
-                    o = pipe canon project j keep { a,b,c };
+                    o = let canon project j keep { a,b,c };
                     return o as answer(a,b,c);
                 }
                 structures {
@@ -464,7 +461,7 @@ fn full_depth_curried_probes_and_prefix_membership_use_written_levels() {
                     l host result(n) = ::cq_storage::HashIndex<'_,_,_> [a];
                     r = ::cq_storage::Trie<'_,_,::cq_storage::HashIndex<'_,_,_>> [a][b];
                     r rows = ::std::vec::Vec<_>;
-                    o canon = sort;
+                    o rows = ::cq_storage::dedup::Sort; o canon = rows;
                 }
             }
         };
@@ -497,14 +494,14 @@ fn written_lazy_host_membership_and_fallback_type_are_preserved() {
                     r = pipe rename R@0 { x -> x };
                     s = pipe rename S@1 { x -> x };
                     m = pipe semi lazy[x] r,s;
-                    o = pipe canon project m keep { x };
+                    o = let canon project m keep { x };
                     return o as answer(x);
                 }
                 structures {
                     r host scan = ::core::iter::Map<_,_> [];
                     s host scan = ::core::iter::Map<_,_> [];
                     s host result(m) = ::cq_storage::dispatch::KeySet<_,false> [x];
-                    o canon = sort;
+                    o rows = ::cq_storage::dedup::Sort; o canon = rows;
                 }
             }
         };
@@ -523,14 +520,14 @@ fn nested_stream_canonical_boundaries_have_separate_state() {
         pipeline {};
         physical {
             relation R(a: i32,b: i32);
-            r = pipe canon rename R@0 { a -> a,b -> b };
-            o = pipe canon project r keep { a };
+            r = let canon rename R@0 { a -> a,b -> b };
+            o = let canon project r keep { a };
             return o as answer(a);
         }
         structures {
             r host scan = ::core::iter::Map<_,_> [];
-            r canon = sort;
-            o canon = sort;
+            r rows = ::cq_storage::dedup::Sort; r canon = rows;
+            o rows = ::cq_storage::dedup::Sort; o canon = rows;
         }
     }
     .collect();
@@ -602,12 +599,12 @@ fn nested_stage_boundaries_run_within_their_bound() {
             relation R(a:i32,b:i32);
             r = pipe rename R@0 {a -> x,b -> y};
             s = pipe select r if (x >= 0);
-            out = pipe canon project s keep {x,y};
+            out = let canon project s keep {x,y};
             return out as answer(x,y);
         }
         structures {
             r host scan = ::core::iter::Map<_,_> [];
-            out canon = sort;
+            out rows = ::cq_storage::dedup::Sort; out canon = rows;
             r stage = batch 2;
             s stage = batch 4;
         }
@@ -794,7 +791,7 @@ fn both_printers_apply_ir_generator_annotations_to_items() {
                     r = pipe rename rows@0 {n -> n};
                     g = pipe bind r with for (value,label):(i32,String) =
                         ((0..*n).map(|i| (i, i.to_string())));
-                    out = pipe canon project g keep {value,label};
+                    out = let canon project g keep {value,label};
                     return out as answer(value,label);
                 }
             }
@@ -884,12 +881,12 @@ fn canonical_consumer_delegates_duplicate_answers_and_keeps_internal_canon() {
         physical {
             relation R(a:i32,b:i32);
             consumer canonical;
-            r = pipe canon rename R@0 {a -> a,b -> b};
+            r = let canon rename R@0 {a -> a,b -> b};
             return r as answer(*a % 2);
         }
         structures {
             r host scan = ::core::iter::Map<_,_> [];
-            r canon = sort;
+            r rows = ::cq_storage::dedup::Sort; r canon = rows;
         }
     };
     assert_eq!(witnesses, vec![1, 1, 1]);
@@ -941,7 +938,7 @@ fn authored_group_provider_and_role_named_readers_execute() {
                     relation L(k:i32); relation R(k:i32,v:i32);
                     l = pipe rename L@0 {k -> k};
                     r = pipe rename R@1 {k -> k,v -> v};
-                    $reader = pipe canon probe first[k] l,r;
+                    $reader = let canon probe first[k] l,r;
                     grouped = pipe group $reader by [k] { n:usize=count(); total:i32=sum(v); };
                     return grouped as answer(k,n,total);
                 }
@@ -949,7 +946,7 @@ fn authored_group_provider_and_role_named_readers_execute() {
                     l host scan = ::core::iter::Map<_,_> [];
                     r host scan = ::core::iter::Map<_,_> [];
                     r host result($reader) = ::cq_storage::HashIndex<'_,_,_> [k];
-                    $reader canon = sort;
+                    $reader rows = ::cq_storage::dedup::Sort; $reader canon = rows;
                     grouped group = ::std::collections::BTreeMap<_, (usize,i32)>;
                 }
             }

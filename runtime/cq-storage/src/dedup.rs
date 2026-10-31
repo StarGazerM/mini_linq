@@ -15,16 +15,16 @@ use std::fmt;
 use std::slice;
 use std::vec;
 
-/// Host catalog capability for comparison-based canonicalization.
+/// Sorted-array provider: the default type of a canonical rows record.
 ///
-/// This zero-sized marker records implementation availability at a machine
-/// level. The recorded strategy still decides between whole-stream sort and
-/// checked prefix runs; the marker is not a sortedness or uniqueness witness.
+/// Its build sorts the whole stream and removes adjacent duplicates
+/// (PL-Distinct). A `host` canonical reference uses checked prefix runs
+/// instead; the marker itself is not a sortedness or uniqueness witness.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Sort;
 
 impl Sort {
-    /// Host provider protocol for explicit `sort using Sort`, forwarding to [`sort`].
+    /// Host build of a canonical rows record typed `Sort` (`r canon = rows`), forwarding to [`sort`].
     pub fn sort<I, C>(rows: I, compare: C) -> Sorted<I::IntoIter, C>
     where
         I: IntoIterator,
@@ -33,7 +33,7 @@ impl Sort {
         sort(rows, compare)
     }
 
-    /// Task provider protocol for explicit `sort using Sort`, forwarding to [`par_sort`].
+    /// Task build of a canonical rows record typed `Sort` (`r canon = rows`), forwarding to [`par_sort`].
     pub fn par_sort<I, C>(rows: I, compare: C) -> vec::IntoIter<I::Item>
     where
         I: IntoIterator,

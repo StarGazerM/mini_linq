@@ -17,17 +17,21 @@ fn recorded_for_order_survives_packed_flat_and_terminal_publications() -> Result
         ],
     ] {
         let data = DeviceColumns::from_rows(
-            pool.clone(), &raw, &mut Dictionary::default(), &[Codec::For, Codec::For],
+            pool.clone(),
+            &raw,
+            &mut Dictionary::default(),
+            &[Codec::For, Codec::For],
         )?;
         let output = cq_gpu_sequence_test_macros::sequence! {
             physical {
                 relation R(a:i64,b:u32) = (&data);
-                r = pipe canon rename R@0 {a -> a,b -> b};
+                r = let canon rename R@0 {a -> a,b -> b};
                 return r as answer(b,a);
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,u32)> [];
-                r canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                r rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                r canon = rows;
             }
             sequence {
                 input = store rows r;

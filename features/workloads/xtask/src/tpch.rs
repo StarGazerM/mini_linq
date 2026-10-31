@@ -876,7 +876,13 @@ mod tests {
         let parse = |args: &[&str]| Options::parse(args.iter().map(|s| (*s).to_owned()).collect());
         assert_eq!(
             parse(&[
-                "--tpch", "--sf", "1", "--runs", "5", "--query", "tpch_q06",
+                "--tpch",
+                "--sf",
+                "1",
+                "--runs",
+                "5",
+                "--query",
+                "tpch_q06",
                 "--index-comparison",
             ])
             .unwrap(),
@@ -891,9 +897,16 @@ mod tests {
             }
         );
         let capped = parse(&[
-            "--tpch", "--sf", "10", "--runs", "0",
-            "--index-comparison", "--cap-seconds", "2",
-        ]).unwrap();
+            "--tpch",
+            "--sf",
+            "10",
+            "--runs",
+            "0",
+            "--index-comparison",
+            "--cap-seconds",
+            "2",
+        ])
+        .unwrap();
         assert!(capped.index_comparison);
         assert_eq!(capped.cap_seconds, Some(2));
         for conflicting in [

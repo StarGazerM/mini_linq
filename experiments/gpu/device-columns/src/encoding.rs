@@ -1,4 +1,4 @@
-use crate::{Result, failure};
+use crate::{failure, Result};
 use std::{collections::HashMap, sync::Arc};
 
 /// A dataset-wide shared string domain. IDs preserve equality, not lexical order.
@@ -191,9 +191,7 @@ macro_rules! integers {
         }
     )*};
 }
-integers!(
-    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
-);
+integers!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
 
 // Host publication codecs preserve the scalar's identity representation. These
 // traits serve typed Rust reads/answers, not a separate staging conversion.
@@ -318,10 +316,19 @@ mod tests {
         for days in [i32::MIN, -1, 0, 1, i32::MAX] {
             // DECODE P: diagnostic Date fixture constructs the expected epoch-day answer.
             let value = cq_load::Date::from_days(days);
-            assert_eq!(encode_value(value, &mut dictionary).unwrap(), i64::from(days));
-            assert_eq!(encode_value(&value, &mut dictionary).unwrap(), i64::from(days));
+            assert_eq!(
+                encode_value(value, &mut dictionary).unwrap(),
+                i64::from(days)
+            );
+            assert_eq!(
+                encode_value(&value, &mut dictionary).unwrap(),
+                i64::from(days)
+            );
             // DECODE P: diagnostic Date round trip exposes the reconstructed date.
-            assert_eq!(decode_value::<cq_load::Date>(i64::from(days), &dictionary).unwrap(), value);
+            assert_eq!(
+                decode_value::<cq_load::Date>(i64::from(days), &dictionary).unwrap(),
+                value
+            );
         }
         // DECODE P: diagnostic lower day overflow checks logical decode rejection.
         assert!(decode_value::<cq_load::Date>(i64::from(i32::MIN) - 1, &dictionary).is_err());
@@ -363,12 +370,10 @@ mod tests {
             decode_value::<u32>(u32::MAX as i64, &dictionary).unwrap(),
             u32::MAX
         );
-        assert!(
-            encode_value(u64::MAX, &mut dictionary)
-                .unwrap_err()
-                .to_string()
-                .contains("CQ_GPU_INTEGER_RANGE")
-        );
+        assert!(encode_value(u64::MAX, &mut dictionary)
+            .unwrap_err()
+            .to_string()
+            .contains("CQ_GPU_INTEGER_RANGE"));
         // DECODE P: diagnostic integer overflow checks typed decode rejection.
         assert!(decode_value::<u8>(256, &dictionary).is_err());
         // DECODE P: diagnostic invalid boolean checks typed decode rejection.
@@ -446,12 +451,10 @@ mod tests {
         assert!(owned.check_extension(&Dictionary::default()).is_err());
         let mut borrowed = Dictionary::default();
         borrowed.intern("shared").unwrap();
-        assert!(
-            borrowed
-                .check_extension(&owned)
-                .unwrap_err()
-                .to_string()
-                .contains("CQ_GPU_DICTIONARY_BORROW")
-        );
+        assert!(borrowed
+            .check_extension(&owned)
+            .unwrap_err()
+            .to_string()
+            .contains("CQ_GPU_DICTIONARY_BORROW"));
     }
 }

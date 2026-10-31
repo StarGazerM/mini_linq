@@ -30,7 +30,7 @@ macro_rules! run {
                 s = pipe range select r if (z > 1);
                 b = let project s keep {x,z};
                 j = pipe probe first [x] l,b;
-                out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+                out = let canon project j keep {x,y,z}; return out as answer(x,y,z);
             }
 
         }
@@ -180,7 +180,7 @@ fn runtime_filter_identity_shares_only_equivalent_work() {
     let (rows, work) = counted_plan!(left, right, [l],
         q = pipe semi eager [x] l,b;
         j = pipe probe first [x] q,b;
-        out = pipe canon project j keep {x,y,z};
+        out = let canon project j keep {x,y,z};
     );
     assert_eq!(rows, expected);
     assert_eq!(
@@ -194,7 +194,7 @@ fn runtime_filter_identity_shares_only_equivalent_work() {
         q = pipe probe first [x] l,b;
         p = pipe project q keep {x,y};
         j = pipe probe first [x] p,c;
-        out = pipe canon project j keep {x,y,z};
+        out = let canon project j keep {x,y,z};
     );
     assert_eq!(rows, expected);
     assert_eq!(work, (2, 6, 2 * left.len()), "different build versions");
@@ -202,7 +202,7 @@ fn runtime_filter_identity_shares_only_equivalent_work() {
     let (rows, work) = counted_plan!(left, right, [l],
         q = pipe probe first [x] l,b;
         j = pipe probe first [x,z] q,b;
-        out = pipe canon project j keep {x,y,z};
+        out = let canon project j keep {x,y,z};
     );
     assert_eq!(rows, expected);
     assert_eq!(
@@ -215,7 +215,7 @@ fn runtime_filter_identity_shares_only_equivalent_work() {
         m = pipe rename L@2 {a -> x,b -> y};
         q = pipe probe first [x] l,b;
         j = pipe probe first [x] m,b;
-        out = pipe canon union q,j;
+        out = let canon union q,j;
     );
     assert_eq!(rows, expected);
     assert_eq!(

@@ -21,5 +21,5 @@
 //! columns are i8/i16/i32/i64/u8/u16/u32 with at most 128 packed bits per row.
 //! Observer callbacks, recorded phase timing, host execution certificates and
 //! unit-valued existential negation keys are rejected explicitly.
-pub use cq_gpu_datalog_macros::{bind_inputs, bind_round, device_storage, print_rounds};
 pub use cq_gpu_datalog_core::{bindings, print, storage};
+pub use cq_gpu_datalog_macros::{bind_inputs, bind_round, device_storage, print_rounds};

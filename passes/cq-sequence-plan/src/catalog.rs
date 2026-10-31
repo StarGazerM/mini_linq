@@ -1,4 +1,5 @@
-use cq_lang_sequence::{Analysis, Catalog, Obligation, Program};
+use cq_lang_sequence::structures::CanonSource;
+use cq_lang_sequence::{Analysis, Capability, Catalog, Obligation, Program};
 use cq_syntax::symbol_name;
 use quote::ToTokens;
 use syn::{GenericArgument, PathArguments, Type};
@@ -12,11 +13,10 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
                 ty,
                 ..
             } => provider_available(analysis, catalog, provider, capability, ty),
-            Obligation::Canon { result, strategy } => {
+            Obligation::Canon { result, canonical } => {
                 let levels = result_levels(program, analysis, result, true);
-                catalog.canons.iter().any(|token| {
-                    canon_matches_type(&token.ty, strategy.as_ref())
-                        && levels.iter().all(|level| token.levels.contains(level))
+                canon_available(analysis, catalog, canonical.as_ref(), |registered| {
+                    levels.iter().all(|level| registered.contains(level))
                 })
             }
             Obligation::Codec { ordered, .. } => catalog.codecs.iter().any(|token| {
@@ -49,18 +49,32 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
     Ok(())
 }
 
-/// Match a recorded canonicalization implementation, not a Rust row type.
-/// Unqualified sort and checked ordered runs use the host runtime capability;
-/// a device implementation must be recorded explicitly as `sort using Type`.
-/// Ordered remains a distinct strategy and cannot acquire a device provider.
-pub(crate) fn canon_matches_type(
-    token: &Type,
-    strategy: Option<&cq_lang_sequence::structures::CanonStrategy>,
+/// Formal rule PL-Distinct: whether the target discharges a canon boundary
+/// reading `canonical` (`None`: the returned answer boundary). `admits` tells
+/// whether a registered level set covers the boundary's execution levels.
+///
+/// A canonical rows record, or the answer's identity index, needs a Distinct
+/// provider of its recorded type; an unrecorded answer index any Distinct
+/// provider. A Built reference is discharged by its own Provider obligations;
+/// a host carrier is read only at host.
+pub(crate) fn canon_available(
+    analysis: &Analysis,
+    catalog: &Catalog,
+    canonical: Option<&CanonSource>,
+    admits: impl Fn(&[Vec<String>]) -> bool,
 ) -> bool {
-    match strategy.and_then(cq_lang_sequence::structures::CanonStrategy::provider) {
-        Some(provider) => matches_type(token, provider),
-        None => matches_type(token, &syn::parse_quote!(::cq_storage::dedup::Sort)),
-    }
+    let ty = match canonical {
+        Some(CanonSource::Rows(ty)) => Some(ty),
+        Some(CanonSource::Index(_)) => return true,
+        Some(CanonSource::Host) => return admits(&[vec!["host".to_owned()]]),
+        // Structures records at most the returned result's identity index.
+        None => analysis.structures.head_dedup.values().next(),
+    };
+    catalog.providers.iter().any(|token| {
+        ty.is_none_or(|ty| matches_type(&token.ty, ty))
+            && token.capabilities.contains(&Capability::Distinct)
+            && admits(&token.levels)
+    })
 }
 
 /// Check the complete target promise, including scheduled read levels and row
@@ -214,14 +228,15 @@ mod tests {
                 relation L(a:i32); relation R(a:i32,b:i32);
                 l = pipe rename L@0 {a -> a};
                 r = pipe rename R@1 {a -> a,b -> b};
-                answer = pipe canon probe first [a] l,r;
+                answer = let canon probe first [a] l,r;
                 return answer as answer(a,b);
             }
             structures {
                 l host scan = Reader [];
                 r host scan = OpaqueNative<i32> [];
                 r host result(answer) = OpaqueNative<i32> [a];
-                answer canon = sort;
+                answer rows = ::cq_storage::dedup::Sort;
+                answer canon = rows;
             }
         };
         let program = cq_sequence_lowering::compile(&structures).unwrap();
@@ -240,6 +255,7 @@ mod tests {
                 supports: Vec::new(),
                 levels: vec![level],
                 elements: Some(vec![syn::parse_quote!(i32)]),
+                max_packed_bits: None,
             }],
             ..Catalog::default()
         };

@@ -1,4 +1,4 @@
-use cq_lang_sequence::{CanonToken, Capability, Catalog, ProviderToken, structures};
+use cq_lang_sequence::{Capability, Catalog, ProviderToken, structures};
 use structures::{ProviderCapability as Support, Structure};
 
 fn source(decision: &str) -> structures::Program {
@@ -9,37 +9,40 @@ fn source(decision: &str) -> structures::Program {
             l = pipe rename L@0 {a -> x};
             r = let rename R@1 {a -> x,b -> y};
             s = pipe semi eager [x] l,r;
-            p = pipe canon probe first [x] s,r;
+            p = let canon probe first [x] s,r;
             return p as answer(x,y);
         }
         structures {
             l host scan = Reader [];
             r host scan = Reader [];
             r = Original [x] supports [expand, keys];
-            p canon = sort;
+            p rows = ::cq_storage::dedup::Sort;
+            p canon = rows;
             #decision
         }
     }
 }
 fn catalog(supports: Vec<Support>) -> Catalog {
-    let token = |ty, supports| ProviderToken {
+    let token = |ty, supports, capabilities| ProviderToken {
         ty,
         supports,
-        capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
+        capabilities,
         levels: vec![vec!["host".into()]],
         elements: None,
+        max_packed_bits: None,
     };
+    let read = || vec![Capability::Exact, Capability::Range, Capability::Membership];
     Catalog {
         // Read capabilities alone must not license retained/expanded/filter decisions.
         providers: vec![
-            token(syn::parse_quote!(ReadOnly), Vec::new()),
-            token(syn::parse_quote!(SelectedAlias), supports),
+            token(syn::parse_quote!(ReadOnly), Vec::new(), read()),
+            token(syn::parse_quote!(SelectedAlias), supports, read()),
+            token(
+                syn::parse_quote!(::cq_storage::dedup::Sort),
+                Vec::new(),
+                vec![Capability::Distinct],
+            ),
         ],
-        canons: vec![CanonToken {
-            ty: syn::parse_quote!(::cq_storage::dedup::Sort),
-            levels: vec![vec!["host".into()]],
-            max_packed_bits: None,
-        }],
         codecs: Vec::new(),
     }
 }

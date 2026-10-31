@@ -38,7 +38,16 @@ pub const CONFIGS: &[&str] = &[
     relation Part(p_partkey: i64, p_brand: StringCode, p_container: StringCode, p_size: i32);
 }
 
-type LineitemRow = (i64, i64, i64, Decimal, Decimal, Decimal, StringCode, StringCode);
+type LineitemRow = (
+    i64,
+    i64,
+    i64,
+    Decimal,
+    Decimal,
+    Decimal,
+    StringCode,
+    StringCode,
+);
 pub struct Data {
     lineitem: Vec<LineitemRow>,
     part: Vec<(i64, StringCode, StringCode, i32)>,
@@ -52,9 +61,15 @@ pub fn load(root: &Path, _config: &str) -> Result<Data, Box<dyn Error>> {
     let mut dictionaries = cq_load::Dictionaries::default();
     Ok(Data {
         lineitem: LineitemLoader::parquet_interned(
-            root.join("lineitem.parquet"), Default::default(), &mut dictionaries)?,
+            root.join("lineitem.parquet"),
+            Default::default(),
+            &mut dictionaries,
+        )?,
         part: PartLoader::parquet_interned(
-            root.join("part.parquet"), Default::default(), &mut dictionaries)?,
+            root.join("part.parquet"),
+            Default::default(),
+            &mut dictionaries,
+        )?,
         dictionaries,
     })
 }
@@ -201,10 +216,30 @@ mod tests {
         };
         let data = Data {
             part: vec![
-                (1, dictionaries.literal("p_brand", "Brand#12"), dictionaries.literal("p_container", "SM CASE"), 5),
-                (2, dictionaries.literal("p_brand", "Brand#23"), dictionaries.literal("p_container", "MED BAG"), 10),
-                (3, dictionaries.literal("p_brand", "Brand#34"), dictionaries.literal("p_container", "LG PKG"), 15),
-                (4, dictionaries.literal("p_brand", "Brand#12"), dictionaries.literal("p_container", "SM CASE"), 6),
+                (
+                    1,
+                    dictionaries.literal("p_brand", "Brand#12"),
+                    dictionaries.literal("p_container", "SM CASE"),
+                    5,
+                ),
+                (
+                    2,
+                    dictionaries.literal("p_brand", "Brand#23"),
+                    dictionaries.literal("p_container", "MED BAG"),
+                    10,
+                ),
+                (
+                    3,
+                    dictionaries.literal("p_brand", "Brand#34"),
+                    dictionaries.literal("p_container", "LG PKG"),
+                    15,
+                ),
+                (
+                    4,
+                    dictionaries.literal("p_brand", "Brand#12"),
+                    dictionaries.literal("p_container", "SM CASE"),
+                    6,
+                ),
             ],
             lineitem: vec![
                 row(1, 1, 100, "AIR", "DELIVER IN PERSON"),

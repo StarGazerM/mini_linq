@@ -16,7 +16,6 @@ use proc_macro2::Span;
 
 const LANES: usize = 256;
 
-
 /// The same cursor places actual kernel buffers and sizes the machine premise.
 pub(crate) struct SharedLayout {
     bytes: usize,

@@ -2,8 +2,8 @@
 //!
 //! The runtime exposes the pooled storage and codec APIs consumed by Sequence.
 
-pub mod nvtx;
 pub mod expansions;
+pub mod nvtx;
 
 pub use gpu_device_columns::{
     decode_stripe, decode_tile_pair, decode_value, detect_integer_codec, encode_value, Bounds,
@@ -73,4 +73,3 @@ pub fn arena_timing_enabled() -> bool {
 pub fn publish_timings(timings: Timings) {
     LAST_TIMINGS.with(|last| last.set(Some(timings)));
 }
-

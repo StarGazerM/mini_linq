@@ -73,20 +73,23 @@ fn positional_spine_preserves_raw_host_membership_at_host_when_retention_is_ille
             selected = let semi eager [a] r,s;
             expanded = pipe probe first [a] s,selected;
             member = pipe probe first [a,b] expanded,r;
-            answer = pipe canon project member keep {a,b};
+            answer = let canon project member keep {a,b};
             return answer as answer(a,b);
         }
     };
-    let structures = cq_structure_selection::compile_with(
-        &physical,
-        quote::quote!(positional(R, S)),
-    ).unwrap();
+    let structures =
+        cq_structure_selection::compile_with(&physical, quote::quote!(positional(R, S))).unwrap();
     let source = cq_sequence_lowering::compile(&structures).unwrap();
     // Keep the authored reader publication separate from join-order advice.
     let source = cq_sequence_plan::rewrites::store(&source, quote::quote!(member)).unwrap();
     let before = cq_lang_sequence::contract::check(&source).unwrap();
     assert!(before.structures.reads.contains_key("selected"));
-    assert!(before.structures.membership.contains(&("r".into(), vec!["a".into(), "b".into()])));
+    assert!(
+        before
+            .structures
+            .membership
+            .contains(&("r".into(), vec!["a".into(), "b".into()]))
+    );
     let catalog = cq_sequence_tasks::catalog();
     let target = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
     let facts = cq_lang_sequence::contract::check(&target).unwrap();
@@ -104,26 +107,42 @@ fn positional_spine_preserves_raw_host_membership_at_host_when_retention_is_ille
     ));
     let expression = cq_sequence_tasks::translate(&planned.program, &facts).unwrap();
     let rendered = quote::ToTokens::to_token_stream(&expression).to_string();
-    let keyset = rendered.find("let __cq_s_keys_a =").expect("borrowed source keyset");
-    let read = rendered.find("ExactMembership :: contains (__cq_s_keys_a")
+    let keyset = rendered
+        .find("let __cq_s_keys_a =")
+        .expect("borrowed source keyset");
+    let read = rendered
+        .find("ExactMembership :: contains (__cq_s_keys_a")
         .expect("partition producer membership read");
-    assert!(keyset < read, "publish keysets before dependent partition producers");
+    assert!(
+        keyset < read,
+        "publish keysets before dependent partition producers"
+    );
     assert_eq!(rendered.matches("let __cq_s_keys_a =").count(), 1);
-    assert!(!rendered.contains("let __cq_s_rows"), "borrowed rows need no tuple buffer");
+    assert!(
+        !rendered.contains("let __cq_s_rows"),
+        "borrowed rows need no tuple buffer"
+    );
     // Each backend selects its own valid catalog; positional markers need
     // the caller's exact cq-load dependency in the generated-Rust runtime.
     let runtime = cq_testkit::rustc::Runtime::with_dependencies(vec![
         cq_testkit::rustc::linked_dependency::<cq_storage::sharded::FullKey>(
-            "cq_storage", "cq_storage::sharded::FullKey"),
+            "cq_storage",
+            "cq_storage::sharded::FullKey",
+        ),
         cq_testkit::rustc::linked_dependency::<cq_load::ColumnAt<0>>(
-            "cq_load", "cq_load::ColumnAt<0>"),
+            "cq_load",
+            "cq_load::ColumnAt<0>",
+        ),
     ]);
     for setup in [
         quote::quote! { let R: Vec<(i32,i32)> = vec![]; let S: Vec<(i32,)> = vec![]; },
         quote::quote! { let R = vec![(1i32,2i32),(1,2),(2,3)]; let S = vec![(1i32,),(1,)]; },
     ] {
         cq_sequence_conformance::assert_conformant_with_runtime(
-            &source, &[Target::Sequential, Target::Tasks], &setup, &runtime,
+            &source,
+            &[Target::Sequential, Target::Tasks],
+            &setup,
+            &runtime,
             &cq_lang_sequence::Catalog::default(),
         );
     }

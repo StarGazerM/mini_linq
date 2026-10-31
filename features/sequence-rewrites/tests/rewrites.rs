@@ -9,10 +9,10 @@ fn program(body: TokenStream) -> Program {
     syn::parse2(quote! {
         physical {
             relation R(a:i32);
-            r = pipe canon rename R@0 {a -> a};
+            r = let canon rename R@0 {a -> a};
             return r as answer(a);
         }
-        structures { r host scan = Reader []; r canon = sort; }
+        structures { r host scan = Reader []; r rows = ::cq_storage::dedup::Sort; r canon = rows; }
         sequence { #body }
     })
     .unwrap()
@@ -264,11 +264,11 @@ fn grouped_key_premises_remove_only_proven_valuation_canon() {
     let source: Program = syn::parse_quote! {
         physical {
             relation R(id:i64, value:i64);
-            r = pipe canon rename R@0 {id -> id, value -> value};
+            r = let canon rename R@0 {id -> id, value -> value};
             grouped = let group r by [] { total: i64 = sum(value); };
             return grouped as answer(total);
         }
-        structures { r host scan = Reader []; r canon = sort; grouped rows = Rows; }
+        structures { r host scan = Reader []; r rows = ::cq_storage::dedup::Sort; r canon = rows; grouped rows = Rows; }
         sequence { values = store canon rows r; answer = store group grouped values; }
     };
     assert!(cq_sequence_plan::rewrites::group_without_canon(&source, quote!(answer)).is_err());
@@ -315,7 +315,7 @@ fn grouped_join_requires_keys_for_every_enumerated_atom() {
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r = Provider [a]; j rows = Rows; j canon = sort; grouped rows = Rows;
+            r = Provider [a]; j rows = ::cq_storage::dedup::Sort; j canon = rows; grouped rows = Rows;
         }
         sequence {
             l = rows l; r = store rows r;

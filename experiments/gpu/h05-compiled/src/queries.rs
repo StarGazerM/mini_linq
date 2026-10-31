@@ -85,7 +85,7 @@ macro_rules! compiled_le {
                 lineitem = let rename Lineitem@4 {l_orderkey -> order,l_suppkey -> supplier};
                 supplier = let rename Supplier@5 {s_suppkey -> supplier,s_nationkey -> nation};
                 $($physical)*
-                answer = pipe canon project matched keep {order,supplier,nation};
+                answer = let canon project matched keep {order,supplier,nation};
                 return answer as answer(order,supplier,nation);
             }
             structures {
@@ -97,7 +97,8 @@ macro_rules! compiled_le {
                 supplier host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
                 r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
                 r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-                answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                answer canon = rows;
                 $($structures)*
             }
             sequence {
@@ -213,7 +214,7 @@ macro_rules! reference {
             rnco = pipe probe first [customer] rnc,orders_index;
             rncol = pipe probe first [order] rnco,lineitem_index;
             matched = pipe semi eager [nation,supplier] rncol,supplier_index;
-            answer = pipe canon project matched keep {order,supplier,nation};
+            answer = let canon project matched keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
         structures {
@@ -230,7 +231,8 @@ macro_rules! reference {
             lineitem_index = ::cq_gpu_sequence_runtime::RangeProvider [order];
             supplier_index = ::cq_gpu_sequence_runtime::RangeProvider [nation][supplier];
             rnc rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer canon = rows;
         }
         sequence {
             RegionASIA = store map region_asia compact region_selected rows region_base;
@@ -291,12 +293,13 @@ pub fn chain<'a>(input: &'a DeviceColumns<'_, Answer>) -> DeviceColumns<'a, Answ
         physical {
             relation Input(order:u32,supplier:u32,nation:u32) = (input);
             source = pipe rename Input@0 {order -> order,supplier -> supplier,nation -> nation};
-            answer = pipe canon project source keep {order,supplier,nation};
+            answer = let canon project source keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
         structures {
             source host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32)> [];
-            answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer canon = rows;
         }
         sequence {
             source = store rows source;

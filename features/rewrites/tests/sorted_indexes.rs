@@ -12,7 +12,7 @@ fn program() -> ir::Program {
         d = let rename D@2 {a -> a, z -> z, w -> w};
         p = pipe probe first [z] x, c;
         s = pipe semi eager [a, z] p, c;
-        q = pipe canon probe first [a, z] s, d;
+        q = let canon probe first [a, z] s, d;
         return q as answer(z, a, w);
     } };
     cq_structure_selection::compile(&physical).unwrap()

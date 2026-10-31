@@ -21,7 +21,7 @@
 //!         l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {b -> x,c -> z};
 //!         s = let point select r if (z = 1);
 //!         t = pipe semi eager [x] l,s;
-//!         out = pipe canon project t keep {x}; return out as answer(x);
+//!         out = let canon project t keep {x}; return out as answer(x);
 //!     }
 //!     structures {
 //!         l host scan = ::core::iter::Map<_,_> [];
@@ -31,7 +31,7 @@
 //!         s keyset = NoInterval<_> [x] owned base R lineage{x -> b,z -> c};
 //!         t read = positional base L lineage{x -> a} column a
 //!             marker ::cq_load::ColumnAt<0> predicate membership s[x] summary exact;
-//!         out canon = sort;
+//!         out rows = ::cq_storage::dedup::Sort; out canon = rows;
 //!     }
 //! }.collect();
 //! ```
