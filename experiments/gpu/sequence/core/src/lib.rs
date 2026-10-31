@@ -15,6 +15,7 @@ pub mod runs;
 mod emit;
 pub mod layout;
 mod reduce;
+mod realize;
 mod rows;
 
 pub use emit::translate;
@@ -120,12 +121,17 @@ pub fn native_abi(ty: &syn::Type) -> Option<NativeAbi> {
                     .all(|segment| matches!(segment.arguments, syn::PathArguments::None))
         })
 }
+/// Collective block width of every generated CUDA template.
+pub(crate) const BLOCK_THREADS: u32 = 256;
+
 /// Host publication over separated, dynamically scheduled device blocks.
 /// Each block is collaborative; lanes are sequential leaves (no warp level).
 pub fn machine() -> Machine {
     Machine { gpu: Some(cq_lang_sequence::gpu::Machine {
-        block_threads: 256,
+        block_threads: BLOCK_THREADS,
+        reserve_rows: 256,
         bindings: bindings::select,
+        realize: realize::select,
         contiguous_range: |ty| native_abi(ty) == Some(NativeAbi::Range),
     }), name: syn::parse_quote!(gpu),
     items: 4,

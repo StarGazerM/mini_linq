@@ -31,6 +31,104 @@ struct Publication {
     placement: advice::Placement,
     nullable: Vec<bool>,
     domains: Vec<Option<(String, String)>>,
+    /// Resident grouped output conversion, recorded with the placement.
+    #[serde(default)]
+    grouped: Option<GroupedPublication>,
+}
+
+/// Formal rule DR-GroupedPublication: a resident grouped answer converts the
+/// grouped machine rows into answer columns by recorded slots; each key column
+/// takes the recorded bounds source, aggregates the full i64 domain.
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+struct GroupedPublication {
+    slots: Vec<usize>,
+    bounds: Vec<KeyBounds>,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+enum KeyBounds {
+    /// Field `field` of the positive body atom over `relation`: resident
+    /// column metadata, or one host scan of a host relation.
+    Input { relation: String, field: usize, resident: bool },
+    Full,
+}
+
+/// Select the grouped conversion at DR-Publication: slots follow the
+/// normalized head over keys then aggregates; a key's bounds come from the
+/// first positive atom binding it.
+fn grouped_publication(
+    source: &cq_lang_cq::Program,
+    normal: &cq_lang_cq::Program,
+    inputs: Option<&std::collections::BTreeMap<String, Publication>>,
+) -> Option<GroupedPublication> {
+    let group = normal.query.group.as_ref()?;
+    let columns: Vec<_> = group.keys.iter().chain(group.aggregates.iter().map(|a| &a.name)).collect();
+    let slots: Vec<_> = normal
+        .query
+        .head
+        .args
+        .iter()
+        .map(|argument| {
+            let syn::Expr::Path(path) = argument else {
+                unreachable!("checked normalized group head");
+            };
+            columns.iter().position(|name| path.path.is_ident(*name)).expect("checked grouped output")
+        })
+        .collect();
+    let bounds = slots
+        .iter()
+        .map(|&slot| {
+            if slot >= group.keys.len() {
+                return KeyBounds::Full;
+            }
+            let key = columns[slot];
+            source
+                .query
+                .body
+                .iter()
+                .find_map(|item| {
+                    let cq_lang_cq::BodyItem::Positive { atom } = item else { return None };
+                    let field = atom.args.iter().position(|arg| matches!(arg,
+                        syn::Expr::Path(path) if path.path.is_ident(key)))?;
+                    let relation = atom.relation.to_string();
+                    let resident = inputs
+                        .and_then(|inputs| inputs.get(&relation))
+                        .map(Publication::resident)
+                        .unwrap_or(true);
+                    Some(KeyBounds::Input { relation, field, resident })
+                })
+                .unwrap_or(KeyBounds::Full)
+        })
+        .collect();
+    Some(GroupedPublication { slots, bounds })
+}
+
+/// Validate a recorded grouped conversion against the checked programs.
+fn check_grouped(
+    source: &cq_lang_cq::Program,
+    normal: &cq_lang_cq::Program,
+    grouped: &GroupedPublication,
+) -> syn::Result<()> {
+    let fail = |message: &str| Err(syn::Error::new_spanned(normal, format!("DR-GroupedPublication: {message}")));
+    let Some(group) = &normal.query.group else { return fail("ungrouped answer has a grouped conversion") };
+    let width = group.keys.len() + group.aggregates.len();
+    if grouped.slots.len() != normal.query.head.args.len() || grouped.bounds.len() != grouped.slots.len()
+        || grouped.slots.iter().any(|slot| *slot >= width)
+    {
+        return fail("slots do not cover the grouped head");
+    }
+    for (slot, bounds) in grouped.slots.iter().zip(&grouped.bounds) {
+        let KeyBounds::Input { relation, field, .. } = bounds else { continue };
+        let Some(key) = group.keys.get(*slot) else { return fail("aggregate column takes input bounds") };
+        let bound = source.query.body.iter().any(|item| matches!(item,
+            cq_lang_cq::BodyItem::Positive { atom } if atom.relation == relation.as_str()
+                && atom.args.get(*field).is_some_and(|arg| matches!(arg,
+                    syn::Expr::Path(path) if path.path.is_ident(key)))));
+        if !bound {
+            return fail("key bounds name an atom field that does not bind the key");
+        }
+    }
+    Ok(())
 }
 
 impl Publication {
@@ -82,7 +180,7 @@ fn publication(
         return Err(syn::Error::new_spanned(program,
             "device publication requires a device target and nonnullable columns; select host publication"));
     }
-    Ok(Publication { placement, nullable, domains: Vec::new() })
+    Ok(Publication { placement, nullable, domains: Vec::new(), grouped: None })
 }
 
 fn checked<T>(
@@ -189,6 +287,12 @@ fn compile_stage(
     let cq: cq_lang_cq::Program = checked("CQ parse", &encoded, syn::parse2(encoded.clone()))?;
     let normal = checked("CQ normalize", &cq, cq_lang_cq::normal::normalize(&cq))?;
     let mut publication = checked("publication contract", &normal, publication(&normal, pipeline, publications))?;
+    if publication.resident() {
+        publication.grouped = grouped_publication(&cq, &normal, publications);
+        if let Some(grouped) = &publication.grouped {
+            checked("grouped publication", &normal, check_grouped(&cq, &normal, grouped))?;
+        }
+    }
     publication.domains = kernel.answer_columns().map_err(|error| Rejected {
         phase: "publication domains", error: error.to_string(), term: cpu_source.to_string(),
     })?.into_iter().map(|origin| origin.filter(|(table, column)|
@@ -803,66 +907,32 @@ fn compile_stage(
                     cq_gpu_runtime::publish_timings(timing);
                     result
                 })
-            } else if let Some(group) = &normal.query.group {
-                let columns: Vec<_> = group
-                    .keys
-                    .iter()
-                    .chain(group.aggregates.iter().map(|a| &a.name))
-                    .collect();
-                let slots: Vec<_> = normal
-                    .query
-                    .head
-                    .args
-                    .iter()
-                    .map(|argument| {
-                        let syn::Expr::Path(path) = argument else {
-                            unreachable!("checked normalized group head");
-                        };
-                        columns
-                            .iter()
-                            .position(|name| path.path.is_ident(*name))
-                            .expect("checked grouped output")
-                    })
-                    .collect();
-                let bounds: Vec<_> = slots.iter().map(|&slot| {
-                    if slot < group.keys.len() {
-                        let key = columns[slot];
-                        for item in &cq.query.body {
-                            let cq_lang_cq::BodyItem::Positive { atom } = item else { continue; };
-                            let Some(field) = atom.args.iter().position(|arg| matches!(arg,
-                                syn::Expr::Path(path) if path.path.is_ident(key)
-                            )) else { continue; };
-                            let name = &atom.relation;
-                            let published = publications.get(&name.to_string());
-                            let value = if published.is_some() { quote!(#name) } else { quote!(&data.#name) };
-                            let resident = published.map(Publication::resident).unwrap_or(true);
-                            if resident {
-                                return quote!((#value).storage().bounds[#field]);
-                            }
-                            let field = syn::Index::from(field);
-                            return quote!((#value).iter().fold(cq_gpu_runtime::Bounds::Empty, |bounds, row| {
-                                let value = gpu_datalog_runtime::encode_scalar(&row.#field);
-                                match bounds {
-                                    cq_gpu_runtime::Bounds::Empty => cq_gpu_runtime::Bounds::Inclusive { min: value, max: value },
-                                    cq_gpu_runtime::Bounds::Inclusive { min, max } => cq_gpu_runtime::Bounds::Inclusive {
-                                        min: min.min(value), max: max.max(value),
-                                    },
-                                }
-                            }));
+            } else if let Some(grouped) = &publication.grouped {
+                let slots = &grouped.slots;
+                let bounds: Vec<_> = grouped.bounds.iter().map(|bounds| match bounds {
+                    KeyBounds::Input { relation, field, resident } => {
+                        let name = format_ident!("{}", relation);
+                        let value = if publications.contains_key(relation) { quote!(#name) } else { quote!(&data.#name) };
+                        if *resident {
+                            return quote!((#value).storage().bounds[#field]);
                         }
+                        let field = syn::Index::from(*field);
+                        quote!((#value).iter().fold(cq_gpu_runtime::Bounds::Empty, |bounds, row| {
+                            let value = gpu_datalog_runtime::encode_scalar(&row.#field);
+                            match bounds {
+                                cq_gpu_runtime::Bounds::Empty => cq_gpu_runtime::Bounds::Inclusive { min: value, max: value },
+                                cq_gpu_runtime::Bounds::Inclusive { min, max } => cq_gpu_runtime::Bounds::Inclusive {
+                                    min: min.min(value), max: max.max(value),
+                                },
+                            }
+                        }))
                     }
-                    quote!(cq_gpu_runtime::Bounds::Inclusive { min: i64::MIN, max: i64::MAX })
+                    KeyBounds::Full => quote!(cq_gpu_runtime::Bounds::Inclusive { min: i64::MIN, max: i64::MAX }),
                 }).collect();
                 quote!({
                     let started = ::std::time::Instant::now();
-                    let start = data.pool.stream().record_event(Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
                     let result = unsafe { output.into_columns::<Answer>(&[#(#slots),*], &[#(#bounds),*])? };
-                    let end = data.pool.stream().record_event(Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
-                    data.pool.stream().synchronize()?;
-                    let elapsed = start.elapsed_ms(&end)? as f64;
                     let mut timing = cq_gpu_runtime::take_last_timings().ok_or("group stage published no timings")?;
-                    timing.dedup_ms += elapsed;
-                    timing.total_ms += elapsed;
                     timing.wall_ms += started.elapsed().as_secs_f64() * 1000.0;
                     cq_gpu_runtime::publish_timings(timing);
                     result

@@ -324,8 +324,20 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     CQ-only: Datalog provider/initializer fixes are deferred to C2 on top of
     track B's ordinary canonical-layout records, without parallel GPU-only
     ownership fields. Fused `DeviceRuns::admit` remains until that cutover.
-    Terminal-group execution placement remains a separate refinement obligation,
-    not discharged by recording its accumulator provider.
+  - **GPU CQ printers print only recorded facts** (P3e, audit
+    `agent://GpuPrinterAudit`). GPU-Launch also records initial capacity,
+    stripe-batch reservation and per-level strips (resolved tile defaults and
+    fold scopes). GPU-Realization records, after publication storage, device
+    source access (scan/positions/provider interval, setup/build), one step per
+    Sequence definition (terminal-group alias, terminal group, dispatch, host
+    union, upload), host transfers (complete rows), provider descriptor bounds
+    including measured run keys, auxiliary element-kernel geometry and closed
+    captures; an independent checker validates them, and a selection failure is
+    recorded and raised only when that candidate is printed. The terminal group
+    records its input realization and completion; keyless groups use fused
+    occupancy-grid partials plus one combine (GPU-GroupGridFold, the one
+    intended work change). TPC-H grouped answers record slots and key bounds
+    sources (DR-GroupedPublication). GPU Datalog printing is not covered.
   - **Removes** CQ `CanonStrategy`/`dedup::sort` canon, `__cq_seen` and
     callback barriers; CPU Datalog `seen`/`all` (hash, `ShardedSeen`, `RunSeen`
     seeds), DL-InsertNew/DL-ShardedAdmission; GPU fused admission. Verified

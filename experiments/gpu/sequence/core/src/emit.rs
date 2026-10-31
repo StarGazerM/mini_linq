@@ -3,11 +3,16 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cq_lang_sequence::{Analysis, Capability, Guard, Len, Monoid, OutputProtocol, Program, Term};
+use cq_lang_sequence::gpu::{FoldScope, Grid, Strip};
+use cq_lang_sequence::gpu::realization::{
+    Granularity, GroupCompletion, GroupInput, HostEvaluation, HostOutput, Step, TransferSource, UnionArm,
+};
 use cq_lang_sequence::gpu::publication::{ColumnBounds, FieldBounds, KeyCodec, KeyField, PublicationRecord, PublicationStorage};
 use cq_lang_structures::physical::{Operator, symbol_name};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 
+use crate::realize::grouped_boundary;
 use crate::rows::{DeviceRow, Rows};
 
 fn error(message: impl std::fmt::Display) -> syn::Error {
@@ -197,39 +202,16 @@ enum Operation {
         negated: bool,
     },
     Flatten,
-    Tile {
-        n: usize,
-        items: usize,
-    },
+    Tile,
     Store,
     Fold(Monoid),
     Canon,
 }
 
-fn local_tiles(operations: &[Operation]) -> Vec<(usize, usize)> {
-    operations
-        .iter()
-        .take_while(|operation| {
-            !matches!(
-                operation,
-                Operation::Lookup {
-                    membership: false,
-                    ..
-                } | Operation::Fold(_)
-            )
-        })
-        .filter_map(|operation| {
-            if let Operation::Tile { n, items } = operation {
-                Some((*n, *items))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
 
-fn nested_partitions(tiles: &[(usize, usize)], mut body: TokenStream) -> TokenStream {
-    for &(size, _) in tiles.iter().rev() {
+/// Nest the recorded local partitions, outermost first.
+fn nested_partitions(tiles: &[usize], mut body: TokenStream) -> TokenStream {
+    for &size in tiles.iter().rev() {
         body = quote! {{
             let mut __part_cursor=__partition_begin;
             while __part_cursor<__partition_end {
@@ -263,7 +245,7 @@ fn active_tile(operations: &[Operation]) -> Option<usize> {
 }
 
 fn partition_body(
-    tiles: &[(usize, usize)],
+    tiles: &[usize],
     scope: usize,
     declare: TokenStream,
     rows: TokenStream,
@@ -492,10 +474,7 @@ impl<'a> Compiler<'a> {
                     Term::Flatten(_) => Operation::Flatten,
                     Term::Canon(_) => Operation::Canon,
                     Term::Store { .. } => Operation::Store,
-                    Term::Tile { n, items, .. } => Operation::Tile {
-                        n: *n,
-                        items: items.unwrap_or(n.div_ceil(256)),
-                    },
+                    Term::Tile { .. } => Operation::Tile,
                     Term::Fold(monoid, _) => Operation::Fold(monoid.clone()),
                     _ => unreachable!(),
                 };
@@ -738,6 +717,16 @@ struct Kernel<'c, 'p> {
     combine: Option<TokenStream>,
     expansion_counters: bool,
     expansion_stages: usize,
+    /// The current chain's recorded strips, consumed in pre-order.
+    strips: std::collections::VecDeque<Strip>,
+}
+
+impl Kernel<'_, '_> {
+    fn next_strip(&mut self) -> syn::Result<Strip> {
+        self.strips
+            .pop_front()
+            .ok_or_else(|| error("GPU-Launch: expansion lacks a recorded strip"))
+    }
 }
 
 struct StripeInput {
@@ -1033,7 +1022,7 @@ impl Kernel<'_, '_> {
                     });
                     child.0.insert(*slot, quote!(*#id.add(#owner)));
                 }
-                let tiles = local_tiles(rest);
+                let strip = self.next_strip()?;
                 // Formal rule SQ-ExpansionCounters: count children before closing
                 // operators, once per block collective, not once per lane.
                 let stage = self.expansion_stages;
@@ -1044,12 +1033,12 @@ impl Kernel<'_, '_> {
                             .fetch_add(__children as u64, ::cuda_device::atomic::AtomicOrdering::Relaxed);
                     }
                 });
-                let tile = tiles.first().map_or(256, |tile| tile.0);
-                let items = tiles.last().map_or(1, |tile| tile.1);
+                let tile = strip
+                    .rows
+                    .ok_or_else(|| error("GPU-Launch: expansion strip lacks its batch rows"))?;
                 let payload = self.compiler.payload(provider, quote!(__child_position))?;
-                let (_, partition, _, _) = self.partition_rows(rest, false,
-                    tiles.get(1..).unwrap_or_default(), StripeInput {
-                        items,
+                let (_, partition, _, _) = self.partition_rows(rest, &strip, StripeInput {
+                        items: strip.items,
                         inherited: child,
                         prelude: quote! {
                             let #owner = if __live {
@@ -1102,17 +1091,23 @@ impl Kernel<'_, '_> {
 
     /// Formal rule GPU-FoldCompletion: whole-input folds emit block partials;
     /// the recorded combine step alone publishes the logical fold result.
+    /// The fold's implementation scope is the level's recorded strip.
     fn partition_rows(
         &mut self,
         operations: &[Operation],
-        source: bool,
-        tiles: &[(usize, usize)],
+        strip: &Strip,
         input_rows: StripeInput,
     ) -> syn::Result<(TokenStream, TokenStream, TokenStream, bool)> {
-        let Some(at) = operations
-            .iter()
-            .position(|operation| matches!(operation, Operation::Fold(_)))
-        else {
+        let tiles = strip.nested.as_slice();
+        let (Some(scope), Some(at)) = (
+            &strip.fold,
+            operations
+                .iter()
+                .position(|operation| matches!(operation, Operation::Fold(_))),
+        ) else {
+            if strip.fold.is_some() {
+                return Err(error("GPU-Launch: recorded fold scope has no fold"));
+            }
             let rows = self.scalar_stripes(
                 operations,
                 input_rows.items,
@@ -1127,36 +1122,6 @@ impl Kernel<'_, '_> {
                 false,
             ));
         };
-        let target = active_tile(&operations[..at]);
-        let next_lookup = operations
-            .iter()
-            .position(|operation| {
-                matches!(
-                    operation,
-                    Operation::Lookup {
-                        membership: false,
-                        ..
-                    }
-                )
-            })
-            .unwrap_or(at)
-            .min(at);
-        let current = active_tile(&operations[..next_lookup]);
-        if !(source && target.is_none()) && (target != current || target.is_none()) {
-            let rows = self.scalar_stripes(
-                operations,
-                input_rows.items,
-                input_rows.inherited,
-                input_rows.prelude,
-                input_rows.load,
-            )?;
-            return Ok((
-                TokenStream::new(),
-                nested_partitions(tiles, rows),
-                TokenStream::new(),
-                false,
-            ));
-        }
         let Operation::Fold(monoid) = &operations[at] else {
             unreachable!()
         };
@@ -1187,13 +1152,15 @@ impl Kernel<'_, '_> {
             #finish
             #suffix
         };
-        let scope = target.map_or(0, |target| {
-            operations[..=target]
-                .iter()
-                .filter(|operation| matches!(operation, Operation::Tile { .. }))
-                .count()
-        });
-        if target.is_none() {
+        if let FoldScope::Tiles(scope) = scope {
+            return Ok((
+                TokenStream::new(),
+                partition_body(tiles, *scope, reduction.declare, body, publish),
+                TokenStream::new(),
+                false,
+            ));
+        }
+        {
             let declare = &reduction.declare;
             let combine_value = if matches!(monoid, Monoid::Or) {
                 quote!(#accumulator |= *__partials.add(__partial_base + __part);)
@@ -1223,13 +1190,6 @@ impl Kernel<'_, '_> {
                 }
             };
             Ok((reduction.declare, nested_partitions(tiles, body), partial, true))
-        } else {
-            Ok((
-                TokenStream::new(),
-                partition_body(tiles, scope, reduction.declare, body, publish),
-                TokenStream::new(),
-                false,
-            ))
         }
     }
 
@@ -1321,27 +1281,11 @@ impl Kernel<'_, '_> {
     }
 }
 
-fn host_union<'a>(
-    term: &'a Term,
-    definitions: &BTreeMap<String, &'a Term>,
-) -> Option<&'a [Term]> {
-    match term {
-        Term::Union(arms) => Some(arms),
-        Term::Store { inner, .. } | Term::Canon(inner) => host_union(inner, definitions),
-        Term::Ref(name) => host_union(definitions.get(&symbol_name(name))?, definitions),
-        _ => None,
-    }
-}
-
-fn grouped_boundary<'a>(
-    term: &'a Term,
-    definitions: &BTreeMap<String, &'a Term>,
-) -> Option<(&'a syn::Ident, &'a Term)> {
-    match term {
-        Term::Group(name, input) => Some((name, input)),
-        Term::Store { inner, .. } | Term::Canon(inner) => grouped_boundary(inner, definitions),
-        Term::Ref(name) => grouped_boundary(definitions.get(&symbol_name(name))?, definitions),
-        _ => None,
+/// Block width of a recorded one-thread-per-element auxiliary launch.
+fn element_block(grid: &Grid) -> syn::Result<proc_macro2::Literal> {
+    match grid {
+        Grid::Elements { block_threads: 256 } => Ok(proc_macro2::Literal::u32_unsuffixed(256)),
+        _ => Err(error("GPU-Realization: element kernels use their recorded 256-lane template")),
     }
 }
 
@@ -1365,125 +1309,113 @@ pub(crate) fn packed_offset(
     }}
 }
 
+/// Realize a recorded host evaluation: bind the recorded completed
+/// publications, download those its transfers name (complete rows), then
+/// evaluate and upload the host boundary.
 fn publish_host(
     compiler: &mut Compiler<'_>,
     result: &str,
-    host_downloads: &mut BTreeMap<usize, syn::Ident>,
+    evaluation: &HostEvaluation,
     launches: &mut Vec<TokenStream>,
     codecs: &crate::runs::Codecs,
 ) -> syn::Result<()> {
     let program = compiler.program;
     let analysis = compiler.analysis;
-                let bindings: BTreeMap<_, _> = compiler
-                    .stored
+    let mut bindings = BTreeMap::new();
+    for name in &evaluation.bound {
+        let prior = compiler
+            .stored
+            .iter()
+            .position(|stored| stored.name == *name)
+            .ok_or_else(|| error("GPU-Transfer: host evaluation binds an incomplete publication"))?;
+        bindings.insert(compiler.stored[prior].result.clone(), format_ident!("__cq_downloaded_{prior}"));
+    }
+    for transfer in &evaluation.transfers {
+        let TransferSource::Publication(name) = &transfer.source else { continue };
+        let Granularity::CompleteRows = transfer.granularity;
+        let prior = compiler
+            .stored
+            .iter()
+            .position(|stored| stored.name == *name)
+            .ok_or_else(|| error("GPU-Transfer: download names an incomplete publication"))?;
+        let stored = &compiler.stored[prior];
+        if stored.range.is_some() {
+            return Err(error("host consumer requires a materialized row publication"));
+        }
+        let downloaded = format_ident!("__cq_downloaded_{prior}");
+        let length = format_ident!("__cq_store_length_{prior}");
+        let rows = format_ident!("__cq_store_rows_{prior}");
+        let owner = format_ident!("__cq_canonical_{prior}");
+        let fields = format_ident!("__cq_fields_{prior}");
+        let mut values = Vec::new();
+        let mut types = Vec::new();
+        for column in &analysis.structures.layouts[&stored.result] {
+            let ty = &analysis.structures.physical.rows[&stored.result].types[column];
+            types.push(ty);
+            let code = if let Some(columns) = &stored.packed {
+                let field = columns
                     .iter()
-                    .enumerate()
-                    .map(|(prior, stored)| {
-                        (
-                            stored.result.clone(),
-                            format_ident!("__cq_downloaded_{prior}"),
-                        )
-                    })
-                    .collect();
-                let dependencies = compiler.rows.bound_host_dependencies(result, &bindings);
-                for (prior, stored) in compiler.stored.iter().enumerate() {
-                    if !dependencies.contains(&stored.result)
-                        || bindings[&stored.result] != format_ident!("__cq_downloaded_{prior}")
-                    {
-                        continue;
-                    }
-                    if stored.range.is_some() {
-                        return Err(error(
-                            "host consumer requires a materialized row publication",
-                        ));
-                    }
-                    let downloaded = format_ident!("__cq_downloaded_{prior}");
-                    if let std::collections::btree_map::Entry::Vacant(entry) =
-                        host_downloads.entry(prior)
-                    {
-                        let length = format_ident!("__cq_store_length_{prior}");
-                        let rows = format_ident!("__cq_store_rows_{prior}");
-                        let owner = format_ident!("__cq_canonical_{prior}");
-                        let fields = format_ident!("__cq_fields_{prior}");
-                        let mut values = Vec::new();
-                        let mut types = Vec::new();
-                        for column in &analysis.structures.layouts[&stored.result] {
-                            let ty =
-                                &analysis.structures.physical.rows[&stored.result].types[column];
-                            types.push(ty);
-                            let code = if let Some(columns) = &stored.packed {
-                                let field = columns
-                                    .iter()
-                                    .position(|name| name == column)
-                                    .ok_or_else(|| {
-                                        error("host consumer column absent from packed publication")
-                                    })?;
-                                let offset = packed_offset(
-                                    quote!(__cq_downloaded_codes.as_ptr()),
-                                    quote!(__position),
-                                    quote!(__lanes),
-                                    quote!(field.shift),
-                                    quote!(field.bits),
-                                );
-                                // DECODE V: P6 intermediate host publication reconstructs packed FOR fields for the whole stored layout.
-                                quote! {{
-                                    let field = #fields[#field];
-                                    let offset = #offset;
-                                    field.base.wrapping_add(offset as i64)
-                                }}
-                            } else {
-                                let width = compiler.rows.width;
-                                let slot = compiler.slot(column)?;
-                                quote!(__cq_downloaded_codes[__position * #width + #slot])
-                            };
-                            // DECODE V: P6 intermediate host fallback resolves symbols and logical values before more engine operators, not final answers.
-                            values.push(if let Some(codec) = codecs.get(ty) {
-                                quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(
-                                    u32::try_from(#code).map_err(|_| "GPU symbol code exceeds u32")?
-                                ))
-                            } else {
-                                quote!(::cq_gpu_runtime::decode_value::<#ty>(#code, &__cq_dictionary)?)
-                            });
-                        }
-                        let (download, key) = if stored.packed.is_some() {
-                            (
-                                quote!(#owner.keys().to_host()?),
-                                quote! {
-                                    let __lanes = #owner.lanes();
-                                },
-                            )
-                        } else {
-                            (quote!(#rows.to_host()?), TokenStream::new())
-                        };
-                        launches.push(quote! {
-                            let #downloaded: ::std::vec::Vec<(#(#types,)*)> = {
-                                let __cq_downloaded_codes = #download;
-                                let mut rows = ::std::vec::Vec::with_capacity(#length);
-                                for __position in 0..#length {
-                                    #key
-                                    rows.push((#(#values,)*));
-                                }
-                                rows
-                            };
-                        });
-                        entry.insert(downloaded.clone());
-                    }
-                }
-                launches.push(
-                    compiler
-                        .rows
-                        .publish_host(program, analysis, result, &bindings)?,
+                    .position(|name| name == column)
+                    .ok_or_else(|| error("host consumer column absent from packed publication"))?;
+                let offset = packed_offset(
+                    quote!(__cq_downloaded_codes.as_ptr()),
+                    quote!(__position),
+                    quote!(__lanes),
+                    quote!(field.shift),
+                    quote!(field.bits),
                 );
+                // DECODE V: P6 intermediate host publication reconstructs packed FOR fields for the whole stored layout.
+                quote! {{
+                    let field = #fields[#field];
+                    let offset = #offset;
+                    field.base.wrapping_add(offset as i64)
+                }}
+            } else {
+                let width = compiler.rows.width;
+                let slot = compiler.slot(column)?;
+                quote!(__cq_downloaded_codes[__position * #width + #slot])
+            };
+            // DECODE V: P6 intermediate host fallback resolves symbols and logical values before more engine operators, not final answers.
+            values.push(if let Some(codec) = codecs.get(ty) {
+                quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(
+                    u32::try_from(#code).map_err(|_| "GPU symbol code exceeds u32")?
+                ))
+            } else {
+                quote!(::cq_gpu_runtime::decode_value::<#ty>(#code, &__cq_dictionary)?)
+            });
+        }
+        let (download, key) = if stored.packed.is_some() {
+            (
+                quote!(#owner.keys().to_host()?),
+                quote! {
+                    let __lanes = #owner.lanes();
+                },
+            )
+        } else {
+            (quote!(#rows.to_host()?), TokenStream::new())
+        };
+        launches.push(quote! {
+            let #downloaded: ::std::vec::Vec<(#(#types,)*)> = {
+                let __cq_downloaded_codes = #download;
+                let mut rows = ::std::vec::Vec::with_capacity(#length);
+                for __position in 0..#length {
+                    #key
+                    rows.push((#(#values,)*));
+                }
+                rows
+            };
+        });
+    }
+    launches.push(compiler.rows.publish_host(program, analysis, result, evaluation, &bindings)?);
     Ok(())
 }
 
 // DESIGN translator-gpu
 // Owns only translation of checked Sequence facts (translator-decides-nothing, T-Gpu).
 // Source: doc/PLANNING-REDESIGN.md Architecture; doc/formal/CONFORMANCE.md GPU emitter rows.
-// Launch, scan, fold completion, capture and publication facts must be recorded before printing.
+// Launch, strip, scan, fold completion, capture, source, transfer, terminal-group and
+// publication facts are recorded before printing (GPU-Launch, GPU-Realization).
 // DO NOT replan joins, move predicates, guess from generated names, or select codecs/memory policy.
-// Known deviation: terminal Group rerouting still bypasses an authored store (CONFORMANCE).
-// Removing that unrecorded grouped refinement belongs to remaining work in Plan P8.
 /// Translate only checked scheduling facts; no planner is consulted here.
 // Formal rule T-Gpu: Interpret checked Sequence constructors at their recorded GPU grades.
 pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
@@ -1516,6 +1448,7 @@ fn translate_observed(
     // The target-owned Structures stage and terminal enforce the same boundary.
     crate::check_structures(&program.structures, &analysis.structures)?;
     cq_lang_sequence::gpu::publication::check(program, analysis, &analysis.gpu_publications)?;
+    cq_lang_sequence::gpu::check(program, analysis)?;
     if arena.is_none()
         && program.sequence.output == Some(OutputProtocol::ReservePrevious)
     {
@@ -1538,7 +1471,6 @@ fn translate_observed(
             .map_err(|err| error(format!("cannot dump Sequence program to {}: {err}", path.display())))?;
     }
     let rows = Rows::new(program, analysis)?;
-    let device_sources = crate::rows::device_source_results(analysis);
     let codecs = crate::runs::Codecs::check(&program.structures)?;
     let arena_packing = arena.map(|_| rows.output_types().and_then(crate::arena::Packing::new)).transpose()?;
     let mut compiler = Compiler {
@@ -1556,7 +1488,6 @@ fn translate_observed(
     let mut kernels = Vec::new();
     let mut launches = Vec::new();
     let mut output = None;
-    let mut host_downloads = BTreeMap::<usize, syn::Ident>::new();
     let final_name = analysis
         .output
         .as_ref()
@@ -1626,31 +1557,30 @@ fn translate_observed(
         std::fs::write(&path, quote!(#program).to_string())
             .map_err(|err| error(format!("cannot dump Sequence program to {}: {err}", path.display())))?;
     }
-    for definition in &program.sequence.definitions {
+    let realization = &analysis.gpu_bindings.realization;
+    if realization.steps.len() != program.sequence.definitions.len() {
+        return Err(error("GPU-Realization: steps differ from the Sequence definitions"));
+    }
+    for (definition, (recorded, step)) in program.sequence.definitions.iter().zip(&realization.steps) {
         let publication = symbol_name(&definition.name);
-        // Lowering can give the terminal group its own store, followed by a
-        // final store alias. Both name the same grouped publication, which is
-        // realized by the collective below, not a CPU group/download/reupload.
-        // Only transparent wrappers around that terminal group are deferred;
-        // ordinary host publications still follow their recorded boundaries.
-        if publication != final_name
-            && final_group.is_some_and(|(final_group, _)| {
-                grouped_boundary(&definition.term, &compiler.definitions)
-                    .is_some_and(|(group, _)| group == final_group)
-            })
-        {
+        if *recorded != publication {
+            return Err(error("GPU-Realization: step names another definition"));
+        }
+        // Formal rule GPU-TerminalGroup: transparent store aliases of the
+        // terminal group are realized by its recorded fold, not published.
+        if let Step::GroupAlias = step {
             continue;
         }
-        if publication == final_name
-            && let Some((name, input)) = grouped_boundary(&definition.term, &compiler.definitions)
-        {
+        if let Step::Group(record) = step {
+            let (_, input) = grouped_boundary(&definition.term, &compiler.definitions)
+                .ok_or_else(|| error("GPU-TerminalGroup: step is not a grouped publication"))?;
             let mut chains = compiler.fold(input)?;
             let [chain] = chains.as_mut_slice() else {
                 return Err(error(
                     "GPU group requires one canonical valuation publication",
                 ));
             };
-            let result = symbol_name(name);
+            let result = record.group.clone();
             let physical = program
                 .structures
                 .physical
@@ -1662,38 +1592,42 @@ fn translate_observed(
             let Operator::Group(group) = &physical.operator else {
                 return Err(error("GPU group provenance is not a Physical group"));
             };
-            let mut host_input = chain.stored.is_none() && !compiler.rows.has_source(&chain.source);
-            for operation in &chain.operations {
-                let Operation::Map(name, input) = operation else { continue };
-                for name in compiler.rows.capture_definitions(name, input)? {
-                    let definition = program.structures.physical.program.definitions.iter()
-                        .find(|definition| symbol_name(&definition.name) == name)
-                        .ok_or_else(|| error("GPU group input lacks checked Physical provenance"))?;
-                    host_input |= analysis.rust_requires_host(&definition.operator);
+            let stored_index = |name: &str| compiler.stored.iter().position(|stored| stored.name == name);
+            let canonical = match &record.input {
+                GroupInput::Host { input, upload } => {
+                    // The host-graded input is evaluated at its recorded boundary,
+                    // using published device operands rather than replaying joins.
+                    // Only the numeric grouped-fold representation runs on device.
+                    if let Some(evaluation) = upload {
+                        publish_host(&mut compiler, input, evaluation, &mut launches, &codecs)?;
+                    }
+                    chain.source = input.clone();
+                    chain.result = input.clone();
+                    chain.stored = None;
+                    chain.operations.clear();
+                    None
                 }
-            }
-            if host_input {
-                // The host-graded input is evaluated at its recorded boundary,
-                // using published device operands rather than replaying joins.
-                // Only the numeric grouped-fold representation runs on device.
-                let input = symbol_name(&group.input);
-                if !compiler.rows.has_source(&input) {
-                    publish_host(&mut compiler, &input, &mut host_downloads, &mut launches, &codecs)?;
+                GroupInput::Canonical { publication } => {
+                    let index = stored_index(publication)
+                        .filter(|index| chain.stored == Some(*index) && chain.operations.is_empty())
+                        .ok_or_else(|| error("GPU-TerminalGroup: canonical input is not the chain's publication"))?;
+                    let columns = compiler.stored[index].packed.clone()
+                        .ok_or_else(|| error("GPU-TerminalGroup: canonical input is not packed"))?;
+                    Some((index, columns))
                 }
-                chain.source = input.clone();
-                chain.result = input;
-                chain.stored = None;
-                chain.operations.clear();
-            }
-            let canonical = chain
-                .stored
-                .and_then(|index| (chain.operations.is_empty()).then_some(index))
-                .and_then(|index| {
-                    compiler.stored[index]
-                        .packed
-                        .as_ref()
-                        .map(|columns| (index, columns))
-                });
+                GroupInput::Stored { publication } => {
+                    if chain.stored.is_none() || chain.stored != stored_index(publication) {
+                        return Err(error("GPU-TerminalGroup: stored input is not the chain's publication"));
+                    }
+                    None
+                }
+                GroupInput::Source { source } => {
+                    if chain.stored.is_some() || chain.source != *source {
+                        return Err(error("GPU-TerminalGroup: source input is not the chain's source"));
+                    }
+                    None
+                }
+            };
             let direct = if canonical.is_none() {
                 let mut load = TokenStream::new();
                 let length = if let Some(index) = chain.stored {
@@ -1794,20 +1728,46 @@ fn translate_observed(
                 None
             };
             let (prior, columns) = canonical
-                .map(|(index, columns)| (index, columns.as_slice()))
+                .as_ref()
+                .map(|(index, columns)| (*index, columns.as_slice()))
                 .unwrap_or((0, &[]));
             let kernel = format_ident!("__cq_group_arguments_{module_name}");
-            let (code, publication) = crate::reduce::group(
-                group,
-                analysis.structures.groups.get(&result),
-                columns,
-                &compiler.rows.output_columns,
-                &analysis.structures.physical.rows[&result].types,
-                prior,
-                &kernel,
-                direct,
-                &codecs,
-            )?;
+            let (code, publication) = match &record.completion {
+                GroupCompletion::Segmented { arguments } => {
+                    let Grid::KernelOccupancy = arguments else {
+                        return Err(error("GPU-TerminalGroup: argument extraction uses the occupancy grid"));
+                    };
+                    crate::reduce::group(
+                        group,
+                        analysis.structures.groups.get(&result),
+                        columns,
+                        &compiler.rows.output_columns,
+                        &analysis.structures.physical.rows[&result].types,
+                        prior,
+                        &kernel,
+                        direct,
+                        &codecs,
+                    )?
+                }
+                GroupCompletion::GridPartials { partials } => {
+                    let Grid::KernelOccupancy = partials else {
+                        return Err(error("GPU-TerminalGroup: grid partials use the occupancy grid"));
+                    };
+                    if analysis.structures.groups.contains_key(&result) {
+                        return Err(error("GPU-Group: global fold cannot carry a keyed accumulator provider"));
+                    }
+                    crate::reduce::global(
+                        group,
+                        columns,
+                        &compiler.rows.output_columns,
+                        &analysis.structures.physical.rows[&result].types,
+                        prior,
+                        &format_ident!("__cq_group_partials_{module_name}"),
+                        direct,
+                        &codecs,
+                    )?
+                }
+            };
             kernels.push(code);
             output = Some(publication);
             continue;
@@ -1825,13 +1785,7 @@ fn translate_observed(
             if arena.is_some() && publication == final_name {
                 return Err(error("GPU arena terminal requires a recorded device row dispatch"));
             }
-            if analysis
-                .levels
-                .get(&publication)
-                .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
-                && matches!(definition.term, Term::Store { .. })
-                && let Some(arms) = host_union(&definition.term, &compiler.definitions)
-            {
+            if let Step::HostUnion(union) = step {
                 let result = &analysis.results[&publication];
                 let record = publication_record(analysis, &publication)?;
                 let width = record.union_staging.as_ref()
@@ -1844,14 +1798,13 @@ fn translate_observed(
                 let store_meta = format_ident!("__cq_store_meta_{index}");
                 let mut lengths = Vec::new();
                 let mut copies = Vec::new();
-                for arm in arms {
-                    let chains = compiler.fold(arm)?;
-                    for chain in chains {
-                        if !chain.operations.is_empty() {
-                            return Err(error("host union operands must be published stores"));
-                        }
-                        let prior = chain
+                for arm in &union.arms {
+                    {
+                        let (UnionArm::Copy { publication: name } | UnionArm::Decode { publication: name, .. }) = arm;
+                        let prior = compiler
                             .stored
+                            .iter()
+                            .position(|stored| stored.name == *name)
                             .ok_or_else(|| error("host union operand has not published"))?;
                         let source = &compiler.stored[prior];
                         if source.range.is_some() {
@@ -1862,7 +1815,10 @@ fn translate_observed(
                         let length = format_ident!("__cq_store_length_{prior}");
                         lengths.push(quote!(#length));
                         let source_rows = format_ident!("__cq_store_rows_{prior}");
-                        if let Some(columns) = &source.packed {
+                        if let UnionArm::Decode { grid, .. } = arm {
+                            let block = element_block(grid)?;
+                            let columns = source.packed.as_ref()
+                                .ok_or_else(|| error("GPU-Realization: decoded union arm is not packed"))?;
                             let owner = format_ident!("__cq_canonical_{prior}");
                             let fields = format_ident!("__cq_fields_{prior}");
                             let arm_index = copies.len();
@@ -1910,14 +1866,14 @@ fn translate_observed(
                                         let mut position = ::cuda_device::thread::index_1d().get() as usize;
                                         while position < length {
                                             #(#writes)*
-                                            position += ::cuda_device::thread::gridDim_x() as usize * 256;
+                                            position += ::cuda_device::thread::gridDim_x() as usize * #block;
                                         }
                                     }
                                 }
                             });
                             copies.push(quote! {
                                 if #length != 0 {
-                                    let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new((#length.div_ceil(256)) as u32,256,0))?;
+                                    let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new((#length.div_ceil(#block)) as u32,#block,0))?;
                                     __cq_module.#kernel(__cq_pool.stream(), &prepared, #owner.keys().ptr(),
                                         unsafe { #store_rows.ptr().add(__cq_union_offset * #width) }, #length, #owner.lanes(), #(#args),*)?;
                                 }
@@ -1951,6 +1907,8 @@ fn translate_observed(
                 let final_output = publication == final_name;
                 let packed_columns = packed_columns(&record.storage);
                 if let Some(codec) = record.storage.codec() {
+                    let block = element_block(union.pack.as_ref()
+                        .ok_or_else(|| error("GPU-Realization: packed union lacks its pack launch"))?)?;
                     let provider = record.storage.canonical_provider();
                     let canonical = provider.is_some();
                     let mut fields = Vec::new();
@@ -1990,7 +1948,7 @@ fn translate_observed(
                                     let packed = keys.add(position * lanes);
                                     for lane in 0..lanes { *packed.add(lane) = 0; }
                                     #(#parts)*
-                                    position += ::cuda_device::thread::gridDim_x() as usize * 256;
+                                    position += ::cuda_device::thread::gridDim_x() as usize * #block;
                                 }
                             }
                         }
@@ -2003,7 +1961,7 @@ fn translate_observed(
                         let __cq_key_lanes = #lanes;
                         let #keys = unsafe { ::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),#store_length * __cq_key_lanes)? };
                         if #store_length != 0 {
-                            let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(#store_length.div_ceil(256) as u32,256,0))?;
+                            let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(#store_length.div_ceil(#block) as u32,#block,0))?;
                             __cq_module.#kernel(__cq_pool.stream(),&prepared,#store_rows.ptr(),#keys.ptr(),#store_length,__cq_key_lanes,#(#args),*)?;
                         }
                     });
@@ -2035,11 +1993,11 @@ fn translate_observed(
                 if !final_output {
                     launches.push(compiler.rows.publish_provider(
                         analysis,
-                        program,
                         result,
                         &publication,
                         index,
                         packed_columns.as_deref(),
+                        union.provider.as_ref(),
                     )?);
                 }
                 compiler.stored.push(Stored {
@@ -2048,18 +2006,17 @@ fn translate_observed(
                     range: None,
                     packed: packed_columns,
                 });
-            } else if matches!(definition.term, Term::Store { .. })
-                && analysis
-                    .levels
-                    .get(&publication)
-                    .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
-                && let Some(result) = analysis.results.get(&publication)
-                && device_sources.contains(result)
-                && !compiler.rows.has_source(result)
-            {
-                publish_host(&mut compiler, result, &mut host_downloads, &mut launches, &codecs)?;
+            } else if let Step::Upload { evaluation, provider: None } = step {
+                let result = analysis.results.get(&publication)
+                    .ok_or_else(|| error("GPU-Realization: upload lacks its checked result"))?;
+                publish_host(&mut compiler, result, evaluation, &mut launches, &codecs)?;
+            } else if !matches!(step, Step::Host) {
+                return Err(error("GPU-Realization: step contradicts the checked dispatches"));
             }
             continue;
+        };
+        let Step::Dispatch { provider: dispatch_provider } = step else {
+            return Err(error("GPU-Realization: checked dispatch lacks its dispatch step"));
         };
         let term = compiler
             .definitions
@@ -2174,6 +2131,10 @@ fn translate_observed(
         if execution.block_threads != 256 {
             return Err(error("GPU-Launch: this collective template requires 256 lanes"));
         }
+        let cq_lang_sequence::gpu::Reservation::StripeBatch = execution.reservation;
+        if execution.chains.len() != chains.len() {
+            return Err(error("GPU-Launch: chain records differ from the publication"));
+        }
         let virtual_range = match &execution.publication {
             cq_lang_sequence::gpu::Publication::Rows => None,
             cq_lang_sequence::gpu::Publication::DeferredRange { provider, keys } =>
@@ -2276,6 +2237,7 @@ fn translate_observed(
             combine: None,
             expansion_counters,
             expansion_stages: 0,
+            strips: Default::default(),
         };
         let mut bodies = Vec::new();
         let mut host_domains = Vec::new();
@@ -2363,23 +2325,28 @@ fn translate_observed(
                     .rows
                     .source(&chain.source, quote!(__position), quote!(__row))?
             };
-            let tiles = local_tiles(&chain.operations);
+            generator.strips = execution.chains[chain_index].strips.iter().cloned().collect();
+            let strip = generator.next_strip()?;
+            if strip.rows.is_some() {
+                return Err(error("GPU-Launch: source strip uses the dispatch partition"));
+            }
             let tile = match execution.partition {
                 cq_lang_sequence::gpu::Partition::Tiles { rows } => quote!(#rows),
                 cq_lang_sequence::gpu::Partition::One => quote!((#domain as u64).max(1)),
             };
-            let items = tiles.last().map_or(1, |tile| tile.1);
             let (outside_declare, partition, outside_finish, whole) = generator.partition_rows(
                 &chain.operations,
-                true,
-                tiles.get(1..).unwrap_or_default(),
+                &strip,
                 StripeInput {
-                    items,
+                    items: strip.items,
                     inherited: DeviceRow::default(),
                     prelude: TokenStream::new(),
                     load: source,
                 },
             )?;
+            if !generator.strips.is_empty() {
+                return Err(error("GPU-Launch: unconsumed strip records"));
+            }
             if whole {
                 let combine = generator.combine.take().expect("whole-fold combine");
                 combine_bodies.push(quote! {
@@ -2482,21 +2449,21 @@ fn translate_observed(
                 quote!(0usize #(.max(#domains))*)
             }
         };
-        let initial = match (dispatch.concatenation.clone(), capacity) {
-            (OutputProtocol::Count, _) => quote!(0usize),
+        use cq_lang_sequence::gpu::InitialCapacity;
+        let initial = match (&execution.capacity, capacity) {
+            (InitialCapacity::Zero, _) => quote!(0usize),
             // Formal rule GPU-ReservePrevious: a recorded previous-count hint is
             // not a bound; validate full count and failure flags, then replay any
             // undersized attempt against unchanged inputs before publication.
-            (OutputProtocol::ReservePrevious, _) if arena.is_some() && final_output =>
+            (InitialCapacity::PreviousCount, _) if arena.is_some() && final_output =>
                 quote!(__cq_arena.previous_count()),
-            (OutputProtocol::ReservePrevious, _) =>
+            (InitialCapacity::PreviousCount, _) =>
                 return Err(error("reserve_previous requires a final GPU arena dispatch")),
-            (OutputProtocol::Bounded, Some(capacity)) => quote!(#capacity),
-            (OutputProtocol::Bounded, None) => {
-                return Err(error("bounded dispatch requires its recorded capacity"));
+            (InitialCapacity::Declared, Some(capacity)) => quote!(#capacity),
+            (InitialCapacity::Declared, None) => {
+                return Err(error("GPU-Launch: declared capacity is absent from the store"));
             }
-            (OutputProtocol::Reserve, Some(capacity)) => quote!(#capacity),
-            (OutputProtocol::Reserve, None) => quote!(256usize),
+            (InitialCapacity::Rows(rows), _) => quote!(#rows),
         };
         let (row_width, key_width) = match &record.storage {
             PublicationStorage::FlatRows(flat) => (flat.width, 0usize),
@@ -2570,7 +2537,9 @@ fn translate_observed(
                 #pointers #key_pointer, __cq_capacity as u32, #store_meta.ptr(),
                 __cq_partials.ptr(), __cq_grid)?;
         });
-        let cq_lang_sequence::gpu::Grid::KernelOccupancy = execution.grid;
+        let Grid::KernelOccupancy = execution.grid else {
+            return Err(error("GPU-Launch: query kernels use the occupancy grid"));
+        };
         let count_readback = execution.synchronization.iter().find_map(|point| match point {
             cq_lang_sequence::gpu::Synchronization::CountAndFailure =>
                 Some(quote!(let __cq_counts=#store_meta.to_host()?;)),
@@ -2655,11 +2624,11 @@ fn translate_observed(
         if !final_output {
             launches.push(compiler.rows.publish_provider(
                 analysis,
-                program,
                 &chains[0].result,
                 &publication,
                 index,
                 packed_columns.as_deref(),
+                dispatch_provider.as_ref(),
             )?);
         }
         compiler.stored.push(Stored {
@@ -2674,28 +2643,9 @@ fn translate_observed(
         let canonical = provider.is_some();
         // A checked host publication may be the complete result. Its transfer
         // to the device is a storage adapter, not an additional row dispatch.
-        let mut name = final_name;
-        let source = loop {
-            if analysis.stores.contains_key(name)
-                && analysis
-                    .levels
-                    .get(name)
-                    .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
-            {
-                break analysis.results.get(name).map(String::as_str);
-            }
-            let Some(Term::Store { inner, .. }) = compiler.definitions.get(name).copied() else {
-                break None;
-            };
-            let Term::Ref(parent) = inner.as_ref() else {
-                break None;
-            };
-            let Some((parent, _)) = compiler.definitions.get_key_value(&symbol_name(parent)) else {
-                break None;
-            };
-            name = parent;
-        };
-        if let Some(source) = source {
+        let source = realization.output.as_ref();
+        if let Some(HostOutput { source, pack }) = source {
+            let block = element_block(pack)?;
             let length = compiler.rows.source_len(source)?;
             let load = compiler
                 .rows
@@ -2734,6 +2684,7 @@ fn translate_observed(
                 combine: None,
                 expansion_counters: false,
                 expansion_stages: 0,
+            strips: Default::default(),
             };
             let write = row.rewrite(generator.output_write()?)?;
             let kernel = format_ident!("__cq_host_output_{module_name}");
@@ -2768,9 +2719,9 @@ fn translate_observed(
                         __cq_host_output_length.checked_mul(__cq_key_lanes).ok_or("Sequence output allocation overflow")?)?
                 };
                 if __cq_host_output_length != 0 {
-                    let grid = u32::try_from(__cq_host_output_length.div_ceil(256))
+                    let grid = u32::try_from(__cq_host_output_length.div_ceil(#block))
                         .map_err(|_| "Sequence output exceeds CUDA grid")?;
-                    let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(grid,256,0))?;
+                    let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(grid,#block,0))?;
                     __cq_module.#kernel(__cq_pool.stream(), &prepared, #(#arguments,)*
                         __cq_host_output_keys.ptr(),__cq_host_output_length,__cq_key_lanes)?;
                 }
@@ -2943,14 +2894,25 @@ mod tests {
         names
     }
 
-    /// Accumulator providers of every emitted `fold` call; `None` is the
-    /// global (keyless) runtime fold path.
+    /// Whether a call path is a runtime fold: the keyed `fold` or the keyless
+    /// `GlobalFold::new` grid-partials path.
+    fn is_fold_call(path: &syn::Path) -> bool {
+        let mut segments = path.segments.iter().rev();
+        match (segments.next(), segments.next()) {
+            (Some(last), _) if last.ident == "fold" => true,
+            (Some(last), Some(owner)) => last.ident == "new" && owner.ident == "GlobalFold",
+            _ => false,
+        }
+    }
+
+    /// Accumulator providers of every emitted runtime fold; `None` is the
+    /// global (keyless) `GlobalFold` path.
     fn fold_providers(generated: &syn::Expr) -> Vec<Option<syn::Type>> {
         struct Folds(Vec<Option<syn::Type>>);
         impl<'a> syn::visit::Visit<'a> for Folds {
             fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
                 if let syn::Expr::Path(path) = &*call.func
-                    && path.path.segments.last().is_some_and(|segment| segment.ident == "fold")
+                    && is_fold_call(&path.path)
                 {
                     self.0.push(path.qself.as_ref().map(|qself| (*qself.ty).clone()));
                 }
@@ -3461,7 +3423,7 @@ mod tests {
                     {
                         if last.ident == "from_rows" || last.ident == "upload_numeric_columns" {
                             self.0.push("upload");
-                        } else if last.ident == "fold" {
+                        } else if is_fold_call(&path.path) {
                             self.0.push("fold");
                         }
                     }
@@ -3740,7 +3702,7 @@ mod tests {
                 for tiled in [false, true] {
                     let mut operations = Vec::new();
                     if tiled {
-                        operations.push(Operation::Tile { n: 1024, items: 4 });
+                        operations.push(Operation::Tile);
                     }
                     operations.push(Operation::Fold(monoid.clone()));
                     let mut kernel = Kernel {
@@ -3754,12 +3716,18 @@ mod tests {
                         combine: None,
                         expansion_counters: false,
                         expansion_stages: 0,
+                        strips: Default::default(),
+                    };
+                    let strip = Strip {
+                        rows: None,
+                        items: 4,
+                        nested: Vec::new(),
+                        fold: Some(if tiled { FoldScope::Tiles(1) } else { FoldScope::Whole }),
                     };
                     let (declare, body, finish, whole) = kernel
                         .partition_rows(
                             &operations,
-                            true,
-                            &[],
+                            &strip,
                             StripeInput {
                                 items: 4,
                                 inherited: DeviceRow::default(),

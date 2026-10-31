@@ -773,8 +773,9 @@ its sorting implementation.
 
 Keyed groups record `group::SegmentedGroup` in `Structure::Group.ty` during
 GPU refinement and print that provider's fold. Keyless folds have no keyed
-accumulator record. The separate terminal-group execution-placement gap is
-not resolved by this provider change.
+accumulator record. Terminal-group execution and input realization are
+recorded by GPU-TerminalGroup (P3e); keyless groups fold through recorded
+occupancy-grid partials (GPU-GroupGridFold).
 
 Datalog provider/initializer and admission changes are deferred to C2, on top
 of the ordinary canonical-layout records from track B. C1 adds no parallel

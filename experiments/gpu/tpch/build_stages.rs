@@ -56,6 +56,7 @@ pub fn compile(
                     placement: advice::Placement::Host,
                     nullable: vec![false; preprocess.columns.len()],
                     domains: vec![None; preprocess.columns.len()],
+                    grouped: None,
                 });
                 dependencies.push(preprocess.name.clone());
             }
