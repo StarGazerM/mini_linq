@@ -12,3 +12,6 @@ cq-gpu-runtime = { path = "../printer-runtime" }
 gpu-device-columns = { path = "../device-columns" }
 rccl-cub.workspace = true
 rccl-memory.workspace = true
+
+[dev-dependencies]
+cq-storage = { path = "../../../runtime/cq-storage" }

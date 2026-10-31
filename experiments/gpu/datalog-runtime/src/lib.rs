@@ -4,9 +4,11 @@
 //! erased descriptors. [`CandidateArena`] leases packed output lanes to Sequence
 //! terminals; [`CandidateBatch`] retains those lanes and input owners without a
 //! candidate-row download. Signed packing preserves numeric lexicographic order.
+//! [`DeviceRadixRun`] is the occurrence-preserving grouped index provider.
 pub mod arena;
 pub mod layout;
 pub mod pack;
+pub mod radix_run;
 pub mod runs;
 pub mod phases;
 mod stats;
@@ -14,6 +16,7 @@ pub use stats::{readback_count, record_readback, trace_kernels, trace_memory, Me
 pub use gpu_device_columns::{Buffer, Pool};
 pub use pack::{Column, Packing, Word};
 pub use runs::{AdmissionTimings, DeviceRuns, Run, RunView};
+pub use radix_run::{DeviceItemColumns, DeviceRadixRun, OffsetWord, RadixRunParams, RadixSnapshot};
 pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
 pub use layout::{device, encode_scalar, DeviceLayout, PackedProvider, PackedField, PackedRunView, RunsView, Scalar, ScalarTuple};
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
