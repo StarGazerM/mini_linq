@@ -1,6 +1,6 @@
 use cq_lang_sequence::{
-    Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken,
-    check_grading, check_rewrite, structures,
+    Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken, check_grading,
+    check_rewrite, structures,
 };
 use cq_sequence_plan::{Advice, decompose, select_from_catalog};
 

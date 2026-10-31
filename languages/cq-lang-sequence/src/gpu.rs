@@ -292,7 +292,11 @@ pub(crate) fn derive(
 fn chain_sources<'a>(
     program: &'a Program,
     analysis: &Analysis,
-) -> (BTreeMap<String, &'a Term>, BTreeSet<String>, BTreeSet<String>) {
+) -> (
+    BTreeMap<String, &'a Term>,
+    BTreeSet<String>,
+    BTreeSet<String>,
+) {
     let definitions: BTreeMap<_, _> = program
         .sequence
         .definitions
@@ -311,19 +315,31 @@ fn chain_sources<'a>(
         })
         .collect();
     let mut sources = published.clone();
-    sources.extend(program.sequence.definitions.iter().filter_map(|definition| {
-        let name = symbol_name(&definition.name);
-        (matches!(definition.term, Term::Store { .. })
-            && analysis.levels.get(&name).is_some_and(|level| level.len() == 1))
-        .then_some(name)
-    }));
+    sources.extend(
+        program
+            .sequence
+            .definitions
+            .iter()
+            .filter_map(|definition| {
+                let name = symbol_name(&definition.name);
+                (matches!(definition.term, Term::Store { .. })
+                    && analysis
+                        .levels
+                        .get(&name)
+                        .is_some_and(|level| level.len() == 1))
+                .then_some(name)
+            }),
+    );
     (definitions, published, sources)
 }
 
 /// Strip-mined levels of one chain in pre-order: the source, then the
 /// remainder after each expanding lookup. A fold placed at a level splits its
 /// walk at the fold; a deferred-range lookup closes the chain without a level.
-fn levels<'a>(steps: &'a [Step], deferred: Option<(&String, &Vec<String>)>) -> Vec<(&'a [Step], bool)> {
+fn levels<'a>(
+    steps: &'a [Step],
+    deferred: Option<(&String, &Vec<String>)>,
+) -> Vec<(&'a [Step], bool)> {
     fn level<'a>(
         operations: &'a [Step],
         source: bool,
@@ -331,8 +347,11 @@ fn levels<'a>(steps: &'a [Step], deferred: Option<(&String, &Vec<String>)>) -> V
         output: &mut Vec<(&'a [Step], bool)>,
     ) {
         output.push((operations, source));
-        let at = fold_scope(operations, source)
-            .and_then(|_| operations.iter().position(|step| matches!(step, Step::Fold(_))));
+        let at = fold_scope(operations, source).and_then(|_| {
+            operations
+                .iter()
+                .position(|step| matches!(step, Step::Fold(_)))
+        });
         match at {
             Some(at) => {
                 walk(&operations[..at], deferred, output);
@@ -350,7 +369,9 @@ fn levels<'a>(steps: &'a [Step], deferred: Option<(&String, &Vec<String>)>) -> V
             if let Step::Lookup(provider, keys) = step {
                 let rest = &operations[at + 1..];
                 if deferred == Some((provider, keys))
-                    && rest.iter().all(|step| matches!(step, Step::Flatten | Step::Store))
+                    && rest
+                        .iter()
+                        .all(|step| matches!(step, Step::Flatten | Step::Store))
                 {
                     return;
                 }
@@ -395,7 +416,9 @@ fn active_tile(operations: &[Step]) -> Option<usize> {
 /// The level's fold scope: the fold's innermost open partition is a tile of
 /// this level, or the whole domain at the source with no open tile.
 fn fold_scope(operations: &[Step], source: bool) -> Option<FoldScope> {
-    let at = operations.iter().position(|step| matches!(step, Step::Fold(_)))?;
+    let at = operations
+        .iter()
+        .position(|step| matches!(step, Step::Fold(_)))?;
     let target = active_tile(&operations[..at]);
     let next = operations
         .iter()
@@ -438,7 +461,10 @@ fn strip(operations: &[Step], source: bool, block: usize) -> Strip {
 /// is sound; explicit tiles, fold scopes and the output protocol are facts.
 pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
     let error = |message: &str| {
-        syn::Error::new(proc_macro2::Span::call_site(), format!("GPU-Launch: {message}"))
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("GPU-Launch: {message}"),
+        )
     };
     let (definitions, _, sources) = chain_sources(program, analysis);
     for dispatch in &analysis.dispatches {
@@ -459,11 +485,17 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             }
             continue;
         };
-        let Term::Store { inner, capacity } = definitions[name] else { unreachable!() };
+        let Term::Store { inner, capacity } = definitions[name] else {
+            unreachable!()
+        };
         let capacity = match (&dispatch.concatenation, &execution.capacity, capacity) {
             (OutputProtocol::Count, InitialCapacity::Zero, _)
             | (OutputProtocol::ReservePrevious, InitialCapacity::PreviousCount, _)
-            | (OutputProtocol::Bounded | OutputProtocol::Reserve, InitialCapacity::Declared, Some(_)) => true,
+            | (
+                OutputProtocol::Bounded | OutputProtocol::Reserve,
+                InitialCapacity::Declared,
+                Some(_),
+            ) => true,
             (OutputProtocol::Reserve, InitialCapacity::Rows(rows), None) => *rows > 0,
             _ => false,
         };
@@ -488,10 +520,15 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 let explicit_items = tiles.last().and_then(|tile| tile.1);
                 let sound = strip.items > 0
                     && explicit_items.is_none_or(|items| items == strip.items)
-                    && strip.nested.iter().eq(tiles.iter().skip(1).map(|tile| &tile.0))
+                    && strip
+                        .nested
+                        .iter()
+                        .eq(tiles.iter().skip(1).map(|tile| &tile.0))
                     && match (source, strip.rows) {
                         (true, None) => true,
-                        (false, Some(rows)) => rows > 0 && tiles.first().is_none_or(|tile| tile.0 == rows),
+                        (false, Some(rows)) => {
+                            rows > 0 && tiles.first().is_none_or(|tile| tile.0 == rows)
+                        }
                         _ => false,
                     }
                     && strip.fold == fold_scope(operations, source)
@@ -555,7 +592,13 @@ fn linear(
         | Term::Group(_, inner) => (inner.as_ref(), Step::Other),
         Term::Flatten(inner) => (inner.as_ref(), Step::Flatten),
         Term::Store { inner, .. } => (inner.as_ref(), Step::Store),
-        Term::Tile { inner, n, items } => (inner.as_ref(), Step::Tile { n: *n, items: *items }),
+        Term::Tile { inner, n, items } => (
+            inner.as_ref(),
+            Step::Tile {
+                n: *n,
+                items: *items,
+            },
+        ),
         Term::Fold(monoid, inner) => (inner.as_ref(), Step::Fold(monoid.clone())),
         Term::Lookup {
             provider,

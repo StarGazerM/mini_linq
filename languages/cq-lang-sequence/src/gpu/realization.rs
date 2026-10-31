@@ -14,7 +14,10 @@ pub enum SourceOrigin {
     /// Immutable resident input columns (`host`), renamed into `columns`.
     Resident { host: String },
     /// Resident packed device runs; lookups use the recorded native providers.
-    Runs { host: String, providers: Vec<String> },
+    Runs {
+        host: String,
+        providers: Vec<String>,
+    },
     /// Host-evaluated rows uploaded through the recorded adapter during build.
     Uploaded { evaluation: HostEvaluation },
 }
@@ -149,7 +152,10 @@ pub enum GroupInput {
     Source { source: String },
     /// Evaluate the Physical input at the host and upload it when it is not
     /// already a device source; the device fold reads the uploaded rows.
-    Host { input: String, upload: Option<HostEvaluation> },
+    Host {
+        input: String,
+        upload: Option<HostEvaluation>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -177,10 +183,15 @@ pub enum Step {
     GroupAlias,
     Group(TerminalGroup),
     /// The recorded dispatch; nonterminal publications build their providers.
-    Dispatch { provider: Option<ProviderBuild> },
+    Dispatch {
+        provider: Option<ProviderBuild>,
+    },
     HostUnion(HostUnion),
     /// A host publication uploaded for device consumers.
-    Upload { evaluation: HostEvaluation, provider: Option<ProviderBuild> },
+    Upload {
+        evaluation: HostEvaluation,
+        provider: Option<ProviderBuild>,
+    },
     /// No device realization.
     Host,
 }
@@ -196,7 +207,11 @@ pub struct HostOutput {
 pub enum Capture {
     /// Query-closed value evaluated once at host, encoded through the
     /// compared column's recorded codec (identity when absent).
-    Value { expression: syn::Expr, logical: syn::Type, codec: Option<syn::Type> },
+    Value {
+        expression: syn::Expr,
+        logical: syn::Type,
+        codec: Option<syn::Type>,
+    },
     /// Verbatim device Rust: row reads are callable arguments; closed
     /// subexpressions are host-evaluated when the callable is enabled.
     Callable {

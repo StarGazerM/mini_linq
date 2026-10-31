@@ -482,7 +482,16 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   (`backend_ir.tex` `\inferrule*` error). (5) Datalog outputs are sets in
   layout order, no longer insertion order. (6) ADM-InPlan (anti-join at the
   deepest join layer) and its advice are unimplemented. (7) The LianJie repo
-  split is undecided and out of scope here.
+  split is undecided and out of scope here. (8) CPU TPC-H h10 1.116x and h19
+  1.168x of M0 (h14 1.028x) with identical instructions per query: glibc
+  heap layout. M0's loader left long-lived allocations that kept the heap top
+  from being trimmed, so each repeated run reused the freed index tables; the
+  P3c interning loader leaves a leaner heap, glibc trims it after every run,
+  and the next run re-faults the hash table and arena (h10 351 → 14.5K faults
+  per query). M0 itself swings 350–20.5K (h10) and 5.9K–16.7K (h12) faults
+  with the data-path string length. Recorded as a repeated-run allocator
+  effect; benchmarks should report page faults beside timings. Index
+  footprint reductions (P4 compiler selection) are the real lever.
 
 ## Progress
 
