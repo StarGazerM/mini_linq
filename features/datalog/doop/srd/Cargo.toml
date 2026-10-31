@@ -1,3 +1,7 @@
+# Standalone: consumed by the doop/srd-engines and experiments/gpu workspaces,
+# not a member of features/datalog. Keeps `cargo fmt --all` there resolvable.
+[workspace]
+
 [package]
 name = "srd-doop-shared"
 version = "0.1.0"

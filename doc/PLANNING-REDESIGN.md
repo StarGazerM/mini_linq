@@ -159,9 +159,46 @@ and the classes-file format.
 Cache keys include normalized Rust, linked runtime sources, toolchain/build
 inputs, and data/oracle manifests. Identical targets reuse verified exactness
 and counter outcomes without compilation/execution; runtime changes require
-fresh evidence. `--verified-results` imports explicit results with hashed
-evidence, or `--verify-command` runs a shell-free verifier. The default gate
-only expands Rust and never runs timed benchmarks.
+fresh evidence. The default gate only expands Rust and never runs timed
+benchmarks, so a classified intended (g–l or defined) or runtime-changed target
+first exits 2 with `verification: "required"`. Supplying evidence:
+
+1. Run the gate with `--classes`; fix or review every hunk until `unexplained`
+   is 0 (exit 1 otherwise — evidence never excuses an unexplained hunk, and
+   `--verify-command` is not even invoked for such targets).
+2. Either rerun with `--verify-command '<argv template>'` (shell-free;
+   placeholders `{target} {tree} {key} {expansion} {baseline_tree}
+   {baseline_key}`; must print `{"exact":true,"counters":{"passed":true,
+   "values":{…}},"scope":"…","evidence":[paths relative to the repo root]}`),
+   or run the exactness/counter checks yourself and rerun with
+   `--verified-results results.json` containing
+   `{"version":1,"results":[{"target":…,"key":<report key>,"outcome":{…}}]}`
+   (evidence paths relative to `results.json`'s directory). The `key` must be
+   the current report's `key`; any source/runtime/input change yields a new
+   key and requires new evidence.
+3. Outcomes must attest actual exactness and counter checks: `exact: true`,
+   `counters.passed: true`, nonempty counter `values`, a nonempty `scope`, and
+   existing evidence files. Timing alone is not evidence. Files are copied
+   into the cache and hashed in `target/expand-gate/cache/<key>.json`.
+   The target reports `passed` for a successful verifier command, or `cached`
+   for an imported result (including its first run), and the gate exits 0
+   only when every selected target passes. Subsequent runs reuse that evidence
+   while the key and cached file hashes match.
+
+For example, after collecting the current report keys and writing the above
+import envelope from actual checks:
+
+```sh
+python3 tools/expanded_gate.py --baseline <rev> --targets all \
+  --classes tools/expanded_gate_classes.json \
+  --verified-results path/to/results.json
+```
+
+Keep the same baseline, target selection and data-manifest arguments used to
+collect the keys. A `--verify-command` adapter should emit only its outcome JSON
+on stdout (send diagnostics to stderr); it must perform those same checks, not
+merely echo success. Neither evidence route changes hunk classification.
+
 `--classify-report <report.json>` updates only the captured snapshot's
 classifications without expansion or execution; it does not validate a later
 working tree. Its table distinguishes identical, refactor-only, intended and

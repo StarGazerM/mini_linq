@@ -105,8 +105,8 @@ equality-class map and $s_i=|\kappa(O_i)\cap\kappa(B)|$:
    \concat[\mathsf{subatom}(j,B_1)]_{j\in J}}
 
 \Rule{O-BlockPlacement}{b\text{ a block in ordinary ordering}}
- {b.placement=\begin{cases}\mathsf{correlated}&\mathsf{Rust}(b)\\
- \mathsf{hoisted}&\text{otherwise}\end{cases}}
+ {b.placement={\begin{cases}\mathsf{correlated}&\mathsf{Rust}(b)\\
+ \mathsf{hoisted}&\text{otherwise}\end{cases}}}
 
 \Rule{O-WrittenBlocks}{t=\mathsf{WrittenCoarse}(s)}
  {\mathsf{compileWritten}_{order}(s)=
@@ -838,8 +838,8 @@ to $N(q)$. Apply $\rho$ to qualified order, reduction and skip selectors before
 passing them to the normal-IR ordering API; unqualified selectors are unchanged.
 \begin{mathpar}
 \Rule{Plan-Prefix}{p=\rho(\mathsf{parsePlanOptions}(args))\quad n=N(q)\\
- v=\begin{cases}O_{explicit(p.order),Coarse}(n)&p.order\text{ present}\\
- O_{Prefix(Connected),Coarse}(n)&\text{otherwise}\end{cases}\\
+ v={\begin{cases}O_{explicit(p.order),Coarse}(n)&p.order\text{ present}\\
+ O_{Prefix(Connected),Coarse}(n)&\text{otherwise}\end{cases}}\\
  r=\text{None if }p.no\_reduce,\text{ otherwise Masks}\\
  w=\mathsf{advise}(R_{None,r}(v),p)\quad a=E(w)}
  {\code{compile_prefix}(q,p)=\code{mini_linq::passes::plan}(q,args)=a}

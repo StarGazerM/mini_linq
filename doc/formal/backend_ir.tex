@@ -1496,11 +1496,13 @@ instead publish named inner flatten levels using EXT-SeqStore; every resulting
 tile/item candidate still satisfies BE-Resource before PL-Cost selection.
 
 \subsection{Nonsemantic expansion observations}
+\begin{mathpar}
 \Rule{SQ-ExpansionCounters}
  {s\text{ is a checked Sequence expansion site}\quad
   C_s=\sum_{p\in\mathsf{parents}(s)}|\mathsf{children}_s(p)|}
  {\mathsf{observe}(s)=C_s\quad
-  \erase{\mathsf{instrument}(P)}=\erase P}
+  \mathsf{erase}(\mathsf{instrument}(P))=\mathsf{erase}(P)}
+\end{mathpar}
 An opt-in observation names the program, Sequence definition and expansion
 stage; a Datalog invocation adds its checked rule variant and round.
 Count children before downstream closing filters or lookups, not surviving

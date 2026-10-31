@@ -5,14 +5,46 @@ use std::error::Error;
 use std::path::Path;
 use std::time::Instant;
 
-fn peak_rss_kib() -> Option<u64> {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("VmHWM:")
-                .and_then(|v| v.split_whitespace().next()?.parse().ok())
-        })
+#[derive(Clone, Copy)]
+struct Usage {
+    minor_faults: u64,
+    major_faults: u64,
+    peak_rss_kib: u64,
+}
+
+fn usage() -> std::io::Result<Option<Usage>> {
+    #[cfg(unix)]
+    {
+        let mut value = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        // SAFETY: getrusage initializes the pointed-to rusage on success.
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, value.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let value = unsafe { value.assume_init() };
+        // Darwin reports bytes; other supported Unix hosts report KiB.
+        let peak_rss_kib = value.ru_maxrss as u64;
+        #[cfg(target_os = "macos")]
+        let peak_rss_kib = peak_rss_kib / 1024;
+        Ok(Some(Usage {
+            minor_faults: value.ru_minflt as u64,
+            major_faults: value.ru_majflt as u64,
+            peak_rss_kib,
+        }))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(None)
+    }
+}
+
+fn faults(before: Option<Usage>, after: Option<Usage>) -> (Option<u64>, Option<u64>) {
+    match (before, after) {
+        (Some(before), Some(after)) => (
+            Some(after.minor_faults - before.minor_faults),
+            Some(after.major_faults - before.major_faults),
+        ),
+        _ => (None, None),
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -53,7 +85,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     if cfg!(feature = "counters") && runs != 0 && !profiling {
         return Err("instrumented workers only count a separate untimed run".into());
     }
+    let warm_before = usage()?;
     let warm = query::run(&data, &args[1]);
+    let warm_after = usage()?;
+    let warm_faults = faults(warm_before, warm_after);
     #[cfg(any(feature = "counters", feature = "profile"))]
     let counts = cq_storage::counters::snapshot();
     let expected = comparison::normalize_set(query::canonical(&warm), &decimals);
@@ -115,11 +150,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?;
         return Ok(());
     }
-    let mut times = Vec::with_capacity(runs);
+    let mut samples = Vec::with_capacity(runs);
     for _ in 0..runs {
+        let before = usage()?;
         let start = Instant::now();
         let answers = query::run(std::hint::black_box(&data), &args[1]);
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        let after = usage()?;
+        let (minor, major) = faults(before, after);
         std::hint::black_box(&answers);
         // Every measured execution must agree with the warm answer, not just
         // its cardinality. Conversion, sorting, and comparison are untimed.
@@ -127,14 +165,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         if canonical != expected {
             return Err("query answer changed between warm and measured runs".into());
         }
-        times.push(elapsed);
+        samples.push((elapsed, minor, major, after.map(|value| value.peak_rss_kib)));
     }
-    times.sort_by(f64::total_cmp);
+    samples.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let median = samples[runs / 2];
     std::fs::write(
         &args[4],
         serde_json::to_vec_pretty(&serde_json::json!({
-            "load_ms": load_ms, "median_ms": times[runs / 2], "samples_ms": times,
-            "answer_rows": answer_rows, "peak_rss_kib": peak_rss_kib(),
+            "load_ms": load_ms, "median_ms": median.0,
+            "samples_ms": samples.iter().map(|sample| sample.0).collect::<Vec<_>>(),
+            "samples_minor_faults": samples.iter().map(|sample| sample.1).collect::<Vec<_>>(),
+            "samples_major_faults": samples.iter().map(|sample| sample.2).collect::<Vec<_>>(),
+            "samples_peak_rss_kib": samples.iter().map(|sample| sample.3).collect::<Vec<_>>(),
+            "query_minor_faults": median.1, "query_major_faults": median.2,
+            "query_peak_rss_kib": median.3,
+            "warm_minor_faults": warm_faults.0, "warm_major_faults": warm_faults.1,
+            "warm_peak_rss_kib": warm_after.map(|value| value.peak_rss_kib),
+            "answer_rows": answer_rows, "peak_rss_kib": usage()?.map(|value| value.peak_rss_kib),
             "instrumented": false,
             "zone_build_ms": crate::tpch_runtime::zone_metrics().0,
             "zone_metadata_bytes": crate::tpch_runtime::zone_metrics().1,

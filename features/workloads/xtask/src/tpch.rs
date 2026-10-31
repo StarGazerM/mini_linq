@@ -310,7 +310,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
     let path = bench.join(format!("tpch-{}{suffix}.tsv", options.sf));
     let pending = path.with_extension("tsv.partial");
     let mut table = String::from(
-        "suite\tsf\tquery\tconfiguration\truns\tanswer_rows\tload_ms\tquery_median_ms\tduckdb_load_ms\tduckdb_1_median_ms\tduckdb_default_median_ms\tduckdb_default_threads\tcompile_unit_ms\tpeak_rss_kib\tblocks_considered\tblocks_visited\tblocks_skipped\tblocks_skipped_metadata\tblocks_skipped_empty_selection\trows_tested\trows_copied\tbytes_retained_current\tbytes_retained_peak\tkeyset_staging_bytes_peak\thash_computations\tindex_builds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tcorrectness\tjoin_filter_tested\tjoin_filter_passed\tduckdb_1_execute_median_ms\n",
+        "suite\tsf\tquery\tconfiguration\truns\tanswer_rows\tload_ms\tquery_median_ms\tduckdb_load_ms\tduckdb_1_median_ms\tduckdb_default_median_ms\tduckdb_default_threads\tcompile_unit_ms\tpeak_rss_kib\tblocks_considered\tblocks_visited\tblocks_skipped\tblocks_skipped_metadata\tblocks_skipped_empty_selection\trows_tested\trows_copied\tbytes_retained_current\tbytes_retained_peak\tkeyset_staging_bytes_peak\thash_computations\tindex_builds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tcorrectness\tjoin_filter_tested\tjoin_filter_passed\tduckdb_1_execute_median_ms\tquery_minor_faults\tquery_major_faults\tquery_peak_rss_kib\n",
     );
     println!(
         "TPC-H-derived; SF {}; release; one warm run + median of {}; DuckDB {} default threads={}",
@@ -410,7 +410,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                 Ok(Some((measured, counted, repeated)))
             })()?;
             let Some((mut measured, counted, repeated)) = results else {
-                let mut row = vec!["NA".to_owned(); 34];
+                let mut row = vec!["NA".to_owned(); 37];
                 row[0] = "TPC-H-derived".into();
                 row[1] = options.sf.clone();
                 row[2] = query.name.clone();
@@ -518,7 +518,12 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             let passed = measured["join_filter_passed"]
                 .as_u64()
                 .ok_or("missing join_filter_passed counter")?;
-            table.push_str(&format!("TPC-H-derived\t{}\t{}\t{config}\t{}\t{}\t{load:.6}\t{median:.6}\t{duck_load_ms:.6}\t{:.6}\t{:.6}\t{}\t{unit_ms}\t{counters}\tpass\t{tested}\t{passed}\t{:.6}\n", options.sf, query.name, options.runs, expected.rows.len(), duck_one.0, duck_default.0, database.default_threads, duck_one_execute.0));
+            let resources = ["query_minor_faults", "query_major_faults", "query_peak_rss_kib"]
+                .iter()
+                .map(|name| measured[name].as_u64().map_or_else(|| "NA".to_owned(), |n| n.to_string()))
+                .collect::<Vec<_>>()
+                .join("\t");
+            table.push_str(&format!("TPC-H-derived\t{}\t{}\t{config}\t{}\t{}\t{load:.6}\t{median:.6}\t{duck_load_ms:.6}\t{:.6}\t{:.6}\t{}\t{unit_ms}\t{counters}\tpass\t{tested}\t{passed}\t{:.6}\t{resources}\n", options.sf, query.name, options.runs, expected.rows.len(), duck_one.0, duck_default.0, database.default_threads, duck_one_execute.0));
             std::fs::write(&pending, &table)?;
             configs.push(serde_json::json!({"configuration":config,"metrics":measured}));
         }
@@ -549,7 +554,8 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         "compile_method":"Cargo --release --timings per-query binary unit (all authored configurations; proc macros at opt-level 3); macro expansion + optimization + linking; dependency units excluded; not isolated proc-macro CPU time; null/NA when Cargo reused an up-to-date worker",
         "query_boundary":"fresh query initialization, index construction, full typed result materialization; excludes load, serialization, canonical set comparison and result drop; duckdb_1_median_ms includes prepare/optimization and Arrow result materialization; duckdb_1_execute_median_ms prepares once untimed and times execution plus Arrow result materialization (MiniLinq plans at compile time)",
         "sf_0_1_gate":"SF 1/10: every query/configuration worker checked at SF 0.1 before timing; SF 0.1: timed workers check exact answers before sampling",
-        "memory_method":"Linux /proc/self/status VmHWM per configuration worker process, includes load, warmup, answers and correctness; not incremental query-only memory; NA elsewhere",
+        "memory_method":"getrusage(RUSAGE_SELF) ru_maxrss in KiB (Darwin bytes converted); process lifetime high water includes load, warmup, answers and correctness; not incremental query-only memory; NA on non-Unix",
+        "fault_method":"getrusage(RUSAGE_SELF) ru_minflt/ru_majflt deltas immediately around each query, outside its wall timer; excludes load, result canonicalization/comparison and drop; query_* TSV fields are paired with the median-time sample, samples_* JSON arrays share timing order; warm_* records first-touch warm execution separately; RSS is process lifetime high water at the end of that query",
         "counter_scope":"cq-storage instrumentation disabled in timed binary; counters collected in a separately compiled binary and untimed execution; extension aggregate folds and uninstrumented host work are not counted; DuckDB lacks equivalent instrumentation",
         "cpu_model":std::fs::read_to_string("/proc/cpuinfo").ok().and_then(|text| text.lines().find_map(|line| line.strip_prefix("model name").and_then(|v|v.split_once(':').map(|(_,v)|v.trim().to_owned())))),
         "coverage":coverage,"queries":details,

@@ -136,3 +136,16 @@ cargo xtask bench --tpch --sf 1
 Regression logs live in `target/regression-logs/`; isolation, external, and API
 gates keep their diagnostics under `target/`. Reviewed API snapshots change
 only through an explicit `tools/check_public_api.py --update` review.
+
+`tools/test_regressions.sh --jobs N` bounds concurrent independent targets
+(default 2; `--jobs 1` preserves sequential execution). Cargo metadata groups
+targets by both workspace and effective target directory, including
+`CARGO_TARGET_DIR`; targets sharing either resource never overlap. Scenario
+Cargo contexts are recorded in `tools/test_regressions.py`; unknown scenarios
+or unavailable metadata conservatively run without overlapping Cargo targets.
+`CARGO_BUILD_JOBS` still controls each Cargo process, so budget for up to
+`N * CARGO_BUILD_JOBS` compiler jobs. Exact `package/target` selectors work with
+either mode. Every selected target runs despite failures; per-target log names,
+numeric exit statuses and the `results.tsv` schema are unchanged. Final status
+lines and TSV rows retain inventory order, while live RUN lines reflect dispatch
+order. The runner prints total wall time (including grouping) for comparisons.

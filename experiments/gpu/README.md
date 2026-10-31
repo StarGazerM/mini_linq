@@ -86,6 +86,14 @@ raw Cargo. Cubins target the configured GPU architecture rather than providing
 the runtime PTX bridge to other architectures; rebuild with the appropriate
 `--arch` when changing GPUs.
 
+Formatting needs no CUDA toolchain: run `cargo fmt --all --check` from this
+directory. `--all` also checks local path dependencies outside this workspace
+(the DOOP crates under `features/datalog/doop`); `doop/srd` declares its own
+empty `[workspace]` so their metadata resolves.
+To exercise formatting without changing files or failing on existing style
+differences, use `cargo fmt --all -- --emit stdout`; `--check` additionally
+requires every included source to already match rustfmt.
+
 ### Lookup/Expand child counters
 
 Build with `CQ_EXPANSION_COUNTERS=1` to instrument GPU Sequence and CPU pull

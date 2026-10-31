@@ -188,9 +188,9 @@ produces typed columnar Arrow batches. Neither timer includes textual output
 conversion. This is an end-to-end execution boundary, not an isolated operator
 benchmark. Engine/client output layouts and DuckDB's runtime planning differ.
 
-The optional Linux VmHWM reading is the worker process peak RSS. It includes
+The getrusage peak_rss_kib reading is the worker process peak RSS. It includes
 loading, oracle/answer witnesses, warmup, all samples, and canonical comparison;
-it is not incremental query-only memory. Unsupported platforms report NA.
+it is not incremental query-only memory. Non-Unix platforms report NA.
 MiniLinq timing uses a release executable compiled with cq-storage instrumentation disabled. Counters come from a separately compiled release executable and two untimed executions, each checked exactly against DuckDB. DuckDB is also timed without operation counters.
 Counters are the existing cq-storage counters: hashes, index builds, lookups,
 cursor steps, row enumeration and distinct insertions. Extension aggregate
@@ -220,6 +220,28 @@ The complete TSV has one row per query/configuration/scale. Companion JSON
 records raw sorted samples, SQL, export schemas, configurations, compile reports,
 engine/compiler versions and methodology. A .partial TSV is used during a run;
 the final TSV is replaced only after the entire requested suite passes.
+
+Resource evidence uses getrusage(RUSAGE_SELF), including all worker threads.
+The TSV appends query_minor_faults, query_major_faults and query_peak_rss_kib:
+these belong to the same execution as query_median_ms, not independent medians.
+Minor/major faults are ru_minflt/ru_majflt deltas immediately around query::run;
+the getrusage calls themselves are outside the wall timer. Input loading,
+canonicalization, exact comparison and result drop are outside this boundary.
+query_peak_rss_kib is ru_maxrss sampled immediately after that execution, a
+process-lifetime high-water mark, NOT query-only allocation or an RSS delta.
+It includes earlier load/warmup/correctness work. peak_rss_kib retains its
+whole-worker meaning, sampled after all measured runs. Darwin bytes are
+converted to KiB; unsupported non-Unix hosts emit null in JSON / NA in TSV.
+On fork/exec hosts this high water can also include the child's inherited
+pre-exec address space; it must not be interpreted as incremental query RSS.
+Timed worker JSON has samples_minor_faults, samples_major_faults and
+samples_peak_rss_kib aligned with sorted samples_ms. warm_minor_faults,
+warm_major_faults and warm_peak_rss_kib capture the first untimed query
+separately, so allocator first-touch is not hidden by the warmup. No noisy
+resource observations are included in deterministic counting-run comparisons.
+For a focused SF1 evidence run:
+  cargo xtask bench --tpch --sf 1 --runs 3 --query tpch_q06 --config default
+Other catalog names are listed in src/tpch.rs.
 
 Join-filter configurations
 H03, D85, H07 and H09 declare join-filter-advised explicitly in their source.
