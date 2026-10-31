@@ -1363,15 +1363,17 @@ device invocation. Issuing waves in order on one stream is exact by
 \end{mathpar}
 Let $S$ be a power of two at least the worker count. Admission of a head's
 candidate chunks $C=\biguplus_j C_j$ against its committed canonical layout $A$
-first removes, from every chunk independently (in parallel above the recorded
-threshold), the rows $A$ already contains, using the layout's exact
-membership read. A sharded canonical layout then builds the round's NEW
-version by bulk \code{extend\_from} of the surviving chunks: equal complete
-rows hash to the same shard and key, so NEW holds each surviving row once, and
-its distinct keys are the fresh batch. A sorted-run canonical layout instead
-concatenates, sorts and deduplicates the survivors. Only existing provider
-operations are used. Output order is unspecified. The termination condition
-is any admitted row.
+removes the rows $A$ already contains, using the layout's exact membership
+read, and keeps each survivor once. A sharded canonical layout realizes this
+per shard: chunks are hashed and routed by shard in parallel (above the
+recorded threshold), and one task per shard checks the committed shard and
+inserts into the round's NEW version's shard. NEW takes $A$'s hasher and shard
+count, so one hash routes a row to the same shard of both and equal complete
+rows meet in one task; the per-shard admitted rows, concatenated, are the
+fresh batch. A sorted-run canonical layout instead removes $A$'s rows from
+every chunk independently, then concatenates, sorts and deduplicates the
+survivors. Output order is unspecified. The termination condition is any
+admitted row.
 \begin{mathpar}
 \Rule{DL-ShardedAdmission}{C'_j=C_j\setminus A\quad
  N=\mathrm{distinct}\Big(\biguplus_j C'_j\Big)}

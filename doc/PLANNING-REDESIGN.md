@@ -368,8 +368,15 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     move (`set`/`grouped_map`) or clone (`bulk`) the canonical layout. The
     parallel extension shards each IDB canonical layout by default
     (`ShardedLayout<K, (), S>`, or `RunLayout<K, ()>` under `layouts(runs)`)
-    and admits by per-chunk anti-join plus NEW `extend_from`/distinct keys
-    (sorted runs: concat, sort, dedup) (DL-ShardedAdmission). `seen`, `all`,
+    and admits per shard (`ShardedLayout::admit`: chunks hashed and routed in
+    parallel, one task per shard checks the committed shard and inserts into
+    NEW, which takes the committed hasher so one hash serves both; sorted runs:
+    concat, sort, dedup) (DL-ShardedAdmission). The first realization (per-chunk
+    anti-join, then NEW `extend_from` per chunk and a serial distinct-key
+    listing) cost batik `mini-par-keyed` at 15 threads 1.18× M0 (admission
+    3.3 s vs M0 2.0 s); per-shard admission takes 1.0 s and measures batik
+    `mini-par`/`mini-par-keyed` 0.89×/0.90× and xalan 0.95×/0.93× M0 (t15,
+    5 interleaved pairs, CIs below 1.0). `seen`, `all`,
     the `Canonical` wrapper, `ShardedSeen`/`RunSeen`, `seen(runs)`,
     `RuleHole.insertion` and DL-RunAdmission are gone; Datalog uses no
     `maintain::{Fresh, Publish}` trait.
