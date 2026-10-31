@@ -407,6 +407,42 @@ With $\Gamma$ the recorded registry and $\mathrm{last}(Q)$ the terminal:
  h.\mathrm{answer}_i=\mathrm{borrowed}\Rightarrow\mathrm{borrowable}(h,\iota)_i}
  {\Gamma\vdash(h,Q,\iota)\ \mathrm{hole}}
 \end{mathpar}
+\paragraph{Relational copies and bounded recursion.}
+Frozen-filter helpers project all named columns of their single frozen positive
+input, in column order. Their heads are relational variables, not Rust copy
+expressions; the ordinary \textsc{DL-AnswerOwnership} record realizes storage.
+The CQ recursion extension likewise requires variable heads from positive atoms,
+not merely expressions whose free variables are bound: $*x+1$ can generate an
+infinite domain. All Rust head expressions, including dereference and clone
+spellings, are rejected; the user writes the plain column instead.
+\begin{mathpar}
+\Rule{DL-InvariantProjection}
+ {H\text{ is a certified frozen-filter helper}\quad A\text{ is its positive input}}
+ {H.\mathrm{head}=\mathrm{variables}(A)\text{ in column order}}
+\and
+\Rule{EXT-ActiveDomain}
+ {\mathrm{head}(q)\subseteq\mathrm{variables}(\mathrm{positive}(q))\quad
+  \mathrm{head}(q)\text{ contains only plain variables}\quad
+  \#\mathrm{recursive}(q)\leq1\quad
+  \mathrm{seeds}\ne\varnothing\quad\mathrm{steps}\ne\varnothing}
+ {\mathrm{finiteActiveDomain}(P)}
+\and
+\Rule{EXT-AnswerOwnership}
+ {|a_q|=|\mathrm{head}(q)|\quad
+  a_{q,i}=\mathrm{borrowed}\ \Leftrightarrow\
+  \mathrm{def}_q(\mathrm{head}_i)\text{ is a positive atom}}
+ {\mathrm{WFAnswer}(q,a_q)}
+\end{mathpar}
+The extension context records one source-ownership vector per rule and each
+hole's owned-head realization: borrowed $x$ becomes the uniform generated
+\code{::core::clone::Clone::clone(x)}, while owned $x$ stays a variable.
+This realizes ownership before CQ planning and canonicalization; no printer
+chooses a copy spelling or canonicalizes borrowed pointers in place of owned
+rows. Rustc checks Clone without compiler type recognition. The checker checks
+the defining binders and exact recorded realization, then erases that realization
+to the authored variables; it neither invokes compilation nor recognizes user
+Rust copies. A prior generator-bound variable joined to a positive atom remains
+in the finite domain but is owned.
 \begin{mathpar}
 \Rule{WF-DL-Round}{\mathrm{WF}_{\mathrm{Storage}}(D)\quad
  H\text{ implements the recorded variants and frozen keys}\quad

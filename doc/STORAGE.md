@@ -41,6 +41,7 @@ actually sits:
 | Late materialization | positions are witnesses, not logical columns (`ir_structures.tex:215-219`) | existing STR-Repr positions | already law |
 | Merge/compaction | output blocks represent the same multiset (STR-RunCompact); dedup only where set semantics is recorded (canon) | Storage/Round maintenance (incremental.tex) | merge kernel; summaries recomputed per output block |
 | Join filter on summaries | exact keyset `any_in(lo,hi)` is exact; min/max or Bloom only *admit* (false positives), the exact probe stays | existing STR-JoinFilter | unchanged |
+| Owned fixpoint/helper rows | faithful Clone preserves a projected column value | Datalog `DL-AnswerOwnership`; recursion extension `EXT-AnswerOwnership` records source ownership and uniform owned-head realization before CQ planning | printer consumes recorded realization; rustc checks Clone; no primitive-type list or user-Rust copy recognition |
 
 The **only** genuinely semantic decision is the codec's preserved-op set.
 `where x < c` on a column whose codec preserves only equality (a first-intern

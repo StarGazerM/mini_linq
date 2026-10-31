@@ -574,19 +574,18 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   with the data-path string length. Recorded as a repeated-run allocator
   effect; benchmarks should report page faults beside timings. Index
   footprint reductions (P4 compiler selection) are the real lever.
-  (9) `cq-ext-recursion` still recognizes `*x` / `(*x).clone()` heads
-  (`features/extensions/cq-ext-recursion/src/expansion.rs`, `active_column`)
-  to guarantee an active-domain, terminating recursion (ui case
-  `recursive_infinite`). Free-variable analysis cannot replace it (`*x + 1`
-  has bound free variables but an infinite domain). The contract-7 form is
-  bare-variable heads, which needs that extension's printer to own borrowed
-  answers as Datalog's DL-AnswerOwnership does; not a local change. DL-Source's
-  copy recognition was replaced by free variables (2026-10-31).
-  (10) DL-Source invariant hoisting still classifies host types
-  (`features/datalog/languages/dl-source/src/invariants.rs`, `owned_column`:
-  a primitive-type list chooses `*x` versus `(*x).clone()`), a contract-7 type
-  inspection; its replacement is an owned-copy printer obligation recorded per
-  column, as for hole answers.
+  (9) **Closed (2026-10-31):** `cq-ext-recursion` heads are authored plain
+  relational variables from positive atoms (`EXT-ActiveDomain`), not recognized
+  `*x`/`.clone()` Rust. Computed heads still fail the active-domain check;
+  free variables alone cannot prove finiteness (`*x + 1`). Context records
+  per-rule/head borrowed/owned columns from the defining binder
+  (`EXT-AnswerOwnership`), with checked uniform Clone realizations in owned CQ
+  hole heads before planning/canonicalization; the renderer decides nothing.
+  (10) **Closed (2026-10-31):** invariant helpers project positive-input
+  variables in column order (`DL-InvariantProjection`). The `owned_column`
+  primitive-type classifier is deleted. Existing `DL-AnswerOwnership` records
+  the copies for owned storage, including `String` and aliases; no Rust/type
+  recognition or new Datalog printer decision is involved.
 
 ## Progress
 

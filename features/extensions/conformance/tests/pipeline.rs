@@ -86,7 +86,7 @@ fn recursive_seed_and_step_queries_use_the_callers_printer() {
             print = cq_ext_test_passes::repeated(twice);
         }
         recursion! { struct R; relation Seed(x:i32); relation Edge(x:i32,y:i32); relation reach(x:i32);
-            reach(*x) :- Seed(x); reach(*y) :- reach(x), Edge(x,y);
+            reach(x) :- Seed(x); reach(y) :- reach(x), Edge(x,y);
         }
     }.collect();
     assert_eq!(rows.len(), 3);

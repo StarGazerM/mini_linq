@@ -1,0 +1,180 @@
+{
+  "version": 1,
+  "definitions": {
+    "p4-radix-items-rows": {
+      "kind": "refactor",
+      "description": "P4 class R: the recorded RadixRun payload layout items rows is printed as the explicit default layout argument RadixRun<_, _, ::std::vec::Vec<_>> (identical Rust type to RadixRun<_, _>)"
+    },
+    "p4-packed-canon": {
+      "kind": "intended",
+      "description": "P4 class P: authored canon(packed) advice records dedup::Packed for canonical rows records (EXT-PackedCanon, PL-PackedCanon); same answers and order, different build work, measured by paired timing"
+    },
+    "c7-relational-projection": {
+      "kind": "refactor",
+      "description": "Contract 7 issues 9/10: authored plain-variable heads carry recorded ownership; recursion realizes borrowed head columns uniformly with Clone before CQ planning/canonicalization, without recognizing Rust copies or inspecting types."
+    }
+  },
+  "rules": [
+    {
+      "target": "recursion_closure",
+      "class": "c7-relational-projection",
+      "hunk_sha256": "4591af22497411feb1cd2dbbd57b6b1d3616139c611a6e75d56f7e86865d096f",
+      "reason": "Seed x ownership realization changes only *x to the uniform ::core::clone::Clone::clone(x); the generated i32 binding and its placement are unchanged. Rustc resolves the same scalar copy without compiler type inspection.",
+      "source": "features/extensions/cq-ext-recursion/src/expansion.rs:EXT-AnswerOwnership"
+    },
+    {
+      "target": "recursion_closure",
+      "class": "c7-relational-projection",
+      "hunk_sha256": "ce59b1114d08bb6331b76c9f765ae58c8021c645f8f9e321bae27dc05e921322",
+      "reason": "Seed y ownership realization changes only *y to the uniform ::core::clone::Clone::clone(y); the generated i32 binding and its placement are unchanged.",
+      "source": "features/extensions/cq-ext-recursion/src/expansion.rs:EXT-AnswerOwnership"
+    },
+    {
+      "target": "recursion_closure",
+      "class": "c7-relational-projection",
+      "hunk_sha256": "fc538b73500f8682bf88bbbd648c91897027869ed452c570b2e86fefdfa0a80a",
+      "reason": "Step x ownership realization changes only *x to the uniform ::core::clone::Clone::clone(x); all scans, joins, maps, Sort and fixpoint operations remain at the same positions.",
+      "source": "features/extensions/cq-ext-recursion/src/expansion.rs:EXT-AnswerOwnership"
+    },
+    {
+      "target": "recursion_closure",
+      "class": "c7-relational-projection",
+      "hunk_sha256": "60fbe7586459b48d3f18cc44ff93c94bb086fc0e44e0bd12a862deeeacde8c82",
+      "reason": "Step z ownership realization changes only *z to the uniform ::core::clone::Clone::clone(z); the generated i32 binding and its placement are unchanged.",
+      "source": "features/extensions/cq-ext-recursion/src/expansion.rs:EXT-AnswerOwnership"
+    },
+    {
+      "target": "retail_d19",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_d27",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_d72_inner",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_d85",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h01",
+      "class": "p4-packed-canon",
+      "hunk_sha256": "b3b5f943102afc5ba9b9391cfe9cd703175583fae10767e7b1def81d99f88a18",
+      "reason": "h01's authored canon(packed) advice (EXT-PackedCanon) retypes the canonical rows record <::cq_storage::dedup::Sort>::sort to <::cq_storage::dedup::Packed>::sort; same rows stream and comparator tokens, packed-OrderKey sorted-run build (PL-PackedCanon), timed",
+      "source": "features/rewrites/passes/src/structures.rs:137;runtime/cq-storage/src/dedup.rs:124;features/workloads/src/queries/retail/tpch/retail_h01.rs:61"
+    },
+    {
+      "target": "retail_h02",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "ed6fc869688f9e804b1255d716b3d632724521be1de431757dc94ca28d01a855",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h02",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h03",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h05",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h07",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h07_block",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h08",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h09",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h10",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h11",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h16",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h20",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "retail_h21_positive",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "0a3687d37abdabc5c9dbcba2b9c72f04c0674418ac8e58906125917b91a39608",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    },
+    {
+      "target": "tpch_q19",
+      "class": "p4-radix-items-rows",
+      "hunk_sha256": "ed6fc869688f9e804b1255d716b3d632724521be1de431757dc94ca28d01a855",
+      "reason": "radix_runs records items rows (SEL-ItemLayout: every payload reader carries the complete payload) and prints it as RadixRun's layout argument ::std::vec::Vec<_>, the type's default parameter: the same Rust type",
+      "source": "features/rewrites/passes/src/structures.rs:227-240;runtime/cq-storage/src/radix_run.rs:200"
+    }
+  ]
+}

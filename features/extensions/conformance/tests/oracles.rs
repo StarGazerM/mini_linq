@@ -115,7 +115,7 @@ fn linear_recursion_matches_graph_search_with_cycles_and_empty_seeds() {
                     pipeline { surface = [cq_ext_recursion::recursion]; }
                     recursion! {
                         struct R; relation Edge(x:i32,y:i32); relation reach(x:i32,y:i32);
-                        reach(*x,*y) :- Edge(x,y); reach(*x,*z) :- reach(x,y), Edge(y,z);
+                        reach(x,y) :- Edge(x,y); reach(x,z) :- reach(x,y), Edge(y,z);
                     }
                 }
                 .map(|(x, y)| vec![x, y])

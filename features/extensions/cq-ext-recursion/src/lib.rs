@@ -1,16 +1,16 @@
 //! Linear, finite active-domain recursion via semi-naive delta holes.
-//! The surface is several rules with a declared result schema; heads copy
-//! positive atom columns (`*x` or `(*x).clone()`). Every recursive rule has
+//! The surface is several rules with a declared result schema; heads project
+//! positive atom columns as plain variables (`x`). Every recursive rule has
 //! exactly one result atom. No core recursion operator is introduced.
 //! Optional `observe = (|round, delta_len| ...);` instruments nonempty rounds.
 //!
-//! Surface: Declared result, seed rules, and linear recursive rules: `reach(*x,*y) :- Edge(x,y); reach(*x,*z) :- reach(x,y), Edge(y,z);`
+//! Surface: Declared result, seed rules, and linear recursive rules: `reach(x,y) :- Edge(x,y); reach(x,z) :- reach(x,y), Edge(y,z);`
 //!
 //! Result and openings: Iterator of owned fixpoint rows; each round reads only delta `Answers` through an ordinary leaf
 //!
 //! Recursion supports several seeds and several linear steps. Each step has exactly
-//! one recursive atom. Heads are projections of positive atom columns using `*x`
-//! or `(*x).clone()`; arithmetic/function-generating heads and nonlinear recursion
+//! one recursive atom. Heads are relational projections of positive atom columns;
+//! all Rust heads (including `*x` and `.clone()`) and nonlinear recursion
 //! are rejected. This finite active domain, immutable hosts and pure expressions
 //! are the fixpoint premises. Optional `observe=(|round, delta_len| ...);` before
 //! the CQ header observes nonempty rounds. Distinctness across seeds and rounds
@@ -18,9 +18,12 @@
 //! Select `pipeline { surface = [cq_ext_recursion::recursion]; }` and wrap this
 //! surface in `recursion! { ... }` inside `mini_linq::compile!`. Seed and delta
 //! queries each resume the caller's remaining queue. Unowned quotations are
-//! forwarded unchanged. Leibniz equality and faithful Clone on owned results are
-//! required; observer effects and evaluation counts are outside the denotation.
-//! Every opaque Rust chain within a rule retains its written order.
+//! forwarded unchanged. Context records source head ownership (the
+//! DL-AnswerOwnership law) and uniform Clone realizations for borrowed columns
+//! in owned CQ hole heads, before CQ planning and canonicalization.
+//! Leibniz equality and faithful Clone are required, with trait bounds enforced
+//! by rustc; observer effects and evaluation counts are outside the denotation.
+//! Opaque Rust remains unchanged and is placed by its free variables.
 //!
 //! Each crate's `expansion::check(source, context)` is an independently callable
 //! internal structural relation exercised by its unit tests. It checks rule/hole

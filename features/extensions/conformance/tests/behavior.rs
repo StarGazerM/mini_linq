@@ -136,7 +136,7 @@ fn raw_identifiers_preserve_logical_symbols_across_extension_boundaries() {
     let recursive: BTreeSet<_> =
         mini_linq::compile! { pipeline { surface = [cq_ext_recursion::recursion]; } recursion! {
            struct Raw; relation Seed(x:i32); relation Edge(x:i32,y:i32); relation r#reach(x:i32);
-           reach(*x) :- Seed(x); r#reach(*y) :- r#reach(x), Edge(x,y);
+           reach(x) :- Seed(x); r#reach(y) :- r#reach(x), Edge(x,y);
         } }
         .collect();
     assert_eq!(recursive, [(0,), (1,), (2,)].into());
@@ -152,8 +152,8 @@ fn recursion_unions_seeds_and_multiple_linear_steps_and_stops_on_cycles() {
     let result: BTreeSet<_> = mini_linq::compile! { pipeline { surface = [cq_ext_recursion::recursion]; } recursion! {
         observe=(|_:usize,n:usize|{rounds.set(rounds.get()+1);deltas.set(deltas.get()+n);});
         struct Multi; relation Seed(x:i32); relation Extra(x:i32); relation Edge(x:i32,y:i32); relation reach(x:i32);
-        reach(*x) :- Seed(x); reach(*x) :- Extra(x);
-        reach(*y) :- reach(x), Edge(x,y); reach(*y) :- reach(x), Edge(y,x);
+        reach(x) :- Seed(x); reach(x) :- Extra(x);
+        reach(y) :- reach(x), Edge(x,y); reach(y) :- reach(x), Edge(y,x);
      } }.collect();
     assert_eq!(result, [(0,), (1,), (2,), (3,)].into());
     assert_eq!(rounds.get(), 2);
@@ -168,10 +168,24 @@ fn recursion_owns_non_copy_delta_rows_and_hoists_leaves_once() {
         relation Seed(x:String) = ({calls.set(calls.get()+1);[(String::from("a"),)]});
         relation Edge(x:String,y:String) = ({calls.set(calls.get()+1);[(String::from("a"),String::from("b")),(String::from("b"),String::from("a"))]});
         relation reach(x:String);
-        reach((*x).clone()) :- Seed(x); reach((*y).clone()) :- reach(x), Edge(x,y);
+        reach(x) :- Seed(x); reach(y) :- reach(x), Edge(x,y);
      } }.collect();
     assert_eq!(result, [(String::from("a"),), (String::from("b"),)].into());
     assert_eq!(calls.get(), 2);
+    type Name = String;
+    let seed = [(Name::from("a"),)];
+    let edge = [(Name::from("a"), Name::from("b")), (Name::from("b"), Name::from("a"))];
+    let aliased: BTreeSet<_> = mini_linq::compile! {
+        pipeline { surface = [cq_ext_recursion::recursion]; }
+        recursion! {
+            struct Aliased;
+            relation Seed(x:Name) = (&seed);
+            relation Edge(x:Name,y:Name) = (&edge);
+            relation reach(x:Name);
+            reach(x) :- Seed(x); reach(y) :- reach(x), Edge(x,y);
+        }
+    }.collect();
+    assert_eq!(aliased, result);
 }
 
 #[test]

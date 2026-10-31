@@ -29,9 +29,19 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   passes on xalan and batik for every engine; CPU paired timings show no CI
   entirely above 1.0
   (`experiments/gpu/compare/doop_cassandra.relational_heads.results.json`).
-  Open: `cq-ext-recursion` still recognizes `*x` heads for its active-domain
-  check, and DL-Source invariant hoisting still classifies host types
-  (plan open issues 9 and 10).
+  Plan issues 9 and 10 are now closed: recursion heads use plain relational
+  variables and Context records per-column answer ownership, while frozen-filter
+  invariant helpers project plain variables and use existing DL-AnswerOwnership.
+  Removed Rust-copy recognition and the primitive-type ownership classifier.
+  Old recursion `*x`/`.clone()` heads now diagnose writing the plain variable;
+  non-Copy String and alias copies remain supported without type inspection.
+  Recursion's uniform Clone realization is recorded in owned hole heads before
+  CQ planning/canonicalization, not after sorting borrowed tuples. The latter
+  was rejected by paired timing (+2.8%); the retained form preserves all
+  expanded operations except four dereference-to-Clone spellings. Extension,
+  Datalog, parallel, workload, String/alias and full-set xalan checks pass;
+  five locked timing pairs show no CI entirely above 1.0 for recursion-path
+  or invariant-enabled xalan (`tools/c7_open_issues.results.json`).
 
 - `doop-gpu` builds again (broken since contract 7, `0124315f`). Placement
   predicted descendant reads of a pipe-host handle with its own blanket

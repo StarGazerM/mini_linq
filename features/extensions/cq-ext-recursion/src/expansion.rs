@@ -1,3 +1,8 @@
+//! DESIGN contract7-recursion-projection
+//! Contract 7 and doc/PLANNING-REDESIGN.md: active-domain heads are authored
+//! relational variables. DO NOT recognize Rust copies or inspect column types.
+//! EXT-ActiveDomain and EXT-AnswerOwnership (doc/formal/datalog.tex) separate
+//! finite-domain membership from the recorded borrowed/owned calling convention.
 use std::collections::BTreeSet;
 
 use cq_ext_support::{
@@ -43,6 +48,12 @@ impl ToTokens for Source {
         rules.to_tokens(tokens);
     }
 }
+/// DL-AnswerOwnership vocabulary: this extension only admits atom projections.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AnswerColumn {
+    Borrowed,
+    Owned,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Context {
     pub declarations: Vec<RelationDecl>,
@@ -51,6 +62,8 @@ pub struct Context {
     pub seeds: Vec<(usize, Program)>,
     pub steps: Vec<(usize, Program)>,
     pub observer: Option<Expr>,
+    /// Source projection representation; each hole records its owned realization.
+    pub answers: Vec<Vec<AnswerColumn>>,
 }
 fn recursion_count(query: &Query, result: &Ident) -> usize {
     query
@@ -59,31 +72,33 @@ fn recursion_count(query: &Query, result: &Ident) -> usize {
         .filter(|item| matches!(item, BodyItem::Positive { atom } if same_symbol(&atom.relation,result)))
         .count()
 }
-fn unparen(expression: &Expr) -> &Expr {
-    match expression {
-        Expr::Paren(p) => unparen(&p.expr),
-        Expr::Group(g) => unparen(&g.expr),
-        _ => expression,
-    }
-}
-fn active_column(expression: &Expr) -> Option<&Ident> {
-    match unparen(expression) {
-        Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
-            rust::variable(unparen(&unary.expr))
-        }
-        Expr::MethodCall(call)
-            if call.method == "clone" && call.args.is_empty() && call.turbofish.is_none() =>
-        {
-            match unparen(&call.receiver) {
-                Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
-                    rust::variable(unparen(&unary.expr))
-                }
-                _ => None,
+/// Positive atoms can also join a value previously bound by a generator.
+/// The first binder determines ownership, not membership in the active domain.
+fn borrowed_columns(query: &Query) -> BTreeSet<String> {
+    let mut defined = BTreeSet::new();
+    let mut borrowed = BTreeSet::new();
+    for item in &query.body {
+        let (names, atom): (Vec<_>, bool) = match item {
+            BodyItem::Positive { atom } => (atom.variables().map(symbol_name).collect(), true),
+            BodyItem::Let(binding) => (
+                rust::bindings(&binding.pattern).iter().map(symbol_name).collect(), false,
+            ),
+            BodyItem::For(binding) => (
+                rust::bindings(&binding.pattern).iter().map(symbol_name).collect(), false,
+            ),
+            BodyItem::Block(block) => (block.analyze(&defined).interface.into_keys().collect(), false),
+            _ => continue,
+        };
+        for name in names {
+            if defined.insert(name.clone()) && atom {
+                borrowed.insert(name);
             }
         }
-        _ => None,
     }
+    borrowed
 }
+/// Formal rule EXT-ActiveDomain: every head is a plain variable occurring in a
+/// positive atom; there is at least one seed and one linear recursive rule.
 fn domain(source: &Source) -> syn::Result<()> {
     let first = &source.rules.first;
     let output = first.output().ok_or_else(|| {
@@ -123,10 +138,10 @@ fn domain(source: &Source) -> syn::Result<()> {
             .map(symbol_name)
             .collect();
         for argument in &query.head.args {
-            let id = active_column(argument).ok_or_else(|| {
+            let id = rust::variable(argument).ok_or_else(|| {
                 syn::Error::new_spanned(
                     argument,
-                    "recursive heads must copy an active-domain column: *x or (*x).clone()",
+                    "recursive heads must project an active-domain column: write the plain variable, not *x or .clone()",
                 )
             })?;
             ensure(
@@ -159,11 +174,29 @@ pub fn compile(source: &Source) -> syn::Result<Context> {
     let delta = fresh.id("delta");
     let mut seeds = Vec::new();
     let mut steps = Vec::new();
+    let mut answers = Vec::new();
     for (position, query) in source.rules.queries().enumerate() {
         let recursive = recursion_count(query, &source.rules.first.query.head.relation) == 1;
+        let borrowed = borrowed_columns(query);
+        let answer: Vec<_> = query.head.variables().map(|id| {
+            if borrowed.contains(&symbol_name(id)) {
+                AnswerColumn::Borrowed
+            } else {
+                AnswerColumn::Owned
+            }
+        }).collect();
         let mut query = query.clone();
         let name = fresh.id("round_rows");
         query.head.relation = name.clone();
+        // Realize relational ownership before CQ planning/canonicalization.
+        // This is generated from the record, never recognized from user Rust.
+        for (argument, ownership) in query.head.args.iter_mut().zip(&answer) {
+            if matches!(ownership, AnswerColumn::Borrowed) {
+                let variable = rust::variable(argument).expect("checked relational head");
+                *argument = syn::parse_quote!(::core::clone::Clone::clone(#variable));
+            }
+        }
+        answers.push(answer);
         let mut hole = with_query(
             &source.rules.first,
             &declarations,
@@ -192,14 +225,29 @@ pub fn compile(source: &Source) -> syn::Result<Context> {
         delta,
         seeds,
         steps,
+        answers,
         observer: source.observer.clone(),
     })
 }
 /// Erase delta renames to result reads, verify the rule partition, schema and
 /// observer, and require an active-domain, linear source. Fixpoint execution
 /// and ownership are validated by runtime oracles and Rust.
+/// Formal rule EXT-AnswerOwnership: check one ownership record per rule/head
+/// column against its first defining binder, independently of compilation.
 pub fn check(source: &Source, target: &Context) -> syn::Result<()> {
     domain(source)?;
+    ensure(target.answers.len() == source.rules.queries().count(), source, "recursive answer ownership rule count changed")?;
+    for (query, answer) in source.rules.queries().zip(&target.answers) {
+        let borrowed = borrowed_columns(query);
+        ensure(
+            answer.len() == query.head.args.len()
+                && query.head.variables().zip(answer).all(|(id, ownership)| {
+                    matches!(ownership, AnswerColumn::Borrowed) == borrowed.contains(&symbol_name(id))
+                }),
+            query,
+            "recursive answer ownership does not match its defining binders",
+        )?;
+    }
     check_fresh(
         source,
         target
@@ -232,6 +280,26 @@ pub fn check(source: &Source, target: &Context) -> syn::Result<()> {
                 "wrong seed/delta partition",
             )?;
             let mut erased = hole.clone();
+            ensure(
+                erased.query.head.args.len() == original.head.args.len(),
+                hole,
+                "recursive owned-head arity changed",
+            )?;
+            for ((argument, projection), ownership) in erased.query.head.args.iter_mut()
+                .zip(&original.head.args)
+                .zip(&target.answers[*position])
+            {
+                let expected = match ownership {
+                    AnswerColumn::Borrowed => syn::parse_quote!(::core::clone::Clone::clone(#projection)),
+                    AnswerColumn::Owned => projection.clone(),
+                };
+                ensure(
+                    *argument == expected,
+                    &*argument,
+                    "recursive owned-head realization changed",
+                )?;
+                *argument = projection.clone();
+            }
             let name = erased.query.head.relation.clone();
             let out = erased
                 .declarations
@@ -355,7 +423,6 @@ pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<T
         })
         .collect::<syn::Result<Vec<_>>>()?;
     let observe_binding = context.observer.as_ref().map(|expression| {
-        let expression = unparen(expression);
         quote!(#[allow(unused_mut)] let mut #observer = #expression;)
     });
     let observe_call = context
@@ -385,7 +452,7 @@ mod tests {
     fn raw_result_aliases_erase_to_each_rules_authored_spelling() {
         let source: Source = syn::parse_quote! {
             struct Raw; relation Seed(x:i32); relation E(x:i32,y:i32); relation r#reach(x:i32);
-            reach(*x) :- Seed(x); r#reach(*y) :- r#reach(x), E(x,y);
+            reach(x) :- Seed(x); r#reach(y) :- r#reach(x), E(x,y);
         };
         let target = compile(&source).unwrap();
         check(&source, &target).unwrap();
@@ -393,7 +460,7 @@ mod tests {
     fn source() -> Source {
         syn::parse_quote! {
             struct Reach; relation E(a:i32,b:i32); relation reach(a:i32,b:i32);
-            reach(*x,*y) :- E(x,y); reach(*x,*z) :- reach(x,y), E(y,z);
+            reach(x,y) :- E(x,y); reach(x,z) :- reach(x,y), E(y,z);
         }
     }
     #[test]
@@ -418,6 +485,16 @@ mod tests {
         let source = source();
         let target = compile(&source).unwrap();
         check(&source, &target).unwrap();
+        assert!(format!("{target:?}").contains("Borrowed"));
+        let mut changed = target.clone();
+        changed.answers.pop();
+        assert!(check(&source, &changed).is_err());
+        let mut changed = target.clone();
+        changed.answers[0].pop();
+        assert!(check(&source, &changed).is_err());
+        let mut changed = target.clone();
+        changed.answers[0][0] = AnswerColumn::Owned;
+        assert!(check(&source, &changed).is_err());
         let mut changed = target.clone();
         changed.seeds.clear();
         assert!(check(&source, &changed).is_err());
@@ -432,13 +509,29 @@ mod tests {
         assert!(check(&source, &changed).is_err());
     }
     #[test]
+    fn joined_generator_binding_is_owned_but_still_active_domain() {
+        let source: Source = syn::parse_quote! {
+            struct R; relation E(x:i32); relation reach(x:i32);
+            reach(x) :- for x in [1], E(x);
+            reach(x) :- reach(x);
+        };
+        let target = compile(&source).unwrap();
+        assert_eq!(target.answers, vec![vec![AnswerColumn::Owned], vec![AnswerColumn::Borrowed]]);
+        check(&source, &target).unwrap();
+        let mut changed = target;
+        changed.answers[0][0] = AnswerColumn::Borrowed;
+        assert!(check(&source, &changed).is_err());
+    }
+    #[test]
     fn nonlinear_and_function_generating_rules_are_rejected() {
         for recursive in [
-            "reach(*x,*z) :- reach(x,y), reach(y,z);",
-            "reach(*x + 1,*z) :- reach(x,y), E(y,z);",
-            "reach(x,z) :- reach(x,y), E(y,z);",
+            "reach(x,z) :- reach(x,y), reach(y,z);",
+            "reach(*x + 1,z) :- reach(x,y), E(y,z);",
+            "reach(*x,z) :- reach(x,y), E(y,z);",
+            "reach((*x).clone(),z) :- reach(x,y), E(y,z);",
+            "reach(x.clone(),z) :- reach(x,y), E(y,z);",
         ] {
-            let source = syn::parse_str(&format!("struct R; relation E(a:i32,b:i32); relation reach(a:i32,b:i32); reach(*x,*y) :- E(x,y); {recursive}")).unwrap();
+            let source = syn::parse_str(&format!("struct R; relation E(a:i32,b:i32); relation reach(a:i32,b:i32); reach(x,y) :- E(x,y); {recursive}")).unwrap();
             assert!(compile(&source).is_err());
         }
     }

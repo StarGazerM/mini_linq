@@ -35,8 +35,8 @@ pub fn run(scale: usize) -> Vec<Observation> {
 recursion! {
         observe = (|_: usize, rows: usize| { rounds.set(rounds.get()+1); delta_rows.set(delta_rows.get()+rows); });
         struct Path; relation seed(x:i32); relation edges(x:i32,y:i32); relation reach(x:i32);
-        reach(*y) :- seed(x), edges(x,y);
-        reach(*z) :- reach(y), edges(y,z);
+        reach(y) :- seed(x), edges(x,y);
+        reach(z) :- reach(y), edges(y,z);
      }}.collect();
     let elapsed = start.elapsed();
     let counts = counters::snapshot();

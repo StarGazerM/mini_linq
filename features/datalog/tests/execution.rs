@@ -23,6 +23,36 @@ fn opt_in_frozen_filter_preserves_exact_recursive_answers() {
 }
 
 #[test]
+fn invariant_projection_owns_string_aliases_on_pull_and_push() {
+    type Name = String;
+    let seed = [(Name::from("a"), Name::from("b"))];
+    let edges = [(Name::from("b"), Name::from("c")), (Name::from("c"), Name::from("d"))];
+    let blocked = [(Name::from("d"),)];
+    macro_rules! run {
+        ($printer:path, $input:ident) => {
+            cq_datalog::datalog! {
+                arguments { hoist_invariants; };
+                pipeline { cq = pipeline { print = $printer; print_input = $input; }; }
+                struct FilteredNames;
+                relation Seed(x:Name,y:String) = (&seed);
+                relation Edge(x:Name,y:String) = (&edges);
+                relation Block(x:Name) = (&blocked);
+                relation Reach(x:Name,y:String);
+                output Reach;
+                Reach(x,y) :- Seed(x,y);
+                Reach(x,z) :- Reach(x,y), Edge(y,z), !Block(z);
+            }.collect::<BTreeSet<_>>()
+        };
+    }
+    let expected = BTreeSet::from([
+        (Name::from("a"), Name::from("b")),
+        (Name::from("a"), Name::from("c")),
+    ]);
+    assert_eq!(run!(::mini_linq::passes::translate_pull, sequence), expected);
+    assert_eq!(run!(::cq_datalog::passes::print_push, structures), expected);
+}
+
+#[test]
 fn push_holes_match_pull_for_owned_heads_and_constant_filtered_keys() {
     let names = [
         ("alice".to_owned(),),

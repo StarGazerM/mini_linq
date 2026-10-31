@@ -38,30 +38,26 @@ fn frozen_filter_roundtrips_and_erases_independently() {
 }
 
 #[test]
-fn helper_ownership_follows_declared_column_types() {
-    for (ty, expected) in [
-        ("i64", "*x"),
-        ("::core::primitive::u32", "*x"),
-        ("bool", "*x"),
-        ("char", "*x"),
-        ("&'static str", "*x"),
-        ("String", "(*x).clone()"),
-        ("UserType", "(*x).clone()"),
-    ] {
-        let expression = cq_lang_datalog_source::invariants::owned_column(
-            &syn::parse_quote!(x),
-            &syn::parse_str(ty).unwrap(),
-        );
-        assert_eq!(expression, syn::parse_str::<syn::Expr>(expected).unwrap());
+fn helper_projection_is_relational_and_type_blind() {
+    for ty in ["i64", "::core::primitive::u32", "bool", "char", "&'static str", "String", "UserType"] {
+        let mut source = source();
+        for declaration in &mut source.declarations {
+            for column in &mut declaration.columns {
+                column.ty = syn::parse_str(ty).unwrap();
+            }
+        }
+        let before = stratify::compile(&source).unwrap();
+        let after = invariants::compile(&before).unwrap();
+        let helper = after.source.rules.last().unwrap();
+        assert_eq!(helper.head.args[0], syn::parse_quote!(y));
+        assert_eq!(helper.head.args[1], syn::parse_quote!(z));
+        invariants::check(&before, &after).unwrap();
+        for expression in [syn::parse_quote!(*y), syn::parse_quote!((*y).clone()), syn::parse_quote!(z)] {
+            let mut forged = after.clone();
+            forged.source.rules.last_mut().unwrap().head.args[0] = expression;
+            assert!(contract::check(&forged).is_err());
+        }
     }
-    let after = invariants::compile(&stratify::compile(&source()).unwrap()).unwrap();
-    assert_eq!(
-        after.source.rules.last().unwrap().head.args[0],
-        syn::parse_quote!(*y)
-    );
-    let mut forged = after;
-    forged.source.rules.last_mut().unwrap().head.args[0] = syn::parse_quote!((*y).clone());
-    assert!(contract::check(&forged).is_err());
 }
 
 #[test]

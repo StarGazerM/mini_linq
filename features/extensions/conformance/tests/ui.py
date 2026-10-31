@@ -28,8 +28,9 @@ cases = [
     ("union_arity", "union", "struct U; answer(x) :- A(x); answer(x,y) :- B(x,y);", "head relation and arity"),
     ("aggregate_key", "aggregate", "by(missing); n=count(); struct G; relation A(x:i32); rows(x) :- A(x);", "group key is absent"),
     ("aggregate_arity", "aggregate", "by(x); n=count(x); struct G; relation A(x:i32); rows(x) :- A(x);", "argument count mismatch"),
-    ("recursive_nonlinear", "recursion", "struct R; relation E(x:i32,y:i32); relation reach(x:i32,y:i32); reach(*x,*y) :- E(x,y); reach(*x,*z) :- reach(x,y),reach(y,z);", "nonlinear recursion"),
-    ("recursive_infinite", "recursion", "struct R; relation E(x:i32,y:i32); relation reach(x:i32,y:i32); reach(*x,*y) :- E(x,y); reach(*x+1,*z) :- reach(x,y),E(y,z);", "active-domain column"),
+    ("recursive_nonlinear", "recursion", "struct R; relation E(x:i32,y:i32); relation reach(x:i32,y:i32); reach(x,y) :- E(x,y); reach(x,z) :- reach(x,y),reach(y,z);", "nonlinear recursion"),
+    ("recursive_infinite", "recursion", "struct R; relation E(x:i32,y:i32); relation reach(x:i32,y:i32); reach(x,y) :- E(x,y); reach(*x+1,z) :- reach(x,y),E(y,z);", "active-domain column"),
+    ("recursive_copy_syntax", "recursion", "struct R; relation E(x:i32,y:i32); relation reach(x:i32,y:i32); reach(x,y) :- E(x,y); reach(*x,z) :- reach(x,y),E(y,z);", "write the plain variable"),
     ("scalar_shadow", "correlated", "struct C; relation A(x:i32); answer(x) :- A(x),scalar!{x:i32=(0); select(1); A(y)};", "shadows an outer binding"),
     ("exists_empty", "correlated", "struct C; relation A(x:i32); answer(x) :- A(x),exists!{if true};", "needs a positive atom"),
 ]
