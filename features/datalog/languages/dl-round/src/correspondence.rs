@@ -19,16 +19,6 @@ fn required_inputs(
         .collect();
     let mut declarations = Vec::new();
     for relation in &context.relations {
-        if required.contains(&symbol_name(&relation.declaration.name)) {
-            let mut declaration = relation.declaration.clone();
-            let host = &relation.all;
-            declaration.value = Some(if declaration.value.is_some() {
-                syn::parse_quote!(= (#host))
-            } else {
-                syn::parse_quote!(= (&#host))
-            });
-            declarations.push(declaration);
-        }
         if let Some(delta) = &relation.delta {
             if !required.contains(&symbol_name(delta)) {
                 continue;
@@ -226,8 +216,7 @@ pub(crate) fn check_storage_with_analysis(
             source,
             "fork changed relation schema or delta binding",
         )?;
-        add_name(&relation.all)?;
-        add_name(&relation.seen)?;
+        add_name(&relation.next_canonical)?;
         add_name(&relation.next)?;
         ensure(
             relation.delta_host.is_some() == relation.delta.is_some(),
@@ -362,18 +351,24 @@ pub(crate) fn check_storage_with_analysis(
                     "key hole must read its completed relation",
                 ));
             };
+            // A completed relation is scanned through its canonical layout.
+            let canonical = &context.layouts[source.providers[key.relation].canonical];
             ensure(
-                atom.relation == declaration.name && atom.args.len() == declaration.arity(),
+                atom.relation == canonical.name && atom.args.len() == declaration.arity(),
                 source,
                 "key hole changed its input",
             )?;
-            let variables: Vec<_> = atom.args.iter().map(rust::variable).collect();
+            let mut args: Vec<&Expr> = atom.args.iter().collect();
+            for (position, &column) in canonical.columns.iter().enumerate() {
+                args[column] = &atom.args[position];
+            }
+            let variables: Vec<_> = args.iter().map(|arg| rust::variable(arg)).collect();
             ensure(
-                atom.args.iter().enumerate().all(|(column, argument)| {
+                args.iter().enumerate().all(|(column, argument)| {
                     match key.filters.iter().find(|(i, expression)| {
                         *i == column && cq_syntax::equality::literal(rust::unparen(expression))
                     }) {
-                        Some((_, expression)) => argument == rust::unparen(expression),
+                        Some((_, expression)) => *argument == rust::unparen(expression),
                         None => rust::variable(argument).is_some(),
                     }
                 }) && variables
@@ -410,7 +405,7 @@ pub(crate) fn check_storage_with_analysis(
                 key.columns
                     .iter()
                     .map(|&i| {
-                        let argument = &atom.args[i];
+                        let argument = args[i];
                         if batch {
                             syn::parse_quote!(*#argument)
                         } else {

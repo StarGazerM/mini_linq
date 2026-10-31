@@ -52,9 +52,6 @@ pub(super) fn step_loop(
     let admits: Vec<_> = (0..stratum.members.len())
         .map(|m| format_ident!("__cq_rel_admit_{m}", span = Span::mixed_site()))
         .collect();
-    let seen_locks: Vec<_> = (0..stratum.members.len())
-        .map(|m| format_ident!("__cq_rel_seen_{m}", span = Span::mixed_site()))
-        .collect();
     let local: BTreeMap<_, _> = stratum
         .members
         .iter()
@@ -66,10 +63,7 @@ pub(super) fn step_loop(
         .iter()
         .map(|&member| {
             let relation = &context.relations[member];
-            let mut hosts = vec![
-                relation.all.clone(),
-                relation.delta_host.clone().expect("checked delta host"),
-            ];
+            let mut hosts = vec![relation.delta_host.clone().expect("checked delta host")];
             let publication = stratum
                 .publication
                 .iter()
@@ -87,23 +81,23 @@ pub(super) fn step_loop(
         })
         .collect();
     let initial = hosts.iter().map(|hosts| {
-        let delta = &hosts[1];
+        let delta = &hosts[0];
         quote!(!#delta.is_empty())
     });
     let declarations = stratum.members.iter().enumerate().map(|(m, &member)| {
         let lock = &locks[m];
         let admit = &admits[m];
-        let seen_lock = &seen_locks[m];
         let hosts = &hosts[m];
         let relation = &context.relations[member];
-        let seen = &relation.seen;
         let types = relation.declaration.columns.iter().map(|column| &column.ty);
         let hasher = format_ident!("__cq_rel_hasher_{member}", span = Span::mixed_site());
-        let hasher = program.certificate.self_dedup.is_some().then(|| quote!(let #hasher = #seen.hasher().clone();));
+        let state = super::task_hasher(&context.layouts[relation.providers.canonical]);
+        let hasher = program.certificate.self_dedup.is_some().then(|| {
+            quote!(let #hasher = <#state as ::core::default::Default>::default();)
+        });
         quote!(
             #hasher
             let #lock = ::std::sync::RwLock::new((#(&mut #hosts,)*));
-            let #seen_lock = ::std::sync::Mutex::new(&mut #seen);
             let #admit = ::std::sync::Mutex::new(::std::vec::Vec::<::std::vec::Vec<(#(#types,)*)>>::new());
         )
     });
@@ -177,8 +171,25 @@ pub(super) fn step_loop(
     let commit_arms = stratum.members.iter().enumerate().map(|(m, &member)| {
         let lock = &locks[m];
         let admit = &admits[m];
-        let seen_lock = &seen_locks[m];
-        let next = &context.relations[member].next;
+        let relation = &context.relations[member];
+        let next = &relation.next;
+        let canonical = &context.layouts[relation.providers.canonical];
+        let provider = &canonical.provider;
+        let field = syn::Index::from(
+            hosts[m]
+                .iter()
+                .position(|host| *host == canonical.host)
+                .expect("canonical layout is published by its member"),
+        );
+        let admission = super::admit_chunks(
+            context,
+            member,
+            &quote!(::core::mem::take(&mut *#admit.lock().unwrap())),
+            &quote!(&*__cq_rel_write.#field),
+            &quote!((&mut __cq_rel_new)),
+            threshold,
+            false,
+        );
         let mut names = BTreeMap::new();
         for (k, host) in hosts[m].iter().enumerate() {
             let field = syn::Index::from(k);
@@ -187,15 +198,15 @@ pub(super) fn step_loop(
         let p = stratum.publication.iter().position(|p| p.relation == member).expect("checked publication");
         let publication = rename(publications[p].clone(), &names);
         quote!(#m => {
-            let #next = {
-                let chunks = ::core::mem::take(&mut *#admit.lock().unwrap());
-                #seen_lock.try_lock().expect("P-DL-Relational: exclusive admission").admit(chunks, #threshold)
-            };
+            // Commits exclude every reader, so the write guard is uncontended.
+            let mut __cq_rel_write_guard = #lock.try_write().expect("P-DL-Relational: scheduler isolation");
+            // Reborrow the tuple once so Rust can split its disjoint fields.
+            let __cq_rel_write = &mut *__cq_rel_write_guard;
+            #[allow(unused_mut, unused_variables)]
+            let mut __cq_rel_new: #provider = ::core::default::Default::default();
+            let #next = #admission;
             let fresh = !#next.is_empty();
             if fresh {
-                let mut __cq_rel_write_guard = #lock.try_write().expect("P-DL-Relational: scheduler isolation");
-                // Reborrow the tuple once so Rust can split its disjoint fields.
-                let __cq_rel_write = &mut *__cq_rel_write_guard;
                 #publication
             }
             ::cq_datalog_parallel_runtime::relational::Completion::Commit { fresh }

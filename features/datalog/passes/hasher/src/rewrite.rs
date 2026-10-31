@@ -34,8 +34,6 @@ enum Provider<'a> {
     Map(&'a Type, &'a Type),
     Layout(&'a Type, &'a Type),
     Set(&'a Type),
-    Sharded(&'a Type),
-    Runs(&'a Type),
     Other,
 }
 
@@ -61,10 +59,8 @@ fn provider(ty: &Type) -> syn::Result<Provider<'_>> {
     let map = path_is(path, &["std", "collections", "HashMap"]);
     let set = path_is(path, &["std", "collections", "HashSet"]);
     let alias = path_is(path, &["cq_storage", "HashSet"]);
-    let sharded = path_is(path, &["cq_datalog_parallel_runtime", "ShardedSeen"]);
-    let runs = path_is(path, &["cq_datalog_parallel_runtime", "RunSeen"]);
     let layout = path_is(path, &["cq_datalog_parallel_runtime", "ShardedLayout"]);
-    if !map && !set && !alias && !sharded && !layout && !runs {
+    if !map && !set && !alias && !layout {
         return Ok(Provider::Other);
     }
     let malformed = || {
@@ -112,10 +108,6 @@ fn provider(ty: &Type) -> syn::Result<Provider<'_>> {
         } else {
             Provider::Map(first, second)
         })
-    } else if sharded {
-        Ok(Provider::Sharded(first))
-    } else if runs {
-        Ok(Provider::Runs(first))
     } else {
         Ok(Provider::Set(first))
     }
@@ -142,20 +134,6 @@ fn select(ty: &mut Type, choice: Choice) -> syn::Result<()> {
                 ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
         ),
         (Provider::Set(row), Choice::Keyed) => syn::parse_quote!(::cq_storage::HashSet<#row>),
-        (Provider::Sharded(row), Choice::Fx) => syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::ShardedSeen<#row,
-                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
-        ),
-        (Provider::Sharded(row), Choice::Keyed) => syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::ShardedSeen<#row>
-        ),
-        (Provider::Runs(row), Choice::Fx) => syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::RunSeen<#row,
-                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
-        ),
-        (Provider::Runs(row), Choice::Keyed) => syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::RunSeen<#row>
-        ),
         (Provider::Other, _) => return Ok(()),
     };
     Ok(())
@@ -166,17 +144,6 @@ pub(crate) fn storage(source: &storage::Program, choice: Choice) -> syn::Result<
     let mut target = source.clone();
     for layout in target.layouts.iter_mut().chain(&mut target.delta_layouts) {
         select(&mut layout.provider, choice)?;
-    }
-    for (fields, declaration) in target
-        .providers
-        .iter_mut()
-        .zip(&source.incremental.strata.source.declarations)
-    {
-        if declaration.value.is_some() {
-            select(&mut fields.canonical_set, choice)?;
-        } else {
-            select(&mut fields.seen, choice)?;
-        }
     }
     check_storage(source, &target, choice)?;
     Ok(target)
@@ -238,30 +205,6 @@ fn check_provider(source: &Type, target: &Type, choice: Choice) -> syn::Result<(
                 )),
             ),
             (Provider::Set(row), Choice::Keyed) => (&["cq_storage", "HashSet"], (*row, None), None),
-            (Provider::Sharded(row), Choice::Fx) => (
-                &["cq_datalog_parallel_runtime", "ShardedSeen"],
-                (*row, None),
-                Some(syn::parse_quote!(
-                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-                )),
-            ),
-            (Provider::Sharded(row), Choice::Keyed) => (
-                &["cq_datalog_parallel_runtime", "ShardedSeen"],
-                (*row, None),
-                None,
-            ),
-            (Provider::Runs(row), Choice::Fx) => (
-                &["cq_datalog_parallel_runtime", "RunSeen"],
-                (*row, None),
-                Some(syn::parse_quote!(
-                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-                )),
-            ),
-            (Provider::Runs(row), Choice::Keyed) => (
-                &["cq_datalog_parallel_runtime", "RunSeen"],
-                (*row, None),
-                None,
-            ),
         };
     let Type::Path(path) = target else {
         return Err(syn::Error::new_spanned(
@@ -328,20 +271,6 @@ pub(crate) fn check_storage(
     ) {
         check_provider(&before.provider, &after.provider, choice)?;
         after.provider = before.provider.clone();
-    }
-    for ((before, after), declaration) in source
-        .providers
-        .iter()
-        .zip(&mut unchanged.providers)
-        .zip(&source.incremental.strata.source.declarations)
-    {
-        if declaration.value.is_some() {
-            check_provider(&before.canonical_set, &after.canonical_set, choice)?;
-            after.canonical_set = before.canonical_set.clone();
-        } else {
-            check_provider(&before.seen, &after.seen, choice)?;
-            after.seen = before.seen.clone();
-        }
     }
     ensure(
         source == &unchanged,

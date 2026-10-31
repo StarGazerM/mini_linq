@@ -712,9 +712,12 @@ GPU reduction/dedup overhead and CPU h01's dominant cost must be profiled
    building such an index is not this self-dedup operation.
    Dedup against full data remains a separate merge/search operation on
    sorted plain runs (§8). GPU Datalog admission already uses that scheme
-   (`experiments/gpu/datalog-runtime/src/runs.rs`). CPU Datalog's
-   DL-InsertNew hash `seen` admission is explicitly outside this CQ strategy
-   cutover and remains unchanged. Historical h01 SF1 t1: hash DISTINCT
+   (`experiments/gpu/datalog-runtime/src/runs.rs`). CPU Datalog admission
+   (DL-InsertNew) is outside this CQ strategy cutover: it anti-joins each
+   candidate with the relation's canonical layout, an ordinary all-column
+   key set (`HashSet<K, Fx>` by default; a sharded or sorted-run layout in
+   the parallel extension), and inserts it into the round's NEW version of
+   that layout; there is no separate `seen` set. Historical h01 SF1 t1: hash DISTINCT
    2542 ms (95% of the query; 36% of cycles in rehash hashing) vs DuckDB 819 ms.
    M6b (`experiments/storage-bench/results/cpu-h01-decomposition-2026-10-29.md`,
    exact vs DuckDB, t1 / t24):

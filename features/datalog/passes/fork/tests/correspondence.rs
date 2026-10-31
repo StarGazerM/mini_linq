@@ -41,7 +41,8 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     assert_eq!(stratum.keys.len(), 1);
     assert_eq!(stratum.keys[0].columns, [0]);
     assert_eq!(target.holes.len(), 3);
-    assert_eq!(context.layouts.len(), 2);
+    // Two read layouts plus identity canonical layouts for Edge, Blocked and Reach.
+    assert_eq!(context.layouts.len(), 5);
     for entry in &target.holes {
         let hole = &entry.cq;
         cq_lang_cq::contract::check(hole).unwrap();
@@ -141,7 +142,7 @@ fn checker_rejects_schedule_and_layout_mutations() {
     rejected(|t| t.context.observer = Some(syn::parse_quote!(observer)));
     rejected(|t| t.context.relations[2].delta_host = None);
     rejected(|t| t.context.relations[2].delta_host = Some(syn::parse_quote!(Recent)));
-    rejected(|t| t.context.relations[0].all = t.context.relations[1].all.clone());
+    rejected(|t| t.context.relations[0].next_canonical = t.context.relations[1].next.clone());
     rejected(|t| t.context.strata[0].members.clear());
     rejected(|t| t.context.strata[0].steps[0].head = 0);
     rejected(|t| t.context.strata[0].steps[0].variant = 0);
@@ -154,7 +155,7 @@ fn checker_rejects_schedule_and_layout_mutations() {
     rejected(|t| t.context.layouts[0].key = 2);
     rejected(|t| t.context.layouts[1].columns.swap(0, 1));
     rejected(|t| t.context.layouts[0].relation = usize::MAX);
-    rejected(|t| t.context.layouts[0].host = t.context.relations[0].all.clone());
+    rejected(|t| t.context.layouts[0].host = t.context.relations[0].next.clone());
     rejected(|t| t.context.layouts[0].name = syn::parse_quote!(Edge));
     rejected(|t| {
         let hole = t.context.strata[0].steps[0].hole;
@@ -529,7 +530,8 @@ fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
     let probe = &context.layouts[1];
     assert_eq!(probe.columns, [1, 0]);
     assert_eq!(probe.key, 1);
-    assert_eq!(context.layouts.len(), 6);
+    // Alloc and Assign add identity canonical layouts; VarPointsTo reuses its lookup.
+    assert_eq!(context.layouts.len(), 8);
     assert_eq!(context.delta_layouts.len(), 2);
     let delta_probe = &context.delta_layouts[0];
     assert_eq!(delta_probe.columns, [1, 0]);
@@ -655,7 +657,8 @@ fn delta_hosts_are_shared_only_by_exact_demand_and_keep_written_bodies() {
     let target = compile(&source).unwrap();
     let context = &target.context;
     assert_eq!(context.delta_layouts.len(), 4);
-    assert_eq!(context.layouts.len(), 1);
+    // E reuses its all-column lookup; R adds its identity canonical layout.
+    assert_eq!(context.layouts.len(), 3);
     let constant = &context.delta_layouts[0].name;
     let keyed = &context.delta_layouts[1].name;
     let zero = &context.delta_layouts[2].name;
@@ -824,8 +827,8 @@ fn fork_preserves_generators_and_generated_join_values() {
 #[test]
 fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
     let mut source = authored();
-    source.providers[2].all = syn::parse_quote!(custom::Rows<(i32, i32)>);
-    source.providers[2].all_init = syn::parse_quote!(custom::Rows::new());
+    source.providers[2].delta = syn::parse_quote!(custom::Rows<(i32, i32)>);
+    source.providers[2].next = syn::parse_quote!(custom::Rows<(i32, i32)>);
     source.layouts[0].provider = syn::parse_quote!(custom::Index);
     let target = compile(&source).unwrap();
     assert_eq!(target.context.relations[2].providers, source.providers[2]);
@@ -1026,26 +1029,42 @@ fn step_advice_remaps_delta_occurrences_and_uses_cq_checkers() {
     };
     let strata = cq_datalog_stratify::compile(&source).unwrap();
     let generic = RulePlan {
-        rule: syn::parse_quote!(Step), delta: None,
-        order: vec![syn::parse_quote!(R@0), syn::parse_quote!(R@1(y)),
-            syn::parse_quote!(R@1), syn::parse_quote!(E)],
+        rule: syn::parse_quote!(Step),
+        delta: None,
+        order: vec![
+            syn::parse_quote!(R@0),
+            syn::parse_quote!(R@1(y)),
+            syn::parse_quote!(R@1),
+            syn::parse_quote!(E),
+        ],
         smallest: Vec::new(),
     };
     let specific = RulePlan {
         delta: Some(syn::parse_quote!(R@1)),
-        order: vec![syn::parse_quote!(R@0), syn::parse_quote!(E(x)),
-            syn::parse_quote!(R@1), syn::parse_quote!(E)],
+        order: vec![
+            syn::parse_quote!(R@0),
+            syn::parse_quote!(E(x)),
+            syn::parse_quote!(R@1),
+            syn::parse_quote!(E),
+        ],
         ..generic.clone()
     };
     let incremental = cq_datalog_incremental::compile_with_advice(
-        &strata, DriverPolicy::DeltaFirst, &[generic, specific]).unwrap();
+        &strata,
+        DriverPolicy::DeltaFirst,
+        &[generic, specific],
+    )
+    .unwrap();
     assert_eq!(incremental.variants[1].steps[1].occurrence, 1);
     assert_eq!(incremental.variants[2].steps[1].occurrence, 2);
     let fork = compile(&schedule(&incremental).unwrap()).unwrap();
     let restored: Fork = syn::parse2(fork.to_token_stream()).unwrap();
     assert_eq!(restored, fork);
-    for hole in fork.holes.iter().filter(|hole|
-        !hole.pipeline.passes[hole.plan.unwrap()].arguments.is_empty()) {
+    for hole in fork.holes.iter().filter(|hole| {
+        !hole.pipeline.passes[hole.plan.unwrap()]
+            .arguments
+            .is_empty()
+    }) {
         use syn::parse::{Parse, Parser};
         let parser = |input: syn::parse::ParseStream<'_>| {
             let no_reduce: syn::Ident = input.parse()?;
@@ -1062,7 +1081,11 @@ fn step_advice_remaps_delta_occurrences_and_uses_cq_checkers() {
         // compile_explicit runs WF-VO and the selected CK-Le phases.
         cq_order::compile_explicit(&normal, &selectors).unwrap();
         let mut incomplete = selectors.clone();
-        incomplete.remove(if incomplete[1].occurrence == Some(1) { 2 } else { 3 });
+        incomplete.remove(if incomplete[1].occurrence == Some(1) {
+            2
+        } else {
+            3
+        });
         assert!(cq_order::compile_explicit(&normal, &incomplete).is_err());
         let mut invalid = selectors.clone();
         invalid[1].columns = Some(vec![syn::parse_quote!(not_a_column)]);
@@ -1089,22 +1112,38 @@ fn smallest_rule_sites_preserve_recorded_pipeline_ordinals() {
     let baseline = cq_datalog_incremental::compile(&strata).unwrap();
     let baseline = compile(&schedule(&baseline).unwrap()).unwrap();
     let advice = RulePlan {
-        rule: syn::parse_quote!(Join), delta: None,
-        order: vec![syn::parse_quote!(Seed), syn::parse_quote!(R(a,x)), syn::parse_quote!(S)],
+        rule: syn::parse_quote!(Join),
+        delta: None,
+        order: vec![
+            syn::parse_quote!(Seed),
+            syn::parse_quote!(R(a, x)),
+            syn::parse_quote!(S),
+        ],
         smallest: vec![vec![syn::parse_quote!(R), syn::parse_quote!(S)]],
     };
-    let incremental = cq_datalog_incremental::compile_with_advice(
-        &strata, DriverPolicy::WrittenOrder, &[advice]).unwrap();
+    let incremental =
+        cq_datalog_incremental::compile_with_advice(&strata, DriverPolicy::WrittenOrder, &[advice])
+            .unwrap();
     let fork = compile(&schedule(&incremental).unwrap()).unwrap();
     let (before, after) = (&baseline.holes[0], &fork.holes[0]);
     assert_eq!(before.lower, after.lower);
     assert_eq!(before.plan, after.plan);
     assert_eq!(before.pipeline.passes.len(), after.pipeline.passes.len());
     let wrapper = &after.pipeline.passes[after.lower + 1];
-    assert_eq!(wrapper.path.segments.last().unwrap().ident, "smallest_before");
+    assert_eq!(
+        wrapper.path.segments.last().unwrap().ident,
+        "smallest_before"
+    );
     let arguments = wrapper.arguments.to_string();
     assert!(arguments.contains("smallest"));
-    assert!(arguments.contains(&before.pipeline.passes[before.lower + 1].path.to_token_stream().to_string()));
+    assert!(
+        arguments.contains(
+            &before.pipeline.passes[before.lower + 1]
+                .path
+                .to_token_stream()
+                .to_string()
+        )
+    );
     let restored: Fork = syn::parse2(fork.to_token_stream()).unwrap();
     assert_eq!(restored, fork);
     let mut invalid = incremental.clone();

@@ -63,11 +63,19 @@ impl Parse for AdviceStep {
         let columns = if input.peek(syn::token::Paren) {
             let columns;
             syn::parenthesized!(columns in input);
-            Some(columns.parse_terminated(Ident::parse, Token![,])?.into_iter().collect())
+            Some(
+                columns
+                    .parse_terminated(Ident::parse, Token![,])?
+                    .into_iter()
+                    .collect(),
+            )
         } else {
             None
         };
-        Ok(Self { occurrence, columns })
+        Ok(Self {
+            occurrence,
+            columns,
+        })
     }
 }
 impl ToTokens for AdviceStep {
@@ -140,7 +148,10 @@ impl Parse for Program {
                 body.parse::<kw::steps>()?;
                 let steps;
                 syn::bracketed!(steps in body);
-                steps.parse_terminated(AdviceStep::parse, Token![,])?.into_iter().collect()
+                steps
+                    .parse_terminated(AdviceStep::parse, Token![,])?
+                    .into_iter()
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -149,7 +160,11 @@ impl Parse for Program {
                 body.parse::<kw::smallest>()?;
                 let site;
                 syn::parenthesized!(site in body);
-                smallest.push(site.parse_terminated(number, Token![,])?.into_iter().collect());
+                smallest.push(
+                    site.parse_terminated(number, Token![,])?
+                        .into_iter()
+                        .collect(),
+                );
             }
             let query;
             syn::braced!(query in body);
@@ -252,16 +267,32 @@ fn check_variants(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         let order = variant_order(&p.rules[v.rule], &v.order)?;
         // Formal rule DL-StepAdvice: advice is occurrence metadata, never a
         // replacement for the checked semi-naive cover or its erased query.
-        ensure(v.authored || (v.steps.is_empty() && v.smallest.is_empty()), p,
-            "step advice requires an authored variant")?;
-        for occurrence in v.steps.iter().map(|step| step.occurrence)
-            .chain(v.smallest.iter().flatten().copied()) {
-            ensure(matches!(p.rules[v.rule].body.get(occurrence), Some(BodyItem::Positive { .. })),
-                p, "step advice names no source positive occurrence")?;
+        ensure(
+            v.authored || (v.steps.is_empty() && v.smallest.is_empty()),
+            p,
+            "step advice requires an authored variant",
+        )?;
+        for occurrence in v
+            .steps
+            .iter()
+            .map(|step| step.occurrence)
+            .chain(v.smallest.iter().flatten().copied())
+        {
+            ensure(
+                matches!(
+                    p.rules[v.rule].body.get(occurrence),
+                    Some(BodyItem::Positive { .. })
+                ),
+                p,
+                "step advice names no source positive occurrence",
+            )?;
         }
         for site in &v.smallest {
-            ensure(site.len() >= 2 && site.iter().collect::<BTreeSet<_>>().len() == site.len(),
-                p, "smallest requires distinct positive occurrences")?;
+            ensure(
+                site.len() >= 2 && site.iter().collect::<BTreeSet<_>>().len() == site.len(),
+                p,
+                "smallest requires distinct positive occurrences",
+            )?;
         }
         ensure(
             v.query.body.len() == order.len(),

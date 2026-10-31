@@ -55,7 +55,7 @@ oracle_shared::oracle_programs!(
     ascent::ascent,
     oracle_shared::oracle_input,
     pipeline {
-        storage_rewrites = [cq_datalog_parallel::shard_storage(layouts(runs), seen(runs))];
+        storage_rewrites = [cq_datalog_parallel::shard_storage(layouts(runs))];
         round = [cq_datalog_parallel::partition(threshold = 0, grain = 2)];
         print = cq_datalog_parallel::print_rounds;
     }

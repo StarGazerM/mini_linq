@@ -17,26 +17,11 @@ pub fn emit(program: &Program) -> syn::Result<TokenStream> {
     let mut fresh = Fresh::new(program);
     let mut bindings = Vec::new();
     for relation in &context.relations {
-        let all = &relation.all;
-        let types = relation.declaration.columns.iter().map(|c| &c.ty);
-        let tuple = quote!((#(#types,)*));
-        if let Some(value) = &relation.declaration.value {
-            let expression = &value.expression;
-            let row = fresh.id("round_input");
-            bindings.push(quote!(
-                let #all = ::std::iter::IntoIterator::into_iter(#expression)
-                    .map(|#row| ::std::borrow::Borrow::<#tuple>::borrow(&#row).clone())
-                    .collect::<::std::collections::HashSet<#tuple>>();
-            ));
-        } else {
-            let seen = &relation.seen;
-            bindings.push(quote!(
-                let mut #all = ::std::collections::HashSet::<#tuple>::new();
-                let mut #seen = ::std::collections::HashSet::<#tuple>::new();
-            ));
-        }
         if let Some(delta) = &relation.delta_host {
-            bindings.push(quote!(let mut #delta = ::std::collections::HashSet::<#tuple>::new();));
+            let types = relation.declaration.columns.iter().map(|c| &c.ty);
+            bindings.push(
+                quote!(let mut #delta = ::std::collections::HashSet::<(#(#types,)*)>::new();),
+            );
         }
     }
     for layout in context.layouts.iter().chain(&context.delta_layouts) {
@@ -47,8 +32,28 @@ pub fn emit(program: &Program) -> syn::Result<TokenStream> {
             .iter()
             .map(|&i| &relation.declaration.columns[i].ty);
         bindings.push(quote!(let mut #host = ::std::collections::HashSet::<(#(#types,)*)>::new();));
-        if relation.declaration.value.is_some() {
-            bindings.push(extend_layout(layout, &relation.all, &mut fresh));
+    }
+    // An EDB's input set extends every full layout of that relation.
+    for (index, relation) in context.relations.iter().enumerate() {
+        let Some(value) = &relation.declaration.value else {
+            continue;
+        };
+        let types = relation.declaration.columns.iter().map(|c| &c.ty);
+        let tuple = quote!((#(#types,)*));
+        let expression = &value.expression;
+        let row = fresh.id("round_input");
+        let input = fresh.id("round_input_rows");
+        bindings.push(quote!(
+            let #input = ::std::iter::IntoIterator::into_iter(#expression)
+                .map(|#row| ::std::borrow::Borrow::<#tuple>::borrow(&#row).clone())
+                .collect::<::std::collections::HashSet<#tuple>>();
+        ));
+        for layout in context
+            .layouts
+            .iter()
+            .filter(|layout| layout.relation == index)
+        {
+            bindings.push(extend_layout(layout, &input, &mut fresh));
         }
     }
     let mut components = Vec::new();
@@ -91,11 +96,26 @@ pub fn emit(program: &Program) -> syn::Result<TokenStream> {
         .outputs
         .iter()
         .map(|output| {
-            let all = &context.relations[output.relation].all;
+            let relation = &context.relations[output.relation];
+            let canonical = &context.layouts[relation.providers.canonical];
+            let host = &canonical.host;
+            let row = fresh.id("round_output_row");
+            let columns = (0..relation.declaration.arity()).map(|column| {
+                let position = canonical
+                    .columns
+                    .iter()
+                    .position(|&c| c == column)
+                    .expect("checked canonical permutation");
+                let position = syn::Index::from(position);
+                quote!(#row.#position)
+            });
             match output.conversion.to_string().as_str() {
-                // The reference owns its canonical EDB copy already. Both recorded
-                // conversions therefore return that owned set without another copy.
-                "borrowed_cloned_into_iter" | "owned_into_iter" => quote!(#all),
+                // The reference owns its canonical layout set. Both recorded
+                // conversions return its rows in declaration order.
+                "borrowed_cloned_into_iter" | "owned_into_iter" => quote!(#host
+                    .into_iter()
+                    .map(|#row| (#(#columns,)*))
+                    .collect::<::std::collections::HashSet<_>>()),
                 _ => unreachable!("checked output conversion"),
             }
         })
@@ -182,7 +202,15 @@ fn schedule(
             let relation = &context.relations[index];
             let next = &relation.next;
             let types = relation.declaration.columns.iter().map(|column| &column.ty);
-            quote!(let mut #next = ::std::collections::HashSet::<(#(#types,)*)>::new();)
+            let next_canonical = &relation.next_canonical;
+            let canonical = context.layouts[relation.providers.canonical]
+                .columns
+                .iter()
+                .map(|&column| &relation.declaration.columns[column].ty);
+            quote!(
+                let mut #next = ::std::collections::HashSet::<(#(#types,)*)>::new();
+                let mut #next_canonical = ::std::collections::HashSet::<(#(#canonical,)*)>::new();
+            )
         })
         .collect::<Vec<_>>();
     let mut evaluate = Vec::new();
@@ -214,18 +242,25 @@ fn schedule(
         }
         evaluate.push(quote!(let #rows = { #(#scan_bindings)* #query };));
         let relation = &context.relations[rule.head];
-        let seen = &relation.seen;
         let next = &relation.next;
-        let insertion = &rule.insertion;
+        let next_canonical = &relation.next_canonical;
+        let canonical = &context.layouts[relation.providers.canonical];
+        let committed = &canonical.host;
         let row = fresh.id("round_candidate");
+        let key = canonical.columns.iter().map(|&index| {
+            let index = syn::Index::from(index);
+            quote!(#row.#index.clone())
+        });
+        // Anti-join with the committed canonical layout, then first insertion
+        // into the round's new version of that layout.
         admit.push(quote!(for #row in #rows {
-            if #seen.#insertion(#row.clone()) { #next.insert(#row); }
+            let key = (#(#key,)*);
+            if !#committed.contains(&key) && #next_canonical.insert(key) { #next.insert(#row); }
         }));
     }
     let mut publish = Vec::new();
     for transaction in &stratum.publication {
         let relation = &context.relations[transaction.relation];
-        let all = &relation.all;
         let next = &relation.next;
         let delta = relation
             .delta_host
@@ -238,7 +273,6 @@ fn schedule(
                         publish.push(extend_layout(&context.layouts[index], next, fresh));
                     }
                 }
-                "all_extend" => publish.push(quote!(#all.extend(#next.iter().cloned());)),
                 "delta_swap" => publish.push(quote!(#delta = #next;)),
                 "delta_rebuild" => {
                     for &index in &operation.layouts {

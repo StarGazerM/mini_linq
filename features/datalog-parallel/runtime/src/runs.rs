@@ -4,10 +4,9 @@
 //! Lookup borrows a stored key and visits each run's contiguous matching range;
 //! its cursor allocates nothing and outlives the temporary query key.
 use cq_storage::rows::{Columns, Concat, Rows};
-use cq_storage::{Candidates, ExactMembership, HashState, IndexRead, PointLookup, PointRows};
+use cq_storage::{Candidates, ExactMembership, IndexRead, PointLookup, PointRows};
 use rayon::prelude::*;
 use std::borrow::Borrow;
-use std::collections::BTreeSet;
 
 const RATIO: usize = 4;
 
@@ -273,93 +272,6 @@ where
     }
 }
 
-/// Exact full-tuple admission. The hasher belongs only to task-local deduplication.
-/// Seeds stage in an ordered set, so insertion stays exact without one run per row.
-pub struct RunSeen<T: Ord + Clone, S = HashState> {
-    runs: Vec<Vec<T>>,
-    seeds: BTreeSet<T>,
-    hasher: S,
-}
-
-impl<T: Ord + Clone, S: Default> Default for RunSeen<T, S> {
-    fn default() -> Self {
-        Self::with_hasher(S::default())
-    }
-}
-
-impl<T: Ord + Clone, S: Default> RunSeen<T, S> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl<T: Ord + Clone, S> RunSeen<T, S> {
-    pub fn with_hasher(hasher: S) -> Self {
-        Self {
-            runs: Vec::new(),
-            seeds: BTreeSet::new(),
-            hasher,
-        }
-    }
-    pub fn hasher(&self) -> &S {
-        &self.hasher
-    }
-
-    pub fn insert(&mut self, row: T) -> bool {
-        if self.runs.iter().any(|run| run.binary_search(&row).is_ok()) {
-            return false;
-        }
-        self.seeds.insert(row)
-    }
-
-    fn append(&mut self, rows: Vec<T>) {
-        if rows.is_empty() {
-            return;
-        }
-        self.runs.push(rows);
-        while self.runs.len() >= 2 {
-            let last = self.runs.len() - 1;
-            if self.runs[last - 1].len() > self.runs[last].len().saturating_mul(RATIO) {
-                break;
-            }
-            let right = self.runs.pop().unwrap();
-            let left = self.runs.pop().unwrap();
-            let mut merged = Vec::with_capacity(left.len() + right.len());
-            merged.extend(merge(left.into_iter(), right.into_iter()));
-            self.runs.push(merged);
-        }
-    }
-}
-
-impl<T: Ord + Clone + Send + Sync, S> RunSeen<T, S> {
-    /// Formal rule DL-RunAdmission: sort and deduplicate candidates, subtract accepted runs, then append exactly the fresh sorted tuples.
-    pub fn admit(&mut self, candidates: Vec<Vec<T>>, threshold: usize) -> Vec<T> {
-        if !self.seeds.is_empty() {
-            let seeds = std::mem::take(&mut self.seeds).into_iter().collect();
-            self.append(seeds);
-        }
-        let count = candidates.iter().map(Vec::len).sum();
-        let mut rows = Vec::with_capacity(count);
-        for chunk in candidates {
-            rows.extend(chunk);
-        }
-        rows.par_sort_unstable();
-        rows.dedup();
-        let runs = &self.runs;
-        let fresh: Vec<T> = if rows.len() < threshold {
-            rows.into_iter()
-                .filter(|row| !runs.iter().any(|run| run.binary_search(row).is_ok()))
-                .collect()
-        } else {
-            rows.into_par_iter()
-                .filter(|row| !runs.iter().any(|run| run.binary_search(row).is_ok()))
-                .collect()
-        };
-        self.append(fresh.clone());
-        fresh
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,61 +371,5 @@ mod tests {
             assert_runs(&layout);
         }
         assert_eq!(layout.len(), 20_000);
-    }
-
-    #[test]
-    fn admission_is_sorted_set_difference_including_seeds() {
-        for threads in [1, 4, 8] {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .unwrap()
-                .install(|| {
-                    for threshold in [0, usize::MAX] {
-                        let mut seen = RunSeen::<u32>::default();
-                        let mut expected = BTreeSet::new();
-                        for row in (0..1500).map(|i| i % 997) {
-                            assert_eq!(seen.insert(row), expected.insert(row));
-                        }
-                        assert!(seen.runs.is_empty());
-                        for batch in 0..70 {
-                            let chunks: Vec<Vec<_>> = (0..5)
-                                .map(|chunk| {
-                                    (0..120)
-                                        .map(|i| (batch * 103 + chunk * 17 + i * 3) % 7001)
-                                        .collect()
-                                })
-                                .collect();
-                            let candidates: BTreeSet<_> =
-                                chunks.iter().flatten().copied().collect();
-                            let wanted: Vec<_> =
-                                candidates.difference(&expected).copied().collect();
-                            let fresh = seen.admit(chunks, threshold);
-                            assert_eq!(fresh, wanted);
-                            expected.extend(fresh);
-                            assert!(
-                                seen.runs
-                                    .windows(2)
-                                    .all(|pair| pair[0].len() > RATIO * pair[1].len())
-                            );
-                            assert!(seen.runs.iter().all(|run| run.is_sorted()));
-                            let accepted: BTreeSet<_> =
-                                seen.runs.iter().flatten().copied().collect();
-                            assert_eq!(accepted, expected);
-                            assert_eq!(
-                                seen.runs.iter().map(Vec::len).sum::<usize>(),
-                                expected.len()
-                            );
-                            assert_eq!(seen.insert(batch), expected.insert(batch));
-                            assert_eq!(
-                                seen.insert(10_000 + batch),
-                                expected.insert(10_000 + batch)
-                            );
-                        }
-                        assert!(seen.admit(vec![], threshold).is_empty());
-                        assert!(seen.seeds.is_empty());
-                    }
-                });
-        }
     }
 }

@@ -44,12 +44,9 @@ macro_rules! configurations {
         $check!(whole; layouts(runs));
         $check!(by_head; layouts(runs));
         $check!(relational; layouts(runs));
-        $check!(whole; seen(runs));
-        $check!(by_head; seen(runs));
-        $check!(relational; seen(runs));
-        $check!(whole; layouts(runs), seen(runs));
-        $check!(by_head; layouts(runs), seen(runs));
-        $check!(relational; layouts(runs), seen(runs));
+        $check!(whole; layouts(sharded));
+        $check!(by_head; layouts(sharded));
+        $check!(relational; layouts(sharded));
     };
 }
 

@@ -155,16 +155,6 @@ fn hole_inputs<'a>(
     let names: std::collections::BTreeSet<_> = names.map(symbol_name).collect();
     let mut inputs = Vec::new();
     for relation in &context.relations {
-        if names.contains(&symbol_name(&relation.declaration.name)) {
-            let mut declaration = relation.declaration.clone();
-            let host = &relation.all;
-            declaration.value = Some(if declaration.value.is_some() {
-                syn::parse_quote!(= (#host))
-            } else {
-                syn::parse_quote!(= (&#host))
-            });
-            inputs.push(declaration);
-        }
         if let Some(delta) = &relation.delta {
             if names.contains(&symbol_name(delta)) {
                 let mut declaration = relation.declaration.clone();
@@ -249,8 +239,7 @@ fn construct(
             .map(|(declaration, providers)| Relation {
                 declaration: declaration.clone(),
                 providers: providers.clone(),
-                all: fresh.id("all"),
-                seen: fresh.id("seen"),
+                next_canonical: fresh.id("next_canonical"),
                 next: fresh.id("next"),
                 delta: analysis
                     .deltas
@@ -302,9 +291,8 @@ fn construct(
                 let relation = analysis.positions[&symbol_name(id)];
                 Output {
                     relation,
-                    conversion: if source.incremental.strata.source.declarations[relation]
-                        .value
-                        .is_some()
+                    conversion: if source.layouts[source.providers[relation].canonical].protocol
+                        == storage::LayoutProtocol::Bulk
                     {
                         syn::parse_quote!(borrowed_cloned_into_iter)
                     } else {
@@ -350,17 +338,11 @@ fn construct(
                         .filter(|(_, layout)| layout.relation == relation)
                         .map(|(index, _)| index)
                         .collect();
-                    let mut operations = Vec::new();
-                    if !full.is_empty() {
-                        operations.push(PublicationOp {
-                            kind: syn::parse_quote!(full_layouts),
-                            layouts: full,
-                        });
-                    }
-                    operations.push(PublicationOp {
-                        kind: syn::parse_quote!(all_extend),
-                        layouts: Vec::new(),
-                    });
+                    // The canonical layout is a full layout, so this is never empty.
+                    let mut operations = vec![PublicationOp {
+                        kind: syn::parse_quote!(full_layouts),
+                        layouts: full,
+                    }];
                     operations.push(PublicationOp {
                         kind: syn::parse_quote!(delta_swap),
                         layouts: Vec::new(),
@@ -430,7 +412,9 @@ fn construct(
                         hole: holes.len(),
                     };
                     let name = fresh.id("key_hole");
-                    let source_name = &source.incremental.strata.source.declarations[relation].name;
+                    // Completed relations are scanned through their canonical layout.
+                    let canonical = &context.layouts[source.providers[relation].canonical];
+                    let source_name = &canonical.name;
                     let variables: Vec<_> = source.incremental.strata.source.declarations[relation]
                         .columns
                         .iter()
@@ -492,6 +476,7 @@ fn construct(
                         let repeated = &variables[repeated];
                         selections.push(quote!(where #first == #repeated));
                     }
+                    let arguments = canonical.columns.iter().map(|&column| &arguments[column]);
                     let declarations = hole_inputs(&context, &[], std::iter::once(source_name));
                     holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#arguments),*) #(, #selections)*;))?);
                     authored_orders.push(None);
@@ -528,39 +513,69 @@ fn construct(
                 let normal = round::cq::normal::normalize(&holes[hole])?;
                 // Formal rule DL-StepAdvice: retain occurrence identity through
                 // permutation, delta/layout/scan renaming, and CQ normalization.
-                let source_atoms: Vec<_> = variant.query.body.iter().enumerate()
-                    .filter_map(|(position, item)| matches!(item, BodyItem::Positive { .. })
-                        .then_some(variant.order[position])).collect();
-                let normal_atoms: Vec<_> = normal.query.body.iter().enumerate()
+                let source_atoms: Vec<_> = variant
+                    .query
+                    .body
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(position, item)| {
+                        matches!(item, BodyItem::Positive { .. }).then_some(variant.order[position])
+                    })
+                    .collect();
+                let normal_atoms: Vec<_> = normal
+                    .query
+                    .body
+                    .iter()
+                    .enumerate()
                     .filter_map(|(index, item)| match item {
                         BodyItem::Positive { atom } => Some((index, &atom.relation)),
                         _ => None,
-                    }).collect();
-                ensure(source_atoms.len() == normal_atoms.len(), &normal,
-                    "Datalog step advice requires normalization to preserve positive occurrences")?;
-                let mapped: std::collections::BTreeMap<_, _> =
-                    source_atoms.into_iter().zip(normal_atoms.iter().copied()).collect();
-                let selector = |occurrence: usize, columns: &Option<Vec<Ident>>| -> syn::Result<TokenStream> {
-                    let &(index, relation) = mapped.get(&occurrence).ok_or_else(||
-                        syn::Error::new_spanned(&normal, "advice names no positive occurrence"))?;
-                    let index = syn::Index::from(index);
-                    let columns = columns.as_ref().map(|columns| quote!((#(#columns),*)));
-                    Ok(quote!(#relation @ #index #columns))
-                };
-                let atoms = if variant.steps.is_empty() {
-                    normal_atoms.iter().map(|&(index, relation)| {
+                    })
+                    .collect();
+                ensure(
+                    source_atoms.len() == normal_atoms.len(),
+                    &normal,
+                    "Datalog step advice requires normalization to preserve positive occurrences",
+                )?;
+                let mapped: std::collections::BTreeMap<_, _> = source_atoms
+                    .into_iter()
+                    .zip(normal_atoms.iter().copied())
+                    .collect();
+                let selector =
+                    |occurrence: usize, columns: &Option<Vec<Ident>>| -> syn::Result<TokenStream> {
+                        let &(index, relation) = mapped.get(&occurrence).ok_or_else(|| {
+                            syn::Error::new_spanned(&normal, "advice names no positive occurrence")
+                        })?;
                         let index = syn::Index::from(index);
-                        quote!(#relation @ #index)
-                    }).collect::<Vec<_>>()
+                        let columns = columns.as_ref().map(|columns| quote!((#(#columns),*)));
+                        Ok(quote!(#relation @ #index #columns))
+                    };
+                let atoms = if variant.steps.is_empty() {
+                    normal_atoms
+                        .iter()
+                        .map(|&(index, relation)| {
+                            let index = syn::Index::from(index);
+                            quote!(#relation @ #index)
+                        })
+                        .collect::<Vec<_>>()
                 } else {
-                    variant.steps.iter().map(|step| selector(step.occurrence, &step.columns))
+                    variant
+                        .steps
+                        .iter()
+                        .map(|step| selector(step.occurrence, &step.columns))
                         .collect::<syn::Result<Vec<_>>>()?
                 };
-                let sites = variant.smallest.iter().map(|site| {
-                    let atoms = site.iter().map(|&occurrence| selector(occurrence, &None))
-                        .collect::<syn::Result<Vec<_>>>()?;
-                    Ok(quote!(smallest(#(#atoms),*)))
-                }).collect::<syn::Result<Vec<_>>>()?;
+                let sites = variant
+                    .smallest
+                    .iter()
+                    .map(|site| {
+                        let atoms = site
+                            .iter()
+                            .map(|&occurrence| selector(occurrence, &None))
+                            .collect::<syn::Result<Vec<_>>>()?;
+                        Ok(quote!(smallest(#(#atoms),*)))
+                    })
+                    .collect::<syn::Result<Vec<_>>>()?;
                 let no_reduce = (!variant.steps.is_empty() || !variant.smallest.is_empty())
                     .then(|| quote!(no_reduce,));
                 Some((quote!(#no_reduce order(#(#atoms),*)), quote!(#(#sites),*)))
@@ -573,7 +588,6 @@ fn construct(
                 head,
                 hole,
                 scan,
-                insertion: syn::parse_quote!(insert),
             };
             if variant.delta.is_some() {
                 stratum.steps.push(rule);
@@ -586,7 +600,6 @@ fn construct(
     let mut certified_hosts = std::collections::BTreeSet::new();
     for certificate in &source.certificates {
         let name = match symbol_name(&certificate.kind).as_str() {
-            "all" => Some(&context.relations[certificate.index].declaration.name),
             "delta" => context.relations[certificate.index].delta.as_ref(),
             "layout" => Some(&context.layouts[certificate.index].name),
             "delta_layout" => Some(&context.delta_layouts[certificate.index].name),

@@ -180,7 +180,6 @@ fn policy_and_correspondence_mutations_are_rejected() {
     let target = compile(&source).unwrap();
     let mutations: &[fn(&mut round::Program)] = &[
         |p| p.context.strata[0].phases.reverse(),
-        |p| p.context.strata[0].seeds[0].insertion = syn::parse_quote!(bag),
         |p| p.context.strata[0].termination.clear(),
         |p| p.context.strata[0].observer = syn::parse_quote!(after_step),
         |p| p.context.outputs[0].conversion = syn::parse_quote!(borrowed),
@@ -307,7 +306,10 @@ fn reusable_printer_splices_and_delegates_only_phase_evaluation() {
         .unwrap();
     assert_eq!(phases.len(), 2);
     let text = printed.to_token_stream().to_string();
-    assert!(text.contains("Canonical"));
+    assert!(!text.contains("Canonical"));
+    // Admission anti-joins the committed canonical set, then inserts into NEW.
+    assert!(text.contains(". contains (") && text.contains(". insert ("));
+    assert!(!text.contains("contains_key"));
     assert!(text.contains("while"));
     assert!(text.contains("into_iter"));
     assert!(cq_datalog_print::render_with(&program, &[], |_, _, _, _| unreachable!()).is_err());
@@ -530,10 +532,18 @@ fn publication_permutations_and_loop_forms_are_checked_records() {
     stratum.termination.reverse();
     stratum.termination_test = syn::parse_quote!(any_delta);
     stratum.loop_form = syn::parse_quote!(loop_until_empty);
-    // All extension may precede full-layout updates: both finish before swap.
+    // Full-layout maintenance may be split and permuted: all of it precedes swap.
     for publication in &mut stratum.publication {
-        if publication.operations[0].kind == "full_layouts" {
-            publication.operations.swap(0, 1);
+        let full = publication.operations.remove(0);
+        assert_eq!(full.kind, "full_layouts");
+        for layout in full.layouts {
+            publication.operations.insert(
+                0,
+                round::PublicationOp {
+                    kind: syn::parse_quote!(full_layouts),
+                    layouts: vec![layout],
+                },
+            );
         }
         for operation in &mut publication.operations {
             operation.layouts.reverse();
@@ -567,10 +577,12 @@ fn publication_obligations_reject_incomplete_or_stale_rounds() {
         |p| p.context.strata[0].termination[0] = usize::MAX,
         |p| p.context.strata[0].termination_test = syn::parse_quote!(first_delta),
         |p| {
-            for member in &mut p.context.strata[0].publication {
-                member
-                    .operations
-                    .retain(|operation| operation.kind != "all_extend");
+            let relation = p.context.strata[0].publication[0].relation;
+            let canonical = p.context.relations[relation].providers.canonical;
+            for operation in &mut p.context.strata[0].publication[0].operations {
+                if operation.kind == "full_layouts" {
+                    operation.layouts.retain(|&layout| layout != canonical);
+                }
             }
         },
         |p| {
@@ -625,12 +637,13 @@ fn publication_obligations_reject_incomplete_or_stale_rounds() {
                 .publication
                 .iter_mut()
                 .flat_map(|member| &mut member.operations)
-                .find(|operation| operation.kind == "all_extend")
+                .find(|operation| operation.kind == "delta_swap")
                 .unwrap();
             operation.layouts.push(0);
         },
-        |p| p.context.outputs[2].conversion = syn::parse_quote!(owned_into_iter),
-        |p| p.context.relations[1].providers.all = syn::parse_quote!(UnrecordedProvider),
+        |p| p.context.outputs[2].conversion = syn::parse_quote!(borrowed_cloned_into_iter),
+        |p| p.context.relations[1].providers.next = syn::parse_quote!(UnrecordedProvider),
+        |p| p.context.relations[1].providers.canonical = usize::MAX,
         |p| p.context.layouts[0].provider = syn::parse_quote!(UnrecordedProvider),
         |p| p.context.layouts[0].maintenance = syn::parse_quote!(never),
         |p| p.context.delta_layouts[0].provider = syn::parse_quote!(UnrecordedProvider),
@@ -718,14 +731,13 @@ fn execution_records_have_authored_lossless_grammar() {
         relation { 2 }
         operations { [
             { kind { full_layouts } layouts { [{ 3 } { 1 }] } }
-            { kind { all_extend } layouts { [] } }
             { kind { delta_swap } layouts { [] } }
             { kind { delta_rebuild } layouts { [{ 0 }] } }
         ] }
     };
     assert_eq!(publication.relation, 2);
     assert_eq!(publication.operations[0].layouts, [3, 1]);
-    assert_eq!(publication.operations[2].kind, "delta_swap");
+    assert_eq!(publication.operations[1].kind, "delta_swap");
     assert_eq!(
         syn::parse2::<round::Publication>(publication.to_token_stream()).unwrap(),
         publication

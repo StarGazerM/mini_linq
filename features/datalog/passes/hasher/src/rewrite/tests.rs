@@ -25,40 +25,20 @@ fn selects_both_directions_and_restores_fx_base_exactly() {
     let keyed = storage(&source, Choice::Keyed).unwrap();
     assert_ne!(keyed, source);
     assert_eq!(storage(&keyed, Choice::Keyed).unwrap(), keyed);
+    let canonical = &keyed.layouts[keyed.providers[2].canonical];
+    // Full-key layouts are key sets; the keyed choice is the cq_storage alias.
     assert_eq!(
-        keyed.providers[0].canonical_set,
-        syn::parse_quote!(::cq_storage::HashSet<R>)
-    );
-    assert_eq!(
-        keyed.providers[2].seen,
+        canonical.provider,
         syn::parse_quote!(::cq_storage::HashSet<(i32, i32,)>)
     );
+    assert_eq!(keyed.providers, source.providers);
     for layout in keyed.layouts.iter().chain(&keyed.delta_layouts) {
-        assert!(
-            layout
-                .provider
-                .to_token_stream()
-                .to_string()
-                .contains("HashState")
-        );
+        let text = layout.provider.to_token_stream().to_string();
+        assert!(text.contains("HashState") || text.contains("cq_storage :: HashSet"));
     }
     check_storage(&source, &keyed, Choice::Keyed).unwrap();
     let selected = storage(&keyed, Choice::Fx).unwrap();
-    let state: Type =
-        syn::parse_quote!(::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>);
-    assert_eq!(
-        selected.providers[0].canonical_set,
-        syn::parse_quote!(::std::collections::HashSet<R, #state>)
-    );
-    assert_eq!(selected.providers[0].seen, source.providers[0].seen);
-    assert_eq!(
-        selected.providers[2].seen,
-        syn::parse_quote!(::std::collections::HashSet<(i32, i32,), #state>)
-    );
-    assert_eq!(
-        selected.providers[2].canonical_set,
-        source.providers[2].canonical_set
-    );
+    assert_eq!(selected.providers, source.providers);
     for layout in selected.layouts.iter().chain(&selected.delta_layouts) {
         assert!(
             layout
@@ -83,48 +63,47 @@ fn preserves_ordered_custom_and_nested_providers() {
         syn::parse_quote!(::std::collections::BTreeMap<(i32, i32), Vec<()>>);
     source.delta_layouts[0].provider =
         syn::parse_quote!(Custom<::std::collections::HashMap<i32, i32>>);
-    source.providers[0].canonical_set = syn::parse_quote!(::std::collections::BTreeSet<R>);
-    source.providers[2].seen = syn::parse_quote!(MySeen<(i32, i32)>);
     let selected = storage(&source, Choice::Fx).unwrap();
     assert_eq!(selected.layouts[0], source.layouts[0]);
     assert_eq!(selected.delta_layouts[0], source.delta_layouts[0]);
     assert_eq!(selected.providers[0], source.providers[0]);
     assert_eq!(selected.providers[2], source.providers[2]);
     let mut mutation = selected.clone();
-    mutation.providers[2].seen = syn::parse_quote!(::std::collections::BTreeSet<(i32, i32)>);
+    mutation.layouts[1].provider =
+        syn::parse_quote!(::std::collections::BTreeMap<(i32,), Vec<(i32,)>>);
     assert!(check_storage(&source, &mutation, Choice::Fx).is_err());
 }
 
 #[test]
 fn accepts_explicit_std_hashers_and_post_sharding_order() {
     let mut source = fixture();
-    source.providers[0].canonical_set = syn::parse_quote!(std::collections::HashSet<R>);
-    source.providers[2].seen =
-        syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,)>);
-    source.providers[3].seen =
-        syn::parse_quote!(cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,), CustomState>);
+    let reach = source.providers[2].canonical;
+    let allowed = source.providers[3].canonical;
+    source.layouts[reach].provider =
+        syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), ()>);
+    source.layouts[allowed].provider = syn::parse_quote!(
+        cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), (), CustomState>
+    );
     source.layouts[0].provider =
         syn::parse_quote!(std::collections::HashMap<(i32, i32,), Vec<()>, CustomState>);
     let selected = storage(&source, Choice::Fx).unwrap();
     let state: Type =
         syn::parse_quote!(::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>);
-    for fields in &selected.providers[2..] {
+    for canonical in [reach, allowed] {
         assert_eq!(
-            fields.seen,
-            syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,), #state>)
+            selected.layouts[canonical].provider,
+            syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), (), #state>)
         );
     }
     let restored = storage(&selected, Choice::Keyed).unwrap();
-    for fields in &restored.providers[2..] {
+    for canonical in [reach, allowed] {
         assert_eq!(
-            fields.seen,
-            syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,)>)
+            restored.layouts[canonical].provider,
+            syn::parse_quote!(
+                ::cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), (), ::cq_storage::HashState>
+            )
         );
     }
-    assert_eq!(
-        restored.providers[0].canonical_set,
-        syn::parse_quote!(::cq_storage::HashSet<R>)
-    );
     assert_eq!(
         restored.layouts[0].provider,
         syn::parse_quote!(::std::collections::HashMap<(i32, i32,), Vec<()>, ::cq_storage::HashState>)
@@ -188,7 +167,7 @@ fn sharded_layout_selects_hashers_without_changing_key_or_payload() {
 }
 
 #[test]
-fn keyed_storage_combines_sharded_layouts_and_seen_providers() {
+fn keyed_storage_selects_sharded_canonical_and_read_layouts() {
     let mut source = fixture();
     for layouts in [&mut source.layouts, &mut source.delta_layouts] {
         let mut sharded = 0;
@@ -196,33 +175,36 @@ fn keyed_storage_combines_sharded_layouts_and_seen_providers() {
             if layout.relation != "Reach" || layout.key == 0 {
                 continue;
             }
-            let Provider::Map(key, value) = provider(&layout.provider).unwrap() else {
-                panic!("expected grouped map fixture");
-            };
-            let Type::Path(value) = value else {
-                panic!("expected vector payload");
-            };
-            let PathArguments::AngleBracketed(arguments) =
-                &value.path.segments.last().unwrap().arguments
-            else {
-                panic!("expected vector payload argument");
-            };
-            let GenericArgument::Type(payload) = &arguments.args[0] else {
-                panic!("expected payload type");
+            let (key, payload): (&Type, Type) = match provider(&layout.provider).unwrap() {
+                Provider::Set(key) => (key, syn::parse_quote!(())),
+                Provider::Map(key, value) => {
+                    let Type::Path(value) = value else {
+                        panic!("expected vector payload");
+                    };
+                    let PathArguments::AngleBracketed(arguments) =
+                        &value.path.segments.last().unwrap().arguments
+                    else {
+                        panic!("expected vector payload argument");
+                    };
+                    let GenericArgument::Type(payload) = &arguments.args[0] else {
+                        panic!("expected payload type");
+                    };
+                    (key, payload.clone())
+                }
+                _ => panic!("expected grouped map or set fixture"),
             };
             layout.provider = syn::parse_quote!(
                 ::cq_datalog_parallel_runtime::ShardedLayout<#key, #payload>
             );
+            layout.protocol = storage::LayoutProtocol::Bulk;
             sharded += 1;
         }
         assert!(sharded > 0);
     }
-    source.providers[2].seen =
-        syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,)>);
     let keyed = storage(&source, Choice::Keyed).unwrap();
     check_storage(&source, &keyed, Choice::Keyed).unwrap();
     assert_eq!(storage(&keyed, Choice::Keyed).unwrap(), keyed);
-    assert_eq!(keyed.providers[2].seen, source.providers[2].seen);
+    assert_eq!(keyed.providers, source.providers);
     for (original, selected) in source
         .layouts
         .iter()
@@ -270,9 +252,8 @@ fn independent_storage_checker_rejects_mutations() {
     let source = fixture();
     let selected = storage(&source, Choice::Fx).unwrap();
     let mutations: &[fn(&mut storage::Program)] = &[
-        |p| p.providers[0].canonical_set = syn::parse_quote!(::cq_storage::HashSet<R>),
-        |p| p.providers[2].seen = syn::parse_quote!(::cq_storage::HashSet<(i32, i32,)>),
-        |p| p.providers[2].seen = syn::parse_quote!(::std::collections::HashSet<(u64,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>),
+        |p| p.providers[2].canonical = 0,
+        |p| p.providers[2].next_init = syn::parse_quote!(Vec::with_capacity(42)),
         |p| {
             p.layouts[0].provider =
                 syn::parse_quote!(::std::collections::HashMap<(), Vec<()>, ::cq_storage::HashState>)
@@ -281,8 +262,6 @@ fn independent_storage_checker_rejects_mutations() {
             p.delta_layouts[0].provider =
                 syn::parse_quote!(::std::collections::BTreeMap<(), Vec<()>>)
         },
-        |p| p.providers[2].all_init = syn::parse_quote!(Vec::with_capacity(42)),
-        |p| p.providers[0].canonical_name = syn::parse_quote!(DifferentCanonical),
         |p| p.layouts.push(p.layouts[0].clone()),
         |p| p.reads[0].index = usize::MAX,
         |p| p.layouts[0].maintenance = syn::parse_quote!(replace_each_run),
@@ -309,8 +288,9 @@ fn independent_storage_checker_rejects_mutations() {
         );
     }
     for index in [0, 2] {
+        let canonical = source.providers[index].canonical;
         let mut mutation = keyed.clone();
-        mutation.providers[index] = source.providers[index].clone();
+        mutation.layouts[canonical] = source.layouts[canonical].clone();
         assert!(check_storage(&source, &mutation, Choice::Keyed).is_err());
     }
 }
@@ -451,7 +431,7 @@ fn reports_bad_arguments_and_malformed_known_providers() {
         syn::parse_quote!(::std::collections::HashSet),
         syn::parse_quote!(::std::collections::HashSet<'a>),
         syn::parse_quote!(::cq_storage::HashSet<i32, CustomState>),
-        syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<i32, S, Extra>),
+        syn::parse_quote!(::cq_storage::HashSet<i32, S, Extra>),
         syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout),
         syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<i32>),
         syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<i32, (), S, Extra>),
@@ -516,35 +496,7 @@ fn stage_protocol_forwards_checked_provider_selections() {
 }
 
 #[test]
-fn run_seen_selects_hashers_and_run_layout_stays_opaque() {
-    for source in [
-        syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32,)>),
-        syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32,), CustomHasher>),
-    ] {
-        for choice in [Choice::Fx, Choice::Keyed] {
-            let mut selected = Type::clone(&source);
-            select(&mut selected, choice).unwrap();
-            check_provider(&source, &selected, choice).unwrap();
-            let expected: Type = match choice {
-                Choice::Fx => syn::parse_quote!(
-                    ::cq_datalog_parallel_runtime::RunSeen<(i32,),
-                        ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
-                ),
-                Choice::Keyed => syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32,)>),
-            };
-            assert_eq!(selected, expected);
-            for bad in [
-                syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i64,)>),
-                syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32,), BadHasher>),
-                syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<(i32,)>),
-            ] {
-                assert!(check_provider(&source, &bad, choice).is_err());
-            }
-            let mut again = selected.clone();
-            select(&mut again, choice).unwrap();
-            assert_eq!(again, selected);
-        }
-    }
+fn run_layout_stays_opaque() {
     let source: Type = syn::parse_quote!(::cq_datalog_parallel_runtime::RunLayout<(i32,), (i64,)>);
     for choice in [Choice::Fx, Choice::Keyed] {
         let mut selected = source.clone();
@@ -554,38 +506,21 @@ fn run_seen_selects_hashers_and_run_layout_stays_opaque() {
         let bad = syn::parse_quote!(::cq_datalog_parallel_runtime::RunLayout<(i32,), (i32,)>);
         assert!(check_provider(&source, &bad, choice).is_err());
         let mut program = fixture();
-        program.providers[2].seen =
-            syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32), CustomHasher>);
         let layout = program
             .layouts
             .iter()
             .position(|layout| layout.relation == "Reach" && layout.key > 0)
             .unwrap();
         program.layouts[layout].provider = source.clone();
+        let canonical = program.providers[2].canonical;
+        program.layouts[canonical].provider =
+            syn::parse_quote!(::cq_datalog_parallel_runtime::RunLayout<(i32, i32,), ()>);
         let selected = storage(&program, choice).unwrap();
         check_storage(&program, &selected, choice).unwrap();
         assert_eq!(selected.layouts[layout].provider, source);
-        assert!(
-            selected.providers[2]
-                .seen
-                .to_token_stream()
-                .to_string()
-                .contains("RunSeen")
+        assert_eq!(
+            selected.layouts[canonical].provider,
+            program.layouts[canonical].provider
         );
-    }
-}
-
-#[test]
-fn malformed_run_seen_is_rejected() {
-    for mut ty in [
-        syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen),
-        syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen),
-        syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<T, S, Extra>),
-        syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<'a>),
-        syn::parse_quote!(::cq_datalog_parallel_runtime<S>::RunSeen<T>),
-    ] {
-        assert!(select(&mut ty, Choice::Fx).is_err());
-        assert!(select(&mut ty, Choice::Keyed).is_err());
-        assert!(check_provider(&ty, &ty, Choice::Fx).is_err());
     }
 }

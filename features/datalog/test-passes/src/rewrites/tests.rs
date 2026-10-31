@@ -125,7 +125,9 @@ fn storage_alternative_fixture_and_binding_mutations() {
         maintenance: syn::parse_quote!(admitted_rows),
         protocol: storage::LayoutProtocol::GroupedMap,
     });
-    expected.reads[0].index = 1;
+    // E's scan and both identity canonical layouts precede the added layout.
+    assert_eq!(source.layouts.len(), 3);
+    expected.reads[0].index = 3;
     expected.reads[0].columns = vec![1, 0];
     // Storage's alpha map evaluates the embedded Incremental program.
     let reference = crate::reference_incremental::emit(&source.incremental).unwrap();
@@ -137,12 +139,12 @@ fn storage_alternative_fixture_and_binding_mutations() {
         mutations: vec![
             Box::new(|p: &storage::Program| {
                 let mut p = p.clone();
-                p.layouts[1].key = 1;
+                p.layouts[3].key = 1;
                 p
             }),
             Box::new(|p: &storage::Program| {
                 let mut p = p.clone();
-                p.layouts[1].columns = vec![0, 0];
+                p.layouts[3].columns = vec![0, 0];
                 p
             }),
             Box::new(|p: &storage::Program| {

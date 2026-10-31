@@ -266,9 +266,24 @@ fn render_admitted(
                 let next = &relation.next;
                 let provider = &relation.providers.next;
                 let init = &relation.providers.next_init;
-                quote!(let mut #next: #provider = #init;)
+                let next_canonical = &relation.next_canonical;
+                let canonical = &context.layouts[relation.providers.canonical].provider;
+                quote!(
+                    let mut #next: #provider = #init;
+                    // Sorted-run admission builds NEW as a sorted vector instead.
+                    #[allow(unused_mut, unused_variables)]
+                    let mut #next_canonical: #canonical = ::core::default::Default::default();
+                )
             })
             .collect();
+        let fresh = {
+            let lengths = stratum
+                .members
+                .iter()
+                .map(|&i| &context.relations[i].next)
+                .map(|next| quote!(#next.len()));
+            quote!(0usize #(+ #lengths)*)
+        };
         let publish = publish(context, stratum);
         let lengths = stratum.termination.iter().map(|&i| {
             let delta = context.relations[i]
@@ -305,6 +320,7 @@ fn render_admitted(
             &publish,
             &stratum.phases,
             program.policy.timing == "phases",
+            &fresh,
         );
         let step_round = round_body(
             &allocate,
@@ -312,6 +328,7 @@ fn render_admitted(
             &publish,
             &stratum.phases,
             program.policy.timing == "phases",
+            &fresh,
         );
         let loop_body = match stratum.loop_form.to_string().as_str() {
             "while_nonempty" => quote!(
@@ -344,10 +361,9 @@ fn render_admitted(
                 let mut locals = BTreeSet::new();
                 for &index in &stratum.members {
                     let relation = &context.relations[index];
-                    mutable.insert(relation.all.to_string());
-                    mutable.insert(relation.seen.to_string());
                     mutable.extend(relation.delta_host.iter().map(ToString::to_string));
                     locals.insert(relation.next.to_string());
+                    locals.insert(relation.next_canonical.to_string());
                 }
                 for transaction in &stratum.publication {
                     for operation in &transaction.operations {
@@ -381,62 +397,116 @@ fn render_admitted(
 pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
     let mut bindings = Vec::new();
     for relation in &context.relations {
-        let declaration = &relation.declaration;
-        let all = &relation.all;
-        let delta = &relation.delta_host;
-        let providers = &relation.providers;
-        if let Some(value) = &declaration.value {
-            let expression = &value.expression;
-            let canonical = &providers.canonical_name;
-            let set = &providers.canonical_set;
-            // Keep the original host alive, including temporary and grouped hosts.
-            // Rows already supplies Copy tuples of borrowed columns: hash those
-            // tuples once, without cloning values or adding another reference layer.
-            bindings.push(quote!(
-                let #all = &(#expression);
-                let #all = &{
-                    struct #canonical<R>(#set);
-                    impl<R: ::core::marker::Copy> ::cq_storage::rows::Rows for &#canonical<R> {
-                        type Row = R;
-                        fn rows(self) -> impl ::core::iter::Iterator<Item = R> {
-                            self.0.iter().copied()
-                        }
-                    }
-                    #canonical(::cq_storage::rows::Rows::rows(#all).collect())
-                };
-            ));
-        } else {
-            let seen = &relation.seen;
-            let all_provider = &providers.all;
-            let all_init = &providers.all_init;
-            let seen_provider = &providers.seen;
-            bindings.push(quote!(
-                let mut #all: #all_provider = #all_init;
-                let mut #seen: #seen_provider = ::core::default::Default::default();
-            ));
-        }
-        if let Some(delta) = delta {
-            let provider = &providers.delta;
-            let init = &providers.delta_init;
+        if let Some(delta) = &relation.delta_host {
+            let provider = &relation.providers.delta;
+            let init = &relation.providers.delta_init;
             bindings.push(quote!(let mut #delta: #provider = #init;));
         }
     }
     for layout in context.layouts.iter().chain(&context.delta_layouts) {
-        let relation = &context.relations[layout.relation];
         let host = &layout.host;
         let provider = &layout.provider;
         bindings.push(quote!(
             let mut #host: #provider
                 = ::core::default::Default::default();
         ));
-        // Delta layouts name IDBs, so both IDB host kinds start empty.
-        if relation.declaration.value.is_some() {
-            let all = &relation.all;
-            let insert = insert_layout(layout, true);
-            bindings.push(quote!(for row in ::cq_storage::rows::Rows::rows(#all) { #insert }));
-        }
+    }
+    // EDB loading is one admission: each input row new to the canonical layout
+    // extends every full layout. Delta layouts name IDBs, which start empty.
+    for (index, relation) in context.relations.iter().enumerate() {
+        let Some(value) = &relation.declaration.value else {
+            continue;
+        };
+        let expression = &value.expression;
+        let canonical = &context.layouts[relation.providers.canonical];
+        let inserts = context
+            .layouts
+            .iter()
+            .enumerate()
+            .filter(|&(position, layout)| {
+                layout.relation == index && position != relation.providers.canonical
+            })
+            .map(|(_, layout)| insert_layout(layout, true));
+        let admit = admit_canonical(canonical, None, &canonical.host, true, quote!(#(#inserts)*));
+        let input = Ident::new("__cq_input", Span::mixed_site());
+        // Keep the original host alive, including temporary and grouped hosts.
+        bindings.push(quote!({
+            let #input = &(#expression);
+            for row in ::cq_storage::rows::Rows::rows(#input) { #admit }
+        }));
     }
     bindings
+}
+/// Formal rule DL-InsertNew: a row is new iff its all-column key is absent from
+/// the committed canonical layout and first inserted into `target`, the round's
+/// NEW version of that layout (or the canonical layout itself while loading EDBs).
+/// `then` runs exactly once per new row; `row` is the candidate in scope.
+pub fn admit_canonical(
+    canonical: &Layout,
+    committed: Option<&Ident>,
+    target: &Ident,
+    borrowed_columns: bool,
+    then: TokenStream,
+) -> TokenStream {
+    let key = Ident::new("__cq_key", Span::mixed_site());
+    let identity = !borrowed_columns
+        && canonical
+            .columns
+            .iter()
+            .copied()
+            .eq(0..canonical.columns.len());
+    let (bind, probe, owned) = if identity {
+        (
+            TokenStream::new(),
+            quote!(&row),
+            quote!(::core::clone::Clone::clone(&row)),
+        )
+    } else {
+        let columns = layout_columns(canonical, borrowed_columns);
+        (
+            quote!(let #key = (#(#columns,)*);),
+            quote!(&#key),
+            quote!(#key),
+        )
+    };
+    match canonical.protocol {
+        round::storage::LayoutProtocol::Bulk => {
+            let committed = committed.map(|committed| {
+                quote!(!::cq_storage::ExactMembership::contains(&#committed, #probe) &&)
+            });
+            quote!({
+                #bind
+                if #committed !::cq_storage::ExactMembership::contains(&#target, #probe) {
+                    #target.push(#owned, ());
+                    #then
+                }
+            })
+        }
+        // The set's own insertion reports whether the key was absent.
+        round::storage::LayoutProtocol::Set => {
+            let committed = committed.map(|committed| quote!(!#committed.contains(#probe) &&));
+            quote!({
+                #bind
+                if #committed #target.insert(#owned) {
+                    #then
+                }
+            })
+        }
+        round::storage::LayoutProtocol::GroupedMap => {
+            let bucket = Ident::new("__cq_bucket", Span::mixed_site());
+            let insert = quote!({
+                let #bucket = #target.entry(#owned).or_default();
+                if #bucket.is_empty() {
+                    #bucket.push(());
+                    #then
+                }
+            });
+            match committed {
+                Some(committed) => quote!({ #bind if !#committed.contains_key(#probe) #insert }),
+                None => quote!({ #bind #insert }),
+            }
+        }
+    }
 }
 pub fn publication(context: &RoundContext, stratum: &Stratum) -> Vec<TokenStream> {
     stratum
@@ -457,7 +527,6 @@ pub fn publication(context: &RoundContext, stratum: &Stratum) -> Vec<TokenStream
                             .map(|&index| &context.layouts[index]),
                         &relation.next,
                     ),
-                    "all_extend" => all_extend(relation),
                     "delta_swap" => delta_swap(relation),
                     "delta_rebuild" => {
                         let rebuilds = operation
@@ -473,7 +542,8 @@ pub fn publication(context: &RoundContext, stratum: &Stratum) -> Vec<TokenStream
         })
         .collect()
 }
-/// Insert admitted rows with one shared HashMap loop and one bulk call per bulk layout.
+/// Insert admitted rows with one shared loop of map/set insertions and one bulk
+/// call per bulk layout.
 pub fn full_insert<'a>(layouts: impl IntoIterator<Item = &'a Layout>, next: &Ident) -> TokenStream {
     let mut updates = Vec::new();
     let mut bulk = Vec::new();
@@ -490,12 +560,6 @@ pub fn full_insert<'a>(layouts: impl IntoIterator<Item = &'a Layout>, next: &Ide
         quote!(for row in &#next { #(#updates)* })
     };
     quote!({ #rows #(#bulk)* })
-}
-/// Extend a relation's accumulated rows with its admitted rows.
-pub fn all_extend(relation: &round::Relation) -> TokenStream {
-    let all = &relation.all;
-    let next = &relation.next;
-    quote!(#all.extend(#next.iter().cloned());)
 }
 /// Publish admitted rows as the relation's next delta.
 pub fn delta_swap(relation: &round::Relation) -> TokenStream {
@@ -522,25 +586,52 @@ pub fn delta_rebuild(layout: &Layout, delta: &Ident) -> TokenStream {
         for row in &#delta { #insert }
     })
 }
+/// Return each output relation's rows from its canonical layout in declaration order.
 pub fn outputs(context: &RoundContext) -> TokenStream {
     let outputs: Vec<_> = context
         .outputs
         .iter()
         .map(|conversion| {
             let relation = &context.relations[conversion.relation];
-            let output = &relation.all;
+            let canonical = &context.layouts[relation.providers.canonical];
+            let output = &canonical.host;
+            let position = |column: usize| {
+                syn::Index::from(
+                    canonical
+                        .columns
+                        .iter()
+                        .position(|&c| c == column)
+                        .expect("checked complete canonical permutation"),
+                )
+            };
             match conversion.conversion.to_string().as_str() {
                 "borrowed_cloned_into_iter" => {
                     let columns = (0..relation.declaration.arity()).map(|column| {
-                        let column = syn::Index::from(column);
+                        let column = position(column);
                         quote!(::core::clone::Clone::clone(row.#column))
                     });
-                    quote!(::cq_storage::rows::Rows::rows(#output)
+                    quote!(::cq_storage::rows::Rows::rows(&#output)
                 .map(|row| (#(#columns,)*))
                 .collect::<::std::vec::Vec<_>>()
                 .into_iter())
                 }
-                "owned_into_iter" => quote!(#output.into_iter()),
+                "owned_into_iter" => {
+                    let columns = (0..relation.declaration.arity()).map(|column| {
+                        let column = position(column);
+                        quote!(key.#column)
+                    });
+                    // A set yields its keys; a grouped map yields `(key, bucket)`.
+                    let pattern = if canonical.protocol == round::storage::LayoutProtocol::Set {
+                        quote!(key)
+                    } else {
+                        quote!((key, _))
+                    };
+                    quote!(#output
+                .into_iter()
+                .map(|#pattern| (#(#columns,)*))
+                .collect::<::std::vec::Vec<_>>()
+                .into_iter())
+                }
                 _ => unreachable!("checked output conversion"),
             }
         })
@@ -574,17 +665,11 @@ pub fn evaluate(
                 quote!(::std::vec::Vec<(#(#types,)*)>),
             )
         } else if specifications[rule.hole].interface == HoleInterface::Push {
-            let seen = &head.seen;
-            let next = &head.next;
-            let insertion = &rule.insertion;
+            let admit = admit_row(head, context);
             consume_hole(
                 HoleInterface::Push,
                 invocation,
-                quote!(|row: (#(#types,)*)| {
-                    if #seen.#insertion(::core::clone::Clone::clone(&row)) {
-                        #next.push(row);
-                    }
-                }),
+                quote!(|row: (#(#types,)*)| #admit),
             )
         } else {
             insert_new(rule, context, invocation)
@@ -613,7 +698,14 @@ pub fn evaluate(
         if materialize {
             evaluations.push(quote!(let #candidates=#evaluation;));
             let insert = insert_new(rule, context, &quote!(#admitted));
-            admissions.push(quote!(for #admitted in #candidates {#insert}));
+            let count = candidate_count();
+            admissions.push(quote!(
+                #count.fetch_add(
+                    #candidates.iter().map(::std::vec::Vec::len).sum::<usize>(),
+                    ::core::sync::atomic::Ordering::Relaxed,
+                );
+                for #admitted in #candidates {#insert}
+            ));
         } else {
             evaluations.push(evaluation);
         }
@@ -629,29 +721,42 @@ pub fn split_evaluation(rule: &RuleHole, context: &RoundContext, body: TokenStre
         body,
         context,
         rule.hole,
-        &[head.seen.to_string(), head.next.to_string()]
+        &[head.next_canonical.to_string(), head.next.to_string()]
             .into_iter()
             .collect(),
         &BTreeSet::new(),
     )
 }
+/// Candidate rows reaching admission in one timed round, before deduplication.
+/// Atomic so parallel admission tasks may add their counts.
+pub fn candidate_count() -> Ident {
+    Ident::new("__cq_candidate_count", Span::mixed_site())
+}
+/// `fresh` sums the members' admitted rows after admission, before publication.
 pub fn round_body(
     allocate: &[TokenStream],
     (evaluate, admit): (TokenStream, TokenStream),
     publish: &[TokenStream],
     phases: &[Ident],
     timing: bool,
+    fresh: &TokenStream,
 ) -> TokenStream {
     let phase_start = Ident::new("__cq_phase_start", Span::mixed_site());
     let evaluation_time = Ident::new("__cq_evaluation_time", Span::mixed_site());
     let admission_time = Ident::new("__cq_admission_time", Span::mixed_site());
+    let fresh_count = Ident::new("__cq_fresh_count", Span::mixed_site());
+    let candidates = candidate_count();
     let bodies = phases.iter().map(|phase| {
         let (body, elapsed) = match phase.to_string().as_str() {
             "evaluate" => (evaluate.clone(), quote!(let #evaluation_time = #phase_start.elapsed();)),
-            "admit" => (admit.clone(), quote!(let #admission_time = #phase_start.elapsed();)),
+            "admit" => (admit.clone(), quote!(
+                let #admission_time = #phase_start.elapsed();
+                let #fresh_count: usize = #fresh;
+            )),
             "publish" => (quote!(#(#publish)*), quote!(
-                ::std::eprintln!("datalog-phase evaluation_ns={} admission_ns={} publication_ns={}",
-                    #evaluation_time.as_nanos(), #admission_time.as_nanos(), #phase_start.elapsed().as_nanos());
+                ::std::eprintln!("datalog-phase evaluation_ns={} admission_ns={} publication_ns={} candidates={} fresh={}",
+                    #evaluation_time.as_nanos(), #admission_time.as_nanos(), #phase_start.elapsed().as_nanos(),
+                    #candidates.load(::core::sync::atomic::Ordering::Relaxed), #fresh_count);
             )),
             _ => unreachable!("checked round phase"),
         };
@@ -661,7 +766,9 @@ pub fn round_body(
             body
         }
     });
-    quote!(#(#allocate)* #(#bodies)*)
+    let count =
+        timing.then(|| quote!(let #candidates = ::core::sync::atomic::AtomicUsize::new(0);));
+    quote!(#(#allocate)* #count #(#bodies)*)
 }
 
 fn layout_columns(layout: &Layout, borrowed_columns: bool) -> Vec<TokenStream> {
@@ -688,31 +795,41 @@ fn extend_layout(layout: &Layout, rows: &Ident) -> TokenStream {
 
 // Every full layout is immutable while the round's holes run. Only admitted
 // rows reach publication, so no repeated whole-IDB scans or rebuilds occur.
-// EDB bindings remain HashMaps; sharded and sorted-run IDBs use bulk publication above.
+// EDB bindings use maps and sets; sharded and sorted-run IDBs use bulk publication above.
 pub fn insert_layout(layout: &Layout, borrowed_columns: bool) -> TokenStream {
     let host = &layout.host;
     let columns = layout_columns(layout, borrowed_columns);
     let (keys, values) = columns.split_at(layout.key);
-    if layout.protocol == round::storage::LayoutProtocol::Bulk {
-        quote!(#host.push((#(#keys,)*), (#(#values,)*));)
-    } else {
-        quote!(#host.entry((#(#keys,)*)).or_default().push((#(#values,)*));)
+    match layout.protocol {
+        round::storage::LayoutProtocol::Bulk => {
+            quote!(#host.push((#(#keys,)*), (#(#values,)*));)
+        }
+        round::storage::LayoutProtocol::Set => quote!(#host.insert((#(#keys,)*));),
+        round::storage::LayoutProtocol::GroupedMap => {
+            quote!(#host.entry((#(#keys,)*)).or_default().push((#(#values,)*));)
+        }
     }
 }
 
-/// Formal rule DL-InsertNew: Canonical all-column membership admits each row with one insertion lookup.
+/// Admit every candidate row of one hole into its head relation.
 pub fn insert_new(
     rule: &RuleHole,
     context: &RoundContext,
     invocation: &TokenStream,
 ) -> TokenStream {
-    let head = &context.relations[rule.head];
-    let seen = &head.seen;
-    let next = &head.next;
-    let insertion = &rule.insertion;
-    quote!(for row in #invocation {
-        if #seen.#insertion(::core::clone::Clone::clone(&row)) {
-            #next.push(row);
-        }
-    })
+    let admit = admit_row(&context.relations[rule.head], context);
+    quote!(for row in #invocation #admit)
+}
+/// Admit `row` against the committed canonical layout and the round's NEW
+/// version of it, pushing each new row once to `next`.
+pub fn admit_row(relation: &round::Relation, context: &RoundContext) -> TokenStream {
+    let canonical = &context.layouts[relation.providers.canonical];
+    let next = &relation.next;
+    admit_canonical(
+        canonical,
+        Some(&canonical.host),
+        &relation.next_canonical,
+        false,
+        quote!(#next.push(row);),
+    )
 }

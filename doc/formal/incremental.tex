@@ -165,8 +165,8 @@ the old committed version. Both obligations are discharged by the index
 protocol below, never by a store outside the relation's recorded indices.
 Cost includes processing the candidate bag, not only the accepted delta; no
 universal $O(|\delta R_t|)$ round bound follows from these equations.
-(Transitional: CPU Datalog's hash \code{seen} and CQ's sort canon still
-realize these obligations outside the index protocol; P3d removes both.)
+(CPU Datalog realizes them in its canonical layout, below; CQ's sort canon
+still realizes them outside the index protocol.)
 
 \paragraph{Admission is an anti-join against an ordinary index (P3d).}
 Let $O$ be an output relation (a CQ result or a Datalog IDB) and let its
@@ -371,14 +371,26 @@ Thus the next union is $R^t\cup S\cup F(R^t)$, as required.
 \end{proof}
 
 \paragraph{Owned indexes, not a core incremental protocol.}
-The Datalog layer owns one canonical all-column set for each derived relation.
-After a round's CQ holes finish, successful \texttt{insert\_new} operations
-produce precisely the next delta, and those fresh tuples update every selected
-layout. Extensional layouts are built once per program. Each layout records a
+The Datalog layer records, for each relation, one canonical layout: an
+ordinary member of its full layouts whose key covers every column
+(\textsc{DL-Canonical}). The storage pass reuses the first such read layout,
+else appends the identity all-column layout; a layout keyed by every column is
+a payload-free key set by default. Admission realizes \textsc{DL-InsertNew}
+with the canonical provider's own operations: an anti-join with the committed
+canonical layout ($\neg\mathsf{contains}$) and insert-if-absent into the
+round's NEW version of that layout, which deduplicates the batch; each row
+passing both is pushed once into next. NEW is round-local. After a round's
+CQ holes finish, publication inserts those fresh tuples into every full
+layout, the canonical one included; there is no separate seen, accumulated or
+wrapper store and no publication step beyond layout maintenance. Extensional
+relations are loaded once per program by the same insert-if-absent into the
+canonical layout, newly admitted rows extending the other layouts.
+Each layout records a
 complete column permutation and a leading key prefix, chosen from join
 variables under delta-driven evaluation. Borrowed grouped map hosts expose
 their existing indexes through the public \texttt{Rows}/\texttt{IndexRead}
-interfaces. No compiler staging or maintained-storage extension is required.
+interfaces, and key-set hosts through \texttt{Rows}/\texttt{ExactMembership}.
+No compiler staging or maintained-storage extension is required.
 The caller's CQ pipeline is unchanged: if its chosen probe does not match a
 recorded layout, ordinary CQ fallback construction remains correct but may
 cost more work. Layout choice is therefore a checked Datalog decision, not a

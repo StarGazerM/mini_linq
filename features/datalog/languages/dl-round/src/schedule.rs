@@ -539,7 +539,6 @@ mod tests {
             head,
             hole: 0,
             scan: None,
-            insertion: ident("insert"),
         }
     }
     fn stratum(seed_heads: &[usize], step_heads: &[usize]) -> Stratum {

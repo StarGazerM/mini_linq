@@ -72,7 +72,9 @@ pub fn compile_with_advice(
         let identity: Vec<_> = (0..query.body.len()).collect();
         if positions.is_empty() {
             let authored = plans.get(&(rule, None));
-            let order = authored.map(|plan| plan.order.clone()).unwrap_or_else(|| identity.clone());
+            let order = authored
+                .map(|plan| plan.order.clone())
+                .unwrap_or_else(|| identity.clone());
             variants.push(Variant {
                 rule,
                 delta: None,
@@ -89,7 +91,9 @@ pub fn compile_with_advice(
                 unreachable!("checked changing position")
             };
             atom.relation = names[&symbol_name(&atom.relation)].clone();
-            let authored = plans.get(&(rule, Some(position))).or_else(|| plans.get(&(rule, None)));
+            let authored = plans
+                .get(&(rule, Some(position)))
+                .or_else(|| plans.get(&(rule, None)));
             let order = match authored {
                 Some(plan) => plan.order.clone(),
                 None => match driver_policy {
@@ -224,7 +228,10 @@ fn resolve_plans(
                 )?;
                 order.push(position);
             }
-            steps.push(AdviceStep { occurrence: position, columns: selector.columns.clone() });
+            steps.push(AdviceStep {
+                occurrence: position,
+                columns: selector.columns.clone(),
+            });
         }
         let mut complete: Vec<_> = (0..prefix.start).collect();
         complete.extend(&order);
@@ -233,20 +240,49 @@ fn resolve_plans(
         if !explicit_steps {
             steps.clear();
         }
-        let smallest = plan.smallest.iter().map(|site| {
-            ensure(site.len() >= 2, &plan.rule, "smallest requires at least two occurrences")?;
-            let mut positions = Vec::new();
-            for selector in site {
-                ensure(selector.columns.is_none(), &selector.relation, "smallest selects whole occurrences")?;
-                let position = selector.resolve_in(&query.body)?;
-                ensure(prefix.contains(&position), &selector.relation, "smallest requires positive prefix occurrences")?;
-                ensure(!positions.contains(&position), &selector.relation, "duplicate smallest occurrence")?;
-                positions.push(position);
-            }
-            Ok(positions)
-        }).collect::<syn::Result<Vec<_>>>()?;
+        let smallest = plan
+            .smallest
+            .iter()
+            .map(|site| {
+                ensure(
+                    site.len() >= 2,
+                    &plan.rule,
+                    "smallest requires at least two occurrences",
+                )?;
+                let mut positions = Vec::new();
+                for selector in site {
+                    ensure(
+                        selector.columns.is_none(),
+                        &selector.relation,
+                        "smallest selects whole occurrences",
+                    )?;
+                    let position = selector.resolve_in(&query.body)?;
+                    ensure(
+                        prefix.contains(&position),
+                        &selector.relation,
+                        "smallest requires positive prefix occurrences",
+                    )?;
+                    ensure(
+                        !positions.contains(&position),
+                        &selector.relation,
+                        "duplicate smallest occurrence",
+                    )?;
+                    positions.push(position);
+                }
+                Ok(positions)
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
         ensure(
-            resolved.insert((rule, delta), ResolvedPlan { order: complete, steps, smallest }).is_none(),
+            resolved
+                .insert(
+                    (rule, delta),
+                    ResolvedPlan {
+                        order: complete,
+                        steps,
+                        smallest,
+                    },
+                )
+                .is_none(),
             &plan.rule,
             "duplicate plan advice for this rule version",
         )?;

@@ -346,12 +346,23 @@ fn empty_output_only_program_is_an_identity_rewrite() {
 }
 
 #[test]
-fn partition_requires_sharded_seen_vector_deltas_and_native_layouts() {
+fn partition_requires_sharded_canonical_vector_deltas_and_native_layouts() {
     let mutations: &[fn(&mut Program)] = &[
+        // A native (set) canonical layout is valid storage, but not sharded admission.
         |program| {
-            program.storage.providers[2].seen =
-                syn::parse_quote!(::cq_storage::HashSet<(i32, i32,)>);
-            program.context.relations[2].providers = program.storage.providers[2].clone();
+            let canonical = program.storage.providers[2].canonical;
+            let provider: syn::Type = syn::parse_quote!(
+                ::std::collections::HashSet<(i32, i32,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+            );
+            for layout in [
+                &mut program.storage.layouts[canonical].provider,
+                &mut program.context.layouts[canonical].provider,
+            ] {
+                *layout = provider.clone();
+            }
+            program.storage.layouts[canonical].protocol = round::storage::LayoutProtocol::Set;
+            program.context.layouts[canonical].protocol = round::storage::LayoutProtocol::Set;
+            program.context.outputs[0].conversion = syn::parse_quote!(owned_into_iter);
         },
         |program| {
             program.storage.layouts[0].provider = syn::parse_quote!(

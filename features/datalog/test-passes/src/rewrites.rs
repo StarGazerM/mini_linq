@@ -92,7 +92,19 @@ pub fn ordered_storage(source: &storage::Program) -> syn::Result<storage::Progra
             .map(|&i| &declaration.columns[i].ty)
             .collect();
         let (keys, values) = types.split_at(layout.key);
-        layout.provider = syn::parse_quote!(::std::collections::BTreeMap<(#(#keys,)*), ::std::vec::Vec<(#(#values,)*)>>);
+        // DL-LayoutProtocol: ordered sets and grouped maps share the set and
+        // grouped-map operations of their hash counterparts.
+        (layout.provider, layout.protocol) = if values.is_empty() {
+            (
+                syn::parse_quote!(::std::collections::BTreeSet<(#(#keys,)*)>),
+                storage::LayoutProtocol::Set,
+            )
+        } else {
+            (
+                syn::parse_quote!(::std::collections::BTreeMap<(#(#keys,)*), ::std::vec::Vec<(#(#values,)*)>>),
+                storage::LayoutProtocol::GroupedMap,
+            )
+        };
     }
     Ok(target)
 }

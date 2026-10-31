@@ -773,24 +773,29 @@ fn duplicate_grouped_inputs_are_scanned_once_for_all_layouts_keys_and_outputs() 
 }
 
 #[test]
-fn canonical_negative_only_inputs_do_not_require_column_clones() {
-    #[derive(Debug, Eq, PartialEq, Hash)]
-    struct NoClone(String);
+fn canonical_negative_only_inputs_are_deduplicated_once() {
     let blocked = [
-        (1, NoClone(String::from("reason"))),
-        (1, NoClone(String::from("reason"))),
+        (1, String::from("reason")),
+        (1, String::from("reason")),
+        (3, String::from("other")),
     ];
-    let domain = [(1,), (1,), (2,), (2,)];
+    let domain = [(1,), (1,), (2,), (2,), (3,)];
     let result = cq_datalog::datalog! {
-        struct BorrowOnly;
+        struct NegativeOnly;
         relation D(x:i32) = (&domain);
-        relation Blocked(x:i32,reason:NoClone) = (&blocked);
+        relation Blocked(x:i32,reason:String) = (&blocked);
         relation Out(x:i32);
-        output Out;
+        output Out, Blocked;
         Out(*x) :- D(x), !Blocked(x,_);
     };
-    assert_eq!(result.collect::<Vec<_>>(), [(2,)]);
-    assert_eq!(blocked[0].1.0, "reason");
+    let (out, blocked_rows) = result;
+    assert_eq!(out.collect::<Vec<_>>(), [(2,)]);
+    let mut blocked_rows: Vec<_> = blocked_rows.collect();
+    blocked_rows.sort();
+    assert_eq!(
+        blocked_rows,
+        [(1, String::from("reason")), (3, String::from("other"))]
+    );
 }
 
 #[test]
@@ -876,6 +881,55 @@ fn empty_delta_replaces_the_old_run_while_another_member_advances() {
     // Layout reset/build order is checked independently by printer realization
     // tests; an opaque `if` call count would not measure delta-row visits.
     assert_eq!(rounds, [(0, 1), (1, 1), (2, 1), (3, 1)]);
+}
+
+#[test]
+fn same_round_duplicates_from_one_hole_are_admitted_once() {
+    let mut rounds = Vec::new();
+    // Seed and step candidates each repeat within one hole's round.
+    let edges = [(1, 5), (2, 5), (5, 7), (5, 7), (6, 7), (5, 8), (7, 8)];
+    let seed = [(1,), (2,), (6,)];
+    let reach = cq_datalog::datalog! {
+        observe = (|round, count| rounds.push((round, count)));
+        struct OneHole;
+        relation Edge(x:i32,y:i32) = (&edges);
+        relation Seed(x:i32) = (&seed);
+        relation Out(y:i32);
+        output Out;
+        Out(*y) :- Seed(x), Edge(x,y);
+        Out(*z) :- Out(y), Edge(y,z);
+    };
+    assert_eq!(
+        reach.collect::<BTreeSet<_>>(),
+        BTreeSet::from([(5,), (7,), (8,)])
+    );
+    // Seed candidates 5, 5, 7 admit {5, 7}; step candidates 7, 8, 8 admit {8}.
+    assert_eq!(rounds, [(0, 2), (1, 1)]);
+}
+
+#[test]
+fn same_round_duplicates_from_two_holes_are_admitted_once() {
+    let mut rounds = Vec::new();
+    let left = [(1,), (2,), (3,)];
+    let right = [(2,), (3,), (4,)];
+    let both = cq_datalog::datalog! {
+        observe = (|round, count| rounds.push((round, count)));
+        struct TwoHoles;
+        relation Left(x:i32) = (&left);
+        relation Right(x:i32) = (&right);
+        relation Both(x:i32);
+        output Both;
+        Both(*x) :- Left(x);
+        Both(*x) :- Right(x);
+    };
+    let rows: Vec<_> = both.collect();
+    assert_eq!(rows.len(), 4);
+    assert_eq!(
+        rows.into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from([(1,), (2,), (3,), (4,)])
+    );
+    // Six candidates from two seed holes publish one delta of four rows.
+    assert_eq!(rounds, [(0, 4)]);
 }
 
 #[test]
