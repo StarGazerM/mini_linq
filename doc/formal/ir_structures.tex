@@ -195,6 +195,29 @@ are provider capabilities, never truncation.
  {\mathsf{cmp}(x,y)=\mathsf{cmp}(\mathsf{ord}(x),\mathsf{ord}(y))}
 \]
 
+\paragraph{Runtime scan blocks.}
+The authored family $F$ is Plain or Bytes. Plain stores native-width ordinals;
+Bytes stores constant, byte or two-byte residuals when strictly narrower,
+otherwise native-width ordinals. Block size is a positive multiple of 1024.
+The inverse ordinal law is a premise on the host type, not compiler inspection.
+Ordinals and extrema are collected in one input traversal; reusable block
+scratch supplies the final payload after its base and width are known.
+\begin{mathpar}
+\Rule{RT-ScanCodec}{b=\mathsf{encode}_F(v)\quad
+ \forall x\in v.\ \mathsf{fromOrdinal}(\mathsf{ord}(x))=x}
+ {\mathsf{concat}(\mathsf{decodeVectors}(b))=v}
+\Rule{RT-ScanSummary}{b=\mathsf{encode}_F(v)\quad
+ s=\mathsf{summary}(b)\quad v\ne []}
+ {s.lo=\min_{x\in v}\mathsf{ord}(x)\quad s.hi=\max_{x\in v}\mathsf{ord}(x)}
+\Rule{RT-Translate}{b=\mathsf{encode}_F(v)\quad
+ p\in\{\mathsf{point},\mathsf{window},\mathsf{membership}\}\quad
+ c_i=\mathsf{ord}(v_i)-b.base}
+ {\mathsf{translate}(p,b)(c_i)\iff p(\mathsf{ord}(v_i))}
+\end{mathpar}
+Window translation handles open endpoints with checked successor/predecessor;
+absent constants and empty intersections do not introduce matches. Filtering
+returns ascending occurrence positions, including duplicate occurrences.
+
 \paragraph{Adaptive membership representation law.}
 \code{AdaptiveMembership<K,B>} denotes exactly the supplied set of keys.
 Its \code{OrderKey} capability supplies a total order-preserving ordinal:

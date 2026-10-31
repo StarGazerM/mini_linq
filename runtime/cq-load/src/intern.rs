@@ -24,6 +24,13 @@ impl cq_storage::OrderKey for StringCode {
     }
 }
 
+impl cq_storage::scan::OrdinalDecode for StringCode {
+    const WIDTH: cq_storage::scan::Width = cq_storage::scan::Width::W32;
+    fn from_ordinal(ordinal: u64) -> Self {
+        Self(ordinal as u32)
+    }
+}
+
 /// A caller-owned string dictionary with deterministic, zero-based `u32` codes.
 ///
 /// Codes follow the lexicographic order of distinct source strings, independent

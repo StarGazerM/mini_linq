@@ -653,6 +653,63 @@ So storage work pays on CPU scan-bound queries (h06-like: ~1.5×), while
 GPU reduction/dedup overhead and CPU h01's dominant cost must be profiled
 (§12.3 E2) before storage slices.
 
+**P5 S1 runtime boundary.** `cq_storage::scan::ScanColumn<T, Plain|Bytes>`
+stores immutable 1024-aligned blocks, a contiguous eight-byte-aligned payload,
+per-block headers (byte offset, ordinal base, row count, width and codec), and
+optional exact min/max ordinals. `Bytes` deterministically uses constant/u8/u16
+FOR residuals only when narrower than the native ordinal; larger spans stay
+plain. `Plain` always retains native-width ordinals. No packed family ships in
+S1. `OrdinalDecode` extends the existing order embedding, including Date,
+Decimal and StringCode in cq-load; dictionaries retain their domain law.
+Encoding collects ordinals and extrema together in one input pass per block,
+then emits the chosen width from reusable block scratch: summaries never scan
+a decoded copy. Vector decode writes into caller-owned storage. Point,
+open/closed window and membership filtering compares residuals after host
+constant translation, prunes only when summaries were requested, and emits
+ascending occurrence positions or caller-owned selection bytes. Width and
+predicate variant dispatch are outside the row loop; byte/word range masks use
+branch-free native-width comparisons (release x86-64 assembly contains packed
+byte min/max and packed word comparison/pack loops). RT-ScanCodec,
+RT-ScanSummary and RT-Translate also check masks against decoded oracles.
+This slice does not select blocks in the compiler or migrate any source;
+ScanTable integration, loaders and late materialization remain later slices.
+
+S1 microbenchmark (`experiments/storage-bench/scan_bench.py`, raw
+`results/p5-s1-scan-vectorized.json`): 4,194,304 and 67,108,864 u64 values,
+8/16-bit spans, 16,384-row blocks, summaries off. Five interleaved pairs,
+each with five warmups and 21 checked samples, hold the timing lock throughout.
+Filter sums surviving occurrence positions; mask writes one 0/1 byte per row
+on both Vec and encoded routes, checking its positional checksum outside timing.
+Both receive runtime bounds (inclusive domain/6 through domain/3).
+
+| Rows / residual | Callback filter Bytes/Vec time [95% CI] | Mask Bytes/Vec time [95% CI] | Mask input GB/s Vec / Bytes |
+|---|---|---|---|
+| 4M / u8 | 0.976 [0.970, 0.982] | 0.0494 [0.0476, 0.0497] | 14.38 / 36.74 |
+| 4M / u16 | 0.926 [0.888, 0.936] | 0.1049 [0.0981, 0.1096] | 14.40 / 34.37 |
+| 64M / u8 | 0.951 [0.916, 0.959] | 0.1323 [0.1249, 0.1370] | 14.06 / 13.28 |
+| 64M / u16 | 0.886 [0.848, 0.899] | 0.1979 [0.1899, 0.2008] | 14.16 / 18.23 |
+
+Both shipped compressed widths beat Vec in both interfaces. The 64M mask
+outputs add 64 MiB of writes; input bandwidth excludes those writes and is
+payload/time, not measured DRAM traffic. The plain input is 512 MiB, encoded
+u8/u16 input 64/128 MiB. Callback scans remain compute-heavy (encoded input
+2.20/4.72 GB/s at 64M); bulk masks expose the narrow-lane bandwidth benefit.
+4M/u16 encode versus Vec clone is 0.778 [0.761, 0.793], 342.2 versus
+264.6 Mrows/s; vector decode+checksum versus Vec checksum is
+0.768 [0.735, 0.833], 5280.3 versus 4056.8 Mrows/s.
+
+One-minute load was 16.8–25.7; these are not quiet-machine policy-selection
+results. All major faults were zero. Paired-process minor faults (Vec/Bytes):
+4M u8 filter 46,746/46,748, mask 51,869/51,868; 4M u16 filter
+51,868/51,865, mask 56,986/56,984; 64M u8 filter 738,139/738,139, mask
+820,058/820,056; 64M u16 filter 820,058/820,054, mask 901,980/901,976.
+Encode faults were 1,116,954/72,446 and decode 51,865/51,871.
+Ratios are medians of paired process medians with bootstrap CIs.
+The initial implementation's 5.69x callback loss is retained in
+`results/p5-s1-scan.json`: hoisting predicate-variant dispatch out of the row
+loop fixes that realization; the final benchmark additionally prevents
+constant-folded bounds on the Vec side. No compiler default changes in S1.
+
 ## 13. Engine-wide rules adopted 2026-10-29 (user decisions + evidence)
 
 1. **Strings are interned at input on every target.** No query column has

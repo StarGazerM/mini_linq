@@ -107,6 +107,15 @@ impl<const SCALE: u32> cq_storage::OrderKey for Decimal<SCALE> {
     }
 }
 
+impl<const SCALE: u32> cq_storage::scan::OrdinalDecode for Decimal<SCALE> {
+    const WIDTH: cq_storage::scan::Width = cq_storage::scan::Width::W64;
+    fn from_ordinal(ordinal: u64) -> Self {
+        Self(<i64 as cq_storage::scan::OrdinalDecode>::from_ordinal(
+            ordinal,
+        ))
+    }
+}
+
 impl<const SCALE: u32> Load for Decimal<SCALE> {
     // DECODE ?: Decimal::load parses a logical decimal for generic source, test, and user callers.
     fn load(field: &str) -> Result<Self, String> {
@@ -240,6 +249,15 @@ impl cq_storage::OrderKey for Date {
     #[inline]
     fn ordinal(&self) -> u64 {
         cq_storage::OrderKey::ordinal(&self.0)
+    }
+}
+
+impl cq_storage::scan::OrdinalDecode for Date {
+    const WIDTH: cq_storage::scan::Width = cq_storage::scan::Width::W32;
+    fn from_ordinal(ordinal: u64) -> Self {
+        Self(<i32 as cq_storage::scan::OrdinalDecode>::from_ordinal(
+            ordinal,
+        ))
     }
 }
 

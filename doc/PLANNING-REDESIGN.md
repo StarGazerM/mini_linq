@@ -516,6 +516,12 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   scans; encoded execution on dictionary codes first. Block format, codec trait, summaries built with
   payload, columnar loader; prune → encoded predicate (preserved-op law) →
   positions → late materialization; STR-Blocks / BE-Blocks rules.
+  S1 runtime implementation: `cq-storage::scan` Plain/Bytes columns retain
+  per-block headers, aligned payload and optional same-input-pass extrema;
+  Bytes uses at most 16-bit residuals, otherwise native-width plain storage.
+  RT-ScanCodec/RT-ScanSummary/RT-Translate cover decoding, enclosure and encoded
+  predicates. This adds no compiler selection; loader/ScanTable cutover and
+  STR-Blocks/BE-Blocks remain later slices.
 - **P6 GPU storage** (compression for transfer/capacity first; resident
   scan codecs only where measured). Device blocks with per-vector summaries, tile decode
   fused with predicates, narrow carriers, summary skip; GPU Datalog runs as

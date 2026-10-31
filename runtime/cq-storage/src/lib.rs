@@ -94,6 +94,7 @@ pub(crate) use count;
 pub mod counters;
 pub mod dedup;
 pub mod dispatch;
+pub mod scan;
 pub use dispatch::AutoDense;
 mod hash_index;
 mod hash_state;

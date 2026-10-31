@@ -7,6 +7,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- P5 S1 adds runtime-only `cq_storage::scan` Plain/Bytes block columns,
+  same-input-pass optional min/max summaries, caller-buffer vector decoding
+  and exact encoded point/window/membership filtering. Bytes caps residuals
+  at 16 bits and otherwise retains plain native-width ordinals. Runtime law
+  tests cover inverse decoding, enclosure and predicate preservation; no
+  compiler selection or source migration is part of this slice.
 - Query-closed values are host captures (A-Capture, A-CaptureRef,
   WF-Capture, IF-Capture). CQ normalization records a top-level `let`/`if`
   that reads no query variable, a closed head operand and a closed aggregate
