@@ -27,7 +27,7 @@ fn assert_plan(captured: &str, retained: bool, staged: bool) -> ir::Program {
     assert_eq!(facts.built["r"].len(), 1);
     assert_eq!(
         facts.built["r"][0].1,
-        syn::parse_quote!(::cq_storage::RadixRun<_, _>)
+        syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
     );
     assert!(!facts.membership.contains(&("r".into(), vec!["x".into()])));
     assert_eq!(facts.shares.contains_key("s"), retained);
@@ -161,7 +161,7 @@ fn owned_computed_wide_probes_execute_without_a_borrowed_codec() {
     let facts = ir::contract::check(&program).unwrap();
     assert_eq!(
         facts.built["r"][0].1,
-        syn::parse_quote!(::cq_storage::RadixRun<_, _>)
+        syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
     );
     let right = [(0u64, 0i64), (u64::MAX, 10), (u64::MAX, 11), (u64::MAX, 10)];
     for key in [0, 1, i64::MAX as u64 + 1, u64::MAX] {
@@ -204,7 +204,8 @@ fn named_pipeline_composes_and_executes() {
             .built
             .values()
             .flatten()
-            .any(|(_, ty)| *ty == syn::parse_quote!(::cq_storage::RadixRun<_, _>))
+            .any(|(_, ty)| *ty
+                == syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>))
     );
     assert!(!facts.expands.is_empty());
     let left = [(i64::MIN,), (-1,), (2,), (i64::MAX,)];
@@ -255,7 +256,7 @@ fn selection_is_checked_idempotent_and_preserves_defaults() {
         );
         assert_eq!(
             ir::contract::check(&target).unwrap().built["r"][0].1,
-            syn::parse_quote!(::cq_storage::RadixRun<_, _>)
+            syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
         );
         assert_eq!(source.physical, target.physical);
         assert_eq!(radix_runs(&target, quote!()).unwrap(), target);
@@ -340,4 +341,80 @@ fn radix_payload_remains_an_exact_join_filter_source() {
         ir::contract::check(&filtered).unwrap().join_filters["l"].len(),
         1
     );
+}
+
+macro_rules! partial_reader {
+    ($left:expr, $right:expr; $($pipeline:tt)*) => {
+        mini_linq::passes::select! {
+            pipeline { $($pipeline)* };
+            physical {
+                relation L(a:i64) = ($left); relation R(a:i64,b:i64,c:i64) = ($right);
+                l = pipe rename L@0 {a -> x};
+                r = let rename R@1 {a -> x,b -> y,c -> z};
+                p = pipe probe first [x] l,r;
+                g = pipe guard p if (*y > 0);
+                k = pipe project g keep {x};
+                q = pipe probe first [x] k,r;
+                out = let canon project q keep {x,y,z};
+                return out as answer(x,y,z);
+            }
+        }
+    };
+}
+
+/// SEL-ItemLayout: the first probe carries only `y` of the `{y, z}` payload,
+/// so the run stores its payload column-wise; a complete-row reader alone,
+/// as in every test above, keeps `items rows`.
+#[test]
+fn partial_payload_reader_selects_tuple_columns() {
+    let captured = partial_reader!(left, right;
+        cq_rewrites::radix_runs, cq_rewrite_test_driver::capture_structures
+    );
+    let program: ir::Program = syn::parse_str(captured).unwrap();
+    let facts = ir::contract::check(&program).unwrap();
+    assert_eq!(
+        facts.built["r"][0].1,
+        syn::parse_quote!(::cq_storage::RadixRun<_, _, ::cq_storage::TupleColumns<_>>)
+    );
+    assert!(program.structures.entries.iter().any(|entry| matches!(
+        &entry.structure,
+        Structure::Built { keyed, .. }
+            if matches!(keyed.items.as_ref().map(|items| &items.layout), Some(ir::ItemLayout::Columns(_)))
+    )));
+    let left = [(1_i64,), (2,), (3,)];
+    let right = [
+        (1_i64, 5_i64, 7_i64),
+        (1, -1, 8),
+        (2, -2, 9),
+        (3, 4, 10),
+        (3, 4, 11),
+    ];
+    let run = |rows: Vec<(&i64, &i64, &i64)>| -> BTreeSet<(i64, i64, i64)> {
+        rows.into_iter().map(|(x, y, z)| (*x, *y, *z)).collect()
+    };
+    let radix = run(partial_reader!(&left, &right;
+        cq_rewrites::radix_runs, mini_linq::passes::sequence,
+        mini_linq::passes::sequential, mini_linq::passes::translate_pull
+    )
+    .collect());
+    let baseline = run(partial_reader!(&left, &right;
+        mini_linq::passes::sequence, mini_linq::passes::sequential,
+        mini_linq::passes::translate_pull
+    )
+    .collect());
+    assert_eq!(radix, baseline);
+    assert_eq!(
+        radix,
+        BTreeSet::from([(1, 5, 7), (1, -1, 8), (3, 4, 10), (3, 4, 11)])
+    );
+    // A column layout needs a split payload: recording it on a one-field
+    // payload is rejected by the Structures checker.
+    let source = single_key_source(syn::parse_quote!(i64), quote!(let));
+    let mut target = radix_runs(&source, quote!()).unwrap();
+    for entry in &mut target.structures.entries {
+        if let Structure::Built { keyed, .. } = &mut entry.structure {
+            keyed.items = Some(syn::parse_quote!(items columns));
+        }
+    }
+    assert!(ir::contract::check(&target).is_err());
 }

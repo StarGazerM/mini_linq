@@ -41,7 +41,7 @@ use syn::{Expr, Ident, Stmt};
 
 pub mod access;
 mod columns;
-pub use columns::{columns_used, columns_used_rust};
+pub use structures::demand::{columns_used, columns_used_rust};
 pub mod expressions;
 mod filtered;
 mod ownership;
@@ -380,7 +380,7 @@ impl<'a> Context<'a> {
             has_generators,
             binding_functions,
             idents: BTreeMap::new(),
-            carried_columns: columns::carried_columns(module, analysis),
+            carried_columns: structures::demand::carried_columns(module, analysis),
             carried_witnesses: columns::carried_witnesses(module, analysis),
             reprs: BTreeMap::new(),
             statements,

@@ -117,7 +117,25 @@ macro_rules! standalone_configuration {
         #[allow(non_snake_case)]
         mod $module {
             use super::*;
+            // `canon(packed);` is authored Structures advice: every column of
+            // the query's canonical rows records has an `OrderKey`, so they use
+            // the packed sorted-run provider in every configuration.
             macro_rules! query {
+                (plan($d($d advice:tt)*); canon(packed); evidence { $d($d facts:tt)* } $d($d tokens:tt)*) => {
+                    crate::tpch_runtime::standalone_query! {
+                        $module; [$d($d advice)*]; {
+                            $($stages)*
+                            sequence = ::mini_linq::passes::sequence(evidence { $d($d facts)* });
+                        };
+                        [$($extra,)* ::cq_rewrites::packed_canon]; $d($d tokens)*
+                    }
+                };
+                (plan($d($d advice:tt)*); canon(packed); $d($d tokens:tt)*) => {
+                    crate::tpch_runtime::standalone_query! {
+                        $module; [$d($d advice)*]; { $($stages)* };
+                        [$($extra,)* ::cq_rewrites::packed_canon]; $d($d tokens)*
+                    }
+                };
                 (plan($d($d advice:tt)*); evidence { $d($d facts:tt)* } $d($d tokens:tt)*) => {
                     crate::tpch_runtime::standalone_query! {
                         $module; [$d($d advice)*]; {
@@ -142,9 +160,9 @@ macro_rules! standalone_configuration {
 pub(crate) use standalone_configuration;
 
 macro_rules! standalone_query {
-    (advised; [$($advice:tt)*]; {$($stages:tt)*}; []; $($tokens:tt)*) => {
+    (advised; [$($advice:tt)*]; {$($stages:tt)*}; [$($extra:path),*]; $($tokens:tt)*) => {
         crate::tpch_runtime::standalone_query! {
-            default; []; { $($stages)* plan = ::mini_linq::passes::plan($($advice)*); }; [];
+            default; []; { $($stages)* plan = ::mini_linq::passes::plan($($advice)*); }; [$($extra),*];
             $($tokens)*
         }
     };

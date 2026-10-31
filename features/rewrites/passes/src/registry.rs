@@ -26,6 +26,7 @@ macro_rules! structures_registry {
             sorted_indexes => $crate::sorted_indexes;
             sorted_runs => $crate::sorted_runs;
             radix_runs => $crate::radix_runs;
+            packed_canon => $crate::packed_canon;
             hashed_runs => $crate::hashed_runs;
             retain_lookups => $crate::retain_lookups;
             expand_lookups => $crate::expand_lookups;

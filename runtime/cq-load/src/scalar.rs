@@ -96,6 +96,17 @@ impl<const SCALE: u32> Decimal<SCALE> {
     }
 }
 
+/// IX-OrderKey: the derived order is the scaled coefficient's, so its `i64`
+/// ordinal is the one order embedding (equal scale is part of the type).
+impl<const SCALE: u32> cq_storage::OrderKey for Decimal<SCALE> {
+    type Ordinal = u64;
+
+    #[inline]
+    fn ordinal(&self) -> u64 {
+        cq_storage::OrderKey::ordinal(&self.0)
+    }
+}
+
 impl<const SCALE: u32> Load for Decimal<SCALE> {
     // DECODE ?: Decimal::load parses a logical decimal for generic source, test, and user callers.
     fn load(field: &str) -> Result<Self, String> {
@@ -219,6 +230,16 @@ impl Date {
 
     pub const fn days_since_epoch(self) -> i32 {
         self.0
+    }
+}
+
+/// IX-OrderKey: the derived order is the epoch-day count's.
+impl cq_storage::OrderKey for Date {
+    type Ordinal = u64;
+
+    #[inline]
+    fn ordinal(&self) -> u64 {
+        cq_storage::OrderKey::ordinal(&self.0)
     }
 }
 

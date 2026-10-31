@@ -98,7 +98,7 @@ pub use dispatch::AutoDense;
 mod hash_index;
 mod hash_state;
 mod item_columns;
-pub use item_columns::ItemColumns;
+pub use item_columns::{ColumnRow, ItemColumns, TupleColumns};
 mod join_filter;
 mod key;
 pub use join_filter::{

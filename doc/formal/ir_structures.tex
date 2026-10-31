@@ -250,7 +250,14 @@ length; append and range-copy preserve the same occurrence positions.
 Key-only operations do not call row reconstruction. Column-group reads
 borrow the selected arrays and position ranges; lookup reconstructs only
 demanded rows, while contiguous legacy item reads may materialize a row view.
-The compiler records C rather than inspecting V.
+The compiler records C rather than inspecting V: a one-level payload build
+carries the Structures fact \code{items rows} or \code{items columns}, printed
+as \code{C = ::std::vec::Vec<\_>} or \code{C = ::cq\_storage::TupleColumns<\_>}
+(the tuple of vectors rustc derives from the row type, so no arity is spelled).
+The payload is the filtered schema, else the result's carried columns
+(\code{cq\_lang\_structures::demand}, the same column demand printers carry),
+without the key. A reader's need is the carried columns of the probe or merge
+reading the index.
 \[
 \Rule{IX-ItemColumns}{\mathsf{columns}(I)=(C_1,\ldots,C_m)\quad 0\le j<|I|}
  {\forall i.\ |C_i|=|I|\quad (C_1[j],\ldots,C_m[j])=I[j]}
@@ -276,6 +283,16 @@ The compiler records C rather than inspecting V.
  \mathsf{oneLevelHashPayload}(b,K)\quad
  \mathsf{singleKey}(K)\quad\mathsf{singleStoredKey}(K)\quad\mathsf{streamReads}(b)
 }{\mathsf{retype}(b,\mathsf{RadixRun})\text{ preserves Structures}}
+
+\Rule{STR-ItemLayout}{
+ b\text{ built}\quad |\mathsf{levels}(b)|=1\quad \neg\mathsf{membership}(b)\\
+ \ell=\mathsf{columns}\Rightarrow|\mathsf{payload}(b)|\ge2
+}{b\ \code{items}\ \ell\text{ is admissible}}
+
+\Rule{SEL-ItemLayout}{
+ P=\mathsf{payload}(b)\quad 2\le|P|\le12\\
+ \exists d.\ d\text{ probes or merges }b\text{ on its key}\land P\not\subseteq\mathsf{carried}(d)
+}{\mathsf{radixRuns}\text{ records }b\ \code{items columns}\text{, otherwise }\code{items rows}}
 
 \Rule{EXT-SortedIndexes}{
  \mathcal{K}=\{K\mid \mathsf{streamRead}(b,K)\}\quad
@@ -402,6 +419,30 @@ Selection writes the reference:
   \text{existence-only single complete Built}\Rightarrow r\ \code{canon = [K]}\text{, rows dropped}}
 \end{mathpar}
 Returned results record \code{ret head = ::cq\_storage::dedup::Sort}.
+
+Authored advice may record a different \textsc{PL-Distinct} rows provider.
+\code{dedup::Packed} is the sorted run keyed by the packed \code{OrderKey} of
+every column. Its build measures each column's ordinal span while collecting,
+packs the span-relative ordinals most significant column first into one word
+together with the row position, sorts the words and reads the rows in word
+order, skipping equal keys. Packing is injective and lexicographic, so order
+and identity are those of the tuple order the printed comparator denotes; it
+falls back to that comparator when the spans exceed 128 bits. Its rows are
+\code{Copy}. The external \code{packed\_canon} rewrite (\code{canon(packed)} in
+the TPC-H harness) records it; the advice is the authored premise that every
+column has an \code{OrderKey}, which rustc checks through \code{PackedRow}.
+Selection never chooses it itself: that would need a recorded column
+representation fact or evidence-driven grading.
+\begin{mathpar}
+\Rule{PL-PackedCanon}{\forall i.\ \mathsf{OrderKey}(T_i)\quad
+ \mathsf{pack}(t)=\textstyle\sum_i (\mathsf{ord}_i(t_i)-m_i)\,2^{s_i}}
+ {\mathsf{pack}\text{ injective and lexicographic}\Rightarrow
+  \mathsf{build}_{\mathsf{Packed}}(t^*)=\mathsf{build}_{\mathsf{Sort}}(t^*)}
+
+\Rule{EXT-PackedCanon}{r\ \code{canon = rows}\quad r\ \code{rows = dedup::Sort}\quad
+ \text{advice } \mathsf{packedCanon}}
+ {r\ \code{rows = dedup::Packed}\text{ preserves Structures}}
+\end{mathpar}
 Membership indexes and retained row buffers remain ordinary members of the
 same index set.
 

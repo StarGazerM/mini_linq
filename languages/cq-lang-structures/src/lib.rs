@@ -20,7 +20,7 @@
 //! Rust expressions are opaque and total by premise, placed by free variables.
 //! Const supplies use one point read and never justify a build.
 //! ```text
-//! Entry ::= Ident ("=" RustType ("[" Ident,* "]")+ [Support]
+//! Entry ::= Ident ("=" RustType ("[" Ident,* "]")+ [Support] [Items]
 //!                | "host" ReaderRef "=" RustType ("[" Ident,* "]")+ [Support]
 //!                | ("rows" | "head" | "group") "=" RustType
 //!                | "canon" "=" ("rows" | "[" Ident,* "]" | "host")
@@ -35,6 +35,7 @@
 //!                | "share" "=" "lookup" Ident "[" Ident,* "]" "first" Ident "force" Ident
 //!                | "stage" "=" "batch" Integer ["expand"]) ";"
 //! Support ::= "supports" "[" ("retain" | "expand" | "keys"),* "]"
+//! Items ::= "items" ("rows" | "columns")
 //! Origin ::= "base" Ident "lineage" "{" (Ident "->" Ident),* "}"
 //! ReaderRef ::= "scan" | "candidates" | "membership" | "result" "(" Ident ")"
 //! ```
@@ -110,6 +111,8 @@ pub mod kw {
     syn::custom_keyword!(supports);
     syn::custom_keyword!(retain);
     syn::custom_keyword!(keys);
+    syn::custom_keyword!(items);
+    syn::custom_keyword!(columns);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -357,6 +360,8 @@ pub struct Keyed {
     pub levels: Vec<Level>,
     #[parse(parse_support)]
     pub supports: Option<ProviderSupport>,
+    #[parse(parse_items)]
+    pub items: Option<Items>,
     pub membership: Option<kw::membership>,
     #[parse(parse_filtered)]
     pub filtered: Option<Filtered>,
@@ -414,6 +419,33 @@ impl ProviderSupport {
 
 fn parse_support(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<ProviderSupport>> {
     if input.peek(kw::supports) {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// The payload layout of a one-level payload build (STR-ItemLayout), chosen
+/// by index selection from the recorded read needs. `rows`
+/// stores complete payload rows contiguously; `columns` stores one vector per
+/// payload field, so a reader that needs some fields reads only those. The
+/// provider type's layout argument is this fact's printing.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Items {
+    pub items_token: kw::items,
+    pub layout: ItemLayout,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum ItemLayout {
+    #[parse(peek = kw::rows)]
+    Rows(kw::rows),
+    #[parse(peek = kw::columns)]
+    Columns(kw::columns),
+}
+
+fn parse_items(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<Items>> {
+    if input.peek(kw::items) {
         input.parse().map(Some)
     } else {
         Ok(None)
@@ -815,6 +847,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
                 concrete_type(&keyed.ty)?;
                 keyed.check_support()?;
+                if let Some(items) = &keyed.items {
+                    return error(items, "an item layout belongs to a built payload provider");
+                }
                 let columns = keyed.level_names();
                 if columns.is_empty() || (columns.len() > 1 && columns.iter().any(Vec::is_empty)) {
                     return error(keyed, "host fallback requires nonempty key levels");
@@ -1380,7 +1415,54 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         );
     }
     coalesce_join_filters(program, &mut analysis);
+    check_items(program, &analysis)?;
     Ok(analysis)
+}
+
+/// Formal rule STR-ItemLayout: an item layout belongs to a one-level payload
+/// build; a column layout splits a payload of at least two fields. The payload
+/// is the filtered schema, else the carried columns, without the key.
+fn check_items(program: &Program, analysis: &Analysis) -> syn::Result<()> {
+    let mut carried = None;
+    for entry in &program.structures.entries {
+        let Structure::Built { keyed, .. } = &entry.structure else {
+            continue;
+        };
+        let Some(items) = &keyed.items else {
+            continue;
+        };
+        if keyed.levels.len() != 1
+            || keyed.levels[0].columns.is_empty()
+            || keyed.membership.is_some()
+        {
+            return error(
+                items,
+                "an item layout needs one nonempty key level and a payload",
+            );
+        }
+        if matches!(items.layout, ItemLayout::Columns(_)) {
+            let name = symbol_name(&entry.name);
+            let key = keyed.level_names().concat();
+            let payload = match analysis.filtered.get(&name) {
+                Some(filtered) => filtered.payload.columns.iter().map(symbol_name).collect(),
+                None => carried.get_or_insert_with(|| demand::carried_columns(program, analysis))
+                    [&name]
+                    .clone(),
+            };
+            if payload
+                .iter()
+                .filter(|column| !key.contains(column))
+                .count()
+                < 2
+            {
+                return error(
+                    items,
+                    "a column layout splits a payload of at least two fields",
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Formal rule STR-Group: Exactly keyed Group results record a concrete accumulator table.
@@ -1473,6 +1555,7 @@ pub fn storage_layout_eq(left: &Entry, right: &Entry) -> bool {
         (Structure::Built { keyed: left, .. }, Structure::Built { keyed: right, .. }) => {
             left.ty = right.ty.clone();
             left.supports = right.supports.clone();
+            left.items = right.items.clone();
         }
         (Structure::Rows { ty: left, .. }, Structure::Rows { ty: right, .. })
         | (Structure::HeadDedup { ty: left, .. }, Structure::HeadDedup { ty: right, .. })
@@ -1582,6 +1665,7 @@ pub fn check_retention_rewrite(source: &Program, target: &Program) -> syn::Resul
     Ok(())
 }
 
+pub mod demand;
 pub mod positional;
 pub use positional::*;
 mod join_filter;

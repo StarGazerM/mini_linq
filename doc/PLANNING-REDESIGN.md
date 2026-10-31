@@ -473,10 +473,27 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   publication, aligned with round/load boundaries.
   Memory placement is a per-target fact (`doc/STORAGE.md` §11): shared byte
   layout and laws; CUDA and Metal differ in allocation, copy reasons and cost.
-  **Compiler selection (open):** record the RadixRun payload layout `C`, and
-  let the canonical pass choose a sorted-run provider keyed by the packed
-  `OrderKey` for wide canonical results (h01's 61% comparison sort) where
-  measurement supports it.
+  **Compiler selection (CPU, done 2026-10-31).** (a) A one-level payload
+  build records `items rows | items columns` (STR-ItemLayout), printed as
+  RadixRun's layout argument `::std::vec::Vec<_>` / `::cq_storage::TupleColumns<_>`.
+  `radix_runs` chooses it from recorded read needs (SEL-ItemLayout): the
+  carried-column demand analysis, now `cq_lang_structures::demand` (moved
+  verbatim from cq-print), gives each probe/merge reader's columns; `columns`
+  iff the payload has 2–12 fields and some reader carries part of it. Every
+  TPC-H radix reader carries the full payload, so all record `rows`
+  (spelling-only hunks). (b) `cq_storage::dedup::Packed` is an ordinary
+  Distinct provider: a sorted run keyed by the packed `OrderKey` of every
+  column (PL-PackedCanon; comparator fallback beyond 128 bits). It is
+  selected only by authored, checked advice (`canon(packed)` →
+  `cq_rewrites::packed_canon`, EXT-PackedCanon); h01 opts in. Making Packed
+  the canonical pass's own choice needs a recorded column-representation
+  (OrderKey) fact or evidence-driven grading (P3.3) and is deferred.
+  `OrderKey` now covers `cq_load::Decimal<S>` and `Date`. Measured (SF1, 5
+  interleaved pairs of 5-run medians vs 1031adf6, bootstrap 95% CI of the
+  geometric-mean ratio): h01 default 1981 → 939 ms, 0.470× [0.457, 0.480];
+  h01 par 4.97 → 4.87 ms, 0.991× [0.970, 1.015]. Page faults: h01 default
+  process minor faults 718K → 906K (about +31K per execution, the 24-byte
+  key words of 5.9M rows), peak RSS 714 → 853 MB; par unchanged (74.0K).
 - **P4-GPU Device RadixRun.** Runtime done (`DeviceRadixRun<W, O, C>` in
   gpu-datalog-runtime: whole packed order-key words, offset carrier as a type
   fact, explicit item layouts, caller-supplied ratio/radix bits/merge tile,

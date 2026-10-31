@@ -215,6 +215,14 @@ existing opaque item column; `(Vec<A>, Vec<B>, …)` stores actual independent
 columns, with tuple layouts supplied through arity twelve. Custom layouts
 implement the same append/position/range-copy law. The selected C is explicit
 in the provider type; compiler index selection records it, never inspects V.
+The Structures fact is `items rows | items columns` on a one-level payload
+build (STR-ItemLayout), printed as `C = ::std::vec::Vec<_>` or
+`C = ::cq_storage::TupleColumns<_>` (the tuple of vectors rustc derives from
+V, so no arity is spelled). `radix_runs` records `columns` when the payload
+has 2–12 fields and some probe or merge on the index key carries only part
+of it (the carried columns of `cq_lang_structures::demand`), otherwise
+`rows` (SEL-ItemLayout). Every TPC-H radix payload reader carries the full
+payload, so all TPC-H sites record `rows`.
 `from_column_rows(source,ratio)` builds that selected layout.
 `column_groups(key)` returns each matching columns object and position range
 without reconstructing rows, so consumers can read only a needed field.
@@ -682,6 +690,17 @@ GPU reduction/dedup overhead and CPU h01's dominant cost must be profiled
    On CPU, `dedup::Sort` collects the whole boundary stream, uses `sort_unstable_by` with
    Rust `Ord` comparisons of the fields, then removes adjacent equal rows.
    Tasks uses `par_sort_unstable_by`; its adjacent-unique pass is sequential.
+   Authored advice `canon(packed)` (rewrite `cq_rewrites::packed_canon`,
+   EXT-PackedCanon) instead records `::cq_storage::dedup::Packed`, the sorted
+   run keyed by the packed `OrderKey` of every column (PL-PackedCanon): the
+   build measures each column's ordinal span while collecting, packs the
+   span-relative ordinals most significant column first with the row
+   position into one `u64`, `u128` or two-word key, sorts the words, and
+   reads the rows in word order, skipping equal keys. Order and identity equal
+   the comparator's; spans over 128 bits fall back to it. The premise (every
+   column has an `OrderKey`, rows are `Copy`) is the author's, checked by
+   rustc; selection does not choose `Packed` on its own until a recorded
+   column-representation fact or evidence-driven grading (P3.3) exists.
    On device, catalog selection retypes the rows record to a `Distinct`
    provider (`PackedCanon` up to 128 packed bits, `WideCanon` otherwise),
    but never turns a `host` reference into `rows`. This

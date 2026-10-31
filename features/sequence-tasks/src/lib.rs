@@ -213,6 +213,11 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             vec![Keys],
         ),
         (
+            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::RadixRun<_, _, _>>),
+            vec![Capability::Exact, Capability::Membership],
+            vec![Keys],
+        ),
+        (
             syn::parse_quote!(
                 ::cq_storage::sharded::Sharded<::std::collections::BTreeMap<_, ::std::vec::Vec<_>>>
             ),

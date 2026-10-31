@@ -134,6 +134,40 @@ pub fn radix_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<i
     select_runs(source, arguments, RunKind::Radix)
 }
 
+/// Formal rule EXT-PackedCanon:
+/// Retype every canonical rows record typed by the default sorted array to the
+/// sorted run keyed by the packed OrderKey. The advice is the authored premise
+/// that every column of those results has an OrderKey; rustc checks it at the
+/// build. Other records and canonical references are unchanged.
+pub fn packed_canon(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    if !arguments.is_empty() {
+        return Err(syn::Error::new_spanned(
+            arguments,
+            "packed_canon takes no arguments",
+        ));
+    }
+    let analysis = ir::contract::check(source)?;
+    let mut target = source.clone();
+    for entry in &mut target.structures.entries {
+        let Structure::Rows { ty, .. } = &mut entry.structure else {
+            continue;
+        };
+        let rows_record = analysis
+            .canonical
+            .get(&symbol_name(&entry.name))
+            .and_then(ir::CanonSource::rows_provider)
+            .is_some();
+        if rows_record
+            && matches!(&*ty, Type::Path(p) if p.qself.is_none()
+                && p.path.segments.iter().map(|s| s.ident.to_string()).eq(["cq_storage", "dedup", "Sort"]))
+        {
+            *ty = syn::parse_quote!(::cq_storage::dedup::Packed);
+        }
+    }
+    ir::check_rewrite(source, &target)?;
+    Ok(target)
+}
+
 #[derive(Clone, Copy)]
 enum RunKind {
     Sorted,
@@ -191,7 +225,17 @@ fn select_runs(
             // Constants removed from the stored key do not make a composite
             // read eligible. Rust checks the selected provider's key traits.
             if columns.len() == 1 && stored.len() == 1 {
-                keyed.ty = syn::parse_quote!(::cq_storage::RadixRun<_, _>);
+                // The type argument prints the recorded `items` fact
+                // (SEL-ItemLayout).
+                if split_payload(source, &analysis, &name, &columns) {
+                    keyed.ty = syn::parse_quote!(
+                        ::cq_storage::RadixRun<_, _, ::cq_storage::TupleColumns<_>>
+                    );
+                    keyed.items = Some(syn::parse_quote!(items columns));
+                } else {
+                    keyed.ty = syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>);
+                    keyed.items = Some(syn::parse_quote!(items rows));
+                }
                 keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
             }
             continue;
@@ -205,6 +249,50 @@ fn select_runs(
     }
     ir::check_rewrite(source, &target)?;
     Ok(target)
+}
+
+/// Formal rule SEL-ItemLayout: store a payload column-wise when it has two to
+/// twelve fields (the tuple layouts) and some payload reader of this index,
+/// a probe or merge on its key, carries only part of it. Complete-row readers
+/// keep contiguous rows; key, count and membership reads never touch items.
+/// Needs are the recorded carried columns (`ir::demand`), never Rust types.
+fn split_payload(
+    source: &ir::Program,
+    analysis: &ir::Analysis,
+    name: &str,
+    key: &[String],
+) -> bool {
+    let carried = ir::demand::carried_columns(source, analysis);
+    let stored: Vec<String> = match analysis.filtered.get(name) {
+        Some(filtered) => filtered.payload.columns.iter().map(symbol_name).collect(),
+        None => carried[name].clone(),
+    };
+    let payload: Vec<String> = stored
+        .into_iter()
+        .filter(|column| !key.contains(column))
+        .collect();
+    if !(2..=12).contains(&payload.len()) {
+        return false;
+    }
+    source
+        .physical
+        .program
+        .definitions
+        .iter()
+        .any(|definition| {
+            let (ir::physical::Operator::Probe(_, read) | ir::physical::Operator::Merge(_, read)) =
+                &definition.operator
+            else {
+                return false;
+            };
+            let mut columns: Vec<_> = read.columns.iter().map(symbol_name).collect();
+            columns.sort();
+            symbol_name(&read.right) == name
+                && columns == key
+                && payload
+                    .iter()
+                    .any(|column| !carried[&symbol_name(&definition.name)].contains(column))
+        })
 }
 
 /// Record an exact hashed-bucket run for one-level composite scalar keys.

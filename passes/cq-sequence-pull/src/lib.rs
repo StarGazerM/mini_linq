@@ -72,6 +72,11 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             vec![Retain, Expand, Keys],
         ),
         (
+            syn::parse_quote!(::cq_storage::RadixRun<_, _, _>),
+            vec![Exact, Range, Membership],
+            vec![Retain, Expand, Keys],
+        ),
+        (
             syn::parse_quote!(::cq_storage::HashSet<_>),
             vec![Membership],
             vec![],
@@ -145,6 +150,11 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         // 0-ary set, whose build already yields the distinct rows.
         (
             syn::parse_quote!(::cq_storage::dedup::Sort),
+            vec![Distinct],
+            vec![],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::dedup::Packed),
             vec![Distinct],
             vec![],
         ),

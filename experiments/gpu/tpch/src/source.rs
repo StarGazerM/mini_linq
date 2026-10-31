@@ -59,6 +59,15 @@ pub(crate) fn authored_file(source: &str) -> Result<syn::File> {
                 let _: TokenStream = advice.parse()?;
                 input.parse::<Token![;]>()?;
             }
+            // `canon(packed);` is CPU Structures advice for canonical rows
+            // records; GPU canonical providers come from the GPU catalog.
+            if input.peek(Ident) && input.fork().parse::<Ident>()? == "canon" {
+                let _: Ident = input.parse()?;
+                let advice;
+                syn::parenthesized!(advice in input);
+                let _: TokenStream = advice.parse()?;
+                input.parse::<Token![;]>()?;
+            }
             Ok(Self(input.parse()?))
         }
     }

@@ -30,7 +30,17 @@
 //! Compose with `retain_lookups` to reuse exact ranges, and optionally
 //! `expand_lookups(N)` for checked segmented execution. Neither sorted storage
 //! nor range capability alone selects a merge join or GPU execution.
+//! Each selected run also records its payload layout, `items rows` or
+//! `items columns` (SEL-ItemLayout): column-wise (`TupleColumns<_>`) only when
+//! the payload has 2..=12 fields and some reader of the index carries part of
+//! it, otherwise contiguous rows (`Vec<_>`).
 //! Use `pipeline { structures = [cq_rewrites::radix_runs, cq_rewrites::retain_lookups]; }`.
+//!
+//! `packed_canon` takes no arguments and retypes every canonical rows record
+//! typed `::cq_storage::dedup::Sort` to `::cq_storage::dedup::Packed`, the
+//! sorted run keyed by the packed `OrderKey` of every column. The advice is
+//! the author's premise that every such column has an `OrderKey` (rustc
+//! checks `PackedRow`); answers and their order are unchanged.
 //!
 //! `retain_lookups` takes no arguments and records a `share` decision and a
 //! `repr` witness for each eligible eager semijoin followed by a probe of the

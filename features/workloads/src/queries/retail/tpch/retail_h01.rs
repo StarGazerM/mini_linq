@@ -55,6 +55,10 @@ crate::tpch_runtime::standalone_configs! { $;
         let cutoff = Date::load("1998-09-02").expect("authored ISO date");
         query! {
             plan(no_reduce, order(Lineitem));
+            // Every valuation column has an OrderKey (StringCode codes, Decimal
+            // coefficients, Date days, i64): the canonical rows record is the
+            // packed sorted run (PL-PackedCanon) instead of a comparison sort.
+            canon(packed);
             // dbgen's line identity is retained by the loader and group valuation.
             evidence { key Lineitem [l_orderkey, l_linenumber]; }
             struct Query;
