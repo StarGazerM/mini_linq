@@ -244,7 +244,7 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
 - **P3b Profile the engine gaps** (`doc/STORAGE.md` §12.4): GPU h06
   reduce/dedup at 16–74× a hand kernel; CPU h01 at ~140× a String-grouping
   microbenchmark. Profiles (perf, nsys/ncu) decide whether these come before
-  the storage slices. **Profiled 2026-10-31** (`/data/mini_linq-wt/p3b-profile`,
+  the storage slices. **Profiled 2026-10-31** (`experiments/gpu/compare/p3b-profile/`,
   M0 binaries): GPU h06's scalar reduce ran on one 256-thread CTA (51% of
   kernel time, 0.9% of peak bandwidth), fixed by P3e's recorded grid fold;
   CPU h01 spends 61% in comparison sorting of wide DISTINCT valuations (keys
@@ -458,7 +458,7 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   fused with predicates, narrow carriers, summary skip; GPU Datalog runs as
   grouped runs.
 - **P6b GPU Datalog parallelism** (profile 2026-10-31,
-  `/data/mini_linq-wt/p3b-profile/01-doop-report.md`): fixpoint xalan 1.76 s /
+  `experiments/gpu/compare/p3b-profile/01-doop-report.md`): fixpoint xalan 1.76 s /
   batik 4.97 s vs SRDatalog ~1.0–1.5 s / 1.8–3.0 s; one stream, zero kernel
   overlap, GPU idle 40% / 22%; joins 0.70 / 3.40 s (batik `VPT_LoadArray` alone
   1.52 s, skew), host/launch gaps 0.70 / 1.08 s, sort/unique ~0.3 s. Work:
