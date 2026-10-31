@@ -483,7 +483,9 @@ def harness(tree, directory, target, source, deps):
         if name == "cq-load":
             manifest += ', features = ["parquet"]'
         manifest += ' }\n'
-    manifest += 'serde_json="1"\nrayon="1"\n'
+    # Mirrors the bench harness manifest (xtask/src/tpch/compile.rs): the
+    # included worker reads getrusage through libc on unix.
+    manifest += 'serde_json="1"\nrayon="1"\n[target.\'cfg(unix)\'.dependencies]\nlibc="0.2"\n'
     (directory / "Cargo.toml").write_text(manifest)
     lock = tree / "features/workloads/Cargo.lock"
     shutil.copyfile(lock, directory / "Cargo.lock")
