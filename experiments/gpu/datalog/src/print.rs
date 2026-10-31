@@ -654,7 +654,8 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream]) ->
                     ::std::eprintln!("gpu_datalog_hole\tstratum={}\tphase={}\thole={}\thead={}\tcurrent_bytes={}\treserved_bytes={}\tarena_bytes={}",
                         #index, #phase, #hole, #head_name, memory.current_bytes, memory.reserved_bytes, #arena.allocated_bytes());
                 }
-                let __cq_gpu_arena = &mut #arena;
+                // GPU-ReservePrevious: the capacity hint is this Round hole's own.
+                let __cq_gpu_arena = #arena.hole(#hole);
                 #counter_scope
                 let __cq_gpu_batch = #invocation;
                 #counter_report

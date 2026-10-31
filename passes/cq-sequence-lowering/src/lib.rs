@@ -115,6 +115,7 @@ pub fn compile(source: &cq_lang_structures::Program) -> syn::Result<Program> {
         structures: source.clone(),
         sequence: Sequence {
             definitions,
+            roots: Default::default(),
             output: Some(OutputProtocol::Count),
         },
         graded: None,

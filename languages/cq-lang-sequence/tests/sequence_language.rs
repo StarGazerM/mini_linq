@@ -948,6 +948,25 @@ fn reserve_previous_round_trips_without_claiming_capacity() {
 }
 
 #[test]
+fn roots_spread_round_trips_before_output() {
+    let p = program(quote!(a = store rows r; roots spread; output reserve_previous;));
+    assert_eq!(p.sequence.roots, Roots::Spread);
+    assert_eq!(syn::parse2::<Program>(p.to_token_stream()).unwrap(), p);
+    contract::check(&p).unwrap();
+    assert_eq!(
+        program(quote!(a = store rows r;)).sequence.roots,
+        Roots::Declared
+    );
+    // The statement follows every definition and precedes output.
+    for misplaced in [
+        quote!(sequence { roots spread; a = store rows r; }),
+        quote!(sequence { a = store rows r; output count; roots spread; }),
+    ] {
+        assert!(syn::parse2::<Sequence>(misplaced).is_err());
+    }
+}
+
+#[test]
 fn choose_rejects_nonexhaustive_and_unequal_alternatives() {
     reject(
         &program(quote!(a = choose [len r < 3 => rows r];)),

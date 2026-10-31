@@ -15,7 +15,11 @@
 //! takes its capacity from that store. `reserve_previous` is arena-terminal only:
 //! the last validated count is an initial capacity hint (zero on first use),
 //! never a bound; full counter and BE-Abort checks and overflow replay precede
-//! publication. Codec and provider premises are analysis obligations, not syntax.
+//! publication. The optional statement `roots spread;`, after the definitions
+//! and before `output`, records the root partition policy of every fold-free
+//! dispatch (EXT-SeqRoots, GPU-RootSpread): root tiles are sized at launch to
+//! fill the machine's resident blocks, never larger than the declared tile.
+//! Codec and provider premises are analysis obligations, not syntax.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -61,6 +65,8 @@ mod kw {
     syn::custom_keyword!(len);
     syn::custom_keyword!(workers);
     syn::custom_keyword!(output);
+    syn::custom_keyword!(roots);
+    syn::custom_keyword!(spread);
     syn::custom_keyword!(reserve);
     syn::custom_keyword!(reserve_previous);
     syn::custom_keyword!(bounded);
@@ -140,7 +146,19 @@ impl ToTokens for Representation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sequence {
     pub definitions: Vec<Definition>,
+    pub roots: Roots,
     pub output: Option<OutputProtocol>,
+}
+
+/// Root partition policy of the program's dispatches (EXT-SeqRoots).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Roots {
+    /// The declared distributed tile, or one part covering the source.
+    #[default]
+    Declared,
+    /// Root tiles sized at launch from the resident block count, at most the
+    /// declared tile (one block of rows when undeclared). Fold-free dispatches only.
+    Spread,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -536,9 +554,18 @@ impl Parse for Sequence {
         let body;
         braced!(body in input);
         let mut definitions = Vec::new();
+        let mut roots = Roots::Declared;
         let mut output = None;
         while !body.is_empty() {
-            if body.peek(kw::output) && !body.peek2(Token![=]) {
+            if body.peek(kw::roots) && !body.peek2(Token![=]) {
+                body.parse::<kw::roots>()?;
+                body.parse::<kw::spread>()?;
+                body.parse::<Token![;]>()?;
+                roots = Roots::Spread;
+                if !(body.is_empty() || body.peek(kw::output) && !body.peek2(Token![=])) {
+                    return Err(body.error("roots must follow every definition, before output"));
+                }
+            } else if body.peek(kw::output) && !body.peek2(Token![=]) {
                 body.parse::<kw::output>()?;
                 output = Some(body.parse()?);
                 body.parse::<Token![;]>()?;
@@ -551,6 +578,7 @@ impl Parse for Sequence {
         }
         Ok(Self {
             definitions,
+            roots,
             output,
         })
     }
@@ -559,12 +587,13 @@ impl Parse for Sequence {
 impl ToTokens for Sequence {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let definitions = &self.definitions;
+        let roots = (self.roots == Roots::Spread).then(|| quote! { roots spread; });
         let output = self
             .output
             .as_ref()
             .map(|protocol| quote! { output #protocol; });
         tokens.extend(quote! { sequence {
-            #(#definitions)* #output
+            #(#definitions)* #roots #output
         } });
     }
 }

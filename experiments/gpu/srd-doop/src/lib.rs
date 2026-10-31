@@ -36,10 +36,12 @@ srd_doop_shared::srd_doop_engine!(run, incremental(driver(delta_first); $($advic
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs, ::cq_gpu_sequence::select_catalog];
         stage = ::cq_gpu_sequence::stage;
         sequence = ::mini_linq::passes::sequence;
-        // Reuse only each arena hole's last validated count as a capacity hint.
+        // Reuse only each arena hole's last validated count as a capacity hint;
+        // size root tiles at launch to fill the device (GPU-RootSpread).
         decompose = [
             ::cq_gpu_sequence::decompose,
             ::cq_sequence_rewrites::output(reserve_previous),
+            ::cq_sequence_rewrites::roots(spread),
         ];
         grade = ::cq_gpu_sequence::machine_grade;
         print = ::cq_gpu_sequence::translate_arena;

@@ -12,6 +12,7 @@
 //! | `segment` | `d, n` or `d, n, items m` | Materialize a named flatten's offsets and pair tile/flatten around that store. |
 //! | `choose` | `d, len x < k => a, else => b` | Select earlier equal-Structures-result definitions (BE-Choose). |
 //! | `output` | `count`, `reserve`, `reserve_previous`, or `bounded` | Set the final store protocol; bounded requires declared capacity. |
+//! | `roots` | `spread` | Size fold-free dispatches' root tiles at launch to fill resident blocks, at most the declared tile (GPU-RootSpread). |
 //! | `grade` | `machine, d at host.device, ...` | Add/update placements; preserve other grades on the same machine. |
 //! | `evidence` | `evidence { ... }` | Record estimates and author-asserted key premises. False keys can change grouped answers. |
 //! | `group_without_canon` | group definition | Remove valuation canon only with checked positional uniqueness. |
@@ -71,6 +72,7 @@ sequence_rewrite!(segment, missing, 0);
 sequence_rewrite!(key_partition, missing, publication, [], 0);
 sequence_rewrite!(choose, b, len r < 4 => a, else => missing);
 sequence_rewrite!(output, bounded);
+sequence_rewrite!(roots, declared);
 sequence_rewrite!(grade, custom, missing at host);
 sequence_rewrite!(evidence, evidence { count missing = 1; });
 sequence_rewrite!(group_without_canon, missing);

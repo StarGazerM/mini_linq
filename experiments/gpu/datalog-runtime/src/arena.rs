@@ -9,30 +9,45 @@ use std::{any::Any, sync::Arc};
 /// every batch clone and owner token has been dropped. Dropped leases become
 /// reusable, including failed capacity-probe attempts, without synchronization.
 /// The pool orders both reuse and destruction after preceding device work.
+/// Capacity hints are kept per Round hole (GPU-ReservePrevious): the printer
+/// selects the recorded hole with [`Self::hole`] before invoking it, so holes
+/// sharing a head relation's arena never overwrite each other's hint.
 pub struct CandidateArena {
     pool: Arc<Pool>,
     slots: Vec<Arc<Buffer<u64>>>,
-    previous_count: usize,
+    previous_counts: Vec<usize>,
+    hole: usize,
 }
 impl CandidateArena {
     pub fn new(pool: Arc<Pool>) -> Self {
         Self {
             pool,
             slots: Vec::new(),
-            previous_count: 0,
+            previous_counts: Vec::new(),
+            hole: 0,
         }
     }
     pub fn pool(&self) -> &Arc<Pool> {
         &self.pool
     }
-    /// Initial capacity hint for the explicitly recorded reserve_previous protocol.
+    /// Select the Round hole whose hint the next terminal reads and records.
+    pub fn hole(&mut self, hole: usize) -> &mut Self {
+        if self.previous_counts.len() <= hole {
+            self.previous_counts.resize(hole + 1, 0);
+        }
+        self.hole = hole;
+        self
+    }
+    /// Initial capacity hint for the explicitly recorded reserve_previous protocol:
+    /// the selected hole's last validated count (zero on its first invocation).
     /// This is not a bound or a live length; every attempt must validate its count.
     pub fn previous_count(&self) -> usize {
-        self.previous_count
+        self.previous_counts.get(self.hole).copied().unwrap_or(0)
     }
-    /// Remember a fully validated invocation's count, including an empty result.
+    /// Remember the selected hole's fully validated count, including an empty result.
     pub fn record_count(&mut self, rows: usize) {
-        self.previous_count = rows;
+        let hole = self.hole;
+        self.hole(hole).previous_counts[hole] = rows;
     }
 
     /// Device bytes retained by all slots, including spare capacity and slots
@@ -67,11 +82,14 @@ impl CandidateArena {
     /// their own storage alive; subsequent reservations allocate fresh slots.
     pub fn clear(&mut self) {
         self.slots.clear();
-        self.previous_count = 0;
+        self.previous_counts.clear();
     }
 
     /// Reserve the minimum complete u64 lanes for each row. Native u128 words
     /// use low-lane-first storage; words wider than 128 bits use MS-first arrays.
+    /// The lease's capacity is the chosen slot's full row capacity (at least the
+    /// request, at most `u32::MAX` rows), so an attempt may use spare retained
+    /// storage instead of replaying (GPU-ReservePrevious).
     /// The emitter initializes the live prefix before finish.
     /// `GPU_DATALOG_TRACE_MEMORY=1` logs requested and actual backing bytes on
     /// allocation/growth, including failed retries, without device readbacks.
@@ -110,10 +128,11 @@ impl CandidateArena {
                 self.slots.len() - 1
             }
         };
+        let rows = self.slots[index].len() / (packing.word_bits() / 64) as usize;
         Ok(CandidateLease {
             buffer: self.slots[index].clone(),
             packing,
-            capacity,
+            capacity: rows.min(u32::MAX as usize).max(capacity),
         })
     }
 }

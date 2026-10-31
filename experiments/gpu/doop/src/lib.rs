@@ -24,6 +24,8 @@ doop_shared::doop_engine!(run, pipeline {
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs, ::cq_gpu_sequence::select_catalog];
         sequence = ::mini_linq::passes::sequence;
         // Each arena hole reuses only its last validated count as a capacity hint.
+        // No `roots(spread)`: Cassandra's joins are not occupancy-bound and the
+        // spread/shared launches measured 1.032x [1.021, 1.045] of main (P6b).
         decompose = [
             ::cq_gpu_sequence::decompose,
             ::cq_sequence_rewrites::output(reserve_previous),

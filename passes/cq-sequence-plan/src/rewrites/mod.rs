@@ -282,6 +282,28 @@ pub fn output_in(
     checked_in(checker, source, target)
 }
 
+/// Record the root partition policy: `roots(spread)` sizes every fold-free
+/// dispatch's root tiles at launch from the resident block count, never above
+/// the declared tile. Rows, their order within a part and support are unchanged.
+/// Formal rule EXT-SeqRoots: Root partition policy changes only how roots are tiled across blocks, not the construction or its support.
+pub fn roots(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
+    roots_in(&mut Default::default(), source, arguments)
+}
+
+pub fn roots_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+    arguments: TokenStream,
+) -> syn::Result<Program> {
+    let policy: Ident = syn::parse2(arguments)?;
+    if policy != "spread" {
+        return Err(syn::Error::new_spanned(policy, "expected roots(spread)"));
+    }
+    let mut target = source.clone();
+    target.sequence.roots = cq_lang_sequence::Roots::Spread;
+    checked_in(checker, source, target)
+}
+
 struct Grades {
     machine: Ident,
     grades: Vec<Grade>,

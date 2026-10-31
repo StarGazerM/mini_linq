@@ -34,6 +34,15 @@ pub fn launch_grid_for_kernel(
     Ok((parts.max(1) as u64).min(resident).min(u64::from(u32::MAX)) as u32)
 }
 
+/// GPU-RootSpread realization: the root tile of a recorded `Spread` partition,
+/// `clamp(ceil(domain / resident), 1, max_rows)` rows, so a small driver fills
+/// the `resident` blocks returned by [`launch_grid_for_kernel`] instead of one
+/// block per declared tile. A large driver keeps the declared tile.
+pub fn spread_tile(domain: u32, resident: u32, max_rows: usize) -> u32 {
+    let rows = (domain as usize).div_ceil(resident.max(1) as usize);
+    rows.clamp(1, max_rows.clamp(1, u32::MAX as usize)) as u32
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Timings {
     pub upload_ms: f64,

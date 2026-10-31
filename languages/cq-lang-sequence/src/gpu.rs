@@ -23,7 +23,16 @@ pub struct Machine {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Partition {
     One,
-    Tiles { rows: usize },
+    Tiles {
+        rows: usize,
+    },
+    /// GPU-RootSpread: root tiles of `clamp(ceil(domain / resident), 1, max_rows)`
+    /// rows, `resident` the launch's occupancy-query block capacity; the grid is
+    /// the resulting tile count capped by `resident`. `max_rows` is the declared
+    /// distributed tile, else one block pass of source rows.
+    Spread {
+        max_rows: usize,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Publication {
@@ -108,7 +117,22 @@ pub struct Execution {
     pub reservation: Reservation,
     /// One record per publication chain, in Sequence constructor order.
     pub chains: Vec<ChainExecution>,
+    pub share: Share,
 }
+
+/// GPU-RootShare: how blocks divide the first expansion level of a root tile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Share {
+    /// The block that claimed the root tile expands all of its descendants.
+    None,
+    /// Child batches of the first expansion are claimed from a per-tile cursor
+    /// for the first `tiles` root tiles; once root tiles are exhausted, idle
+    /// blocks replay a tile with unclaimed batches and claim from it too.
+    FirstExpansion { tiles: usize },
+}
+
+/// Root tiles whose first expansion is shared under `Spread`.
+pub const SHARED_TILES: usize = 2048;
 
 /// Formal rule GPU-Launch: grading records partition, kernel occupancy policy,
 /// fold completion and synchronization before any launch is emitted.
@@ -180,6 +204,7 @@ pub(crate) fn derive(
             capacity: InitialCapacity::Zero,
             reservation: Reservation::StripeBatch,
             chains: Vec::new(),
+            share: Share::None,
         };
         if let Some(name) = dispatch
             .inner_stores
@@ -282,9 +307,58 @@ pub(crate) fn derive(
                 })
                 .collect();
         }
+        if let Some(max_rows) = spread_rows(program, &execution, dispatch.parts) {
+            execution.partition = Partition::Spread { max_rows };
+            execution.share = shared_first(&execution);
+        }
         executions.push(execution);
     }
     Ok(executions)
+}
+
+/// Formal rule GPU-RootSpread: under `roots spread`, a fold-free dispatch with
+/// a publication records `Spread`, bounded by its declared distributed tile or
+/// else one block pass of its widest source strip. Folds keep their declared
+/// partition, because block-local fold scopes depend on the root tile.
+fn spread_rows(program: &Program, execution: &Execution, parts: Option<usize>) -> Option<usize> {
+    let fold_free = execution.fold == FoldCompletion::Local
+        && execution
+            .chains
+            .iter()
+            .flat_map(|chain| &chain.strips)
+            .all(|strip| strip.fold.is_none());
+    (program.sequence.roots == crate::Roots::Spread && !execution.chains.is_empty() && fold_free)
+        .then(|| {
+            parts.unwrap_or_else(|| {
+                let items = execution
+                    .chains
+                    .iter()
+                    .filter_map(|chain| chain.strips.first())
+                    .map(|strip| strip.items)
+                    .max()
+                    .unwrap_or(1);
+                execution.block_threads as usize * items
+            })
+        })
+}
+
+/// Formal rule GPU-RootShare: a spread single-chain dispatch whose source level
+/// has one local tile and that expands at least once shares its first
+/// expansion's child batches across blocks. Batches are claimed exactly once
+/// from a per-tile cursor; a helper replays the tile's source and first lookup,
+/// which are deterministic over the immutable inputs, so every participant
+/// numbers the batches identically.
+fn shared_first(execution: &Execution) -> Share {
+    match (&execution.partition, execution.chains.as_slice()) {
+        (Partition::Spread { .. }, [chain])
+            if chain.strips.len() >= 2 && chain.strips[0].nested.is_empty() =>
+        {
+            Share::FirstExpansion {
+                tiles: SHARED_TILES,
+            }
+        }
+        _ => Share::None,
+    }
 }
 
 /// Sequence definitions, dispatch publications, and the publication
@@ -473,6 +547,25 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         };
         if execution.block_threads == 0 {
             return Err(error("zero block width"));
+        }
+        // GPU-RootSpread: the recorded partition follows the program's root
+        // policy exactly; a fold-bearing dispatch never spreads.
+        match (
+            spread_rows(program, execution, dispatch.parts),
+            &execution.partition,
+        ) {
+            (Some(expected), Partition::Spread { max_rows }) if expected == *max_rows => {}
+            (None, Partition::One | Partition::Tiles { .. }) => {}
+            _ => {
+                return Err(error(
+                    "root partition contradicts the recorded roots policy",
+                ));
+            }
+        }
+        if execution.share != shared_first(execution) {
+            return Err(error(
+                "first-expansion sharing contradicts the spread single-chain dispatch",
+            ));
         }
         let Some(name) = dispatch
             .inner_stores

@@ -906,6 +906,8 @@ construction-based support equality:
 
 \Rule{EXT-SeqOutput}{p\in\{\mathsf{count},\mathsf{reserve},\mathsf{reserve\_previous},\mathsf{bounded}\}\quad p=\mathsf{bounded}\Rightarrow\text{capacity declared}}{\mathsf{output}:=p}
 
+\Rule{EXT-SeqRoots}{\text{every definition precedes }\mathsf{roots}}{\mathsf{roots}:=\mathsf{spread}\text{; the construction and its support are unchanged}}
+
 \Rule{EXT-SeqGrade}{\text{machine }M\text{ named}\quad\text{placements }d_i\ \mathsf{at}\ \ell_i}{\mathsf{graded}\ M\{\ldots\}\text{ extended; the construction is unchanged}}
 \end{mathpar}
 \code{grade} records advice only: the facade's grading phase checks the
@@ -1061,7 +1063,13 @@ sizes and the fold's implementation scope (whole domain or the first $n$
 local tiles). Omitted items cover a tile in one block pass; an untiled
 expansion batches one block of children with one item. The checker accepts
 any positive implicit strip and requires explicit tiles and fold scopes to be
-the chain's.
+the chain's. Under the Sequence statement \code{roots spread} (EXT-SeqRoots),
+every fold-free dispatch records \textsc{Spread}$(m)$ instead: a block still
+exhausts the descendants of the roots it claims, but root tiles shrink at
+launch so a small driver occupies every resident block (GPU-RootSpread). A
+dispatch with a fold keeps its declared partition, because block-local fold
+scopes depend on the root tile. Only the assignment of roots to blocks
+changes; the multiset of published rows is the declared partition's.
 \begin{mathpar}
 \Rule{GPU-Launch}{d\text{ is a checked dispatch}\quad M.\mathsf{gpu}\text{ supplied}}
  {\mathsf{execution}(d)=
@@ -1071,6 +1079,16 @@ the chain's.
 \Rule{GPU-LAUNCH-OCCUPANCY}{P=\text{domain tile count}\quad
  S=\text{device SM count}\quad R=\mathsf{residentBlocks}(K,\mathsf{threads},\mathsf{shared})>0}
  {\mathsf{grid}(K,P)=\min(\max(1,P),S R)}
+\Rule{GPU-RootSpread}{\mathsf{roots}=\mathsf{spread}\quad d\text{ fold-free}\quad
+ m=\text{declared tile, else }\mathsf{threads}\cdot\text{source items}\quad
+ R'=S R\text{ (GPU-LAUNCH-OCCUPANCY)}}
+ {d.\mathsf{partition}=\mathsf{Spread}(m)\quad
+  \mathsf{tile}_i=\min(m,\max(1,\lceil|D_i|/R'\rceil))\quad
+  \mathsf{grid}=\min(\max(1,\max_i\lceil|D_i|/\mathsf{tile}_i\rceil),R')\text{, or }R'\text{ when shared (GPU-RootShare)}}
+\Rule{GPU-RootShare}{d.\mathsf{partition}=\mathsf{Spread}(m)\quad d\text{ has one chain}\quad
+ \text{its source level has one local tile and it expands}\quad
+ \text{inputs immutable during the launch}}
+ {\text{first-expansion batches of tile }t<T\text{ are numbered in replay order and each is claimed once from }\mathsf{cursor}_t\text{; idle blocks replay }t\text{ while }\mathsf{cursor}_t<\mathsf{announced}_t\text{; the published multiset is unchanged}}
 \Rule{GPU-OffsetScan}{d.\mathsf{publication}=\mathsf{DeferredRange}(p)\quad
  \ell_0,\ldots,\ell_{n-1}\text{ initialized}\quad \ell_n=0}
  {d.\mathsf{offsetScan}=\mathsf{DeviceExclusive}\quad
@@ -1172,7 +1190,10 @@ change the result.
 \end{mathpar}
 The recorded output protocol \code{reserve\_previous}, accepted only by the arena
 terminal, starts each invocation of a hole with the last validated count of
-that hole as its capacity (zero at first use). The remembered count is an
+that hole as its capacity (zero at first use). Holes whose heads share one
+candidate arena keep separate counts, selected by the recorded Round hole
+index. A keys-only attempt uses its leased arena slot's full row capacity,
+which is at least that count. The remembered count is an
 initial capacity, not a bound: the kernel counts every candidate and writes
 only in bounds; an arithmetic failure aborts (BE-Abort); a capacity shortfall
 discards the attempt and reruns it with the full required capacity against the

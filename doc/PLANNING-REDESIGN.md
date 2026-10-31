@@ -515,10 +515,38 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   `experiments/gpu/compare/p3b-profile/01-doop-report.md`): fixpoint xalan 1.76 s /
   batik 4.97 s vs SRDatalog ~1.0–1.5 s / 1.8–3.0 s; one stream, zero kernel
   overlap, GPU idle 40% / 22%; joins 0.70 / 3.40 s (batik `VPT_LoadArray` alone
-  1.52 s, skew), host/launch gaps 0.70 / 1.08 s, sort/unique ~0.3 s. Work:
-  concurrent waves on multiple streams as a recorded schedule realization,
-  fewer host syncs or CUDA graphs, skew-balanced join realization (recorded,
-  as SRDatalog's balanced/work-stealing variants).
+  1.52 s, skew), host/launch gaps 0.70 / 1.08 s, sort/unique ~0.3 s.
+  **Re-profiled 2026-10-31 on aad2670d** (nsys + ncu, `/data/p6b-work`): batik join
+  kernels spent 2.6 s in launches of 1–46 blocks at ~6% SM fill (a block exhausts
+  its claimed root tile; grid = root tiles), `VPT_Cast` always ran one block
+  (`Partition::One`), and 5734 of 19218 dispatch attempts were full replays because
+  the `reserve_previous` hint lived in the head relation's shared arena.
+  Done (each a recorded, checked, printed fact; 43/43 export compare identical,
+  counts identical in every paired run):
+  (1) `roots spread` Sequence statement (EXT-SeqRoots, rewrite
+  `cq_sequence_rewrites::roots(spread)` in the DOOP GPU pipelines) recording
+  `Partition::Spread` for fold-free dispatches (GPU-RootSpread): root tiles sized
+  at launch from the occupancy query; batik 0.562× / xalan 0.858× of main.
+  (2) GPU-ReservePrevious per Round hole (arena hint selected by the recorded hole)
+  and keys-only attempts use the leased slot's capacity: 0.854× / 0.904× of (1).
+  (3) Releasing pool storage once per program instead of per component measured
+  0.996× / 0.989× (CIs include 1) and was reverted.
+  (4) GPU-RootShare (`Execution.share`): spread single-chain dispatches share their
+  first expansion's child batches through per-tile cursors; owners list hot tiles
+  and idle blocks replay and help them (VPT_Cast leaves the top kernels): batik
+  0.948× [0.856, 0.981], xalan 0.966× [0.894, 1.022] of (2).
+  Total vs main (5 interleaved pairs): xalan 1.449 → 1.056 s (0.729×), batik
+  4.335 → 1.977 s (0.456×). `roots spread` is scoped to `srd-doop-gpu`: on doop-gpu
+  Cassandra (host round-trip bound, joins 0.45 s of an 8 s profiled fixpoint) it
+  measured 1.032× [1.021, 1.045] of main; without it the remaining changes measure
+  0.992× [0.966, 1.013]. Revisit after the Cassandra host-transfer track. Making
+  `Spread` a default from size evidence is a later
+  decision. Remaining (approved order): per-hole op reduction (fused metadata
+  memset, cached per-publication descriptors, no zero-length partials), then
+  DL-WaveLanes (`/data/p6b-work/lanes-design.md`: recorded `StratumSchedule.lanes`,
+  `Pool::lane` sharing allocator/context, `shares_memory` identity, event
+  fork/join); idle is ~97K gaps under 20 µs per xalan run on one stream. Sort/unique
+  (~0.23 s) stays with P4-GPU.
 - **P7 Join filters and evidence** across targets (exact min/max and
   membership from runs; published key/row/group statistics for `choose`).
 - **P8 Remaining items.** Key-partition routing projection, placement spine
