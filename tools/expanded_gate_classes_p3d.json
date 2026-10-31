@@ -1,0 +1,1903 @@
+{
+ "version": 1,
+ "definitions": {
+  "ra-1-sort-path": {
+   "kind": "refactor",
+   "description": "P3d-A class 1: canonical rows provider path rename dedup::sort -> <dedup::Sort>::sort and dedup::par_sort -> <dedup::Sort>::par_sort (inherent forwarders, runtime/cq-storage/src/dedup.rs:28-44)"
+  },
+  "ra-7-canon-store-by-value": {
+   "kind": "intended",
+   "description": "P3d-A class 7: a planner Store over a by-value canon let (STR-RowsByValue) is moved into its only Tasks driver: the routed per-part Sort::par_sort parts are collected by the driver directly instead of first into __cq_sequence_store_<r> plus retain_rows and a cloned re-read; routing and per-part canonicalization are unchanged"
+  },
+  "ra-7h-host-output-by-value": {
+   "kind": "intended",
+   "description": "P3d-A class 7h: the host-output publication Store (__sequence_host___sequence_output) over a by-value canon let (STR-RowsByValue) is moved into the answer collect instead of materializing __cq_sequence_store___sequence_host___sequence_output plus retain_rows and a cloned re-read; the whole-stream Sort::par_sort is unchanged"
+  },
+  "ra-F-format": {
+   "kind": "refactor",
+   "description": "P3d-A class F: rustfmt fallback reflow of an otherwise token-identical block whose only token change is class 1 (dedup::sort -> <dedup::Sort>::sort)"
+  },
+  "p3c-intern-loader": {
+   "kind": "intended",
+   "description": "P3c (937972ed) single-pass string interning: the generated `impl ::cq_load::InternedRelation for __MiniLinqLoad<Rel><Column..>` loader glue (facade/mini-linq-macros/src/load.rs:74-138) gains `type State`/`fn state()` (per-column InternedField::State), `intern` encodes each row through InternedField::encode into column-local state then calls Self::finish, new `decode` reads Batch columns via InternedField::column, and new `finish` registers dictionaries and remaps codes (InternedField::finish/remap); replaces prepare/dictionaries.get/intern. Trait contract runtime/cq-load/src/intern.rs:232-288. Reviewed: each hunk's removed lines equal the old template instance and added lines the new template instance for the same marker, column parameters and column names; every changed line lies inside the InternedRelation impl; no query-body code changes"
+  }
+ },
+ "rules": [
+  {
+   "target": "aggregate_stats",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "9df5ebc1179758bb6d0c27b097cbffaf1d927bc5f5b93a29307be3f65e1c078a",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "aggregate_two_keys",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "9df5ebc1179758bb6d0c27b097cbffaf1d927bc5f5b93a29307be3f65e1c078a",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "correlated_exists",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "dbc1a89e2c141cb9435db33b2f1218dbccaaf46c5a839ffe04a6977c4e160a49",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "correlated_exists",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "769d7a6bfc20cc684ed358570e8ce34609403a26261e9ef01d7700b141fe5440",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "correlated_parameter",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "00c4182bce7c4cda1bd3ebff234467c83af0e121b82d2e535f02b5c4f1fa524c",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "correlated_scalar",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "49908d2d305b449b5178c3c77f3451c1a2e8e8c659984c6e1188fa59f7475235",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "correlated_scalar",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "fa70168c03bf1aa4d8d65c333a366a61618ffe4f6f8a07976d1fc7b8e4eb7ede",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "recursion_closure",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "6d1646440eee46a7e3d35fd96cbf699bd96525058a13becc772b8a2d4ec2fb06",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "recursion_closure",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ad77b7f1326e90981d2d555fb73f9bddcf8d4bd1ac497c35c3cfefff5c296662",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d19",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "e88ae029a9b4913fd33e991dca738c4259d01f13d2c2d19239ca8494e66b8c29",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d19",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "4532f61db28969a60a1e6411d889285a62c208fd839d7954fcd244e931ea5f50",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d27",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ae480c36446c1b99a941ed7f046fde0191df24c4806ed3ad38ea6e5daaa14acf",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d27",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "7a189540d0d9eb9a31b542ae421c23b613f2a3e4311a6173ba3bb26cb1905300",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort( (inherent forwarder to the same function); remaining token differences are rustfmt reflow (trailing comma)",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d72_inner",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "672250a943f5bbd99b37c1ae0a901e292fca0554807b524f7a9624ee85f7458d",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d72_inner",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "4532f61db28969a60a1e6411d889285a62c208fd839d7954fcd244e931ea5f50",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d72_inner",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "c586a4f15bbc5009ea2cdbce96012b08aa71d05ea2b7f1f091d8a7c606fb2b3f",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d72_inner",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "5b19e05101eead4f168777404f710ffbbf938c9caa177cfb5c025c76e9d9fc54",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d72_inner",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "aa96c222e9ce99ee0099ae2f7a95c63761e76ef55f1905408a40bdfb057c23f9",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d85",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "523bc2990ea5eb63ba81358f7cfc1a6705d37298465c131a2f3384633f07fbd9",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d85",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ae480c36446c1b99a941ed7f046fde0191df24c4806ed3ad38ea6e5daaa14acf",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d85",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "e79cb9dd37f163be4611931219b5ae158c0d60a06e0d00735e7c2a3c90c1e3c7",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d85",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "387faf56bb3a916bd5860da3947ec23cdef9d5a83a038e462d4e8b1f1c7f75e2",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d85",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "022c7f4c4913752b148d8587a21fc979dc3d8bf08cee9a839a49a2ca2766912f",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d85",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "51592f15185ca2f570cc6caca1a36d39128e4dcede0a4a6cc64975708cc044e5",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h01",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "c3b6891e2af7f5b2ecdb241ce90d13c8b1553935e416c930d263c19ba06841a0",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h02",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "c5f1e29e074b48e560b317f9b11cb6680804b647076b58698431869b293c64da",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h02",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "c586a4f15bbc5009ea2cdbce96012b08aa71d05ea2b7f1f091d8a7c606fb2b3f",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h02",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "8301a0d36d4c2c6431d4194ea90941b175a7128bfae32fe3883c76f831f79218",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h02",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "6932e561bc97fa3a1ba9dff36f75a03dd1e489f872e665a4835742413e202177",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h02",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "4c53925aa2443e9d343ec1589d5bda142ef5c5a07695b6f2bafef33f50343c6f",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h02",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "3e081b00f56259d7fdf28de810c748339c0bfe17754b5726d3f0e57b2d1fb192",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h02",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "b331809788f4f3d227aa5a346534ba20637def419f49f7063aaeda697ca95dd4",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h02",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "a3b73e8b0a11e26df0845e805ab97345a1da4651495c745a4f24d170cb50daca",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h03",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "c586a4f15bbc5009ea2cdbce96012b08aa71d05ea2b7f1f091d8a7c606fb2b3f",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h03",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "4532f61db28969a60a1e6411d889285a62c208fd839d7954fcd244e931ea5f50",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h03",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "b63646e6d467949c363c1799b5ce072acc3adf5429f8c427f3f1db662c2f9136",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h03",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "994844709aff70b546a37721a4a88e4a6d0f882e0e9756255bdaa30a66b6c8d4",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h04",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "93ceaa357e70d2682c4f39367a3af661541be7ee1d3d5ea4d6a2e57bf5c03e50",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h04",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "3617318cebf984fa3389ed13fd2a260f800d91b63ba078681baf055c6e507786",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h04",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "8e1fa9985ef31657205dd731dd7f0d0dffd31414fabbfd6e3f554f3e236e4e1e",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h04",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "0ac830135fe1505510dc9da732f16706cda0944141783a17132df8c917785d12",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h04_not_exists",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "e007847239578242ac63720b8a7c628531b19739007eeb1a528159262d79731f",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h04_not_exists",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "e67e66df4ba7af08f4e018316c5141494301fbbd65a1f2fae86591493ea8ba58",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort( (inherent forwarder to the same function); remaining token differences are rustfmt reflow (trailing comma)",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h05",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "e88ae029a9b4913fd33e991dca738c4259d01f13d2c2d19239ca8494e66b8c29",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h05",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "4532f61db28969a60a1e6411d889285a62c208fd839d7954fcd244e931ea5f50",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h05",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "9aebca0409ae5cd32cd491bf92c5d8a3222421b57878b4d14379bab3e413b2c9",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h05",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "2885caafab8abc3a3a6350a12f7980f97915546daf6d5da6aef8b9ab7e2c7e9c",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h05",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "c586a4f15bbc5009ea2cdbce96012b08aa71d05ea2b7f1f091d8a7c606fb2b3f",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h06",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "1b2d6d4ff65c5c4e8b461a4aa2ede0bab4d9264dc1681b1941525a87838aad31",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h07",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "77fe16d0ef7ba8841eb6f79d3d2b9d3f5bfe204c107defac05f61563fecb2848",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h07",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "c586a4f15bbc5009ea2cdbce96012b08aa71d05ea2b7f1f091d8a7c606fb2b3f",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "4532f61db28969a60a1e6411d889285a62c208fd839d7954fcd244e931ea5f50",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "c586a4f15bbc5009ea2cdbce96012b08aa71d05ea2b7f1f091d8a7c606fb2b3f",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h08",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "523bc2990ea5eb63ba81358f7cfc1a6705d37298465c131a2f3384633f07fbd9",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h08",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "582e5125739f86dbb7e8810aaa532709a948c5c68e640c915a1b01cfd9b5ef3f",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h08",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "0a57ef3271e0f033e6a6920dcb3176fcc644f44f8137c788adbd42ba93ce9e6a",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h09",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "23862d7df9c618d40a551e7d9b181845d9d3a254a32f2662000d5127fd03eea8",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h09",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ae480c36446c1b99a941ed7f046fde0191df24c4806ed3ad38ea6e5daaa14acf",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h09",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "7ad36a6d5301d459c00db68a9ae4be830481f13817cf3549c4dc23ff3890df13",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h09",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "6deadef572ed8dc481f29b89e45df029920e502cfd1562d951aa0275426485b4",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h09",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "4163f40c17ab6c18d005c4cca8728a5da704003969633d43e6217d0f535b56a1",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h10",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "3413a825d5a2b1a82951103f5a3e8a74ac5a89d3748497a13464f35b549a8d9e",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h10",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "3fe7c73091d152205a31017a93fefed686bbd2b745283ae503fd32d169409b18",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h11",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ae480c36446c1b99a941ed7f046fde0191df24c4806ed3ad38ea6e5daaa14acf",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h11",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "1d58157f6ec54e81dd7c1095d0237612163780d3fd5f6a326860c87d123b4434",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h11",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "994844709aff70b546a37721a4a88e4a6d0f882e0e9756255bdaa30a66b6c8d4",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h11",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "14cc5695fce2f4b89d4f79511b6c4c419a633df2a9d7dd340513b9fe36f603d6",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h11",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "3e8be1f35b3d55b5ea3e8ed6428e4e6bc47516b1a5f2f18b1e4c66f097b7f971",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h11",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "b5639ee479fb4f94987465523a16b3b48e0d6d28c9857a9374351fb2c72b63d5",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h11",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "cd2633945728ae7c7e2af5fdc5e717c27bee9e16c6f4160a422d1e9685e1d404",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h11",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "2f85208080fbc91cb2ab55a4c6437bc96c23497842a6c454ad2d69f4bd027e1b",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h11",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "42182174a839e59d51b5f195e7197990da98b2e250d0de358407b429c7055251",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "4d5f468cb335516b700261bf7417a2014e8919b44a184886fc589c861dfcd479",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "dfb75b5a273064287fffeeee7e2331e32ce35f83f740c4f75dc65d723cbab915",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "92440c3d0e5217a5ba11151d702f3dfb42d0099f92d8caf321134051d26894bc",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "d8aaafc589067313011b02d564534fe7b756f74c303103f66d9edf753fb1a66d",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "9df5ebc1179758bb6d0c27b097cbffaf1d927bc5f5b93a29307be3f65e1c078a",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "884772e6b0c728110b738ddbd744fcd7b58999040b32b87c6ae90d1eeb15ede7",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "a3b73e8b0a11e26df0845e805ab97345a1da4651495c745a4f24d170cb50daca",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "2c7d46844eb7ac5c3891920c770cfc2cdf43ea2ac963c6624f21529229ca5900",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h13",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "dfb75b5a273064287fffeeee7e2331e32ce35f83f740c4f75dc65d723cbab915",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h13",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "f671211ef36419f68f1a66c50ea1e82ff0e819a68736a8722a04f6b20b83d25b",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h14",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "cb12ca05a99f9baa919d36707b570c114cff191677570b669c80af8047264ebb",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h14",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ab65e8215a2e4afdc87a89cf624b3318d5cdba567e40e86b24d1a03deef46463",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h15",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "102f9fbd092bf4f6650e3572eefc2a3815942d9bd1a3f34a7ad56a2cb3411bd4",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h15",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "d460a281cbfcbd7582a9b0112c3a8fd0e093e85e1408cc18cca7239a7daac21a",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h15",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "87beb5e8b291e318395a772ce332306683822ade09d21d4561ebbf93650eb978",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h15",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "a2de6696fc73d3358b785ac69dc26c51eaf8b37c84984bd306fd290deb9e998e",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h16",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "6d1646440eee46a7e3d35fd96cbf699bd96525058a13becc772b8a2d4ec2fb06",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h16",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ff9ca42e1be5d8e2da64e0ddec55e01eb3cfd49083af534ff77887136b2956bd",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h16",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ca677224a7f66bbb4072c7f4c4584e1c132933f424ff84f72562190f2242bfb9",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort( (inherent forwarder to the same function); remaining token differences are rustfmt reflow (trailing comma)",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h16",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "e79cb9dd37f163be4611931219b5ae158c0d60a06e0d00735e7c2a3c90c1e3c7",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h16",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "041926f195b15da31e294dab735e41ffdcea37ba6053cafb979753252c3926b1",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h18",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "1d58157f6ec54e81dd7c1095d0237612163780d3fd5f6a326860c87d123b4434",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h18",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "a2de6696fc73d3358b785ac69dc26c51eaf8b37c84984bd306fd290deb9e998e",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h18",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ace1e0176512268db6612db49f186c9f4914dc3f6b390923ddea0de56aec1452",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h19",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "5f2cccb2de58d06677c055a0215176810ca769878b18c41dc1f81ffafa43f936",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h19",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "c872d283052dc3a866fb06c300bef36e09a1a69614e29023111b65d4af2cdc62",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h20",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "102f9fbd092bf4f6650e3572eefc2a3815942d9bd1a3f34a7ad56a2cb3411bd4",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h20",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "c586a4f15bbc5009ea2cdbce96012b08aa71d05ea2b7f1f091d8a7c606fb2b3f",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h20",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "3c63c62cb09ad29ee02e145d27efe2edf1715b3c2cf834c756026076b071173c",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "e88ae029a9b4913fd33e991dca738c4259d01f13d2c2d19239ca8494e66b8c29",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "7311a16d183930e1962ba9fbb0c25259f43debf210d493d68fa123c2753deea7",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "45cce8c761aedab7e374f8b5297c40b869b77f6330ae267b166f1f559bf10bd8",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "bff08407b3115d9ddce57ecca89e05fb3f51adc54d17b59bb2cdde14b297c2f7",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "6deadef572ed8dc481f29b89e45df029920e502cfd1562d951aa0275426485b4",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "e82f7da97fbbf756451f21f164dca788ed7177f161065e0e15d14d3d676213ae",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "5a5f247fc5fbc840026c304c20f578c83751b289082309c97e7d59859288197c",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h22",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "63c2f41ff4b85ccd87e89c39b33595d7602a2aecda06a020c39d4d5c1bd8d025",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h22",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "520148faf10686659de8ee1ccbd0a8b234056530bda285105300decec618e7f2",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort( (inherent forwarder to the same function); remaining token differences are rustfmt reflow (trailing comma)",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h22",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ff9ca42e1be5d8e2da64e0ddec55e01eb3cfd49083af534ff77887136b2956bd",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h22",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "041926f195b15da31e294dab735e41ffdcea37ba6053cafb979753252c3926b1",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_h22",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "1604e0e12befef6584f0f48a8cba658739752c5109fe1ceb7ebfbb938a796e7b",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "surface_boolean_guard",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "00c4182bce7c4cda1bd3ebff234467c83af0e121b82d2e535f02b5c4f1fa524c",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "surface_compare",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "00c4182bce7c4cda1bd3ebff234467c83af0e121b82d2e535f02b5c4f1fa524c",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "surface_computed_head",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "00c4182bce7c4cda1bd3ebff234467c83af0e121b82d2e535f02b5c4f1fa524c",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "surface_disconnected",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "00c4182bce7c4cda1bd3ebff234467c83af0e121b82d2e535f02b5c4f1fa524c",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "surface_let_chain",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "6ce208fcfae4ff27b1fd1133aca2837cc5724cf4479a8d6a90ed42bd3b24621a",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "surface_let_sum",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "00c4182bce7c4cda1bd3ebff234467c83af0e121b82d2e535f02b5c4f1fa524c",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "surface_self_join",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "d3451ee57ef6f8966258e32df066844e2be98b91be11fbc203ad7ed6df610594",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "surface_wildcards",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "00c4182bce7c4cda1bd3ebff234467c83af0e121b82d2e535f02b5c4f1fa524c",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "86763d9baafbffe0d554ced359075df930b4b1d726d084fe044ec956d6b62a43",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "052674a1bbc73e3d2e4b3dc1ec8d26beb4a7c1392d83ff9ae8eb24188fa33ddf",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "d7ff579e63fa52338760815f6e00aaf7f286a33c864f8adaa5d19280256a2638",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "d2e36bfcced44f515b272a4344565f84d2a0e94bdcef29e94d0ea67b233c1d03",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "1b4d68ba37ceb7524e2c48604605febbe88dbfa118a9f2959491803b3beb3e3e",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "4c9557144d8a0a28a3622646f359e2759c7aaa691fbd2b88f7d5d1e765841fa9",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "84ca4b0df674f7f8de4e0bafaa5879ff51647c6f61d2df258808ade537b18388",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "987813c25eb16289d7d39277544988bce9226c3f65333153377905cb592ee2b0",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "30533c358756ad635aeacdbaba4965da1e7d73b9865cfafad563800deeb5ebb0",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "d20575c3b1c7dbb89fcd6795264364d2a30733ea27ee304aecfccbede0205229",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "typed_line_filter",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "fe40be007bf60e6501d0c8b0040c0409445433bd882f9af349f380f9b3e59cc5",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "union_project",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "921326918b5f093c0435bdb7c6303fe401ec1355da7e511c5e9bca187cf6ae16",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "union_two",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "921326918b5f093c0435bdb7c6303fe401ec1355da7e511c5e9bca187cf6ae16",
+   "reason": "canon host build path ::cq_storage::dedup::sort( printed as <::cq_storage::dedup::Sort>::sort(, an inherent forwarder to the same function; token-identical otherwise",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d19",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "d5fecf118c9ce09d798d657d07f34586bd91bf7c9d56bfa8702ae9d9794cf36e",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_d27",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "bf944e221c54ca977e4f258929864b591cb2b0040d9dcd6a0c14b11d48922c85",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_d27",
+   "class": "ra-F-format",
+   "hunk_sha256": "d81ac1f623bcbbf78f710b89199d2c4a1862da1e53312da2ee17e87dbb4fa77a",
+   "reason": "rustfmt fallback reflow (tokens equal modulo braces/commas) around the class-1 dedup::sort -> <dedup::Sort>::sort forwarder rename; no other token change",
+   "source": "runtime/cq-storage/src/dedup.rs:28"
+  },
+  {
+   "target": "retail_d72_inner",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "9d2860ab15f1c5f82553cddc63bede0844785e2109498b5349cf1338d9f95bb0",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h02",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ff892bb71e1bcb4da10332150ae580eca0c3ec446d8210a31fdbbf84f146f904",
+   "reason": "canon task build path ::cq_storage::dedup::par_sort( printed as <::cq_storage::dedup::Sort>::par_sort(, an inherent forwarder to the same function; token-identical otherwise (per-part par_sort inside map_parts after route_by, as in the baseline)",
+   "source": "runtime/cq-storage/src/dedup.rs:37"
+  },
+  {
+   "target": "retail_h02",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "f3a424169290ab8ddfa8379489f1edc9116af2540ce1be3d8b441e9b4dbf54aa",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h03",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "2ef2534e1af15edaa8cb90aa7d72b7007e7c6fcb19df4eae5599ec30801468ba",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h04",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "ae6d48a0d869dd5014533972620fd39d04a1ed6308386b46fe5d63c1d74c1c79",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h04_not_exists",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "79d89e8e92e176689e0a0130214d7b02dea89b47ce205e85159dec58df9215a6",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h05",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "4ce85bec5276ae1b75d299f3e14198da32c4a2c6f47a4afe3abd011f0746473b",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h06",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "211f58a7238f02e7313ab233de5d8ed3e318127b4fac8cff3a7a1811b1de11c5",
+   "reason": "canon task build path ::cq_storage::dedup::par_sort( printed as <::cq_storage::dedup::Sort>::par_sort(, an inherent forwarder to the same function; token-identical otherwise (per-part par_sort inside map_parts after route_by, as in the baseline)",
+   "source": "runtime/cq-storage/src/dedup.rs:37"
+  },
+  {
+   "target": "retail_h07",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "ae4f58ff3d844250560835c3fc7e21adc8279983737a598f5278948c887c8911",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "c858dd97ecaec8677d162e301e50377717331b0eb9960dd230b4ee1fa2f927f4",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h09",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "bf944e221c54ca977e4f258929864b591cb2b0040d9dcd6a0c14b11d48922c85",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h10",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "2f783337a5dac7cdbae064790618fb34a6f6a4297de4fb614ffe4d3e336daf7f",
+   "reason": "canon task build path ::cq_storage::dedup::par_sort( printed as <::cq_storage::dedup::Sort>::par_sort(, an inherent forwarder to the same function; token-identical otherwise (per-part par_sort inside map_parts after route_by, as in the baseline)",
+   "source": "runtime/cq-storage/src/dedup.rs:37"
+  },
+  {
+   "target": "retail_h11",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "0bab0c078eb35d4e9e98f21af57ba69ada168bb07a2400a1d582b0ff1bcb4eea",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h11",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "211f58a7238f02e7313ab233de5d8ed3e318127b4fac8cff3a7a1811b1de11c5",
+   "reason": "canon task build path ::cq_storage::dedup::par_sort( printed as <::cq_storage::dedup::Sort>::par_sort(, an inherent forwarder to the same function; token-identical otherwise (per-part par_sort inside map_parts after route_by, as in the baseline)",
+   "source": "runtime/cq-storage/src/dedup.rs:37"
+  },
+  {
+   "target": "retail_h11",
+   "class": "ra-7h-host-output-by-value",
+   "hunk_sha256": "41f7e1112c03ca628e9ec5b4a0621b47b875ab8666c2331db02d21e933e77572",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the host-output publication of a single-consumer canon let is moved into the answer collect; removed: __cq_sequence_store___sequence_host___sequence_output, its retain_rows and the cloned re-read; dedup::par_sort -> <Sort>::par_sort forwarder (dedup.rs:37); the sort input is token-identical",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "e2906d716a15dc095682d593fe97d69a63840cdc5d5ab363c89473cde5356ed7",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "211f58a7238f02e7313ab233de5d8ed3e318127b4fac8cff3a7a1811b1de11c5",
+   "reason": "canon task build path ::cq_storage::dedup::par_sort( printed as <::cq_storage::dedup::Sort>::par_sort(, an inherent forwarder to the same function; token-identical otherwise (per-part par_sort inside map_parts after route_by, as in the baseline)",
+   "source": "runtime/cq-storage/src/dedup.rs:37"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ff892bb71e1bcb4da10332150ae580eca0c3ec446d8210a31fdbbf84f146f904",
+   "reason": "canon task build path ::cq_storage::dedup::par_sort( printed as <::cq_storage::dedup::Sort>::par_sort(, an inherent forwarder to the same function; token-identical otherwise (per-part par_sort inside map_parts after route_by, as in the baseline)",
+   "source": "runtime/cq-storage/src/dedup.rs:37"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "7f47aec4ce117565a9869ed99dd138dc95d1e8a839ffaede6bcf942902f5855e",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h12",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "003cfc19badabf460d0878323c9daf9cb5d8e510592cb96a706a6fbbaecc55c8",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h13",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "ff892bb71e1bcb4da10332150ae580eca0c3ec446d8210a31fdbbf84f146f904",
+   "reason": "canon task build path ::cq_storage::dedup::par_sort( printed as <::cq_storage::dedup::Sort>::par_sort(, an inherent forwarder to the same function; token-identical otherwise (per-part par_sort inside map_parts after route_by, as in the baseline)",
+   "source": "runtime/cq-storage/src/dedup.rs:37"
+  },
+  {
+   "target": "retail_h13",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "af57b7cdc0175604a1d8048b8b12d4936c0eb0bd9e452d1defc3f26eb4f84be1",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h14",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "2f783337a5dac7cdbae064790618fb34a6f6a4297de4fb614ffe4d3e336daf7f",
+   "reason": "canon task build path ::cq_storage::dedup::par_sort( printed as <::cq_storage::dedup::Sort>::par_sort(, an inherent forwarder to the same function; token-identical otherwise (per-part par_sort inside map_parts after route_by, as in the baseline)",
+   "source": "runtime/cq-storage/src/dedup.rs:37"
+  },
+  {
+   "target": "retail_h15",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "211f58a7238f02e7313ab233de5d8ed3e318127b4fac8cff3a7a1811b1de11c5",
+   "reason": "canon task build path ::cq_storage::dedup::par_sort( printed as <::cq_storage::dedup::Sort>::par_sort(, an inherent forwarder to the same function; token-identical otherwise (per-part par_sort inside map_parts after route_by, as in the baseline)",
+   "source": "runtime/cq-storage/src/dedup.rs:37"
+  },
+  {
+   "target": "retail_h15",
+   "class": "ra-7h-host-output-by-value",
+   "hunk_sha256": "507ceb37428bf9b47e66a91d46114b5430b660ef637360556ed1d840eb8fcc92",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the host-output publication of a single-consumer canon let is moved into the answer collect; removed: __cq_sequence_store___sequence_host___sequence_output, its retain_rows and the cloned re-read; dedup::par_sort -> <Sort>::par_sort forwarder (dedup.rs:37); the sort input is token-identical",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h15",
+   "class": "ra-7h-host-output-by-value",
+   "hunk_sha256": "b38afd024eaf5b3c72ff7df1adf1979971e0f43f7a4895d3eaabacdc61986e53",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the host-output publication of a single-consumer canon let is moved into the answer collect; removed: __cq_sequence_store___sequence_host___sequence_output, its retain_rows and the cloned re-read; dedup::par_sort -> <Sort>::par_sort forwarder (dedup.rs:37); the sort input is token-identical",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h16",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "20eb21d2edfefb5eb6add38e0f9ce74dd16614964fe90ffae04207379f544f13",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h16",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "a338e35b229326109acee4d7bbf727935b2c33b5d54ee0be987ae59a1119eee2",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h18",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "211f58a7238f02e7313ab233de5d8ed3e318127b4fac8cff3a7a1811b1de11c5",
+   "reason": "canon task build path ::cq_storage::dedup::par_sort( printed as <::cq_storage::dedup::Sort>::par_sort(, an inherent forwarder to the same function; token-identical otherwise (per-part par_sort inside map_parts after route_by, as in the baseline)",
+   "source": "runtime/cq-storage/src/dedup.rs:37"
+  },
+  {
+   "target": "retail_h18",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "b7c9524cb31328e2035067a7092c5b53a352f0033f7b9b4b9fe519c2ee2e7ba7",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h19",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "2f783337a5dac7cdbae064790618fb34a6f6a4297de4fb614ffe4d3e336daf7f",
+   "reason": "canon task build path ::cq_storage::dedup::par_sort( printed as <::cq_storage::dedup::Sort>::par_sort(, an inherent forwarder to the same function; token-identical otherwise (per-part par_sort inside map_parts after route_by, as in the baseline)",
+   "source": "runtime/cq-storage/src/dedup.rs:37"
+  },
+  {
+   "target": "retail_h20",
+   "class": "ra-1-sort-path",
+   "hunk_sha256": "211f58a7238f02e7313ab233de5d8ed3e318127b4fac8cff3a7a1811b1de11c5",
+   "reason": "canon task build path ::cq_storage::dedup::par_sort( printed as <::cq_storage::dedup::Sort>::par_sort(, an inherent forwarder to the same function; token-identical otherwise (per-part par_sort inside map_parts after route_by, as in the baseline)",
+   "source": "runtime/cq-storage/src/dedup.rs:37"
+  },
+  {
+   "target": "retail_h20",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "123350fe97049594e43f03ffdb2b5a3abdb6ee0341b46522b9025621a47a74f0",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "3286ad87020b58da4531bf4672d48803006dc69e1e03dc4ee3b151f168e39819",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h22",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "68dcade2e6fe6469907c81448f05f506785d9b6278c9d3cf5000c10e1c0a6366",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "671e36276a62e616790e740890223b979ea54a4d7705fc01cbd6a6988b3a33ee",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "b5b153540e52dbc32d1007836154b8adde69a950bac0e837961614cd942018de",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_d85",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "bafb6bb8e5747be25ecc94f47ee81bd44a8fc32521a26ebf0f7f50e3be31b4a9",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_h08",
+   "class": "ra-7-canon-store-by-value",
+   "hunk_sha256": "4cf474b0adf0569735c908fcf913ce14b3b84959ab6ef09ad1903c7a98a26a5a",
+   "reason": "STR-RowsByValue (Analysis::rows_by_value, languages/cq-lang-structures/src/lib.rs:646): the canon let has one consumer, so Pull publish moves the planner Store value into the Tasks driver instead of collecting __cq_sequence_store_<r>; route_by + per-part <Sort>::par_sort tokens unchanged",
+   "source": "passes/cq-sequence-pull/src/lib.rs:1111"
+  },
+  {
+   "target": "retail_d19",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "14ddf7dc15623b9e5e34c7b371592630fa79c7937f8308d6832c53cac4f215a2",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_partkey, l_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d19",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "a24f22a34b55aa7d872a13c79dffcdd506f0a6afc73a51b15cab819137a2728a",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d19",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "04dc43b38a2a71158af529234d57981f2761277c4dcafec384bbc4b2cec4e5f6",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPart (1 columns: p_partkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d19",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "580189df982054a8cefafd5fdd40b6c292126bb92d760764ae56620713b202e3",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d19",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d19",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "24add7caf180018ba8b8b8780f3a5d32574c22db169ed62ba140ae023868a5e0",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (1 columns: s_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d27",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "14ddf7dc15623b9e5e34c7b371592630fa79c7937f8308d6832c53cac4f215a2",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_partkey, l_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d27",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "4a0231dd8c6b0376227a158ef9b72d0b45dcf5e68813d51953df5edf9a2930f1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (2 columns: o_orderkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d27",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "17c4c7a69de8da4ad0e0ede68fddf9471346743877377935f05e6631fc9fd64d",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPart (2 columns: p_partkey, p_brand): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d27",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d27",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d85",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "14ddf7dc15623b9e5e34c7b371592630fa79c7937f8308d6832c53cac4f215a2",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_partkey, l_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d85",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "6b45e68aa91cadeb6b8c590b7e08add588fb5bd4346e99f43de0fc018b22a6d9",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPartSupp (3 columns: ps_partkey, ps_suppkey, ps_availqty): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d85",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "04dc43b38a2a71158af529234d57981f2761277c4dcafec384bbc4b2cec4e5f6",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPart (1 columns: p_partkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d85",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "a24f22a34b55aa7d872a13c79dffcdd506f0a6afc73a51b15cab819137a2728a",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d85",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "580189df982054a8cefafd5fdd40b6c292126bb92d760764ae56620713b202e3",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d85",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_d85",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h01",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "c26d0141f2ec5c39605c3188858d94cc7ed6fde345c718242dfaef9d99ac17e5",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (7 columns: l_orderkey, l_linenumber, l_returnflag, l_linestatus, l_quantity, l_extendedprice, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h02",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "55c0924dfee1dab5534b5c4981551456b4977909fbd38618fb893549faa89c71",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPart (4 columns: p_partkey, p_mfgr, p_size, p_type): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h02",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "f71622ca49ca086ec94bd1b81aeac28096d7cb59917f0410661e9a4b837de469",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPartsupp (3 columns: ps_partkey, ps_suppkey, ps_supplycost): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h02",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "8d683893d5ec6fe0aed91a09a2519ea7dbfaf313f5e760c6579ad2501feccd12",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (7 columns: s_suppkey, s_nationkey, s_acctbal, s_name, s_address, s_phone, s_comment): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h02",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "68741a76f2189ebf38c32ae4cfc35f04fc13cf4fb045f190304fee2f3f7011b1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (3 columns: n_nationkey, n_regionkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h02",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "17cff27330de5cac317026c0832df00f9826119d50a2fa6383fa4786ecdb5d5e",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadRegion (2 columns: r_regionkey, r_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h03",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "4fba573710f394a25af4b2c9923acd357f11ad0f97acf044cfd05d601fb100bd",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_mktsegment): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h03",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "a24f22a34b55aa7d872a13c79dffcdd506f0a6afc73a51b15cab819137a2728a",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h03",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "6897406392b36973b9c86ae11d1dc9963612fd534005f821124b1908de142b30",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (2 columns: l_orderkey, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h05",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "580189df982054a8cefafd5fdd40b6c292126bb92d760764ae56620713b202e3",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h05",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "a24f22a34b55aa7d872a13c79dffcdd506f0a6afc73a51b15cab819137a2728a",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h05",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "d8b39cfd9fb47c20b5d9a00262ed59d3cb904e2c76a42a4ca91a756542696365",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (2 columns: l_orderkey, l_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h05",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h05",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "ba96814ad77b8f248d0f6c405116be090d9fc168c131d4c89bc7f71ae843f8ea",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_regionkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h05",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "17cff27330de5cac317026c0832df00f9826119d50a2fa6383fa4786ecdb5d5e",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadRegion (2 columns: r_regionkey, r_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h07",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h07",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "1a21299d590e5fd15fb70a81b3babbc6e0c2950987032b5e60162b0926310909",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_suppkey, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h07",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "64c4f1fe1a73187fc5e6636e18bbb373e91358582c3f0c2ed3e84ff23a2041a6",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (2 columns: o_orderkey, o_custkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h07",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "580189df982054a8cefafd5fdd40b6c292126bb92d760764ae56620713b202e3",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h07",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "1a21299d590e5fd15fb70a81b3babbc6e0c2950987032b5e60162b0926310909",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_suppkey, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "64c4f1fe1a73187fc5e6636e18bbb373e91358582c3f0c2ed3e84ff23a2041a6",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (2 columns: o_orderkey, o_custkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "580189df982054a8cefafd5fdd40b6c292126bb92d760764ae56620713b202e3",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h08",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "14ddf7dc15623b9e5e34c7b371592630fa79c7937f8308d6832c53cac4f215a2",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_partkey, l_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h08",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "0705dd62a21b1f8b5aaca96403e78109b5bbf07d97349ae9361cd90ae358ae4a",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPart (2 columns: p_partkey, p_type): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h08",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h08",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "a24f22a34b55aa7d872a13c79dffcdd506f0a6afc73a51b15cab819137a2728a",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h08",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "580189df982054a8cefafd5fdd40b6c292126bb92d760764ae56620713b202e3",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h08",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "ba96814ad77b8f248d0f6c405116be090d9fc168c131d4c89bc7f71ae843f8ea",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_regionkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h08",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "17cff27330de5cac317026c0832df00f9826119d50a2fa6383fa4786ecdb5d5e",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadRegion (2 columns: r_regionkey, r_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h09",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "14ddf7dc15623b9e5e34c7b371592630fa79c7937f8308d6832c53cac4f215a2",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_partkey, l_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h09",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "bc29554cbe08dc23b084391c40c84ceb17131def8d1b944eded3f24c44d8d0f2",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPartSupp (2 columns: ps_partkey, ps_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h09",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "50a66f8d7ebca8dbbed5c9fae8e97cb59af86927f18998de6d9a7491013d7e8b",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPart (2 columns: p_partkey, p_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h09",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h09",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "d94ba589884e8172626e731639ac9769d563f57b09ec6a9d7ae966582243c513",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (1 columns: o_orderkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h09",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "9a637291e413fbda3ba1086fd7eb5bb2dde71123b939082f1ec4b688a5e7da8c",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (1 columns: n_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h10",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "3408521339b8085d7799cf435d3ad994e59674b77673681be0763f01f3d998d1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (7 columns: c_custkey, c_name, c_acctbal, c_nationkey, c_address, c_phone, c_comment): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h10",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "a24f22a34b55aa7d872a13c79dffcdd506f0a6afc73a51b15cab819137a2728a",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h10",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "1467ab2539eddb1d3737de30c19ecbdd902de3e191d0e4b42de49758d579ab9c",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (5 columns: l_orderkey, l_linenumber, l_extendedprice, l_discount, l_returnflag): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h10",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h11",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "d9a68b4d8f2b7821bfe709c7fc960a1dffdf513af494ddd9bafc7e5163319b68",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPartsupp (4 columns: ps_partkey, ps_suppkey, ps_availqty, ps_supplycost): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h11",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h11",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h12",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "4bad46be2a3a790884aabb9b6121e67759f71af84ed8d6999dc91db9d59f28fb",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (2 columns: o_orderkey, o_orderpriority): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h12",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "7c036f424260b48ba2d5271eb225440663e77a0933ff82d75df176bbd5dcaf46",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (6 columns: l_orderkey, l_linenumber, l_shipmode, l_commitdate, l_receiptdate, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h13",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "ba58810fe3058b4116df2672a1f0c787840608d9d0bb2824655c095fd6b86121",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (1 columns: c_custkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h13",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "8d261afe0e7778dd3d8c71b782a122cebd19c4dc8c464ef9b22a58b90d4519b8",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_comment): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h14",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "3980c67d6388a67eb5d59f77f34686f97a9742c5ab639850ef1df9fec7f49de1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (6 columns: l_orderkey, l_linenumber, l_partkey, l_extendedprice, l_discount, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h14",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "0705dd62a21b1f8b5aaca96403e78109b5bbf07d97349ae9361cd90ae358ae4a",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPart (2 columns: p_partkey, p_type): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h15",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "d94dc49a7c31b7d99613cd806a67e1fc1fa8611741d2bce9032ab99538b69e5d",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (4 columns: s_suppkey, s_name, s_address, s_phone): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h15",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "76fae8c0d7cce8339209f66a29c20ce56904d8e399e6aaf4b530d8c5c3cc1ddf",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (6 columns: l_orderkey, l_linenumber, l_suppkey, l_extendedprice, l_discount, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h16",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "e2847b4fba1b8798778dfa75b41d5d26c50b952f1fef1b2b996a6a540047636d",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPart (4 columns: p_partkey, p_brand, p_type, p_size): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h16",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "bc29554cbe08dc23b084391c40c84ceb17131def8d1b944eded3f24c44d8d0f2",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPartsupp (2 columns: ps_partkey, ps_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h16",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "6844fec8c36a4ab63534d3215ee9fd7accd3121e3534dc34308f517c779f8dcf",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_comment): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h18",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "166f7725b5a78e2aecc3d3510ae3c596a9d5c192db4ce10adc5fd031835d956c",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_linenumber, l_quantity): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h18",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "cb84d52930b8595f0d3771a7eaa8a65fb411e5950e35b78c693b49e754566305",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (4 columns: o_orderkey, o_custkey, o_orderdate, o_totalprice): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h18",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "aa07648d33f26841c4562a9e2f31f85b5f974aafe5125955eeb0beda669ba5f3",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h19",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "dbad50118acb7dfbf611dd995e0d9257d635eaad8eb5b2d23799a73beac1b9b4",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (8 columns: l_orderkey, l_linenumber, l_partkey, l_quantity, l_extendedprice, l_discount, l_shipmode, l_shipinstruct): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h19",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "55dbc9c558b981e5b8662cc48f775a1c10555e8024ad9856cfb41dc8d102a0f9",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPart (4 columns: p_partkey, p_brand, p_container, p_size): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h20",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "50a66f8d7ebca8dbbed5c9fae8e97cb59af86927f18998de6d9a7491013d7e8b",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPart (2 columns: p_partkey, p_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h20",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "6b45e68aa91cadeb6b8c590b7e08add588fb5bd4346e99f43de0fc018b22a6d9",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPartsupp (3 columns: ps_partkey, ps_suppkey, ps_availqty): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h20",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "ef999dc48c76b7e516c20cee1c73107ddf407b8d841a121812140dfdb0323559",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (6 columns: l_orderkey, l_linenumber, l_partkey, l_suppkey, l_quantity, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h20",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "0b82d032b9a0c7f1d81368306a5e6773d8837013ee15201944eca5425241751b",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (4 columns: s_suppkey, s_nationkey, s_name, s_address): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h20",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "3d275cc6d70a988a38b270a001bbe8567e24866875f026906e08f139d3943a2c",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (4 columns: l_orderkey, l_suppkey, l_receiptdate, l_commitdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "aa2e989e3a0811e8e5ede129feb836d635000a0fd3942f876e578c6391e93452",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (2 columns: o_orderkey, o_orderstatus): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h22",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "3a0223fc1d18bb4ee3bc2fd05921de8969d7672d3a21d144c3c0890a4b9e4f80",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_phone): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "retail_h22",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "64c4f1fe1a73187fc5e6636e18bbb373e91358582c3f0c2ed3e84ff23a2041a6",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (2 columns: o_orderkey, o_custkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "ff1a8370e3ad55cf45d74005ba2182e880509a8d60d8a4f2d5bd166ef187b3e8",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (8 columns: l_partkey, l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_shipmode, l_shipinstruct): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "p3c-intern-loader",
+   "hunk_sha256": "55dbc9c558b981e5b8662cc48f775a1c10555e8024ad9856cfb41dc8d102a0f9",
+   "reason": "InternedRelation loader glue for __MiniLinqLoadPart (4 columns: p_partkey, p_brand, p_container, p_size): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
+   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+  }
+ ]
+}
