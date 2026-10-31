@@ -133,8 +133,10 @@ dependencies = [
 name = "cq-load"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "cq-storage",
  "csv",
+ "hashbrown",
 ]
 
 [[package]]

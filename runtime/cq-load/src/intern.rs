@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::{Load, Relation};
+use hashbrown::HashTable;
+
+use crate::{Batch, Load, Relation, Result};
 
 /// A sorted, column-local string code. Codes from different columns cannot be
 /// compared as strings, even when their numeric values happen to match.
@@ -38,16 +40,27 @@ impl StringDictionary {
     ///
     /// Panics if more than `u32::MAX` distinct values are supplied.
     pub fn new<'a>(values: impl IntoIterator<Item = &'a str>) -> Self {
-        let mut values: Vec<&str> = values.into_iter().collect();
-        values.sort_unstable();
-        values.dedup();
-        assert!(
-            values.len() <= u32::MAX as usize,
-            "string dictionary exceeds u32 codes"
-        );
-        Self {
-            values: values.into_iter().map(str::to_owned).collect(),
+        let mut interner = StringInterner::default();
+        for value in values {
+            interner.encode(value);
         }
+        interner.finish()
+    }
+
+    /// Encode borrowed strings in one input pass, allocating text only for
+    /// distinct dictionary entries. Finalization sorts those entries and remaps
+    /// integer codes; it never hashes or searches the source strings again.
+    pub fn encode<'a>(values: impl IntoIterator<Item = &'a str>) -> (Self, Vec<StringCode>) {
+        let mut interner = StringInterner::default();
+        let mut codes: Vec<_> = values
+            .into_iter()
+            .map(|value| interner.encode(value))
+            .collect();
+        let dictionary = interner.finish();
+        for code in &mut codes {
+            code.0 = interner.remap[code.0 as usize];
+        }
+        (dictionary, codes)
     }
 
     /// Returns the source value's code, or `None` when the value is absent.
@@ -74,6 +87,10 @@ impl Dictionaries {
     /// Register all source values for a column before encoding any of its rows.
     pub fn insert<'a>(&mut self, column: &str, values: impl IntoIterator<Item = &'a str>) {
         let dictionary = StringDictionary::new(values);
+        self.register(column, dictionary);
+    }
+
+    fn register(&mut self, column: &str, dictionary: StringDictionary) {
         if let Some(existing) = self.columns.get(column) {
             assert_eq!(
                 existing, &dictionary,
@@ -142,77 +159,163 @@ pub fn dictionary_where(
     dictionaries.select(column, predicate)
 }
 
+struct InternEntry {
+    value: String,
+    hash: u64,
+    code: u32,
+}
+
+/// Load-time state for a string column; intermediate codes never escape loading.
+///
+/// Each source string is hashed once. Cached hashes also avoid rereading text
+/// when the table grows. Only distinct strings own allocations. Sorted final
+/// codes are independent of encounter order and randomized hash-table layout.
+#[derive(Default)]
+pub struct StringInterner {
+    index: HashTable<u32>,
+    entries: Vec<InternEntry>,
+    hasher: ahash::RandomState,
+    remap: Vec<u32>,
+}
+
+impl StringInterner {
+    fn encode(&mut self, value: &str) -> StringCode {
+        let hash = self.hasher.hash_one(value);
+        let entries = &mut self.entries;
+        let next = entries.len();
+        let entry = self
+            .index
+            .entry(
+                hash,
+                |&code| entries[code as usize].value == value,
+                |&code| entries[code as usize].hash,
+            )
+            .or_insert_with(|| {
+                assert!(
+                    next < u32::MAX as usize,
+                    "string dictionary exceeds u32 codes"
+                );
+                entries.push(InternEntry {
+                    value: value.to_owned(),
+                    hash,
+                    code: next as u32,
+                });
+                next as u32
+            });
+        StringCode(*entry.get())
+    }
+
+    fn finish(&mut self) -> StringDictionary {
+        // The lookup table stores only indices, so growth never moves text
+        // descriptors. Distinct values are already dense and ready to sort.
+        self.index = HashTable::new();
+        let mut entries = std::mem::take(&mut self.entries);
+        entries.sort_unstable_by(|left, right| left.value.cmp(&right.value));
+        self.remap.resize(entries.len(), 0);
+        let values = entries
+            .into_iter()
+            .enumerate()
+            .map(|(code, entry)| {
+                self.remap[entry.code as usize] = code as u32;
+                entry.value
+            })
+            .collect();
+        StringDictionary { values }
+    }
+}
+
 /// Load-time field conversion selected by traits, not by Rust type spelling.
 ///
-/// Every [`Load`] type is preserved unchanged. [`StringCode`] instead loads
-/// input-only [`String`] values, prepares a sorted dictionary, and encodes them.
-/// It intentionally does not implement `Load`: a code needs its column's
-/// complete dictionary and cannot be parsed independently from one source cell.
+/// Ordinary [`Load`] values pass through unchanged. [`StringCode`] borrows
+/// source cells directly into column-local state; its [`String`] source type is
+/// used only by callers supplying already-owned in-memory fixture rows.
 pub trait InternedField: Sized {
     type Source: Load;
+    type State: Default;
 
-    fn prepare<'a>(
-        column: &str,
-        values: impl Iterator<Item = &'a Self::Source>,
-        dictionaries: &mut Dictionaries,
-    ) where
-        Self::Source: 'a;
-
-    fn intern(value: Self::Source, dictionary: Option<&StringDictionary>) -> Self;
+    fn encode(value: Self::Source, state: &mut Self::State) -> Self;
+    fn column(batch: &Batch<'_>, index: usize, state: &mut Self::State) -> Result<Vec<Self>>;
+    fn finish(column: &str, state: &mut Self::State, dictionaries: &mut Dictionaries);
+    fn remap(&mut self, state: &Self::State);
 }
 
 impl<T: Load> InternedField for T {
     type Source = T;
+    type State = ();
 
-    fn prepare<'a>(_: &str, _: impl Iterator<Item = &'a T>, _: &mut Dictionaries)
-    where
-        T: 'a,
-    {
-    }
-
-    fn intern(value: T, _: Option<&StringDictionary>) -> Self {
+    fn encode(value: T, _: &mut ()) -> Self {
         value
     }
+    fn column(batch: &Batch<'_>, index: usize, _: &mut ()) -> Result<Vec<Self>> {
+        batch.column(index)
+    }
+    fn finish(_: &str, _: &mut (), _: &mut Dictionaries) {}
+    fn remap(&mut self, _: &()) {}
 }
 
 impl InternedField for StringCode {
     type Source = String;
+    type State = StringInterner;
 
-    fn prepare<'a>(
-        column: &str,
-        values: impl Iterator<Item = &'a String>,
-        dictionaries: &mut Dictionaries,
-    ) where
-        String: 'a,
-    {
-        dictionaries.insert(column, values.map(String::as_str));
+    fn encode(value: String, state: &mut StringInterner) -> Self {
+        state.encode(&value)
     }
-
-    fn intern(value: String, dictionary: Option<&StringDictionary>) -> Self {
-        Self(
-            dictionary
-                .expect("string column dictionary was not prepared")
-                .lookup(&value)
-                .expect("source value missing from prepared dictionary"),
-        )
+    fn column(batch: &Batch<'_>, index: usize, state: &mut StringInterner) -> Result<Vec<Self>> {
+        batch.strings(index, |value| state.encode(value))
+    }
+    fn finish(column: &str, state: &mut StringInterner, dictionaries: &mut Dictionaries) {
+        dictionaries.register(column, state.finish());
+    }
+    fn remap(&mut self, state: &StringInterner) {
+        self.0 = state.remap[self.0 as usize];
     }
 }
 
-/// A generated relation whose source schema may differ from its encoded rows.
-/// Source strings exist only while loading; returned relation rows own codes.
+/// A generated relation with column-local state used only during loading.
+/// File readers borrow source text; returned relation rows own final codes.
 pub trait InternedRelation {
     type Row;
     type Source: Relation;
+    type State;
+
+    fn state() -> Self::State;
 
     fn intern(
         rows: Vec<<Self::Source as Relation>::Row>,
         dictionaries: &mut Dictionaries,
     ) -> Vec<Self::Row>;
+    fn decode(batch: &Batch<'_>, state: &mut Self::State) -> Result<Vec<Self::Row>>;
+    fn finish(rows: &mut [Self::Row], state: Self::State, dictionaries: &mut Dictionaries);
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Dictionaries, InternedField, StringCode, StringDictionary};
+
+    #[test]
+    fn borrowed_encoding_matches_sorted_dictionary_across_growth_and_permutation() {
+        let values: Vec<_> = (0..8192)
+            .map(|i| format!("{}-é-{}", i % 997, i % 19))
+            .collect();
+        let mut source: Vec<_> = values.iter().map(String::as_str).collect();
+        source.extend(["", " ", "a", "a\0", "a\0b", "a ", "A", "é", "東京", ""]);
+        for reverse in [false, true] {
+            if reverse {
+                source.reverse();
+            }
+            let (dictionary, codes) = StringDictionary::encode(source.iter().copied());
+            let mut sorted = source.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(dictionary.values, sorted);
+            for (value, code) in source.iter().zip(codes) {
+                assert_eq!(code.0 as usize, sorted.binary_search(value).unwrap());
+            }
+        }
+        let (dictionary, codes) = StringDictionary::encode([]);
+        assert!(dictionary.values.is_empty());
+        assert!(codes.is_empty());
+    }
 
     #[test]
     fn code_capabilities_select_dense_membership_and_ordered_keysets() {
@@ -340,14 +443,17 @@ mod tests {
     fn field_traits_encode_strings_and_move_scalars_unchanged() {
         let values = ["z".to_owned(), "a".to_owned(), "z".to_owned()];
         let mut dictionaries = Dictionaries::default();
-        StringCode::prepare("name", values.iter(), &mut dictionaries);
-        let dictionary = dictionaries.get("name");
-        let codes: Vec<_> = values
+        let mut state = super::StringInterner::default();
+        let mut codes: Vec<_> = values
             .into_iter()
-            .map(|value| StringCode::intern(value, dictionary))
+            .map(|value| StringCode::encode(value, &mut state))
             .collect();
+        StringCode::finish("name", &mut state, &mut dictionaries);
+        for code in &mut codes {
+            code.remap(&state);
+        }
         assert_eq!(codes, [StringCode(1), StringCode(0), StringCode(1)]);
-        assert_eq!(i64::intern(42, None), 42);
-        assert!(f64::intern(f64::NAN, None).is_nan());
+        assert_eq!(i64::encode(42, &mut ()), 42);
+        assert!(f64::encode(f64::NAN, &mut ()).is_nan());
     }
 }

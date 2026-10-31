@@ -434,19 +434,85 @@ mod parquet_tests {
     impl InternedRelation for InternedTyped {
         type Row = (i64, StringCode, Date, Decimal, bool);
         type Source = Typed;
+        type State = cq_load::StringInterner;
+
+        fn state() -> Self::State {
+            Self::State::default()
+        }
 
         fn intern(
             rows: Vec<<Typed as Relation>::Row>,
             dictionaries: &mut Dictionaries,
         ) -> Vec<Self::Row> {
-            StringCode::prepare("name", rows.iter().map(|row| &row.1), dictionaries);
-            let dictionary = dictionaries.get("name");
-            rows.into_iter()
+            let mut state = Self::State::default();
+            let mut rows: Vec<_> = rows
+                .into_iter()
                 .map(|(id, name, day, price, active)| {
-                    (id, StringCode::intern(name, dictionary), day, price, active)
+                    (id, StringCode::encode(name, &mut state), day, price, active)
                 })
-                .collect()
+                .collect();
+            Self::finish(&mut rows, state, dictionaries);
+            rows
         }
+
+        fn decode(batch: &Batch<'_>, state: &mut Self::State) -> cq_load::Result<Vec<Self::Row>> {
+            let ids = batch.column::<i64>(0)?;
+            let names = StringCode::column(batch, 1, state)?;
+            let days = batch.column::<Date>(2)?;
+            let prices = batch.column::<Decimal>(3)?;
+            let active = batch.column::<bool>(4)?;
+            Ok(ids
+                .into_iter()
+                .zip(names)
+                .zip(days)
+                .zip(prices)
+                .zip(active)
+                .map(|((((id, name), day), price), active)| (id, name, day, price, active))
+                .collect())
+        }
+
+        fn finish(rows: &mut [Self::Row], mut state: Self::State, dictionaries: &mut Dictionaries) {
+            StringCode::finish("name", &mut state, dictionaries);
+            for row in rows {
+                row.1.remap(&state);
+            }
+        }
+    }
+    #[test]
+    fn late_null_discards_partial_interning_state() {
+        let file = write(
+            vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("name", DataType::Utf8, true),
+                Field::new("day", DataType::Date32, false),
+                Field::new("price", DataType::Decimal128(18, 2), false),
+                Field::new("active", DataType::Boolean, false),
+            ],
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec![Some("already interned"), None])),
+                Arc::new(Date32Array::from(vec![0, 0])),
+                Arc::new(
+                    Decimal128Array::from(vec![100, 200])
+                        .with_precision_and_scale(18, 2)
+                        .unwrap(),
+                ),
+                Arc::new(BooleanArray::from(vec![true, false])),
+            ],
+        );
+        let mut dictionaries = Dictionaries::default();
+        dictionaries.insert("retained", ["value"]);
+        let error = Loader::<InternedTyped>::parquet_interned(
+            &file.0,
+            ParquetOptions { batch_size: 1 },
+            &mut dictionaries,
+        )
+        .unwrap_err();
+        assert_eq!(error.column, "name");
+        assert_eq!(error.line, 2);
+        assert_eq!(error.value, "<NULL>");
+        assert!(dictionaries.get("name").is_none());
+        assert_eq!(dictionaries.literal("retained", "value"), StringCode(0));
     }
 
     #[test]

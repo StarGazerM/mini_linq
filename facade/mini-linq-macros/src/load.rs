@@ -60,40 +60,6 @@ fn generate(
         let generic_types = (!types.is_empty()).then(|| quote!(<#(#types),*>));
         let generic_bounds =
             (!parameters.is_empty()).then(|| quote!(<#(#parameters: ::cq_load::Load),*>));
-        let interned_impl = interned.then(|| {
-            let interned_bounds = (!parameters.is_empty())
-                .then(|| quote!(<#(#parameters: ::cq_load::InternedField),*>));
-            let source_types = (!parameters.is_empty())
-                .then(|| quote!(<#(<#parameters as ::cq_load::InternedField>::Source),*>));
-            let tuple_indices: Vec<_> = indices.iter().map(|&i| syn::Index::from(i)).collect();
-            quote! {
-                impl #interned_bounds ::cq_load::InternedRelation for #marker #generic_parameters {
-                    type Row = (#(#parameters,)*);
-                    type Source = #marker #source_types;
-
-                    fn intern(
-                        rows: ::std::vec::Vec<<Self::Source as ::cq_load::Relation>::Row>,
-                        dictionaries: &mut ::cq_load::Dictionaries,
-                    ) -> ::std::vec::Vec<Self::Row> {
-                        #(
-                            <#parameters as ::cq_load::InternedField>::prepare(
-                                #names,
-                                rows.iter().map(|row| &row.#tuple_indices),
-                                dictionaries,
-                            );
-                        )*
-                        #(let #fields = dictionaries.get(#names);)*
-                        rows.into_iter().map(|row| (
-                            #(
-                                <#parameters as ::cq_load::InternedField>::intern(
-                                    row.#tuple_indices, #fields,
-                                ),
-                            )*
-                        )).collect()
-                    }
-                }
-            }
-        });
         let decode = if let Some(first) = fields.first() {
             let mut zipped = quote!(#first);
             let mut pattern = quote!(#first);
@@ -105,6 +71,71 @@ fn generate(
         } else {
             quote!(::std::vec![(); batch.len()])
         };
+        let interned_impl = interned.then(|| {
+            let interned_bounds = (!parameters.is_empty())
+                .then(|| quote!(<#(#parameters: ::cq_load::InternedField),*>));
+            let source_types = (!parameters.is_empty())
+                .then(|| quote!(<#(<#parameters as ::cq_load::InternedField>::Source),*>));
+            let tuple_indices: Vec<_> = indices.iter().map(|&i| syn::Index::from(i)).collect();
+            quote! {
+                impl #interned_bounds ::cq_load::InternedRelation for #marker #generic_parameters {
+                    type Row = (#(#parameters,)*);
+                    type Source = #marker #source_types;
+                    type State = (#(<#parameters as ::cq_load::InternedField>::State,)*);
+
+                    fn state() -> Self::State {
+                        (#(<#parameters as ::cq_load::InternedField>::State::default(),)*)
+                    }
+
+                    fn intern(
+                        rows: ::std::vec::Vec<<Self::Source as ::cq_load::Relation>::Row>,
+                        dictionaries: &mut ::cq_load::Dictionaries,
+                    ) -> ::std::vec::Vec<Self::Row> {
+                        let mut state = Self::state();
+                        let mut rows: ::std::vec::Vec<_> = rows.into_iter().map(|row| (
+                            #(
+                                <#parameters as ::cq_load::InternedField>::encode(
+                                    row.#tuple_indices, &mut state.#tuple_indices,
+                                ),
+                            )*
+                        )).collect();
+                        Self::finish(&mut rows, state, dictionaries);
+                        rows
+                    }
+
+                    fn decode(
+                        batch: &::cq_load::Batch<'_>,
+                        state: &mut Self::State,
+                    ) -> ::cq_load::Result<::std::vec::Vec<Self::Row>> {
+                        #(
+                            let #fields = <#parameters as ::cq_load::InternedField>::column(
+                                batch, #indices, &mut state.#tuple_indices,
+                            )?.into_iter();
+                        )*
+                        Ok(#decode)
+                    }
+
+                    fn finish(
+                        rows: &mut [Self::Row],
+                        mut state: Self::State,
+                        dictionaries: &mut ::cq_load::Dictionaries,
+                    ) {
+                        #(
+                            <#parameters as ::cq_load::InternedField>::finish(
+                                #names, &mut state.#tuple_indices, dictionaries,
+                            );
+                        )*
+                        for row in rows {
+                            #(
+                                <#parameters as ::cq_load::InternedField>::remap(
+                                    &mut row.#tuple_indices, &state.#tuple_indices,
+                                );
+                            )*
+                        }
+                    }
+                }
+            }
+        });
         let groups = (0..=arity).map(|prefix| {
             let keys = &parameters[..prefix];
             let values = &parameters[prefix..];
