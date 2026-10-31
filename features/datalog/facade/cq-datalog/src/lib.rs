@@ -2,7 +2,9 @@
 //!
 //! Each stage has its own checked language: Source, Strata, Incremental,
 //! Storage and Round. The terminal printer executes ordinary CQ holes against
-//! borrowed hosts and admits each candidate through canonical set insertion.
+//! borrowed hosts and admits each candidate by an anti-join with its
+//! relation's canonical layout (an ordinary all-column-keyed layout) and
+//! insert-if-absent into that layout's NEW version for the round.
 //! Datalog owns its pipeline configuration without changing core CQ planning.
 //!
 //! Consumers declare direct `mini-linq` and `cq-storage` dependencies, just as
@@ -41,8 +43,8 @@
 //! Each rule hole records `consumer canonical`: its result belongs to exactly
 //! one checked admission owner for its head relation. Frozen-key holes have
 //! their own canonical key-set consumer. Storage certificates establish
-//! `host_set H discharged` for certified positive hosts: canonical EDBs,
-//! admitted IDB all/delta rows, and their maintained layouts. Certificates may
+//! `host_set H discharged` for certified positive hosts: each relation's
+//! canonical layout, admitted IDB deltas, and their maintained layouts. Certificates may
 //! cover a subset of hosts; an uncertified host receives no discharged fact.
 //! Provider types are not whitelisted. Checked scan substitutions preserve the
 //! certificate for the renamed input.
@@ -130,8 +132,8 @@
 //! before requiring exact erased correspondence; it never changes the registry.
 //! Parallel and phase-timed execution retain their explicit candidate storage.
 //!
-//! Datalog defaults to unkeyed Fx hashing for layout maps, IDB membership,
-//! EDB canonicalization, and negation key sets. Checked context facts eliminate
+//! Datalog defaults to unkeyed Fx hashing for layout maps and key sets (the
+//! canonical layouts included) and negation key sets. Checked context facts eliminate
 //! dedup representations in the generated rule holes, so the default queue
 //! installs no CQ dedup retype rewrite.
 //! This assumes trusted inputs: Fx is not collision-attack resistant.
@@ -160,8 +162,11 @@
 //! cq_datalog::passes::print_rounds }; <strata program> }`.
 //! For authored Incremental text, enter [`passes::storage!`] instead.
 //! Every direct entry accepts `arguments { ... }; pipeline { ... }; <IR>`.
-//! Storage records full and delta layouts separately.
-//! Full layouts receive per-admitted-row insertions. Each demanded delta
+//! Storage records full and delta layouts separately; each relation's canonical
+//! layout is one of its full layouts keyed by every column, and every layout
+//! keyed by all columns is a payload-free `HashSet` by default.
+//! Full layouts, the canonical one included, receive per-admitted-row
+//! insertions. Each demanded delta
 //! layout is batch-built once at seed publication and once at every subsequent
 //! publication, replacing the previous run even when the new delta is empty.
 //! The next round's holes share that immutable grouped host rather than
@@ -261,8 +266,8 @@
 //! bundled DuckDB even though the Datalog oracle itself uses sequential Ascent.
 //!
 //! Counters are opt-in; `bench` rejects counters-enabled builds. Counters describe
-//! the ordinary CQ runtime: Datalog-owned fast-hashed full-layout insertions,
-//! delta-run batch builds, and canonical-set writes are not counted as core
+//! the ordinary CQ runtime: Datalog-owned fast-hashed full-layout insertions
+//! (canonical layouts included) and delta-run batch builds are not counted as core
 //! index builds. Compatible borrowed keys probe both grouped host kinds
 //! natively; counter regressions require zero per-hole fallback builds.
 //! `layout_mismatch` measures native host probing versus a fallback for the

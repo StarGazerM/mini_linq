@@ -9,7 +9,8 @@ publish = false
 [features]
 default = []
 counters = ["cq-storage/counters"]
-phase-timing = ["cq-datalog-configuration/phase-timing"]
+# The proc macro resolves host-side features separately: forward to it too.
+phase-timing = ["cq-datalog-configuration/phase-timing", "cq-datalog-macros/phase-timing"]
 hoist-invariants = ["cq-datalog-macros/hoist-invariants"]
 
 [dependencies]

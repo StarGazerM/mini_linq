@@ -268,26 +268,30 @@ fn accepts_reordered_certificate_sets() {
 }
 
 #[test]
-fn storage_rewrites_only_idb_seen_and_preserves_all_native_layouts() {
-    let mut source = authored_storage();
-    // Opaque Rust syntax unrelated to sharding must survive without rewriting.
-    source.providers[2].all_init = syn::parse_quote!(make_rows());
+fn default_shards_only_idb_canonical_layouts() {
+    let source = authored_storage();
     let target = compile_storage(&source).unwrap();
     check_storage(&source, &target).unwrap();
-    assert_eq!(target.providers[0], source.providers[0]);
-    assert_eq!(target.providers[1], source.providers[1]);
-    assert_eq!(
-        target.providers[2].seen,
-        syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
-    );
+    assert_eq!(target.providers, source.providers);
     assert!(!target.delta_layouts.is_empty());
-    assert_eq!(target.layouts, source.layouts);
     assert_eq!(target.delta_layouts, source.delta_layouts);
-    let mut restored = target.clone();
-    for (original, rewritten) in source.providers.iter().zip(&mut restored.providers) {
-        rewritten.seen = original.seen.clone();
+    let idb_canonical: Vec<_> = [2, 3]
+        .map(|relation| source.providers[relation].canonical)
+        .into();
+    for (index, (before, after)) in source.layouts.iter().zip(&target.layouts).enumerate() {
+        if idb_canonical.contains(&index) {
+            // Every canonical layout is keyed by all columns: a key set.
+            assert_eq!(before.protocol, storage::LayoutProtocol::Set);
+            assert_eq!(after.provider, shard_layout_type(&before.provider));
+            assert_eq!(after.protocol, storage::LayoutProtocol::Bulk);
+        } else {
+            assert_eq!(before, after);
+        }
     }
-    assert_eq!(restored, source);
+    assert_eq!(
+        target.layouts[idb_canonical[0]].provider,
+        syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), (), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
+    );
     assert_eq!(
         syn::parse2::<storage::Program>(target.to_token_stream()).unwrap(),
         target
@@ -295,15 +299,21 @@ fn storage_rewrites_only_idb_seen_and_preserves_all_native_layouts() {
     assert!(compile_storage_with(&source, quote!(threshold = 3)).is_err());
 }
 
+/// The sharded counterpart of a grouped map `HashMap<K, Vec<V>, S>` or a key
+/// set `HashSet<K, S>` (payload `()`).
 fn shard_layout_type(provider: &syn::Type) -> syn::Type {
     let syn::Type::Path(path) = provider else {
         panic!("map provider")
     };
-    let syn::PathArguments::AngleBracketed(args) = &path.path.segments.last().unwrap().arguments
-    else {
+    let segment = path.path.segments.last().unwrap();
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
         panic!("map arguments")
     };
     let key = &args.args[0];
+    if segment.ident == "HashSet" {
+        let hasher = &args.args[1];
+        return syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<#key, (), #hasher>);
+    }
     let syn::GenericArgument::Type(syn::Type::Path(values)) = &args.args[1] else {
         panic!("vector payload")
     };
@@ -444,25 +454,14 @@ fn run_layout_type(provider: &syn::Type) -> syn::Type {
 }
 
 #[test]
-fn run_selections_are_independent_and_erase_exactly() {
+fn run_and_sharded_selections_cover_canonical_and_erase_exactly() {
     let source = authored_storage();
-    for args in [
-        quote!(seen(runs)),
-        quote!(layouts(runs)),
-        quote!(layouts(runs), seen(runs)),
-        quote!(seen(runs), layouts(sharded),),
-    ] {
+    for args in [quote!(), quote!(layouts(runs)), quote!(layouts(sharded),)] {
         let text = args.to_string();
         let target = compile_storage_with(&source, args).unwrap();
         check_storage(&source, &target).unwrap();
-        assert_eq!(target.providers[0], source.providers[0]);
-        assert_eq!(target.providers[1], source.providers[1]);
-        let seen = target.providers[2].seen.to_token_stream().to_string();
-        assert_eq!(seen.contains("RunSeen"), text.contains("seen"));
+        assert_eq!(target.providers, source.providers);
         let mut restored = target.clone();
-        for (before, after) in source.providers.iter().zip(&mut restored.providers) {
-            after.seen = before.seen.clone();
-        }
         let mut changed = 0;
         for (before, after) in source.layouts.iter().chain(&source.delta_layouts).zip(
             restored
@@ -485,7 +484,8 @@ fn run_selections_are_independent_and_erase_exactly() {
                 changed += 1;
             }
         }
-        assert_eq!(changed > 0, text.contains("layouts"));
+        // Canonical layouts change under every selection; reads only when selected.
+        assert_eq!(changed > 2, text.contains("layouts"));
         assert_eq!(restored, source);
         assert_eq!(
             syn::parse2::<storage::Program>(target.to_token_stream()).unwrap(),
@@ -497,13 +497,30 @@ fn run_selections_are_independent_and_erase_exactly() {
         quote!(layouts(runs), layouts(sharded)),
         quote!(layouts(sharded), layouts(runs)),
         quote!(layouts(runs), layouts(runs)),
-        quote!(seen(runs), seen(runs)),
-        quote!(seen(sharded)),
-        quote!(seen()),
+        quote!(seen(runs)),
+        quote!(layouts(runs), seen(runs)),
         quote!(layouts(runs extra)),
     ] {
         assert!(compile_storage_with(&source, args).is_err());
     }
+}
+
+#[test]
+fn run_layouts_make_each_idb_canonical_a_payload_free_run() {
+    let source = authored_storage();
+    let target = compile_storage_with(&source, quote!(layouts(runs))).unwrap();
+    for relation in [2, 3] {
+        let canonical = &target.layouts[target.providers[relation].canonical];
+        assert_eq!(
+            canonical.provider,
+            syn::parse_quote!(::cq_datalog_parallel_runtime::RunLayout<(i32, i32,), ()>)
+        );
+        assert_eq!(canonical.protocol, storage::LayoutProtocol::Bulk);
+    }
+    // EDB canonical layouts stay native key sets.
+    let edge = &target.layouts[target.providers[0].canonical];
+    assert_eq!(edge.protocol, storage::LayoutProtocol::Set);
+    assert_eq!(edge, &source.layouts[source.providers[0].canonical]);
 }
 
 #[test]
@@ -533,7 +550,7 @@ fn layout_substitution_checks_recorded_maintenance_protocol() {
 #[test]
 fn run_layout_checker_rejects_ineligible_and_changed_types_and_hashers() {
     let source = authored_storage();
-    let target = compile_storage_with(&source, quote!(layouts(runs), seen(runs))).unwrap();
+    let target = compile_storage_with(&source, quote!(layouts(runs))).unwrap();
     for delta in [false, true] {
         let layouts = if delta {
             &source.delta_layouts
@@ -597,7 +614,8 @@ fn run_layout_checker_rejects_ineligible_and_changed_types_and_hashers() {
                     else {
                         unreachable!()
                     };
-                    args.args[2] = syn::GenericArgument::Type(hasher);
+                    // The hasher is the last argument of both maps and sets.
+                    *args.args.last_mut().unwrap() = syn::GenericArgument::Type(hasher);
                     assert!(
                         compile_storage_with(&changed, quote!(layouts(runs)))
                             .unwrap_err()
@@ -605,7 +623,7 @@ fn run_layout_checker_rejects_ineligible_and_changed_types_and_hashers() {
                             .contains("default storage hasher")
                     );
                     assert!(check_storage(&changed, &target).is_err());
-                    compile_storage_with(&changed, quote!(seen(runs))).unwrap();
+                    compile_storage_with(&changed, quote!(layouts(sharded))).unwrap();
                 }
             }
         }
@@ -613,55 +631,20 @@ fn run_layout_checker_rejects_ineligible_and_changed_types_and_hashers() {
 }
 
 #[test]
-fn run_seen_preserves_hasher_and_rejects_row_or_hasher_changes() {
-    for original in [
-        syn::parse_quote!(::cq_storage::HashSet<(i32, i32,)>),
-        syn::parse_quote!(::std::collections::HashSet<(i32, i32,)>),
-        syn::parse_quote!(::std::collections::HashSet<(i32, i32,), CustomHasher>),
-    ] {
-        let mut source = authored_storage();
-        source.providers[2].seen = original;
-        let target = compile_storage_with(&source, quote!(seen(runs))).unwrap();
-        check_storage(&source, &target).unwrap();
-        let expected: syn::Type = if target.providers[2]
-            .seen
-            .to_token_stream()
-            .to_string()
-            .contains("CustomHasher")
-        {
-            syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32,), CustomHasher>)
-        } else if source.providers[2]
-            .seen
-            .to_token_stream()
-            .to_string()
-            .contains("cq_storage")
-        {
-            syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32,)>)
-        } else {
-            syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32,), ::std::collections::hash_map::RandomState>)
-        };
-        assert_eq!(target.providers[2].seen, expected);
-        for bad in [
-            syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i64,), CustomHasher>),
-            syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32,), ChangedHasher>),
-        ] {
-            let mut changed = target.clone();
-            changed.providers[2].seen = bad;
-            assert!(check_storage(&source, &changed).is_err());
-        }
-    }
-}
-
-#[test]
 fn storage_checker_rejects_unrelated_and_provider_mutations() {
     let mutations: &[fn(&mut storage::Program)] = &[
-        |p| p.providers[2].seen = syn::parse_quote!(::cq_storage::HashSet<(i32, i32,)>),
+        // A native IDB canonical layout is valid storage but cannot admit in parallel.
         |p| {
-            p.providers[2].seen =
-                syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<(i32,)>)
+            let source = authored_storage();
+            let canonical = source.providers[2].canonical;
+            p.layouts[canonical] = source.layouts[canonical].clone();
         },
-        |p| p.providers[2].all_init = syn::parse_quote!(other_rows()),
-        |p| p.providers[0].canonical_name = syn::parse_quote!(OtherCanonical),
+        |p| p.providers[2].canonical = p.providers[3].canonical,
+        |p| {
+            let canonical = p.providers[2].canonical;
+            p.layouts[canonical].provider =
+                syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<(i32,), ()>)
+        },
         |p| {
             p.layouts[0].provider =
                 syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedIndex<(), (i32, i32,)>)
@@ -697,26 +680,30 @@ fn storage_checker_rejects_unrelated_and_provider_mutations() {
 }
 
 #[test]
-fn storage_preserves_layout_shapes_but_rejects_unsupported_seen_providers() {
+fn storage_preserves_layout_shapes_but_rejects_unsupported_canonical_providers() {
     let mut source = authored_storage();
     source.layouts[0].provider =
         syn::parse_quote!(::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>);
     let target = compile_storage(&source).unwrap();
-    assert_eq!(target.layouts, source.layouts);
+    assert_eq!(target.layouts[0], source.layouts[0]);
     check_storage(&source, &target).unwrap();
     let round = cq_datalog_fork::compile(&target).unwrap();
     assert!(compile_sharded(&round).is_err());
+    // An opaque canonical provider has no sharded counterpart.
     let mut source = authored_storage();
-    source.providers[2].seen = syn::parse_quote!(custom::Set<(i32, i32,)>);
-    assert!(compile_storage(&source).is_err());
+    let canonical = source.providers[2].canonical;
+    source.layouts[canonical].provider = syn::parse_quote!(custom::Set<(i32, i32,)>);
+    assert!(
+        compile_storage(&source)
+            .unwrap_err()
+            .to_string()
+            .contains("IDB canonical layouts require")
+    );
 }
 
 #[test]
 fn sharding_preserves_explicit_hashers_and_checks_their_correspondence() {
     let mut source = authored_storage();
-    source.providers[2].seen = syn::parse_quote!(
-        ::std::collections::HashSet<(i32, i32,), ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>
-    );
     for layout in source.layouts.iter_mut().chain(&mut source.delta_layouts) {
         let syn::Type::Path(path) = &mut layout.provider else {
             unreachable!()
@@ -726,21 +713,22 @@ fn sharding_preserves_explicit_hashers_and_checks_their_correspondence() {
         else {
             unreachable!()
         };
-        arguments.args[2] =
+        *arguments.args.last_mut().unwrap() =
             syn::parse_quote!(::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>);
     }
     let target = compile_storage(&source).unwrap();
+    let canonical = target.providers[2].canonical;
     assert_eq!(
-        target.providers[2].seen,
+        target.layouts[canonical].provider,
         syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,), ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>
+            ::cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), (), ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>
         )
     );
     check_storage(&source, &target).unwrap();
     compile_sharded(&cq_datalog_fork::compile(&target).unwrap()).unwrap();
     let mut changed = target;
-    changed.providers[2].seen = syn::parse_quote!(
-        ::cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,), ::cq_storage::HashState>
+    changed.layouts[canonical].provider = syn::parse_quote!(
+        ::cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), (), ::cq_storage::HashState>
     );
     assert!(check_storage(&source, &changed).is_err());
 }
@@ -1020,7 +1008,10 @@ fn output_only_program_has_no_phantom_owners_or_publications() {
     let target = compile_sharded(&source).unwrap();
     assert_eq!(target.round, source);
     assert!(target.certificate.admission.is_empty());
-    assert!(target.certificate.layouts.is_empty());
+    // The EDB's canonical layout is an ordinary layout with one owner; it is
+    // loaded once and never published, so no barrier names it.
+    assert_eq!(source.context.layouts.len(), 1);
+    assert_eq!(target.certificate.layouts.len(), 1);
     assert!(target.certificate.delta_layouts.is_empty());
     assert!(target.certificate.publication.is_empty());
     Language::check(&target).unwrap();

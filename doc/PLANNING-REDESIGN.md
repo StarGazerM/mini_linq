@@ -328,10 +328,29 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     not discharged by recording its accumulator provider.
   - **Removes** CQ `CanonStrategy`/`dedup::sort` canon, `__cq_seen` and
     callback barriers; CPU Datalog `seen`/`all` (hash, `ShardedSeen`, `RunSeen`
-    seeds), DL-InsertNew/DL-ShardedAdmission; GPU fused admission. Verified
-    by laziness tests (the first answer after the first batch), expansion
-    counters (candidates before/after ▷O), exact oracle/TPC-H/DOOP, and paired
-    timing.
+    seeds) and the separate DL-InsertNew/DL-ShardedAdmission stores; GPU fused
+    admission. Verified by laziness tests (the first answer after the first
+    batch), expansion counters (candidates before/after ▷O), exact
+    oracle/TPC-H/DOOP, and paired timing.
+  - **Track B (CPU Datalog) as implemented.** Storage `Providers.canonical`
+    indexes one full layout of the relation keyed by every column
+    (DL-Canonical): the first such read layout, else an appended identity
+    layout. Every layout keyed by all columns is a payload-free key set
+    (`HashSet<K, Fx>`, protocol `set`); other layouts stay grouped maps.
+    Admission (DL-InsertNew) is the anti-join `¬C.contains(k)` with the
+    committed canonical layout plus insert-if-absent into the round-local NEW
+    version `Relation.next_canonical`, using the provider's own operations;
+    publication maintains the canonical layout as an ordinary `full_layouts`
+    member (no `all_extend`); EDB loading is insert-if-absent into the
+    canonical layout, extending the other layouts with admitted rows. Outputs
+    move (`set`/`grouped_map`) or clone (`bulk`) the canonical layout. The
+    parallel extension shards each IDB canonical layout by default
+    (`ShardedLayout<K, (), S>`, or `RunLayout<K, ()>` under `layouts(runs)`)
+    and admits by per-chunk anti-join plus NEW `extend_from`/distinct keys
+    (sorted runs: concat, sort, dedup) (DL-ShardedAdmission). `seen`, `all`,
+    the `Canonical` wrapper, `ShardedSeen`/`RunSeen`, `seen(runs)`,
+    `RuleHole.insertion` and DL-RunAdmission are gone; Datalog uses no
+    `maintain::{Fresh, Publish}` trait.
   - **Parallel tracks** (decided 2026-10-30). M0 (`e189e296` baseline plus the
     contract commit: `cq_storage::maintain::{Fresh, Publish}` with
     `ExactMembership`; ADM-*/IX-* in `incremental.tex`) is serial on main.

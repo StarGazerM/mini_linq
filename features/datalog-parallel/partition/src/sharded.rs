@@ -1,8 +1,8 @@
 //! Sharding is an extension premise, not a base-language execution policy.
 //! Admission ownership quantifies over runtime shard IDs: `[start, end)` is the
-//! complete domain and `owner = shard_id` is injective. Seen providers choose a
-//! power-of-two shard count at least the Rayon worker count and hash full tuples.
-//! Each native full/delta layout instead has one exclusive owner.
+//! complete domain and `owner = shard_id` is injective. Sharded canonical
+//! layouts choose a power-of-two shard count at least the Rayon worker count
+//! and route full tuples by hash. Each full/delta layout has one exclusive owner.
 //! Publication joins every layout owner before the next evaluation, including
 //! owners publishing an empty delta.
 use cq_datalog_support::ensure;
@@ -139,10 +139,10 @@ impl syn::parse::Parse for Arguments {
     }
 }
 
-/// Rewrite IDB membership, independently selecting keyed IDB layout providers.
-/// Defaults retain sharded admission and native layouts. `seen(runs)` selects
-/// sorted-run admission; `layouts(sharded)` and `layouts(runs)` are exclusive.
-/// EDB providers, layout metadata, and opaque initializers remain unchanged.
+/// Select bulk providers for IDB layouts. Each IDB canonical layout is an
+/// ordinary keyed layout: by default only canonical layouts become sharded;
+/// `layouts(sharded)` and `layouts(runs)` (exclusive) select every keyed IDB
+/// layout, canonical included. EDB and unit-key layouts remain native.
 pub fn compile_storage(source: &storage::Program) -> syn::Result<storage::Program> {
     compile_storage_with(source, TokenStream::new())
 }
@@ -156,13 +156,11 @@ enum LayoutChoice {
 
 struct StorageArguments {
     layouts: LayoutChoice,
-    run_seen: bool,
 }
 
 impl syn::parse::Parse for StorageArguments {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let mut layouts = None;
-        let mut run_seen = false;
         while !input.is_empty() {
             let name: Ident = input.parse()?;
             let content;
@@ -189,15 +187,8 @@ impl syn::parse::Parse for StorageArguments {
                         "expected sharded or runs",
                     ));
                 });
-            } else if name == "seen" {
-                ensure(
-                    !run_seen && provider == "runs",
-                    &provider,
-                    "expected one seen(runs)",
-                )?;
-                run_seen = true;
             } else {
-                return Err(syn::Error::new_spanned(name, "expected layouts or seen"));
+                return Err(syn::Error::new_spanned(name, "expected layouts"));
             }
             if !input.is_empty() {
                 input.parse::<syn::Token![,]>()?;
@@ -205,7 +196,6 @@ impl syn::parse::Parse for StorageArguments {
         }
         Ok(Self {
             layouts: layouts.unwrap_or(LayoutChoice::Native),
-            run_seen,
         })
     }
 }
@@ -217,37 +207,43 @@ pub fn compile_storage_with(
     let arguments: StorageArguments = syn::parse2(arguments)?;
     storage::contract::check(source)?;
     let mut target = source.clone();
-    for (provider, declaration) in target
+    let canonical: Vec<_> = source
         .providers
-        .iter_mut()
+        .iter()
         .zip(&source.incremental.strata.source.declarations)
-    {
-        if declaration.value.is_none() {
-            provider.seen = selected_seen(&provider.seen, arguments.run_seen)?;
+        .filter(|(_, declaration)| declaration.value.is_none())
+        .map(|(provider, _)| provider.canonical)
+        .collect();
+    let native = arguments.layouts == LayoutChoice::Native;
+    let full = target
+        .layouts
+        .iter_mut()
+        .enumerate()
+        .map(|(i, l)| (Some(i), l));
+    let delta = target.delta_layouts.iter_mut().map(|l| (None, l));
+    for (index, layout) in full.chain(delta) {
+        if native && !index.is_some_and(|index| canonical.contains(&index)) {
+            continue;
         }
-    }
-    if arguments.layouts != LayoutChoice::Native {
-        for layout in target.layouts.iter_mut().chain(&mut target.delta_layouts) {
-            if layout.key > 0
-                && source
-                    .incremental
-                    .strata
-                    .source
-                    .declarations
-                    .iter()
-                    .any(|declaration| {
-                        declaration.name == layout.relation && declaration.value.is_none()
-                    })
-            {
-                let replacement = if arguments.layouts == LayoutChoice::Runs {
-                    run_layout(&layout.provider)?
-                } else {
-                    sharded_layout(&layout.provider)
-                };
-                if let Some(provider) = replacement {
-                    layout.provider = provider;
-                    layout.protocol = storage::LayoutProtocol::Bulk;
-                }
+        if layout.key > 0
+            && source
+                .incremental
+                .strata
+                .source
+                .declarations
+                .iter()
+                .any(|declaration| {
+                    declaration.name == layout.relation && declaration.value.is_none()
+                })
+        {
+            let replacement = if arguments.layouts == LayoutChoice::Runs {
+                run_layout(&layout.provider)?
+            } else {
+                sharded_layout(&layout.provider)
+            };
+            if let Some(provider) = replacement {
+                layout.provider = provider;
+                layout.protocol = storage::LayoutProtocol::Bulk;
             }
         }
     }
@@ -255,7 +251,8 @@ pub fn compile_storage_with(
     Ok(target)
 }
 
-/// Formal rule CK-DL-ShardStorage: reverse IDB seen and eligible layout substitutions.
+/// Formal rule CK-DL-ShardStorage: reverse eligible layout substitutions; every
+/// IDB canonical layout must be a sharded or sorted-run layout.
 /// Demand exact equality after erasure, including all layout metadata and opaque
 /// CQ queues; unit-key and EDB layouts cannot be substituted.
 pub fn check_storage(source: &storage::Program, target: &storage::Program) -> syn::Result<()> {
@@ -278,15 +275,12 @@ pub fn check_storage(source: &storage::Program, target: &storage::Program) -> sy
         .enumerate()
     {
         if declaration.value.is_none() {
-            let original = &source.providers[index].seen;
-            let expected = sharded_seen(original)?;
+            let canonical = &target.layouts[target.providers[index].canonical];
             ensure(
-                target.providers[index].seen == expected
-                    || target.providers[index].seen == selected_seen(original, true)?,
+                canonical.protocol == storage::LayoutProtocol::Bulk,
                 target,
-                "incorrect admission provider",
+                "IDB canonical layouts require a sharded or sorted-run provider",
             )?;
-            erased.providers[index].seen = original.clone();
         }
     }
     for (original, rewritten) in source
@@ -308,8 +302,10 @@ pub fn check_storage(source: &storage::Program, target: &storage::Program) -> sy
                 })
         {
             ensure(
-                original.protocol == storage::LayoutProtocol::GroupedMap
-                    && rewritten.protocol == storage::LayoutProtocol::Bulk
+                matches!(
+                    original.protocol,
+                    storage::LayoutProtocol::GroupedMap | storage::LayoutProtocol::Set
+                ) && rewritten.protocol == storage::LayoutProtocol::Bulk
                     && (sharded_layout(&original.provider).as_ref() == Some(&rewritten.provider)
                         || run_layout(&original.provider).ok().flatten().as_ref()
                             == Some(&rewritten.provider)),
@@ -331,7 +327,7 @@ pub fn compile_sharded(source: &Program) -> syn::Result<ShardedProgram> {
     compile_sharded_with(source, TokenStream::new())
 }
 
-/// Partition a Round program with sharded seen admission and native layouts.
+/// Partition a Round program whose IDB canonical layouts are sharded or sorted runs.
 /// Threshold controls the sequential fallback; grain controls scan chunk size.
 /// A zero threshold forces the parallel path; grain must remain nonzero.
 /// The default `self_dedup per_task` realization removes duplicate owned
@@ -661,27 +657,16 @@ fn check_providers(program: &Program) -> syn::Result<()> {
         if relation.declaration.value.is_none() {
             let types = relation.declaration.columns.iter().map(|column| &column.ty);
             let tuple: Type = syn::parse_quote!((#(#types,)*));
-            let seen_arguments = type_arguments(
-                &relation.providers.seen,
-                &["cq_datalog_parallel_runtime", "ShardedSeen"],
-            )
-            .or_else(|| {
-                type_arguments(
-                    &relation.providers.seen,
-                    &["cq_datalog_parallel_runtime", "RunSeen"],
-                )
-            });
             let rows: Type = syn::parse_quote!(::std::vec::Vec<#tuple>);
+            // Layout providers are checked below; admission needs a bulk canonical.
             ensure(
-                seen_arguments.is_some_and(|arguments| {
-                    (1..=2).contains(&arguments.len())
-                        && argument_type(&arguments[0]) == Some(&tuple)
-                        && arguments
-                            .iter()
-                            .all(|argument| argument_type(argument).is_some())
-                }),
+                program
+                    .context
+                    .layouts
+                    .get(relation.providers.canonical)
+                    .is_some_and(|layout| layout.protocol == storage::LayoutProtocol::Bulk),
                 program,
-                "sharded Round requires ShardedSeen or RunSeen for each IDB",
+                "sharded Round requires a sharded or sorted-run canonical layout for each IDB",
             )?;
             ensure(
                 relation.providers.delta == rows && relation.providers.next == rows,
@@ -717,6 +702,14 @@ fn check_providers(program: &Program) -> syn::Result<()> {
                 &["cq_datalog_parallel_runtime", "RunLayout"],
             )
             .is_some();
+        // A native key set: std names its hasher, the keyed alias fixes it.
+        let set_arguments = type_arguments(&layout.provider, &["std", "collections", "HashSet"])
+            .filter(|arguments| arguments.len() == 2)
+            .or_else(|| {
+                type_arguments(&layout.provider, &["cq_storage", "HashSet"])
+                    .filter(|arguments| arguments.len() == 1)
+            });
+        let set = !sharded && !runs && set_arguments.is_some();
         let arguments = if sharded {
             type_arguments(
                 &layout.provider,
@@ -727,6 +720,8 @@ fn check_providers(program: &Program) -> syn::Result<()> {
                 &layout.provider,
                 &["cq_datalog_parallel_runtime", "RunLayout"],
             )
+        } else if set {
+            set_arguments
         } else {
             type_arguments(&layout.provider, &["std", "collections", "HashMap"])
         };
@@ -738,18 +733,26 @@ fn check_providers(program: &Program) -> syn::Result<()> {
         };
         ensure(
             arguments.is_some_and(|arguments| {
-                arguments.len() == (if runs { 2 } else { 3 })
-                    && argument_type(&arguments[0]) == Some(&key)
-                    && argument_type(&arguments[1]) == Some(&value)
-                    && (runs || argument_type(&arguments[2]).is_some())
+                if set {
+                    values.is_empty()
+                        && argument_type(&arguments[0]) == Some(&key)
+                        && arguments.iter().all(|a| argument_type(a).is_some())
+                } else {
+                    arguments.len() == (if runs { 2 } else { 3 })
+                        && argument_type(&arguments[0]) == Some(&key)
+                        && argument_type(&arguments[1]) == Some(&value)
+                        && (runs || argument_type(&arguments[2]).is_some())
+                }
             }),
             program,
-            "sharded Round requires a native HashMap or an eligible ShardedLayout or RunLayout",
+            "sharded Round requires a native HashMap or HashSet or an eligible ShardedLayout or RunLayout",
         )?;
         ensure(
             layout.protocol
                 == if sharded || runs {
                     storage::LayoutProtocol::Bulk
+                } else if set {
+                    storage::LayoutProtocol::Set
                 } else {
                     storage::LayoutProtocol::GroupedMap
                 },
@@ -793,8 +796,28 @@ fn argument_type(argument: &syn::GenericArgument) -> Option<&Type> {
     }
 }
 
-/// Recognize exactly the grouped native map, preserving all three type arguments.
+/// Recognize exactly the grouped native map or the native/keyed key set,
+/// preserving the key, row payload (`()` for a set) and hasher arguments.
 fn sharded_layout(ty: &Type) -> Option<Type> {
+    if let Some(arguments) = type_arguments(ty, &["std", "collections", "HashSet"]) {
+        if arguments.len() != 2 {
+            return None;
+        }
+        let key = argument_type(&arguments[0])?;
+        let hasher = argument_type(&arguments[1])?;
+        return Some(
+            syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<#key, (), #hasher>),
+        );
+    }
+    if let Some(arguments) = type_arguments(ty, &["cq_storage", "HashSet"]) {
+        if arguments.len() != 1 {
+            return None;
+        }
+        let key = argument_type(&arguments[0])?;
+        return Some(syn::parse_quote!(
+            ::cq_datalog_parallel_runtime::ShardedLayout<#key, (), ::cq_storage::HashState>
+        ));
+    }
     let arguments = type_arguments(ty, &["std", "collections", "HashMap"])?;
     if arguments.len() != 3 {
         return None;
@@ -829,44 +852,6 @@ fn run_layout(ty: &Type) -> syn::Result<Option<Type>> {
     Ok(Some(
         syn::parse_quote!(::cq_datalog_parallel_runtime::RunLayout<#key, #value>),
     ))
-}
-
-fn selected_seen(ty: &Type, runs: bool) -> syn::Result<Type> {
-    let mut selected = sharded_seen(ty)?;
-    if runs {
-        let Type::Path(path) = &mut selected else {
-            unreachable!()
-        };
-        path.path.segments.last_mut().expect("seen path").ident =
-            Ident::new("RunSeen", proc_macro2::Span::call_site());
-    }
-    Ok(selected)
-}
-
-fn sharded_seen(ty: &Type) -> syn::Result<Type> {
-    let invalid = || {
-        syn::Error::new_spanned(
-            ty,
-            "sharded admission requires a HashSet<Tuple, Hasher> provider",
-        )
-    };
-    let alias = type_arguments(ty, &["cq_storage", "HashSet"]);
-    let arguments = alias
-        .or_else(|| type_arguments(ty, &["std", "collections", "HashSet"]))
-        .ok_or_else(invalid)?;
-    let tuple = arguments
-        .first()
-        .and_then(argument_type)
-        .ok_or_else(invalid)?;
-    if alias.is_some() && arguments.len() == 1 {
-        return Ok(syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<#tuple>));
-    }
-    let hasher: Type = match arguments.len() {
-        1 => syn::parse_quote!(::std::collections::hash_map::RandomState),
-        2 if alias.is_none() => argument_type(&arguments[1]).ok_or_else(invalid)?.clone(),
-        _ => return Err(invalid()),
-    };
-    Ok(syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<#tuple, #hasher>))
 }
 
 impl cq_stage::Language for ShardedProgram {

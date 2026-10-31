@@ -134,13 +134,25 @@ fn rule_plan(input: ParseStream<'_>) -> syn::Result<cq_datalog_incremental::Rule
         input.parse::<Token![,]>()?;
         let name: syn::Ident = input.parse()?;
         if name != "smallest" {
-            return Err(syn::Error::new_spanned(name, "expected smallest(Relation@clause, ...)"));
+            return Err(syn::Error::new_spanned(
+                name,
+                "expected smallest(Relation@clause, ...)",
+            ));
         }
         let site;
         syn::parenthesized!(site in input);
-        smallest.push(site.parse_terminated(cq_datalog_incremental::OrderAtom::parse, Token![,])?.into_iter().collect());
+        smallest.push(
+            site.parse_terminated(cq_datalog_incremental::OrderAtom::parse, Token![,])?
+                .into_iter()
+                .collect(),
+        );
     }
-    Ok(cq_datalog_incremental::RulePlan { rule, delta, order, smallest })
+    Ok(cq_datalog_incremental::RulePlan {
+        rule,
+        delta,
+        order,
+        smallest,
+    })
 }
 
 fn incremental_arguments(input: ParseStream<'_>) -> syn::Result<IncrementalArguments> {
@@ -316,5 +328,8 @@ pub fn smallest_before(input: TokenStream) -> TokenStream {
             arguments { #sites }; #context #pipeline; #program
         }))
     };
-    parser.parse2(input.into()).unwrap_or_else(syn::Error::into_compile_error).into()
+    parser
+        .parse2(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }

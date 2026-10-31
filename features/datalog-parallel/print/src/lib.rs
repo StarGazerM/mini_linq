@@ -140,15 +140,16 @@ fn evaluate(
         let types = head.declaration.columns.iter().map(|column| &column.ty);
         let consume = if self_dedup {
             let hasher = format_ident!("__cq_task_hasher_{}", rule.hole, span = Span::mixed_site());
-            let seen = &head.seen;
-            // Borrow only S before task closures: capturing seen inside a split
-            // evaluation would request mutable storage and impose row Sync.
+            // Task-local deduplication only needs some hasher of the canonical
+            // layout's family; it never shares membership with admission.
             if standalone {
                 let owned =
                     format_ident!("__cq_rel_hasher_{}", rule.head, span = Span::mixed_site());
                 declarations.push(quote!(let #hasher = &#owned;));
             } else {
-                declarations.push(quote!(let #hasher = #seen.hasher();));
+                let state = task_hasher(&context.layouts[head.providers.canonical]);
+                declarations
+                    .push(quote!(let #hasher = &<#state as ::core::default::Default>::default();));
             }
             collect_task(
                 specifications[rule.hole].interface,
@@ -279,18 +280,30 @@ fn evaluate(
         .iter()
         .map(|rule| format_ident!("__cq_run_hole_{}", rule.hole, span = Span::mixed_site()))
         .collect();
+    let timing = program.policy.timing == "phases";
     let admissions: ::std::collections::BTreeMap<_, _> = candidates_by_head
         .into_iter()
         .map(|(index, candidates)| {
-            let seen = format_ident!("__cq_admit_seen_{index}", span = Span::mixed_site());
+            let new = format_ident!("__cq_admit_new_{index}", span = Span::mixed_site());
             let next = format_ident!("__cq_admit_next_{index}", span = Span::mixed_site());
             let first = &candidates[0];
             let rest = &candidates[1..];
+            let canonical = &context.layouts[context.relations[index].providers.canonical];
+            let committed = &canonical.host;
+            let admit = admit_chunks(
+                context,
+                index,
+                &quote!(#first),
+                &quote!(&#committed),
+                &quote!(#new),
+                threshold,
+                timing,
+            );
             (
                 index,
                 quote!(
                     #(#first.extend(#rest);)*
-                    *#next = #seen.admit(#first, #threshold);
+                    *#next = #admit;
                 ),
             )
         })
@@ -327,10 +340,9 @@ fn evaluate(
                 .iter()
                 .map(|head: &usize| {
                     let relation = &context.relations[*head];
-                    let seen = &relation.seen;
+                    let new = &relation.next_canonical;
                     let next = &relation.next;
-                    let seen_ref =
-                        format_ident!("__cq_admit_seen_{head}", span = Span::mixed_site());
+                    let new_ref = format_ident!("__cq_admit_new_{head}", span = Span::mixed_site());
                     let next_ref =
                         format_ident!("__cq_admit_next_{head}", span = Span::mixed_site());
                     let body = admissions.get(head).cloned().unwrap_or_default();
@@ -346,7 +358,7 @@ fn evaluate(
                         body.clone()
                     };
                     quote!({
-                        let #seen_ref = &mut #seen;
+                        let #new_ref = &mut #new;
                         let #next_ref = &mut #next;
                         #body
                     })
@@ -394,12 +406,12 @@ fn evaluate(
     }
     let final_admissions = pending.iter().map(|head| {
         let relation = &context.relations[*head];
-        let seen = &relation.seen;
+        let new = &relation.next_canonical;
         let next = &relation.next;
-        let seen_ref = format_ident!("__cq_admit_seen_{head}", span = Span::mixed_site());
+        let new_ref = format_ident!("__cq_admit_new_{head}", span = Span::mixed_site());
         let next_ref = format_ident!("__cq_admit_next_{head}", span = Span::mixed_site());
         let body = &admissions[head];
-        quote!({ let #seen_ref = &mut #seen; let #next_ref = &mut #next; #body })
+        quote!({ let #new_ref = &mut #new; let #next_ref = &mut #next; #body })
     });
     Ok((
         quote!(
@@ -446,6 +458,148 @@ fn collect_task(
             ::cq_datalog_parallel_runtime::TaskCandidates::<#row_type, _>::with_hasher(#hasher);
         #consume;
         #candidates.into_rows()
+    })
+}
+
+/// The canonical layout's outer provider name and type arguments.
+fn provider_parts(layout: &round::Layout) -> (String, Vec<&syn::Type>) {
+    let syn::Type::Path(path) = &layout.provider else {
+        return (String::new(), Vec::new());
+    };
+    let Some(last) = path.path.segments.last() else {
+        return (String::new(), Vec::new());
+    };
+    let arguments = match &last.arguments {
+        syn::PathArguments::AngleBracketed(arguments) => arguments
+            .args
+            .iter()
+            .filter_map(|argument| match argument {
+                syn::GenericArgument::Type(ty) => Some(ty),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    (last.ident.to_string(), arguments)
+}
+
+/// A hasher type for task-local candidate deduplication, from the canonical
+/// layout's own family: a sharded layout's state, else the default Fx state.
+fn task_hasher(canonical: &round::Layout) -> TokenStream {
+    match provider_parts(canonical) {
+        (name, arguments) if name == "ShardedLayout" && arguments.len() == 3 => {
+            let state = arguments[2];
+            quote!(#state)
+        }
+        (name, _) if name == "ShardedLayout" => quote!(::cq_storage::HashState),
+        _ => quote!(::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>),
+    }
+}
+
+/// Formal rule DL-ShardedAdmission: subtract the committed canonical layout
+/// from every candidate chunk (in parallel above the threshold), then build the
+/// round's NEW canonical version from the survivors and return each row once.
+/// A sharded canonical layout fills NEW by `extend_from` and enumerates its
+/// distinct keys; a sorted-run canonical layout's NEW is the sorted, deduplicated
+/// survivor vector. Only existing provider operations are used.
+fn admit_chunks(
+    context: &RoundContext,
+    head: usize,
+    chunks: &TokenStream,
+    committed: &TokenStream,
+    new: &TokenStream,
+    threshold: usize,
+    timing: bool,
+) -> TokenStream {
+    let relation = &context.relations[head];
+    let canonical = &context.layouts[relation.providers.canonical];
+    let identity = canonical
+        .columns
+        .iter()
+        .copied()
+        .eq(0..canonical.columns.len());
+    let columns: Vec<_> = canonical
+        .columns
+        .iter()
+        .map(|&column| {
+            let column = syn::Index::from(column);
+            quote!(::core::clone::Clone::clone(&row.#column))
+        })
+        .collect();
+    let (probe, key, row) = if identity {
+        (
+            quote!(row),
+            quote!(::core::clone::Clone::clone(row)),
+            quote!(::core::clone::Clone::clone(key)),
+        )
+    } else {
+        let row = (0..canonical.columns.len()).map(|column| {
+            let position = canonical
+                .columns
+                .iter()
+                .position(|&c| c == column)
+                .expect("checked complete canonical permutation");
+            let position = syn::Index::from(position);
+            quote!(::core::clone::Clone::clone(&key.#position))
+        });
+        (
+            quote!(&(#(#columns,)*)),
+            quote!((#(#columns,)*)),
+            quote!((#(#row,)*)),
+        )
+    };
+    let rows = Ident::new("__cq_admit_chunks", Span::mixed_site());
+    let count = Ident::new("__cq_admit_count", Span::mixed_site());
+    let membership = Ident::new("__cq_admit_committed", Span::mixed_site());
+    let counted = timing.then(|| {
+        let total = cq_datalog_print::candidate_count();
+        quote!(#total.fetch_add(#count, ::core::sync::atomic::Ordering::Relaxed);)
+    });
+    let subtract = quote!(
+        let mut #rows = #chunks;
+        let #membership = #committed;
+        let #count = #rows.iter().map(::std::vec::Vec::len).sum::<usize>();
+        #counted
+        if #count < #threshold || ::rayon::current_num_threads() == 1 {
+            for chunk in &mut #rows {
+                chunk.retain(|row| !::cq_storage::ExactMembership::contains(#membership, #probe));
+            }
+        } else {
+            use ::rayon::prelude::*;
+            #rows.par_iter_mut().for_each(|chunk| {
+                chunk.retain(|row| !::cq_storage::ExactMembership::contains(#membership, #probe));
+            });
+        }
+    );
+    let (name, _) = provider_parts(canonical);
+    if name == "RunLayout" {
+        let survivors = Ident::new("__cq_admit_rows", Span::mixed_site());
+        return quote!({
+            #subtract
+            let mut #survivors = ::std::vec::Vec::with_capacity(
+                #rows.iter().map(::std::vec::Vec::len).sum::<usize>(),
+            );
+            for chunk in #rows {
+                #survivors.extend(chunk);
+            }
+            if #survivors.len() < #threshold || ::rayon::current_num_threads() == 1 {
+                #survivors.sort_unstable();
+            } else {
+                use ::rayon::prelude::*;
+                #survivors.par_sort_unstable();
+            }
+            #survivors.dedup();
+            #survivors
+        });
+    }
+    quote!({
+        #subtract
+        for chunk in &#rows {
+            #new.extend_from(chunk, |row| #key, |_| ());
+        }
+        ::cq_storage::Keys::distinct_keys(&*#new)
+            .map(|key| #row)
+            .collect::<::std::vec::Vec<_>>()
     })
 }
 
@@ -650,18 +804,18 @@ mod tests {
         let barrier = quote!(#(#barrier)*).to_string();
         for head in early {
             let relation = &context.relations[head];
-            let all = &relation.all;
+            let canonical = &context.layouts[relation.providers.canonical].host;
             let delta = relation.delta_host.as_ref().unwrap();
             let next = &relation.next;
-            let extend = quote!(#all.extend).to_string();
+            let extend = quote!(#canonical.extend_from).to_string();
             let swap = quote!(#delta = #next).to_string();
             let task = format!("__cq_publish_head_{head}");
             assert!(waves.contains(&format!("let {task} =")));
             assert!(waves.contains(&format!("{task} ()")));
             assert!(waves.contains(&extend));
             assert!(waves.contains(&swap));
-            assert!(waves.contains(&format!("__cq_admit_seen_{head} . admit")));
-            assert!(!admit.contains(&format!("__cq_admit_seen_{head}")));
+            assert!(waves.contains(&format!("__cq_admit_new_{head}")));
+            assert!(!admit.contains(&format!("__cq_admit_new_{head}")));
             assert!(!barrier.contains(&extend));
             assert!(!barrier.contains(&swap));
         }
@@ -676,8 +830,8 @@ mod tests {
             .find(|entry| entry.phase == round::schedule::STEP && entry.wave == last)
             .unwrap();
         let relation = &context.relations[late.relation];
-        let all = &relation.all;
-        assert!(barrier.contains(&quote!(#all.extend).to_string()));
+        let canonical = &context.layouts[relation.providers.canonical].host;
+        assert!(barrier.contains(&quote!(#canonical.extend_from).to_string()));
     }
 
     #[test]
@@ -858,7 +1012,8 @@ mod tests {
             }
             let printed = compile(&program).unwrap().to_token_stream().to_string();
             assert_eq!(printed.matches("TaskCandidates").count(), count);
-            assert_eq!(printed.matches(". hasher ()").count(), count);
+            // Each task collector hashes with its canonical layout's state.
+            assert_eq!(printed.matches(":: with_hasher (").count(), count);
             assert_eq!(printed.matches(". into_rows ()").count(), count);
             assert!(!printed.contains("__cq_seen"));
             let holes = cq_datalog_print::splice(&program.round).unwrap();
@@ -889,9 +1044,10 @@ mod tests {
                     count
                 );
             }
+            // Hole evaluation never touches admission's NEW canonical version.
             for relation in &program.round.context.relations {
-                let seen = &relation.seen;
-                assert!(!evaluation.contains(&quote!(&mut #seen).to_string()));
+                let new = &relation.next_canonical;
+                assert!(!evaluation.contains(&quote!(&mut #new).to_string()));
             }
             #[cfg(feature = "hole-timing")]
             {
@@ -908,7 +1064,7 @@ mod tests {
             }
             let ordinary = compile(&program).unwrap().to_token_stream().to_string();
             assert!(!ordinary.contains("TaskCandidates"));
-            assert!(!ordinary.contains(". hasher ()"));
+            assert!(!ordinary.contains(":: with_hasher ("));
         }
     }
 }

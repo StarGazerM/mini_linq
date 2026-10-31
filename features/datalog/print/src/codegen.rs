@@ -51,7 +51,7 @@ pub(crate) fn split(
         .relations
         .iter()
         .flat_map(|relation| {
-            [&relation.all, &relation.seen, &relation.next]
+            [&relation.next_canonical, &relation.next]
                 .into_iter()
                 .chain(relation.delta_host.iter())
         })

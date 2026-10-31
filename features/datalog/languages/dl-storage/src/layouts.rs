@@ -44,6 +44,12 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             &layout.relation,
             "layout key exceeds relation arity",
         )?;
+        // A set layout has no payload: every column is part of its key.
+        ensure(
+            layout.protocol != crate::LayoutProtocol::Set || layout.key == arity,
+            &layout.relation,
+            "set layouts must be keyed by every column",
+        )?;
     }
     for layout in &program.delta_layouts {
         let index = analysis.positions[&symbol_name(&layout.relation)];

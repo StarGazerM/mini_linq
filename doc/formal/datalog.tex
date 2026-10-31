@@ -164,13 +164,13 @@ premise rather than imposing an additional ordering restriction.
 \paragraph{Grammar.} DL-Incremental plus a declaration-ordered
 \code{providers} vector, full and delta layouts, occurrence-to-read bindings,
 frozen negative projections, and insertion/negation policies. Each
-\code{Providers} record contains a local \code{canonical\_name}, the opaque Rust
-type \code{canonical\_set} with generic row parameter \code{R}, and concrete
-row-container types \code{all}, \code{seen}, \code{delta} and \code{next}.
-The opaque expressions \code{all\_init}, \code{delta\_init} and
-\code{next\_init} initialize their respective containers. Each \code{Layout}
+\code{Providers} record contains \code{canonical}, the index of the relation's
+canonical member of the full-layout vector, and the concrete row-container
+types \code{delta} and \code{next} with their opaque initializers
+\code{delta\_init} and \code{next\_init}. Each \code{Layout}
 records its relation, complete column permutation, key-prefix length,
-opaque concrete map \code{provider} type and \code{maintenance} operation.
+opaque concrete \code{provider} type, \code{maintenance} operation and
+maintenance \code{protocol}.
 A \code{Read} records the variant, written body position, read kind, structure
 index and column order. A \code{Negative} records its consuming component,
 source relation, distinct-variable columns, constant filters and positional
@@ -191,7 +191,10 @@ negation policies \code{all\_columns} and
 \code{borrowed}. Every full layout records
 \code{admitted\_rows} maintenance; every delta layout records
 \code{replace\_each\_run}. Each declared layout has a complete column
-permutation and valid key prefix, including additional unused layouts.
+permutation and valid key prefix, including additional unused layouts; a
+\code{set} layout is keyed by every column.
+Each relation's \code{canonical} index names one of its own full layouts whose
+key covers every column (\textsc{DL-Canonical}).
 For every recorded read, locate the actual source-rule occurrence and derive
 the variables already bound at that written position and its constants.
 The selected structure must belong to the correct relation and version, and
@@ -206,30 +209,39 @@ The checker does not whitelist applicable Rust provider types or interpret their
 initializer expressions; typing and operation availability are checked by Rust.
 It does require syntactically identical \code{delta} and \code{next} types,
 because \code{delta\_swap} moves the entire next container into delta.
-The uniform provider record reserves fields for both relation kinds. For an
-EDB, the unused \code{all}, \code{seen}, \code{delta}, \code{next} and their
-initializers must retain the default row-container records. For an IDB,
-the unused \code{canonical\_name} and \code{canonical\_set} must retain their
-defaults. Changes to these inapplicable fields are rejected, not silently ignored.
+The uniform provider record reserves \code{delta} and \code{next} for IDBs. For
+an EDB, they and their initializers must retain the default row-container
+records; changes to these inapplicable fields are rejected, not silently ignored.
+\begin{mathpar}
+\Rule{DL-Canonical}{\ell=D.\mathrm{layouts}[D.\mathrm{providers}[R].\mathrm{canonical}]\quad
+ \ell.\mathrm{relation}=R\quad
+ \ell.\mathrm{key}=\mathrm{arity}(R)}
+ {\ell\text{ is }R\text{'s canonical layout: admission, EDB loading and outputs use it}}
+\end{mathpar}
+The canonical layout is an ordinary full layout, maintained and read like any
+other; there is no separate accumulated, membership or wrapper store. Its
+all-column key makes it a key set of complete rows in its column permutation.
 \begin{mathpar}
 \Rule{WF-DL-Storage}{\mathrm{WF}_{\mathrm{Incremental}}(I)\quad
  D\text{ records complete providers, usable reads and maintained layouts}}
  {\mathrm{WF}_{\mathrm{Storage}}(I,D)}
 \end{mathpar}
 \paragraph{Meaning and provider premises.} Data refinement by $\alpha$ requires
-the EDB canonical provider and each published full layout to represent the
-same relation, delta layouts to represent precisely the current fresh delta,
+each published full layout, the canonical one included, to represent the same
+relation, delta layouts to represent precisely the current fresh delta,
 and negative keys to represent the prescribed projection/filter of frozen
 inputs. Initializers and default construction must denote empty containers.
-In particular, membership sets, initial full/delta layout hosts, and every
-delta-layout reset use \code{::core::default::Default::default()}.
+In particular, the round's NEW canonical version, initial full/delta layout
+hosts, and every delta-layout reset use \code{::core::default::Default::default()}.
 Default construction is part of these operations' meaning, not an independent
 initializer choice: each selected provider must implement \code{Default} as
 the empty represented collection, including every empty delta-run rebuild.
-Canonical collection removes duplicates without changing row values; canonical
-iteration and cloning preserve those values. The membership provider's
-\code{insert} returns true exactly for a previously absent complete row,
-and retains that row. Sequence push, extension, traversal and owned iteration
+A canonical layout's membership test is true exactly for a represented complete
+row (in its column permutation). Its insert-if-absent operation (\code{insert}
+returning \code{true} for a \code{set}; an empty-bucket test after
+\code{entry} for a \code{grouped\_map}; \code{contains} then \code{push} for
+\code{bulk}) reports exactly a previously absent row and retains it.
+Sequence push, extension, traversal and owned iteration
 preserve their rows; moving the next container to delta preserves exactly the
 admitted batch. Map entry lookup and bucket insertion implement the recorded
 key/payload split, without losing rows or mixing unequal keys. Equality,
@@ -242,18 +254,21 @@ parsing a type name or by checking method availability.
 The \code{certificates} vector records typed \code{HostCanonical} entries:
 each has a \code{kind}, structure \code{index}, structural \code{source}
 and \code{columns} provenance. Admitted kind/source pairs are
-\code{all/provider} for canonical EDBs, \code{all/admission} and
-\code{delta/admission} for IDBs, \code{layout/all} and
-\code{delta\_layout/delta} for maintained layouts, and
-\code{negation/projection} for frozen projected keys.
+\code{canonical/admission} for every relation (index: the relation; columns:
+its canonical layout's permutation), \code{delta/admission} for IDBs,
+\code{layout/canonical} and \code{delta\_layout/delta} for maintained layouts,
+and \code{negation/projection} for frozen projected keys.
 A layout certificate requires its exact complete column permutation,
-maintenance operation and certified all/delta root. Certificates may cover
+maintenance operation and certified canonical/delta root; a negation
+certificate requires a canonical root for its relation. Certificates may cover
 only a subset of the storage hosts; an uncertified host receives no discharged
 fact. Eligibility follows structural provenance, not a provider-type whitelist.
 Opaque lawful collection and maintenance remain premises, not properties
 proved by inspecting Rust type names.
-Canonical EDB collection establishes distinct complete rows even when the
-original EDB traversal repeats them. IDB \code{all} starts empty and
+EDB loading admits each input row into the canonical layout by
+insert-if-absent and inserts only newly admitted rows into the relation's other
+full layouts, so it establishes distinct complete rows even when the
+original EDB traversal repeats them. An IDB canonical layout starts empty and
 receives only admitted fresh batches; \code{delta} is precisely one such batch.
 A full layout receives each admitted row once, and a delta layout is reset and
 rebuilt from the current batch. Their complete column permutations preserve
@@ -266,7 +281,7 @@ keys; projection alone would not establish uniqueness.
  \mathrm{WF}_{\mathrm{Storage}}(D)\quad
  \mathsf{certified}_D(H)\quad
  \mathsf{provenance}(H)\in
- \{\mathsf{canonicalEDB},\mathsf{admittedAll},\mathsf{admittedDelta},
+ \{\mathsf{canonicalLayout},\mathsf{admittedDelta},
    \mathsf{maintainedLayout},\mathsf{collectedKeys}\}\quad
  \mathsf{operations}(H)\text{ satisfy the corresponding provider laws}}
  {\mathsf{fullRows}(H)\text{ has no duplicates}}
@@ -279,23 +294,27 @@ Fork, and neither proves the laws of an opaque provider from its Rust type.
 A complete immutable scan or an independently checked slice of such a host
 inherits uniqueness; a raw external binding does not.
 
-\paragraph{Defaults and checked alternatives.} The default canonical wrapper
-is named \code{Canonical}, with \code{::std::collections::HashSet<R, Fx>} storage,
-where \code{Fx} abbreviates the recorded concrete type
+\paragraph{Defaults and checked alternatives.} Let \code{Fx} abbreviate the
+recorded concrete type
 \code{::std::hash::BuildHasherDefault<::cq\_datalog::rustc\_hash::FxHasher>}.
-The accumulated, delta and next providers are concrete \code{Vec} row types,
-initialized with \code{::std::vec::Vec::new()}; membership uses
-\code{::std::collections::HashSet<Tuple, Fx>} of complete rows. Layouts use
-\code{::std::collections::HashMap} from key tuples to \code{Vec} payload
-tuples, with the same Fx build hasher. These are default records, not
-the definition of admissibility. A concrete \code{BTreeMap} layout with the
-same key/payload types is admitted under its lawful ordering premise.
+The delta and next providers are concrete \code{Vec} row types,
+initialized with \code{::std::vec::Vec::new()}. The default storage pass reads
+layouts in the checked occurrence order; each relation's canonical layout is
+its first full layout keyed by every column, otherwise an appended identity
+layout keyed by every column (the admission anti-join binds every column).
+A layout keyed by every column has no payload, so its default provider is the
+key set \code{::std::collections::HashSet<K, Fx>} with protocol \code{set};
+every other layout uses \code{::std::collections::HashMap<K, Vec<V>, Fx>} with
+protocol \code{grouped\_map}. These are default records, not
+the definition of admissibility. A concrete \code{BTreeMap}/\code{BTreeSet}
+layout with the same key/payload types is admitted under its lawful ordering premise.
 Likewise a later changing occurrence may select a direct delta scan instead
 of a delta layout, retaining its written position and declaration-order columns.
 
-\paragraph{Recorded decisions.} Concrete provider types, wrapper name,
-container initializers, layout shape and maintenance, occurrence bindings,
-negative projections and the supported insertion/negation operations.
+\paragraph{Recorded decisions.} Concrete provider types, canonical layout
+choice, container initializers, layout shape, maintenance and protocol,
+occurrence bindings, negative projections and the supported
+insertion/negation operations.
 Applicable opaque provider syntax is retained through Fork and consumed by the
 printer, rather than replaced with default types; inapplicable fields are
 checked reserved defaults.
@@ -312,8 +331,10 @@ CQ sub-pipeline and typed interface for each hole. A \code{Stratum} records
 members, component-local negative keys, ordered seed/step \code{RuleHole}
 lists, explicit phases, publication operations, termination references and test,
 observer placement, key scope and loop form. Each \code{RuleHole} records the variant, head,
-hole index, optional scan binding and membership \code{insertion} operation.
-Each runtime \code{Relation} records \code{admit}, a vector of owned rule-hole
+hole index and optional scan binding. Each runtime \code{Relation} records its
+copied providers, the round-local name \code{next\_canonical} of the NEW version
+of its canonical layout (with the canonical layout's provider type), the
+\code{next} and delta names, and \code{admit}, a vector of owned rule-hole
 indices. Each \code{Hole} records \code{facts: cq\_stage::Context}, with a
 consumer-canonical flag and a set of discharged host names.
 Its \code{lower} and optional \code{plan} fields record exact invocation ordinals
@@ -466,28 +487,31 @@ Type correctness alone does not establish these laws. A checked Round rewrite
 may change this provider subject to those semantic premises.
 \paragraph{Admission and publication records.} Each component's \code{phases}
 vector is exactly \code{[\{evaluate\}\{admit\}\{publish\}]}.
-A rule's \code{insertion} operation is \code{insert}: all-column membership
-admission pushes only fresh heads into that member's next container.
-Evaluations read only the committed snapshot; admission never publishes an
-accumulated relation or layout early.
+Admission of a candidate row is an anti-join with the committed canonical
+layout followed by insert-if-absent into the round's NEW canonical version
+(\code{next\_canonical}): a row absent from both is new and is pushed once into
+that member's next container (\textsc{DL-InsertNew}). NEW is discarded after
+the round; publication inserts the admitted rows into the canonical layout like
+any other full layout.
+Evaluations read only the committed snapshot; admission never publishes a
+full layout early.
 Each \code{Publication} names a component relation and an ordered
 \code{operations} vector. Each \code{PublicationOp} has a \code{kind} and
 \code{layouts} indices in the relevant full or delta layout list:
 \begin{itemize}
 \item \code{full\_layouts}: insert the fresh next rows into the listed full
-layouts, using their recorded column permutations and key prefixes.
-\item \code{all\_extend}: extend the accumulated host with the next rows;
-its layout-index list is empty.
+layouts (the canonical layout included), using their recorded column
+permutations, key prefixes and maintenance protocols.
 \item \code{delta\_swap}: replace the current delta host with the next batch;
 its layout-index list is empty.
 \item \code{delta\_rebuild}: reset each listed delta layout and rebuild it
 from the replaced current delta, even when that batch is empty.
 \end{itemize}
-Publication covers every component member once. Full-layout maintenance and
-accumulated extension precede that member's delta replacement; delta rebuilding
-follows it. Every declared full and delta layout of the member, including an
-unused layout, is maintained exactly once. Accumulated extension and delta
-replacement each occur exactly once. Layout indices must reference the correct
+Publication covers every component member once. Full-layout maintenance
+precedes that member's delta replacement; delta rebuilding
+follows it. Every declared full and delta layout of the member, including the
+canonical and any unused layout, is maintained exactly once. Delta
+replacement occurs exactly once. Layout indices must reference the correct
 member and version; \code{full\_layouts} and \code{delta\_rebuild} each require
 a nonempty index list. Their lists may be split or reordered within the stated
 dependencies, rather than having to match the default grouping.
@@ -643,9 +667,11 @@ the sum of the listed delta lengths, regardless of the termination test.
 frozen negative keys are built for their consuming component and do not escape
 its lifetime. Output references preserve the exact source output relation list
 and order; an out-of-range or substituted relation is rejected.
-\code{borrowed\_cloned\_into\_iter} converts an EDB's canonical borrowed rows
-to owned output tuples, while \code{owned\_into\_iter} consumes an IDB's
-accumulated provider. Conversion must match the referenced relation kind.
+Each output reads its relation's canonical layout and returns rows in
+declaration column order. \code{owned\_into\_iter} moves a \code{grouped\_map}
+or \code{set} canonical layout and yields its owned keys, while
+\code{borrowed\_cloned\_into\_iter} clones a \code{bulk} canonical layout's
+borrowed rows once. Conversion must match the canonical layout's protocol.
 The remaining \code{RoundPolicy} field is \code{timing}, accepting \code{none}
 or \code{phases}; timing and observer effects remain outside relational meaning.
 Provider, admission, publication, termination, observer, scope, loop and output
@@ -1006,7 +1032,7 @@ and all 24 raw timing samples are retained in
 
 \paragraph{Default and alternative hash-provider selection.}
 Datalog directly records unkeyed Fx providers for Storage's native layout
-maps, IDB membership sets, EDB canonical sets, and Round's negation key sets.
+maps and key sets (the canonical layouts included) and Round's negation key sets.
 The discharged default holes have no CQ dedup representations, so their queue
 installs no \code{retype(dedup => ...)} rewrite. An explicit dedup-provider
 override is likewise invalid when no such representation remains; it must not
@@ -1107,8 +1133,8 @@ more than one worker: a small delta inlines a hole's chunks, never the
 concurrency between holes. A head's sharded admission is spawned into the
 first scope after the last wave containing one of its holes. When the
 recorded publication wave of a member precedes the phase's last wave, that
-member's admission and complete publication (full layouts, accumulated
-extension, delta replacement, delta rebuilds, in the recorded order) run as
+member's admission and complete publication (full layouts including the
+canonical layout, delta replacement, delta rebuilds, in the recorded order) run as
 one task in the following wave's scope and are omitted from the phase
 barrier; otherwise they follow the final wave as before. The sequential base
 printer evaluates holes in wave order with its inline admission and ignores
@@ -1126,11 +1152,13 @@ above and replaces the step loop by an event-driven executor. Isolation is a
 scheduling property, not lock waiting: a hole task may itself run nested
 parallel chunks, and a work-stealing pool may then run another released task
 on the same thread's stack, so no released task may ever wait on state held
-by another. Each member's hosts (accumulated rows, delta host, full and delta
-layouts) sit behind one reader/writer lock acquired only by non-blocking
-attempts; its admission set sits behind a mutex touched only by its own
-commit; its pending candidates sit behind a mutex held only to append or take,
-never across nested work. Per-head hashers are cloned before the step phase.
+by another. Each member's hosts (delta host, full layouts including its
+canonical layout, and delta layouts) sit behind one reader/writer lock acquired
+only by non-blocking attempts; its commit holds that write lock while it
+anti-joins its pending candidates with the canonical layout and publishes, so
+admission state is never shared with readers. Its pending candidates sit behind
+a mutex held only to append or take, never across nested work. Per-head task
+hashers are cloned before the step phase.
 A step-hole task takes read access to every member it reads, in member-index
 order, and keeps it for its whole evaluation; on completion it appends its
 candidates to each head's pending buffer and the scheduler records that it
@@ -1166,26 +1194,29 @@ commits, so commits cannot starve.
 \end{mathpar}
 
 \subsection{Sharded admission and exclusive-layout publication (extension)}
-By default the extension's Storage rewrite replaces only canonical IDB
-membership. With the argument \code{layouts(sharded)} it additionally replaces
-every IDB full or delta layout whose key is nonempty, from
-\code{HashMap<K, Vec<V>, S>} to \code{ShardedLayout<K, V, S>}, preserving the
-key, payload and hasher types and the layout's relation, columns, key length
-and maintenance operation. The provider substitution also changes the recorded
-protocol from \code{grouped\_map} to \code{bulk}; its correspondence checker
-checks and reverses both fields. With \code{layouts(runs)} it instead replaces them with
-\code{RunLayout<K, V>}, and with \code{seen(runs)} canonical membership becomes
-\code{RunSeen<T, S>}, keeping $S$ for task-local deduplication only.
+By default the extension's Storage rewrite replaces only each IDB's canonical
+layout, an ordinary full layout keyed by every column. With the argument
+\code{layouts(sharded)} it replaces every IDB full or delta layout whose key is
+nonempty, the canonical layout included: \code{HashMap<K, Vec<V>, S>} becomes
+\code{ShardedLayout<K, V, S>} and the key set \code{HashSet<K, S>} (or the
+keyed \code{cq\_storage::HashSet<K>}) becomes \code{ShardedLayout<K, (), S>},
+preserving the key, payload and hasher types and the layout's relation,
+columns, key length and maintenance operation. The provider substitution also
+changes the recorded protocol from \code{grouped\_map} or \code{set} to
+\code{bulk}; its correspondence checker checks and reverses both fields. With
+\code{layouts(runs)} it instead replaces them with \code{RunLayout<K, V>}
+(\code{RunLayout<K, ()>} for a key set), which requires the default Fx hasher.
 Unit-key scan layouts, EDB layouts, other Storage records and
-CQ queues are unchanged.
+CQ queues are unchanged. The checker requires every IDB canonical layout of
+the target to be \code{bulk}.
 A Round-to-extension pass records the small-work threshold, partition grain,
 admission shard-count policy and ownership/publication certificate. None of
 these parallel choices belongs to the base language or default expansion.
 \begin{mathpar}
 \Rule{CK-DL-ShardStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad
- t\text{ changes only canonical IDB membership providers and, optionally,}\\
- \text{nonempty-key IDB grouped-map layouts to bulk sharded or run layouts with equal }K,V(,S)}
+ t\text{ changes only nonempty-key IDB grouped-map or set layouts to bulk}\\
+ \text{sharded or run layouts with equal }K,V(,S)\text{, every IDB canonical layout among them}}
  {\mathrm{check}_{\mathrm{shardStorage}}(s,t)}
 \end{mathpar}
 A sharded layout holds $S$ disjoint grouped maps; key $k$ lives only in shard
@@ -1216,16 +1247,11 @@ $m=O(\log_r|L|)$. The ratio changes only cost.
  L'=\mathrm{merge}^{*}(\rho_1\cdots\rho_{m+1})}
  {\mathrm{lookup}_{L'}(k)\equiv_{\mathrm{bag}}\mathrm{lookup}_{L}(k)\uplus\mathrm{lookup}_{\mathrm{layout}(N)}(k)}
 \end{mathpar}
-Run admission is the device algorithm: sort and deduplicate the candidates,
-remove those found by binary search in an accepted run, append the remainder
-as a run (merging as above) and return it in sorted order.
-\begin{mathpar}
-\Rule{DL-RunAdmission}{U=\mathrm{unique}(\mathrm{sort}(C))\quad
- N=[r\in U\mid\forall i.\ r\notin\rho_i]\quad
- A'=A\uplus N}
- {\mathrm{set}(N)=C\setminus A\quad\mathrm{set}(A')=A\cup C}
-\end{mathpar}
-Device runs realize the same two rules over packed words. For fixed-width
+A sorted-run canonical layout admits by the same anti-join: candidates found in
+an accepted run are removed, and the round's survivors are concatenated,
+sorted and deduplicated into the fresh batch (\textsc{DL-ShardedAdmission}),
+which publication appends as a run (merging as above).
+Device runs realize the same run layout and admission over packed words. For fixed-width
 column types $\tau_1\ldots\tau_n$ with $b=\sum_i w_i$, a word is $L=\lceil b/64\rceil$
 64-bit lanes ($u64$, $u128$, or $[u64;L]$ for $L>2$) read as one
 $64L$-bit integer, most significant lane first. Packing places column $i$ of a
@@ -1242,7 +1268,8 @@ with $s_j=64L-\sum_{i\le j}w_i$.
  {\mathrm{pack}(r)<\mathrm{pack}(r')\iff r<_{\mathrm{lex}}r'\quad
  \mathrm{lookup}_L(k)=\mathrm{unpack}(\{x\in L\mid p(k)2^{s_j}\le x<(p(k)+1)2^{s_j}\})}
 \Rule{DL-DeviceRuns}{\textsc{DL-DevicePacking}\quad
- \text{device admission and merge follow \textsc{DL-RunAdmission} and \textsc{DL-RunLayout} on words}}
+ \text{device admission (sort, deduplicate, drop rows found in an accepted run,}\\
+ \text{append the remainder) and merge follow \textsc{DL-RunLayout} on words}}
  {\mathrm{unpack}(\text{device state})=\text{the CPU run state after the same candidate batches}}
 \end{mathpar}
 A layout run built from an admitted delta permutes columns of a run whose
@@ -1259,9 +1286,10 @@ readbacks are recorded realization cost, not semantic steps.
 
 \paragraph{Device realization (extension).}
 The device Storage rewrite replaces every layout provider (EDB and IDB, full
-and delta, any key length) by \code{DeviceLayout<K, V>} and every IDB
-membership provider by \code{DeviceRuns<W>}, where $W$ is the narrowest word
-holding the relation's packed columns. It requires every column type to be a
+and delta, any key length) by \code{DeviceLayout<K, V>}; each IDB's canonical
+layout holds the accepted runs, as \code{DeviceRuns<W>}, where $W$ is the
+narrowest word holding the relation's packed columns. It requires every
+column type to be a
 supported fixed-width integer or a declared symbol type, and each source
 layout to be the default \code{HashMap} with the default hasher, so erasure is
 exact. A symbol type is named with its codec by the rewrite's
@@ -1305,7 +1333,7 @@ batches; after the last wave every head admits its batches into its accepted
 runs (\textsc{DL-DeviceRuns}), yielding the delta. Publication then follows the
 recorded operations: \code{full\_layouts} permutes the delta into each layout's
 packing, sorts it and appends it as a run (disjoint because it was admitted);
-\code{all\_extend} is the admission itself; \code{delta\_swap} retains the delta
+the canonical layout's accepted runs are the admission itself; \code{delta\_swap} retains the delta
 run; \code{delta\_rebuild} builds each delta layout from it. Termination tests
 the sum of the fresh counts. Outputs unpack the accepted runs. Issuing waves in
 order on one stream is exact by \textsc{DL-WaveCommute}; concurrent streams per
@@ -1316,31 +1344,29 @@ wave would change only cost.
  \textsc{CK-DL-DeviceStorage}\quad\textsc{DL-DeviceBindings}\quad\textsc{GPU-Arena}}
  {\mathrm{unpack}(\mathrm{print}_{\mathrm{gpu}}(r))=\mathrm{print}_{\mathrm{rounds}}(r)\text{ as relations}}
 \end{mathpar}
-Let $S$ be a power of two at least the worker count and let
-$h_S(x)=h(x)\mathbin{\&}(S-1)$. Canonical admission uses the full tuple:
-$C_i=\{r\in C\mid h_S(r)=i\}$, so equal tuples always share a shard.
-The recorded membership provider's build hasher supplies $h$ for both routing
-and the shard table. The runtime carries the computed hash with each candidate
-into its shard and reuses it for admission; table growth may rehash stored rows.
-Random-seeded providers need not share routing across distinct instances.
-The Storage correspondence check preserves an explicitly recorded hasher when
-substituting \code{ShardedSeen<Tuple, Hasher>}; native layout maps may record
-any build hasher while retaining their checked key and vector-bucket types.
-Each shard owns its \code{seen} set exclusively and inserts candidates once;
-its newly admitted rows form $N_i$. Concatenation is in shard order, but
-output order is unspecified. The termination condition is any admitted row.
+Let $S$ be a power of two at least the worker count. Admission of a head's
+candidate chunks $C=\biguplus_j C_j$ against its committed canonical layout $A$
+first removes, from every chunk independently (in parallel above the recorded
+threshold), the rows $A$ already contains, using the layout's exact
+membership read. A sharded canonical layout then builds the round's NEW
+version by bulk \code{extend\_from} of the surviving chunks: equal complete
+rows hash to the same shard and key, so NEW holds each surviving row once, and
+its distinct keys are the fresh batch. A sorted-run canonical layout instead
+concatenates, sorts and deduplicates the survivors. Only existing provider
+operations are used. Output order is unspecified. The termination condition
+is any admitted row.
 \begin{mathpar}
-\Rule{DL-ShardedAdmission}{N_i=C_i\setminus A_i\quad A'_i=A_i\cup C_i
- \quad 0\leq i<S}
- {\mathrm{set}(\mathrm{concat}_{i=0}^{S-1}N_i)=C\setminus A}
+\Rule{DL-ShardedAdmission}{C'_j=C_j\setminus A\quad
+ N=\mathrm{distinct}\Big(\biguplus_j C'_j\Big)}
+ {\mathrm{set}(N)=\mathrm{supp}(C)\setminus A\quad N\text{ has no duplicates}}
 \end{mathpar}
 Each native layout has exactly one owner task during publication. The printer
 interprets each member's recorded operation vector without regrouping or sorting
 by owner. Each \code{full\_layouts} or \code{delta\_rebuild} operation may
 dispatch its distinct layout owners concurrently, but that scope joins before
 the next recorded operation starts. Its inline arm follows the recorded layout
-list order. Accumulated extension and delta replacement occur exactly at their
-recorded positions; delta rebuilding uses the recorded maintenance protocol,
+list order. Delta replacement occurs exactly at its
+recorded position; delta rebuilding uses the recorded maintenance protocol,
 including for empty deltas. Early member publication uses the same interpreter.
 The original \code{IndexRead}/\code{Rows} implementations serve CQ holes
 without fallback index construction or a shard-routing hash on every probe.
@@ -1365,13 +1391,13 @@ owner bijections directly, without invoking the certificate producer. It checks
 complete membership/coverage and each stratum's publication barriers. The printer
 uses certified layout lists and owner labels to generate and order its tasks.
 Reordered certificates and valid owner permutations are accepted. Scoped tasks
-receive exclusive mutable seen shards or native maps, never locks. Below
-the recorded candidate threshold, admission runs inline while preserving shard
-concatenation order; publication similarly avoids tasks for small next sets.
+receive exclusive mutable chunks, NEW versions or layouts, never locks. Below
+the recorded candidate threshold, admission runs inline;
+publication similarly avoids tasks for small next sets.
 The base Round admission-owner lists remain checked independently of the
 extension's shard and layout owner certificates. A candidate buffer may contain
-duplicate heads from one hole, several holes or several workers; equal complete
-tuples route to the same admission shard and only fresh tuples enter next.
+duplicate heads from one hole, several holes or several workers; the
+anti-join and NEW construction keep each fresh complete tuple once.
 Consequently sharded admission discharges the same \code{consumer canonical}
 fact, and exclusive-layout publication preserves \textsc{DL-HostCanonical}
 for the subsequent snapshot. Optional \code{per\_task} execution deduplication
@@ -1381,17 +1407,21 @@ weakens the exact context-envelope requirement.
 Purity, totality and lawful hashing/equality/cloning
 remain required. Neither ownership checking nor the counters regression is a
 general Rust equivalence proof.
-The base printing library exports generic \code{full\_insert},
-\code{all\_extend}, \code{delta\_swap} and \code{delta\_rebuild} generators.
+The base printing library exports generic \code{admit\_canonical},
+\code{full\_insert}, \code{delta\_swap} and \code{delta\_rebuild} generators.
 Both terminals reuse those operations and execute their checked recorded order.
 Each layout records a maintenance protocol independent of its opaque Rust type:
 \code{grouped\_map} uses entry insertion and default replacement on reset;
-\code{bulk} uses bulk \code{extend\_from}, single-row \code{push}, and \code{clear}.
+\code{set} is a payload-free key set keyed by every column, using
+\code{insert} (true exactly for an absent key), \code{contains} and default
+replacement on reset;
+\code{bulk} uses bulk \code{extend\_from}, single-row \code{push}, exact
+membership and \code{clear}.
 The provider owes the declared operations' collection laws. Round copies and
 checks that protocol exactly against Storage; printers consume it.
 \begin{mathpar}
 \Rule{DL-LayoutProtocol}
- {\ell.\mathrm{protocol}\in\{\mathrm{grouped\_map},\mathrm{bulk}\}\quad
+ {\ell.\mathrm{protocol}\in\{\mathrm{grouped\_map},\mathrm{set},\mathrm{bulk}\}\quad
   \mathrm{lawful}(\ell.\mathrm{provider},\ell.\mathrm{protocol})}
  {\mathrm{maintain}(\ell)=\mathrm{operations}(\ell.\mathrm{protocol})}
 \end{mathpar}

@@ -57,14 +57,15 @@ pub fn reorder_publication(input: proc_macro::TokenStream) -> proc_macro::TokenS
                         delta.extend(operation.layouts.iter().copied());
                     }
                 }
-                let mut operations = vec![syn::parse_quote!(
-                    kind { all_extend } layouts { [] }
-                )];
-                operations.extend(full.into_iter().rev().map(|index| {
-                    syn::parse_quote!(
-                        kind { full_layouts } layouts { [{#index}] }
-                    )
-                }));
+                let mut operations: Vec<cq_lang_datalog_round::PublicationOp> = full
+                    .into_iter()
+                    .rev()
+                    .map(|index| {
+                        syn::parse_quote!(
+                            kind { full_layouts } layouts { [{#index}] }
+                        )
+                    })
+                    .collect();
                 operations.push(syn::parse_quote!(
                     kind { delta_swap } layouts { [] }
                 ));
@@ -108,7 +109,11 @@ pub fn trace_publication(input: proc_macro::TokenStream) -> proc_macro::TokenStr
                     .iter()
                     .find(|declaration| declaration.name == layout.relation)
                     .expect("checked layout relation");
-                if declaration.value.is_some() {
+                // A bulk (sharded or run) layout, such as a sharded canonical
+                // layout, keeps its provider: parallel admission requires it.
+                if declaration.value.is_some()
+                    || layout.protocol == cq_lang_datalog_round::storage::LayoutProtocol::Bulk
+                {
                     continue;
                 }
                 let types: Vec<_> = layout

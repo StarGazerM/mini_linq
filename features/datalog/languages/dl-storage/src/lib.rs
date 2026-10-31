@@ -1,10 +1,13 @@
 //! Checked storage refinement of Boolean incremental Datalog.
-//! Records concrete Rust providers, canonicalization wrappers, per-layout maintenance,
-//! occurrence bindings, and negation-key projections. Applicable provider types and
-//! initializers are opaque Rust syntax whose collection laws are premises. Unused
-//! relation-kind fields retain checked defaults; delta and next share a move type.
-//! Optional per-host certificates record canonical-wrapper/admission roots,
-//! complete maintained layout permutations, and set-valued negation projections.
+//! Records concrete Rust providers, per-layout maintenance, each relation's
+//! canonical layout, occurrence bindings, and negation-key projections.
+//! Applicable provider types and initializers are opaque Rust syntax whose
+//! collection laws are premises. Delta and next share a move type.
+//! A relation's canonical layout is an ordinary member of its full layouts whose
+//! key covers every column; admission and EDB loading deduplicate against it,
+//! and full scans read it. There is no separate seen, all, or canonical set.
+//! Optional per-host certificates record canonical admission roots, complete
+//! maintained layout permutations, and set-valued negation projections.
 //! Negative projections record first variable columns, repeated-column equality
 //! pairs and constant filters; their key sets are prepared once per component.
 //! Uncertified hosts remain valid storage but cannot discharge CQ host facts.
@@ -40,21 +43,21 @@ record!(DeviceStorage { symbols: Vec<(Type, Type)>, ratio: usize });
 /// Concrete providers for one relation, indexed by source declaration order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Providers {
-    pub canonical_name: Ident,
-    /// Generic inner collection type, with `R` denoting the canonical row.
-    pub canonical_set: Type,
-    pub all: Type,
-    pub seen: Type,
+    /// Index of this relation's canonical member of `Program::layouts`.
+    pub canonical: usize,
     pub delta: Type,
     pub next: Type,
-    pub all_init: Expr,
     pub delta_init: Expr,
     pub next_init: Expr,
 }
 /// Formal rule DL-LayoutProtocol: checked maintenance operations are independent of provider spelling.
+/// `GroupedMap` is `entry(key).or_default().push(value)`; `Set` is a set of
+/// all-column keys with no payload (`insert`, `contains`, `extend`);
+/// `Bulk` is `push(key, value)` / `extend_from` with exact membership.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutProtocol {
     GroupedMap,
+    Set,
     Bulk,
 }
 impl text::Text for LayoutProtocol {
@@ -62,6 +65,7 @@ impl text::Text for LayoutProtocol {
         let name: Ident = input.parse()?;
         match name.to_string().as_str() {
             "grouped_map" => Ok(Self::GroupedMap),
+            "set" => Ok(Self::Set),
             "bulk" => Ok(Self::Bulk),
             _ => Err(syn::Error::new_spanned(
                 name,
@@ -72,6 +76,7 @@ impl text::Text for LayoutProtocol {
     fn text(&self) -> proc_macro2::TokenStream {
         match self {
             Self::GroupedMap => quote::quote!(grouped_map),
+            Self::Set => quote::quote!(set),
             Self::Bulk => quote::quote!(bulk),
         }
     }
@@ -117,13 +122,9 @@ pub struct Policy {
 }
 record!(Program { incremental: incremental::Program, providers: Vec<Providers>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, reads: Vec<Read>, negations: Vec<Negative>, certificates: Vec<HostCanonical>, policy: Policy, device: Option<DeviceStorage> });
 record!(Providers {
-    canonical_name: Ident,
-    canonical_set: Type,
-    all: Type,
-    seen: Type,
+    canonical: usize,
     delta: Type,
     next: Type,
-    all_init: Expr,
     delta_init: Expr,
     next_init: Expr
 });
@@ -241,15 +242,12 @@ fn check_certificates(program: &Program, analysis: &Analysis) -> syn::Result<()>
                 .map(|d| (0..d.columns.len()).collect())
         };
         let valid = match symbol_name(&certificate.kind).as_str() {
-            "all" => declarations
+            "canonical" => program
+                .providers
                 .get(certificate.index)
-                .is_some_and(|declaration| {
-                    certificate.columns == full_heading(certificate.index).unwrap()
-                        && if declaration.value.is_some() {
-                            certificate.source == "provider"
-                        } else {
-                            certificate.source == "admission"
-                        }
+                .and_then(|provider| program.layouts.get(provider.canonical))
+                .is_some_and(|layout| {
+                    certificate.source == "admission" && certificate.columns == layout.columns
                 }),
             "delta" => declarations
                 .get(certificate.index)
@@ -274,7 +272,7 @@ fn check_certificates(program: &Program, analysis: &Analysis) -> syn::Result<()>
                     columns.sort_unstable();
                     certificate.columns == layout.columns
                         && Some(columns) == full_heading(relation)
-                        && certificate.source == if delta { "delta" } else { "all" }
+                        && certificate.source == if delta { "delta" } else { "canonical" }
                         && layout.maintenance
                             == if delta {
                                 "replace_each_run"
@@ -283,7 +281,7 @@ fn check_certificates(program: &Program, analysis: &Analysis) -> syn::Result<()>
                             }
                         && program.certificates.iter().any(|root| {
                             root.index == relation
-                                && root.kind == if delta { "delta" } else { "all" }
+                                && root.kind == if delta { "delta" } else { "canonical" }
                         })
                 })
             }
@@ -296,7 +294,7 @@ fn check_certificates(program: &Program, analysis: &Analysis) -> syn::Result<()>
                         && program
                             .certificates
                             .iter()
-                            .any(|root| root.kind == "all" && root.index == negative.relation)
+                            .any(|root| root.kind == "canonical" && root.index == negative.relation)
                 }),
             _ => false,
         };
@@ -347,15 +345,27 @@ pub mod contract {
             program,
             "storage providers must cover every declaration in declaration order",
         )?;
-        for (provider, declaration) in program
+        for (index, (provider, declaration)) in program
             .providers
             .iter()
             .zip(&program.incremental.strata.source.declarations)
+            .enumerate()
         {
             ensure(
                 provider.delta == provider.next,
                 provider,
                 "delta and next providers must have the same type for move publication",
+            )?;
+            // Formal rule DL-Canonical: one complete, all-column-keyed member of
+            // the relation's own full layouts; no separate membership store.
+            let canonical = program.layouts.get(provider.canonical);
+            ensure(
+                canonical.is_some_and(|layout| {
+                    analysis.positions.get(&symbol_name(&layout.relation)) == Some(&index)
+                        && layout.key == declaration.arity()
+                }),
+                provider,
+                "canonical must name one of the relation's full layouts keyed by every column",
             )?;
             if declaration.value.is_some() {
                 let types: Vec<_> = declaration
@@ -364,25 +374,14 @@ pub mod contract {
                     .map(|column| &column.ty)
                     .collect();
                 let rows: Type = syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>);
-                let seen: Type = syn::parse_quote!(::cq_storage::HashSet<(#(#types,)*)>);
                 let empty: Expr = syn::parse_quote!(::std::vec::Vec::new());
                 ensure(
-                    provider.all == rows
-                        && provider.seen == seen
-                        && provider.delta == rows
+                    provider.delta == rows
                         && provider.next == rows
-                        && provider.all_init == empty
                         && provider.delta_init == empty
                         && provider.next_init == empty,
                     provider,
                     "EDB providers must retain defaults for unused IDB storage fields",
-                )?;
-            } else {
-                ensure(
-                    provider.canonical_name == "Canonical"
-                        && provider.canonical_set == syn::parse_quote!(::cq_storage::HashSet<R>),
-                    provider,
-                    "IDB providers must retain defaults for unused EDB canonicalization fields",
                 )?;
             }
         }

@@ -43,8 +43,8 @@ pub use schedule::Schedule;
 pub struct Relation {
     pub declaration: RelationDecl,
     pub providers: storage::Providers,
-    pub all: Ident,
-    pub seen: Ident,
+    /// Round-local NEW version of the canonical layout, with its provider type.
+    pub next_canonical: Ident,
     pub next: Ident,
     pub delta: Option<Ident>,
     pub delta_host: Option<Ident>,
@@ -95,7 +95,6 @@ pub struct RuleHole {
     pub head: usize,
     pub hole: usize,
     pub scan: Option<ScanBinding>,
-    pub insertion: Ident,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -362,14 +361,14 @@ record!(Execution {
     self_dedup: Option<Ident>
 });
 record!(RoundPolicy { timing: Ident });
-record!(Relation { declaration: RelationDecl, providers: storage::Providers, all: Ident, seen: Ident, next: Ident, delta: Option<Ident>, delta_host: Option<Ident>, admit: Vec<usize> });
+record!(Relation { declaration: RelationDecl, providers: storage::Providers, next_canonical: Ident, next: Ident, delta: Option<Ident>, delta_host: Option<Ident>, admit: Vec<usize> });
 record!(Layout { relation: usize, columns: Vec<usize>, key: usize, name: Ident, host: Ident, provider: syn::Type, maintenance: Ident, protocol: storage::LayoutProtocol });
 record!(KeySet { relation: usize, columns: Vec<usize>, filters: Vec<(usize,Expr)>, equalities: Vec<(usize, usize)>, name: Ident, provider: syn::Type, hole: usize });
 record!(ScanBinding {
     source: InputSource,
     binding: Ident
 });
-record!(RuleHole { variant: usize, head: usize, hole: usize, scan: Option<ScanBinding>, insertion: Ident });
+record!(RuleHole { variant: usize, head: usize, hole: usize, scan: Option<ScanBinding> });
 record!(Stratum { members: Vec<usize>, keys: Vec<KeySet>, seeds: Vec<RuleHole>, steps: Vec<RuleHole>, phases: Vec<Ident>, publication: Vec<Publication>, termination: Vec<usize>, termination_test: Ident, observer: Ident, key_scope: Ident, loop_form: Ident });
 record!(Publication { relation: usize, operations: Vec<PublicationOp> });
 record!(PublicationOp { kind: Ident, layouts: Vec<usize> });
@@ -610,13 +609,6 @@ fn check_execution(program: &Program) -> syn::Result<()> {
             program,
             "round requires evaluate/admit/publish, before-step observation, and component-local keys",
         )?;
-        for rule in stratum.seeds.iter().chain(&stratum.steps) {
-            ensure(
-                rule.insertion == "insert",
-                program,
-                "admission requires the provider's set insertion operation",
-            )?;
-        }
         let members: BTreeSet<_> = stratum.members.iter().copied().collect();
         let termination: BTreeSet<_> = stratum.termination.iter().copied().collect();
         ensure(
@@ -648,7 +640,6 @@ fn check_execution(program: &Program) -> syn::Result<()> {
                 .collect();
             let mut updated = BTreeSet::new();
             let mut rebuilt = BTreeSet::new();
-            let mut extended = false;
             let mut swapped = false;
             for operation in &publication.operations {
                 match symbol_name(&operation.kind).as_str() {
@@ -666,19 +657,11 @@ fn check_execution(program: &Program) -> syn::Result<()> {
                             )?;
                         }
                     }
-                    "all_extend" => {
-                        ensure(
-                            !extended && !swapped && operation.layouts.is_empty(),
-                            program,
-                            "all extension must occur once before delta replacement",
-                        )?;
-                        extended = true;
-                    }
                     "delta_swap" => {
                         ensure(
-                            extended && !swapped && updated == full && operation.layouts.is_empty(),
+                            !swapped && updated == full && operation.layouts.is_empty(),
                             program,
-                            "delta replacement requires complete full-layout maintenance and all extension",
+                            "delta replacement requires complete full-layout maintenance",
                         )?;
                         swapped = true;
                     }
@@ -705,9 +688,9 @@ fn check_execution(program: &Program) -> syn::Result<()> {
                 }
             }
             ensure(
-                extended && swapped && updated == full && rebuilt == delta,
+                swapped && updated == full && rebuilt == delta,
                 program,
-                "publication must extend all, replace delta, and maintain every layout including empty runs",
+                "publication must maintain every layout, including the canonical one, and replace delta",
             )?;
         }
         ensure(
@@ -720,14 +703,19 @@ fn check_execution(program: &Program) -> syn::Result<()> {
         let relation = context.relations.get(output.relation).ok_or_else(|| {
             syn::Error::new_spanned(output, "output must reference a declared relation")
         })?;
+        // Moving a canonical grouped map or set yields its owned all-column
+        // keys; bulk providers expose borrowed rows, which are cloned once.
+        let canonical = context.layouts.get(relation.providers.canonical);
         ensure(
-            if relation.declaration.value.is_some() {
-                output.conversion == "borrowed_cloned_into_iter"
-            } else {
-                output.conversion == "owned_into_iter"
-            },
+            canonical.is_some_and(|layout| {
+                if layout.protocol == storage::LayoutProtocol::Bulk {
+                    output.conversion == "borrowed_cloned_into_iter"
+                } else {
+                    output.conversion == "owned_into_iter"
+                }
+            }),
             output,
-            "output conversion must preserve ownership and return owned rows",
+            "output conversion must match its canonical layout and return owned rows",
         )?;
     }
     Ok(())
@@ -782,10 +770,11 @@ fn check_facts(program: &Program) -> syn::Result<()> {
                 continue;
             };
             let name = &atom.relation;
-            let relation_host = context.relations.iter().enumerate().any(|(i, r)| {
-                (&r.declaration.name == name && certified("all", i))
-                    || (r.delta.as_ref() == Some(name) && certified("delta", i))
-            });
+            let relation_host = context
+                .relations
+                .iter()
+                .enumerate()
+                .any(|(i, r)| r.delta.as_ref() == Some(name) && certified("delta", i));
             let layout_host = context
                 .layouts
                 .iter()
@@ -876,14 +865,6 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
         before.observer = after.observer.clone();
         before.key_scope = after.key_scope.clone();
         before.loop_form = after.loop_form.clone();
-        for (before, after) in before
-            .seeds
-            .iter_mut()
-            .chain(&mut before.steps)
-            .zip(after.seeds.iter().chain(&after.steps))
-        {
-            before.insertion = after.insertion.clone();
-        }
         for (before, after) in before.keys.iter_mut().zip(&after.keys) {
             before.provider = after.provider.clone();
         }

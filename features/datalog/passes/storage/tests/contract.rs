@@ -207,6 +207,9 @@ fn alternate_layouts_and_recorded_reads_are_admissible() {
             read.index = count - 1 - read.index;
         }
     }
+    for provider in &mut alternate.providers {
+        provider.canonical = count - 1 - provider.canonical;
+    }
     alternate.reads.reverse();
     check_rewrite(&original, &alternate).unwrap();
 
@@ -312,17 +315,18 @@ fn provider_coverage_and_every_layout_maintenance_are_required() {
         |p| p.delta_layouts[0].maintenance = syn::parse_quote!(append),
         |p| p.delta_layouts[0].maintenance = syn::parse_quote!(admitted_rows),
         |p| p.providers[2].next = syn::parse_quote!(custom::DifferentRows),
-        |p| p.providers[0].all = syn::parse_quote!(custom::UnusedRows),
-        |p| p.providers[0].seen = syn::parse_quote!(custom::UnusedSeen),
+        |p| p.providers[2].canonical = usize::MAX,
+        |p| p.providers[2].canonical = p.providers[0].canonical,
+        |p| {
+            let reach = p.providers[2].canonical;
+            p.layouts[reach].key -= 1;
+        },
         |p| {
             p.providers[0].delta = syn::parse_quote!(custom::UnusedRows);
             p.providers[0].next = syn::parse_quote!(custom::UnusedRows);
         },
-        |p| p.providers[0].all_init = syn::parse_quote!(custom::empty()),
         |p| p.providers[0].delta_init = syn::parse_quote!(custom::empty()),
         |p| p.providers[0].next_init = syn::parse_quote!(custom::empty()),
-        |p| p.providers[2].canonical_name = syn::parse_quote!(UnusedCanonical),
-        |p| p.providers[2].canonical_set = syn::parse_quote!(custom::UnusedSet<R>),
         |p| {
             let mut extra = p.layouts[0].clone();
             extra.maintenance = syn::parse_quote!(omit);
@@ -350,17 +354,14 @@ fn provider_coverage_and_every_layout_maintenance_are_required() {
 fn opaque_providers_and_initializers_are_not_whitelisted() {
     let original = authored(INCREMENTAL);
     let mut alternate = original.clone();
-    let provider = &mut alternate.providers[0];
-    provider.canonical_name = syn::parse_quote!(OrderedCanonical);
-    provider.canonical_set = syn::parse_quote!(::std::collections::BTreeSet<R>);
     let provider = &mut alternate.providers[2];
-    provider.all = syn::parse_quote!(custom::Rows<(i32, i32,)>);
-    provider.seen = syn::parse_quote!(::std::collections::BTreeSet<(i32, i32,)>);
     provider.delta = syn::parse_quote!(custom::Delta<(i32, i32,)>);
     provider.next = syn::parse_quote!(custom::Delta<(i32, i32,)>);
-    provider.all_init = syn::parse_quote!(custom::Rows::empty());
     provider.delta_init = syn::parse_quote!(custom::Delta::empty());
     provider.next_init = syn::parse_quote!(custom::Delta::empty());
+    let canonical = alternate.providers[2].canonical;
+    alternate.layouts[canonical].provider =
+        syn::parse_quote!(::std::collections::BTreeMap<(i32, i32,), ::std::vec::Vec<()>>);
     alternate.layouts[0].provider =
         syn::parse_quote!(::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>);
     alternate.delta_layouts[0].provider =
@@ -377,12 +378,10 @@ fn provider_records_reject_missing_or_malformed_fields() {
     let source = authored(INCREMENTAL);
     let provider = source.providers[0].to_token_stream().to_string();
     for malformed in [
-        provider.replacen("canonical_name", "unknown", 1),
-        provider.replacen("canonical_set", "unknown", 1),
-        provider.replacen("all_init", "unknown", 1),
+        provider.replacen("canonical", "unknown", 1),
         provider.replacen("delta_init", "unknown", 1),
         provider.replacen("next_init", "unknown", 1),
-        provider.replacen("canonical_set {", "canonical_set { 123", 1),
+        provider.replacen("canonical {", "canonical { x", 1),
     ] {
         assert!(syn::parse_str::<cq_lang_datalog_storage::Providers>(&malformed).is_err());
     }
@@ -404,7 +403,7 @@ fn canonical_host_certificates_require_structural_provenance() {
         |p| p.certificates.push(p.certificates[0].clone()),
         |p| p.certificates[0].kind = syn::parse_quote!(unknown),
         |p| p.certificates[0].index = usize::MAX,
-        |p| p.certificates[0].source = syn::parse_quote!(admission),
+        |p| p.certificates[0].source = syn::parse_quote!(provider),
         |p| p.certificates[0].columns.clear(),
         |p| {
             p.certificates
@@ -420,7 +419,7 @@ fn canonical_host_certificates_require_structural_provenance() {
                 .unwrap()
                 .source = syn::parse_quote!(delta)
         },
-        |p| p.certificates.retain(|c| c.kind != "all"),
+        |p| p.certificates.retain(|c| c.kind != "canonical"),
         |p| {
             p.certificates
                 .iter_mut()

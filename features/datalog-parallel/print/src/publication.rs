@@ -91,7 +91,6 @@ fn operations(
                         .collect(),
                     inline,
                 ),
-                "all_extend" => cq_datalog_print::all_extend(relation),
                 "delta_swap" => cq_datalog_print::delta_swap(relation),
                 "delta_rebuild" => {
                     let delta = relation
@@ -275,8 +274,10 @@ mod tests {
         ))
         .unwrap();
         // Statement order is significant: stale rows must be removed before filling.
-        let [syn::Stmt::Expr(syn::Expr::MethodCall(clear), Some(_)), syn::Stmt::Expr(syn::Expr::MethodCall(extend), Some(_))] =
-            rebuilt.stmts.as_slice()
+        let [
+            syn::Stmt::Expr(syn::Expr::MethodCall(clear), Some(_)),
+            syn::Stmt::Expr(syn::Expr::MethodCall(extend), Some(_)),
+        ] = rebuilt.stmts.as_slice()
         else {
             panic!("expected clear followed by extend_from");
         };
@@ -345,7 +346,12 @@ mod tests {
             assert!(function.qself.is_none());
             assert!(function.path.leading_colon.is_some());
             assert_eq!(function.path.segments.len(), 4);
-            for (segment, expected) in function.path.segments.iter().zip(["core", "clone", "Clone", "clone"]) {
+            for (segment, expected) in function
+                .path
+                .segments
+                .iter()
+                .zip(["core", "clone", "Clone", "clone"])
+            {
                 assert_eq!(segment.ident, expected);
                 assert!(matches!(segment.arguments, syn::PathArguments::None));
             }

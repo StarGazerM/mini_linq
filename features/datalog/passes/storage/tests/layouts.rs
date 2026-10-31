@@ -48,6 +48,9 @@ fn delta_binds_only_at_its_written_positive_position() {
         ]
     );
     assert_eq!(target.incremental.variants[1].delta, Some(1));
+    // Existing all-column-keyed reads are the canonical layouts; none is added.
+    let canonical: Vec<_> = target.providers.iter().map(|p| p.canonical).collect();
+    assert_eq!(canonical, [2, 1, 3]);
     check(&strata, &target).unwrap();
     let mut wrong = target.clone();
     wrong.layouts[0].columns = vec![1, 0, 2];
@@ -86,8 +89,11 @@ fn constants_are_keys_but_wildcards_repeats_and_lets_do_not_prebind_variables() 
             ("E".into(), vec![0, 1, 2], 3),
             ("E".into(), vec![1, 0, 2], 1),
             ("E".into(), vec![2, 0, 1], 1),
+            ("A".into(), vec![0], 1),
         ]
     );
+    let canonical: Vec<_> = target.providers.iter().map(|p| p.canonical).collect();
+    assert_eq!(canonical, [1, 4]);
     contract::check(&target).unwrap();
 }
 
@@ -110,6 +116,11 @@ fn disconnected_full_reads_are_scans_and_negative_reads_have_separate_policy() {
             ("E".into(), vec![0], 0),
             ("A".into(), vec![0], 0),
             ("F".into(), vec![0], 0),
+            ("E".into(), vec![0], 1),
+            ("F".into(), vec![0], 1),
+            ("Blocked".into(), vec![0], 1),
+            ("A".into(), vec![0], 1),
+            ("B".into(), vec![0], 1),
         ]
     );
     assert_eq!(&target.policy.negation_keys, "borrowed");
@@ -128,7 +139,15 @@ fn independent_strata_and_empty_idbs_are_explicit() {
     assert_eq!(strata.strata.components.len(), 2);
     assert_eq!(target.incremental.deltas.len(), 2);
     assert_eq!(target.incremental.variants.len(), 1);
-    assert_eq!(choices(&target), vec![("E".into(), vec![0], 0)]);
+    assert_eq!(
+        choices(&target),
+        vec![
+            ("E".into(), vec![0], 0),
+            ("E".into(), vec![0], 1),
+            ("A".into(), vec![0], 1),
+            ("Empty".into(), vec![0], 1),
+        ]
+    );
 }
 
 #[test]
@@ -146,6 +165,8 @@ fn authored_written_order_layouts_preserve_later_delta_probes() {
             ("VarPointsTo".into(), vec![0, 1], 0),
             ("Assign".into(), vec![0, 1], 0),
             ("VarPointsTo".into(), vec![0, 1], 2),
+            ("Alloc".into(), vec![0, 1], 2),
+            ("Assign".into(), vec![0, 1], 2),
         ]
     );
     let replay: Program = syn::parse2(target.to_token_stream()).unwrap();
@@ -172,7 +193,14 @@ fn delta_demands_cover_constants_later_scans_and_shared_mixed_keys_exactly() {
             ("R".into(), vec![0, 1, 2], 2)
         ]
     );
-    assert_eq!(choices(&target), vec![("E".into(), vec![0, 1, 2], 0)]);
+    assert_eq!(
+        choices(&target),
+        vec![
+            ("E".into(), vec![0, 1, 2], 0),
+            ("E".into(), vec![0, 1, 2], 3),
+            ("R".into(), vec![0, 1, 2], 3),
+        ]
+    );
     let replay: Program = syn::parse2(target.to_token_stream()).unwrap();
     assert_eq!(target, replay);
     check(&source, &replay).unwrap();
@@ -208,24 +236,16 @@ fn default_providers_record_concrete_types_in_declaration_order() {
     });
     let expected: Vec<cq_lang_datalog_storage::Providers> = vec![
         syn::parse_quote! {
-            canonical_name { Canonical }
-            canonical_set { ::std::collections::HashSet<R, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>> }
-            all { ::std::vec::Vec<(i32, u64,)> }
-            seen { ::cq_storage::HashSet<(i32, u64,)> }
+            canonical { 1 }
             delta { ::std::vec::Vec<(i32, u64,)> }
             next { ::std::vec::Vec<(i32, u64,)> }
-            all_init { ::std::vec::Vec::new() }
             delta_init { ::std::vec::Vec::new() }
             next_init { ::std::vec::Vec::new() }
         },
         syn::parse_quote! {
-            canonical_name { Canonical }
-            canonical_set { ::cq_storage::HashSet<R> }
-            all { ::std::vec::Vec<(u64, i32,)> }
-            seen { ::std::collections::HashSet<(u64, i32,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>> }
+            canonical { 2 }
             delta { ::std::vec::Vec<(u64, i32,)> }
             next { ::std::vec::Vec<(u64, i32,)> }
-            all_init { ::std::vec::Vec::new() }
             delta_init { ::std::vec::Vec::new() }
             next_init { ::std::vec::Vec::new() }
         },
@@ -235,10 +255,19 @@ fn default_providers_record_concrete_types_in_declaration_order() {
         ::std::collections::HashMap<(), ::std::vec::Vec<(i32, u64,)>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
     );
     assert_eq!(target.layouts[0].provider, scan);
+    assert_eq!(
+        target.layouts[0].protocol,
+        cq_lang_datalog_storage::LayoutProtocol::GroupedMap
+    );
+    // A full-key layout has no payload: it is a key set, not a map of `Vec<()>`.
     let lookup: syn::Type = syn::parse_quote!(
-        ::std::collections::HashMap<(i32, u64,), ::std::vec::Vec<()>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+        ::std::collections::HashSet<(i32, u64,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
     );
     assert_eq!(target.layouts[1].provider, lookup);
+    assert_eq!(
+        target.layouts[1].protocol,
+        cq_lang_datalog_storage::LayoutProtocol::Set
+    );
     assert!(
         target
             .layouts

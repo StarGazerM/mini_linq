@@ -1,4 +1,9 @@
 //! Choose stable storage layouts in the independently checked occurrence order.
+//! Each relation's canonical layout is the first full layout keyed by every
+//! column (a read binding all columns); otherwise the admission anti-join read
+//! adds the identity all-column-keyed layout. It is an ordinary layout. Every
+//! layout keyed by all columns is a payload-free hash set; the others are
+//! grouped hash maps.
 use cq_datalog_support::{ensure, key_columns};
 use cq_lang_datalog_incremental as incremental;
 use cq_lang_datalog_storage::{BodyItem, HostCanonical, Layout, Policy, Program, Providers};
@@ -7,7 +12,7 @@ use std::collections::BTreeSet;
 
 pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
     let analysis = incremental::contract::check(source)?;
-    let (layouts, delta_layouts) = choose_layouts(source, &analysis);
+    let (layouts, delta_layouts, canonical) = choose_layouts(source, &analysis);
     let mut target = Program {
         incremental: source.clone(),
         device: None,
@@ -16,28 +21,17 @@ pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
             .source
             .declarations
             .iter()
-            .map(|declaration| {
+            .zip(canonical)
+            .map(|(declaration, canonical)| {
                 let types: Vec<_> = declaration
                     .columns
                     .iter()
                     .map(|column| &column.ty)
                     .collect();
                 Providers {
-                    canonical_name: syn::parse_quote!(Canonical),
-                    canonical_set: if declaration.value.is_some() {
-                        syn::parse_quote!(::std::collections::HashSet<R, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
-                    } else {
-                        syn::parse_quote!(::cq_storage::HashSet<R>)
-                    },
-                    all: syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>),
-                    seen: if declaration.value.is_some() {
-                        syn::parse_quote!(::cq_storage::HashSet<(#(#types,)*)>)
-                    } else {
-                        syn::parse_quote!(::std::collections::HashSet<(#(#types,)*), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
-                    },
+                    canonical,
                     delta: syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>),
                     next: syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>),
-                    all_init: syn::parse_quote!(::std::vec::Vec::new()),
                     delta_init: syn::parse_quote!(::std::vec::Vec::new()),
                     next_init: syn::parse_quote!(::std::vec::Vec::new()),
                 }
@@ -55,16 +49,13 @@ pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
     };
     (target.reads, target.negations) = cq_lang_datalog_storage::read_plan(&target, &analysis)?;
     for (index, declaration) in source.strata.source.declarations.iter().enumerate() {
-        let columns: Vec<_> = (0..declaration.columns.len()).collect();
         target.certificates.push(HostCanonical {
-            kind: syn::parse_quote!(all),
+            kind: syn::parse_quote!(canonical),
             index,
-            source: if declaration.value.is_some() {
-                syn::parse_quote!(provider)
-            } else {
-                syn::parse_quote!(admission)
-            },
-            columns: columns.clone(),
+            source: syn::parse_quote!(admission),
+            columns: target.layouts[target.providers[index].canonical]
+                .columns
+                .clone(),
         });
         if analysis
             .deltas
@@ -74,7 +65,7 @@ pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
                 kind: syn::parse_quote!(delta),
                 index,
                 source: syn::parse_quote!(admission),
-                columns,
+                columns: (0..declaration.columns.len()).collect(),
             });
         }
     }
@@ -90,7 +81,7 @@ pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
                 source: if delta {
                     syn::parse_quote!(delta)
                 } else {
-                    syn::parse_quote!(all)
+                    syn::parse_quote!(canonical)
                 },
                 columns: layout.columns.clone(),
             });
@@ -117,10 +108,59 @@ pub fn check(source: &incremental::Program, target: &Program) -> syn::Result<()>
         "storage changed its incremental source",
     )
 }
+/// Default providers (DL-LayoutProtocol): a layout keyed by every column has no
+/// payload, so it is a key set; other layouts group their payload rows by key.
+fn layout(
+    declaration: &cq_syntax::RelationDecl,
+    columns: Vec<usize>,
+    key: usize,
+    delta: bool,
+) -> Layout {
+    let types: Vec<_> = columns
+        .iter()
+        .map(|&column| &declaration.columns[column].ty)
+        .collect();
+    let (key_types, value_types) = types.split_at(key);
+    let (provider, protocol) = if value_types.is_empty() {
+        (
+            syn::parse_quote!(
+                ::std::collections::HashSet<
+                    (#(#key_types,)*),
+                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
+                >
+            ),
+            cq_lang_datalog_storage::LayoutProtocol::Set,
+        )
+    } else {
+        (
+            syn::parse_quote!(
+                ::std::collections::HashMap<
+                    (#(#key_types,)*),
+                    ::std::vec::Vec<(#(#value_types,)*)>,
+                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
+                >
+            ),
+            cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
+        )
+    };
+    Layout {
+        relation: declaration.name.clone(),
+        columns,
+        key,
+        provider,
+        protocol,
+        maintenance: if delta {
+            syn::parse_quote!(replace_each_run)
+        } else {
+            syn::parse_quote!(admitted_rows)
+        },
+    }
+}
+/// Formal rule DL-Canonical: read layouts first, then one canonical member per relation.
 fn choose_layouts(
     source: &incremental::Program,
     analysis: &incremental::Analysis,
-) -> (Vec<Layout>, Vec<Layout>) {
+) -> (Vec<Layout>, Vec<Layout>, Vec<usize>) {
     let mut layouts = Vec::new();
     let mut delta_layouts = Vec::new();
     let mut seen = BTreeSet::new();
@@ -158,32 +198,33 @@ fn choose_layouts(
                 };
                 let declaration =
                     &source.strata.source.declarations[analysis.positions[&symbol_name(relation)]];
-                let types: Vec<_> = keys
-                    .iter()
-                    .map(|&column| &declaration.columns[column].ty)
-                    .collect();
-                let (key_types, value_types) = types.split_at(key);
-                selected.push(Layout {
-                    relation: relation.clone(),
-                    columns: keys,
-                    key,
-                    provider: syn::parse_quote!(
-                        ::std::collections::HashMap<
-                            (#(#key_types,)*),
-                            ::std::vec::Vec<(#(#value_types,)*)>,
-                            ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-                        >
-                    ),
-                    protocol: cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
-                    maintenance: if is_delta {
-                        syn::parse_quote!(replace_each_run)
-                    } else {
-                        syn::parse_quote!(admitted_rows)
-                    },
-                });
+                let mut layout = layout(declaration, keys, key, is_delta);
+                layout.relation = relation.clone();
+                selected.push(layout);
             }
             bound.extend(atom.variables().map(symbol_name));
         }
     }
-    (layouts, delta_layouts)
+    // The admission anti-join (and EDB loading) binds every column: reuse a
+    // full layout already keyed by all columns, else complete it in identity order.
+    let canonical = source
+        .strata
+        .source
+        .declarations
+        .iter()
+        .map(|declaration| {
+            let name = symbol_name(&declaration.name);
+            layouts
+                .iter()
+                .position(|layout| {
+                    symbol_name(&layout.relation) == name && layout.key == declaration.arity()
+                })
+                .unwrap_or_else(|| {
+                    let arity = declaration.arity();
+                    layouts.push(layout(declaration, (0..arity).collect(), arity, false));
+                    layouts.len() - 1
+                })
+        })
+        .collect();
+    (layouts, delta_layouts, canonical)
 }

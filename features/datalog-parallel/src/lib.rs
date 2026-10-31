@@ -4,16 +4,18 @@
 //! Checked Storage/Round refinements precede all CQ hole expansion.
 //! Opt into internally parallel keyed IDB layouts with
 //! `storage_rewrites = [cq_datalog_parallel::shard_storage(layouts(sharded))];`.
-//! The default shards only admission; unit-key and EDB layouts stay native.
-//! Select sorted-run keyed IDB layouts with `shard_storage(layouts(runs))`,
-//! sorted-run admission with `shard_storage(seen(runs))`, or both with
-//! `shard_storage(layouts(runs), seen(runs))`. These options are independent;
-//! `layouts(sharded)` and `layouts(runs)` are mutually exclusive. Run layouts
-//! require ordered keys and payloads; run admission requires ordered rows.
+//! The default shards only each IDB's canonical layout (its all-column-keyed
+//! admission layout, a key set, becomes `ShardedLayout<K, (), S>`); other
+//! keyed IDB layouts, unit-key and EDB layouts stay native. Admission subtracts
+//! the committed canonical layout from each candidate chunk and builds the
+//! round's NEW canonical version from the survivors.
+//! Select sorted-run keyed IDB layouts, canonical included, with
+//! `shard_storage(layouts(runs))`; `layouts(sharded)` and `layouts(runs)` are
+//! mutually exclusive. Run layouts require ordered keys and payloads.
 //! Run layouts accept only the default source layout hasher
 //! `BuildHasherDefault<cq_datalog::rustc_hash::FxHasher>`; custom/keyed layout
 //! hashers are rejected rather than silently erased. Unit-key and EDB layouts
-//! remain native, and omitting `seen(runs)` retains sharded admission.
+//! remain native.
 //! Eligible rule holes replace the entire standard `sequence -> sequential ->
 //! translate_pull` tail with the registered Structures `print_push` terminal,
 //! feeding the task collector directly. The checker preserves the preceding

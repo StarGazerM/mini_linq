@@ -1,18 +1,17 @@
 //! Hash-provider selection for Datalog, whose default providers use Fx hashing.
 //!
-//! `hasher(keyed)` opts Storage's native hash layout maps, IDB seen sets,
-//! and EDB canonical sets into the keyed `cq_storage` hash providers.
-//! `hasher(fx)` explicitly selects the default Fx providers. Unused
-//! relation-kind fields, ordered/custom providers, row buffers, bindings,
-//! maintenance, and all logical/execution decisions are preserved.
+//! `hasher(keyed)` opts Storage's native hash layout maps, including each
+//! relation's canonical layout, into the keyed `cq_storage` hash providers.
+//! `hasher(fx)` explicitly selects the default Fx providers. Ordered/custom
+//! providers, row buffers, bindings, the canonical choice, maintenance, and all
+//! logical/execution decisions are preserved.
 //! Only qualified `std::collections::HashMap`, `std::collections::HashSet`,
-//! `cq_storage::HashSet`, and `cq_datalog_parallel_runtime::ShardedSeen`
+//! `cq_storage::HashSet`, and `cq_datalog_parallel_runtime::ShardedLayout`
 //! types are recognized (an initial `::` is optional); aliases and nested
 //! types are deliberately opaque.
 //!
-//! `ShardedSeen<T>` and `ShardedSeen<T, S>` are supported, so Storage selection
-//! may precede or follow sharded Storage selection. Keyed selection produces
-//! `ShardedSeen<T>`. The runtime must support its generic hasher parameter.
+//! `ShardedLayout<K, V>` and `ShardedLayout<K, V, S>` are supported, so Storage
+//! selection may precede or follow sharded Storage selection.
 //!
 //! Negation key sets are recorded only after fork. Pair the Storage rewrite
 //! with `hasher_round(keyed)` in the Round queue to opt those sets out of Fx
