@@ -244,7 +244,12 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
 - **P3b Profile the engine gaps** (`doc/STORAGE.md` §12.4): GPU h06
   reduce/dedup at 16–74× a hand kernel; CPU h01 at ~140× a String-grouping
   microbenchmark. Profiles (perf, nsys/ncu) decide whether these come before
-  the storage slices.
+  the storage slices. **Profiled 2026-10-31** (`/data/mini_linq-wt/p3b-profile`,
+  M0 binaries): GPU h06's scalar reduce ran on one 256-thread CTA (51% of
+  kernel time, 0.9% of peak bandwidth), fixed by P3e's recorded grid fold;
+  CPU h01 spends 61% in comparison sorting of wide DISTINCT valuations (keys
+  are already StringCode), addressed in P4 compiler selection below; GPU DOOP
+  gaps go to P6b.
 - **P3c Engine-wide storage rules** (`doc/STORAGE.md` §13): intern strings
   at input for the CPU catalog as on GPU; remove V decode sites
   (`doc/DECODE-AUDIT.md`), measured per target. The uncommitted sort-canon
@@ -424,6 +429,18 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   publication, aligned with round/load boundaries.
   Memory placement is a per-target fact (`doc/STORAGE.md` §11): shared byte
   layout and laws; CUDA and Metal differ in allocation, copy reasons and cost.
+  **Compiler selection (open):** record the RadixRun payload layout `C`, and
+  let the canonical pass choose a sorted-run provider keyed by the packed
+  `OrderKey` for wide canonical results (h01's 61% comparison sort) where
+  measurement supports it.
+- **P4-GPU Device RadixRun.** Runtime done (`DeviceRadixRun<W, O, C>` in
+  gpu-datalog-runtime: whole packed order-key words, offset carrier as a type
+  fact, explicit item layouts, caller-supplied ratio/radix bits/merge tile,
+  exact radix-prefix directory, stable merge-path, key reads without items;
+  law tests against `cq_storage::RadixRun`). Remaining: index selection
+  records it as a provider for GPU CQ built indices (range reads unblock
+  `probe smallest`, `triangle-compiled`, L&E match-set reuse), GPU Datalog
+  layouts (replacing plain-word `DeviceRuns`), and GPU canonical indices.
 - **P5 Scan columns (CPU).** Measured rules only (§12.4): plain default;
   byte truncation for scans; bit-packing only for bandwidth-bound parallel
   scans; encoded execution on dictionary codes first. Block format, codec trait, summaries built with
@@ -433,11 +450,32 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   scan codecs only where measured). Device blocks with per-vector summaries, tile decode
   fused with predicates, narrow carriers, summary skip; GPU Datalog runs as
   grouped runs.
+- **P6b GPU Datalog parallelism** (profile 2026-10-31,
+  `/data/mini_linq-wt/p3b-profile/01-doop-report.md`): fixpoint xalan 1.76 s /
+  batik 4.97 s vs SRDatalog ~1.0–1.5 s / 1.8–3.0 s; one stream, zero kernel
+  overlap, GPU idle 40% / 22%; joins 0.70 / 3.40 s (batik `VPT_LoadArray` alone
+  1.52 s, skew), host/launch gaps 0.70 / 1.08 s, sort/unique ~0.3 s. Work:
+  concurrent waves on multiple streams as a recorded schedule realization,
+  fewer host syncs or CUDA graphs, skew-balanced join realization (recorded,
+  as SRDatalog's balanced/work-stealing variants).
 - **P7 Join filters and evidence** across targets (exact min/max and
   membership from runs; published key/row/group statistics for `choose`).
 - **P8 Remaining items.** Key-partition routing projection, placement spine
   (only when a branching machine appears), Masks as full reducer (a cost
   question), delta=k SRDatalog plans.
+- **Open issues (2026-10-31).** (1) `doop-gpu` (26-output DOOP) fails at base
+  67d76822 with 220 P-Decompose unmet catalog obligations (DeviceLayout
+  membership at host level). (2) Counters test
+  `empty_negative_keys_test_existence_without_building_indexes` fails since
+  `0124315f`: `cq-order` `ready()` places a closed binding first, so a positive
+  empty-key probe builds an index (`passes/cq-order/src/lib.rs:229`,
+  `passes/cq-print/src/access.rs:583,635`). (3) Row-granular streaming of CQ
+  answers has no realization without a new construct; the two facade
+  streaming tests stay ignored. (4) `compiler.tex` does not build
+  (`backend_ir.tex` `\inferrule*` error). (5) Datalog outputs are sets in
+  layout order, no longer insertion order. (6) ADM-InPlan (anti-join at the
+  deepest join layer) and its advice are unimplemented. (7) The LianJie repo
+  split is undecided and out of scope here.
 
 ## Progress
 
