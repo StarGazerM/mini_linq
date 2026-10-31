@@ -46,7 +46,9 @@ pub mod keyed;
 pub use keyed::SupplyKind;
 pub mod constraint;
 pub use constraint::Constraint;
+pub mod capture;
 pub mod rust;
+pub use capture::{Capture, Captures};
 
 /// One named, typed column in a declared input relation.
 ///
@@ -147,9 +149,11 @@ impl Atom {
 }
 
 /// An opaque, pure, total Rust condition placed by its free variables.
+/// With `capture`, the condition is a query capture's `bool` (IF-Capture).
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Filter {
     pub if_token: Token![if],
+    pub capture: Option<capture::kw::capture>,
     pub condition: syn::Expr,
 }
 
@@ -166,8 +170,17 @@ impl syn::parse::Parse for Filter {
         reject_guard_attributes(input)?;
         Ok(Self {
             if_token: input.parse()?,
+            capture: capture::parse_reference(input)?,
             condition: input.parse()?,
         })
+    }
+}
+
+impl Filter {
+    /// The Rust condition a printer evaluates: a capture reference reads the
+    /// host-once `bool` through its binder reference (IF-Capture).
+    pub fn test(&self) -> syn::Expr {
+        capture::realize_test(self.capture.as_ref(), &self.condition)
     }
 }
 
@@ -190,11 +203,14 @@ impl For {
             pattern: self.pattern.clone(),
             annotation: None,
             eq_token: Default::default(),
+            capture: None,
             expression: self.expression.clone(),
         }
     }
 }
 
+/// A scalar binding. With `capture`, the value is a copy of the named query
+/// capture (IF-Capture); the expression is then that capture's name.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Let {
     pub let_token: Token![let],
@@ -203,10 +219,18 @@ pub struct Let {
     #[syn(optional, peek = Token![:])]
     pub annotation: Option<TypeAnnotation>,
     pub eq_token: Token![=],
+    #[parse(capture::parse_reference)]
+    pub capture: Option<capture::kw::capture>,
     pub expression: syn::Expr,
 }
 
 impl Let {
+    /// The Rust value a printer binds: a capture reference copies the
+    /// host-once value out of its binder reference (IF-Capture).
+    pub fn value(&self) -> syn::Expr {
+        capture::realize_value(self.capture.as_ref(), &self.expression)
+    }
+
     /// Carry a whole-variable annotation without interpreting Rust types.
     /// Destructuring field types and binding modes are inferred by rustc.
     pub fn binding_types(&self) -> Vec<(Ident, syn::Type)> {

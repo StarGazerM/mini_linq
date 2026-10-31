@@ -42,10 +42,11 @@ impl Packing {
         }
     }
 
-    pub fn write(&self, slots: &[usize]) -> TokenStream {
+    /// Pack one answer row; each value is a row slot or a capture kernel scalar.
+    pub fn write(&self, values: &[TokenStream]) -> TokenStream {
         let bits = &self.bits;
-        let parts = slots.iter().zip(&self.columns)
-            .map(|(slot, column)| {
+        let parts = values.iter().zip(&self.columns)
+            .map(|(value, column)| {
                 quote! {
                     let width = #column.bits();
                     __shift -= width;
@@ -54,7 +55,7 @@ impl Packing {
                     let local = __shift % 64;
                     let mask = u64::MAX >> (64 - width);
                     let sign = if #column.is_signed() { 1u64 << (width - 1) } else { 0 };
-                    let value = (__row[#slot] as u64 & mask) ^ sign;
+                    let value = ((#value) as u64 & mask) ^ sign;
                     *__packed.add(lane) |= value << local;
                     if local != 0 && local + width > 64 {
                         let next = if __lanes <= 2 { logical_lane + 1 } else { __lanes - 2 - logical_lane };

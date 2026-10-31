@@ -35,17 +35,30 @@ arguments, fresh $k$ starts at \code{__cq_i_j}; cases are tried in order:
 \Rule{A-Local}{a_j=e\text{ is a remaining expression}\quad
  \uses(e,A)\ne\emptyset\quad k,v\text{ fresh}}
  {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[\mathsf{let}\ v:\tau_j=e,\ k=v]]}
+
+\Rule{A-Capture}{c=\mathsf{let}\ p=e\ \lor\ c=\mathsf{if}\ e\text{ top-level, or a closed head operand/aggregate argument}\\
+ \fv(e)\cap(Q\setminus\mathsf{captures})=\emptyset\quad\mathsf{binders}(p)\text{ bound nowhere else}}
+ {c\leadsto_{NF}\mathsf{captures}:=\mathsf{captures}\concat[c]\text{ (dependency order)}}
+
+\Rule{A-CaptureRef}{\mathsf{let}\ p=e\ \text{or}\ \mathsf{if}\ e\text{ in a branch}\quad
+ \fv(e)\cap Q_{branch}=\emptyset\quad c\text{ fresh}}
+ {\mathsf{let}\ p=e\leadsto_{NF}\mathsf{let}\ p=\mathsf{capture}\ c,\ \mathsf{if}\ e\leadsto_{NF}\mathsf{if}\ \mathsf{capture}\ c
+  \quad[\mathsf{captures}:=\mathsf{captures}\concat[\mathsf{let}\ c=e]]}
 \end{mathpar}
 Replace the atom by $\mathit{before}\concat[R(\bar a')]\concat\mathit{after}$.
-Identities are relational clauses, not guards. Constraints, Rust guards and
+Identities are relational clauses, not guards. Row-dependent Rust guards,
 lets and generators are copied; branch bodies normalize recursively with fresh names; a
-computed head becomes a final typed bind. In \code{R(x,f(x),g())}, closed
+row-dependent computed head becomes a final typed bind. Query-closed lets, guards,
+head operands and aggregate arguments are recorded once as captures, never body
+clauses, so ordering never places them; a closed branch binding keeps its binder
+as a capture reference. In \code{R(x,f(x),g())}, closed
 \code{g()} remains a once-bound host operand of an occurrence restriction;
 the dependent \code{f(x)} bind follows the atom. No closed atom operand creates
 a row binding or a Rust block dependency.
 \emph{Check:} the NF contract only; there is no separate correspondence check.
 \emph{Refinement:} each rewrite replaces an argument by an equivalent
-identity or a bind at the position Rust would evaluate it, so meanings are equal.
+identity or a bind at the position Rust would evaluate it, and a pure total
+closed value evaluated once equals its per-row evaluation, so meanings are equal.
 
 \subsection{Ordering: CQ$_{\rm NF}\to$ VO}
 \label{sec:planning-order}
@@ -685,6 +698,12 @@ expansion fixtures. Interfaces at the Rust boundary:
 
 \Rule{IF-Parameter}{p\in\vars_H(\theta)\quad b_p\text{ fresh}}
  {p\longmapsto\code{let b_p = \&p;}\text{ once outside all query loops}}
+
+\Rule{IF-Capture}{\mathsf{let}\ p=e\in\mathsf{captures}\quad b\text{ fresh}\quad
+ \mathsf{if}\ g\in\mathsf{captures}}
+ {\code{let b = e; let p = \&b;}\text{ once before IF-Parameter};\ 
+  \text{answer}=\code{if g \{rows\} else \{empty\}};\ 
+  \mathsf{capture}\ c\longmapsto\code{Clone::clone(c)}\ /\ \code{*c}}
 
 \Rule{IF-Range}{C=\{d_1\}\quad H:\code{OrderedRead}\text{ at the matching key type}}
  {\mathsf{window}(H,C)\text{ is an ordered read; otherwise scan/filter, no build}}

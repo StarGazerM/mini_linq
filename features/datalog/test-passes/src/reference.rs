@@ -181,9 +181,63 @@ pub(crate) struct Inputs<'a> {
     pub borrowed_negative_inputs: &'a [String],
 }
 
+/// Reference evaluation follows A-Capture: closed top-level lets, guards and
+/// head operands are evaluated once, before every loop of the rule.
+pub(crate) fn body(
+    items: &[&BodyItem],
+    heads: &[&syn::Expr],
+    candidates: &syn::Ident,
+    inputs: Inputs<'_>,
+    mut scope: BTreeMap<String, bool>,
+    fresh: &mut Fresh,
+) -> syn::Result<TokenStream> {
+    let list: cq_syntax::CommaList<BodyItem> = items.iter().map(|item| (*item).clone()).collect();
+    let positions = cq_lang_cq::normal::capture_positions(&list);
+    let rest: cq_syntax::CommaList<BodyItem> = list
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !positions.contains(index))
+        .map(|(_, item)| item.clone())
+        .collect();
+    let logical: std::collections::BTreeSet<String> =
+        cq_lang_cq::blocks::bound(&rest).into_keys().collect();
+    let named = cq_lang_cq::blocks::bound(&list);
+    // A closed head operand is bound once after the captured lets it may read.
+    let mut hoisted = Vec::new();
+    let mut owned = Vec::new();
+    for value in heads {
+        let named = rust::variable(value).is_some_and(|v| {
+            named.contains_key(&symbol_name(v)) || scope.contains_key(&symbol_name(v))
+        });
+        if !named && rust::free_variables(value).dependencies(&logical).is_empty() {
+            let id = fresh.id("reference_capture");
+            hoisted.push(BodyItem::Let(Box::new(
+                syn::parse_quote!(let #id = ::std::clone::Clone::clone(&(#value))),
+            )));
+            owned.push(syn::parse_quote!(#id));
+        } else {
+            owned.push((*value).clone());
+        }
+    }
+    let ordered: Vec<&BodyItem> = positions
+        .iter()
+        .map(|&position| items[position])
+        .chain(&hoisted)
+        .chain(
+            items
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !positions.contains(index))
+                .map(|(_, item)| *item),
+        )
+        .collect();
+    let heads: Vec<&syn::Expr> = owned.iter().collect();
+    nested(&ordered, &heads, candidates, inputs, scope, fresh)
+}
+
 // Scope values record borrowed atom/generator columns (true) versus native
 // scalar let values (false). No expression is interpreted as text.
-pub(crate) fn body(
+fn nested(
     items: &[&BodyItem],
     heads: &[&syn::Expr],
     candidates: &syn::Ident,
@@ -233,7 +287,7 @@ pub(crate) fn body(
                     prefix.push(quote!(if #row.#column != (#argument) { continue; }));
                 }
             }
-            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
+            let next = nested(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!(for #row in #state.#field.iter() { #(#prefix)* #next }))
         }
         BodyItem::Negation(negative) => {
@@ -266,19 +320,19 @@ pub(crate) fn body(
                     )
                 })
                 .collect::<Vec<_>>();
-            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
+            let next = nested(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!(if !#state.#field.iter().any(|#row| true #(&& (#conditions))*) { #next }))
         }
         BodyItem::Filter(filter) => {
             let condition = &filter.condition;
-            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
+            let next = nested(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!(if #condition { #next }))
         }
         BodyItem::Let(binding) => {
             for name in rust::bindings(&binding.pattern) {
                 scope.insert(symbol_name(&name), false);
             }
-            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
+            let next = nested(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!({ #binding; #next }))
         }
         BodyItem::For(generator) => {
@@ -288,7 +342,7 @@ pub(crate) fn body(
             let value = fresh.id("reference_generated");
             let expression = &generator.expression;
             let pattern = &generator.pattern;
-            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
+            let next = nested(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!(for #value in #expression {
                 let #pattern = &#value;
                 #next
@@ -296,12 +350,12 @@ pub(crate) fn body(
         }
         BodyItem::Equality(equality) => {
             let condition = constraint(&cq_syntax::Constraint::from_equality(equality), &scope);
-            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
+            let next = nested(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!(if #condition { #next }))
         }
         BodyItem::Constraint(constraint) => {
             let condition = self::constraint(constraint, &scope);
-            let next = body(rest, heads, candidates, inputs, scope, fresh)?;
+            let next = nested(rest, heads, candidates, inputs, scope, fresh)?;
             Ok(quote!(if #condition { #next }))
         }
         _ => Err(syn::Error::new_spanned(

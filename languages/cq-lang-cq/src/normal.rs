@@ -3,7 +3,9 @@
 //! Only explicit `where` predicates and atom restrictions are relational.
 //!
 //! DESIGN contract7-normal-form
-//! Owns CQ normalization, preserving `Constraint` operands `Term::Closed(syn::Expr)` unchanged.
+//! Owns CQ normalization, preserving `Constraint` operands `Term::Closed(syn::Expr)` unchanged,
+//! and owns the one decision that a query-closed `let`/`if`/head operand is a host-once
+//! capture (A-Capture, A-CaptureRef); later IRs carry `captures` unchanged.
 //! Contract 7, CQ-Closed/WF-NF; source: doc/PLANNING-REDESIGN.md Contract and Architecture.
 //! Source: doc/formal/CONFORMANCE.md CQ-Where/CQ-Closed; the shared Term lives in cq-syntax.
 //! DO NOT turn closed Rust into recognized arithmetic, relational facts, or type-directed rewrites.
@@ -16,7 +18,8 @@ use quote::{ToTokens, format_ident, quote};
 use std::collections::{BTreeMap, BTreeSet};
 use syn::Ident;
 
-/// Formal rule WF-NF: Check CQ, distinct variable or literal atom arguments and variable-only output.
+/// Formal rule WF-NF: Check CQ, distinct variable or literal atom arguments, variable-only
+/// output bound by the body or a capture, and no query-closed top-level `let`/`if` (A-Capture).
 pub fn check(module: &Program) -> syn::Result<()> {
     super::contract::check(module)?;
     for item in super::blocks::walk(&module.query.body) {
@@ -43,6 +46,35 @@ pub fn check(module: &Program) -> syn::Result<()> {
             }
         }
     }
+    if let Some((_, item)) = module
+        .query
+        .body
+        .iter()
+        .enumerate()
+        .find(|(index, item)| capturable(item, &module.query.body, *index))
+    {
+        return Err(syn::Error::new_spanned(
+            item,
+            "normal form: a query-closed binding or guard is a capture",
+        ));
+    }
+    let logical = super::blocks::bound(&module.query.body)
+        .into_keys()
+        .collect();
+    if let Some(item) = closed_branch_item(&module.query.body, &logical) {
+        return Err(syn::Error::new_spanned(
+            item,
+            "normal form: a query-closed branch binding or guard reads a capture",
+        ));
+    }
+    for item in super::blocks::walk(&module.query.body) {
+        let (reference, expression) = match item {
+            BodyItem::Let(binding) => (binding.capture.as_ref(), &binding.expression),
+            BodyItem::Filter(guard) => (guard.capture.as_ref(), &guard.condition),
+            _ => continue,
+        };
+        cq_syntax::capture::check_reference(reference, expression, &module.query.captures)?;
+    }
     if module
         .query
         .head
@@ -66,6 +98,7 @@ pub fn check(module: &Program) -> syn::Result<()> {
                 .map(|aggregate| symbol_name(&aggregate.name)),
         );
     }
+    bound.extend(module.query.captures.names());
     if let Some(variable) = module
         .query
         .head
@@ -87,6 +120,7 @@ pub fn check(module: &Program) -> syn::Result<()> {
 /// Formal rule A-Prefix: Place an opaque binding immediately before its atom.
 /// Formal rule A-Closed: Keep a query-closed atom operand as a relational restriction.
 /// Formal rule A-Local: Place a dependent binding and relational equality after its atom.
+/// Formal rule A-Capture: Record a query-closed `let`/`if` or head operand once as a host capture.
 pub fn normalize(module: &Program) -> syn::Result<Program> {
     super::contract::check(module)?;
     if module.query.group.is_some() {
@@ -95,18 +129,28 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
     }
     let declarations: BTreeMap<_, _> = module.inputs().map(|d| (symbol_name(&d.name), d)).collect();
     let mut names = reserved(module);
+    let mut normal = module.clone();
+    hoist(&mut normal.query);
     let mut bound = BTreeSet::new();
-    let logical = super::blocks::bound(&module.query.body)
+    let logical: BTreeSet<String> = super::blocks::bound(&normal.query.body)
         .into_keys()
         .collect();
+    let captured = normal.query.captures.names();
+    let closed = |expression: &syn::Expr| {
+        rust::free_variables(expression)
+            .dependencies(&logical)
+            .is_empty()
+    };
+    let mut branch_captures = Vec::new();
     let mut body = normalize_body(
-        &module.query.body,
+        &normal.query.body,
         &declarations,
         &logical,
         &mut names,
         &mut bound,
+        &mut branch_captures,
     )?;
-    let mut normal = module.clone();
+    normal.query.captures.items.extend(branch_captures);
     let grouped = module
         .query
         .head
@@ -117,10 +161,11 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
         .iter()
         .any(Option::is_some);
     if grouped {
-        let mut valuation: BTreeMap<_, _> = super::blocks::bound(&module.query.body);
+        let mut valuation: BTreeMap<_, _> = super::blocks::bound(&normal.query.body);
         let mut keys = Vec::new();
         let mut key_names = BTreeSet::new();
         let mut aggregates = Vec::new();
+        let mut captures = Vec::new();
         for (position, argument) in normal.query.head.args.iter_mut().enumerate() {
             let Some((kind, expression)) = super::group::aggregate(argument)? else {
                 let variable = rust::variable(argument).expect("group key checked");
@@ -144,16 +189,28 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
                 semi_token: Default::default(),
             };
             if let Some(expression) = &aggregate.expression {
-                if !rust::variable(expression).is_some_and(|v| bound.contains(&symbol_name(v))) {
+                if !rust::variable(expression).is_some_and(|v| {
+                    bound.contains(&symbol_name(v)) || captured.contains(&symbol_name(v))
+                }) {
                     let value = fresh(&mut names, module.query.body.len(), position);
-                    body.push(binding(&value, &syn::parse_quote!(_), expression.clone()));
-                    valuation.insert(symbol_name(&value), value.clone());
+                    let item = binding(&value, &syn::parse_quote!(_), expression.clone());
+                    if closed(expression) {
+                        captures.push(item);
+                    } else {
+                        body.push(item);
+                        valuation.insert(symbol_name(&value), value.clone());
+                    }
                     aggregate.expression = Some(path(&value));
                 }
             }
             aggregates.push(aggregate);
             *argument = path(&name);
         }
+        normal
+            .query
+            .captures
+            .items
+            .extend(captures.into_iter().map(capture));
         normal.query.group = Some(super::group::HeadGroup {
             group_token: Default::default(),
             valuation_bracket: Default::default(),
@@ -168,8 +225,11 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
         check(&normal)?;
         return Ok(normal);
     }
+    let mut captures = Vec::new();
     for (position, argument) in normal.query.head.args.iter_mut().enumerate() {
-        if rust::variable(argument).is_some_and(|variable| bound.contains(&symbol_name(variable))) {
+        if rust::variable(argument).is_some_and(|variable| {
+            bound.contains(&symbol_name(variable)) || captured.contains(&symbol_name(variable))
+        }) {
             continue;
         }
         let key = fresh(&mut names, module.query.body.len(), position);
@@ -177,12 +237,183 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
             .output()
             .expect("computed output types checked")
             .columns[position];
-        body.push(binding(&key, &column.ty, argument.clone()));
+        let item = binding(&key, &column.ty, argument.clone());
+        if closed(argument) {
+            captures.push(item);
+        } else {
+            body.push(item);
+        }
         *argument = path(&key);
     }
+    normal
+        .query
+        .captures
+        .items
+        .extend(captures.into_iter().map(capture));
     normal.query.body = body.into_iter().collect();
     check(&normal)?;
     Ok(normal)
+}
+
+fn capture(item: BodyItem) -> cq_syntax::Capture {
+    match item {
+        BodyItem::Let(binding) => cq_syntax::Capture::Let(binding),
+        BodyItem::Filter(guard) => cq_syntax::Capture::Guard(guard),
+        _ => unreachable!("only bindings and guards are captured"),
+    }
+}
+
+/// A-Capture: a top-level `let` or `if` is a capture when its
+/// expression reads no query variable and its binders are bound nowhere else.
+/// Captures are found in dependency order; references to them then resolve
+/// like any host name (`where` operands become closed terms).
+fn capturable(item: &BodyItem, body: &super::CommaList<BodyItem>, position: usize) -> bool {
+    let logical: BTreeSet<_> = super::blocks::bound(body).into_keys().collect();
+    let closed = |expression: &syn::Expr| {
+        rust::free_variables(expression)
+            .dependencies(&logical)
+            .is_empty()
+    };
+    match item {
+        BodyItem::Filter(guard) => closed(&guard.condition),
+        BodyItem::Let(binding) => {
+            let others: super::CommaList<BodyItem> = body
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != position)
+                .map(|(_, item)| item.clone())
+                .collect();
+            let elsewhere = super::blocks::bound(&others);
+            closed(&binding.expression)
+                && rust::bindings(&binding.pattern)
+                    .iter()
+                    .all(|binder| !elsewhere.contains_key(&symbol_name(binder)))
+        }
+        _ => false,
+    }
+}
+
+/// A-Capture: positions of the top-level body items that are
+/// captures, in dependency order. Normalization records them once; reference
+/// interpreters evaluate them before their loops.
+pub fn capture_positions(body: &super::CommaList<BodyItem>) -> Vec<usize> {
+    let mut remaining: Vec<(usize, BodyItem)> = body.iter().cloned().enumerate().collect();
+    let mut positions = Vec::new();
+    loop {
+        let current: super::CommaList<BodyItem> =
+            remaining.iter().map(|(_, item)| item.clone()).collect();
+        let Some(index) = current
+            .iter()
+            .enumerate()
+            .position(|(index, item)| capturable(item, &current, index))
+        else {
+            return positions;
+        };
+        positions.push(remaining.remove(index).0);
+    }
+}
+
+fn hoist(query: &mut super::Query) {
+    let positions = capture_positions(&query.body);
+    let mut items: Vec<Option<BodyItem>> = std::mem::take(&mut query.body)
+        .into_iter()
+        .map(Some)
+        .collect();
+    for position in positions {
+        let item = items[position]
+            .take()
+            .expect("each position is captured once");
+        query.captures.items.push(capture(item));
+    }
+    query.body = items.into_iter().flatten().collect();
+    let logical = super::blocks::bound(&query.body).into_keys().collect();
+    super::blocks::resolve_constraints(&mut query.body, &logical);
+}
+
+/// Formal rule A-CaptureRef: a query-closed branch `let`/`if` is
+/// evaluated once as a fresh query capture; the branch keeps its binder (or
+/// guard) as a capture reference, so union interfaces are unchanged.
+fn hoist_branch(
+    body: Vec<BodyItem>,
+    logical: &BTreeSet<String>,
+    names: &mut BTreeSet<String>,
+    captures: &mut Vec<cq_syntax::Capture>,
+) -> Vec<BodyItem> {
+    let closed = |expression: &syn::Expr| {
+        rust::free_variables(expression)
+            .dependencies(logical)
+            .is_empty()
+    };
+    body.into_iter()
+        .map(|item| match item {
+            BodyItem::Let(mut binding)
+                if binding.capture.is_none() && closed(&binding.expression) =>
+            {
+                let name = fresh_capture(names);
+                let annotation = match &binding.pattern {
+                    syn::Pat::Ident(pattern) if pattern.by_ref.is_none() => {
+                        binding.annotation.clone()
+                    }
+                    _ => None,
+                };
+                let value = std::mem::replace(&mut binding.expression, path(&name));
+                captures.push(cq_syntax::Capture::Let(Box::new(Let {
+                    pattern: ident_pattern(&name),
+                    annotation,
+                    expression: value,
+                    ..(*binding).clone()
+                })));
+                binding.capture = Some(Default::default());
+                BodyItem::Let(binding)
+            }
+            BodyItem::Filter(mut guard) if guard.capture.is_none() && closed(&guard.condition) => {
+                let name = fresh_capture(names);
+                let value = std::mem::replace(&mut guard.condition, path(&name));
+                let BodyItem::Let(binding) = binding(&name, &syn::parse_quote!(bool), value) else {
+                    unreachable!("binding builds a let")
+                };
+                captures.push(cq_syntax::Capture::Let(binding));
+                guard.capture = Some(Default::default());
+                BodyItem::Filter(guard)
+            }
+            item => item,
+        })
+        .collect()
+}
+
+/// WF-NF: the first branch `let`/`if` that A-Capture would still hoist.
+fn closed_branch_item<'a>(
+    body: &'a super::CommaList<BodyItem>,
+    logical: &BTreeSet<String>,
+) -> Option<&'a BodyItem> {
+    body.iter().find_map(|item| {
+        let BodyItem::Block(block) = item else {
+            return None;
+        };
+        block.branches.iter().find_map(|branch| {
+            let logical: BTreeSet<String> = logical
+                .iter()
+                .cloned()
+                .chain(super::blocks::bound(&branch.body).into_keys())
+                .collect();
+            let closed = |expression: &syn::Expr| {
+                rust::free_variables(expression)
+                    .dependencies(&logical)
+                    .is_empty()
+            };
+            branch
+                .body
+                .iter()
+                .find(|item| match item {
+                    BodyItem::Let(binding) => {
+                        binding.capture.is_none() && closed(&binding.expression)
+                    }
+                    BodyItem::Filter(guard) => guard.capture.is_none() && closed(&guard.condition),
+                    _ => false,
+                })
+                .or_else(|| closed_branch_item(&branch.body, &logical))
+        })
+    })
 }
 
 fn normalize_body(
@@ -191,6 +422,7 @@ fn normalize_body(
     logical: &BTreeSet<String>,
     names: &mut BTreeSet<String>,
     bound: &mut BTreeSet<String>,
+    captures: &mut Vec<cq_syntax::Capture>,
 ) -> syn::Result<Vec<BodyItem>> {
     let mut body = Vec::new();
     for (clause, item) in source.iter().enumerate() {
@@ -204,15 +436,17 @@ fn normalize_body(
                         .cloned()
                         .chain(super::blocks::bound(&branch.body).into_keys())
                         .collect();
-                    branch.body = normalize_body(
+                    let normal = normalize_body(
                         &branch.body,
                         declarations,
                         &branch_logical,
                         names,
                         &mut local,
-                    )?
-                    .into_iter()
-                    .collect();
+                        captures,
+                    )?;
+                    branch.body = hoist_branch(normal, &branch_logical, names, captures)
+                        .into_iter()
+                        .collect();
                 }
                 bound.extend(block.analyze(bound).interface.into_keys());
                 body.push(BodyItem::Block(block));
@@ -323,24 +557,39 @@ fn equality(left: Ident, right: EqualityValue) -> BodyItem {
 fn binding(key: &Ident, ty: &syn::Type, expression: syn::Expr) -> BodyItem {
     BodyItem::Let(Box::new(Let {
         let_token: Default::default(),
-        pattern: syn::Pat::Ident(syn::PatIdent {
-            attrs: Vec::new(),
-            by_ref: None,
-            mutability: None,
-            ident: key.clone(),
-            subpat: None,
-        }),
+        pattern: ident_pattern(key),
         annotation: Some(super::TypeAnnotation {
             colon_token: Default::default(),
             ty: ty.clone(),
         }),
         eq_token: Default::default(),
+        capture: None,
         expression,
     }))
 }
 
+fn ident_pattern(key: &Ident) -> syn::Pat {
+    syn::Pat::Ident(syn::PatIdent {
+        attrs: Vec::new(),
+        by_ref: None,
+        mutability: None,
+        ident: key.clone(),
+        subpat: None,
+    })
+}
+
 fn path(ident: &Ident) -> syn::Expr {
     syn::parse2(quote!(#ident)).expect("identifier expression")
+}
+
+/// `__cq_c_<n>`, the first unused.
+fn fresh_capture(names: &mut BTreeSet<String>) -> Ident {
+    let name = (0..)
+        .map(|n| format!("__cq_c_{n}"))
+        .find(|name| !names.contains(name))
+        .expect("an unused capture name");
+    names.insert(name.clone());
+    format_ident!("{name}", span = Span::mixed_site())
 }
 
 /// Every identifier the module mentions, so fresh names never capture.

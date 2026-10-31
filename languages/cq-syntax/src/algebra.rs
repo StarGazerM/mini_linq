@@ -124,15 +124,20 @@ fn parse_aggregate_expression(
 
 impl Group {
     /// Check the complete input valuation schema and typed fold payloads.
-    pub fn check(&self, input: &std::collections::BTreeMap<String, syn::Type>) -> syn::Result<()> {
+    /// Keys and aggregate arguments name input columns or host captures
+    /// (WF-Capture); a capture is one value shared by every valuation.
+    pub fn check(
+        &self,
+        input: &std::collections::BTreeMap<String, syn::Type>,
+        captures: &std::collections::BTreeSet<String>,
+    ) -> syn::Result<()> {
+        let available = |name: &String| input.contains_key(name) || captures.contains(name);
         let mut outputs = std::collections::BTreeSet::new();
         for key in &self.keys {
-            if !input.contains_key(&crate::symbol_name(key))
-                || !outputs.insert(crate::symbol_name(key))
-            {
+            if !available(&crate::symbol_name(key)) || !outputs.insert(crate::symbol_name(key)) {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "group keys must be distinct input columns",
+                    "group keys must be distinct input columns or captures",
                 ));
             }
         }
@@ -141,7 +146,7 @@ impl Group {
         }
         for aggregate in &self.aggregates {
             let name = crate::symbol_name(&aggregate.name);
-            if input.contains_key(&name) || !outputs.insert(name) {
+            if available(&name) || !outputs.insert(name) {
                 return Err(syn::Error::new_spanned(
                     &aggregate.name,
                     "aggregate outputs must be fresh and distinct",
@@ -166,12 +171,12 @@ impl Group {
                         "aggregate argument must be a normalized input variable",
                     )
                 })?;
-            input.get(&crate::symbol_name(variable)).ok_or_else(|| {
-                syn::Error::new_spanned(
+            if !available(&crate::symbol_name(variable)) {
+                return Err(syn::Error::new_spanned(
                     variable,
-                    "aggregate argument is not in the input valuation",
-                )
-            })?;
+                    "aggregate argument is not in the input valuation or captures",
+                ));
+            }
         }
         Ok(())
     }
@@ -706,6 +711,9 @@ pub struct Bind {
     #[syn(optional, peek = Token![:])]
     pub annotation: Option<crate::TypeAnnotation>,
     pub eq_token: Token![=],
+    /// IF-Capture: the bound value is a copy of the named query capture.
+    #[syn(optional, peek = crate::capture::kw::capture)]
+    pub capture: Option<crate::capture::kw::capture>,
     #[syn(parenthesized)]
     pub expression_paren: token::Paren,
     #[syn(in = expression_paren)]
@@ -721,8 +729,14 @@ impl Bind {
             pattern: self.pattern.clone(),
             annotation: self.annotation.clone(),
             eq_token: self.eq_token,
+            capture: self.capture,
             expression: self.expression.clone(),
         }
+    }
+
+    /// The Rust value a printer binds (IF-Capture).
+    pub fn value(&self) -> syn::Expr {
+        crate::capture::realize_value(self.capture.as_ref(), &self.expression)
     }
 
     pub fn binding_types(&self) -> Vec<(Ident, syn::Type)> {
@@ -736,12 +750,22 @@ pub struct Guard {
     pub guard_token: kw::guard,
     pub input: Ident,
     pub if_token: Token![if],
+    /// IF-Capture: the condition is the named query capture's `bool`.
+    #[syn(optional, peek = crate::capture::kw::capture)]
+    pub capture: Option<crate::capture::kw::capture>,
     #[syn(parenthesized)]
     pub condition_paren: token::Paren,
     #[syn(in = condition_paren)]
     pub condition: syn::Expr,
     #[parse(parse_environment)]
     pub environment: Option<Environment>,
+}
+
+impl Guard {
+    /// The Rust condition a printer evaluates (IF-Capture).
+    pub fn test(&self) -> syn::Expr {
+        crate::capture::realize_test(self.capture.as_ref(), &self.condition)
+    }
 }
 
 /// Written lexical query environment of an opaque step. Planned binders added

@@ -11,6 +11,25 @@ fn error(message: &str) -> syn::Error {
     syn::Error::new(proc_macro2::Span::call_site(), message)
 }
 
+/// Typed `let` capture binders: the columns a capture answer may publish.
+fn capture_types(program: &Program) -> Vec<(String, syn::Type)> {
+    program
+        .structures
+        .physical
+        .program
+        .captures
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            cq_lang_structures::syntax::Capture::Let(binding) => Some(binding.binding_types()),
+            cq_lang_structures::syntax::Capture::Guard(_) => None,
+        })
+        .flatten()
+        .filter(|(_, ty)| !matches!(ty, syn::Type::Infer(_)))
+        .map(|(binder, ty)| (symbol_name(&binder), ty))
+        .collect()
+}
+
 pub(crate) fn select(
     program: &Program,
     analysis: &Analysis,
@@ -31,6 +50,18 @@ pub(crate) fn select(
             );
         }
         unbounded.extend(row.computed.iter().cloned());
+    }
+    // A capture answer column publishes one host value of its declared type;
+    // its bounds are that type's whole domain (IF-Capture).
+    for (column, ty) in capture_types(program) {
+        types.insert(
+            column,
+            if codecs.get(&ty).is_some() {
+                syn::parse_quote!(u32)
+            } else {
+                ty
+            },
+        );
     }
     let resident: BTreeSet<_> = program
         .structures
@@ -106,17 +137,29 @@ pub(crate) fn select(
 /// Validate source coverage and carrier legality; never call selection or require its preference.
 pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) -> syn::Result<()> {
     let codecs = crate::runs::Codecs::check(&program.structures)?;
-    let columns: BTreeSet<_> = analysis
+    let captures = capture_types(program);
+    let mut columns: BTreeSet<_> = analysis
         .structures
         .physical
         .rows
         .values()
         .flat_map(|row| row.types.keys())
         .collect();
+    columns.extend(captures.iter().map(|(column, _)| column));
     if records.bounds.keys().collect::<BTreeSet<_>>() != columns
         || records.uploads.len() != analysis.structures.layouts.len()
     {
         return Err(error("GPU-Bounds: incomplete bounds or upload records"));
+    }
+    for (column, logical) in &captures {
+        let expected: syn::Type = if codecs.get(logical).is_some() {
+            syn::parse_quote!(u32)
+        } else {
+            logical.clone()
+        };
+        if records.bounds.get(column) != Some(&ColumnBounds::Scalar { ty: expected }) {
+            return Err(error("GPU-Bounds: a capture column has its type's scalar bounds"));
+        }
     }
     for (column, domain) in &records.bounds {
         match domain {

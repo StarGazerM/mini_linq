@@ -168,6 +168,7 @@ fn compile_in(source: &valuation::Program, optimize_predicates: bool) -> syn::Re
         relational_brace: Default::default(),
         plan: ra::Plan {
             declarations: source.cq.declarations.clone(),
+            captures: source.cq.query.captures.clone(),
             definitions: state.definitions,
             output,
         },
@@ -245,6 +246,15 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
             format!(
                 "result `{}`: output head differs from `{}`",
                 target.plan.output.input, source.cq.query.head.relation
+            ),
+        ));
+    }
+    if target.plan.captures != source.cq.query.captures {
+        return Err(syn::Error::new_spanned(
+            &target.plan.output,
+            format!(
+                "result `{}`: captures differ from query `{}`",
+                target.plan.output.input, source.cq.name
             ),
         ));
     }
@@ -1077,6 +1087,7 @@ impl<'a> State<'a> {
             guard_token: Default::default(),
             input,
             if_token: filter.if_token,
+            capture: filter.capture,
             condition_paren: Default::default(),
             condition: filter.condition.clone(),
             environment,
@@ -1095,6 +1106,7 @@ impl<'a> State<'a> {
             pattern: binding.pattern.clone(),
             annotation: binding.annotation.clone(),
             eq_token: binding.eq_token,
+            capture: binding.capture,
             expression_paren: Default::default(),
             expression: binding.expression.clone(),
             environment,
@@ -1113,6 +1125,7 @@ impl<'a> State<'a> {
             pattern: binding.pattern.clone(),
             annotation: None,
             eq_token: Default::default(),
+            capture: None,
             expression_paren: Default::default(),
             expression: binding.expression.clone(),
             environment,

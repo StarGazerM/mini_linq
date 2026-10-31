@@ -563,11 +563,12 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   question), delta=k SRDatalog plans.
 - **Open issues (2026-10-31).** (1) `doop-gpu` (26-output DOOP) fails at base
   67d76822 with 220 P-Decompose unmet catalog obligations (DeviceLayout
-  membership at host level). (2) Counters test
-  `empty_negative_keys_test_existence_without_building_indexes` fails since
-  `0124315f`: `cq-order` `ready()` places a closed binding first, so a positive
-  empty-key probe builds an index (`passes/cq-order/src/lib.rs:229`,
-  `passes/cq-print/src/access.rs:583,635`). (3) Row-granular streaming of CQ
+  membership at host level). (2) **Resolved by closed capture (see
+  Progress).** Counters test
+  `empty_negative_keys_test_existence_without_building_indexes` failed since
+  `0124315f`: `cq-order` `ready()` placed a closed binding first, so a positive
+  empty-key probe built an index. A query-closed `let`/`if` is now a host
+  capture, never a heading column, and the test passes. (3) Row-granular streaming of CQ
   answers has no realization without a new construct; the two facade
   streaming tests stay ignored. (4) `compiler.tex` does not build
   (`backend_ir.tex` `\inferrule*` error). (5) Datalog outputs are sets in
@@ -748,3 +749,39 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   Lineitem (dispatches 1 → 2). Recovering it belongs to P3.3 grading, not to a
   revived transfer. `cq_storage::dedup::sort` defers work to the first
   `next()`, so an undemanded result evaluates nothing.
+- Closed capture (A-Capture, A-CaptureRef, WF-Capture, IF-Capture), on
+  `6bf2ca20`, 2026-10-31: CQ normalization records each query-closed
+  `let`/`if`, closed head operand and closed aggregate argument once as a host
+  capture; union branches keep their binders as `let p = capture c` /
+  `if capture c`. RA and Physical carry and check the list; printers bind it
+  once before any loop. Open issue (2) is resolved: the Datalog counters suite
+  passes 9/9, including
+  `empty_negative_keys_test_existence_without_building_indexes`. Regressions
+  119/119; the 11 `features/datalog-parallel` targets needed their
+  `Cargo.lock` updated for the new `cq-datalog-test-passes` → `cq-lang-cq`
+  edge. CPU TPC-H SF1 `default,par`: 58/58 configurations exact against
+  DuckDB. CPU DOOP xalan `--check`: `mini` and `mini-keyed` match Ascent on
+  all 26 outputs. `doop-gpu` cassandra: 26/26 outputs exact against
+  `doop-mini`. GPU TPC-H SF1 advised and automatic: 52/52 exact. Expanded gate
+  against `6bf2ca20`: 42 targets identical; `correlated_exists`, `retail_h12`,
+  `tpch_q06` and `tpch_q19` differ in 159 hunks (77 distinct), all reviewed
+  in `tools/expanded_gate_classes_closed_capture.json`, which contains the p4
+  rules plus 54 `closed-capture-binding` rules (intended: the capture binding
+  removes the empty-key build and its `seek`/`lookup(&())` driver) and 23
+  `closed-capture-renumber` rules (refactor: generated ordinals shift). 0
+  unexplained. With imported exactness and counter evidence
+  (`--verified-results`) for the four differing targets, the gate exits 0.
+  Paired timing: 5 interleaved AB/BA process pairs, median of
+  3 runs each; ratios are new/base with a bootstrap 95% CI. Page faults are
+  whole-process minor faults.
+
+  | Target | Ratio [95% CI] | `index_builds` base → new | Minor faults base → new |
+  |---|---|---|---|
+  | `tpch_q06` | 0.865 [0.844, 0.880] | 1 → 0 | 78.2K → 75.5K |
+  | `tpch_q19` | 0.758 [0.724, 0.759] | 2 → 1 | 88.6K → 86.1K |
+  | `retail_h12` | 0.971 [0.940, 1.003] | 7 → 4 | 101.9K → 102.0K |
+  | `correlated_exists` (synthetic, A=4000, S=400K) | 1.009 [0.945, 1.021] | 4000 → 0 | 2460 → 2459 |
+
+  `rows_tested` is unchanged on every target. The `correlated_exists` time is
+  dominated by its per-outer-value scan of S (1.74G rows tested). No CI lies
+  entirely above 1.0.

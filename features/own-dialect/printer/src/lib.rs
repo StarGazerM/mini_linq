@@ -214,12 +214,18 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
             quote!(::core::iter::IntoIterator::into_iter(#out)),
         ),
     };
+    // IF-Capture: `if` captures decide once whether the push loops run at all.
+    let gates = &push.gates;
+    let run = if gates.is_empty() {
+        quote!(#body #head_publish)
+    } else {
+        quote!(if #(#gates)&&* { #body #head_publish })
+    };
     let mut expression = syn::parse2(quote!({
         #(#statements)*
         #endpoint
         #head_state
-        #body
-        #head_publish
+        #run
         #result
     }))?;
     cq_print::own_captures(&mut expression, &push.owned);
@@ -277,7 +283,12 @@ impl Push<'_> {
         let mut fields = Vec::new();
         for (i, expression) in head.args.iter().enumerate() {
             if let Some(variable) = structures::syntax::rust::variable(expression) {
-                fields.push(self.access(result, &symbol_name(variable)));
+                let name = symbol_name(variable);
+                // A capture copies its host value; it is never a row column.
+                fields.push(
+                    self.capture_value(&name)
+                        .unwrap_or_else(|| self.access(result, &name)),
+                );
             } else {
                 let id = temporary(&format!("head_{i}"), result);
                 fields.push(id.to_token_stream());
@@ -500,20 +511,21 @@ impl Push<'_> {
             }
             Operator::Select(select) => self.select(select, sink),
             Operator::Guard(guard) => {
-                let condition = &guard.condition;
                 let input = symbol_name(&guard.input);
-                let shadows = self.rust_aliases(&input, condition, guard.environment.as_ref());
+                let shadows =
+                    self.rust_aliases(&input, &guard.condition, guard.environment.as_ref());
+                let condition = guard.test();
                 self.emit(&input, quote!(if { #(#shadows)* #condition } { #sink }))
             }
             Operator::Bind(bind) => {
                 let pattern = &bind.pattern;
                 let annotation = &bind.annotation;
-                let expression = &bind.expression;
                 let input = symbol_name(&bind.input);
-                let shadows = self.rust_aliases(&input, expression, bind.environment.as_ref());
+                let shadows =
+                    self.rust_aliases(&input, &bind.expression, bind.environment.as_ref());
                 let expression = match self.binding_functions.get(result) {
                     Some((function, arguments)) => quote!(#function(#(#arguments),*)),
-                    None => quote!(#expression),
+                    None => bind.value().to_token_stream(),
                 };
                 self.emit(
                     &input,

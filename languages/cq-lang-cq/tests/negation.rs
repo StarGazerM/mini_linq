@@ -77,8 +77,13 @@ fn negation_only_queries_support_existential_emptiness_and_parameters() {
         cq::contract::check(&query).unwrap();
         assert!(cq::blocks::bound(&query.query.body).is_empty());
         let normal = cq::normal::normalize(&query).unwrap();
+        assert_eq!(normal.query.body.len(), 1);
         assert!(matches!(normal.query.body[0], cq::BodyItem::Negation(_)));
-        assert!(matches!(normal.query.body[1], cq::BodyItem::Let(_)));
+        // The closed head operand is a host capture, not a body binding (A-Capture).
+        assert!(matches!(
+            normal.query.captures.items.as_slice(),
+            [cq::syntax::Capture::Let(_)]
+        ));
         assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
     }
 }
@@ -102,7 +107,7 @@ fn negation_leaves_column_type_obligations_to_rustc() {
         "struct Q; relation R(a:i32); relation S(a:i32); answer(y) :- R(y), let x:f64 = 0.0, !S(x);",
     ] {
         let query: cq::Program = syn::parse_str(source).unwrap();
-        cq::normal::check(&query).unwrap();
+        cq::normal::check(&cq::normal::normalize(&query).unwrap()).unwrap();
     }
 }
 

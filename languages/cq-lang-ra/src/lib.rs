@@ -86,15 +86,19 @@ pub struct Program {
 /// A named relational-algebra dataflow ending in output metadata.
 ///
 /// ```text
-/// Plan       ::= RelationDecl* Definition* Output
+/// Plan       ::= RelationDecl* Captures Definition* Output
 /// Definition ::= RelationId "=" Operator ";"
 /// Output     ::= "output" RelationId "as" Atom ";"
 /// ```
+///
+/// Captures are the CQ's host-once values (A-Capture), carried unchanged:
+/// never a heading column; the output head and group keys/arguments may name them.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Plan {
     #[parse(cq_syntax::parse_declarations)]
     #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
     pub declarations: Vec<cq_syntax::RelationDecl>,
+    pub captures: cq_syntax::Captures,
     #[syn(repeat, until = kw::output)]
     pub definitions: Vec<Definition>,
     pub output: Output,
@@ -265,6 +269,9 @@ fn check_in<'a>(
         }
         Ok(())
     };
+    // Formal rule WF-Capture: carried captures bind host names outside every heading.
+    plan.captures.check(&logical)?;
+    let captures = plan.captures.names();
 
     let mut occurrences = BTreeSet::new();
     for definition in &plan.definitions {
@@ -281,14 +288,16 @@ fn check_in<'a>(
         // tests/hw4_optional.rs in the root course package requires.
         let (heading, operands) = match &definition.operator {
             // Formal rule RA-Group: Fold the same set of complete named valuations for every aggregate.
+            // Capture keys group by one shared host value; they are not output columns.
             Operator::Group(group) => {
                 let (name, input) = earlier_relation(&group.input, &relations)?;
-                group.check(&input.types)?;
+                group.check(&input.types, &captures)?;
                 let heading = group
                     .keys
                     .iter()
                     .chain(group.aggregates.iter().map(|aggregate| &aggregate.name))
                     .map(symbol_name)
+                    .filter(|name| !captures.contains(name))
                     .collect();
                 (heading, vec![name])
             }
@@ -477,6 +486,11 @@ fn check_in<'a>(
             }
             Operator::Guard(guard) => {
                 let (name, input) = earlier_relation(&guard.input, &relations)?;
+                cq_syntax::capture::check_reference(
+                    guard.capture.as_ref(),
+                    &guard.condition,
+                    &plan.captures,
+                )?;
                 if guard.environment.is_none() {
                     check_uses(&guard.condition, &input.heading)?;
                 }
@@ -487,6 +501,11 @@ fn check_in<'a>(
             }
             Operator::Bind(bind) => {
                 let (name, input) = earlier_relation(&bind.input, &relations)?;
+                cq_syntax::capture::check_reference(
+                    bind.capture.as_ref(),
+                    &bind.expression,
+                    &plan.captures,
+                )?;
                 if bind.environment.is_none() {
                     check_uses(&bind.expression, &input.heading)?;
                 }
@@ -600,11 +619,13 @@ fn check_in<'a>(
             "RA output arguments must be variables; computations belong in final bind nodes",
         ));
     }
+    // Capture arguments read the host value; every other variable is a column.
     let output_attributes = plan
         .output
         .head
         .variables()
         .map(symbol_name)
+        .filter(|name| !captures.contains(name))
         .collect::<BTreeSet<_>>();
     if output_attributes != output.heading {
         return Err(syn::Error::new_spanned(
@@ -760,6 +781,12 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         return Err(syn::Error::new_spanned(
             &target.plan.output,
             "RA rewrite changes declarations",
+        ));
+    }
+    if source.plan.captures != target.plan.captures {
+        return Err(syn::Error::new_spanned(
+            &target.plan.output,
+            "RA rewrite changes captures",
         ));
     }
     source_schedule

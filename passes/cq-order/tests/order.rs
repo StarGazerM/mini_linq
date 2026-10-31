@@ -1003,13 +1003,41 @@ fn rust_can_move_before_unrelated_relational_steps() {
 }
 
 #[test]
-fn closed_rust_does_not_require_a_complete_atom() {
-    let source = cq(quote! {
-        struct Q; relation R(a:i32,b:i32);
-        answer(x) :- R(x,y), if host();
+fn closed_rust_is_a_capture_and_never_opens_the_plan() {
+    // A closed head operand, `let` and `if` are host captures (A-Capture). The
+    // planner never sees them, so no unit prefix turns `R` into a keyless probe.
+    let closed = normal(quote! {
+        struct Q; relation R(a:i32,b:i32); relation answer(a:i32, unit:(), one:i64);
+        answer(x, (), one) :- R(x,y), let one: i64 = 1, if host();
     });
-    let target = expected(&source, quote! { R@0(x,_); if host(); R@0(x,y); });
-    valuation::contract::check(&target).unwrap();
+    assert_eq!(closed.query.body.len(), 1);
+    assert_eq!(closed.query.captures.items.len(), 3);
+    for heuristic in [
+        Heuristic::Written,
+        Heuristic::Prefix(Ranking::Connected),
+        Heuristic::Prefix(Ranking::GreedyWidth),
+        Heuristic::Filtered,
+        Heuristic::Elimination,
+    ] {
+        for split in [Split::Coarse, Split::Fine] {
+            let target = plan(&closed, heuristic, split);
+            assert!(
+                target
+                    .valuation
+                    .steps
+                    .iter()
+                    .all(|step| matches!(step, valuation::Step::Atom(..))),
+                "{heuristic:?} {split:?}: {}",
+                target.valuation.to_token_stream()
+            );
+            valuation::contract::check(&target).unwrap();
+        }
+    }
+    let advised = cq_order::compile_explicit(&closed, &[syn::parse_quote!(R)]).unwrap();
+    assert!(matches!(
+        advised.valuation.steps.first(),
+        Some(valuation::Step::Atom(..))
+    ));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 anchor	contract	path	marker	summary
 contract7-surface	contract 7; CQ-Where; CQ-Closed	languages/cq-syntax/src/constraint.rs	DESIGN contract7-surface	Only explicit where creates relational predicates; closed Rust is opaque and host-once.
-contract7-normal-form	contract 7; CQ-Closed; WF-NF	languages/cq-lang-cq/src/normal.rs	DESIGN contract7-normal-form	Normalization preserves closed Rust operands without recognition or type-directed rewriting.
+contract7-normal-form	contract 7; CQ-Closed; WF-NF; A-Capture; A-CaptureRef	languages/cq-lang-cq/src/normal.rs	DESIGN contract7-normal-form	Normalization preserves closed Rust operands without recognition or type-directed rewriting and records query-closed lets/guards/head operands once as host captures.
 contract7-placement	contract 7; BE-RustRepresentation	passes/cq-sequence-plan/src/placement.rs	DESIGN contract7-placement	Execution placement consumes dependencies and representation rather than interpreting Rust.
 contract7-closed-printing	contract 7; CQ-Closed	passes/cq-print/src/lib.rs	DESIGN contract7-closed-printing	Closed operands are borrowed once on the host with temporary lifetimes preserved.
 contract7-representation	contract 7; STR-Repr; BE-RustRepresentation	languages/cq-lang-sequence/src/lib.rs	DESIGN contract7-representation	Identity and encoded columns are explicit facts, never inferred from types.

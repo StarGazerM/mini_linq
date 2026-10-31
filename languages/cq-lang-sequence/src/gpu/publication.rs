@@ -350,7 +350,11 @@ impl<'a> Context<'a> {
                     .bounds
                     .get(column)
                     .cloned()
-                    .ok_or_else(|| error("packed column lacks a recorded bounds source"))?,
+                    .ok_or_else(|| {
+                        error(&format!(
+                            "packed column {column} lacks a recorded bounds source"
+                        ))
+                    })?,
             ),
             Some(Monoid::Count) => FieldBounds::Inclusive {
                 min: 0,

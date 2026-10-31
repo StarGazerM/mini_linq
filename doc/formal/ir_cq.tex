@@ -162,7 +162,21 @@ Shared names across atoms are natural-join variables. Literals remain in their a
 restrict the corresponding declared columns and drop those columns from the
 occurrence's heading. They bind no variable and are not guards. Repeats within
 an occurrence become relational identities at the atom's position; computed
-arguments become positioned binds plus identities; computed heads become final binds.
+arguments become positioned binds plus identities; a row-dependent computed head
+becomes a final bind.
+
+\paragraph{Captures.}
+A query records its host-once values in
+\code{capture \{ let p[:T] = e; if e; \}} after the body and group. A capture
+reads no query variable and binds host names, never valuation columns; every
+later IR carries the list unchanged. A top-level query-closed \code{let} or
+\code{if}, a closed head operand and a closed aggregate argument are captures
+(A-Capture). A query-closed branch \code{let}/\code{if} is a fresh capture
+whose branch binder or guard stays in place as a capture reference
+\code{let p = capture c} / \code{if capture c} (A-CaptureRef), so union
+interfaces keep their binders. A \code{let} capture is printed once as a
+reference binder; an \code{if} capture gates the whole answer; a reference copies
+(or, for a guard, reads) the host value (IF-Capture).
 
 \paragraph{Contract.}
 $\mathsf{CQScope}(s)$ is the scope rules plus:
@@ -179,8 +193,14 @@ names and have query-closed Rust operands; types are checked only by rustc.
 \begin{mathpar}
 \Rule{WF-CQ}{\mathsf{CQScope}(s)}{\mathsf{WF}_{CQ}(s)\Downarrow\ok}
 
+\Rule{WF-Capture}{\fv(e_c)\cap Q=\emptyset\quad\mathsf{binders}(c)\cap Q=\emptyset\quad
+ \text{binders distinct}\\
+ \text{each }\code{capture c}\text{ reference names a }\code{let}\text{ capture binder}}
+ {Q\vdash\mathsf{captures}\Downarrow\ok}
+
 \Rule{WF-NF}{\mathsf{WF}_{CQ}(s)\quad\text{every nested positive atom has distinct variables or literals}\\
- \text{head arguments are bound variables}}
+ \text{head arguments are bound variables or captures}\quad
+ \text{no top-level or branch query-closed }\code{let}/\code{if}\text{ remains}}
  {\mathsf{WF}_{NF}(s)\Downarrow\ok}
 \end{mathpar}
 Representation admissibility and Rust totality remain semantic premises.

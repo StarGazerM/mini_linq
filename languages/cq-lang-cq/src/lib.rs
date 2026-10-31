@@ -127,7 +127,7 @@ pub use cq_syntax::Atom;
 /// One query, with a nonempty syntactic body.
 ///
 /// ```text
-/// Query ::= Atom ":-" BodyItem ("," BodyItem)* ";"
+/// Query ::= Atom ":-" BodyItem ("," BodyItem)* [HeadGroup] Captures ";"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Query {
@@ -136,6 +136,8 @@ pub struct Query {
     pub minus_token: Token![-],
     pub body: CommaList<BodyItem>,
     pub group: Option<group::HeadGroup>,
+    /// Query-closed values recorded by normalization (A-Capture); never body clauses.
+    pub captures: cq_syntax::Captures,
     pub semi_token: Token![;],
 }
 
@@ -151,6 +153,7 @@ impl syn::parse::Parse for Query {
             } else {
                 None
             },
+            captures: input.parse()?,
             semi_token: input.parse()?,
         };
         // Scope is determined by binders, never by identifiers in predicates.
@@ -164,11 +167,14 @@ impl syn::parse::Parse for Query {
 
 impl Query {
     /// Columns whose complete valuations must survive logical planning.
+    /// Captures are host values, never valuation columns.
     pub fn valuation_variables(&self) -> impl Iterator<Item = &Ident> {
         self.group
             .iter()
             .flat_map(|group| group.valuation.iter())
-            .chain(self.head.variables().filter(move |_| self.group.is_none()))
+            .chain(self.head.variables().filter(move |variable| {
+                self.group.is_none() && !self.captures.contains(&symbol_name(variable))
+            }))
     }
     /// The positive, distinct-variable/literal fragment accepted by the basic route.
     pub fn is_basic(&self) -> bool {
@@ -270,6 +276,7 @@ impl syn::parse::Parse for BodyItem {
             && !input.peek(Token![,])
             && !input.peek(Token![;])
             && !input.peek(cq_syntax::algebra::kw::group)
+            && !input.peek(cq_syntax::capture::kw::capture)
         {
             return Err(cq_syntax::constraint::unexpected(
                 input,
@@ -477,7 +484,17 @@ fn check_program(program: &Program) -> syn::Result<()> {
         }
     }
     if program.output().is_none() {
-        let types = blocks::types(&schema, &program.query.body, &BTreeMap::new())?;
+        let mut types = blocks::types(&schema, &program.query.body, &BTreeMap::new())?;
+        for item in &program.query.captures.items {
+            if let cq_syntax::Capture::Let(binding) = item {
+                types.extend(
+                    binding
+                        .binding_types()
+                        .into_iter()
+                        .map(|(id, ty)| (symbol_name(&id), ty)),
+                );
+            }
+        }
         for arg in &program.query.head.args {
             if !rust::variable(arg)
                 .and_then(|id| types.get(&symbol_name(id)))
@@ -503,7 +520,9 @@ fn check_query(
     check_result_atom(schema, &query.head)?;
     let logical: BTreeSet<_> = blocks::bound(&query.body).into_keys().collect();
     blocks::types(schema, &query.body, &BTreeMap::new())?;
-    let body_variables = check_body(schema, &query.body, &logical, BTreeSet::new())?;
+    // Formal rule WF-Capture: captures read no query variable and bind host names only.
+    query.captures.check(&logical)?;
+    let mut body_variables = check_body(schema, &query.body, &logical, BTreeSet::new())?;
     let check_uses = |expr: &syn::Expr, bound: &BTreeSet<String>| -> syn::Result<()> {
         if let Some(name) = rust::known_uses(expr, &logical).difference(bound).next() {
             return Err(syn::Error::new_spanned(
@@ -542,6 +561,7 @@ fn check_query(
         }
         check_uses(expression, &body_variables)?;
     }
+    body_variables.extend(query.captures.names());
     for variable in query.head.variables() {
         if !declared_output && !body_variables.contains(&symbol_name(variable)) {
             return Err(syn::Error::new_spanned(

@@ -23,10 +23,15 @@ impl<'a> Printer<'a> {
         let state = format_ident!("__cq_group_state", span = proc_macro2::Span::mixed_site());
         let table = format_ident!("__cq_groups", span = proc_macro2::Span::mixed_site());
         let keys = format_ident!("__cq_group_keys", span = proc_macro2::Span::mixed_site());
+        // A capture key copies its one host value into every group key.
         let key_values: Vec<_> = group
             .keys
             .iter()
-            .map(|key| self.access(&input_name, &symbol_name(key)))
+            .map(|key| {
+                let key = symbol_name(key);
+                self.capture_value(&key)
+                    .unwrap_or_else(|| self.access(&input_name, &key))
+            })
             .collect();
         let types: Vec<_> = group
             .aggregates
@@ -64,8 +69,10 @@ impl<'a> Printer<'a> {
                 );
             };
             let column = symbol_name(path.path.get_ident().expect("checked variable"));
-            let value = self.access(&input_name, &column);
-            let borrowed = !self.infos[&input_name].computed.contains(&column);
+            // A capture argument reads its host reference, like a borrowed column.
+            let capture = self.captures.get(&column).map(|id| quote!(#id));
+            let borrowed = capture.is_some() || !self.infos[&input_name].computed.contains(&column);
+            let value = capture.unwrap_or_else(|| self.access(&input_name, &column));
             let reused = group.keys.iter().any(|key| symbol_name(key) == column)
                 || group.aggregates[i + 1..].iter().any(|later| {
                     later
@@ -408,7 +415,7 @@ impl<'a> Printer<'a> {
                 );
                 let aliases =
                     self.rust_aliases(&input_name, &guard.condition, guard.environment.as_ref());
-                let condition = &guard.condition;
+                let condition = guard.test();
                 let rows = quote!(::core::iter::Iterator::filter(#rows, move |#pattern| {
                     #(#aliases)*
                     ::cq_storage::residual(#condition)
@@ -464,7 +471,7 @@ impl<'a> Printer<'a> {
                     &guard.condition,
                     guard.environment.as_ref(),
                 );
-                let condition = &guard.condition;
+                let condition = guard.test();
                 Ok(quote! {
                     ::core::iter::Iterator::filter(#input, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition))
                 })
@@ -504,7 +511,7 @@ impl<'a> Printer<'a> {
                 let annotation = &bind.annotation;
                 let value = match self.binding_functions.get(name) {
                     Some((function, arguments)) => quote!(#function(#(#arguments),*)),
-                    None => bind.expression.to_token_stream(),
+                    None => bind.value().to_token_stream(),
                 };
                 // Fan out each prefix through its finite iterator,
                 // moving generated values and retaining the prefix for subsequent items.

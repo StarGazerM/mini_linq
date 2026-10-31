@@ -108,6 +108,7 @@ pub fn compile_with(
         brace: Default::default(),
         program: physical::Body {
             declarations: source.ra.plan.declarations.clone(),
+            captures: source.ra.plan.captures.clone(),
             host_sets: packet.host_sets,
             consumer_canonical: packet.consumer_canonical,
             definitions,
@@ -375,7 +376,15 @@ fn canonical(
                 .get(&symbol_name(&p.input))
                 .filter(|key| key.iter().all(|c| heading.contains(c)))
                 .cloned(),
-            Op::Group(group) => Some(group.keys.iter().map(symbol_name).collect()),
+            // A capture key is one host value, so the column keys alone are unique.
+            Op::Group(group) => Some(
+                group
+                    .keys
+                    .iter()
+                    .map(symbol_name)
+                    .filter(|key| heading.contains(key))
+                    .collect(),
+            ),
         };
         if let Some(key) = key {
             inherited.insert(name.clone());
@@ -411,6 +420,7 @@ pub fn erase(target: &physical::Program) -> ix::ra::Program {
         relational_brace: Default::default(),
         plan: ra::Plan {
             declarations: target.program.declarations.clone(),
+            captures: target.program.captures.clone(),
             definitions: target
                 .program
                 .definitions

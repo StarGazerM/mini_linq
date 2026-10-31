@@ -185,6 +185,15 @@ fn captures(facts: &Facts) -> syn::Result<Captures> {
     let mut records = Captures::default();
     for (name, definition) in &facts.definitions {
         captures.used.clear();
+        if !analysis.rust_requires_host(&definition.operator)
+            && (matches!(&definition.operator, Operator::Guard(guard) if guard.capture.is_some())
+                || matches!(&definition.operator, Operator::Bind(bind) if bind.capture.is_some()))
+        {
+            return Err(syn::Error::new_spanned(
+                &definition.name,
+                "T-Gpu: a branch capture reference has no device realization",
+            ));
+        }
         let expression = match &definition.operator {
             Operator::Guard(guard) if !analysis.rust_requires_host(&definition.operator) => {
                 let row = &analysis.structures.physical.rows[&symbol_name(&guard.input)];

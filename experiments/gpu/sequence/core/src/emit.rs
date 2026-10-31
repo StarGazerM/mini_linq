@@ -786,6 +786,7 @@ impl Kernel<'_, '_> {
         if let Some(columns) = &self.packed_columns {
             columns
                 .iter()
+                .filter(|column| !self.compiler.rows.is_capture_output(column))
                 .map(|column| self.compiler.slot(column))
                 .collect()
         } else {
@@ -1312,14 +1313,14 @@ impl Kernel<'_, '_> {
 
     fn output_write(&self) -> syn::Result<TokenStream> {
         if let Some(packing) = self.arena_packing {
-            let slots = self
+            let values = self
                 .compiler
                 .rows
                 .output_columns
                 .iter()
-                .map(|column| self.compiler.slot(column))
+                .map(|column| self.compiler.rows.output_value(column))
                 .collect::<syn::Result<Vec<_>>>()?;
-            return Ok(packing.write(&slots));
+            return Ok(packing.write(&values));
         }
         let width = self.compiler.rows.width;
         let write = if let Some(columns) = &self.packed_columns {
@@ -1327,10 +1328,10 @@ impl Kernel<'_, '_> {
                 .iter()
                 .enumerate()
                 .map(|(i, column)| {
-                    let slot = self.compiler.slot(column)?;
+                    let value = self.compiler.rows.output_value(column)?;
                     let base = format_ident!("__cq_pack_base_{i}");
                     let shift = format_ident!("__cq_pack_shift_{i}");
-                    let value = quote!((__row[#slot] as i64).wrapping_sub(#base) as u64);
+                    let value = quote!((#value as i64).wrapping_sub(#base) as u64);
                     Ok(quote! {
                         let value = #value;
                         let lane = (#shift / 64) as usize;
@@ -1822,6 +1823,7 @@ fn translate_observed(
                 for aggregate in &group.aggregates {
                     if let Some(expression) = &aggregate.expression
                         && let Some(name) = cq_lang_structures::syntax::rust::variable(expression)
+                        && !compiler.rows.query_captures.contains(&symbol_name(name))
                     {
                         used.insert(compiler.slot(&symbol_name(name))?);
                     }
@@ -1911,6 +1913,7 @@ fn translate_observed(
                         &kernel,
                         direct,
                         &codecs,
+                        &compiler.rows.query_captures,
                     )?
                 }
                 GroupCompletion::GridPartials { partials } => {
@@ -1933,6 +1936,7 @@ fn translate_observed(
                         &format_ident!("__cq_group_partials_{module_name}"),
                         direct,
                         &codecs,
+                        &compiler.rows.query_captures,
                     )?
                 }
             };
@@ -3028,6 +3032,9 @@ fn translate_observed(
             let mut row = DeviceRow::default();
             let mut declarations = TokenStream::new();
             for column in &compiler.rows.output_columns {
+                if compiler.rows.is_capture_output(column) {
+                    continue;
+                }
                 let slot = compiler.slot(column)?;
                 let code = format_ident!("__code_{slot}");
                 declarations.extend(quote!(let mut #code = 0i64;));

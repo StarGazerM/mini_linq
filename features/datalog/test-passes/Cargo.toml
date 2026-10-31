@@ -10,6 +10,7 @@ proc-macro = true
 [dependencies]
 cq-stage.workspace = true
 cq-syntax.workspace = true
+cq-lang-cq.workspace = true
 cq-datalog-support.workspace = true
 cq-lang-datalog-source.workspace = true
 cq-lang-datalog-strata.workspace = true

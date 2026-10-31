@@ -28,7 +28,8 @@ RA-Extend	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local struc
 RA-For	implementation	languages/cq-lang-ra/src/lib.rs	/// Formal rule RA-For:	Check set-valued Bind heading, visible RHS and fresh item columns while retaining the generator tag.
 RA-Def	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 WF-CQ	implementation	languages/cq-lang-cq/src/lib.rs	/// Formal rule WF-CQ:	Check CQ declarations, positive scope, output arity and symbolic type availability.
-WF-NF	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule WF-NF:	Check CQ plus distinct variables or literals within each body atom.
+WF-NF	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule WF-NF:	Check CQ plus distinct variables or literals within each body atom, variable heads bound by the body or a capture, and no remaining query-closed top-level or branch let/if.
+WF-Capture	implementation	languages/cq-syntax/src/capture.rs	/// Formal rule WF-Capture:	Captures read no query variable, bind distinct host names outside every heading, and are written Rust; capture references name a let capture.
 WF-VO	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-VO:	Check NF, local coverage, free-variable dependencies, reductions and explicit block placement.
 WF-VO-Rust	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-VO-Rust:	Every unchanged Rust expression appears exactly once with its free variables bound.
 WF-BlockPlacement	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-BlockPlacement:	Require explicit placement; hoisted arms are Rust-free, correlated free variables are bound, repeated reads agree and correlated blocks are not reduction operands.
@@ -69,6 +70,8 @@ A-Wildcard	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-W
 A-Closed	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Closed:	Keep query-closed atom operands as relational restrictions with unchanged once-bound host expressions, never row bindings.
 A-Prefix	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Prefix:	Emit an opaque Rust binding immediately before its atom when its query inputs are already bound.
 A-Local	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Local:	Emit an opaque Rust binding after its atom, then a relational equality with the fresh atom column.
+A-Capture	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Capture:	Record a query-closed top-level let/if, head operand or aggregate argument once as a host capture in dependency order.
+A-CaptureRef	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-CaptureRef:	Hoist a query-closed branch let/if to a fresh capture; the branch keeps its binder or guard as a capture reference.
 D-Atom	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Atom:	Atom provides its columns and requires scalar-let- or generator-supplied columns.
 D-Guard	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Guard:	Guard requires dependencies on the written prefix.
 D-Bind	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Bind:	Binding provides pattern names and requires RHS prefix dependencies.
@@ -141,6 +144,7 @@ IX-Const	implementation	languages/cq-lang-ix/src/lib.rs	// IX-Const:	Column cons
 IX-Range	implementation	languages/cq-lang-ix/src/lib.rs	// IX-Range:	Constant order bounds on one column produce range supply.
 PH-Range	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-Range:	A constant window reads one column with range supply.
 IF-Parameter	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Parameter:	Read each capture once outside query loops.
+IF-Capture	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Capture:	Bind each let capture once as a host reference, gate the answer on if captures; references copy (guards read) the host value.
 IF-Range	implementation	passes/cq-print/src/range.rs	/// Formal rule IF-Range:	Ordered leading windows or scan/filter without builds.
 CQ-Closed	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Closed:	Closed host operands have no query free variables and retain their original expression.
 CQ-Where	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Where:	Only explicit where syntax introduces relational predicates; check bound variables and closed operands.

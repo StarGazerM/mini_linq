@@ -661,8 +661,13 @@ impl Printer<'_> {
             }
         });
         let pattern = quote!((#(#binders,)*));
+        // A capture argument copies its host value; it is never a row column.
+        let answer = |v: &Ident| {
+            self.capture_value(&symbol_name(v))
+                .unwrap_or_else(|| v.to_token_stream())
+        };
         if !computed {
-            let output = variables.iter().flatten();
+            let output: Vec<_> = variables.iter().flatten().map(|v| answer(v)).collect();
             let rows = quote! {
                 ::core::iter::Iterator::map(#rows, move |#pattern| (#(#output,)*))
             };
@@ -687,10 +692,14 @@ impl Printer<'_> {
             .zip(&variables)
             .filter(|(_, v)| v.is_none())
             .map(|(e, _)| e);
-        let output = variables.iter().enumerate().map(|(i, v)| match v {
-            Some(v) => v.to_token_stream(),
-            None => format_ident!("__cq_h{i}").to_token_stream(),
-        });
+        let output: Vec<_> = variables
+            .iter()
+            .enumerate()
+            .map(|(i, v)| match v {
+                Some(v) => answer(v),
+                None => format_ident!("__cq_h{i}").to_token_stream(),
+            })
+            .collect();
         let mapped = quote! {
             ::core::iter::Iterator::map(#rows, move |#[allow(unused_variables)] #pattern| {
                 let (#(#temporaries,)*) = { #(#shadows)* (#(#expressions,)*) };

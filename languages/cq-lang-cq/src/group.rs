@@ -68,7 +68,7 @@ impl HeadGroup {
             }
         }
         self.operator(Ident::new("valuation", proc_macro2::Span::call_site()))
-            .check(&input)?;
+            .check(&input, &program.query.captures.names())?;
         let available: BTreeSet<_> = self
             .keys
             .iter()

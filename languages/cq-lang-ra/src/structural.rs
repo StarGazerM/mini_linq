@@ -820,6 +820,7 @@ impl Schedule {
                     results[&symbol_name(&g.input)],
                     &crate::syntax::Filter {
                         if_token: g.if_token,
+                        capture: g.capture,
                         condition: g.condition.clone(),
                     },
                     g.environment.as_ref(),

@@ -211,14 +211,17 @@ pub(crate) fn dispatch_shape(
             })
             .collect()
     } else if canonical && builder.output_fold(inner) {
-        // A scalar publication reuses the single declared output attribute.
-        program
-            .structures
-            .physical
-            .program
+        // A scalar publication reuses the single declared output attribute;
+        // capture arguments are host values, not published attributes.
+        let physical = &program.structures.physical.program;
+        physical
             .head
             .args
-            .first()
+            .iter()
+            .find(|argument| {
+                !rust::variable(argument)
+                    .is_some_and(|v| physical.captures.contains(&symbol_name(v)))
+            })
             .and_then(rust::variable)
             .map(symbol_name)
             .into_iter()

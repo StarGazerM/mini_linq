@@ -213,6 +213,11 @@ impl DeviceRow {
     }
 }
 
+/// The kernel scalar publishing a capture answer column (IF-Capture).
+pub(crate) fn head_capture(column: &str) -> Ident {
+    format_ident!("__cq_head_capture_{column}")
+}
+
 fn row_slot(expression: &syn::Expr) -> Option<usize> {
     let syn::Expr::Index(index) = expression else {
         return None;
@@ -248,6 +253,10 @@ pub struct Rows {
     pub parameters: Vec<(Ident, Type, TokenStream)>,
     pub rust_functions: Vec<(Ident, TokenStream, Ident)>,
     pub output_columns: Vec<String>,
+    /// The query's host captures (A-Capture), bound once in `setup`.
+    pub query_captures: cq_lang_structures::syntax::Captures,
+    /// Carrier types of capture answer columns, published as kernel scalars.
+    capture_types: BTreeMap<String, Type>,
     pub dense: BTreeSet<usize>,
     sources: BTreeMap<String, Source>,
     providers: BTreeMap<String, Provider>,
@@ -353,8 +362,64 @@ impl Rows {
         let rust_functions = captures.rust_functions;
         let disabled_captures = captures.disabled;
         let mut setup = captures.setup;
+        // IF-Capture on GPU: each `let` capture is evaluated once on the host
+        // before any launch and read through its binder reference; an `if`
+        // capture (answer gate) has no GPU realization.
+        for (index, item) in physical.program.captures.items.iter().enumerate() {
+            match item {
+                cq_lang_structures::syntax::Capture::Let(binding) => {
+                    let id = format_ident!("__cq_query_capture_{index}");
+                    let annotation = &binding.annotation;
+                    let expression = &binding.expression;
+                    let pattern = &binding.pattern;
+                    setup.extend(quote! {
+                        let #id #annotation = #expression;
+                        #[allow(unused_variables)]
+                        let #pattern = &#id;
+                    });
+                }
+                cq_lang_structures::syntax::Capture::Guard(guard) => {
+                    return Err(syn::Error::new_spanned(
+                        guard,
+                        "T-Gpu: an `if` capture (answer gate) has no GPU realization",
+                    ));
+                }
+            }
+        }
         let mut build = TokenStream::new();
         let mut parameters = captures.parameters;
+        let mut capture_types = BTreeMap::new();
+        // IF-Capture on GPU: an answer column naming a capture is published from
+        // one host-encoded kernel scalar, never a device row slot.
+        for item in &physical.program.captures.items {
+            let cq_lang_structures::syntax::Capture::Let(binding) = item else {
+                continue;
+            };
+            for (binder, ty) in binding.binding_types() {
+                let column = symbol_name(&binder);
+                if !output_columns.contains(&column) {
+                    continue;
+                }
+                if matches!(ty, syn::Type::Infer(_)) {
+                    return Err(syn::Error::new_spanned(
+                        &binder,
+                        "T-Gpu: a capture answer column needs a recorded type",
+                    ));
+                }
+                let (value, carrier): (TokenStream, Type) = match codecs.get(&ty) {
+                    Some(codec) => (
+                        quote!((<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::code(#binder) as i64)),
+                        syn::parse_quote!(u32),
+                    ),
+                    None => (
+                        quote!(::gpu_datalog_runtime::encode_scalar::<#ty>(#binder)),
+                        ty.clone(),
+                    ),
+                };
+                capture_types.insert(column.clone(), carrier);
+                parameters.push((head_capture(&column), syn::parse_quote!(i64), value));
+            }
+        }
         let mut hosts = BTreeMap::new();
         let mut raw = BTreeMap::new();
         let mut first = true;
@@ -853,6 +918,8 @@ impl Rows {
             parameters,
             rust_functions,
             output_columns,
+            query_captures: physical.program.captures.clone(),
+            capture_types,
             dense,
             sources,
             providers,
@@ -1003,6 +1070,23 @@ impl Rows {
     pub fn run_provider(&self, name: &str) -> bool {
         self.run_providers.contains(name)
     }
+    /// The device value of an answer column: its row slot, or the kernel
+    /// scalar of a capture answer column (IF-Capture).
+    pub fn output_value(&self, column: &str) -> syn::Result<TokenStream> {
+        if self.capture_types.contains_key(column) {
+            let parameter = head_capture(column);
+            return Ok(quote!(#parameter));
+        }
+        let slot = self
+            .columns
+            .get(column)
+            .ok_or_else(|| error(format!("missing device column {column}")))?;
+        Ok(quote!(__row[#slot]))
+    }
+    /// Whether an answer column is a capture published from a kernel scalar.
+    pub fn is_capture_output(&self, column: &str) -> bool {
+        self.capture_types.contains_key(column)
+    }
     pub fn output_types(&self) -> syn::Result<Vec<Type>> {
         self.output_columns
             .iter()
@@ -1010,6 +1094,7 @@ impl Rows {
                 self.physical_rows
                     .values()
                     .find_map(|row| row.types.get(column))
+                    .or_else(|| self.capture_types.get(column))
                     .cloned()
                     .ok_or_else(|| {
                         error(format!(

@@ -136,7 +136,7 @@ pub(super) fn binding_captures(
         }
         let name = format_ident!("__cq_binding_{n}", span = proc_macro2::Span::mixed_site());
         used.insert(name.to_string());
-        let expression = &bind.expression;
+        let expression = bind.value();
         let generic_types: Vec<_> = (0..arguments.len())
             .map(|index| format_ident!("T{index}"))
             .collect();

@@ -99,6 +99,7 @@ pub fn group(
     kernel: &Ident,
     direct: Option<GroupInput>,
     codecs: &crate::runs::Codecs,
+    captures: &cq_lang_structures::syntax::Captures,
 ) -> syn::Result<(TokenStream, TokenStream)> {
     use cq_lang_structures::{physical::symbol_name, syntax::algebra::AggregateKind};
     use quote::format_ident;
@@ -112,6 +113,12 @@ pub fn group(
             quote!(#id)
         });
     let prepare = format_ident!("prepare_{kernel}");
+    if let Some(key) = group.keys.iter().find(|key| captures.contains(&symbol_name(key))) {
+        return Err(syn::Error::new_spanned(
+            key,
+            "T-Gpu: a capture group key has no GPU realization",
+        ));
+    }
     let mut columns = group.keys.iter().map(symbol_name).collect::<Vec<_>>();
     let keys = columns.len();
     let fold = match (keys, provider) {
@@ -174,6 +181,13 @@ pub fn group(
     let mut writes = Vec::new();
     for (column, argument) in arguments.iter().enumerate() {
         if let Some(argument) = argument {
+            // IF-Capture: a capture argument is one host value, passed as a kernel scalar.
+            if let Some((parameter, value)) = capture_argument(captures, argument, column) {
+                params.push(quote!(#parameter:i64));
+                args.push(value);
+                writes.push(quote!(*values.add(position*#width+#column)=#parameter;));
+                continue;
+            }
             if let Some(input) = &direct {
                 let value = input.columns.get(argument).ok_or_else(|| {
                     syn::Error::new_spanned(group, "GPU resident group argument is absent")
@@ -282,6 +296,20 @@ pub fn group(
     ))
 }
 
+/// A capture aggregate argument's kernel scalar and its host value, read once
+/// through the capture binder bound in the host setup (IF-Capture).
+fn capture_argument(
+    captures: &cq_lang_structures::syntax::Captures,
+    argument: &str,
+    column: usize,
+) -> Option<(Ident, TokenStream)> {
+    let binder = captures
+        .binders()
+        .find(|binder| cq_lang_structures::physical::symbol_name(binder) == argument)?;
+    let parameter = quote::format_ident!("__cq_capture_argument_{column}");
+    Some((parameter, quote!((::core::clone::Clone::clone(#binder) as i64))))
+}
+
 /// Decode each grouped output column from its machine value and validity.
 fn decoders(
     group: &cq_lang_structures::syntax::algebra::Group,
@@ -330,6 +358,7 @@ pub fn global(
     kernel: &Ident,
     direct: Option<GroupInput>,
     codecs: &crate::runs::Codecs,
+    captures: &cq_lang_structures::syntax::Captures,
 ) -> syn::Result<(TokenStream, TokenStream)> {
     use cq_lang_structures::{physical::symbol_name, syntax::algebra::AggregateKind};
     use quote::format_ident;
@@ -375,7 +404,11 @@ pub fn global(
             let name = symbol_name(cq_lang_structures::syntax::rust::variable(expression).ok_or_else(|| {
                 syn::Error::new_spanned(expression, "GPU aggregate argument must be a normalized variable")
             })?);
-            if let Some(input) = &direct {
+            if let Some((parameter, value)) = capture_argument(captures, &name, column) {
+                params.push(quote!(#parameter:i64));
+                args.push(value);
+                quote!(#parameter)
+            } else if let Some(input) = &direct {
                 let value = input.columns.get(&name).ok_or_else(|| {
                     syn::Error::new_spanned(group, "GPU resident group argument is absent")
                 })?;

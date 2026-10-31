@@ -1,6 +1,6 @@
 use cq_syntax::algebra::{AggregateKind, Group};
 use quote::ToTokens;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[test]
 fn grouped_fold_syntax_round_trips() {
@@ -18,12 +18,26 @@ fn grouped_fold_syntax_round_trips() {
         group
     );
     group
-        .check(&BTreeMap::from([
-            ("key".into(), syn::parse_quote!(i32)),
-            ("value".into(), syn::parse_quote!(i64)),
-            ("identity".into(), syn::parse_quote!(usize)),
-        ]))
+        .check(
+            &BTreeMap::from([
+                ("key".into(), syn::parse_quote!(i32)),
+                ("value".into(), syn::parse_quote!(i64)),
+                ("identity".into(), syn::parse_quote!(usize)),
+            ]),
+            &BTreeSet::new(),
+        )
         .unwrap();
+}
+
+#[test]
+fn captures_are_shared_keys_and_arguments_but_not_outputs() {
+    let input = BTreeMap::from([("x".into(), syn::parse_quote!(i32))]);
+    let captures = BTreeSet::from(["one".to_string()]);
+    let group: Group = syn::parse_str("group r by [one] { n: i64 = sum(one); }").unwrap();
+    group.check(&input, &captures).unwrap();
+    assert!(group.check(&input, &BTreeSet::new()).is_err());
+    let shadow: Group = syn::parse_str("group r by [] { one: usize = count(); }").unwrap();
+    assert!(shadow.check(&input, &captures).is_err());
 }
 
 #[test]
@@ -40,7 +54,7 @@ fn fold_payloads_require_fresh_names_and_input_variables() {
         "group r by [] {}",
     ] {
         let group: Group = syn::parse_str(text).unwrap();
-        assert!(group.check(&input).is_err(), "{text}");
+        assert!(group.check(&input, &BTreeSet::new()).is_err(), "{text}");
     }
 }
 
@@ -55,7 +69,7 @@ fn fold_types_are_left_to_rustc() {
     ] {
         syn::parse_str::<Group>(text)
             .unwrap()
-            .check(&input)
+            .check(&input, &BTreeSet::new())
             .unwrap();
     }
 }

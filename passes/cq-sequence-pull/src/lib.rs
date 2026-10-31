@@ -1229,6 +1229,8 @@ impl<'a> Emitter<'a> {
         }
         rows = self.context().profile_stream(&answer, rows);
         rows = self.expansion(rows, "output");
+        // Formal rule IF-Capture: `if` captures decide, once, whether any query work runs.
+        rows = self.context().gate(rows);
         // Target interpreters eagerly join their answer. Measure preparation
         // and final evaluation at the host, never by adding concurrent spans.
         let phases = if !self.pull && self.context().profile.is_some() {

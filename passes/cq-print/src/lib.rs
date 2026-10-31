@@ -99,6 +99,10 @@ pub struct Context<'a> {
     pub physical_definitions: &'a [physical::Definition],
     pub hosts: BTreeMap<String, Host>,
     pub parameters: BTreeMap<String, Ident>,
+    /// Host-once capture binders, each bound to a reference outside all query loops.
+    pub captures: BTreeMap<String, Ident>,
+    /// Host-once `if` capture values; the answer is empty unless all hold.
+    pub gates: Vec<Ident>,
     /// Whether generator item types can require host key annotations.
     pub has_generators: bool,
     /// Shared binding callables and their unchanged query input names.
@@ -117,6 +121,28 @@ pub struct Context<'a> {
     pub owned: Vec<Ident>,
     pub intersect: bool,
     pub candidate_reads: BTreeMap<String, Vec<Vec<String>>>,
+}
+
+impl Context<'_> {
+    /// An owned copy of a capture's host value for an answer, group key or fold
+    /// argument; the value was evaluated once (IF-Capture).
+    pub fn capture_value(&self, name: &str) -> Option<TokenStream> {
+        self.captures
+            .get(name)
+            .map(|id| quote!(::core::clone::Clone::clone(#id)))
+    }
+
+    /// Evaluate the answer only when every `if` capture holds; otherwise no
+    /// query work runs and the answer is empty.
+    pub fn gate(&self, rows: TokenStream) -> TokenStream {
+        if self.gates.is_empty() {
+            return rows;
+        }
+        let gates = &self.gates;
+        quote!(::core::iter::Iterator::flatten(::core::iter::IntoIterator::into_iter(
+            if #(#gates)&&* { ::core::option::Option::Some(#rows) } else { ::core::option::Option::None }
+        )))
+    }
 }
 
 pub fn error<T>(spanned: &impl ToTokens, message: impl std::fmt::Display) -> syn::Result<T> {
@@ -309,8 +335,40 @@ impl<'a> Context<'a> {
                 statements.push(syn::parse_quote!(::cq_storage::require::column_slot::<#slot, _, #marker>(#host);));
             }
         }
+        // Formal rule IF-Capture: Bind each capture once, in dependency order, before
+        // closed operands that may name it. Later Rust reads a binder as a reference,
+        // the convention for computed bindings; `if` captures gate the whole answer.
+        let mut captures = BTreeMap::new();
+        let mut gates = Vec::new();
+        for item in &module.physical.program.captures.items {
+            let mut n = captures.len() + gates.len();
+            while used.contains(&format!("__cq_capture_{n}")) {
+                n += 1;
+            }
+            let id = format_ident!("__cq_capture_{n}", span = proc_macro2::Span::mixed_site());
+            used.insert(id.to_string());
+            match item {
+                cq_lang_structures::syntax::Capture::Let(binding) => {
+                    let expression = &binding.expression;
+                    let annotation = &binding.annotation;
+                    let pattern = &binding.pattern;
+                    statements.push(syn::parse_quote!(let #id #annotation = #expression;));
+                    statements.push(syn::parse_quote!(let #pattern = &#id;));
+                    for binder in item.binders() {
+                        captures.insert(symbol_name(&binder), binder);
+                    }
+                }
+                cq_lang_structures::syntax::Capture::Guard(guard) => {
+                    let condition = &guard.condition;
+                    statements.push(syn::parse_quote!(let #id: bool = #condition;));
+                    gates.push(id);
+                }
+            }
+            bound = true;
+        }
         // Formal rule IF-Parameter: Bind each captured relational value once outside all query loops.
-        let mut parameters = BTreeMap::new();
+        // A closed operand naming a capture reads its existing reference.
+        let mut parameters = captures.clone();
         for definition in &module.physical.program.definitions {
             let theta = match &definition.operator {
                 Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => &s.condition,
@@ -377,6 +435,8 @@ impl<'a> Context<'a> {
                 .collect(),
             hosts,
             parameters,
+            captures,
+            gates,
             has_generators,
             binding_functions,
             idents: BTreeMap::new(),

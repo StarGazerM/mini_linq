@@ -83,6 +83,8 @@ pub struct Program {
 pub struct Body {
     #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
     pub declarations: Vec<cq_syntax::RelationDecl>,
+    /// Host-once values carried from RA (A-Capture); never heading columns.
+    pub captures: cq_syntax::Captures,
     #[to_tokens(|tokens, facts| quote::TokenStreamExt::append_all(tokens, facts))]
     pub host_sets: Vec<HostSet>,
     pub consumer_canonical: Option<ConsumerCanonical>,
@@ -125,6 +127,7 @@ pub struct ConsumerCanonical {
 impl syn::parse::Parse for Body {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let declarations = cq_syntax::parse_declarations(input)?;
+        let captures = input.parse()?;
         let mut host_sets = Vec::new();
         let mut consumer_canonical = None;
         while input.peek(kw::host_set) || input.peek(kw::consumer) {
@@ -143,6 +146,7 @@ impl syn::parse::Parse for Body {
         }
         Ok(Self {
             declarations,
+            captures,
             host_sets,
             consumer_canonical,
             definitions,
@@ -610,6 +614,9 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             _ => Vec::new(),
         })
         .collect();
+    // Formal rule WF-Capture: carried captures bind host names outside every heading.
+    program.captures.check(&logical)?;
+    let captures = program.captures.names();
     let mut analysis = Analysis {
         discharged_host_sets: program
             .host_sets
@@ -900,6 +907,11 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             }
             Operator::Guard(g) => {
                 let row = of(&g.input)?;
+                cq_syntax::capture::check_reference(
+                    g.capture.as_ref(),
+                    &g.condition,
+                    &program.captures,
+                )?;
                 if g.environment.is_none() {
                     check_uses(&g.condition, &row)?;
                 }
@@ -911,6 +923,11 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             }
             Operator::Bind(b) => {
                 let mut row = of(&b.input)?;
+                cq_syntax::capture::check_reference(
+                    b.capture.as_ref(),
+                    &b.expression,
+                    &program.captures,
+                )?;
                 if b.environment.is_none() {
                     check_uses(&b.expression, &row)?;
                 }
@@ -930,12 +947,17 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             }
             Operator::Group(group) => {
                 let input = of(&group.input)?;
-                group.check(&input.types)?;
+                group.check(&input.types, &captures)?;
                 if !unique.contains_key(&symbol_name(&group.input)) {
                     return error(group, "group requires canonical complete input valuations");
                 }
                 let mut row = Row::default();
-                for key in &group.keys {
+                // A capture key groups by one host value and is not a column.
+                for key in group
+                    .keys
+                    .iter()
+                    .filter(|key| !captures.contains(&symbol_name(key)))
+                {
                     let column = symbol_name(key);
                     row.bindings
                         .insert(column.clone(), input.bindings[&column].clone());
@@ -1498,6 +1520,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         }
     }
     if source.program.declarations != target.program.declarations
+        || source.program.captures != target.program.captures
         || source_facts.discharged_host_sets != target_facts.discharged_host_sets
         || source_facts.consumer_canonical != target_facts.consumer_canonical
         || source.program.head != target.program.head

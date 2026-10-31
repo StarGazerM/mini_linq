@@ -6,6 +6,44 @@ fn cq(tokens: proc_macro2::TokenStream) -> cq::Program {
 }
 
 #[test]
+fn closed_branch_lets_and_guards_reference_fresh_query_captures() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32); relation S(a:i32); relation answer(a:i32,b:i32);
+        answer(x,v) :- { R(x), let v:i32 = 1, if host() } | { S(x), let v:i32 = 2 };
+    });
+    let normal = cq::normal::normalize(&source).unwrap();
+    let captures: Vec<_> = normal
+        .query
+        .captures
+        .items
+        .iter()
+        .map(|item| item.to_token_stream().to_string())
+        .collect();
+    assert_eq!(
+        captures,
+        [
+            "let __cq_c_0 : i32 = 1",
+            "let __cq_c_1 : bool = host ()",
+            "let __cq_c_2 : i32 = 2"
+        ]
+    );
+    let text = normal.query.body.to_token_stream().to_string();
+    assert!(
+        text.contains("R (x) , let v : i32 = capture __cq_c_0 , if capture __cq_c_1"),
+        "{text}"
+    );
+    assert!(
+        text.contains("S (x) , let v : i32 = capture __cq_c_2"),
+        "{text}"
+    );
+    cq::normal::check(&normal).unwrap();
+    assert!(cq::normal::check(&source).is_err());
+    assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
+    let printed: cq::Program = syn::parse2(normal.to_token_stream()).unwrap();
+    assert_eq!(printed, normal);
+}
+
+#[test]
 fn normalization_preserves_literals_and_extracts_other_non_variable_arguments() {
     let source = cq(quote! {
         struct Q;
@@ -181,18 +219,44 @@ fn relational_type_obligations_are_left_to_rustc() {
 }
 
 #[test]
-fn a_host_capture_in_the_head_becomes_a_final_binding() {
+fn a_host_capture_in_the_head_becomes_a_host_capture_not_a_body_binding() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); relation answer(a:i32);
         answer(host_value) :- R(x);
     });
     assert!(cq::normal::check(&source).is_err());
     let normal = cq::normal::normalize(&source).unwrap();
+    assert_eq!(normal.query.body.len(), 1);
     assert!(matches!(
-        normal.query.body.last(),
-        Some(cq::BodyItem::Let(_))
+        normal.query.captures.items.as_slice(),
+        [cq::syntax::Capture::Let(_)]
     ));
     cq::normal::check(&normal).unwrap();
+    assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
+}
+
+#[test]
+fn closed_lets_and_guards_are_captures_in_dependency_order() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32); relation answer(a:i32,b:i32,c:i32);
+        answer(x,b,c) :- R(x), let b:i32 = 1, let c:i32 = b + 1, if host();
+    });
+    let normal = cq::normal::normalize(&source).unwrap();
+    assert_eq!(normal.query.body.len(), 1);
+    let captures: Vec<_> = normal
+        .query
+        .captures
+        .items
+        .iter()
+        .map(|item| item.to_token_stream().to_string())
+        .collect();
+    assert_eq!(
+        captures,
+        ["let b : i32 = 1", "let c : i32 = b + 1", "if host ()"]
+    );
+    cq::normal::check(&normal).unwrap();
+    let printed: cq::Program = syn::parse2(normal.to_token_stream()).unwrap();
+    assert_eq!(printed, normal);
 }
 
 #[test]
@@ -379,11 +443,12 @@ fn literals_preserve_argument_positions_and_do_not_bind_head_or_block_names() {
     assert!(!literal_head.query.is_basic());
     assert!(cq::normal::check(&literal_head).is_err());
     let normal = cq::normal::normalize(&literal_head).unwrap();
+    assert_eq!(normal.query.body.len(), 1);
     assert!(matches!(
         normal.query.body[0],
         cq::BodyItem::Positive { .. }
     ));
-    assert!(matches!(normal.query.body[1], cq::BodyItem::Let(_)));
+    assert_eq!(normal.query.captures.items.len(), 1);
     let shifted_float = cq(quote! {
         struct Q; relation R(a:i32,b:f64);
         answer(x) :- R(7,x);

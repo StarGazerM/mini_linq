@@ -349,6 +349,7 @@ name = "cq-datalog-test-passes"
 version = "0.0.0"
 dependencies = [
  "cq-datalog-support",
+ "cq-lang-cq",
  "cq-lang-datalog-incremental",
  "cq-lang-datalog-round",
  "cq-lang-datalog-source",

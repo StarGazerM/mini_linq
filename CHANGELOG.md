@@ -7,6 +7,26 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Query-closed values are host captures (A-Capture, A-CaptureRef,
+  WF-Capture, IF-Capture). CQ normalization records a top-level `let`/`if`
+  that reads no query variable, a closed head operand and a closed aggregate
+  argument once in `capture { let p: T = e; if g; }`; RA (`Plan.captures`)
+  and Physical (`Body.captures`) carry the list unchanged and check it. A
+  capture is never a heading column, so ordering never places it: a closed
+  `let` no longer becomes an empty-key unit prefix that builds an index
+  (`cq-order` `ready()` placed it first since `0124315f`; the counters test
+  `empty_negative_keys_test_existence_without_building_indexes` passes
+  again). A query-closed union-branch `let`/`if` becomes a fresh capture and
+  the branch keeps its binder as `let p = capture c` / `if capture c`, so
+  block interfaces are unchanged. Printers bind each capture once before
+  any loop, copy it into answers, group keys, fold arguments and capture
+  references, and an `if` capture gates the whole answer. GPU Sequence
+  binds captures on the host, folds `sum(capture)` from a kernel scalar
+  (GPU H12) and publishes a capture answer column from a host-encoded kernel
+  scalar (GPU H12 `answer(shipmode, 0)`); capture group keys, `if` captures
+  and device-placed capture references are rejected as unsupported targets.
+  The Datalog reference interpreters evaluate captures before their loops.
+
 - DOOP heads are relational projections. Since contract 7 every Ascent-style
   head copy `rel(*x, ..)` was opaque Rust reading a Symbol-encoded column, so
   BE-RustRepresentation put all 155 `doop-gpu` holes partly at host: each
