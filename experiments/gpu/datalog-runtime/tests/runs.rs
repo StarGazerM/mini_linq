@@ -55,6 +55,14 @@ fn assert_run_bound<W: Word>(state: &DeviceRuns<W>) {
     assert!(views.len() <= bound, "{} runs for {} rows; bound {bound}", views.len(), state.len());
 }
 
+/// Ascent-shaped admission: fresh against accepted runs, then publication.
+fn admit<W: Word>(state: &mut DeviceRuns<W>, input: &Buffer<W>, rows: usize) -> Result<Run<W>> {
+    let fresh = state.fresh(input, rows)?;
+    // SAFETY: fresh is sorted, unique and absent from every accepted run.
+    unsafe { state.append_sorted(fresh.clone())? };
+    Ok(fresh)
+}
+
 fn admit_against_cpu<W: Word>(
     pool: &Arc<Pool>,
     state: &mut DeviceRuns<W>,
@@ -65,9 +73,9 @@ fn admit_against_cpu<W: Word>(
     let batch: BTreeSet<_> = values.iter().copied().collect();
     let expected_delta: Vec<_> = batch.difference(accepted).copied().collect();
     let before = state.len();
-    assert_eq!(state.count_fresh(&input, values.len())?, expected_delta.len());
-    assert_eq!(state.len(), before, "counter observation must not admit rows");
-    let fresh = state.admit(&input, values.len())?;
+    assert_eq!(state.fresh(&input, values.len())?.len(), expected_delta.len());
+    assert_eq!(state.len(), before, "fresh must not publish rows");
+    let fresh = admit(state, &input, values.len())?;
     assert_eq!(fresh.len(), expected_delta.len());
     assert_eq!(fresh.buffer().to_host_prefix(fresh.len())?, expected_delta);
     assert_eq!(fresh.view().len, fresh.len());
@@ -191,8 +199,8 @@ fn empty_single_and_extremes<W: Word>() -> Result {
     }
     // Only the declared live prefix participates, not spare initialized capacity.
     let input = Buffer::from_host(pool.clone(), &[zero, W::from_u128(7)])?;
-    assert_eq!(state.admit(&input, 1)?.len(), 0);
-    assert_eq!(state.admit(&input, 0)?.len(), 0);
+    assert_eq!(admit(&mut state, &input, 1)?.len(), 0);
+    assert_eq!(admit(&mut state, &input, 0)?.len(), 0);
     assert_eq!(state.to_host()?, accepted.iter().copied().collect::<Vec<_>>());
     assert_run_bound(&state);
     Ok(())
@@ -223,12 +231,12 @@ fn million_rows<W: Word>() -> Result {
     expected.sort_unstable();
     expected.dedup();
     let input = Buffer::from_host(pool.clone(), &values)?;
-    let fresh = state.admit(&input, values.len())?;
+    let fresh = admit(&mut state, &input, values.len())?;
     assert_eq!(fresh.buffer().to_host_prefix(fresh.len())?, expected);
     assert_eq!(state.len(), expected.len());
     assert_eq!(state.to_host()?, expected);
     assert_run_bound(&state);
-    let duplicate = state.admit(&input, values.len())?;
+    let duplicate = admit(&mut state, &input, values.len())?;
     assert_eq!(duplicate.len(), 0);
     assert_eq!(state.len(), expected.len());
     assert_eq!(state.to_host()?, expected);
@@ -278,11 +286,11 @@ fn recorded_ratio_changes_compaction_without_changing_rows() -> Result {
         let mut state = DeviceRuns::<u64>::new(pool.clone(), ratio)?;
         let first = Buffer::from_host(pool.clone(), &[0u64, 1, 2, 3, 4, 5])?;
         let second = Buffer::from_host(pool.clone(), &[6u64])?;
-        state.admit(&first, 6)?;
-        state.admit(&second, 1)?;
+        admit(&mut state, &first, 6)?;
+        admit(&mut state, &second, 1)?;
         assert_eq!(state.retained_buffers(), expected_runs);
         assert_eq!(state.to_host()?, (0u64..7).collect::<Vec<_>>());
-        let duplicate = state.admit(&second, 1)?;
+        let duplicate = admit(&mut state, &second, 1)?;
         assert!(duplicate.is_empty());
         assert_eq!(state.to_host()?, (0u64..7).collect::<Vec<_>>());
     }
@@ -520,7 +528,7 @@ fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
             }
         }
         let input = Buffer::from_host(pool.clone(), &values)?;
-        let fresh = canonical.admit(&input, values.len())?;
+        let fresh = admit(&mut canonical, &input, values.len())?;
         let shuffled = packing.permute_device(fresh.buffer(), fresh.len(), &order)?;
         let source = fresh.buffer().to_host_prefix(fresh.len())?;
         let expected = source.iter().map(|&key| {
@@ -614,8 +622,8 @@ fn throughput_10m_candidates_against_50m_accepted() -> Result {
     candidates.retain(|value| value % 2 == 1);
     candidates.sort_unstable();
     candidates.dedup();
-    state.enable_timing(true);
-    let fresh = state.admit(&input, CANDIDATES)?;
+    state.enable_timing(true)?;
+    let fresh = admit(&mut state, &input, CANDIDATES)?;
     let timings = state.last_timings()?;
     println!(
         "DeviceRuns<u64>: accepted_before={ACCEPTED} candidates={CANDIDATES} fresh={} accepted_after={} sort_unique_ms={:.3} anti_join_ms={:.3} merge_ms={:.3}",

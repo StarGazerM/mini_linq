@@ -1,4 +1,4 @@
-//! GPU-resident packed Datalog tuples and immutable, disjoint accepted runs.
+//! GPU-resident packed Datalog tuples and immutable, disjoint sorted runs.
 //! All device work uses the owning [`Pool`]'s legacy default stream.
 //! [`DeviceLayout`] retains typed, immutable run inputs and uploads only their
 //! erased descriptors. [`CandidateArena`] leases packed output lanes to Sequence

@@ -6,12 +6,15 @@ use quote::quote;
 use std::collections::{BTreeMap, BTreeSet};
 use syn::{Ident, Type};
 
-fn inputs(program: &Program) -> syn::Result<BTreeMap<String, Type>> {
-    let symbols = crate::storage::Symbols::from_program(&program.storage)?;
-    let schemas = program.context.relations.iter().map(|relation|
-        relation.declaration.columns.iter().map(|column| symbols.device_type(&column.ty)).collect()
-    ).collect::<Vec<_>>();
-    crate::print::input_types(program, &schemas)
+/// The recorded device provider of each component's negative key set.
+fn key_providers(program: &Program) -> syn::Result<Vec<Vec<Type>>> {
+    let device = program.storage.device.as_ref().ok_or_else(||
+        syn::Error::new_spanned(program, "missing device storage records"))?;
+    program.context.strata.iter().enumerate().map(|(component, stratum)| {
+        stratum.keys.iter().map(|key| {
+            Ok(device.negations[crate::print::negation(program, component, key)?].provider.clone())
+        }).collect()
+    }).collect()
 }
 
 fn packet(hole: &Hole, inputs: &BTreeMap<String, Type>) -> TokenStream {
@@ -38,8 +41,13 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
     let Owner(owner) = syn::parse2(arguments)?;
     round::contract::check(source)?;
     crate::storage::check_device(&source.storage)?;
-    let inputs = inputs(source)?;
     let mut target = source.clone();
+    for (stratum, providers) in target.context.strata.iter_mut().zip(key_providers(source)?) {
+        for (key, provider) in stratum.keys.iter_mut().zip(providers) {
+            key.provider = provider;
+        }
+    }
+    let inputs = crate::print::input_types(&target)?;
     for hole in &mut target.holes {
         ensure(hole.interface == HoleInterface::Batch, &*hole, "GPU Datalog requires batch holes")?;
         ensure(owner > hole.lower && owner < hole.pipeline.passes.len().saturating_sub(1),
@@ -58,10 +66,16 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
     Ok(target)
 }
 
-/// Formal rule DL-DeviceBindings: the declared owner contains exactly the
-/// input-layout packet and the terminal contains its complete arena argument.
+/// Formal rule DL-DeviceBindings: negative key sets use their recorded device
+/// providers, the declared owner contains exactly the input-layout packet and
+/// the terminal contains its complete arena argument.
 pub fn check(program: &Program) -> syn::Result<()> {
-    let inputs = inputs(program)?;
+    for (stratum, providers) in program.context.strata.iter().zip(key_providers(program)?) {
+        for (key, provider) in stratum.keys.iter().zip(providers) {
+            ensure(key.provider == provider, key, "GPU key set differs from its recorded device provider")?;
+        }
+    }
+    let inputs = crate::print::input_types(program)?;
     for hole in &program.holes {
         let owner = hole.binding.ok_or_else(|| syn::Error::new_spanned(hole, "missing GPU binding invocation owner"))?;
         let invocation = hole.pipeline.passes.get(owner).ok_or_else(||

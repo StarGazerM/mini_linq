@@ -114,10 +114,11 @@ impl Timing {
     }
 }
 
-/// Formal rule DL-DeviceRuns: admission subtracts all accepted immutable runs;
-/// each appended delta is unique and disjoint, and merging preserves their union.
+/// Formal rule DL-DeviceRuns: `fresh` subtracts all accepted immutable runs
+/// without changing them; each appended run is unique and disjoint from the
+/// accepted runs, and merging preserves their union.
 ///
-/// Each nonempty admission downloads only the candidate unique count and, when
+/// Each nonempty `fresh` downloads only the candidate unique count and, when
 /// accepted state is nonempty, the fresh count. There are no row readbacks.
 /// Empty batches need neither download. `to_host` and opt-in `last_timings` are
 /// explicit diagnostic synchronization paths, never used by admission.
@@ -126,7 +127,6 @@ pub struct DeviceRuns<W: Word> {
     accepted: Vec<Run<W>>,
     rows: usize,
     module: run_kernels::LoadedModule,
-    timing_enabled: bool,
     timing: Option<Timing>,
     ratio: usize,
 }
@@ -137,7 +137,7 @@ impl<W: Word> DeviceRuns<W> {
         if ratio < 2 { return Err("device maintenance ratio must be at least two".into()); }
         // SAFETY: module is loaded in, and retained with, the pool's context.
         let module = unsafe { run_kernels::load(pool.context())? };
-        Ok(Self { pool, accepted: Vec::new(), rows: 0, module, timing_enabled: false, timing: None, ratio })
+        Ok(Self { pool, accepted: Vec::new(), rows: 0, module, timing: None, ratio })
     }
     pub fn len(&self) -> usize { self.rows }
     pub fn is_empty(&self) -> bool { self.rows == 0 }
@@ -155,15 +155,22 @@ impl<W: Word> DeviceRuns<W> {
     pub fn runs(&self) -> Vec<RunView<W>> { self.accepted.iter().map(Run::view).collect() }
     /// Retain a snapshot of accepted immutable runs, independent of later merges.
     pub fn owned_runs(&self) -> Vec<Run<W>> { self.accepted.clone() }
-    pub fn enable_timing(&mut self, enabled: bool) { self.timing_enabled = enabled; }
+    /// Opt-in event timing: `fresh` records its sort and anti-join phases and
+    /// the following `append_sorted` records its merge.
+    pub fn enable_timing(&mut self, enabled: bool) -> Result<()> {
+        self.timing = if enabled { Some(Timing::new(&self.pool)?) } else { None };
+        Ok(())
+    }
     /// Explicitly synchronize the last profiled admission and read CUDA event times.
     pub fn last_timings(&self) -> Result<AdmissionTimings> {
         self.timing.as_ref().ok_or_else(|| "admission timing is not enabled".into()).and_then(Timing::elapsed)
     }
-    pub fn admit(&mut self, candidates: &Buffer<W>, rows: usize) -> Result<Run<W>> {
+    /// The unique candidate rows absent from every accepted run, sorted.
+    /// Accepted state is unchanged; publishing the result is a separate
+    /// `append_sorted` into each layout, including this one.
+    pub fn fresh(&self, candidates: &Buffer<W>, rows: usize) -> Result<Run<W>> {
         if !Arc::ptr_eq(&self.pool, candidates.pool()) { return Err("candidate pool differs from accepted state".into()); }
         if rows > candidates.len() || rows > u32::MAX as usize { return Err("candidate live length exceeds capacity or u32 domain".into()); }
-        self.timing = if self.timing_enabled { Some(Timing::new(&self.pool)?) } else { None };
         self.mark(0)?;
         let unique = self.sort_unique(candidates, rows)?;
         self.mark(1)?;
@@ -171,20 +178,7 @@ impl<W: Word> DeviceRuns<W> {
             self.subtract(&unique)?
         };
         self.mark(2)?;
-        // SAFETY: subtraction checked every accepted run; unique is sorted.
-        unsafe { self.append_sorted(fresh.clone())? };
-        self.mark(3)?;
         Ok(fresh)
-    }
-    /// SQ-ExpansionCounters: observe this rule's unique fresh output without
-    /// admitting it. All rules in a round compare against the same accepted set.
-    pub fn count_fresh(&self, candidates: &Buffer<W>, rows: usize) -> Result<usize> {
-        let unique = self.sort_unique(candidates, rows)?;
-        if self.accepted.is_empty() || unique.is_empty() {
-            Ok(unique.len())
-        } else {
-            Ok(self.subtract(&unique)?.len())
-        }
     }
     fn mark(&self, phase: usize) -> Result<()> {
         if let Some(timing) = &self.timing { timing.record(phase, &self.pool)?; }
@@ -303,7 +297,7 @@ impl<W: Word> DeviceRuns<W> {
     /// may sort a bijective permutation of an admitted delta for another layout.
     pub unsafe fn append_sorted(&mut self, run: Run<W>) -> Result<()> {
         if !Arc::ptr_eq(&self.pool, run.buffer.pool()) { return Err("layout run pool differs".into()); }
-        if run.is_empty() { return Ok(()); }
+        if run.is_empty() { return self.mark(3); }
         let rows = self.rows.checked_add(run.len()).ok_or("accepted row count overflow")?;
         // Prepare the complete merge before mutating state: failures leave it unchanged.
         let mut merged = run;
@@ -315,7 +309,7 @@ impl<W: Word> DeviceRuns<W> {
         self.accepted.truncate(keep);
         self.accepted.push(merged);
         self.rows = rows;
-        Ok(())
+        self.mark(3)
     }
     fn merge(&self, first: &Run<W>, second: &Run<W>) -> Result<Run<W>> {
         let rows = first.len().checked_add(second.len()).ok_or("merged length overflow")?;

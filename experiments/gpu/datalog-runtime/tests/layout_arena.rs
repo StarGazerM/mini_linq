@@ -126,7 +126,9 @@ fn concatenate_case<W: Word>(packing: Packing) -> Result<()> {
         assert!(concatenate_batches::<u64>(pool.clone(), &packing, &batches).is_err());
     }
     let mut accepted = DeviceRuns::<W>::new(pool, 4)?;
-    accepted.admit(&output, output.len())?;
+    let fresh = accepted.fresh(&output, output.len())?;
+    // SAFETY: fresh is sorted, unique and absent from the empty accepted state.
+    unsafe { accepted.append_sorted(fresh)? };
     let snapshot = accepted.owned_runs();
     drop(accepted);
     let words = snapshot.iter().map(|run| run.buffer().to_host())

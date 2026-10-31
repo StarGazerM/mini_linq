@@ -42,7 +42,9 @@ fn tc_emits_resident_waves_admission_and_publication() {
     let program = program();
     let source = print::compile(&program).unwrap().to_token_stream().to_string();
     assert!(source.contains("concatenate_batches"));
-    assert!(source.contains("permute_device"));
+    // Admission is read-only fresh; publication appends to every layout.
+    assert!(source.contains(". fresh ("));
+    assert!(!source.contains(". admit ("));
     assert!(source.contains("append_sorted"));
     assert!(source.contains("while"));
     assert!(source.contains("translate_arena"));
@@ -63,6 +65,37 @@ fn rejects_host_observers_and_timing() {
     let mut timed = program();
     timed.policy.timing = syn::parse_quote!(phases);
     assert!(print::compile(&timed).unwrap_err().to_string().contains("timing"));
+}
+
+#[test]
+fn rejects_hole_chunking_policy() {
+    let mut program = program();
+    program.schedule = program.schedule.clone().with_policy(0, cq_lang_datalog_round::schedule::HolePolicy {
+        phase: syn::parse_quote!(step),
+        index: 0,
+        grain: Some(64),
+        inline_below: None,
+    });
+    assert!(print::compile(&program).unwrap_err().to_string().contains("grain"));
+}
+
+#[test]
+fn key_sets_and_layouts_print_recorded_device_records() {
+    let program = program();
+    let device = program.storage.device.as_ref().unwrap();
+    let source = print::compile(&program).unwrap().to_token_stream().to_string();
+    for record in device.layouts.iter().chain(&device.delta_layouts) {
+        assert!(source.contains(&record.state_init.to_token_stream().to_string()));
+        assert!(source.contains(&record.init.to_token_stream().to_string()));
+    }
+    for record in &device.relations {
+        assert!(source.contains(&record.packing.to_token_stream().to_string()));
+    }
+    for relation in &program.context.relations {
+        if let Some(delta) = &relation.delta_host {
+            assert!(source.contains(&quote!(#delta = ).to_string()));
+        }
+    }
 }
 
 #[test]

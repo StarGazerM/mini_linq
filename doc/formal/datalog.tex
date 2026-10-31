@@ -1268,9 +1268,9 @@ with $s_j=64L-\sum_{i\le j}w_i$.
  {\mathrm{pack}(r)<\mathrm{pack}(r')\iff r<_{\mathrm{lex}}r'\quad
  \mathrm{lookup}_L(k)=\mathrm{unpack}(\{x\in L\mid p(k)2^{s_j}\le x<(p(k)+1)2^{s_j}\})}
 \Rule{DL-DeviceRuns}{\textsc{DL-DevicePacking}\quad
- \text{device admission (sort, deduplicate, drop rows found in an accepted run,}\\
- \text{append the remainder) and merge follow \textsc{DL-RunLayout} on words}}
- {\mathrm{unpack}(\text{device state})=\text{the CPU run state after the same candidate batches}}
+ \text{device fresh (sort, deduplicate, drop rows found in an accepted run, read-only)}\\
+ \text{and append (merge) follow \textsc{DL-RunLayout} on words}}
+ {\mathrm{unpack}(\text{state after fresh then append})=\text{the CPU run state after the same candidate batches}}
 \end{mathpar}
 A layout run built from an admitted delta permutes columns of a run whose
 words are pairwise distinct; the permutation is injective, so its image is
@@ -1286,13 +1286,20 @@ readbacks are recorded realization cost, not semantic steps.
 
 \paragraph{Device realization (extension).}
 The device Storage rewrite replaces every layout provider (EDB and IDB, full
-and delta, any key length) by \code{DeviceLayout<K, V>}; each IDB's canonical
-layout holds the accepted runs, as \code{DeviceRuns<W>}, where $W$ is the
-narrowest word holding the relation's packed columns. It requires every
-column type to be a
-supported fixed-width integer or a declared symbol type, and each source
-layout to be the default \code{HashMap} with the default hasher, so erasure is
-exact. A symbol type is named with its codec by the rewrite's
+and delta, canonical included, any key length) by the bulk-maintained view
+\code{DeviceLayout<K, V>} and records, in \code{Storage.device}, each layout's
+backing state \code{DeviceRuns<W>} in that layout's column order, its packing,
+state initializer and empty view, where $W$ is the narrowest word holding the
+packed columns. The canonical layout is an ordinary such layout; there is no
+separate accepted state. It also records each negative key set's provider and
+state, each relation's packing, candidate container and arena, and the scratch
+policy (component-scoped arenas, scratch released after each component). IDB
+delta and NEW are relation-order \code{DeviceLayout} views; NEW is recorded as
+\code{fresh\_run}: built directly from admission's fresh rows, so its declared
+empty \code{next\_init} is checked but never printed. It requires every column
+type to be a supported fixed-width integer or a declared symbol type, and each
+source layout to be the default \code{HashSet} or \code{HashMap} with the
+default hasher, so erasure is exact. A symbol type is named with its codec by the rewrite's
 \code{symbols(T => C, ...)} argument, where \code{C: SymbolCodec<T>} is an
 injective map to \code{u32} codes with its inverse, fixed for the process, so
 equal symbols have equal codes in every relation and round. The device sees only codes; strings never leave the host.
@@ -1310,7 +1317,8 @@ No consumer infers codecs from provider names or generic arguments.
 \begin{mathpar}
 \Rule{CK-DL-DeviceStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad
- \text{restoring default providers and erasing device advice in }t\text{ gives }s\quad
+ \text{restoring default providers and erasing device records in }t\text{ gives }s\quad
+ t\text{ equals the device realization of that restoration}\quad
  \textsc{DL-DevicePacking}\text{ premises hold for every relation}}
  {\mathrm{check}_{\mathrm{deviceStorage}}(s,t)}
 \end{mathpar}
@@ -1327,20 +1335,29 @@ The printer checks these packets and invokes them without filling arguments.
  {\mathrm{print}_{\mathrm{gpu}}\text{ consumes the complete recorded invocation }h.Q}
 \end{mathpar}
 The device round printer consumes the same Round and Schedule records as the
-host printers. Inputs are uploaded once into their layouts. Each round issues
-the holes of every wave in wave order, each writing its head's candidate
-batches; after the last wave every head admits its batches into its accepted
-runs (\textsc{DL-DeviceRuns}), yielding the delta. Publication then follows the
-recorded operations: \code{full\_layouts} permutes the delta into each layout's
-packing, sorts it and appends it as a run (disjoint because it was admitted);
-the canonical layout's accepted runs are the admission itself; \code{delta\_swap} retains the delta
-run; \code{delta\_rebuild} builds each delta layout from it. Termination tests
-the sum of the fresh counts. Outputs unpack the accepted runs. Issuing waves in
-order on one stream is exact by \textsc{DL-WaveCommute}; concurrent streams per
-wave would change only cost.
+host printers, and the device Storage records for every provider,
+initializer, state and scratch lifetime. EDB loading uploads the input once and
+admits it against the empty canonical layout, then publishes into every full
+layout. Each round issues the holes of every wave in wave order, each pushing
+its head's candidate batches into the recorded container. After the recorded
+publication wave of a member (\textsc{DL-PublishAfterReaders}; after its
+phase's holes when the phase has no waves) the member admits: fresh is the
+unique candidates, permuted into canonical order when that order is not the
+identity, minus the committed canonical layout's runs (\textsc{DL-DeviceRuns},
+read-only). Publication then follows the recorded operations:
+\code{full\_layouts} appends fresh to every full layout's state, the canonical
+one included, sharing the run when the layout's order equals the canonical
+order and otherwise permuting and sorting it (disjoint because it was
+admitted), and republishes each view from its runs; \code{delta\_swap} builds
+NEW from fresh in relation order (\code{fresh\_run}) and moves it to the delta;
+\code{delta\_rebuild} builds each delta layout from fresh. Termination tests the
+sum of the fresh counts. Outputs read the canonical layout's rows through its
+column permutation. Hole grain and inline advice is rejected: each hole is one
+device invocation. Issuing waves in order on one stream is exact by
+\textsc{DL-WaveCommute}; concurrent streams per wave would change only cost.
 \begin{mathpar}
 \Rule{P-DL-Gpu}{\mathrm{WF}_{\mathrm{Round}}(r)\quad
- \text{every hole has the batch interface}\quad
+ \text{every hole has the batch interface}\quad\text{no hole policy}\quad
  \textsc{CK-DL-DeviceStorage}\quad\textsc{DL-DeviceBindings}\quad\textsc{GPU-Arena}}
  {\mathrm{unpack}(\mathrm{print}_{\mathrm{gpu}}(r))=\mathrm{print}_{\mathrm{rounds}}(r)\text{ as relations}}
 \end{mathpar}

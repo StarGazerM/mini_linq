@@ -328,8 +328,9 @@ signed columns flip the sign bit, and the first tuple column occupies the most
 significant packed bits. `prefix_range` returns inclusive bounds, including the
 maximum word without overflow.
 
-`DeviceRuns::admit` sorts, deduplicates, subtracts all accepted runs on-device,
-and returns a cheap immutable `Run` delta while accepting it internally.
+`DeviceRuns::fresh` sorts, deduplicates and subtracts all accepted runs
+on-device without changing them, returning a cheap immutable `Run`; publishing
+it is a separate unsafe `append_sorted` into each layout, canonical included.
 It reads back only the unique count and fresh count (empty batches and an empty
 accepted state omit unnecessary readbacks). `DeviceRuns::new(pool, ratio)`
 stores the supplied maintenance ratio (at least two); merges retain sorted,
@@ -369,7 +370,7 @@ trait; codec-declared symbols use u32 codes, with no 128-bit tuple cap.
 packed most-significant-first in head order into a `CandidateArena` and returns
 a `CandidateBatch` (u64 lanes, native low-first for u128 and most-significant
 first for larger words; length; packing; retained owners). The hole must be
-consumer-canonical: the batch is a candidate bag for `DeviceRuns::admit`.
+consumer-canonical: the batch is a candidate bag for `DeviceRuns::fresh`.
 Sizing keeps the dispatch's output protocol, so each attempt reads its
 metadata back; candidate rows are never downloaded. Arena invocations omit
 the redundant final stream synchronize and phase timing events by default.
@@ -428,14 +429,18 @@ ownership. The printer rejects missing owners or modified packets.
 `device_storage(ratio(8))` overrides the geometric maintenance ratio; omission
 records four. The ratio is printed in Storage and passed to every run state.
 
-Inputs upload once; each round issues the recorded waves in order, admits each
-head's candidate batches into its accepted runs, and publishes the delta into
-the recorded layouts; outputs download once. All programs on one thread share
+Device Storage records every provider, initializer, layout state, candidate
+container, arena and scratch policy; the printer composes only those records.
+Inputs upload once and are admitted into the canonical layout; each round
+issues the recorded waves in order and, after each member's recorded
+publication wave, computes fresh = unique candidates minus the committed
+canonical layout, appends it to every full layout, builds NEW from it and
+moves NEW to the delta; outputs read the canonical layout once. All programs on one thread share
 `gpu_datalog_runtime::thread_pool()` (device 0), so the runtime's thread-local
 caches never pin a finished program's pool.
 Candidate batches are released after admission, arenas are scoped to the
 producing stratum, and completed strata release cached Sequence scratch and
-wholly unused pool chunks. Accepted runs and layouts retain their published
+wholly unused pool chunks. Layout states and views retain their published
 owners; trimming never invalidates live device views.
 
 Symbol columns are declared with

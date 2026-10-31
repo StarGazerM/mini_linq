@@ -241,9 +241,9 @@ The table distinguishes current authored Rust reads from relational-only uses. M
 | `experiments/gpu/datalog-runtime/tests/layout_arena.rs:222` | P | diagnostic retained layout unpack exposes the unchanged post-permutation answer. |
 | `experiments/gpu/datalog-runtime/tests/layout_arena.rs:233` | P | diagnostic permuted-layout launch reconstructs values for host equality checking. |
 | `experiments/gpu/datalog/facade/tests/symbols.rs:9` | P | diagnostic final datalog answers reconstruct TestSymbol handles for host assertions. |
-| `experiments/gpu/datalog/src/print.rs:399` | P | generated SymbolCodec inverse resolves final datalog host output fields. |
-| `experiments/gpu/datalog/src/print.rs:401` | P | generated numeric carrier inversion constructs final host output fields. |
-| `experiments/gpu/datalog/src/print.rs:409` | P | generated final host output unpack inverts packed tuple ordinals after raw word download. |
+| `experiments/gpu/datalog/src/print.rs:532` | P | generated SymbolCodec inverse resolves final datalog host output fields. |
+| `experiments/gpu/datalog/src/print.rs:534` | P | generated numeric carrier inversion constructs final host output fields. |
+| `experiments/gpu/datalog/src/print.rs:542` | P | generated final host output reads the canonical layout's packed codes. |
 | `experiments/gpu/device-columns-oracle/src/main.rs:118` | P | diagnostic codec oracle publishes reconstructed column values for exact comparison. |
 | `experiments/gpu/device-columns-oracle/src/main.rs:157` | I | diagnostic device chain decodes then immediately re-encodes the column; this reorganization is avoidable. |
 | `experiments/gpu/device-columns-oracle/src/main.rs:240` | P | diagnostic adopted Plain column publishes its logical answer prefix. |

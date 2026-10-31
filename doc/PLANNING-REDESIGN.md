@@ -323,7 +323,11 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     Upload adapters and immutable bounds provenance are also recorded. C1 is
     CQ-only: Datalog provider/initializer fixes are deferred to C2 on top of
     track B's ordinary canonical-layout records, without parallel GPU-only
-    ownership fields. Fused `DeviceRuns::admit` remains until that cutover.
+    ownership fields. RC (P3d) completed that cutover: device Storage records
+    every layout's state and initializers, NEW (`fresh_run`), key sets, candidate
+    containers, arenas and scratch policy; admission is read-only
+    `DeviceRuns::fresh` against the canonical layout, publication appends to
+    every layout, and fused `DeviceRuns::admit` is removed.
   - **GPU CQ printers print only recorded facts** (P3e, audit
     `agent://GpuPrinterAudit`). GPU-Launch also records initial capacity,
     stripe-batch reservation and per-level strips (resolved tile defaults and

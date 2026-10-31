@@ -31,15 +31,91 @@ pub struct Program {
     pub negations: Vec<Negative>,
     pub certificates: Vec<HostCanonical>,
     pub policy: Policy,
-    /// Explicit device realization advice, never recovered from provider types.
+    /// Explicit device realization records, never recovered from provider types.
     pub device: Option<DeviceStorage>,
 }
+/// Device realization of the Storage records. The device refinement fills and
+/// checks every entry; its printer consumes them instead of choosing providers,
+/// initializers or scratch lifetimes. Expressions may read the device pool.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceStorage {
     pub symbols: Vec<(Type, Type)>,
+    /// Geometric run-maintenance advice consumed by every state initializer.
     pub ratio: usize,
+    /// Per declaration: relation-order rows and candidate storage.
+    pub relations: Vec<DeviceRelation>,
+    /// Per `Program::layouts` entry, canonical layouts included.
+    pub layouts: Vec<DeviceState>,
+    /// Per `Program::delta_layouts` entry.
+    pub delta_layouts: Vec<DeviceState>,
+    /// Per `Program::negations` entry: the prepared negative key set.
+    pub negations: Vec<DeviceState>,
+    pub scratch: DeviceScratch,
 }
-record!(DeviceStorage { symbols: Vec<(Type, Type)>, ratio: usize });
+/// Relation-order packed rows: EDB upload, rule candidates and output decoding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceRelation {
+    pub word: Type,
+    pub packing: Expr,
+    /// Container of one round's candidate batches, before admission.
+    pub candidates: Type,
+    pub candidates_init: Expr,
+    /// Scratch arena owning the candidate batches of this relation's holes.
+    pub arena: Type,
+    pub arena_init: Expr,
+    /// How NEW is realized: `fresh_run` builds the `next` provider directly
+    /// from admission's fresh rows, so `next_init` is only its declared empty
+    /// value and is never printed.
+    pub next: Ident,
+}
+/// The maintained backing state of one device provider and its empty view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceState {
+    pub provider: Type,
+    pub word: Type,
+    pub packing: Expr,
+    pub state: Type,
+    pub state_init: Expr,
+    pub init: Expr,
+}
+/// Scratch lifetimes: `arenas` names the scope owning candidate arenas and
+/// `release` the boundary after which cached scratch and unused pool storage
+/// return to the device.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceScratch {
+    pub arenas: Ident,
+    pub release: Ident,
+}
+record!(DeviceStorage {
+    symbols: Vec<(Type, Type)>,
+    ratio: usize,
+    relations: Vec<DeviceRelation>,
+    layouts: Vec<DeviceState>,
+    delta_layouts: Vec<DeviceState>,
+    negations: Vec<DeviceState>,
+    scratch: DeviceScratch
+});
+record!(DeviceRelation {
+    word: Type,
+    packing: Expr,
+    candidates: Type,
+    candidates_init: Expr,
+    arena: Type,
+    arena_init: Expr,
+    next: Ident
+});
+record!(DeviceState {
+    provider: Type,
+    word: Type,
+    packing: Expr,
+    state: Type,
+    state_init: Expr,
+    init: Expr
+});
+record!(DeviceScratch {
+    arenas: Ident,
+    release: Ident
+});
 /// Concrete providers for one relation, indexed by source declaration order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Providers {
@@ -339,6 +415,23 @@ pub mod contract {
                     "symbol type does not occur in a relation",
                 )?;
             }
+            // Device records cover their Storage vectors and realize the
+            // recorded layout providers; the device refinement checks the rest.
+            let realizes = |states: &[DeviceState], layouts: &[Layout]| {
+                states.len() == layouts.len()
+                    && states
+                        .iter()
+                        .zip(layouts)
+                        .all(|(state, layout)| state.provider == layout.provider)
+            };
+            ensure(
+                device.relations.len() == program.incremental.strata.source.declarations.len()
+                    && realizes(&device.layouts, &program.layouts)
+                    && realizes(&device.delta_layouts, &program.delta_layouts)
+                    && device.negations.len() == program.negations.len(),
+                program,
+                "device records must cover every relation, layout and negative key set",
+            )?;
         }
         ensure(
             program.providers.len() == program.incremental.strata.source.declarations.len(),
