@@ -160,7 +160,7 @@ macro_rules! filtered_join {
                 s = pipe range select r if (z > 1);
                 $($build)*
                 j = pipe probe first [x] window,b;
-                out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+                out = let canon project j keep {x,y,z}; return out as answer(x,y,z);
             }
         }.map(|(x,y,z)| (*x,*y,*z)).collect::<BTreeSet<_>>()
     };

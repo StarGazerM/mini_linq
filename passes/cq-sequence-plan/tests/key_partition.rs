@@ -1,5 +1,5 @@
 use cq_lang_sequence::{
-    CanonToken, Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken, Term,
+    Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken, Term,
 };
 use cq_sequence_plan::rewrites::key_partition;
 use cq_sequence_plan::{
@@ -57,6 +57,7 @@ fn catalog() -> Catalog {
                 elements: None,
                 capabilities: vec![Capability::Exact],
                 levels: levels.clone(),
+                max_packed_bits: None,
             },
             ProviderToken {
                 supports: Vec::new(),
@@ -64,17 +65,21 @@ fn catalog() -> Catalog {
                 elements: None,
                 capabilities: vec![Capability::Exact],
                 levels: levels.clone(),
+                max_packed_bits: None,
+            },
+            ProviderToken {
+                supports: Vec::new(),
+                ty: syn::parse_quote!(::cq_storage::dedup::Sort),
+                elements: None,
+                capabilities: vec![Capability::Distinct],
+                levels: levels.clone(),
+                max_packed_bits: None,
             },
         ],
         codecs: vec![CodecToken {
             ty: syn::parse_quote!(::cq_storage::sequence::Identity),
             ordered: true,
-            levels: levels.clone(),
-        }],
-        canons: vec![CanonToken {
-            ty: syn::parse_quote!(::cq_storage::dedup::Sort),
             levels,
-            max_packed_bits: None,
         }],
     }
 }
@@ -100,7 +105,7 @@ fn grouped(global: bool) -> Program {
     syn::parse_quote! {
         physical {
             relation Lineitem(orderkey:i64, linenumber:i32, returnflag:i32, linestatus:i32, quantity:i64, extendedprice:i64);
-            lineitem = pipe canon rename Lineitem@0 {
+            lineitem = let canon rename Lineitem@0 {
                 orderkey -> orderkey, linenumber -> linenumber,
                 returnflag -> returnflag, linestatus -> linestatus,
                 quantity -> quantity, extendedprice -> extendedprice
@@ -114,7 +119,8 @@ fn grouped(global: bool) -> Program {
         }
         structures {
             lineitem host scan = Reader [];
-            lineitem canon = sort;
+            lineitem rows = ::cq_storage::dedup::Sort;
+            lineitem canon = rows;
             #accumulator
         }
         sequence {
@@ -353,10 +359,13 @@ fn canon_partition_and_machine_width_are_explicit() {
     let source: Program = syn::parse_quote! {
         physical {
             relation R(a:i32,b:i32);
-            r = pipe canon rename R@0 {a -> a,b -> b};
+            r = let canon rename R@0 {a -> a,b -> b};
             return r as answer(a,b);
         }
-        structures { r host scan = Reader []; r canon = sort; }
+        structures {
+            r host scan = Reader [];
+            r rows = ::cq_storage::dedup::Sort; r canon = rows;
+        }
         sequence { input = store rows r; result = store canon input; }
     };
     for parts in [1, 3, 16] {
@@ -404,10 +413,13 @@ fn provider_program() -> Program {
             relation L(a:i32); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a,b -> b};
-            joined = pipe canon probe first [a] l,r;
+            joined = let canon probe first [a] l,r;
             return joined as answer(a,b);
         }
-        structures { l host scan = Reader []; r host scan = Reader []; r = Index [a]; joined canon = sort; }
+        structures {
+            l host scan = Reader []; r host scan = Reader []; r = Index [a];
+            joined rows = ::cq_storage::dedup::Sort; joined canon = rows;
+        }
         sequence {
             provider = store rows r;
             input = store rows l;
@@ -918,12 +930,13 @@ fn exact_membership_provider_supports_runtime_partition_choice() {
             relation L(a:i32); relation R(a:i32);
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a};
-            j = pipe canon semi eager [a] l,r;
+            j = let canon semi eager [a] l,r;
             return j as answer(a);
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r = Index [a]; j canon = sort;
+            r = Index [a];
+            j rows = ::cq_storage::dedup::Sort; j canon = rows;
         }
         sequence {
             provider = store rows r;
@@ -933,7 +946,9 @@ fn exact_membership_provider_supports_runtime_partition_choice() {
     };
     let mut membership_catalog = catalog();
     for provider in &mut membership_catalog.providers {
-        provider.capabilities = vec![Capability::Membership];
+        if !provider.capabilities.contains(&Capability::Distinct) {
+            provider.capabilities = vec![Capability::Membership];
+        }
     }
     let planned = decompose(&source, &machine(Some(4)), &membership_catalog).unwrap();
     assert!(
@@ -993,13 +1008,13 @@ fn smallest_candidate_directories_keep_their_native_two_level_providers() {
             r = let rename R@1 {b -> b,c -> c};
             s = let rename S@2 {a -> a,c -> c};
             candidate = pipe probe smallest [b] l,r;
-            checked = pipe canon semi eager [a,c] candidate,s;
+            checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
         structures {
             l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
             r = Index [b][c]; s = Index [a][c];
-            checked canon = sort;
+            checked rows = ::cq_storage::dedup::Sort; checked canon = rows;
         }
     };
     let source = cq_sequence_lowering::compile(&structures).unwrap();
@@ -1040,13 +1055,13 @@ fn filtered_provider_retains_valid_single_level_routing() {
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a,b -> b,unused -> unused};
             joined = pipe probe first [a] l,r;
-            answer = pipe canon project joined keep {a,b};
+            answer = let canon project joined keep {a,b};
             return answer as answer(a,b);
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
             r = Index [a] payload [a,b] constants {};
-            answer canon = sort;
+            answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
         }
         sequence {
             provider = store rows r;
@@ -1147,12 +1162,13 @@ fn provider_rewrite_preserves_shared_flat_rows_and_published_length_guards() {
             r = let rename R@1 {a -> a,b -> b};
             selected = let project r keep {a};
             joined = pipe probe first [a] l,r;
-            final_rows = pipe canon semi eager [a] joined,selected;
+            final_rows = let canon semi eager [a] joined,selected;
             return final_rows as answer(a,b);
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r = Index [a]; selected = Index [a]; final_rows canon = sort;
+            r = Index [a]; selected = Index [a];
+            final_rows rows = ::cq_storage::dedup::Sort; final_rows canon = rows;
             r rows = ::std::vec::Vec<_>;
         }
         sequence {
@@ -1636,12 +1652,13 @@ fn adaptive_provider_publication_preserves_task_owned_pipe_execution() {
             l = pipe rename L@0 {a -> a};
             r = pipe rename R@1 {a -> a,b -> b};
             selected = let select r if (b > a);
-            joined = pipe canon probe first [a] l,selected;
+            joined = let canon probe first [a] l,selected;
             return joined as answer(a,b);
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            selected = Index [a]; joined canon = sort;
+            selected = Index [a];
+            joined rows = ::cq_storage::dedup::Sort; joined canon = rows;
         }
         sequence {
             raw = store rows r;
@@ -1733,12 +1750,13 @@ fn filtered_provider_uses_host_layout_bound_before_demanding_input_count() {
             l = pipe rename L@0 {a -> a};
             r = pipe rename R@1 {a -> a,b -> b};
             selected = let select r if (b > a);
-            joined = pipe canon probe first [a] l,selected;
+            joined = let canon probe first [a] l,selected;
             return joined as answer(a,b);
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            selected = Index [a]; joined canon = sort;
+            selected = Index [a];
+            joined rows = ::cq_storage::dedup::Sort; joined canon = rows;
         }
         sequence {
             r = store rows r;
@@ -1787,12 +1805,13 @@ fn expanding_provider_join_requires_exact_count_without_a_host_shortcut() {
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a,b -> b};
             joined = let probe first [a] l,r;
-            final_rows = pipe canon probe first [a] l,joined;
+            final_rows = let canon probe first [a] l,joined;
             return final_rows as answer(a,b);
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r = Index [a]; joined = Index [a]; final_rows canon = sort;
+            r = Index [a]; joined = Index [a];
+            final_rows rows = ::cq_storage::dedup::Sort; final_rows canon = rows;
         }
         sequence {
             right = store rows r;
@@ -1866,7 +1885,7 @@ fn support_equal_duplicate_rows_never_supply_a_host_cardinality_bound() {
         .physical
         .program
         .definitions
-        .push(syn::parse_quote!(joined = pipe canon probe first [a,b] first,duplicates;));
+        .push(syn::parse_quote!(joined = let canon probe first [a,b] first,duplicates;));
     source
         .structures
         .structures
@@ -1925,7 +1944,7 @@ fn automatic_probe_chain_preserves_filtered_shared_index_contracts() {
             r8 = pipe probe first [a,b] r6,r7;
             r9 = let rename O@5 {o -> o,v -> v};
             r10 = pipe probe first [o] r8,r9;
-            r11 = pipe canon project r10 keep {o,a,b};
+            r11 = let canon project r10 keep {o,a,b};
             return r11 as answer(o,a,b);
         }
         structures {
@@ -1935,7 +1954,7 @@ fn automatic_probe_chain_preserves_filtered_shared_index_contracts() {
             r5 = Index [c] payload [c] constants {};
             r7 = Index [a,b] payload [o,a,b] constants {};
             r9 = Index [o] payload [o] constants {};
-            r11 canon = sort;
+            r11 rows = ::cq_storage::dedup::Sort; r11 canon = rows;
         }
     };
     let source = cq_sequence_lowering::compile(&structures).unwrap();

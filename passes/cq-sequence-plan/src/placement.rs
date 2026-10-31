@@ -674,19 +674,18 @@ fn reads_at(
             facts.obligations.iter().all(|obligation| {
                 let Obligation::Canon {
                     result: name,
-                    strategy,
+                    canonical,
                 } = obligation
                 else {
                     return true;
                 };
                 result != Some(name.as_str())
-                    || catalog.canons.iter().any(|token| {
-                        crate::catalog::canon_matches_type(&token.ty, strategy.as_ref())
-                            && token
-                                .levels
-                                .iter()
-                                .any(|registered| at(registered, canon_level))
-                    })
+                    || crate::catalog::canon_available(
+                        facts,
+                        catalog,
+                        canonical.as_ref(),
+                        |registered| registered.iter().any(|level| at(level, canon_level)),
+                    )
             }) && reads_at(inner, result, facts, catalog, level, canon_level)
         }
         Term::Map(_, inner)
@@ -898,7 +897,7 @@ mod tests {
             }
             structures {
                 l host scan = Reader []; r host scan = Reader [];
-                r = Index [a]; answer rows = ::std::vec::Vec<_>; answer canon = sort;
+                r = Index [a]; answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
             }
         };
         cq_sequence_lowering::compile(&structures).unwrap()
@@ -906,22 +905,28 @@ mod tests {
 
     fn catalog(levels: Vec<Vec<String>>) -> Catalog {
         Catalog {
-            providers: vec![ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(Index),
-                capabilities: vec![Capability::Exact, Capability::Membership],
-                levels,
-                elements: None,
-            }],
-            canons: vec![cq_lang_sequence::CanonToken {
-                ty: syn::parse_quote!(::cq_storage::dedup::Sort),
-                levels: vec![
-                    vec!["host".into()],
-                    vec!["host".into(), "device".into()],
-                    vec!["host".into(), "device".into(), "block".into()],
-                ],
-                max_packed_bits: None,
-            }],
+            providers: vec![
+                ProviderToken {
+                    supports: Vec::new(),
+                    ty: syn::parse_quote!(Index),
+                    capabilities: vec![Capability::Exact, Capability::Membership],
+                    levels,
+                    elements: None,
+                    max_packed_bits: None,
+                },
+                ProviderToken {
+                    supports: Vec::new(),
+                    ty: syn::parse_quote!(::cq_storage::dedup::Sort),
+                    capabilities: vec![Capability::Distinct],
+                    levels: vec![
+                        vec!["host".into()],
+                        vec!["host".into(), "device".into()],
+                        vec!["host".into(), "device".into(), "block".into()],
+                    ],
+                    elements: None,
+                    max_packed_bits: None,
+                },
+            ],
             codecs: Vec::new(),
         }
     }
@@ -935,10 +940,13 @@ mod tests {
                 relation R(a:i32,s:#ty);
                 r = pipe rename R@0 {a -> a,s -> s};
                 selected = pipe select r if (#condition);
-                answer = pipe canon project selected keep {a};
+                answer = let canon project selected keep {a};
                 return answer as answer(a);
             }
-            structures { r host scan = Reader []; answer canon = sort; }
+            structures {
+                r host scan = Reader [];
+                answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
+            }
             sequence {
                 input = store rows r;
                 selected = compact selected input;
@@ -958,10 +966,13 @@ mod tests {
                     relation R(a:i32);
                     r = pipe rename R@0 {a -> a};
                     selected = pipe guard r if (#condition);
-                    answer = pipe canon project selected keep {a};
+                    answer = let canon project selected keep {a};
                     return answer as answer(a);
                 }
-                structures { r host scan = Reader []; answer canon = sort; }
+                structures {
+                    r host scan = Reader [];
+                    answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
+                }
                 sequence {
                     input = store rows r;
                     result = store canon map answer input;
@@ -1078,9 +1089,16 @@ mod tests {
                 .any(|advice| matches!(advice, Advice::Publish { name, .. } if name == "answer"))
         );
         let advice = advise(&source, &target, true, &facts, &source, &available);
+        // STR-RowsByValue: the single-reader canon `answer` is not stored, so
+        // like a canon pipe it executes at the provider's deepest level and
+        // its output store is published at device.
         assert!(advice.iter().any(|advice| matches!(advice,
             Advice::Grade { name, level, .. }
                 if name == "answer" && level.iter().map(symbol_name).collect::<Vec<_>>()
+                    == ["host", "device", "block"])));
+        assert!(advice.iter().any(|advice| matches!(advice,
+            Advice::Grade { name, level, .. }
+                if name == "__sequence_output" && level.iter().map(symbol_name).collect::<Vec<_>>()
                     == ["host", "device"])));
     }
 
@@ -1170,6 +1188,7 @@ mod tests {
                 supports: vec![],
                 levels,
                 elements: None,
+                max_packed_bits: None,
             });
             assert_eq!(
                 rebuilds_native_provider(&source, &facts, &available, "r"),

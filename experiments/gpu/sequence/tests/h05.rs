@@ -366,7 +366,10 @@ fn expansion_uses_live_code_columns_and_one_reservation_per_item_batch() {
     assert!(!query.contains("__row"));
     assert!(!query.contains("__stored"));
     assert!(query.contains("device :: decode ("));
-    assert!(!query.contains("decode_u32"), "parent carriers use the recorded i64 ABI");
+    assert!(
+        !query.contains("decode_u32"),
+        "parent carriers use the recorded i64 ABI"
+    );
     assert!(query.contains("__parent_"));
     assert!(query.contains("__found_count"));
 
@@ -417,7 +420,7 @@ fn semijoin_device_store_builds_provider_after_publication() {
             nation_base = pipe rename Nation@1 {nation -> nation,region -> region};
             r2 = let semi eager [region] nation_base,r1;
             customer = pipe rename Customer@2 {customer -> customer,nation -> nation};
-            answer = pipe canon semi eager [nation] customer,r2;
+            answer = let canon semi eager [nation] customer,r2;
             return answer as answer(customer,nation);
         }
         structures {
@@ -426,7 +429,8 @@ fn semijoin_device_store_builds_provider_after_publication() {
             customer host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
             r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
             r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-            answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer canon = rows;
         }
         sequence {
             R1 = store rows r1;

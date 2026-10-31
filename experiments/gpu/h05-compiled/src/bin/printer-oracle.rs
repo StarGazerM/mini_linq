@@ -24,12 +24,13 @@ fn canonical_projection() {
                 physical {
                     relation Edges(a:i64,b:i64) = ($resident);
                     scan = pipe rename Edges@0 {a -> x,b -> y};
-                    output = pipe canon project scan keep {x};
+                    output = let canon project scan keep {x};
                     return output as answer(x);
                 }
                 structures {
                     scan host scan = ::cq_gpu_runtime::DeviceColumns<'_, (i64,i64)> [];
-                    output canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                    output rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                    output canon = rows;
                 }
                 sequence {
                     source = store rows scan;
@@ -94,12 +95,13 @@ fn repeated_head_projection() {
         physical {
             relation R(a:i64,b:i64) = (&resident);
             scan = pipe rename R@0 {a -> x,b -> y};
-            output = pipe canon project scan keep {x};
+            output = let canon project scan keep {x};
             return output as answer(x,x);
         }
         structures {
             scan host scan = ::cq_gpu_runtime::DeviceColumns<'_, (i64,i64)> [];
-            output canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            output rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            output canon = rows;
         }
         sequence {
             source = store rows scan;

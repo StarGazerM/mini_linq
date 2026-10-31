@@ -9,7 +9,7 @@ const HOIST_SOURCE: &str = "physical {
     r = pipe rename R@1 {b -> b,c -> c};
     candidate = pipe probe first [b] l,r;
     s = pipe rename S@2 {a -> a,c -> c};
-    checked = pipe canon probe first [a,c] candidate,s;
+    checked = let canon probe first [a,c] candidate,s;
     return checked as answer(a,b,c);
 }";
 

@@ -12,14 +12,15 @@ fn filtered_probe(condition: proc_macro2::TokenStream) -> Program {
             present = pipe semi eager [a] filtered, provider;
             projected = pipe project present keep {a, value};
             joined = pipe probe first [a] projected, provider;
-            result = pipe canon project joined keep {a, value, payload};
+            result = let canon project joined keep {a, value, payload};
             return result as answer(a, value, payload);
         }
         structures {
             driver host scan = ::cq_gpu_runtime::DeviceColumns [];
             provider host scan = ::cq_gpu_runtime::DeviceColumns [];
             provider = ::cq_gpu_sequence_runtime::RangeProvider [a];
-            result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            result rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            result canon = rows;
         }
         sequence {
             input = store rows driver;
@@ -137,14 +138,15 @@ fn negative_membership_inverts_the_provider_probe_without_expanding_witnesses() 
                 driver = pipe rename Driver@0 {a -> a, b -> b};
                 provider = let rename Provider@1 {a -> a, b -> b};
                 present = pipe #operator eager [a, b] driver, provider;
-                result = pipe canon project present keep {a, b};
+                result = let canon project present keep {a, b};
                 return result as answer(a, b);
             }
             structures {
                 driver host scan = ::cq_gpu_runtime::DeviceColumns [];
                 provider host scan = ::cq_gpu_runtime::DeviceColumns [];
                 provider = ::cq_gpu_sequence_runtime::RangeProvider [a, b];
-                result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result canon = rows;
             }
             sequence {
                 input = store rows driver;
@@ -181,14 +183,15 @@ fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
             provider = pipe rename Provider@1 {a -> a,value -> value,bound -> bound};
             selected = let select provider if (value < bound);
             present = pipe semi eager [a] driver,selected;
-            result = pipe canon project present keep {a};
+            result = let canon project present keep {a};
             return result as answer(a);
         }
         structures {
             driver host scan = ::cq_gpu_runtime::DeviceColumns [];
             provider host scan = ::cq_gpu_runtime::DeviceColumns [];
             selected = ::cq_gpu_sequence_runtime::RangeProvider [a];
-            result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            result rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            result canon = rows;
         }
         sequence {
             input = rows driver;
@@ -201,7 +204,8 @@ fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
     };
     let machine = cq_gpu_sequence::machine();
     let source = cq_gpu_sequence_core::runs::record_representation(&source).unwrap();
-    let planned = cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
+    let planned =
+        cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
     let analysis = check_grading(&planned.program, &machine).unwrap();
     assert_eq!(analysis.levels["index"], ["host", "device"]);
     let generated = translate(&planned.program);
@@ -222,14 +226,15 @@ fn segmented_binding(expression: proc_macro2::TokenStream) -> Program {
             provider = let rename Provider@1 {a -> a, value -> value};
             joined = pipe probe first [a] driver, provider;
             computed = pipe bind joined with doubled:i32 = (#expression);
-            result = pipe canon project computed keep {a, doubled};
+            result = let canon project computed keep {a, doubled};
             return result as answer(a, doubled);
         }
         structures {
             driver host scan = ::cq_gpu_runtime::DeviceColumns [];
             provider host scan = ::cq_gpu_runtime::DeviceColumns [];
             provider = ::cq_gpu_sequence_runtime::RangeProvider [a];
-            result canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            result rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            result canon = rows;
         }
         sequence {
             input = store rows driver;
@@ -254,13 +259,20 @@ fn segmented_binding(expression: proc_macro2::TokenStream) -> Program {
 #[test]
 fn rust_bindings_use_recorded_scalar_bounds_without_expression_recognition() {
     for expression in [quote!(*value), quote!(*value * 2)] {
-        let program = cq_gpu_sequence_core::runs::record_representation(
-            &segmented_binding(expression)).unwrap();
+        let program =
+            cq_gpu_sequence_core::runs::record_representation(&segmented_binding(expression))
+                .unwrap();
         assert!(program.representation.identity.contains("doubled"));
         assert!(!program.representation.encoded.contains("doubled"));
         let generated = translate(&program);
-        assert!(generated.contains("< i32 as :: gpu_datalog_runtime :: Scalar > :: MIN"), "{generated}");
-        assert!(generated.contains("< i32 as :: gpu_datalog_runtime :: Scalar > :: MAX"), "{generated}");
+        assert!(
+            generated.contains("< i32 as :: gpu_datalog_runtime :: Scalar > :: MIN"),
+            "{generated}"
+        );
+        assert!(
+            generated.contains("< i32 as :: gpu_datalog_runtime :: Scalar > :: MAX"),
+            "{generated}"
+        );
     }
 }
 
@@ -269,10 +281,7 @@ fn segmented_arithmetic_bindings_are_lane_local() {
     let generated = translate(&segmented_binding(quote!(*value * 2)));
     assert!(generated.contains("__child_position"), "{generated}");
     assert!(generated.contains("let mut __map_code_"), "{generated}");
-    assert!(
-        generated.contains("* value * 2"),
-        "{generated}"
-    );
+    assert!(generated.contains("* value * 2"), "{generated}");
     assert!(!generated.contains("wrapping_mul"), "{generated}");
     // Parent slots can be read by sibling lanes, never assigned by a map.
     for statement in generated.split(';') {

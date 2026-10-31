@@ -192,7 +192,12 @@ impl UploadChunk {
         self.used += bytes;
         self.tracked = false;
         unsafe {
-            cuda_core::simt::memory::memcpy_htod_async(destination, source, bytes, stream.cu_stream())?;
+            cuda_core::simt::memory::memcpy_htod_async(
+                destination,
+                source,
+                bytes,
+                stream.cu_stream(),
+            )?;
         }
         self.ready.record(stream)?;
         self.tracked = true;

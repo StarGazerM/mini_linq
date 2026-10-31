@@ -80,7 +80,14 @@ pub fn compile_with(
         .iter()
         .zip(modes)
         .zip(operators)
-        .map(|(((name, _op), mode), operator)| physical::Definition {
+        .map(|(((name, op), mode), operator)| {
+            let canon = (group_inputs.contains(&symbol_name(name)) && !unique.contains(&symbol_name(name)))
+                || (name == &returned && (!consumer_canonical || reads[&symbol_name(name)].count > 1) && !unique.contains(&symbol_name(name)) && !disjoint.contains(&symbol_name(name)))
+                || matches!(op, Op::Union(union) if !disjoint.contains(&symbol_name(name)) && union.origin.as_ref().is_none_or(|o| !o.interface.is_empty()));
+            // Formal rule PH-Canon: a canon result is materialized in its
+            // canonical index (SRDatalog RebuildIndex(NEW, canonical)).
+            let mode = if canon { physical::Mode::Let(Default::default()) } else { mode };
+            physical::Definition {
             name: name.clone(),
             eq_token: Default::default(),
             mode: if matches!(mode, physical::Mode::Let(_))
@@ -90,12 +97,10 @@ pub fn compile_with(
             } else {
                 mode
             },
-            canon: ((group_inputs.contains(&symbol_name(name)) && !unique.contains(&symbol_name(name)))
-                || (name == &returned && (!consumer_canonical || reads[&symbol_name(name)].count > 1) && !unique.contains(&symbol_name(name)) && !disjoint.contains(&symbol_name(name)))
-                || matches!(_op, Op::Union(union) if !disjoint.contains(&symbol_name(name)) && union.origin.as_ref().is_none_or(|o| !o.interface.is_empty())))
-                .then(Default::default),
+            canon: canon.then(Default::default),
             operator,
             semi_token: Default::default(),
+            }
         })
         .collect();
     let target = physical::Program {

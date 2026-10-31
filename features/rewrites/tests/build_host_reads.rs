@@ -10,7 +10,7 @@ fn retains_host_without_changing_graph_or_keys() {
         l = pipe rename L@0 {a -> x};
         r = pipe rename R@1 {a -> x,b -> y};
         s = pipe semi eager [x] l,r;
-        p = pipe canon probe first [x] s,r;
+        p = let canon probe first [x] s,r;
         return p as answer(x,y);
     }};
     let actual = build_host_reads(&source, TokenStream::new()).unwrap();
@@ -35,7 +35,7 @@ fn retains_an_empty_key_cartesian_provider_without_changing_the_join() {
         relation L(a:i64); relation R(b:i64);
         l = pipe rename L@0 {a -> x};
         r = pipe rename R@1 {b -> y};
-        joined = pipe canon probe first [] l,r;
+        joined = let canon probe first [] l,r;
         return joined as answer(x,y);
     }};
     let target = build_host_reads(&source, quote!(r)).unwrap();

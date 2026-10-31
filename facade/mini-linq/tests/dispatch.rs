@@ -297,7 +297,7 @@ fn generator_negation_keys_use_native_borrowed_membership_without_builds() {
     assert_eq!(cost.lookups, 3);
 }
 
-#[ignore = "P3d track A: admit granularity restores first-answer streaming"]
+#[ignore = "first-answer streaming needs a row-granularity canonical build; the canonical pass builds the canonical index whole (no admission granularity)"]
 #[test]
 fn first_host_answer_streams_and_owns_unused_dispatch_state() {
     let values: Vec<_> = (0..100_000).map(|a| (a,)).collect();
@@ -315,7 +315,7 @@ fn first_host_answer_streams_and_owns_unused_dispatch_state() {
     println!("host first answer: rows=1, lookups=1, builds=0; full result=100000");
 }
 
-#[ignore = "P3d track A: admit granularity restores first-answer streaming"]
+#[ignore = "first-answer streaming needs a row-granularity canonical build; the canonical pass builds the canonical index whole (no admission granularity)"]
 #[test]
 fn first_answer_owns_and_initializes_the_fallback_only_on_demand() {
     let values: Vec<_> = (0..20_000).map(|v| (0, v)).collect();
@@ -486,7 +486,7 @@ fn direct_merge_requires_ordered_read_without_requiring_payload_lookup() {
         physical {
             relation l(a:i32); relation r(a:i32);
             left = pipe rename l@0 {a -> a}; right = pipe rename r@1 {a -> a};
-            j = pipe canon merge[a] left,right; return j as answer(a);
+            j = let canon merge[a] left,right; return j as answer(a);
         }
     }
     .collect();
@@ -506,7 +506,7 @@ fn retained_opaque_guards_preserve_unsigned_comparisons() {
     let got: Vec<_> = ::mini_linq::passes::select! { pipeline { ::mini_linq::passes::sequence, ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
         physical {
             relation r(a:u64,b:i32); rows = let rename r@0 {a -> a,b -> b};
-            w = pipe canon guard rows if (*a < 9); return w as answer(a,b);
+            w = let canon guard rows if (*a < 9); return w as answer(a,b);
         }
     }
     .collect();
@@ -930,7 +930,7 @@ fn compiled_retained_column_cursor_expands_once_in_source_chronology() {
             s = pipe semi eager [k] l,r;
             p = pipe probe first [k] s,r;
             observed = pipe guard p if ({ visits.borrow_mut().push((*x,*k,*z)); true });
-            out = pipe canon project observed keep {x,k,z};
+            out = let canon project observed keep {x,k,z};
             return out as answer(x,k,z);
         }
         structures {
@@ -941,7 +941,7 @@ fn compiled_retained_column_cursor_expands_once_in_source_chronology() {
             s share = lookup r [k] first s force p;
             s repr = tuples witness { r [k] at s as _ };
             p stage = batch 2 expand;
-            out canon = sort;
+            out rows = ::cq_storage::dedup::Sort; out canon = rows;
         }
     }
     .map(|(x, k, z)| (*x, *k, *z))

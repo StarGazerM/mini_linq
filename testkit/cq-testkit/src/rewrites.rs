@@ -38,6 +38,10 @@ pub fn canonical_projects(source: &physical::Program) -> syn::Result<physical::P
         d.canon = (inherited.is_none()
             && (matches!(d.operator, Operator::Project(_)) || d.name == target.program.returned))
             .then(Default::default);
+        // PH-Canon: a canon result is stored in its canonical index.
+        if d.canon.is_some() && matches!(d.mode, physical::Mode::Pipe(_)) {
+            d.mode = physical::Mode::Let(Default::default());
+        }
         if let Some(key) = inherited.or_else(|| d.canon.is_some().then_some(heading)) {
             keys.insert(name, key);
         }
@@ -107,7 +111,9 @@ fn retain(target: &mut physical::Program) {
             ),
             _ => None,
         };
-        let retained = counts.get(&name).copied().unwrap_or(0) >= 2
+        // PH-Canon: a canon result is stored in its canonical index.
+        let retained = d.canon.is_some()
+            || counts.get(&name).copied().unwrap_or(0) >= 2
             || keyed.contains(&name)
             || ordered
                 .get(&name)

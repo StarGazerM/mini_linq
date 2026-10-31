@@ -373,44 +373,28 @@ impl<'a> RowEmitter<'a> {
         })
     }
 
-    /// Lower a recorded strategy for the explicitly selected execution target.
+    /// Build a canonical rows record with its provider's distinct-row build
+    /// for the explicitly selected execution target (sequential `sort`,
+    /// parallel `par_sort`; PL-Distinct). The rows it yields are the result.
     pub fn canon_with_target(
         target: CanonTarget,
-        strategy: &structures::CanonStrategy,
+        provider: &syn::Type,
         rows: TokenStream,
         width: usize,
     ) -> TokenStream {
-        match strategy {
-            structures::CanonStrategy::Sort(_) => match target {
-                CanonTarget::Sequential => Self::canon(strategy, rows, width),
-                CanonTarget::Parallel => {
-                    let compare = Self::canon_comparator(width);
-                    if let Some(provider) = strategy.provider() {
-                        quote!(<#provider>::par_sort(#rows, #compare))
-                    } else {
-                        quote!(::cq_storage::dedup::par_sort(#rows, #compare))
-                    }
-                }
-            },
-            structures::CanonStrategy::Ordered(_) => {
-                unreachable!("ordered canon consumes its checked source carrier")
+        match target {
+            CanonTarget::Sequential => Self::canon(provider, rows, width),
+            CanonTarget::Parallel => {
+                let compare = Self::canon_comparator(width);
+                quote!(<#provider>::par_sort(#rows, #compare))
             }
         }
     }
 
-    /// Execute the recorded whole-stream sort canonicalization.
-    pub fn canon(
-        strategy: &structures::CanonStrategy,
-        rows: TokenStream,
-        width: usize,
-    ) -> TokenStream {
-        assert!(matches!(strategy, structures::CanonStrategy::Sort(_)));
+    /// Sequential distinct-row build of a canonical rows record's provider.
+    pub fn canon(provider: &syn::Type, rows: TokenStream, width: usize) -> TokenStream {
         let compare = Self::canon_comparator(width);
-        if let Some(provider) = strategy.provider() {
-            quote!(<#provider>::sort(#rows, #compare))
-        } else {
-            quote!(::cq_storage::dedup::sort(#rows, #compare))
-        }
+        quote!(<#provider>::sort(#rows, #compare))
     }
 
     // DESIGN canon-strategy
@@ -473,10 +457,7 @@ impl Printer<'_> {
                     || (self.analysis.stages.contains_key(&name) && !self.probe_stage(&name)))
                     && !matches!(definition.operator, Operator::Rename(_)) =>
             {
-                let mut rows = self.produce(&name, definition)?;
-                if definition.canon.is_some() {
-                    rows = self.distinct(&definition.name, rows);
-                }
+                let rows = self.produce(&name, definition)?;
                 Repr::Pipe(Some(self.profile_stream(&name, rows)))
             }
             physical::ModeKind::Pipe if matches!(definition.operator, Operator::Rename(_)) => {
@@ -510,10 +491,7 @@ impl Printer<'_> {
                 Repr::Positions(Some(self.profile_stream(&name, ids)))
             }
             physical::ModeKind::Pipe => {
-                let mut rows = self.produce(&name, definition)?;
-                if definition.canon.is_some() {
-                    rows = self.distinct(&definition.name, rows);
-                }
+                let rows = self.produce(&name, definition)?;
                 Repr::Pipe(Some(self.profile_stream(&name, rows)))
             }
             physical::ModeKind::Let if self.analysis.selections.contains_key(&name) => {
@@ -526,7 +504,12 @@ impl Printer<'_> {
                     rows = self.distinct(&definition.name, rows);
                 }
                 let rows = self.profile_stream(&name, rows);
-                self.materialize(&name, rows)
+                if self.analysis.rows_by_value(&name) {
+                    // STR-RowsByValue: the build is moved into the single scan reader.
+                    Repr::Pipe(Some(self.rows_by_value(&name, rows)))
+                } else {
+                    self.materialize(&name, rows)
+                }
             }
         };
         self.consumer = consumer;
@@ -589,16 +572,34 @@ impl Printer<'_> {
         }
     }
 
+    /// Realize the canon boundary of `operator` from its checked canonical
+    /// reference. A rows record is built by its provider's distinct-row build;
+    /// an existing Built index (existence reads only) and an `exists` rows
+    /// record are built from the candidates themselves by their own build; a
+    /// host carrier is read in its verified order.
     pub(crate) fn distinct(&mut self, operator: &Ident, rows: TokenStream) -> TokenStream {
         let name = symbol_name(operator);
-        let ty = self.analysis.dedup[&name].clone();
-        self.distinct_width(&name, &ty, rows, self.carried(&name).len())
+        match self.analysis.canonical[&name].clone() {
+            structures::CanonSource::Rows(provider)
+                if self.physical_analysis.modes[&name] == physical::ModeKind::Let =>
+            {
+                self.distinct_width(&name, &provider, rows, self.carried(&name).len())
+            }
+            structures::CanonSource::Rows(_) | structures::CanonSource::Index(_) => rows,
+            structures::CanonSource::Host => {
+                let dedup = format!("{name}.dedup");
+                let key_columns = self.heading(&name).join(",");
+                self.profile_label(&dedup, "DEDUP", &key_columns, vec![name.clone()]);
+                let result = RowEmitter::ordered_source(&self.context, self.canon_target, &name);
+                self.profile_stream(&dedup, result)
+            }
+        }
     }
 
     fn distinct_width(
         &mut self,
         name: &str,
-        strategy: &structures::CanonStrategy,
+        provider: &syn::Type,
         rows: TokenStream,
         width: usize,
     ) -> TokenStream {
@@ -606,15 +607,8 @@ impl Printer<'_> {
         let input = name.strip_suffix(".head").unwrap_or(name);
         let key_columns = self.heading(input).join(",");
         self.profile_label(&dedup, "DEDUP", &key_columns, vec![input.into()]);
-        let result = match strategy {
-            structures::CanonStrategy::Sort(_) => {
-                let rows = self.profile_inserting(&dedup, rows);
-                RowEmitter::canon_with_target(self.canon_target, strategy, rows, width)
-            }
-            structures::CanonStrategy::Ordered(_) => {
-                RowEmitter::ordered_source(&self.context, self.canon_target, input)
-            }
-        };
+        let rows = self.profile_inserting(&dedup, rows);
+        let result = RowEmitter::canon_with_target(self.canon_target, provider, rows, width);
         self.profile_stream(&dedup, result)
     }
 

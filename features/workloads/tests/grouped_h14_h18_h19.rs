@@ -87,9 +87,11 @@ fn h14_components_preserve_identity_dates_and_empty_global_group() {
                 })
                 .collect(),
             promo_types: h14::PromoTypes::from_dense_keys(
-                cq_load::dictionary_where(&dictionaries, "p_type",
-                    |value| value.starts_with("PROMO"))
-                    .into_iter().map(|(code,)| code),
+                cq_load::dictionary_where(&dictionaries, "p_type", |value| {
+                    value.starts_with("PROMO")
+                })
+                .into_iter()
+                .map(|(code,)| code),
             ),
             dictionaries,
         };

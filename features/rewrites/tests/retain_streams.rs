@@ -10,7 +10,7 @@ fn chain() -> ir::Program {
         b = let rename B@1 {a -> x,b -> y};
         p = pipe probe first [x] a,b;
         c = let rename C@2 {b -> y,c -> z};
-        q = pipe canon probe first [y] p,c;
+        q = let canon probe first [y] p,c;
         return q as answer(x,y,z);
     }}
 }
@@ -58,7 +58,7 @@ fn hoisting_refuses_an_opaque_dependency() {
         relation R(a:i32);
         r = pipe rename R@0 {a -> x};
         guarded = pipe guard r if (opaque(x));
-        projected = pipe canon project guarded keep {x};
+        projected = let canon project guarded keep {x};
         return projected as answer(x);
     }};
     let error = cq_rewrite_passes::hoist(&source, quote!(projected)).unwrap_err();

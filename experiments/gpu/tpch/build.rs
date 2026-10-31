@@ -49,7 +49,11 @@ struct GroupedPublication {
 enum KeyBounds {
     /// Field `field` of the positive body atom over `relation`: resident
     /// column metadata, or one host scan of a host relation.
-    Input { relation: String, field: usize, resident: bool },
+    Input {
+        relation: String,
+        field: usize,
+        resident: bool,
+    },
     Full,
 }
 
@@ -62,7 +66,11 @@ fn grouped_publication(
     inputs: Option<&std::collections::BTreeMap<String, Publication>>,
 ) -> Option<GroupedPublication> {
     let group = normal.query.group.as_ref()?;
-    let columns: Vec<_> = group.keys.iter().chain(group.aggregates.iter().map(|a| &a.name)).collect();
+    let columns: Vec<_> = group
+        .keys
+        .iter()
+        .chain(group.aggregates.iter().map(|a| &a.name))
+        .collect();
     let slots: Vec<_> = normal
         .query
         .head
@@ -72,7 +80,10 @@ fn grouped_publication(
             let syn::Expr::Path(path) = argument else {
                 unreachable!("checked normalized group head");
             };
-            columns.iter().position(|name| path.path.is_ident(*name)).expect("checked grouped output")
+            columns
+                .iter()
+                .position(|name| path.path.is_ident(*name))
+                .expect("checked grouped output")
         })
         .collect();
     let bounds = slots
@@ -87,15 +98,23 @@ fn grouped_publication(
                 .body
                 .iter()
                 .find_map(|item| {
-                    let cq_lang_cq::BodyItem::Positive { atom } = item else { return None };
-                    let field = atom.args.iter().position(|arg| matches!(arg,
-                        syn::Expr::Path(path) if path.path.is_ident(key)))?;
+                    let cq_lang_cq::BodyItem::Positive { atom } = item else {
+                        return None;
+                    };
+                    let field = atom.args.iter().position(|arg| {
+                        matches!(arg,
+                        syn::Expr::Path(path) if path.path.is_ident(key))
+                    })?;
                     let relation = atom.relation.to_string();
                     let resident = inputs
                         .and_then(|inputs| inputs.get(&relation))
                         .map(Publication::resident)
                         .unwrap_or(true);
-                    Some(KeyBounds::Input { relation, field, resident })
+                    Some(KeyBounds::Input {
+                        relation,
+                        field,
+                        resident,
+                    })
                 })
                 .unwrap_or(KeyBounds::Full)
         })
@@ -109,21 +128,38 @@ fn check_grouped(
     normal: &cq_lang_cq::Program,
     grouped: &GroupedPublication,
 ) -> syn::Result<()> {
-    let fail = |message: &str| Err(syn::Error::new_spanned(normal, format!("DR-GroupedPublication: {message}")));
-    let Some(group) = &normal.query.group else { return fail("ungrouped answer has a grouped conversion") };
+    let fail = |message: &str| {
+        Err(syn::Error::new_spanned(
+            normal,
+            format!("DR-GroupedPublication: {message}"),
+        ))
+    };
+    let Some(group) = &normal.query.group else {
+        return fail("ungrouped answer has a grouped conversion");
+    };
     let width = group.keys.len() + group.aggregates.len();
-    if grouped.slots.len() != normal.query.head.args.len() || grouped.bounds.len() != grouped.slots.len()
+    if grouped.slots.len() != normal.query.head.args.len()
+        || grouped.bounds.len() != grouped.slots.len()
         || grouped.slots.iter().any(|slot| *slot >= width)
     {
         return fail("slots do not cover the grouped head");
     }
     for (slot, bounds) in grouped.slots.iter().zip(&grouped.bounds) {
-        let KeyBounds::Input { relation, field, .. } = bounds else { continue };
-        let Some(key) = group.keys.get(*slot) else { return fail("aggregate column takes input bounds") };
-        let bound = source.query.body.iter().any(|item| matches!(item,
+        let KeyBounds::Input {
+            relation, field, ..
+        } = bounds
+        else {
+            continue;
+        };
+        let Some(key) = group.keys.get(*slot) else {
+            return fail("aggregate column takes input bounds");
+        };
+        let bound = source.query.body.iter().any(|item| {
+            matches!(item,
             cq_lang_cq::BodyItem::Positive { atom } if atom.relation == relation.as_str()
                 && atom.args.get(*field).is_some_and(|arg| matches!(arg,
-                    syn::Expr::Path(path) if path.path.is_ident(key)))));
+                    syn::Expr::Path(path) if path.path.is_ident(key))))
+        });
         if !bound {
             return fail("key bounds name an atom field that does not bind the key");
         }
@@ -143,7 +179,9 @@ fn nullable_inputs(
 ) -> std::collections::BTreeSet<String> {
     let mut nullable = std::collections::BTreeSet::new();
     for item in &program.query.body {
-        let cq_lang_cq::BodyItem::Positive { atom } = item else { continue };
+        let cq_lang_cq::BodyItem::Positive { atom } = item else {
+            continue;
+        };
         if let Some(input) = inputs.and_then(|inputs| inputs.get(&atom.relation.to_string())) {
             for (argument, valid) in atom.args.iter().zip(&input.nullable) {
                 if *valid && let syn::Expr::Path(path) = argument {
@@ -164,23 +202,41 @@ fn publication(
     let mut nullable = nullable_inputs(program, inputs);
     if let Some(group) = &program.query.group {
         for aggregate in &group.aggregates {
-            if matches!(aggregate.kind, cq_syntax::algebra::AggregateKind::Min | cq_syntax::algebra::AggregateKind::Max) {
+            if matches!(
+                aggregate.kind,
+                cq_syntax::algebra::AggregateKind::Min | cq_syntax::algebra::AggregateKind::Max
+            ) {
                 nullable.insert(aggregate.name.to_string());
             }
         }
     }
-    let nullable: Vec<_> = program.query.head.args.iter()
-        .map(|argument| matches!(argument, syn::Expr::Path(path)
-            if nullable.contains(&path.path.to_token_stream().to_string())))
+    let nullable: Vec<_> = program
+        .query
+        .head
+        .args
+        .iter()
+        .map(|argument| {
+            matches!(argument, syn::Expr::Path(path)
+            if nullable.contains(&path.path.to_token_stream().to_string()))
+        })
         .collect();
-    let placement = pipeline.publication.resolve(pipeline.target, nullable.iter().any(|value| *value));
+    let placement = pipeline
+        .publication
+        .resolve(pipeline.target, nullable.iter().any(|value| *value));
     if placement == advice::Placement::Device
         && (matches!(pipeline.target, advice::Target::Host) || nullable.iter().any(|value| *value))
     {
-        return Err(syn::Error::new_spanned(program,
-            "device publication requires a device target and nonnullable columns; select host publication"));
+        return Err(syn::Error::new_spanned(
+            program,
+            "device publication requires a device target and nonnullable columns; select host publication",
+        ));
     }
-    Ok(Publication { placement, nullable, domains: Vec::new(), grouped: None })
+    Ok(Publication {
+        placement,
+        nullable,
+        domains: Vec::new(),
+        grouped: None,
+    })
 }
 
 fn checked<T>(
@@ -226,9 +282,13 @@ fn compile_stage(
             });
         }
     };
-    let mut stored_types = kernel.scalar_codec_types(manifest).map_err(|error| Rejected {
-        phase: "loader representation", error: error.to_string(), term: cpu_source.to_string(),
-    })?;
+    let mut stored_types = kernel
+        .scalar_codec_types(manifest)
+        .map_err(|error| Rejected {
+            phase: "loader representation",
+            error: error.to_string(),
+            term: cpu_source.to_string(),
+        })?;
     let mut domains = std::collections::BTreeMap::new();
     if let Some(schema) = &storage_schema {
         for relation in &kernel.relations {
@@ -269,13 +329,19 @@ fn compile_stage(
     }
     // Dictionary IDs are an input representation, independent of the schedule
     // or whether the authored query contains opaque Rust reads.
-    stored_types.extend(kernel.dictionary_types(manifest).map_err(|error| Rejected {
-        phase: "loader representation",
+    stored_types.extend(
+        kernel
+            .dictionary_types(manifest)
+            .map_err(|error| Rejected {
+                phase: "loader representation",
+                error: error.to_string(),
+                term: cpu_source.to_string(),
+            })?,
+    );
+    let setup_bindings = kernel.setup_bindings(manifest).map_err(|error| Rejected {
+        phase: "loader captures",
         error: error.to_string(),
         term: cpu_source.to_string(),
-    })?);
-    let setup_bindings = kernel.setup_bindings(manifest).map_err(|error| Rejected {
-        phase: "loader captures", error: error.to_string(), term: cpu_source.to_string(),
     })?;
     let encoded = kernel
         .encoded_query_with_types(manifest, &stored_types)
@@ -286,18 +352,37 @@ fn compile_stage(
         })?;
     let cq: cq_lang_cq::Program = checked("CQ parse", &encoded, syn::parse2(encoded.clone()))?;
     let normal = checked("CQ normalize", &cq, cq_lang_cq::normal::normalize(&cq))?;
-    let mut publication = checked("publication contract", &normal, publication(&normal, pipeline, publications))?;
+    let mut publication = checked(
+        "publication contract",
+        &normal,
+        publication(&normal, pipeline, publications),
+    )?;
     if publication.resident() {
         publication.grouped = grouped_publication(&cq, &normal, publications);
         if let Some(grouped) = &publication.grouped {
-            checked("grouped publication", &normal, check_grouped(&cq, &normal, grouped))?;
+            checked(
+                "grouped publication",
+                &normal,
+                check_grouped(&cq, &normal, grouped),
+            )?;
         }
     }
-    publication.domains = kernel.answer_columns().map_err(|error| Rejected {
-        phase: "publication domains", error: error.to_string(), term: cpu_source.to_string(),
-    })?.into_iter().map(|origin| origin.filter(|(table, column)|
-        manifest.column(table, column).is_ok_and(|metadata| metadata.encoding == "dictionary")
-    )).collect();
+    publication.domains = kernel
+        .answer_columns()
+        .map_err(|error| Rejected {
+            phase: "publication domains",
+            error: error.to_string(),
+            term: cpu_source.to_string(),
+        })?
+        .into_iter()
+        .map(|origin| {
+            origin.filter(|(table, column)| {
+                manifest
+                    .column(table, column)
+                    .is_ok_and(|metadata| metadata.encoding == "dictionary")
+            })
+        })
+        .collect();
     let reduced = checked(
         "CQ plan advice",
         &normal,
@@ -390,40 +475,69 @@ fn compile_stage(
     // Nullable publication payloads have no device scalar ABI. A join carrying
     // one from either side needs a host-readable index, until a later projection
     // removes that column. Use checked layouts, never Rust type spellings.
-    if !host && publications.is_some_and(|inputs|
-        inputs.values().any(|input| input.nullable.iter().any(|value| *value)))
+    if !host
+        && publications.is_some_and(|inputs| {
+            inputs
+                .values()
+                .any(|input| input.nullable.iter().any(|value| *value))
+        })
     {
         let nullable = nullable_inputs(&normal, publications);
         let host_structures = checked(
-            "nullable host provider selection", &selected,
+            "nullable host provider selection",
+            &selected,
             cq_sequence_plan::select_from_catalog(&selected, &cq_sequence_pull::catalog()),
         )?;
         for index in 0..structures.structures.entries.len() {
             let entry = &structures.structures.entries[index];
             let name = entry.name.to_string();
-            let nullable_reader = facts.physical.keyed_reads.get(&name).into_iter().flatten()
+            let nullable_reader = facts
+                .physical
+                .keyed_reads
+                .get(&name)
+                .into_iter()
+                .flatten()
                 .map(|(reader, _, _)| reader)
-                .chain(facts.physical.merge_reads.get(&name).into_iter().flatten()
-                    .map(|(reader, _)| reader))
-                .any(|reader| facts.layouts.get(reader).is_some_and(|columns|
-                    columns.iter().any(|column| nullable.contains(column)))
-                    && physical.program.definitions.iter().any(|definition|
-                        definition.name == reader.as_str() && matches!(
-                            definition.operator,
-                            cq_lang_physical::Operator::Probe(..) | cq_lang_physical::Operator::Merge(..)
-                        )));
+                .chain(
+                    facts
+                        .physical
+                        .merge_reads
+                        .get(&name)
+                        .into_iter()
+                        .flatten()
+                        .map(|(reader, _)| reader),
+                )
+                .any(|reader| {
+                    facts.layouts.get(reader).is_some_and(|columns| {
+                        columns.iter().any(|column| nullable.contains(column))
+                    }) && physical.program.definitions.iter().any(|definition| {
+                        definition.name == reader.as_str()
+                            && matches!(
+                                definition.operator,
+                                cq_lang_physical::Operator::Probe(..)
+                                    | cq_lang_physical::Operator::Merge(..)
+                            )
+                    })
+                });
             if matches!(entry.structure, cq_lang_structures::Structure::Built { .. })
-                && (nullable_reader || advice::relation_of(&structures.physical, &entry.name)
-                    .and_then(|relation| publications.and_then(|inputs| inputs.get(&relation.to_string())))
-                    .is_some_and(|input| input.nullable.iter().any(|value| *value)))
+                && (nullable_reader
+                    || advice::relation_of(&structures.physical, &entry.name)
+                        .and_then(|relation| {
+                            publications.and_then(|inputs| inputs.get(&relation.to_string()))
+                        })
+                        .is_some_and(|input| input.nullable.iter().any(|value| *value)))
             {
                 let cq_lang_structures::Structure::Built { keyed, .. } =
-                    &host_structures.structures.entries[index].structure else {
-                        unreachable!("catalog selection preserves provider entries");
-                    };
+                    &host_structures.structures.entries[index].structure
+                else {
+                    unreachable!("catalog selection preserves provider entries");
+                };
                 let ty = &keyed.ty;
-                structures = checked("nullable host provider", &structures,
-                    cq_structure_selection::retype(&structures, quote!(entry(#index) => #ty)))?;
+                structures = checked(
+                    "nullable host provider",
+                    &structures,
+                    cq_structure_selection::retype(&structures, quote!(entry(#index) => #ty)),
+                )?;
             }
         }
     }
@@ -485,15 +599,23 @@ fn compile_stage(
     )?;
     // Loader/provider facts, never host type spellings, justify device Rust.
     let origins = kernel.variable_origins().map_err(|error| Rejected {
-        phase: "loader representation", error: error.to_string(), term: cpu_source.to_string(),
+        phase: "loader representation",
+        error: error.to_string(),
+        term: cpu_source.to_string(),
     })?;
     for (variable, origin) in origins {
-        let metadata = manifest.column(&origin.0, &origin.1).map_err(|error| Rejected {
-            phase: "loader representation", error: error.to_string(), term: cpu_source.to_string(),
-        })?;
+        let metadata = manifest
+            .column(&origin.0, &origin.1)
+            .map_err(|error| Rejected {
+                phase: "loader representation",
+                error: error.to_string(),
+                term: cpu_source.to_string(),
+            })?;
         if domains.contains_key(&origin)
-            || (matches!(metadata.encoding.as_str(), "scaled_integer" | "days_since_epoch")
-                && stored_types.contains_key(&origin))
+            || (matches!(
+                metadata.encoding.as_str(),
+                "scaled_integer" | "days_since_epoch"
+            ) && stored_types.contains_key(&origin))
         {
             sequence.representation.encoded.insert(variable);
         } else {
@@ -502,8 +624,13 @@ fn compile_stage(
     }
     if let Some(publications) = publications {
         for item in &normal.query.body {
-            let cq_lang_cq::BodyItem::Positive { atom } = item else { continue };
-            if publications.get(&atom.relation.to_string()).is_some_and(Publication::resident) {
+            let cq_lang_cq::BodyItem::Positive { atom } = item else {
+                continue;
+            };
+            if publications
+                .get(&atom.relation.to_string())
+                .is_some_and(Publication::resident)
+            {
                 for argument in &atom.args {
                     if let syn::Expr::Path(path) = argument
                         && let Some(name) = path.path.get_ident()
@@ -758,11 +885,13 @@ fn compile_stage(
             error: error.to_string(),
             term: cpu_source.to_string(),
         })?;
-        let initializer = source::dictionary_initializer(initializer, &kernel.exports).map_err(|error| Rejected {
-            phase: "dictionary input loader",
-            error: error.to_string(),
-            term: cpu_source.to_string(),
-        })?.unwrap_or_else(|| initializer.to_token_stream());
+        let initializer = source::dictionary_initializer(initializer, &kernel.exports)
+            .map_err(|error| Rejected {
+                phase: "dictionary input loader",
+                error: error.to_string(),
+                term: cpu_source.to_string(),
+            })?
+            .unwrap_or_else(|| initializer.to_token_stream());
         let host_inputs = dependencies.iter().map(|relation| {
             let input = &relation.name;
             if host {
@@ -801,9 +930,12 @@ fn compile_stage(
             // DECODE P: final answer formatting inverts dense source-key domains on the host.
             borrowed_outputs.push(quote!(#decoder.value(*row.#output).to_string()));
             owned_outputs.push(quote!(#decoder.value(row.#output).to_string()));
-        } else if column.as_ref().is_some_and(|origin| stored_types.contains_key(origin)
-            && manifest.column(&origin.0, &origin.1).is_ok_and(|metadata| metadata.encoding == "dictionary"))
-        {
+        } else if column.as_ref().is_some_and(|origin| {
+            stored_types.contains_key(origin)
+                && manifest
+                    .column(&origin.0, &origin.1)
+                    .is_ok_and(|metadata| metadata.encoding == "dictionary")
+        }) {
             let (table, column) = column
                 .as_ref()
                 .expect("encoded string output has an input domain");

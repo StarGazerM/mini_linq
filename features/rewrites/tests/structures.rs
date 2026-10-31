@@ -9,13 +9,13 @@ fn membership_advice_preserves_a_fully_bound_physical_probe() {
         relation L(a:u32,b:u32); relation R(a:u32,b:u32);
         l = pipe rename L@0 {a -> x,b -> y};
         r = let rename R@1 {a -> x,b -> y};
-        joined = pipe canon probe first [x,y] l,r;
+        joined = let canon probe first [x,y] l,r;
         return joined as answer(x,y);
     } structures {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         r = ::cq_storage::HashIndex<'_,_,_> [x,y] supports [keys];
-        joined canon = sort;
+        joined rows = ::cq_storage::dedup::Sort; joined canon = rows;
     }};
     let target = cq_rewrite_passes::membership(&source, quote!(r)).unwrap();
     assert_eq!(target.physical, source.physical);
@@ -42,13 +42,13 @@ fn membership_advice_cannot_discard_a_demanded_payload() {
         relation L(a:u32); relation R(a:u32,b:u32);
         l = pipe rename L@0 {a -> x};
         r = let rename R@1 {a -> x,b -> y};
-        joined = pipe canon probe first [x] l,r;
+        joined = let canon probe first [x] l,r;
         return joined as answer(x,y);
     } structures {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         r = ::cq_storage::HashIndex<'_,_,_> [x];
-        joined canon = sort;
+        joined rows = ::cq_storage::dedup::Sort; joined canon = rows;
     }};
     assert!(cq_rewrite_passes::membership(&source, quote!(r)).is_err());
 }
@@ -60,7 +60,7 @@ fn smallest_expand_source() -> ir::Program {
         r = let rename R@1 {b -> b,c -> c};
         s = let rename S@2 {a -> a,c -> c};
         candidate = pipe probe smallest [b] l,r;
-        checked = pipe canon probe first [a,c] candidate,s;
+        checked = let canon probe first [a,c] candidate,s;
         return checked as answer(a,b,c);
     } structures {
         r = CustomDirectory [b][c] supports [expand];
@@ -70,7 +70,7 @@ fn smallest_expand_source() -> ir::Program {
         s host scan = ::core::iter::Map<_, _> [];
         r rows = ::std::vec::Vec<_>;
         s rows = ::std::vec::Vec<_>;
-        checked canon = sort;
+        checked rows = ::cq_storage::dedup::Sort; checked canon = rows;
     } }
 }
 
@@ -160,7 +160,7 @@ fn membership_bridge_source() -> ir::Program {
         member = pipe probe first [b] first,selected;
         after = pipe probe first [b] member,s;
         last = pipe probe first [c] after,t;
-        out = pipe canon project last keep {a,b,c,d,tag};
+        out = let canon project last keep {a,b,c,d,tag};
         return out as answer(a,b,c,d,tag);
     } structures {
         selected = ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>
@@ -174,7 +174,7 @@ fn membership_bridge_source() -> ir::Program {
         m host result(selected) = ::core::iter::Map<_,_> [tag];
         s host scan = ::core::iter::Map<_,_> [];
         t host scan = ::core::iter::Map<_,_> [];
-        out canon = sort;
+        out rows = ::cq_storage::dedup::Sort; out canon = rows;
     } }
 }
 
@@ -262,7 +262,6 @@ fn source() -> ir::Program {
     ir::contract::check(&source).unwrap();
     source
 }
-
 
 fn missing_storage(target: &ir::Program) -> ir::Program {
     let mut target = target.clone();
@@ -413,19 +412,19 @@ fn provider_trait_compatibility_is_not_inferred_from_type_spelling() {
 #[test]
 fn computed_head_uses_sort_without_touching_physical() {
     let source: cq_testkit::physical::Program = syn::parse_quote!(physical {
-        relation R(a:i32); r = pipe canon rename R@0 {a -> x};
+        relation R(a:i32); r = let canon rename R@0 {a -> x};
         return r as answer(*x % 2);
     });
     let source = cq_structure_selection::compile(&source).unwrap();
     let expected: ir::Program = syn::parse_quote! {
         physical {
-            relation R(a:i32); r = pipe canon rename R@0 {a -> x};
+            relation R(a:i32); r = let canon rename R@0 {a -> x};
             return r as answer(*x % 2);
         }
         structures {
-            r canon = sort;
+            r canon = rows; r rows = ::cq_storage::dedup::Sort;
             r host scan = ::core::iter::Map<_, _> [];
-            r head = sort;
+            r head = ::cq_storage::dedup::Sort;
         }
     };
     assert_eq!(source, expected);
@@ -438,7 +437,7 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
         relation L(a:i32); relation R(a:i32);
         l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
         s = pipe semi eager [x] l,r;
-        p = pipe canon probe first [x] s,r; return p as answer(x);
+        p = let canon probe first [x] s,r; return p as answer(x);
     });
     let source = cq_structure_selection::compile(&source).unwrap();
     assert!(retype(&source, quote!(payload => Shared<'_, _, _>)).is_err());
@@ -448,14 +447,14 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
             relation L(a:i32); relation R(a:i32);
             l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
             s = pipe semi eager [x] l,r;
-            p = pipe canon probe first [x] s,r; return p as answer(x);
+            p = let canon probe first [x] s,r; return p as answer(x);
         }
         structures {
             l host scan = ::core::iter::Map<_, _> [];
             r host scan = ::core::iter::Map<_, _> [];
             r host result(s) = Shared<'_, _, _> [x] membership;
             r host result(p) = Shared<'_, _, _> [x] membership;
-            p canon = sort;
+            p canon = rows; p rows = ::cq_storage::dedup::Sort;
         }
     };
     assert_eq!(target, expected);
@@ -475,7 +474,7 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
         s = let point select r if (z = 1);
         t = let semi eager [x] l,s;
         u = pipe semi eager [x] s,t; j = pipe probe first [x] u,t;
-        out = pipe canon project j keep {x,y}; return out as answer(x,y);
+        out = let canon project j keep {x,y}; return out as answer(x,y);
     }};
     let source = cq_structure_selection::compile_with(&physical, quote!(positional(L, R))).unwrap();
     let membership = retype(
@@ -502,7 +501,22 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
     )
     .unwrap();
     assert_eq!(source.physical, target.physical);
-    assert!(retype(&source, quote!(kind(rows) => ::std::vec::Vec<_>)).is_err());
+    // Positional selection needs no ordinary rows buffers; only the output's
+    // canonical rows provider is eligible for the rows selector.
+    let rows: Vec<_> = source
+        .structures
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry.structure, Structure::Rows { .. }))
+        .map(|entry| entry.name.to_string())
+        .collect();
+    assert_eq!(rows, ["out"]);
+    let canonical = retype(&source, quote!(kind(rows) => CanonicalRows)).unwrap();
+    assert_eq!(canonical.physical, source.physical);
+    assert_eq!(
+        ir::contract::check(&canonical).unwrap().canonical["out"],
+        ir::CanonSource::Rows(syn::parse_quote!(CanonicalRows)),
+    );
     let mut row_only = source.clone();
     for e in &mut row_only.structures.entries {
         if let Structure::Read {
@@ -527,7 +541,7 @@ fn sorted_runs_keeps_two_column_payload_keys_hashed() {
         relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
         l = pipe rename L@0 {a -> x,b -> y};
         r = let rename R@1 {a -> x,b -> y,c -> z};
-        p = pipe canon probe first [x,y] l,r;
+        p = let canon probe first [x,y] l,r;
         return p as answer(x,y,z);
     }};
     let source = cq_structure_selection::compile(&physical).unwrap();
@@ -548,7 +562,7 @@ fn hashed_runs_records_composite_keys_and_preserves_single_key_selection() {
         relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
         l = pipe rename L@0 {a -> x,b -> y};
         r = let rename R@1 {a -> x,b -> y,c -> z};
-        p = pipe canon probe first [x,y] l,r;
+        p = let canon probe first [x,y] l,r;
         return p as answer(x,y,z);
     }};
     let source = cq_structure_selection::compile(&physical).unwrap();
@@ -573,7 +587,7 @@ fn sorted_runs_records_owned_singleton_probe_as_automatic_codec_request() {
         u = pipe unit;
         l = pipe bind u with x:i64 = (meta.x);
         r = let rename R@0 {a -> x,b -> y};
-        p = pipe canon probe first[x] l,r;
+        p = let canon probe first[x] l,r;
         return p as answer(x,y);
     }};
     let source = cq_structure_selection::compile(&physical).unwrap();
@@ -603,7 +617,7 @@ fn hashed_runs_leaves_scalar_encoding_to_rust_traits() {
             relation L(a:#ty,b:i64); relation R(a:#ty,b:i64,c:i64);
             l = pipe rename L@0 {a -> x,b -> y};
             r = let rename R@1 {a -> x,b -> y,c -> z};
-            p = pipe canon probe first[x,y] l,r;
+            p = let canon probe first[x,y] l,r;
             return p as answer(x,y,z);
         }};
         let source = cq_structure_selection::compile(&physical).unwrap();

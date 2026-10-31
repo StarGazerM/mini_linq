@@ -17,7 +17,7 @@ fn main() {
             r = let project r0 keep {b,c};
             s = pipe rename S@0 {a -> a,c -> c};
             candidate = pipe probe smallest [b] l,r;
-            checked = pipe canon semi eager [a,c] candidate,s;
+            checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
         structures {
@@ -28,7 +28,7 @@ fn main() {
             s host result(checked) = ::cq_storage::dispatch::KeySet<_> [a,c];
             s host candidates = ::cq_storage::HashIndex<'_, _, _> [a];
             s host membership = ::cq_storage::dispatch::KeySet<_> [a,c];
-            checked canon = sort;
+            checked rows = ::cq_storage::dedup::Sort; checked canon = rows;
         }
     };
 }

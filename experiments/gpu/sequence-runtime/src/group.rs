@@ -1,10 +1,10 @@
 //! GPU machine instance of segmented grouped monoid folds.
 //! Kernel programs are retained per context for the active query scope; each
 //! fold binds them to its caller's current stream and allocator.
-use crate::{Result, pointer, release, temporary};
+use crate::{pointer, release, temporary, Result};
 use cq_gpu_runtime::{Buffer, Pool};
 use gpu_device_columns::OutputCount;
-use rccl_thrust::{DeviceBufferExt, arithmetic_range, select_flagged};
+use rccl_thrust::{arithmetic_range, select_flagged, DeviceBufferExt};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 // RCCL programs borrow a context, but own their module handles. Keep that
@@ -34,13 +34,17 @@ impl GroupPrograms {
                     rccl_thrust::cuda::Program<'_>,
                     rccl_thrust::cuda::Program<'static>,
                 >(thrust),
-                std::mem::transmute::<
-                    rccl_cub::cuda::Program<'_>,
-                    rccl_cub::cuda::Program<'static>,
-                >(cub),
+                std::mem::transmute::<rccl_cub::cuda::Program<'_>, rccl_cub::cuda::Program<'static>>(
+                    cub,
+                ),
             )
         };
-        Ok(Self { module, thrust, cub, context })
+        Ok(Self {
+            module,
+            thrust,
+            cub,
+            context,
+        })
     }
 }
 
@@ -96,7 +100,11 @@ pub fn aggregate<T: AggregateRepresentation<OPTIONAL>, const OPTIONAL: bool>(
     kind: u32,
 ) -> Result<Aggregate> {
     let min = if kind == 0 { 0 } else { T::MIN };
-    let max = if kind == 0 { T::MAX.min(i64::MAX as i128) } else { T::MAX };
+    let max = if kind == 0 {
+        T::MAX.min(i64::MAX as i128)
+    } else {
+        T::MAX
+    };
     Ok(Aggregate {
         kind,
         min: i64::try_from(min).map_err(|_| "GPU aggregate representation exceeds i64")?,
@@ -122,7 +130,10 @@ mod representation_tests {
     fn count_bounds_fit_the_machine_accumulator() {
         let count = aggregate::<usize, false>(0).unwrap();
         assert_eq!(count.min, 0);
-        assert_eq!(count.max as i128, (usize::MAX as i128).min(i64::MAX as i128));
+        assert_eq!(
+            count.max as i128,
+            (usize::MAX as i128).min(i64::MAX as i128)
+        );
     }
 }
 
@@ -353,10 +364,12 @@ pub unsafe fn fold(
             >(&launch, rows)?)
         };
         if live.is_none() {
-            let shape =
-                module.prepare_identity(cuda_core::LaunchConfig1D::new(1, 256, 0))?;
+            let shape = module.prepare_identity(cuda_core::LaunchConfig1D::new(1, 256, 0))?;
             let blocks = cq_gpu_runtime::launch_grid_for_kernel(
-                shape.function(), rows.div_ceil(256), 256, 0,
+                shape.function(),
+                rows.div_ceil(256),
+                256,
+                0,
             )?;
             module.identity(
                 stream,
@@ -366,10 +379,12 @@ pub unsafe fn fold(
             )?;
         }
         let gather_prepared = if keys != 0 {
-            let shape =
-                module.prepare_gather_key(cuda_core::LaunchConfig1D::new(1, 256, 0))?;
+            let shape = module.prepare_gather_key(cuda_core::LaunchConfig1D::new(1, 256, 0))?;
             let blocks = cq_gpu_runtime::launch_grid_for_kernel(
-                shape.function(), rows.div_ceil(256), 256, 0,
+                shape.function(),
+                rows.div_ceil(256),
+                256,
+                0,
             )?;
             Some(module.prepare_gather_key(cuda_core::LaunchConfig1D::new(blocks, 256, 0))?)
         } else {
@@ -406,9 +421,8 @@ pub unsafe fn fold(
             }
         }
         let shape = module.prepare_boundaries(cuda_core::LaunchConfig1D::new(1, 256, 0))?;
-        let blocks = cq_gpu_runtime::launch_grid_for_kernel(
-            shape.function(), rows.div_ceil(256), 256, 0,
-        )?;
+        let blocks =
+            cq_gpu_runtime::launch_grid_for_kernel(shape.function(), rows.div_ceil(256), 256, 0)?;
         module.boundaries(
             stream,
             &module.prepare_boundaries(cuda_core::LaunchConfig1D::new(blocks, 256, 0))?,

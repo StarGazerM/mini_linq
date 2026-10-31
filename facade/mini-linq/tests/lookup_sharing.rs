@@ -16,7 +16,7 @@ fn shared_lookup_expands_ranges_in_scalar_order() {
             kept = pipe select s if (k >= 1);
             projected = pipe project kept keep {k};
             p = pipe probe first [k] projected,r;
-            out = pipe canon project p keep {k,v};
+            out = let canon project p keep {k,v};
             return out as answer(k,v);
         }
         structures {
@@ -26,7 +26,7 @@ fn shared_lookup_expands_ranges_in_scalar_order() {
             s share = lookup r [k] first s force p;
             s repr = tuples witness { r [k] at s as ::cq_storage::RunCursor<'_, _> };
             p stage = batch 2 expand;
-            out canon = sort;
+            out rows = ::cq_storage::dedup::Sort; out canon = rows;
         }
     }
     .map(|(k, v)| (*k, *v))
@@ -49,7 +49,7 @@ fn positional_witness_is_consumed_by_scalar_probe() {
             s = pipe semi eager [k] l,r;
             kept = pipe select s if (k >= 1);
             p = pipe probe first [k] kept,r;
-            out = pipe canon project p keep {k,v};
+            out = let canon project p keep {k,v};
             return out as answer(k,v);
         }
         structures {
@@ -60,7 +60,7 @@ fn positional_witness_is_consumed_by_scalar_probe() {
             s share = lookup r [k] first s force p;
             s repr = positions { L lineage {k -> k} } owned [] witness { r [k] at s as ::cq_storage::RunCursor<'_, _> };
             kept repr = positions { L lineage {k -> k} } owned [];
-            out canon = sort;
+            out rows = ::cq_storage::dedup::Sort; out canon = rows;
         }
     }.map(|(k,v)| (*k,*v)).collect();
     assert_eq!(result, [(1, 11), (2, 20), (2, 21)]);

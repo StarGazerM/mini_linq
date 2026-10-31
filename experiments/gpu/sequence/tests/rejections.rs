@@ -6,12 +6,13 @@ fn fold_at_noncollaborative_device_is_rejected() {
     let program: Program = syn::parse_quote! {
         physical {
             relation R(a:i32) = (&data.r);
-            r = pipe canon rename R@0 {a -> a};
+            r = let canon rename R@0 {a -> a};
             return r as answer(a);
         }
         structures {
             r host scan = Reader [];
-            r canon = sort;
+            r rows = ::cq_storage::dedup::Sort;
+            r canon = rows;
         }
         sequence {
             input = store rows r;
@@ -34,8 +35,8 @@ fn rust_below_host_requires_identity_representation() {
         }
         structures {
             r host scan = Reader [];
-            bound canon = sort;
-            bound rows = Rows;
+            bound rows = ::cq_storage::dedup::Sort;
+            bound canon = rows;
         }
         sequence { result = store map bound rows r; }
         graded gpu { result at device; }
@@ -47,8 +48,10 @@ fn rust_below_host_requires_identity_representation() {
     assert!(error.contains("BE-RustRepresentation"), "{error}");
     program.representation.encoded.clear();
     program.representation.identity.insert("a".into());
-    assert!(check_grading(&program, &machine()).is_ok(),
-        "arbitrary total Rust is legal on identity device columns");
+    assert!(
+        check_grading(&program, &machine()).is_ok(),
+        "arbitrary total Rust is legal on identity device columns"
+    );
     program.representation.identity.clear();
     program.graded = Some(syn::parse_quote!(graded gpu { result at host; }));
     assert!(
@@ -57,8 +60,10 @@ fn rust_below_host_requires_identity_representation() {
     );
     let unknown = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
     assert!(!unknown.representation.identity.contains("a"));
-    assert!(unknown.representation.identity.contains("n"),
-        "the authored result annotation records identity without admitting unknown inputs");
+    assert!(
+        unknown.representation.identity.contains("n"),
+        "the authored result annotation records identity without admitting unknown inputs"
+    );
     assert!(unknown.representation.encoded.is_empty());
     program.structures.structures.entries[0] = syn::parse_quote!(
         r host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,), ()> [];
@@ -86,12 +91,13 @@ fn scalar_fold_host_code_parses() {
         let program: Program = syn::parse2(quote! {
             physical {
                 relation R(a:i64) = (&data.r);
-                r = pipe canon rename R@0 {a -> a};
+                r = let canon rename R@0 {a -> a};
                 return r as answer(a);
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns [];
-                r canon = sort;
+                r rows = ::cq_storage::dedup::Sort;
+                r canon = rows;
             }
             sequence {
                 input = store rows r;
@@ -124,7 +130,7 @@ fn host_choice_of_expanded_rows_preserves_upstream_range_translation() {
             q = let rename Q@2 {b -> b,c -> c};
             joined = pipe probe first [a] r,p;
             expanded = pipe probe first [b] joined,q;
-            answer = pipe canon project expanded keep {a,b,c};
+            answer = let canon project expanded keep {a,b,c};
             return answer as output(a,b,c);
         }
         structures {
@@ -133,7 +139,8 @@ fn host_choice_of_expanded_rows_preserves_upstream_range_translation() {
             q host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
             p = ::cq_gpu_sequence_runtime::RangeProvider [a];
             q = ::cq_gpu_sequence_runtime::RangeProvider [b];
-            answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer canon = rows;
         }
         sequence {
             input = store rows r;

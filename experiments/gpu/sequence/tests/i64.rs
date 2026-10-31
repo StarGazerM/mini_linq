@@ -10,7 +10,7 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
             r = let rename E@1 {src -> b,dst -> c};
             s = let rename E@2 {src -> a,dst -> c};
             candidate = pipe probe first [b] l,r;
-            checked = pipe canon probe first [a,c] candidate,s;
+            checked = let canon probe first [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
         structures {
@@ -21,7 +21,8 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
             s = ::cq_gpu_sequence_runtime::RangeProvider [a][c];
             r rows = ::cq_gpu_sequence_runtime::RangeProvider;
             s rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            checked canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            checked rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            checked canon = rows;
         }
         sequence {
             Edges = store rows l;
@@ -43,8 +44,10 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
         generated.contains("device :: decode ("),
         "i64 range payloads must use the full-width decoder: {generated}"
     );
-    assert!(generated.contains("< i64 as :: gpu_datalog_runtime :: Scalar > :: COLUMN"),
-        "payload width must come from the recorded scalar provider: {generated}");
+    assert!(
+        generated.contains("< i64 as :: gpu_datalog_runtime :: Scalar > :: COLUMN"),
+        "payload width must come from the recorded scalar provider: {generated}"
+    );
     assert_eq!(analysis.results["result"], "checked");
 
     // An authored smallest probe is not permission to emit a first-probe

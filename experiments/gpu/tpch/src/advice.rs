@@ -99,7 +99,10 @@ impl Pipeline {
 
     pub fn automatic() -> Self {
         Self {
-            recipe: Recipe { automatic: true, ..Recipe::default() },
+            recipe: Recipe {
+                automatic: true,
+                ..Recipe::default()
+            },
             ..Self::baseline()
         }
     }
@@ -150,10 +153,15 @@ impl Pipeline {
         };
         // Groups publish one row per key. MatchingLines retains the Lineitem
         // identity through a unique Orders join; dictionary code sets are unique.
-        keys.iter().map(|(relation, columns)| cq_lang_sequence::EvidenceFact::Key {
-            subject: quote::format_ident!("{relation}"),
-            columns: columns.iter().map(|column| quote::format_ident!("{column}")).collect(),
-        }).collect()
+        keys.iter()
+            .map(|(relation, columns)| cq_lang_sequence::EvidenceFact::Key {
+                subject: quote::format_ident!("{relation}"),
+                columns: columns
+                    .iter()
+                    .map(|column| quote::format_ident!("{column}"))
+                    .collect(),
+            })
+            .collect()
     }
 
     /// Stage-local authored or measured orders; historical measurements are in
@@ -317,10 +325,28 @@ impl Pipeline {
 /// Catalog registration resolves workload labels to printable input facts.
 /// Formal rule DR-Recipe: Execute only explicit recipe facts, never query labels.
 fn catalog_recipe(query: &str) -> Recipe {
-    let simple = matches!(query, "h01" | "h06" | "h19" | "h04"
-        | "h02.0" | "h12.0" | "h12.1" | "h12.2" | "h12.3" | "h12.4"
-        | "h13.0" | "h13.1" | "h16.0" | "h11.1" | "h11.2" | "h15.0"
-        | "h15.1" | "h18.0" | "h20.0");
+    let simple = matches!(
+        query,
+        "h01"
+            | "h06"
+            | "h19"
+            | "h04"
+            | "h02.0"
+            | "h12.0"
+            | "h12.1"
+            | "h12.2"
+            | "h12.3"
+            | "h12.4"
+            | "h13.0"
+            | "h13.1"
+            | "h16.0"
+            | "h11.1"
+            | "h11.2"
+            | "h15.0"
+            | "h15.1"
+            | "h18.0"
+            | "h20.0"
+    );
     let expansions: &[&str] = match query {
         "h05" => &["Orders", "Lineitem"],
         "h09" | "h08" | "d27" | "d19" | "d85" => &["Lineitem"],
@@ -337,15 +363,25 @@ fn catalog_recipe(query: &str) -> Recipe {
     Recipe {
         retained_prefixes: prefixes.iter().map(|s| (*s).into()).collect(),
         filtered_leaves: Vec::new(),
-        retained_probe: (query == "h21_positive").then(|| ("Lineitem".into(), "waiting_supplier".into())),
-        hoist_inputs: matches!(query, "h05" | "h08" | "h21_positive" | "d72_inner" | "h04_not_exists"),
+        retained_probe: (query == "h21_positive")
+            .then(|| ("Lineitem".into(), "waiting_supplier".into())),
+        hoist_inputs: matches!(
+            query,
+            "h05" | "h08" | "h21_positive" | "d72_inner" | "h04_not_exists"
+        ),
         membership: query != "h04" && query != "h05",
-        membership_relations: if query == "h05" { vec!["Supplier".into()] } else { Vec::new() },
+        membership_relations: if query == "h05" {
+            vec!["Supplier".into()]
+        } else {
+            Vec::new()
+        },
         schedule: (!simple).then(|| Schedule {
             expansions: expansions.iter().map(|s| (*s).into()).collect(),
             partition_filters: query != "h05",
             publish_ranges: matches!(query, "d72_inner" | "d85" | "h03"),
-            partition: 256, segment: 1024, items: 4,
+            partition: 256,
+            segment: 1024,
+            items: 4,
         }),
         ..Recipe::default()
     }
@@ -366,7 +402,8 @@ pub fn physical(
     let mut current = source.clone();
     for invocation in invocations {
         let invocation: cq_stage::Invocation = syn::parse_str(invocation)?;
-        current = cq_rewrite_passes::invoke_physical(&current, &invocation.path, invocation.arguments)?;
+        current =
+            cq_rewrite_passes::invoke_physical(&current, &invocation.path, invocation.arguments)?;
     }
     Ok(current)
 }
@@ -378,7 +415,8 @@ pub fn structures(
     let mut current = source.clone();
     for invocation in invocations {
         let invocation: cq_stage::Invocation = syn::parse_str(invocation)?;
-        current = cq_rewrite_passes::invoke_structures(&current, &invocation.path, invocation.arguments)?;
+        current =
+            cq_rewrite_passes::invoke_structures(&current, &invocation.path, invocation.arguments)?;
     }
     Ok(current)
 }
@@ -403,7 +441,10 @@ pub fn provider_layout(program: &cq_lang_physical::Program, relation: &str) -> s
 
 /// Resolve a semantic relation selector to its existing lowered producer. This
 /// follows unary projections/filters, never creates or duplicates an operator.
-pub(crate) fn relation_of<'a>(program: &'a cq_lang_physical::Program, name: &Ident) -> Option<&'a Ident> {
+pub(crate) fn relation_of<'a>(
+    program: &'a cq_lang_physical::Program,
+    name: &Ident,
+) -> Option<&'a Ident> {
     let definition = program
         .program
         .definitions
@@ -498,7 +539,6 @@ pub fn filtered_leaf(
     ))
 }
 
-
 pub fn apply_sequence(
     source: &cq_lang_sequence::Program,
     invocations: &[String],
@@ -544,10 +584,7 @@ pub fn hand_physical(
                     return None;
                 };
                 (relation_of(program, &key.right).is_some_and(|name| name == relation)
-                    && key
-                        .columns
-                        .iter()
-                        .any(|name| name == column))
+                    && key.columns.iter().any(|name| name == column))
                 .then_some(&definition.name)
             })
             .ok_or_else(|| {
@@ -646,7 +683,14 @@ pub fn hand_schedule(
     }];
     // Partition every independent device-side numeric filter. Tiling only join
     // expansion leaves a 6M/60M-row publication as a scalar producer.
-    for definition in source.structures.physical.program.definitions.iter().filter(|_| recipe.partition_filters) {
+    for definition in source
+        .structures
+        .physical
+        .program
+        .definitions
+        .iter()
+        .filter(|_| recipe.partition_filters)
+    {
         let device = planned.trace.iter().any(|step| {
             matches!(step,
             Advice::Grade { name, level, .. }
@@ -735,7 +779,8 @@ pub fn hand_schedule(
         let name = &definition.name;
         // Decomposition may extract a probe into a provider, consuming its
         // named flatten. Segment only boundaries retained in the current plan.
-        if planned.program
+        if planned
+            .program
             .sequence
             .definitions
             .iter()

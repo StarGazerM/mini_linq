@@ -37,7 +37,7 @@ fn membership_plan() -> cq_lang_structures::Program {
         r = pipe rename R@1 {a -> x,b -> y};
         selected = let range select r if (y > 1);
         joined = pipe probe first [x] l,selected;
-        result = pipe canon project joined keep {x};
+        result = let canon project joined keep {x};
         return result as answer(x);
     }};
     cq_structure_selection::compile_with(&source, quote::quote!(positional(L, R))).unwrap()
@@ -123,7 +123,7 @@ fn join_filters_emit_adaptive_builds_and_provider_independent_identity_predicate
         r = pipe rename R@1 {a -> x,b -> y};
         selected = let range select r if (y > 1);
         joined = pipe probe first [x] l,selected;
-        result = pipe canon project joined keep {x,y};
+        result = let canon project joined keep {x,y};
         return result as answer(x,y);
     }};
     let program = cq_structure_selection::compile_with(&source, quote!(positional(L, R))).unwrap();

@@ -7,7 +7,7 @@ fn host_set_text_round_trips_and_removes_only_implied_canon() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation E(a:i64,b:i64);
         e = pipe rename E@0 {a -> x,b -> y};
-        p = pipe canon project e keep {x,y};
+        p = let canon project e keep {x,y};
         return p as answer(x,y);
     }};
     let target = host_sets(&source, quote!(E)).unwrap();
@@ -15,7 +15,7 @@ fn host_set_text_round_trips_and_removes_only_implied_canon() {
         relation E(a:i64,b:i64);
         host_set E;
         e = pipe rename E@0 {a -> x,b -> y};
-        p = pipe project e keep {x,y};
+        p = let project e keep {x,y};
         return p as answer(x,y);
     }};
     assert_eq!(target, expected);
@@ -38,7 +38,7 @@ fn dropping_full_heading_key_keeps_canon() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation E(a:i64,b:i64);
         e = pipe rename E@0 {a -> x,b -> y};
-        p = pipe canon project e keep {x};
+        p = let canon project e keep {x};
         return p as answer(x);
     }};
     let target = host_sets(&source, quote!(E)).unwrap();

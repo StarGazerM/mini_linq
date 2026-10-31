@@ -36,8 +36,10 @@ pub fn decompose(input: TokenStream) -> TokenStream {
             &source,
             &cq_gpu_sequence_core::machine(),
             &cq_gpu_sequence_core::catalog(),
-        )?.program)
-    }).into()
+        )?
+        .program)
+    })
+    .into()
 }
 
 /// Check the authored grades against the GPU machine without choosing grades.
@@ -72,8 +74,10 @@ pub fn translate(input: TokenStream) -> TokenStream {
 pub fn translate_arena(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, arguments| {
         if arguments.is_empty() {
-            return Err(syn::Error::new(proc_macro2::Span::call_site(),
-                "GPU Sequence translate_arena requires an explicit arena expression"));
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "GPU Sequence translate_arena requires an explicit arena expression",
+            ));
         }
         let arena = syn::parse2::<syn::Expr>(arguments)?;
         let source = cq_gpu_sequence_core::runs::record_representation(source)?;
@@ -111,5 +115,6 @@ pub fn capture_constants(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::physical::Program>(input.into(), |source, arguments| {
         no_arguments(arguments)?;
         cq_gpu_sequence_core::constants::compile(source)
-    }).into()
+    })
+    .into()
 }

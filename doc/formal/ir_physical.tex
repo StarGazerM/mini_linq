@@ -31,7 +31,7 @@ common heading; probe and merge take the union;
 types; its origin checks free/interface, prefix/domain and witness metadata;
 (5)~an all-bare head's dependencies equal the returned heading.
 The analysis derives rows, source identifiers, types, computed columns, hosts,
-keyed/merge/range reads, scans, modes and canon flags. With
+keyed/merge/range reads, scans, reader counts, modes and canon flags. With
 $\mathsf{reads}(r)$ the operand and return uses of $r$:
 \begin{mathpar}
 \Rule{PH-Pipe}{\mathsf{mode}(r)=pipe\quad r\text{ is not a literal-bearing rename}\\
@@ -41,6 +41,10 @@ $\mathsf{reads}(r)$ the operand and return uses of $r$:
 
 \Rule{PH-Let}{\mathsf{mode}(r)\in\{let,exists\}\quad\mathsf{reads}(r)>0}
  {\mathsf{PModeOK}(r)}
+
+\Rule{PH-Canon}{r=\mathsf{canon}(\ldots)\quad
+ \mathsf{mode}(r)\in\{let,exists\}\ \lor\ (\mathsf{mode}(r)=pipe\land r\text{ is a host rename})}
+ {\mathsf{PCanonOK}(r)}
 
 \Rule{PH-Block}{\text{branch scopes derived from union origins and fixed operands}\\
  \text{Rust payloads and free-variable binding identities preserved}}
@@ -118,6 +122,20 @@ decomposition decision: a back end may start a new kernel or task at the
 retained rows, so the consumer's parallel domain becomes those rows instead of
 the stream's first relation.
 
+\paragraph{Merges on retained sides.}
+\code{cq_rewrites::merge_joins} replaces a selected probe by a merge only when
+each side supplies order through retained storage, a reusable host, or a
+same-key merge stream. A canon result with a single unkeyed reader is not
+retained storage: PH-Canon stores it only in its canonical index, whose rows
+move by value into that reader (STR-RowsByValue).
+\begin{mathpar}
+\Rule{EXT-MergeRetained}{\mathsf{mode}(r)=let\quad\neg(r\in\mathrm{canon}\wedge
+ r\text{ has one unkeyed reader})}
+ {r\text{ may supply the order of a merge side}}
+\end{mathpar}
+Such a canon result is a canonical stream, as a canon pipe was; a merge on it
+would add an ordered index the probe does not need. Modes are never changed.
+
 \paragraph{Checked host sets.}
 The opt-in Physical rewrite \code{cq_rewrites::host_sets(R,...)} consumes
 relation-name advice and records \code{host_set R;} in the program text.
@@ -152,7 +170,9 @@ uniqueness or literal inference.
 
 \paragraph{Recorded decisions.} \code{pipe} (one streamed read), \code{let}
 (retained, read more than once), \code{exists} (retained witness); \code{canon}
-boundaries; \code{probe first|smallest}; \code{merge}; \code{semi/anti
+boundaries, stored in their canonical index (PH-Canon: lowering makes a canon
+result a \code{let} unless it is a host rename whose canonical index is the
+host carrier); \code{probe first|smallest}; \code{merge}; \code{semi/anti
 eager|lazy}; \code{union any|all}, \code{fused} prefixes and dedup placement.
 Defaults: written branch order, test unions \code{any}, binding unions
 \code{canon} unless proved disjoint, fused prefixes for per-row arms. A fused

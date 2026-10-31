@@ -46,11 +46,11 @@ fn probe_shape_and_structural_checker_reject_mutations() {
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a,b -> b};
             j = pipe probe first [a] l,r;
-            out = pipe canon project j keep {b};
+            out = let canon project j keep {b};
             return out as answer(b);
         } structures {
             l host scan = Reader []; r host scan = Reader [];
-            r = Provider [a]; out canon = sort;
+            r = Provider [a]; out rows = ::cq_storage::dedup::Sort; out canon = rows;
         }
     };
     let target = accept(&source);
@@ -80,13 +80,13 @@ fn correspondence_accepts_authored_output_names_but_not_another_result() {
     let source: cq_lang_structures::Program = syn::parse_quote! {
         physical {
             relation R(a:i32); relation S(a:i32);
-            r = pipe canon rename R@0 {a -> a};
-            s = pipe canon rename S@1 {a -> a};
-            u = pipe canon union r,s;
+            r = let canon rename R@0 {a -> a};
+            s = let canon rename S@1 {a -> a};
+            u = let canon union r,s;
             return u as answer(a);
         } structures {
             r host scan = Reader []; s host scan = Reader [];
-            r canon = sort; s canon = sort; u canon = sort;
+            r rows = ::cq_storage::dedup::Sort; r canon = rows; s rows = ::cq_storage::dedup::Sort; s canon = rows; u rows = ::cq_storage::dedup::Sort; u canon = rows;
         }
     };
     let target: Program = syn::parse_quote! {
@@ -114,7 +114,7 @@ fn output_name_is_fresh_and_return_canon_is_preserved() {
             return canon __sequence_output as answer(a);
         } structures {
             __sequence_output host scan = Reader [];
-            __sequence_output head = sort;
+            __sequence_output head = ::cq_storage::dedup::Sort;
         }
     };
     let target = accept(&source);
@@ -132,7 +132,7 @@ fn merge_uses_lookup_with_both_ordered_provider_obligations() {
             relation L(a:i32); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a,b -> b};
-            j = pipe canon merge [a] l,r;
+            j = let canon merge [a] l,r;
             return j as answer(a,b);
         }
     };
@@ -156,7 +156,7 @@ fn groups_lower_to_segmented_folds_after_complete_valuation_canon() {
         physical {
             relation R(k:i32, witness:i32, value:i64, anonymous:i32);
             raw = pipe rename R@0 {k -> k, witness -> witness, value -> value, anonymous -> anonymous};
-            valuations = pipe canon project raw keep {k, witness, value};
+            valuations = let canon project raw keep {k, witness, value};
             grouped = pipe group valuations by [k] {
                 n: usize = count();
                 total: i64 = sum(value);
@@ -220,7 +220,7 @@ fn projected_membership_probe_lowers_to_flat_compact_before_expansion() {
             t = let rename T@2 {b -> b,c -> c};
             member = pipe probe first [a] l,r;
             expanded = pipe probe first [b] member,t;
-            out = pipe canon project expanded keep {a,b,c};
+            out = let canon project expanded keep {a,b,c};
             return out as answer(a,b,c);
         }
     };
@@ -262,7 +262,7 @@ fn raw_full_key_host_membership_lowers_to_compact_without_type_inspection() {
                 t = let rename T@2 {c -> c,d -> d};
                 member = pipe probe first [a,b] l,r;
                 expanded = pipe probe first [c] member,t;
-                out = pipe canon project expanded keep {a,b,c,d};
+                out = let canon project expanded keep {a,b,c,d};
                 return out as answer(a,b,c,d);
             }
         };

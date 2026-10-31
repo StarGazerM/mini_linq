@@ -91,7 +91,9 @@ fn terminal(
             );
             Ok(())
         }
-        syn::Expr::MethodCall(method) if method.method == "collect" || method.method == "into_iter" => {
+        syn::Expr::MethodCall(method)
+            if method.method == "collect" || method.method == "into_iter" =>
+        {
             terminal(&method.receiver, aliases, result)
         }
         syn::Expr::MethodCall(method) if method.method == "map" && method.args.len() == 1 => {
@@ -123,7 +125,13 @@ fn publication_map(map: &syn::ExprClosure) -> syn::ExprClosure {
             if let syn::Expr::MethodCall(method) = expression
                 && method.method == "publish"
                 && method.args.len() == 2
-                && matches!(&method.args[0], syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. }))
+                && matches!(
+                    &method.args[0],
+                    syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(_),
+                        ..
+                    })
+                )
                 && (matches!(method.receiver.as_ref(), syn::Expr::Path(path) if path.path.is_ident("dictionaries"))
                     || matches!(method.receiver.as_ref(), syn::Expr::Field(field)
                         if matches!(&field.member, syn::Member::Named(name) if name == "dictionaries")
@@ -223,9 +231,7 @@ impl Program {
                     .stmts
                     .iter()
                     .find_map(|statement| match statement {
-                        syn::Stmt::Local(local)
-                            if binding(&local.pat) == Some(&input.name) =>
-                        {
+                        syn::Stmt::Local(local) if binding(&local.pat) == Some(&input.name) => {
                             local.init.as_ref()
                         }
                         _ => None,
@@ -261,7 +267,10 @@ impl Program {
                                 });
                                 return;
                             }
-                            Err(error) => { self.error = Some(error); return; }
+                            Err(error) => {
+                                self.error = Some(error);
+                                return;
+                            }
                             Ok(None) => {}
                         }
                         if let syn::Expr::Field(field) = expression
@@ -291,10 +300,16 @@ impl Program {
                                         self.prepared.push((prepared.clone(), producer));
                                     }
                                     Ok(None) => {
-                                        self.error = Some(format!("unbound preprocessing data field {name}").into());
+                                        self.error = Some(
+                                            format!("unbound preprocessing data field {name}")
+                                                .into(),
+                                        );
                                         return;
                                     }
-                                    Err(error) => { self.error = Some(error); return; }
+                                    Err(error) => {
+                                        self.error = Some(error);
+                                        return;
+                                    }
                                 }
                             }
                             *expression = syn::parse_quote!(#prepared);
@@ -312,10 +327,14 @@ impl Program {
                     used: Vec::new(),
                 };
                 fields.visit_expr_mut(&mut expression);
-                if let Some(error) = fields.error { return Err(error); }
+                if let Some(error) = fields.error {
+                    return Err(error);
+                }
                 if !fields.prepared.is_empty() {
-                    let declarations = fields.prepared.iter().map(|(name, producer)|
-                        quote!(let #name = #producer;));
+                    let declarations = fields
+                        .prepared
+                        .iter()
+                        .map(|(name, producer)| quote!(let #name = #producer;));
                     expression = syn::parse_quote!({ #(#declarations)* #expression });
                 }
                 preprocessing.push(Preprocess {
@@ -323,11 +342,16 @@ impl Program {
                     columns: input
                         .columns
                         .iter()
-                        .map(|c| (c.name.clone(), if dictionary_input {
-                            syn::parse_quote!(u32)
-                        } else {
-                            c.ty.clone()
-                        }))
+                        .map(|c| {
+                            (
+                                c.name.clone(),
+                                if dictionary_input {
+                                    syn::parse_quote!(u32)
+                                } else {
+                                    c.ty.clone()
+                                },
+                            )
+                        })
                         .collect(),
                     expression,
                     relations: fields.used,
@@ -417,12 +441,9 @@ fn loader_declarations(file: &syn::File) -> Result<Vec<Relation>> {
         .iter()
         .find_map(|item| match item {
             syn::Item::Macro(item)
-                if item
-                    .mac
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|s| s.ident == "relation_loaders" || s.ident == "interned_relation_loaders") =>
+                if item.mac.path.segments.last().is_some_and(|s| {
+                    s.ident == "relation_loaders" || s.ident == "interned_relation_loaders"
+                }) =>
             {
                 Some(item.mac.tokens.clone())
             }
@@ -432,10 +453,21 @@ fn loader_declarations(file: &syn::File) -> Result<Vec<Relation>> {
     let mut declarations = syn::parse2::<Declarations>(tokens)?.0;
     let exports = crate::source::export_tables(file)?;
     for relation in &mut declarations {
-        let projection: Vec<_> = relation.columns.iter().map(|(name, _)| name.to_string()).collect();
-        let matches: Vec<_> = exports.iter().filter(|(_, columns)| *columns == projection).collect();
+        let projection: Vec<_> = relation
+            .columns
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect();
+        let matches: Vec<_> = exports
+            .iter()
+            .filter(|(_, columns)| *columns == projection)
+            .collect();
         if matches.len() != 1 {
-            return Err(format!("loader {} requires exactly one EXPORTS projection", relation.name).into());
+            return Err(format!(
+                "loader {} requires exactly one EXPORTS projection",
+                relation.name
+            )
+            .into());
         }
         relation.table = syn::parse_str(&matches[0].0)?;
     }
@@ -505,9 +537,9 @@ mod tests {
     fn terminal_publication_preserves_stage_order_and_rejects_computation() {
         let aliases = BTreeMap::from([("left".into(), 0), ("right".into(), 1)]);
         let expression = syn::parse_quote!(
-            left.chain(right).map(|(code, count)| {
-                (data.dictionaries.publish("label", code), count)
-            }).collect()
+            left.chain(right)
+                .map(|(code, count)| { (data.dictionaries.publish("label", code), count) })
+                .collect()
         );
         let mut stages = Vec::new();
         terminal(&expression, &aliases, &mut stages).unwrap();
@@ -521,7 +553,11 @@ mod tests {
     #[test]
     fn terminal_stage_maps_defer_dictionary_publication_to_the_gpu_decoder() {
         for name in ["h02", "h15", "h18"] {
-            let source = crate::source::SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
+            let source = crate::source::SOURCES
+                .iter()
+                .find(|(query, _)| *query == name)
+                .unwrap()
+                .1;
             let program = Program::import(source).unwrap().unwrap();
             for &index in &program.terminal {
                 let map = program.stages[index].map.as_ref().unwrap();
@@ -529,13 +565,18 @@ mod tests {
                 assert!(!map.to_token_stream().to_string().contains("publish"));
             }
         }
-        let projection: syn::ExprClosure = syn::parse_quote!(
-            |(code, count)| (data.dictionaries.publish("label", *code), *count, 0)
-        );
+        let projection: syn::ExprClosure = syn::parse_quote!(|(code, count)| (
+            data.dictionaries.publish("label", *code),
+            *count,
+            0
+        ));
         let mapped = owned_map(&publication_map(&projection));
-        assert_eq!(mapped.to_token_stream().to_string(),
-            quote!(|(code, count)| (code, count, 0)).to_string());
-        let unrelated: syn::ExprClosure = syn::parse_quote!(|(code,)| (other.publish("label", code),));
+        assert_eq!(
+            mapped.to_token_stream().to_string(),
+            quote!(|(code, count)| (code, count, 0)).to_string()
+        );
+        let unrelated: syn::ExprClosure =
+            syn::parse_quote!(|(code,)| (other.publish("label", code),));
         assert_eq!(publication_map(&unrelated), unrelated);
     }
 }

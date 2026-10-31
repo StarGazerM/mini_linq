@@ -73,7 +73,7 @@ fn merge_mixed_native_and_retained_keys_execute_corpus_answers() {
             r0 = pipe rename R@0 {first -> x, second -> y};
             r1 = let rename S@1 {first -> x, second -> y};
             r2 = pipe probe first [x,y] r0,r1;
-            r3 = pipe canon project r2 keep {x,y}; return r3 as answer(x,y);
+            r3 = let canon project r2 keep {x,y}; return r3 as answer(x,y);
         }
     }
     .map(|(x, y)| vec![*x, *y])
@@ -125,7 +125,8 @@ fn membership_trie_and_rows_retypes_execute_their_trait_obligations() {
             cq_rewrites::retype(r => Payload<'_, _, _>),
             cq_rewrites::retype(s => Membership<_>),
             cq_rewrites::retype(trie => Curried<'_, _, Payload<'_, _, _>>),
-            cq_rewrites::retype(rows => Buffer<_>),
+            // Entry 10 is p's ordinary rows; out's canonical rows remain Sort.
+            cq_rewrites::retype(entry(10) => Buffer<_>),
             mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         };
         physical {
@@ -134,9 +135,13 @@ fn membership_trie_and_rows_retypes_execute_their_trait_obligations() {
             r = let rename R@2 {a -> x,b -> y}; s = let rename S@3 {a -> x};
             t = let rename T@4 {a -> x,b -> y};
             j = pipe merge[x] l,o; n = pipe semi eager[x] j,t;
-            p = let probe first[x] n,r; m = pipe semi eager[x] p,s;
+            p = let probe first[x] n,r;
+            // Two scan consumers retain the ordinary rows buffer.
+            copy = pipe project p keep {x,y};
+            repeated = pipe union p,copy;
+            m = pipe semi eager[x] repeated,s;
             q = pipe probe first[x,y] m,t;
-            out = pipe canon project q keep {x,y}; return out as answer(x,y);
+            out = let canon project q keep {x,y}; return out as answer(x,y);
         }
     }
     .map(|(x, y)| vec![*x, *y])

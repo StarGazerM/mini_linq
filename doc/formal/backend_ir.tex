@@ -117,6 +117,9 @@ one part; a separated store publishes the concatenation of its outer parts.
 \Rule{BE-Bind}{}
  {\sem{\mathsf{probe}[K](l,b)}=\mathrm{supp}\,\alpha\big(\mathsf{flatten}(\mathsf{map}\,(x\mapsto x\bowtie\mathsf{lookup}_b[K]\,x)\,l)\big)}
 
+\Rule{BE-OrderedFallback}{\mathsf{host}(r)\quad\text{reader }c\text{ of }r\text{ is a merge}\quad\mathsf{fallback}(r,c)=T}
+ {\text{the ordered read of }r\text{ is typed }T\text{, not by another reader's fallback}}
+
 \Rule{BE-Partition}{\{P_k\}\text{ disjoint}\quad\textstyle\bigcup_kP_k=[0,|t|)\quad
  (\oplus,e)\text{ commutative}}
  {\mathsf{fold}_{(\oplus,e)}(\mathsf{map}\,f\,t)=\textstyle\bigoplus_k\mathsf{fold}_{(\oplus,e)}(\mathsf{map}\,f\,t|_{P_k})}
@@ -179,13 +182,15 @@ support; a final \code{else} covers the remaining worker counts. Pull supplies
 one worker; target-hook translations receive an explicit worker expression,
 with Tasks supplying \code{rayon::current\_num\_threads()}.
 
-Canonicalization strategy belongs to Structures/Sequence, not to a provider
-name or a per-element hash-insert law. Sort is the default, including
-computed heads; it collects the whole stream at that boundary before
-sorting and adjacent unique. Tasks realizes the sort with parallel comparison
+Canonicalization is the build of the result's canonical index, an ordinary
+index recorded by Structures (STR-Canon), not a strategy name or a
+per-element hash-insert law. Its rows provider is a \textsc{PL-Distinct}
+provider; the default \code{dedup::Sort} (sorted array), used also for
+computed heads, collects the whole stream at that boundary before
+sorting and adjacent unique (\textsc{BE-CanonSort}). Tasks realizes the sort with parallel comparison
 sorting and then an in-place adjacent-unique pass. Comparisons use Rust
 \code{Ord} on borrowed fields, including opaque user types and wide rows.
-Ordered consumes only a direct proof-carrying host scan: the load check
+A \code{host} reference (\textsc{BE-CanonOrdered}) consumes only a direct proof-carrying host scan: the load check
 retains the exact prefix comparison with immutable rows. No downstream
 projection, predicate, join or computed head propagates that witness.
 It proves order, never uniqueness; every equal-prefix run still requires
@@ -193,10 +198,10 @@ complete-row sort and unique. A borrowed realization may collect row
 references without copying owned rows. Consumer membership indexes remain
 separate, and CPU Datalog's \textsc{DL-InsertNew} hash-seen admission is
 outside this cutover.
-Push consumers obey the same recorded whole-stream Sort barrier: publication
+Push consumers obey the same whole-stream provider-build barrier: publication
 callbacks begin only after its input is collected and canonicalized. A push
 printer may not substitute per-element hash insertion to preserve earlier
-callback timing; that would ignore the recorded execution strategy.
+callback timing; that would ignore the recorded canonical index.
 
 \paragraph{Key-disjoint partitions.}
 Let $B=\alpha t$ be a bag of complete valuations $V$, $K$ a tuple of
@@ -306,7 +311,8 @@ exact bucket, contiguous range (rangeCursor), membership, order. Its type
 is an opaque token discharged by runtime traits, as Structures does today
 (STR-Key, STR-SortedRun); the same holds for codecs (BE-Code's premises
 are trait obligations, like Leibniz admissibility). Canonicalization instead
-records the checked Sort or Ordered strategy; runtime order laws remain premises.
+records the checked canonical reference (a \textsc{PL-Distinct} rows provider,
+an existence-only Built index, or the host carrier); runtime order laws remain premises.
 
 \subsection{Placement: a grading over a machine parameter}
 \begin{definition}[Machine model]
@@ -519,7 +525,7 @@ publication record, and the interpreter may not infer a new scheduling guard.
 \subsection{Decomposition}
 A planner is an advice generator, not another interpretation of Sequence.
 Its inputs are a Sequence program $t$, a machine $M$, and an ordered catalog
-$K$ of target-supplied providers, codecs and canon-strategy support with capabilities
+$K$ of target-supplied providers (including \code{Distinct} canonical rows providers) and codecs with capabilities
 and admissible levels. The catalog is data: shared planning and checking
 do not depend on a target implementation. A successful result is a graded
 program together with a replayable trace of the existing Sequence rewrites.
@@ -544,6 +550,10 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
  \mathsf{elements}(e)\subseteq\mathsf{acceptedElements}(k)\}}
  {\mathsf{select}(s,K):\
  e.\mathsf{type}\gets k.\mathsf{type}\quad\text{by checked retention, index construction and retype}}
+
+\Rule{PL-Distinct}{\mathsf{Distinct}\in\mathsf{caps}(P)\quad t\text{ any row stream}}
+ {\alpha(\mathsf{build}_P\,t)=\iota(\mathrm{supp}\,\alpha t)\quad
+  \mathsf{scan}_P\text{ reads each stored row once}}
 
 \Rule{PL-Resident}{\mathsf{hostRead}(p)\quad \exists\ell\in\mathsf{reads}(p).\ |\ell|>1}
  {\mathsf{admit}(p,k)\Longrightarrow
@@ -736,9 +746,10 @@ their keyed fallbacks replaced by built indexes. The dedicated
 \code{check\_retention\_rewrite} checks both endpoints and the Physical
 rewrite contract, requiring identical non-mode Physical syntax and order,
 original host scans, existing key layouts and canonical boundaries.
-Provider, retained-row and membership-state types may change, as may Sort's
-explicit \code{using} implementation. The canonicalization strategy itself
-is preserved, particularly Ordered's verified-carrier requirement.
+Provider, retained-row and membership-state types may change, including a
+canonical rows provider retyped to another \code{Distinct} provider. The
+canonical reference itself is preserved, particularly the host reference's
+verified-carrier requirement.
 Ordinary Structures rewrites still require exact Physical syntax; neither
 boundary permits replacing an opaque reader or predicate.
 When catalog selection follows Sequence lowering, each newly retained
@@ -791,8 +802,8 @@ protocols are filled: count when the final length depends only on input
 lengths, otherwise reserve; a bounded protocol requires an authored
 capacity. Reported provider, canon and codec obligations are validated
 against catalog capabilities at their levels. Structures already records
-provider types and canon strategies, including any explicit Sort implementation.
-Catalog support may refine that implementation without changing the strategy.
+provider types and canonical references; a canonical rows provider must carry
+the \code{Distinct} capability. Catalog support may retype that provider without changing the reference.
 Codec laws remain abstract runtime premises; planning validates
 catalog support, not those laws. Every proposed rewrite and the resulting
 grade are checked; no emitter decision is introduced.
@@ -825,7 +836,7 @@ grading, lengths and views.
   \mathsf{flatten}\mapsto\text{iterator concatenation},\
   \mathsf{tile}\mapsto\text{contiguous groups},\
   \mathsf{choose}\mapsto\text{else arm unless a worker guard requires first-match evaluation},\
-  \mathsf{fold}\mapsto\oplus,\ \mathsf{canon}\mapsto\text{the recorded Sort/Ordered strategy},\
+  \mathsf{fold}\mapsto\oplus,\ \mathsf{canon}\mapsto\text{the canonical provider's build},\
   \mathsf{store}\mapsto\text{intermediate }\code{Vec}\text{ or final count iterator}}
 \end{mathpar}
 BE-TaskProducer records stable producer identities; an active producer is
@@ -855,7 +866,8 @@ propagates Rust failure by unwinding.
   \text{probe, merge}\mapsto\mathsf{flatten}(\mathsf{lookup});\
   \text{semi, anti}\mapsto\mathsf{compact}(\mathsf{lookup}_{\rm membership});\
   \text{union}\mapsto\mathsf{union};\
-  \text{let}\mapsto\mathsf{store};\ \text{canon}\mapsto\mathsf{canon};\
+  \text{let}\mapsto\mathsf{store}\ (\text{except a canon let whose rows record moves by value, STR-RowsByValue});\
+  \text{canon}\mapsto\mathsf{canon};\
   \text{return}\mapsto\mathsf{store}\text{ with }\mathsf{output}\ \mathsf{count};\ \text{no tile, no grade}}
 \end{mathpar}
 The checker re-derives this construction and compares it structurally.
@@ -1093,7 +1105,7 @@ This is an instance of BE-Canon: successive stable least-significant-lane
 passes establish a total complete-key order, and adjacent equality compares
 every lane. The target's \code{PackedCanon} (at most 128 bits) and
 \code{WideCanon} (no fixed width limit) are device implementations of
-sort/unique, recorded as \code{sort using Type}, not interchangeable hash-set
+sort/unique, recorded as \code{Distinct} canonical rows providers (\textsc{PL-Distinct}), not interchangeable hash-set
 canonicalizers.
 Complete declared domains, never statistical evidence, supply conservative
 width obligations; actual lane counts use codec bounds at setup. Both

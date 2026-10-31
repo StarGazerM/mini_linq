@@ -9,9 +9,14 @@ fn fold_providers(generated: &syn::Expr) -> Vec<Option<syn::Type>> {
     impl<'a> syn::visit::Visit<'a> for Folds {
         fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
             if let syn::Expr::Path(path) = &*call.func
-                && path.path.segments.last().is_some_and(|segment| segment.ident == "fold")
+                && path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "fold")
             {
-                self.0.push(path.qself.as_ref().map(|qself| (*qself.ty).clone()));
+                self.0
+                    .push(path.qself.as_ref().map(|qself| (*qself.ty).clone()));
             }
             syn::visit::visit_expr_call(self, call);
         }
@@ -26,13 +31,14 @@ fn translates_grouped_canonical_publication() {
     let mut program: Program = syn::parse_quote! {
         physical {
             relation R(k:u32,id:u32,value:i64) = (data);
-            r = pipe canon rename R@0 {k -> k,id -> id,value -> value};
+            r = let canon rename R@0 {k -> k,id -> id,value -> value};
             grouped = let group r by [k] { n:usize=count(); total:i64=sum(value); low:Option<i64> = min(value); high:Option<i64> = max(value); };
             return grouped as answer(k,n,total,low,high);
         }
         structures {
             r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
-            r canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            r rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            r canon = rows;
             grouped rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
             grouped group = ::std::collections::HashMap<_, (usize, i64, Option<i64>, Option<i64>)>;
         }
@@ -74,13 +80,14 @@ fn gpu_grouped_counts_sums_extrema_and_canonical_valuations() -> Result<()> {
         let result = cq_gpu_sequence_test_macros::sequence! {
             physical {
                 relation R(k:u32,id:u32,value:i64) = (&data);
-                r = pipe canon rename R@0 {k -> k,id -> id,value -> value};
+                r = let canon rename R@0 {k -> k,id -> id,value -> value};
                 grouped = let group r by [k] { n:usize=count(); total:i64=sum(value); low:Option<i64> = min(value); high:Option<i64> = max(value); };
                 return grouped as answer(k,n,total,low,high);
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
-                r canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                r rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                r canon = rows;
                 grouped rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
                 grouped group = ::std::collections::HashMap<_, (usize, i64, Option<i64>, Option<i64>)>;
             }
@@ -125,7 +132,7 @@ fn gpu_keyed_group_reads_resident_columns_and_filters_before_folding() -> Result
             physical {
                 relation R(k:u32,id:u32,value:i64) = (&data);
                 r = pipe rename R@0 {k -> k,id -> id,value -> value};
-                f = pipe canon select r if (value > 0);
+                f = let canon select r if (value > 0);
                 grouped = let group f by [k] {
                     n:usize=count(); total:i64=sum(value);
                     low:Option<i64> = min(value); high:Option<i64> = max(value);
@@ -134,7 +141,8 @@ fn gpu_keyed_group_reads_resident_columns_and_filters_before_folding() -> Result
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
-                f canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                f rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                f canon = rows;
                 grouped rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
                 grouped group = ::std::collections::HashMap<_, (usize, i64, Option<i64>, Option<i64>)>;
             }
@@ -168,17 +176,21 @@ fn whole_input_fold_combines_block_partials_including_empty_identity() -> Result
         let raw: Vec<_> = (0..count).map(|n| (n as i64 - 7,)).collect();
         let expected = raw.iter().map(|row| row.0).sum::<i64>();
         let data = DeviceColumns::from_rows(
-            pool.clone(), &raw, &mut Dictionary::default(), &[Codec::For],
+            pool.clone(),
+            &raw,
+            &mut Dictionary::default(),
+            &[Codec::For],
         )?;
         let result = cq_gpu_sequence_test_macros::sequence! {
             physical {
                 relation R(a:i64) = (&data);
-                r = pipe canon rename R@0 {a -> a};
+                r = let canon rename R@0 {a -> a};
                 return r as answer(a);
             }
             structures {
                 r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
-                r canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                r rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                r canon = rows;
             }
             sequence {
                 input = store rows r;

@@ -301,6 +301,11 @@ pub enum Capability {
     /// The native input handle already denotes immutable target-resident storage.
     /// Its recorded read levels need no generated host-adapter retention.
     Resident,
+    /// Formal rule PL-Distinct: the provider's build from any row stream
+    /// yields exactly that stream's distinct complete rows, and its scan reads
+    /// each stored row once. Such a provider may type a canonical rows record
+    /// (a canon result's identity index, SRDatalog's sorted array).
+    Distinct,
 }
 
 /// Ordered target tokens used to discharge planner obligations.
@@ -313,7 +318,6 @@ pub enum Capability {
 pub struct Catalog {
     pub providers: Vec<ProviderToken>,
     pub codecs: Vec<CodecToken>,
-    pub canons: Vec<CanonToken>,
 }
 
 /// An authored provider type whose reads are supported at the listed levels.
@@ -330,6 +334,9 @@ pub struct ProviderToken {
     pub levels: Vec<Vec<String>>,
     /// Accepted scalar row elements; `None` leaves the element type unrestricted.
     pub elements: Option<Vec<syn::Type>>,
+    /// Packed equality-key capability, checked against codec bounds at setup.
+    /// `None` denotes a provider without a fixed packed-width limit.
+    pub max_packed_bits: Option<u32>,
 }
 
 /// A value-refinement token; `ordered` certifies monotone encoding.
@@ -338,16 +345,6 @@ pub struct CodecToken {
     pub ty: syn::Type,
     pub ordered: bool,
     pub levels: Vec<Vec<String>>,
-}
-
-/// A canonicalization token supported at the listed execution levels.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CanonToken {
-    pub ty: syn::Type,
-    pub levels: Vec<Vec<String>>,
-    /// Packed equality-key capability, checked against codec bounds at setup.
-    /// `None` denotes a provider without a fixed packed-width limit.
-    pub max_packed_bits: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -397,9 +394,11 @@ pub enum Obligation {
         capability: Capability,
         ty: syn::Type,
     },
+    /// The canon boundary owned by Sequence definition `result` reads this
+    /// checked canonical reference; `None` is the returned answer boundary.
     Canon {
         result: String,
-        strategy: Option<structures::CanonStrategy>,
+        canonical: Option<structures::CanonSource>,
     },
     Failure {
         dispatch: usize,

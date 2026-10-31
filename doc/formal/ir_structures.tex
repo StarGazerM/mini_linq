@@ -7,7 +7,7 @@ Structures ::= Physical structures { Entry* }
 Entry ::= r = Type [K]... [supports [Support,...]]
               [membership] [payload[P] constants{c = term, ...}];
         | r host ReaderRef = Type [K]... [supports [Support,...]];
-        | r rows = Type; | r canon = CanonStrategy; | r head = CanonStrategy;
+        | r rows = Type; | r canon = Canon; | r head = Type;
         | r group = Type;
         | r selection = Type base H lineage{a -> c, ...}
               summary (none | per_block);
@@ -24,7 +24,7 @@ Entry ::= r = Type [K]... [supports [Support,...]]
 Predicate ::= physical | membership s [K] summary (exact | row)
 ReaderRef ::= scan | candidates | membership | result(Ident)
 Support ::= retain | expand | keys
-CanonStrategy ::= sort [using Type] | ordered
+Canon ::= rows | [K] | host
 \end{lstlisting}
 
 \paragraph{Contract.} $\mathsf{Entries}(t,A)$ checks the embedded Physical and:
@@ -38,8 +38,8 @@ scan adapters even when their key is empty; they consume candidate, membership,
 or named keyed-reader providers;
 (3)~retained scans, multiple unfiltered builds and exists state record row
 storage; unfiltered host renames record scan and keyed-reader fallbacks;
-(4)~every definition canon has a dedup entry; \code{return canon} has a head
-dedup entry; computed heads that may collapse valuations have one too unless
+(4)~every definition canon has a canonical reference (STR-Canon);
+\code{return canon} has a head entry typing the answer's identity index; computed heads that may collapse valuations have one too unless
 \code{consumer canonical} assigns that returned boundary to the consumer;
 (5)~filtered entries (ordinary renames without literal bindings, declarative
 selections including trusted-total predicates, or unions) record one shared
@@ -171,7 +171,7 @@ Uniqueness: Unit has the empty key; a rename of a certified or discharged
 \code{host_set} has its full heading as key, and other host renames have none; join needs both
 keys and unions them; semi/anti keep the left key; union infers none;
 selections, guards and binds preserve it; projection preserves it only if no key
-column is dropped; a canon flag gives the full heading through its checked strategy.
+column is dropped; a canon flag gives the full heading through its checked canonical reference.
 A built structure alone proves no uniqueness.
 An explicit \code{membership} modifier on a single-level filtered build proves
 that every downstream observation is a supplied key or reconstructed constant.
@@ -336,41 +336,74 @@ bounds at generated uses; the laws are tested, not derived.
 
 \paragraph{Recorded decisions.} Every concrete type and its selected-layout
 support: built indexes and levels, per-reader host fallbacks, keyed group
-accumulator tables, retained rows, canonicalization strategies, filtered payloads and constants,
+accumulator tables, retained rows, canonical references, filtered payloads and constants,
 positional bases and column lineage, mask-summary policy, column markers,
 keyset ownership/codec/budget and exact versus row-only read summaries.
 Positions identify base occurrences without becoming logical columns. A selection
 is not Canonical or OrderedRead. Nothing is substituted at print time.
 
-\paragraph{Canonicalization strategies.}
-Structures records \code{CanonStrategy::Sort} or \code{CanonStrategy::Ordered},
-not an arbitrary per-element dedup-provider type. Sequence carries that
-decision to the target. Sort may additionally record \code{using Type},
-an explicit target sort/unique implementation such as \code{WideCanon};
-plain \code{sort} uses the CPU comparison-sort runtime.
-Default selection writes \code{canon = sort;} and \code{head = sort;},
-including computed heads that may collapse distinct valuations.
+\paragraph{Canonical references.}
+A canon result is stored in its \emph{canonical} index: an ordinary member of
+the result's index set, chosen by index selection (SRDatalog's
+\code{select\_indices}/\code{canonical\_index}). Structures records only a
+reference to it, never a strategy, store or separate provider kind:
+\code{r canon = rows;} names the result's rows record, whose provider build
+yields distinct complete rows (\textsc{PL-Distinct}; default
+\code{::cq\_storage::dedup::Sort}, the sorted array);
+\code{r canon = [K];} names an existing one-level complete-row Built entry;
+\code{r canon = host;} names the load-verified host carrier of a direct
+complete host rename. \code{r head = Type;} types the answer relation's
+identity index the same way, including computed heads that may collapse
+distinct valuations.
 \begin{mathpar}
-\Rule{STR-Canon}{s=\mathsf{Sort}\ \lor\
- (s=\mathsf{Ordered}\land\mathsf{directHostScan}(r)
+\Rule{STR-Canon}{(c=\mathsf{rows}\land\mathsf{mode}(r)\ne pipe\land
+  r\text{ records rows})\ \lor\\
+ (c=[K]\land K\text{ is the full heading}\land\mathsf{mode}(r)=let\land
+  \mathsf{built}(r)=\{[K]\}\land
+  \text{every read of }r\text{ is existence-only and unscanned})\ \lor\\
+ (c=\mathsf{host}\land\mathsf{mode}(r)=pipe\land\mathsf{directHostScan}(r)
  \land\mathsf{loadVerifiedPrefixCarrier}(r))}
- {\mathsf{canonStrategy}(r,s)\text{ is admissible}}
+ {\mathsf{canonical}(r,c)\text{ is admissible}}
 \end{mathpar}
-The Ordered carrier pairs immutable rows with the exact prefix comparison
-verified at load. Rust checks the carrier capability; the compiler checks the
-direct host-scan shape, never a Rust type spelling. No projection, filter,
-join, computed head or other downstream operator inherits this evidence.
-Full-row equality must imply equal prefixes. Equal-prefix runs are still
-sorted and uniqued by complete-row identity: prefix order never establishes
-uniqueness. Host Sort collects the complete boundary stream, uses Rust
-\code{Ord} comparison via \code{sort\_unstable\_by}, then adjacent unique;
-Tasks uses parallel comparison sort, followed by adjacent unique.
-Compared fields may be opaque user Rust types, and wide rows need not
-implement a tuple-level \code{Ord} or \code{Hash}. The order/identity laws
-remain representation premises. The former \code{retype(dedup => Type)}
-selector is removed. Catalog selection may refine Sort's explicit
-\code{using} provider, but never turn Ordered into Sort. Membership indexes
-and retained row buffers remain separate choices.
+A Built reference is the result's only storage: its build need not be
+duplicate-free, since existence reads observe support. The host carrier pairs
+immutable rows with the exact prefix comparison verified at load. Rust checks
+the carrier capability; the compiler checks the direct complete host-scan
+shape, never a Rust type spelling. No projection, filter, join, computed head
+or other downstream operator inherits this evidence. Full-row equality must
+imply equal prefixes; equal-prefix runs are still sorted and uniqued by
+complete-row identity: prefix order never establishes uniqueness. The
+default rows provider \code{dedup::Sort} collects the complete boundary
+stream, uses Rust \code{Ord} comparison via \code{sort\_unstable\_by}, then
+adjacent unique; Tasks uses its parallel sort. Compared fields may be opaque
+user Rust types, and wide rows need not implement a tuple-level \code{Ord} or
+\code{Hash}. The order/identity laws remain representation premises.
+Catalog selection may retype the rows provider to another \textsc{PL-Distinct}
+provider, but never turn a host reference into rows.
+
+Rows records are values, not shared buffers:
+\begin{mathpar}
+\Rule{STR-RowsByValue}{\mathsf{mode}(r)=let\quad
+ \mathsf{scans}(r)+|\mathsf{built}(r)|\le1\quad
+ r\text{ has no selection or keyset}}
+ {r\text{ holds no rows record; its build moves into its single consumer}}
+\end{mathpar}
+A rows record is held as storage only with more than one consumer (scan reads
+plus Built entries). Filtered builds replay their direct source, so an
+unscanned filtered result never holds rows; only a canon result's unheld rows
+record may sit beside filtered storage.
+
+Selection writes the reference:
+\begin{mathpar}
+\Rule{SEL-Canon}{r=\mathsf{canon}(\ldots)}
+ {\mathsf{mode}(r)=pipe\Rightarrow r\ \code{canon = host}\\
+  \mathsf{mode}(r)\ne pipe\Rightarrow r\ \code{rows = dedup::Sort; canon = rows}\ 
+  (\code{Exists}\text{ for exists})\\
+  \text{existence-only single complete Built}\Rightarrow r\ \code{canon = [K]}\text{, rows dropped}}
+\end{mathpar}
+Returned results record \code{ret head = ::cq\_storage::dedup::Sort}.
+Membership indexes and retained row buffers remain ordinary members of the
+same index set.
 
 
 \paragraph{Default hash representations.} Selection records

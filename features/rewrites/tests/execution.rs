@@ -25,7 +25,8 @@ mod from_physical {
     }
 }
 
-type IntersectionRun = fn(&[(i32,)], &[(i32, i32)], &[(i32, i32)], &[(i32, i32)]) -> cq_testkit::Rows;
+type IntersectionRun =
+    fn(&[(i32,)], &[(i32, i32)], &[(i32, i32)], &[(i32, i32)]) -> cq_testkit::Rows;
 
 macro_rules! intersection_runner {
     ($name:ident; $($rewrites:tt)*) => {
@@ -63,11 +64,18 @@ fn three_way_smallest_executes_each_provider_as_minimum() {
             // binary intersection that still enumerates 128 values when T wins.
             assert!(cq_storage::counters::snapshot().lookups < 20);
         }
-        assert_eq!(three_way_default(&l, &inputs[0], &inputs[1], &inputs[2]), expected);
+        assert_eq!(
+            three_way_default(&l, &inputs[0], &inputs[1], &inputs[2]),
+            expected
+        );
         for input in &mut inputs {
             input.extend(input.clone());
         }
-        for run in [three_way_default as IntersectionRun, three_way_all, three_way_site] {
+        for run in [
+            three_way_default as IntersectionRun,
+            three_way_all,
+            three_way_site,
+        ] {
             assert_eq!(run(&l, &inputs[0], &inputs[1], &inputs[2]), expected);
             assert!(run(&[], &inputs[0], &inputs[1], &inputs[2]).is_empty());
             for empty in 0..3 {

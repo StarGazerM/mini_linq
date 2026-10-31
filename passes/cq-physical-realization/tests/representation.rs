@@ -2,11 +2,14 @@ use quote::{ToTokens, quote};
 
 #[test]
 fn native_canon_emits_sort_without_set_provider_state() {
-    let strategy = syn::parse_quote!(sort);
-    let rows = cq_physical_realization::RowEmitter::canon(&strategy, quote!(rows), 1);
+    let provider = syn::parse_quote!(::cq_storage::dedup::Sort);
+    let rows = cq_physical_realization::RowEmitter::canon(&provider, quote!(rows), 1);
     syn::parse2::<syn::Expr>(rows.clone()).unwrap();
     let printed = rows.to_string();
-    assert!(printed.contains("cq_storage :: dedup :: sort"), "{printed}");
+    assert!(
+        printed.contains("cq_storage :: dedup :: Sort > :: sort"),
+        "{printed}"
+    );
     assert!(!printed.contains("from_set"), "{printed}");
     assert!(!printed.contains("HashSet"), "{printed}");
 }
@@ -25,7 +28,7 @@ fn grouped_adapter_emits_one_typed_hash_fold_over_complete_valuations() {
     let physical = syn::parse_quote! { physical {
         relation R(k:i32,id:i32,v:i32);
         relation answer(k:i32,n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
-        r = pipe canon rename R@0 {k -> k,id -> id,v -> v};
+        r = let canon rename R@0 {k -> k,id -> id,v -> v};
         grouped = pipe group r by [k] {
             n:usize = count(); total:i32 = sum(v);
             lo:Option<i32> = min(v); hi:Option<i32> = max(v);
@@ -84,7 +87,7 @@ fn global_group_emits_an_identity_row_even_when_the_input_loop_is_empty() {
     let physical = syn::parse_quote! { physical {
         relation R(v:i32);
         relation answer(n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
-        r = pipe canon rename R@0 {v -> v};
+        r = let canon rename R@0 {v -> v};
         grouped = pipe group r by [] {
             n:usize = count(); total:i32 = sum(v);
             lo:Option<i32> = min(v); hi:Option<i32> = max(v);
@@ -120,7 +123,7 @@ fn positions_print_fetches_and_tuple_boundaries_after_probes() {
             l = pipe rename L@0 {k -> k};
             s = pipe select l if (k >= 2);
             r = let rename R@1 {k -> k,v -> v};
-            j = pipe canon probe first [k] s,r;
+            j = let canon probe first [k] s,r;
             return j as answer(k,v);
         }
     };
@@ -153,7 +156,7 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
             kept = pipe select s if (k >= 1);
             projected = pipe project kept keep {k};
             p = pipe probe first [k] projected,r;
-            out = pipe canon project p keep {k,v};
+            out = let canon project p keep {k,v};
             return out as answer(k,v);
         }
         structures {
@@ -163,7 +166,7 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
             s share = lookup r [k] first s force p;
             s repr = tuples witness { r [k] at s as AuthoredBookmark<'_, _> };
             p stage = batch 4 expand;
-            out canon = sort;
+            out rows = ::cq_storage::dedup::Sort; out canon = rows;
         }
     };
     let analysis = cq_lang_structures::contract::check(&program).unwrap();
@@ -231,7 +234,7 @@ fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected()
             pre_r = pipe semi eager [b] l,r;
             pre_s = pipe semi eager [a] pre_r,s;
             candidate = pipe probe smallest [b] pre_s,r;
-            checked = pipe canon semi eager [a,c] candidate,s;
+            checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
         } structures {
             l host scan = ::core::iter::Map<_, _> [];
@@ -241,7 +244,7 @@ fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected()
             s = ForeignDirectory [a][c] supports [retain, expand];
             r rows = ::std::vec::Vec<_>;
             s rows = ::std::vec::Vec<_>;
-            checked canon = sort;
+            checked rows = ::cq_storage::dedup::Sort; checked canon = rows;
             pre_r share = lookup r [b] first pre_r force candidate;
             pre_s share = lookup s [a] first pre_s force candidate;
             pre_r repr = tuples witness { r [b] at pre_r as ::cq_storage::RunCursor<'_, _> };
@@ -304,7 +307,7 @@ fn retained_host_uses_borrowed_dispatch_and_consumes_the_same_cursor() {
             l = pipe rename L@0 {a -> x};
             r = pipe rename R@1 {a -> x,b -> y};
             s = pipe semi eager [x] l,r;
-            p = pipe canon probe first [x] s,r;
+            p = let canon probe first [x] s,r;
             return p as answer(x,y);
         } structures {
             l host scan = ::core::iter::Map<_,_> [];
@@ -314,7 +317,7 @@ fn retained_host_uses_borrowed_dispatch_and_consumes_the_same_cursor() {
             s share = lookup r [x] first s force p;
             s repr = tuples witness { r [x] at s as _ };
             p stage = batch 4 expand;
-            p canon = sort;
+            p rows = ::cq_storage::dedup::Sort; p canon = rows;
         }
     };
     let printed = source_tokens(&program).unwrap().to_string();

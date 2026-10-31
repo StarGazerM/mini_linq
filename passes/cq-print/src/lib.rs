@@ -566,6 +566,21 @@ impl<'a> Context<'a> {
         self.prepare_host(name);
     }
 
+    /// STR-RowsByValue: bind a single-consumer rows record by value. A
+    /// canonical rows record's rows are already its provider's distinct-row
+    /// build; an ordinary rows record is collected into its provider and moved.
+    pub fn rows_by_value(&self, name: &str, rows: TokenStream) -> TokenStream {
+        match self.analysis.canonical.get(name) {
+            Some(structures::CanonSource::Rows(_)) => rows,
+            _ => {
+                let ty = &self.analysis.retained[name];
+                quote!(::core::iter::IntoIterator::into_iter(
+                    ::core::iter::Iterator::collect::<#ty>(#rows)
+                ))
+            }
+        }
+    }
+
     /// Build the selected structures over a result and append their statements.
     pub fn materialize(&mut self, name: &str, source: TokenStream) -> Repr {
         self.materialize_from(name, source, None)
@@ -608,10 +623,9 @@ impl<'a> Context<'a> {
     ) -> Repr {
         let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
-        let rows = self
-            .analysis
-            .retained
-            .contains_key(name)
+        // STR-RowsByValue: a rows record with a single consumer is not held;
+        // its build streams into the one Built entry constructed below.
+        let rows = (self.analysis.retained.contains_key(name) && self.analysis.rows_held(name))
             .then(|| format_ident!("__cq_{}_rows", name));
         let mut statements: Vec<Stmt> = Vec::new();
         let selection = self.analysis.selections.contains_key(name).then(|| {
@@ -633,7 +647,16 @@ impl<'a> Context<'a> {
         let direct_source = source.clone();
         let source = match &rows {
             Some(rows) => {
-                let ty = self.analysis.retained[name].clone();
+                // A canonical rows record stores the distinct rows its provider's
+                // build yields (a sorted array) as an ordinary row vector.
+                let ty = match self.analysis.canonical.get(name) {
+                    Some(structures::CanonSource::Rows(_))
+                        if self.physical_analysis.modes[name] == physical::ModeKind::Let =>
+                    {
+                        syn::parse_quote!(::std::vec::Vec<_>)
+                    }
+                    _ => self.analysis.retained[name].clone(),
+                };
                 let retained = format!("{name}.rows");
                 self.profile_label(&retained, "ROWS_BUILD", "", vec![name.into()]);
                 let counted_source = self.profile_inserting(&retained, source.clone());

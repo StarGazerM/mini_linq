@@ -10,23 +10,23 @@ mod tpch_runtime;
 #[path = "../src/queries/retail/tpch/retail_h03.rs"]
 mod h03;
 #[allow(dead_code)]
-#[path = "../src/queries/retail/tpch/retail_h09.rs"]
-mod h09;
-#[allow(dead_code)]
-#[path = "../src/queries/tpch/tpch_q06.rs"]
-mod q06;
-#[allow(dead_code)]
-#[path = "../src/queries/tpch/tpch_q19.rs"]
-mod q19;
-#[allow(dead_code)]
 #[path = "../src/queries/retail/tpch/retail_h06.rs"]
 mod h06;
+#[allow(dead_code)]
+#[path = "../src/queries/retail/tpch/retail_h09.rs"]
+mod h09;
 #[allow(dead_code)]
 #[path = "../src/queries/retail/tpch/retail_h10.rs"]
 mod h10;
 #[allow(dead_code)]
 #[path = "../src/queries/retail/tpch/retail_h12.rs"]
 mod h12;
+#[allow(dead_code)]
+#[path = "../src/queries/tpch/tpch_q06.rs"]
+mod q06;
+#[allow(dead_code)]
+#[path = "../src/queries/tpch/tpch_q19.rs"]
+mod q19;
 
 fn decimal(value: i32) -> Decimal {
     Decimal::from_scaled(i64::from(value)).unwrap()
@@ -256,11 +256,9 @@ fn h12_priority_counts_match_duckdb_and_date_guards() {
                     )
                 })
                 .collect(),
-            high_priorities: cq_load::dictionary_where(
-                &dictionaries,
-                "o_orderpriority",
-                |value| value == "1-URGENT" || value == "2-HIGH",
-            ),
+            high_priorities: cq_load::dictionary_where(&dictionaries, "o_orderpriority", |value| {
+                value == "1-URGENT" || value == "2-HIGH"
+            }),
             dictionaries,
         };
         let sql = format!(
@@ -356,21 +354,36 @@ fn h03_radix_variants_preserve_duplicate_and_empty_answers() {
             (1, dictionaries.literal("c_mktsegment", "BUILDING")),
             (2, dictionaries.literal("c_mktsegment", "AUTOMOBILE")),
         ],
-        orders: vec![(10, 1, date("1995-03-14")), (10, 1, date("1995-03-14")),
-            (20, 2, date("1995-03-14")), (30, 1, date("1995-03-15"))],
-        lineitem: vec![(10, date("1995-03-16")), (10, date("1995-03-16")),
-            (20, date("1995-03-16")), (30, date("1995-03-16")), (99, date("1995-03-16"))],
+        orders: vec![
+            (10, 1, date("1995-03-14")),
+            (10, 1, date("1995-03-14")),
+            (20, 2, date("1995-03-14")),
+            (30, 1, date("1995-03-15")),
+        ],
+        lineitem: vec![
+            (10, date("1995-03-16")),
+            (10, date("1995-03-16")),
+            (20, date("1995-03-16")),
+            (30, date("1995-03-16")),
+            (99, date("1995-03-16")),
+        ],
         dictionaries,
     };
-    assert_eq!(tpch_runtime::same_plan_answers(
-        |config| h03::run(&data, config), h03::canonical), [(10, 1)]);
+    assert_eq!(
+        tpch_runtime::same_plan_answers(|config| h03::run(&data, config), h03::canonical),
+        [(10, 1)]
+    );
     data.orders.reverse();
     data.lineitem.reverse();
-    assert_eq!(tpch_runtime::same_plan_answers(
-        |config| h03::run(&data, config), h03::canonical), [(10, 1)]);
+    assert_eq!(
+        tpch_runtime::same_plan_answers(|config| h03::run(&data, config), h03::canonical),
+        [(10, 1)]
+    );
     data.lineitem.clear();
-    assert!(tpch_runtime::same_plan_answers(
-        |config| h03::run(&data, config), h03::canonical).is_empty());
+    assert!(
+        tpch_runtime::same_plan_answers(|config| h03::run(&data, config), h03::canonical)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -387,19 +400,33 @@ fn h09_configurations_preserve_filtered_join_answers() {
         supplier: vec![(100, 7), (101, 8)],
         nation: vec![(7,)],
         orders: vec![(10,), (20,), (30,)],
-        lineitem: vec![(10, 1, 100), (10, 1, 100), (20, 2, 100), (30, 3, 101), (99, 1, 100)],
-        green_names: cq_load::dictionary_where(&dictionaries, "p_name", |value| value.contains("green")),
+        lineitem: vec![
+            (10, 1, 100),
+            (10, 1, 100),
+            (20, 2, 100),
+            (30, 3, 101),
+            (99, 1, 100),
+        ],
+        green_names: cq_load::dictionary_where(&dictionaries, "p_name", |value| {
+            value.contains("green")
+        }),
         dictionaries,
     };
     for config in h09::CONFIGS {
         assert_eq!(h09::run(&data, config), [(10, 1, 100)], "{config}");
     }
-    assert_eq!(tpch_runtime::same_plan_answers(
-        |config| h09::run(&data, config), h09::canonical), [(10, 1, 100)]);
+    assert_eq!(
+        tpch_runtime::same_plan_answers(|config| h09::run(&data, config), h09::canonical),
+        [(10, 1, 100)]
+    );
     data.lineitem.reverse();
-    assert_eq!(tpch_runtime::same_plan_answers(
-        |config| h09::run(&data, config), h09::canonical), [(10, 1, 100)]);
+    assert_eq!(
+        tpch_runtime::same_plan_answers(|config| h09::run(&data, config), h09::canonical),
+        [(10, 1, 100)]
+    );
     data.nation.clear();
-    assert!(tpch_runtime::same_plan_answers(
-        |config| h09::run(&data, config), h09::canonical).is_empty());
+    assert!(
+        tpch_runtime::same_plan_answers(|config| h09::run(&data, config), h09::canonical)
+            .is_empty()
+    );
 }

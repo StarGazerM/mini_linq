@@ -1,7 +1,7 @@
 //! Device realization of the ordinary Datalog Storage and Round records.
-pub mod storage;
-pub mod print;
 pub mod bindings;
+pub mod print;
+pub mod storage;
 
 #[cfg(test)]
 mod print_tests;
@@ -10,9 +10,10 @@ use quote::ToTokens;
 
 /// Bind only the input layouts explicitly supplied by the checked Round invocation.
 /// This is a Structures refinement, not a query planner or an index builder.
-pub fn bind_inputs(source: &cq_lang_structures::Program, args: proc_macro2::TokenStream)
-    -> syn::Result<cq_lang_structures::Program>
-{
+pub fn bind_inputs(
+    source: &cq_lang_structures::Program,
+    args: proc_macro2::TokenStream,
+) -> syn::Result<cq_lang_structures::Program> {
     struct Bindings(std::collections::BTreeMap<String, syn::Type>);
     impl syn::parse::Parse for Bindings {
         fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
@@ -23,7 +24,10 @@ pub fn bind_inputs(source: &cq_lang_structures::Program, args: proc_macro2::Toke
                 let ty = input.parse()?;
                 input.parse::<syn::Token![;]>()?;
                 if bindings.insert(name.to_string(), ty).is_some() {
-                    return Err(syn::Error::new_spanned(name, "duplicate device input binding"));
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "duplicate device input binding",
+                    ));
                 }
             }
             Ok(Self(bindings))
@@ -33,11 +37,17 @@ pub fn bind_inputs(source: &cq_lang_structures::Program, args: proc_macro2::Toke
     let analysis = cq_lang_structures::contract::check(source)?;
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
-        if !matches!(entry.structure, cq_lang_structures::Structure::Host { .. }) { continue; }
+        if !matches!(entry.structure, cq_lang_structures::Structure::Host { .. }) {
+            continue;
+        }
         let name = &entry.name;
         let host = &analysis.physical.hosts[&cq_syntax::symbol_name(name)];
-        let ty = bindings.get(host).ok_or_else(|| syn::Error::new_spanned(
-            entry.to_token_stream(), "GPU Datalog input has no recorded device layout"))?;
+        let ty = bindings.get(host).ok_or_else(|| {
+            syn::Error::new_spanned(
+                entry.to_token_stream(),
+                "GPU Datalog input has no recorded device layout",
+            )
+        })?;
         if let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure {
             keyed.ty = ty.clone();
         }

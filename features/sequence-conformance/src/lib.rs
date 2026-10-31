@@ -39,7 +39,6 @@ pub fn plan_with_catalog(
         .providers
         .extend(additions.providers.iter().cloned());
     catalog.codecs.extend(additions.codecs.iter().cloned());
-    catalog.canons.extend(additions.canons.iter().cloned());
     let source = match target {
         Target::Tasks => cq_sequence_tasks::select_providers(program, &catalog)?,
         Target::Sequential => program.clone(),

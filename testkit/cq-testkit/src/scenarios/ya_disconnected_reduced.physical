@@ -5,6 +5,6 @@ physical { relation R (value : i32);
  r2 = let semi eager [] r0 , r1;
  r3 = pipe semi eager [] r1 , r2;
  r4 = pipe probe first [] r3 , r2;
- r5 = pipe canon project r4 keep { x };
+ r5 = let canon project r4 keep { x };
  return r5 as answer (x);
  }

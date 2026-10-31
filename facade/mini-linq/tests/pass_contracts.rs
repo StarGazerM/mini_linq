@@ -557,7 +557,7 @@ fn output_schemas_cannot_silently_discard_leaf_values() {
         let r: ra::Program = syn::parse_quote! { relational { relation R(a:i32); #output
         r = rename R@0 {a -> x}; output r as answer(x); } };
         let p: physical::Program = syn::parse_quote! { physical { relation R(a:i32); #output
-        r = pipe canon rename R@0 {a -> x}; return r as answer(x); } };
+        r = let canon rename R@0 {a -> x}; return r as answer(x); } };
         for result in [
             cq::contract::check(&c),
             ra::contract::check(&r).map(|_| ()),

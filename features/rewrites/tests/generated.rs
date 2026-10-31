@@ -111,13 +111,15 @@ fn step_order_and_occurrence_smallest_advice_reach_three_provider_execution() {
         seed,r,s,t;
         print_input = structures;
         print = cq_rewrite_test_driver::capture_structures;
-    }).unwrap();
+    })
+    .unwrap();
     let target: structures::Program = syn::parse_str(three_way_query! {
         seed,r,s,t;
         physical = [cq_rewrites::smallest_intersections(smallest(R@1,S@2,T@3))];
         print_input = structures;
         print = cq_rewrite_test_driver::capture_structures;
-    }).unwrap();
+    })
+    .unwrap();
     physical::check_rewrite(&source.physical, &target.physical).unwrap();
     let facts = structures::contract::check(&target).unwrap();
     assert!(physical::candidate_prefixes(&source.physical, &facts.physical).is_empty());
@@ -128,14 +130,23 @@ fn step_order_and_occurrence_smallest_advice_reach_three_provider_execution() {
     let r = [(1, 7, 10), (1, 7, 11), (1, 8, 12), (1, 7, 10)];
     let s = [(1, 7, 20), (1, 9, 21)];
     let t = [(1, 7, 30), (1, 7, 31), (1, 10, 32)];
-    let expected: Rows = [vec![1,7,10,20,30], vec![1,7,10,20,31],
-        vec![1,7,11,20,30], vec![1,7,11,20,31]].into_iter().collect();
+    let expected: Rows = [
+        vec![1, 7, 10, 20, 30],
+        vec![1, 7, 10, 20, 31],
+        vec![1, 7, 11, 20, 30],
+        vec![1, 7, 11, 20, 31],
+    ]
+    .into_iter()
+    .collect();
     let baseline: Rows = three_way_query! { seed,r,s,t; }
-        .map(|(a,x,y,z,w)| vec![*a,*x,*y,*z,*w]).collect();
+        .map(|(a, x, y, z, w)| vec![*a, *x, *y, *z, *w])
+        .collect();
     let advised: Rows = three_way_query! {
         seed,r,s,t;
         physical = [cq_rewrites::smallest_intersections(smallest(R@1,S@2,T@3))];
-    }.map(|(a,x,y,z,w)| vec![*a,*x,*y,*z,*w]).collect();
+    }
+    .map(|(a, x, y, z, w)| vec![*a, *x, *y, *z, *w])
+    .collect();
     assert_eq!(baseline, expected);
     assert_eq!(advised, expected);
 }

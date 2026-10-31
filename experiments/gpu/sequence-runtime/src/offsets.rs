@@ -47,9 +47,11 @@ impl ScanCache {
     fn prepare(&mut self, count: usize) -> Result<()> {
         let entries = count + 1; // The public entrypoint checked this extent.
         let required = rccl_cub::device_scan_workspace_counts(entries)?.temporary_items;
-        if self.workspace.as_ref().is_none_or(|workspace| {
-            workspace.counts().temporary_items < required
-        }) {
+        if self
+            .workspace
+            .as_ref()
+            .is_none_or(|workspace| workspace.counts().temporary_items < required)
+        {
             // Drop the old allocation first. RCCL returns it to the pool on
             // its retained stream, so growth and subsequent reuse stay ordered.
             drop(self.workspace.take());
@@ -63,11 +65,11 @@ impl ScanCache {
         }
         if self.check.as_ref().is_none_or(|(rows, _)| *rows != count) {
             let prepared = self.module.prepare_check(LaunchConfig1D::new(1, 256, 0))?;
-            let blocks =
-                launch_grid_for_kernel(prepared.function(), count.div_ceil(256), 256, 0)?;
+            let blocks = launch_grid_for_kernel(prepared.function(), count.div_ceil(256), 256, 0)?;
             self.check = Some((
                 count,
-                self.module.prepare_check(LaunchConfig1D::new(blocks, 256, 0))?,
+                self.module
+                    .prepare_check(LaunchConfig1D::new(blocks, 256, 0))?,
             ));
         }
         Ok(())
@@ -118,7 +120,10 @@ pub fn scan(
     pool.context().bind_to_thread()?;
     SCAN_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.as_ref().is_none_or(|cached| !Arc::ptr_eq(&cached.pool, pool)) {
+        if cache
+            .as_ref()
+            .is_none_or(|cached| !Arc::ptr_eq(&cached.pool, pool))
+        {
             drop(cache.take());
             *cache = Some(ScanCache::new(pool)?);
         }

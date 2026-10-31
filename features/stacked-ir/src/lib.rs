@@ -63,7 +63,7 @@
 //!     physical {
 //!         relation R(x: i32) = (rows);
 //!         r = pipe rename R@0 {x -> x};
-//!         out = pipe canon project r keep {x};
+//!         out = let canon project r keep {x};
 //!         return out as answer(x);
 //!     }
 //! }.map(|(x,)| *x).collect();

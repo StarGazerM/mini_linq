@@ -1,4 +1,4 @@
-use cq_lang_sequence::{CanonToken, Capability, Catalog, ProviderToken, structures};
+use cq_lang_sequence::{Capability, Catalog, ProviderToken, structures};
 use cq_sequence_plan::select_from_catalog;
 use structures::Structure;
 
@@ -7,28 +7,36 @@ fn h05() -> structures::Program {
 }
 
 // Target tokens are data, not a dependency on a GPU implementation. These are
-// the provider/canon tokens exported by the GPU Sequence target's catalog.
+// the provider tokens exported by the GPU Sequence target's catalog, including
+// its Distinct providers of canonical rows records.
 fn gpu_catalog() -> Catalog {
     let levels = vec![vec!["host".into(), "device".into()]];
+    let distinct = |ty, max_packed_bits| ProviderToken {
+        supports: Vec::new(),
+        ty,
+        elements: None,
+        capabilities: vec![Capability::Distinct],
+        levels: levels.clone(),
+        max_packed_bits,
+    };
     Catalog {
-        providers: vec![ProviderToken {
-            supports: Vec::new(),
-            ty: syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
-            elements: None,
-            capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-            levels: levels.clone(),
-        }],
-        canons: vec![
-            CanonToken {
-                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
+        providers: vec![
+            ProviderToken {
+                supports: Vec::new(),
+                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
+                elements: None,
+                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
                 levels: levels.clone(),
-                max_packed_bits: Some(128),
-            },
-            CanonToken {
-                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
-                levels,
                 max_packed_bits: None,
             },
+            distinct(
+                syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
+                Some(128),
+            ),
+            distinct(
+                syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
+                None,
+            ),
         ],
         codecs: vec![],
     }
@@ -38,7 +46,6 @@ fn provider_type(structure: &Structure) -> Option<&syn::Type> {
     match structure {
         Structure::Built { keyed, .. } => Some(&keyed.ty),
         Structure::Rows { ty, .. } => Some(ty),
-        Structure::Dedup { strategy, .. } => strategy.provider(),
         _ => None,
     }
 }
@@ -135,8 +142,10 @@ fn unavailable_read_or_canonicalization_cannot_be_selected() {
     missing_read.providers[0].capabilities.clear();
     assert!(select_from_catalog(&source, &missing_read).is_err());
     let mut missing_canon = gpu_catalog();
-    for canon in &mut missing_canon.canons {
-        canon.levels.clear();
+    for token in &mut missing_canon.providers {
+        if token.capabilities.contains(&Capability::Distinct) {
+            token.levels.clear();
+        }
     }
     assert!(select_from_catalog(&source, &missing_canon).is_err());
 }
@@ -150,14 +159,15 @@ fn one_provider_must_satisfy_all_reads_not_separate_tokens() {
             r = let rename R@1 {a -> a,b -> b};
             j = pipe probe first [a] l,r;
             projected = pipe project j keep {a};
-            answer = pipe canon semi eager [a] projected,r;
+            answer = let canon semi eager [a] projected,r;
             return answer as answer(a);
         }
         structures {
             l host scan = Reader [];
             r host scan = Reader [];
             r = Index [a];
-            answer canon = sort;
+            answer rows = ::cq_storage::dedup::Sort;
+            answer canon = rows;
         }
     };
     let mut catalog = gpu_catalog();
@@ -184,14 +194,15 @@ fn host_keyed_read() -> structures::Program {
             relation L(a:i64); relation R(a:i64,b:i64);
             l = pipe rename L@0 {a -> a};
             r = pipe rename R@1 {a -> a,b -> b};
-            answer = pipe canon probe first [a] l,r;
+            answer = let canon probe first [a] l,r;
             return answer as answer(a,b);
         }
         structures {
             l host scan = HostColumns [];
             r host scan = HostColumns [];
             r host result(answer) = HostColumns [a];
-            answer canon = sort;
+            answer rows = ::cq_storage::dedup::Sort;
+            answer canon = rows;
         }
     }
 }
@@ -261,14 +272,15 @@ fn catalog_element_capability_checks_both_built_and_host_fallback_rows() {
                 relation L(a:i64); relation R(a:i64,b:String);
                 l = pipe rename L@0 {a -> a};
                 r = pipe rename R@1 {a -> a,b -> b};
-                answer = pipe canon probe first [a] l,r;
+                answer = let canon probe first [a] l,r;
                 return answer as answer(a,b);
             }
             structures {
                 l host scan = HostColumns [];
                 r host scan = HostColumns [];
                 r host result(answer) = HostColumns [a];
-                answer canon = sort;
+                answer rows = ::cq_storage::dedup::Sort;
+                answer canon = rows;
             }
         };
         if retained {
@@ -302,7 +314,7 @@ fn unused_string_payload_is_projected_from_renamed_provider() {
                 l = pipe rename L@0 {a -> a};
                 r = pipe rename R@1 {a -> a,unused -> unused};
                 joined = pipe probe first [a] l,r;
-                answer = pipe canon project joined keep {a};
+                answer = let canon project joined keep {a};
                 return answer as answer(a);
             }
         };
@@ -330,12 +342,13 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
             physical {
                 relation R(a:i64,b:i64,c:i64);
                 r = pipe rename R@0 {a -> a,b -> b,c -> c};
-                answer = pipe canon project r keep {a,b,c};
+                answer = let canon project r keep {a,b,c};
                 return answer as answer(a,b,c);
             }
             structures {
                 r host scan = HostColumns [];
-                answer canon = sort;
+                answer rows = ::cq_storage::dedup::Sort;
+                answer canon = rows;
             }
         };
         if !third {
@@ -343,25 +356,26 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
                 physical {
                     relation R(a:i64,b:i64);
                     r = pipe rename R@0 {a -> a,b -> b};
-                    answer = pipe canon project r keep {a,b};
+                    answer = let canon project r keep {a,b};
                     return answer as answer(a,b);
                 }
                 structures {
                     r host scan = HostColumns [];
-                    answer canon = sort;
+                    answer rows = ::cq_storage::dedup::Sort;
+                    answer canon = rows;
                 }
             };
         }
         let selected = select_from_catalog(&source, &gpu_catalog()).unwrap();
         structures::check_rewrite(&source, &selected).unwrap();
         let analysis = structures::contract::check(&selected).unwrap();
-        let Some(syn::Type::Path(ty)) = analysis.dedup["answer"].provider() else {
+        let Some(syn::Type::Path(ty)) = analysis.canonical["answer"].rows_provider() else {
             panic!("provider path")
         };
         assert_eq!(ty.path.segments.last().unwrap().ident, expected);
         if third {
             let mut catalog = gpu_catalog();
-            catalog.canons.pop();
+            catalog.providers.pop();
             assert!(select_from_catalog(&source, &catalog).is_err());
         }
     }

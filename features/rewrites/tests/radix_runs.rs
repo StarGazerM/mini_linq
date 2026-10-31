@@ -14,7 +14,7 @@ macro_rules! payload {
                 s = pipe semi eager [x] l,r;
                 p = pipe probe first [x] s,r;
                 observed = pipe guard p if ({ $visits.borrow_mut().push((*x, *y)); true });
-                out = pipe canon project observed keep {x,y};
+                out = let canon project observed keep {x,y};
                 return out as answer(x,y);
             }
         }
@@ -145,7 +145,7 @@ macro_rules! owned_probe {
                 u = pipe unit;
                 l = pipe bind u with x:u64 = ($key);
                 r = let rename R@0 {a -> x,b -> y};
-                p = pipe canon probe first [x] l,r;
+                p = let canon probe first [x] l,r;
                 return p as answer(*y);
             }
         }
@@ -227,7 +227,7 @@ fn single_key_source(ty: syn::Type, mode: proc_macro2::TokenStream) -> ir::Progr
         relation L(a:#ty); relation R(a:#ty,b:i64);
         l = pipe rename L@0 {a -> x};
         r = #mode rename R@1 {a -> x,b -> y};
-        p = pipe canon probe first [x] l,r;
+        p = let canon probe first [x] l,r;
         return p as answer(x,y);
     }})
     .unwrap();
@@ -284,7 +284,7 @@ fn composite_membership_trie_and_smallest_providers_are_not_retyped() {
         relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
         l = pipe rename L@0 {a -> x,b -> y};
         r = let rename R@1 {a -> x,b -> y,c -> z};
-        p = pipe canon probe first [x,y] l,r;
+        p = let canon probe first [x,y] l,r;
         return p as answer(x,y,z);
     }})
     .unwrap();
@@ -293,7 +293,7 @@ fn composite_membership_trie_and_smallest_providers_are_not_retyped() {
         relation L(a:i64); relation R(a:i64);
         l = pipe rename L@0 {a -> x};
         r = let rename R@1 {a -> x};
-        p = pipe canon semi eager [x] l,r;
+        p = let canon semi eager [x] l,r;
         return p as answer(x);
     }})
     .unwrap();
@@ -306,7 +306,7 @@ fn composite_membership_trie_and_smallest_providers_are_not_retyped() {
         r = let rename R@1 {b -> b,c -> c};
         s = let rename S@2 {a -> a,c -> c};
         candidate = pipe probe smallest [b] l,r;
-        checked = pipe canon probe first [a,c] candidate,s;
+        checked = let canon probe first [a,c] candidate,s;
         return checked as answer(a,b,c);
     }})
     .unwrap();

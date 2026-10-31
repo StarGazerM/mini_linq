@@ -99,7 +99,12 @@ pub struct Answers {
 #[inline(always)]
 unsafe fn range(offsets: ColumnView, key: u32) -> (u32, u32) {
     // DECODE V: both FOR directory offsets are reconstructed before join expansion; P6 use plain index directories.
-    unsafe { (decode_u32(offsets, key as u64), decode_u32(offsets, key as u64 + 1)) }
+    unsafe {
+        (
+            decode_u32(offsets, key as u64),
+            decode_u32(offsets, key as u64 + 1),
+        )
+    }
 }
 
 /// Exact membership of `value` in ascending u32 `column` over [begin, end).
@@ -146,7 +151,9 @@ unsafe fn checked_scan(value: u32, meta: *mut u32) -> (u32, u32) {
 #[inline(always)]
 unsafe fn emit(out: Answers, destination: u32, order: u32, supplier: u32, nation: u32) {
     if destination < out.capacity {
-        let key = ((order as u64) << out.order_shift) | ((supplier as u64) << out.supplier_shift) | nation as u64;
+        let key = ((order as u64) << out.order_shift)
+            | ((supplier as u64) << out.supplier_shift)
+            | nation as u64;
         unsafe { *out.keys.add(destination as usize) = key };
     }
 }
@@ -184,7 +191,13 @@ pub mod reference {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn selected_keys_and_rows(key: ColumnView, selected: *const u32, rows: u32, keys: *mut u32, order: *mut u32) {
+    pub fn selected_keys_and_rows(
+        key: ColumnView,
+        selected: *const u32,
+        rows: u32,
+        keys: *mut u32,
+        order: *mut u32,
+    ) {
         let mut i = thread::index_1d().get() as u32;
         let stride = thread::gridDim_x() * 256;
         while i < rows {
@@ -212,7 +225,11 @@ pub mod reference {
         let stride = thread::gridDim_x() * 256;
         while i < rows {
             unsafe {
-                let row = if selected.is_null() { i } else { *selected.add(i as usize) };
+                let row = if selected.is_null() {
+                    i
+                } else {
+                    *selected.add(i as usize)
+                };
                 // DECODE V: gathered key reconstruction feeds lexicographic sort; P6 compare retained codes.
                 *out.add(i as usize) = decode_u32(key, row as u64);
             }
@@ -347,7 +364,8 @@ pub mod reference {
                 let mut nation = 0u32;
                 if position < driver_rows {
                     let segment = owner(segments.offsets, segment_count, position) as usize;
-                    let customer_row = *segments.begin.add(segment) + (position - *segments.offsets.add(segment));
+                    let customer_row =
+                        *segments.begin.add(segment) + (position - *segments.offsets.add(segment));
                     nation = *segments.nation.add(segment);
                     // DECODE V: customer ID FOR inverse precedes the orders join; P6 retain index keys without expansion.
                     let customer = decode_u32(ix.customer_id, customer_row as u64);
@@ -422,12 +440,15 @@ pub mod reference {
                                 order[item] = *p2_order.add(parent);
                                 supplier[item] = s;
                                 nation[item] = *p2_nation.add(parent);
-                                let (supplier_begin, supplier_end) = range(ix.supplier_offsets, nation[item]);
-                                found[item] = contains_u32(ix.supplier_id, supplier_begin, supplier_end, s);
+                                let (supplier_begin, supplier_end) =
+                                    range(ix.supplier_offsets, nation[item]);
+                                found[item] =
+                                    contains_u32(ix.supplier_id, supplier_begin, supplier_end, s);
                             }
                             item += 1;
                         }
-                        let hits = found[0] as u32 + found[1] as u32 + found[2] as u32 + found[3] as u32;
+                        let hits =
+                            found[0] as u32 + found[1] as u32 + found[2] as u32 + found[3] as u32;
                         let (offset, block_total) = checked_scan(hits, meta);
                         if tid == 0 {
                             *base_slot = if block_total > 0 {

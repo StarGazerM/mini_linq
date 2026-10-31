@@ -1,5 +1,5 @@
 use cq_lang_sequence::{
-    CanonToken, Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken, Term,
+    Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken,
     check_grading, check_rewrite, structures,
 };
 use cq_sequence_plan::{Advice, decompose, select_from_catalog};
@@ -40,6 +40,7 @@ fn catalog() -> Catalog {
                 elements: Some(vec![syn::parse_quote!(i32)]),
                 capabilities: capabilities.clone(),
                 levels: vec![device.clone(), block.clone()],
+                max_packed_bits: None,
             },
             ProviderToken {
                 supports: Vec::new(),
@@ -47,13 +48,17 @@ fn catalog() -> Catalog {
                 elements: None,
                 capabilities,
                 levels: vec![host.clone()],
+                max_packed_bits: None,
+            },
+            ProviderToken {
+                supports: Vec::new(),
+                ty: syn::parse_quote!(::cq_storage::dedup::Sort),
+                elements: None,
+                capabilities: vec![Capability::Distinct],
+                levels: vec![host.clone(), device.clone(), block.clone()],
+                max_packed_bits: None,
             },
         ],
-        canons: vec![CanonToken {
-            ty: syn::parse_quote!(::cq_storage::dedup::Sort),
-            levels: vec![host.clone(), device.clone(), block.clone()],
-            max_packed_bits: None,
-        }],
         codecs: vec![CodecToken {
             ty: syn::parse_quote!(Identity),
             ordered: true,
@@ -68,12 +73,13 @@ fn string_reader(retained: bool) -> structures::Program {
             relation L(a:i32,label:String); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a,label -> label};
             r = pipe rename R@1 {a -> a,b -> b};
-            answer = pipe canon probe first [a] l,r;
+            answer = let canon probe first [a] l,r;
             return answer as answer(a,b,label);
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r host result(answer) = Reader [a]; answer canon = sort;
+            r host result(answer) = Reader [a];
+            answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
         }
     };
     if retained {
@@ -123,12 +129,13 @@ fn numeric_lookup_is_published_before_host_string_expansion() {
             numeric = pipe probe first [a] r,s;
             text = pipe probe first [b] numeric,t;
             selected = pipe select text if (label = "green");
-            answer = pipe canon project selected keep {a,b};
+            answer = let canon project selected keep {a,b};
             return answer as answer(a,b);
         }
         structures {
             r host scan = Reader []; s host scan = Reader []; t host scan = Reader [];
-            s = RangeProvider [a]; t = HostIndex [b]; answer canon = sort;
+            s = RangeProvider [a]; t = HostIndex [b];
+            answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
         }
     };
     let source = cq_sequence_lowering::compile(&structures).unwrap();
@@ -181,7 +188,7 @@ fn automatic_h09_uses_catalog_read_levels_after_opaque_prefix() {
             supplied = pipe probe first [supplier_key] valid,s;
             n = let rename Nation@6 {nation_key -> nation_key};
             joined = pipe probe first [nation_key] supplied,n;
-            answer = pipe canon project joined keep {order_key,part_key,supplier_key};
+            answer = let canon project joined keep {order_key,part_key,supplier_key};
             return answer as answer(order_key,part_key,supplier_key);
         }
     };
@@ -232,7 +239,7 @@ fn automatic_h07_keeps_numeric_forwards_legal_before_string_readers() {
                 (supplier_name = "FRANCE" and customer_name = "GERMANY")
                 or (supplier_name = "GERMANY" and customer_name = "FRANCE")
             );
-            answer = pipe canon project selected keep {customer_nation,order_key,supplier_nation};
+            answer = let canon project selected keep {customer_nation,order_key,supplier_nation};
             return answer as answer(order_key,supplier_nation,customer_nation);
         }
     };
@@ -256,8 +263,10 @@ fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
     let source = string_reader(false);
     let mut selected = select_from_catalog(&source, &catalog()).unwrap();
     for entry in &mut selected.structures.entries {
-        if let structures::Structure::Dedup { strategy, .. } = &mut entry.structure {
-            *strategy = syn::parse_quote!(sort using NativeCanon);
+        if entry.name == "answer"
+            && let structures::Structure::Rows { ty, .. } = &mut entry.structure
+        {
+            *ty = syn::parse_quote!(NativeCanon);
         }
     }
     // The ordinary Structures-only contract remains exact.
@@ -280,7 +289,7 @@ fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
     assert!(structures::check_retention_rewrite(&source, &changed_order).is_err());
     let mut changed_mode = selected;
     changed_mode.physical.program.definitions[2].mode =
-        structures::physical::Mode::Let(Default::default());
+        structures::physical::Mode::Pipe(Default::default());
     assert!(structures::check_retention_rewrite(&source, &changed_mode).is_err());
 }
 
@@ -290,26 +299,35 @@ fn full_key_host_membership() -> structures::Program {
             relation L(a:i32,b:i32); relation R(a:i32);
             l = pipe rename L@0 {a -> a,b -> b};
             r = pipe rename R@1 {a -> a};
-            answer = pipe canon probe first [a] l,r;
+            answer = let canon probe first [a] l,r;
             return answer as answer(a,b);
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
             r host result(answer) = HostMembership [a] membership;
-            answer canon = sort;
+            answer rows = ::cq_storage::dedup::Sort;
+            answer canon = rows;
         }
     }
 }
 
 fn membership_catalog(ty: syn::Type) -> Catalog {
     let mut available = catalog();
-    available.providers = vec![ProviderToken {
-        ty,
-        supports: Vec::new(),
-        elements: None,
-        capabilities: vec![Capability::Membership],
-        levels: vec![vec!["host".into()]],
-    }];
+    // Only the canonical rows provider survives beside the membership token.
+    available
+        .providers
+        .retain(|token| token.capabilities.contains(&Capability::Distinct));
+    available.providers.insert(
+        0,
+        ProviderToken {
+            ty,
+            supports: Vec::new(),
+            elements: None,
+            capabilities: vec![Capability::Membership],
+            levels: vec![vec!["host".into()]],
+            max_packed_bits: None,
+        },
+    );
     available
 }
 

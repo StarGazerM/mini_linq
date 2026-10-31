@@ -486,6 +486,9 @@ pub struct Analysis {
     pub keyed_reads: BTreeMap<String, Vec<(String, Vec<String>, cq_syntax::SupplyKind)>>,
     /// Results whose rows are enumerated (pipe input, scan of a let).
     pub scanned: BTreeSet<String>,
+    /// Number of reads of every result (scans, keyed and merge reads, and the
+    /// return), each reading definition counted once per operand.
+    pub readers: BTreeMap<String, usize>,
     /// Results flagged `canon`.
     pub canon: BTreeSet<String>,
     /// Mode of every result.
@@ -999,6 +1002,15 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
         }
         analysis.modes.insert(name.clone(), mode);
         if definition.canon.is_some() {
+            // Formal rule PH-Canon: a canon result is materialized in its
+            // canonical index, so it is stored (let/exists); only a host
+            // rename may stay a pipe, its canonical index being the host carrier.
+            if mode == ModeKind::Pipe && !matches!(definition.operator, Operator::Rename(_)) {
+                return error(
+                    &definition.name,
+                    "a canon result is stored in its canonical index: use let, or canon a host rename",
+                );
+            }
             analysis.canon.insert(name);
         }
     }
@@ -1058,6 +1070,10 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
         .or_default()
         .push("return".into());
     analysis.scanned.insert(returned);
+    analysis.readers = readers
+        .iter()
+        .map(|(name, uses)| (name.clone(), uses.len()))
+        .collect();
     for definition in &program.definitions {
         let Operator::Union(union) = &definition.operator else {
             continue;

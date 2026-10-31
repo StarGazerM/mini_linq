@@ -360,7 +360,7 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             }
             keyed.ty = ty;
             keyed.supports = if payload && layout.len() == 1 {
-                Some(syn::parse_quote!(supports [keys]))
+                Some(syn::parse_quote!(supports[keys]))
             } else {
                 None
             };

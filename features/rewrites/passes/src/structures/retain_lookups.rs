@@ -48,7 +48,10 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             });
             if let Some(candidate) = candidate {
                 if !facts.candidate_support(
-                    &build, &keys, &candidate.column, ir::ProviderCapability::Retain,
+                    &build,
+                    &keys,
+                    &candidate.column,
+                    ir::ProviderCapability::Retain,
                 ) {
                     continue;
                 }

@@ -70,11 +70,13 @@ macro_rules! query_body {
                     let group: i32 = 0,
                     let amount: i128 = i128::from(price.scaled()) * i128::from(discount.scaled());
             }};
-            vec![aggregates
-                .iter()
-                .flat_map(|(_, values)| values.iter())
-                .map(|(amount,)| *amount)
-                .next()]
+            vec![
+                aggregates
+                    .iter()
+                    .flat_map(|(_, values)| values.iter())
+                    .map(|(amount,)| *amount)
+                    .next(),
+            ]
         }
     };
 }

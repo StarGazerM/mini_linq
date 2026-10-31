@@ -173,7 +173,7 @@ fn const_demand_and_point_modifier_are_independent_obligations() {
         physical::Operator::Point(..)
     ));
     let mut changed = target.clone();
-    changed.program.definitions[1] = syn::parse_quote!(s = pipe canon select r if (x = 2););
+    changed.program.definitions[1] = syn::parse_quote!(s = let canon select r if (x = 2););
     check(&source, &changed).unwrap();
     let mut missing = source.clone();
     missing.indexes.clear();
@@ -234,7 +234,7 @@ fn chain_reordering_fails_erasure_even_if_local_program_is_scoped() {
     );
     let mut changed = target;
     changed.program.definitions[1] = syn::parse_quote!(b = pipe bind r with y:i32 = (10 / *x););
-    changed.program.definitions[2] = syn::parse_quote!(g = pipe canon guard b if (*x != 0););
+    changed.program.definitions[2] = syn::parse_quote!(g = let canon guard b if (*x != 0););
     changed.program.returned = syn::parse_quote!(g);
     physical::contract::check(&changed).unwrap();
     assert!(check(&source, &changed).is_err());

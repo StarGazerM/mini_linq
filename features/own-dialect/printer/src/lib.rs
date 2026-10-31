@@ -185,14 +185,18 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
     let body = push.head(
         &name,
         &module.physical.program.head,
-        if canonical_head.is_some() { &head_rows } else { &out },
+        if canonical_head.is_some() {
+            &head_rows
+        } else {
+            &out
+        },
         canonical_head.is_none() && consumer.is_some(),
     );
     let body = push.emit(&name, body)?;
     let head_state = canonical_head.map(|_| quote!(let mut #head_rows = ::std::vec::Vec::new();));
-    let head_publish = canonical_head.map(|strategy| {
+    let head_publish = canonical_head.map(|provider| {
         let rows = cq_physical_realization::RowEmitter::canon(
-            strategy,
+            provider,
             quote!(#head_rows),
             module.physical.program.head.args.len(),
         );
@@ -225,7 +229,6 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
 fn temporary(role: &str, result: &str) -> syn::Ident {
     format_ident!("__push_{}_{}", role, result, span = Span::mixed_site())
 }
-
 
 /// The supported stage is one uninterrupted selection spine over a host scan.
 fn selection_chain(
@@ -309,7 +312,7 @@ impl Push<'_> {
                 continue;
             }
             let definition = self.context.physical[&name];
-            if !matches!(definition.mode, physical::Mode::Pipe(_)) {
+            if !self.streamed(&name) {
                 continue;
             }
             if matches!(&definition.operator,Operator::Union(u) if u.fused.is_some())
@@ -323,9 +326,16 @@ impl Push<'_> {
         false
     }
 
+    /// A pipe, or a stored result whose single-consumer rows record is moved
+    /// into its reader (STR-RowsByValue): both are prepared row streams.
+    fn streamed(&self, result: &str) -> bool {
+        matches!(self.context.physical[result].mode, physical::Mode::Pipe(_))
+            || matches!(self.context.reprs.get(result), Some(Repr::Pipe(_)))
+    }
+
     fn emit(&mut self, result: &str, sink: Tokens) -> syn::Result<Tokens> {
         let definition = self.context.physical[result];
-        if matches!(definition.mode, physical::Mode::Pipe(_)) && self.prepared_dependency(result) {
+        if self.streamed(result) && self.prepared_dependency(result) {
             if !self.consumed.insert(result.to_owned()) {
                 return error(&definition.name, "own_push: prepared pipe is read twice");
             }
@@ -388,18 +398,31 @@ impl Push<'_> {
             );
         }
         if definition.canon.is_some() {
-            let strategy = &self.analysis.dedup[result];
             let pattern = self.bind_columns(result, self.carried(result), false);
-            if matches!(strategy, structures::CanonStrategy::Ordered(_)) {
-                let rows = cq_physical_realization::RowEmitter::ordered_source(
-                    &self.context, cq_physical_realization::CanonTarget::Sequential, result,
-                );
-                return Ok(quote!(for #pattern in #rows { #sink }));
-            }
+            let provider = match self.analysis.canonical[result].clone() {
+                structures::CanonSource::Host => {
+                    let rows = cq_physical_realization::RowEmitter::ordered_source(
+                        &self.context,
+                        cq_physical_realization::CanonTarget::Sequential,
+                        result,
+                    );
+                    return Ok(quote!(for #pattern in #rows { #sink }));
+                }
+                structures::CanonSource::Rows(provider)
+                    if matches!(definition.mode, physical::Mode::Let(_)) =>
+                {
+                    provider
+                }
+                structures::CanonSource::Rows(_) | structures::CanonSource::Index(_) => {
+                    return self.operator(result, sink);
+                }
+            };
             let buffer = temporary("canon_rows", result);
             let row = self.carrier(result, |column| self.access(result, column));
             let rows = cq_physical_realization::RowEmitter::canon(
-                strategy, quote!(#buffer), self.carried(result).len(),
+                &provider,
+                quote!(#buffer),
+                self.carried(result).len(),
             );
             let body = self.operator(result, quote!(#buffer.push(#row);))?;
             return Ok(quote!({

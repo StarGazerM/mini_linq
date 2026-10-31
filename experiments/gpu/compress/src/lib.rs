@@ -24,7 +24,8 @@
 //! DO NOT conflate scan codec selection with lookup/expand layout or infer either from type spelling.
 use gpu_compress_host::{Kind, Schema};
 use gpu_device_columns::{
-    Bounds, Buffer, Codec, ColumnView, DeviceColumns, Dictionary, EncodedColumn, OutputCount, Pool, Table,
+    Bounds, Buffer, Codec, ColumnView, DeviceColumns, Dictionary, EncodedColumn, OutputCount, Pool,
+    Table,
 };
 use serde_json::Value;
 use std::{collections::BTreeMap, error::Error, fs, path::Path, sync::Arc};
@@ -48,21 +49,32 @@ impl Source {
         let mut columns = BTreeMap::new();
         let mut texts_by_column = BTreeMap::new();
         let mut declared_bytes = 0;
-        for (relation, meta) in manifest["relations"].as_object().ok_or("relations missing")? {
+        for (relation, meta) in manifest["relations"]
+            .as_object()
+            .ok_or("relations missing")?
+        {
             let rows = meta["rows"].as_u64().ok_or("row count missing")? as usize;
             if rows >= u32::MAX as usize {
                 return Err(format!("{relation}: row count exceeds the u32 row-ID domain").into());
             }
             for column in meta["columns"].as_array().ok_or("columns missing")? {
                 let name = column["name"].as_str().ok_or("column name missing")?;
-                let bytes = fs::read(dir.join(column["file"].as_str().ok_or("column file missing")?))?;
+                let bytes =
+                    fs::read(dir.join(column["file"].as_str().ok_or("column file missing")?))?;
                 let width = match column["type"].as_str().ok_or("column type missing")? {
                     "i64" => 8,
                     "i32" => 4,
-                    other => return Err(format!("{relation}.{name}: unsupported declared type {other}").into()),
+                    other => {
+                        return Err(
+                            format!("{relation}.{name}: unsupported declared type {other}").into(),
+                        )
+                    }
                 };
                 if bytes.len() != rows * width {
-                    return Err(format!("{relation}.{name}: byte length does not match its declared type").into());
+                    return Err(format!(
+                        "{relation}.{name}: byte length does not match its declared type"
+                    )
+                    .into());
                 }
                 let values: Vec<i64> = bytes
                     .chunks_exact(width)
@@ -78,8 +90,14 @@ impl Source {
                 let qualified = format!("{relation}.{name}");
                 let dictionary = dir.join(format!("{qualified}.dict.txt"));
                 if dictionary.is_file() {
-                    let texts: Vec<String> = fs::read_to_string(dictionary)?.lines().map(str::to_owned).collect();
-                    if values.iter().any(|&id| id < 0 || id as usize >= texts.len()) {
+                    let texts: Vec<String> = fs::read_to_string(dictionary)?
+                        .lines()
+                        .map(str::to_owned)
+                        .collect();
+                    if values
+                        .iter()
+                        .any(|&id| id < 0 || id as usize >= texts.len())
+                    {
                         return Err(format!("{qualified}: text ID outside its dictionary").into());
                     }
                     texts_by_column.insert(qualified.clone(), texts);
@@ -87,10 +105,18 @@ impl Source {
                 columns.insert(qualified, values);
             }
         }
-        Ok(Self { columns, texts: texts_by_column, declared_bytes, manifest })
+        Ok(Self {
+            columns,
+            texts: texts_by_column,
+            declared_bytes,
+            manifest,
+        })
     }
     pub fn col(&self, name: &str) -> Result<&[i64]> {
-        self.columns.get(name).map(Vec::as_slice).ok_or_else(|| format!("missing column {name}").into())
+        self.columns
+            .get(name)
+            .map(Vec::as_slice)
+            .ok_or_else(|| format!("missing column {name}").into())
     }
     pub fn declared_bytes(&self) -> usize {
         self.declared_bytes
@@ -115,7 +141,10 @@ impl Domain {
         if values.len() >= u32::MAX as usize {
             return Err(format!("domain {name} exceeds the u32 ID domain").into());
         }
-        Ok(Self { name: name.to_string(), values })
+        Ok(Self {
+            name: name.to_string(),
+            values,
+        })
     }
     pub fn name(&self) -> &str {
         &self.name
@@ -128,10 +157,21 @@ impl Domain {
     }
     /// Bits of an ID: ceil(log2(len)).
     pub fn bits(&self) -> u32 {
-        if self.len() <= 1 { 0 } else { 64 - ((self.len() - 1) as u64).leading_zeros() }
+        if self.len() <= 1 {
+            0
+        } else {
+            64 - ((self.len() - 1) as u64).leading_zeros()
+        }
     }
     pub fn bounds(&self) -> Bounds {
-        if self.is_empty() { Bounds::Empty } else { Bounds::Inclusive { min: 0, max: self.len() as i64 - 1 } }
+        if self.is_empty() {
+            Bounds::Empty
+        } else {
+            Bounds::Inclusive {
+                min: 0,
+                max: self.len() as i64 - 1,
+            }
+        }
     }
     /// Source value of an ID (answer decoding).
     // DECODE ?: source-key ordinal inversion serves answer decoding and generic DomainMap callers; require caller read evidence.
@@ -143,7 +183,10 @@ impl Domain {
         self.values.binary_search(&value).ok().map(|id| id as u32)
     }
     fn ids(&self, column: &[i64]) -> Vec<u32> {
-        column.iter().map(|v| self.values.binary_search(v).expect("value in its domain") as u32).collect()
+        column
+            .iter()
+            .map(|v| self.values.binary_search(v).expect("value in its domain") as u32)
+            .collect()
     }
 }
 
@@ -172,7 +215,10 @@ impl Catalog {
     pub fn compress(pool: &Arc<Pool>, source: &Source, schema: &Schema) -> Result<Self> {
         let mut domains = BTreeMap::new();
         for (name, members) in &schema.domains {
-            let columns = members.iter().map(|m| source.col(m)).collect::<Result<Vec<_>>>()?;
+            let columns = members
+                .iter()
+                .map(|m| source.col(m))
+                .collect::<Result<Vec<_>>>()?;
             domains.insert(name.clone(), Domain::new(name, &columns)?);
         }
         let mut tables = BTreeMap::new();
@@ -186,40 +232,77 @@ impl Catalog {
                 if *rows.get_or_insert(values.len()) != values.len() {
                     return Err(format!("{qualified}: row count differs within {table}").into());
                 }
-                let encoded = match kind {
-                    Kind::Id(domain) => {
-                        let domain = domains.get(domain).ok_or_else(|| format!("{qualified}: unknown domain {domain}"))?;
-                        if !schema.domains.iter().any(|(d, members)| d == domain.name() && members.contains(&qualified)) {
-                            return Err(format!("{qualified} is not a member of domain {}", domain.name()).into());
+                let encoded =
+                    match kind {
+                        Kind::Id(domain) => {
+                            let domain = domains
+                                .get(domain)
+                                .ok_or_else(|| format!("{qualified}: unknown domain {domain}"))?;
+                            if !schema.domains.iter().any(|(d, members)| {
+                                d == domain.name() && members.contains(&qualified)
+                            }) {
+                                return Err(format!(
+                                    "{qualified} is not a member of domain {}",
+                                    domain.name()
+                                )
+                                .into());
+                            }
+                            EncodedColumn::from_host(pool.clone(), &domain.ids(values), Codec::For)?
                         }
-                        EncodedColumn::from_host(pool.clone(), &domain.ids(values), Codec::For)?
-                    }
-                    Kind::I32 => {
-                        let values = values.iter().map(|&v| Ok(i32::try_from(v)?)).collect::<Result<Vec<i32>>>()?;
-                        EncodedColumn::from_host(pool.clone(), &values, Codec::For)?
-                    }
-                };
-                stored.push(CompressedColumn { name: column.clone(), kind: kind.clone(), column: Arc::new(encoded) });
+                        Kind::I32 => {
+                            let values = values
+                                .iter()
+                                .map(|&v| Ok(i32::try_from(v)?))
+                                .collect::<Result<Vec<i32>>>()?;
+                            EncodedColumn::from_host(pool.clone(), &values, Codec::For)?
+                        }
+                    };
+                stored.push(CompressedColumn {
+                    name: column.clone(),
+                    kind: kind.clone(),
+                    column: Arc::new(encoded),
+                });
                 if let Some(texts) = source.texts.get(&qualified) {
                     stored_texts.insert(qualified, texts.clone());
                 }
             }
-            tables.insert(table.clone(), CompressedTable { rows: rows.unwrap_or(0), columns: stored });
+            tables.insert(
+                table.clone(),
+                CompressedTable {
+                    rows: rows.unwrap_or(0),
+                    columns: stored,
+                },
+            );
         }
-        Ok(Self { pool: pool.clone(), domains, tables, texts: stored_texts })
+        Ok(Self {
+            pool: pool.clone(),
+            domains,
+            tables,
+            texts: stored_texts,
+        })
     }
     /// Stored `i32` ID of `text` in the interned text column `table.column`:
     /// the value a query constant must have to compare with that column.
     pub fn text_id(&self, column: &str, text: &str) -> Result<i32> {
-        let texts = self.texts.get(column).ok_or_else(|| format!("{column} is not a stored text column"))?;
-        let id = texts.iter().position(|t| t == text).ok_or_else(|| format!("{column}: {text:?} is not in its dictionary"))?;
+        let texts = self
+            .texts
+            .get(column)
+            .ok_or_else(|| format!("{column} is not a stored text column"))?;
+        let id = texts
+            .iter()
+            .position(|t| t == text)
+            .ok_or_else(|| format!("{column}: {text:?} is not in its dictionary"))?;
         Ok(i32::try_from(id)?)
     }
     pub fn domain(&self, name: &str) -> Result<&Domain> {
-        self.domains.get(name).ok_or_else(|| format!("unknown domain {name}").into())
+        self.domains
+            .get(name)
+            .ok_or_else(|| format!("unknown domain {name}").into())
     }
     pub fn table(&self, name: &str) -> Result<&CompressedTable> {
-        self.tables.get(name).ok_or_else(|| format!("unknown table {name}").into())
+        self.tables
+            .get(name)
+            .ok_or_else(|| format!("unknown table {name}").into())
     }
     pub fn column(&self, table: &str, column: &str) -> Result<&CompressedColumn> {
         self.table(table)?
@@ -237,7 +320,11 @@ impl Catalog {
     }
     /// Encoded bytes of every resident column.
     pub fn bytes(&self) -> usize {
-        self.tables.values().flat_map(|t| &t.columns).map(|c| c.column.bytes()).sum()
+        self.tables
+            .values()
+            .flat_map(|t| &t.columns)
+            .map(|c| c.column.bytes())
+            .sum()
     }
     pub fn tables(&self) -> impl Iterator<Item = (&String, &CompressedTable)> {
         self.tables.iter()
@@ -245,10 +332,24 @@ impl Catalog {
     /// Bind a stored table as a resident relation for compiled queries. `Row`
     /// is the tuple of stored types (domain ID newtypes and `i32`). Setup only:
     /// the column descriptors and row count are uploaded synchronously.
-    pub fn device_columns<Row>(&self, table: &str) -> Result<DeviceColumns<'static, Row, gpu_device_columns::For>> {
+    pub fn device_columns<Row>(
+        &self,
+        table: &str,
+    ) -> Result<DeviceColumns<'static, Row, gpu_device_columns::For>> {
         let stored = self.table(table)?;
-        let views: Vec<ColumnView> = stored.columns.iter().map(|c| unsafe { c.column.view() }).collect();
-        let metadata = Buffer::from_host(self.pool.clone(), &[OutputCount { rows: stored.rows as u64, error: 0, padding: 0 }])?;
+        let views: Vec<ColumnView> = stored
+            .columns
+            .iter()
+            .map(|c| unsafe { c.column.view() })
+            .collect();
+        let metadata = Buffer::from_host(
+            self.pool.clone(),
+            &[OutputCount {
+                rows: stored.rows as u64,
+                error: 0,
+                padding: 0,
+            }],
+        )?;
         let table = Table {
             columns: stored.columns.iter().map(|c| c.column.clone()).collect(),
             views: Arc::new(Buffer::from_host(self.pool.clone(), &views)?),
@@ -260,6 +361,8 @@ impl Catalog {
         // SAFETY: every column belongs to this pool and was initialized by
         // `compress`; the views and count are owned by `table`; bounds are the
         // columns' own. The string dictionary is unused by integer domains.
-        Ok(unsafe { DeviceColumns::from_parts(table, Arc::new(Dictionary::default()), self.pool.clone()) })
+        Ok(unsafe {
+            DeviceColumns::from_parts(table, Arc::new(Dictionary::default()), self.pool.clone())
+        })
     }
 }

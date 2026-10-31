@@ -1113,26 +1113,24 @@ impl Checked<'_> {
             Term::Canon(inner) => {
                 // Formal rule BE-Canon: Canonicalize innermost rows; providers remain trait obligations.
                 let mut fact = self.term(inner, owner)?;
-                let strategy = match &fact.meaning {
-                    Meaning::Result(name) => self.analysis.structures.dedup.get(name).cloned(),
+                let canonical = match &fact.meaning {
+                    Meaning::Result(name) => self.analysis.structures.canonical.get(name).cloned(),
                     _ => None,
                 };
                 // Formal rule BE-CanonOrdered: the proof carrier belongs to this
                 // direct source, not to an arbitrary stream with the same schema.
-                if matches!(
-                    strategy,
-                    Some(cq_lang_structures::CanonStrategy::Ordered(_))
-                ) && !matches!(inner.as_ref(), Term::Rows(_))
+                if matches!(canonical, Some(cq_lang_structures::CanonSource::Host))
+                    && !matches!(inner.as_ref(), Term::Rows(_))
                 {
                     return fail(
                         term,
                         "BE-CanonOrdered",
-                        "ordered canon requires direct source rows",
+                        "a canonical host carrier requires direct source rows",
                     );
                 }
                 self.analysis.obligations.push(Obligation::Canon {
                     result: owner.into(),
-                    strategy,
+                    canonical,
                 });
                 self.analysis.obligations.push(Obligation::Codec {
                     columns: self.heading(&fact.meaning),
@@ -1278,33 +1276,45 @@ impl Checked<'_> {
             .built_on(&name, keys)
             .map(|(ty, _)| ty.clone())
             .or_else(|| {
-                self.analysis
-                    .structures
-                    .fallbacks
-                    .iter()
-                    .find(|((result, reader, columns), _)| {
+                let operator = |consumer: &str| {
+                    self.program
+                        .structures
+                        .physical
+                        .program
+                        .definitions
+                        .iter()
+                        .find(|definition| symbol_name(&definition.name) == consumer)
+                        .map(|definition| &definition.operator)
+                };
+                let fallbacks = self.analysis.structures.fallbacks.iter().filter(
+                    |((result, reader, columns), _)| {
                         *result == name
                             && columns == keys
                             && match reader {
                                 cq_lang_structures::ReaderRef::Scan => false,
                                 cq_lang_structures::ReaderRef::Candidates
                                 | cq_lang_structures::ReaderRef::Membership => true,
-                                cq_lang_structures::ReaderRef::Result(consumer) => self
-                                    .program
-                                    .structures
-                                    .physical
-                                    .program
-                                    .definitions
-                                    .iter()
-                                    .any(|definition| {
-                                        symbol_name(&definition.name) == *consumer
-                                            && !matches!(
-                                                definition.operator,
-                                                Operator::Point(..) | Operator::Range(..)
-                                            )
-                                    }),
+                                cq_lang_structures::ReaderRef::Result(consumer) => {
+                                    operator(consumer).is_some_and(|operator| {
+                                        !matches!(
+                                            operator,
+                                            Operator::Point(..) | Operator::Range(..)
+                                        )
+                                    })
+                                }
                             }
-                    })
+                    },
+                );
+                // Formal rule BE-OrderedFallback: an ordered read of a host
+                // result is typed by the fallback recorded for its merge
+                // reader, not by another reader's (e.g. membership) fallback.
+                let ordered = fallbacks.clone().find(|((_, reader, _), _)| {
+                    required == Capability::Ordered
+                        && matches!(reader, cq_lang_structures::ReaderRef::Result(consumer)
+                            if matches!(operator(consumer), Some(Operator::Merge(..))))
+                });
+                ordered
+                    .or_else(|| fallbacks.clone().next())
                     .map(|(_, ty)| ty.clone())
             })
             .or_else(|| {
@@ -1571,13 +1581,13 @@ mod tests {
         let program: Program = syn::parse_quote! {
             physical {
                 relation R(k:i32, value:i64);
-                r = pipe canon rename R@0 {k -> k, value -> value};
+                r = let canon rename R@0 {k -> k, value -> value};
                 grouped = let group r by [k] { n: usize = count(); };
                 return grouped as answer(k,n);
             }
             structures {
                 r host scan = Reader [];
-                r canon = sort;
+                r rows = ::cq_storage::dedup::Sort; r canon = rows;
                 grouped rows = Rows;
                 grouped group = ::std::collections::HashMap<_, (usize,)>;
             }
@@ -1604,10 +1614,10 @@ mod tests {
             physical {
                 relation R(a:i32);
                 r = pipe rename R@0 {a -> a};
-                output = pipe canon project r keep {a};
+                output = let canon project r keep {a};
                 return output as answer(a);
             }
-            structures { r host scan = Reader []; output canon = sort; }
+            structures { r host scan = Reader []; output rows = ::cq_storage::dedup::Sort; output canon = rows; }
             sequence {
                 a_view = canon rows r;
                 before = rows r;

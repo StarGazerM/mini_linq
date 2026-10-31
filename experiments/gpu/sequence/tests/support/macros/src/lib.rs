@@ -6,13 +6,15 @@ use quote::ToTokens;
 #[proc_macro]
 pub fn sequence(input: TokenStream) -> TokenStream {
     let mut program = syn::parse_macro_input!(input as cq_lang_sequence::Program);
-    let result = cq_gpu_sequence_core::bind_structures(&program.structures).and_then(|structures| {
-        program.structures = structures;
-        cq_gpu_sequence_core::runs::record_representation(&program)
-    }).and_then(|program| {
-        let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())?;
-        cq_gpu_sequence::translate(&program, &analysis)
-    });
+    let result = cq_gpu_sequence_core::bind_structures(&program.structures)
+        .and_then(|structures| {
+            program.structures = structures;
+            cq_gpu_sequence_core::runs::record_representation(&program)
+        })
+        .and_then(|program| {
+            let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())?;
+            cq_gpu_sequence::translate(&program, &analysis)
+        });
     match result {
         Ok(expression) => expression.into_token_stream().into(),
         Err(error) => error.into_compile_error().into(),
@@ -124,16 +126,27 @@ fn arena_hole(
     let normalized = cq_gpu_sequence_core::constants::compile(&structures.physical)?;
     if normalized != structures.physical {
         let before = cq_lang_structures::physical::contract::check(&structures.physical)?;
-        let inputs: std::collections::BTreeMap<_, _> = structures.structures.entries.iter()
+        let inputs: std::collections::BTreeMap<_, _> = structures
+            .structures
+            .entries
+            .iter()
             .filter_map(|entry| match &entry.structure {
-                cq_lang_structures::Structure::Host { reader, keyed, .. } if matches!(reader, cq_lang_structures::ReaderRef::Scan) =>
-                    Some((before.hosts[&entry.name.to_string()].clone(), keyed.ty.clone())),
+                cq_lang_structures::Structure::Host { reader, keyed, .. }
+                    if matches!(reader, cq_lang_structures::ReaderRef::Scan) =>
+                {
+                    Some((
+                        before.hosts[&entry.name.to_string()].clone(),
+                        keyed.ty.clone(),
+                    ))
+                }
                 _ => None,
-            }).collect();
+            })
+            .collect();
         structures = cq_structure_selection::compile(&normalized)?;
         let after = cq_lang_structures::contract::check(&structures)?;
         for entry in &mut structures.structures.entries {
-            if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &mut entry.structure {
+            if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &mut entry.structure
+            {
                 if matches!(reader, cq_lang_structures::ReaderRef::Scan) {
                     if let Some(ty) = inputs.get(&after.physical.hosts[&entry.name.to_string()]) {
                         keyed.ty = ty.clone();
@@ -149,7 +162,10 @@ fn arena_hole(
     let mut planned = cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog())?;
     let terminal = planned.program.sequence.definitions.last_mut().unwrap();
     let cq_lang_sequence::Term::Store { capacity, .. } = &mut terminal.term else {
-        return Err(syn::Error::new_spanned(name, "expected a planned terminal store"));
+        return Err(syn::Error::new_spanned(
+            name,
+            "expected a planned terminal store",
+        ));
     };
     if matches!(output, cq_lang_sequence::OutputProtocol::Reserve) {
         // Keep the fixed-reservation fixture deliberately under-sized so fanout
@@ -180,10 +196,11 @@ pub fn planned_arena_hole(input: TokenStream) -> TokenStream {
 pub fn arena_hole_source(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
     match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve) {
-        Ok(expression) => syn::LitStr::new(
-            &expression.into_token_stream().to_string(),
-            name.span(),
-        ).into_token_stream().into(),
+        Ok(expression) => {
+            syn::LitStr::new(&expression.into_token_stream().to_string(), name.span())
+                .into_token_stream()
+                .into()
+        }
         Err(error) => error.into_compile_error().into(),
     }
 }
@@ -203,10 +220,11 @@ pub fn planned_arena_hole_previous(input: TokenStream) -> TokenStream {
 pub fn arena_hole_previous_source(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
     match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious) {
-        Ok(expression) => syn::LitStr::new(
-            &expression.into_token_stream().to_string(),
-            name.span(),
-        ).into_token_stream().into(),
+        Ok(expression) => {
+            syn::LitStr::new(&expression.into_token_stream().to_string(), name.span())
+                .into_token_stream()
+                .into()
+        }
         Err(error) => error.into_compile_error().into(),
     }
 }

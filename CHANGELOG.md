@@ -7,6 +7,29 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- P3d track A, canonical reference cutover: a canon result is stored in its
+  canonical index, an ordinary index chosen by index selection. Structures
+  records `r canon = rows | [cols] | host` (STR-Canon) and `r head = Type`;
+  default selection types rows by the sorted-array provider
+  `::cq_storage::dedup::Sort` (SEL-Canon), an existence-only single complete
+  Built index may be the reference, and a direct load-verified host rename
+  uses `host`. Canon results lower to `let` unless they are host-rename pipes
+  (PH-Canon); single-consumer rows records move by value (STR-RowsByValue,
+  shared predicate `Analysis::rows_by_value`), so Sequence lowers a by-value
+  canon `let` without a Store, exactly like a canon pipe: Tasks still routes
+  it and canonicalizes per part, folding partial groups over tiles.
+  Sequence catalogs offer `Capability::Distinct` providers (PL-Distinct)
+  instead of canon tokens, and `Obligation::Canon` carries the canonical
+  source. Removed: `CanonStrategy`, the `sort`/`ordered`/`using` canon
+  syntax, `CanonToken`/`Catalog.canons`, and the
+  `cq_storage::maintain::{Fresh, Publish}` traits with their impls, laws and
+  D-only `Default` impls; `RadixRun` publication becomes `RadixRun::merge`.
+  Formal: IX-Fresh, IX-Publish and IX-RunPublish are replaced by IX-RunMerge.
+- Formal: EXT-MergeRetained (`merge_joins` treats a single-unkeyed-reader
+  canon `let` as a canonical stream, not retained merge order) and
+  BE-OrderedFallback (an ordered host read uses its merge reader's recorded
+  fallback provider).
+
 - Unify dense membership and radix/rank keys under `cq_storage::OrderKey`:
   one total, injective, order-preserving ordinal covers stored and absent keys.
   Remove `DenseOrdinal` and `RadixKey`; custom keys implement `OrderKey`.
@@ -16,20 +39,16 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   Signed i32 and unsigned u32 adapters now use the same ordinals as radix runs;
   native u64/u128 membership and existing provider reads remain supported.
   Export `cq_storage::HashMap` with configurable/default `HashState`.
-- Implement ordinary-index `Fresh`/`Publish` for hash/tree sets, grouped hash
-  and ordered maps, sorted/radix runs and recursive tries. Admission compares complete
-  rows, not just grouped keys, and does not mutate the represented relation.
-  Radix publication uses ratio-bounded immutable runs, stable merge-path and
-  narrow group offsets. Membership/count/range reads do not touch payloads.
+- Radix index runs use ratio-bounded immutable runs, stable merge-path and
+  narrow group offsets; the inherent `RadixRun::merge` (IX-RunMerge) is a
+  multiset union. Membership/count/range reads do not touch payloads.
   `RadixRun<K,V,C=Vec<V>>` supports explicit `ItemColumns` layouts, including
   tuple-of-vector SoA columns and selective `column_groups` reads; old flat
   constructors and contiguous item APIs remain available. Radix lookup now
   returns a Copy/ExactSize cross-run cursor through `IndexRead::Cursor`.
-  Empty sorted/radix/trie indices implement `Default` for uniform admission
-  construction; no provider-name branch is required.
-  Set-bucket hash maps support ordinary reads and complete-row admission
-  with independent key/payload hashers. Single-run retained radix expansion
-  resolves its directory once; published key scans merge runs without sorting.
+  Set-bucket hash maps support ordinary reads with independent key/payload
+  hashers. Single-run retained radix expansion resolves its directory once;
+  key scans merge runs without sorting.
 - P3.3-lite: remove `lookup_first`, adaptive optional-filter advice/provenance,
   and automatic Sequence relational replanning. Default and GPU automatic
   routes now use order-preserving decomposition with existing grading.

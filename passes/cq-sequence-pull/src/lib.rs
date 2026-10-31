@@ -34,13 +34,14 @@ pub fn machine() -> cq_lang_sequence::Machine {
     }
 }
 
-/// Native provider, value-refinement and canonicalization tokens.
+/// Native provider and value-refinement tokens, including the distinct-row
+/// providers that type canonical rows records.
 ///
 /// Generic holes describe families of authored types, not a replacement for
 /// their arguments. Rust trait checking retains each token's row-type bounds.
 pub fn catalog() -> cq_lang_sequence::Catalog {
-    use Capability::{Exact, Membership, Ordered, Range};
-    use cq_lang_sequence::{CanonToken, Catalog, CodecToken, ProviderToken};
+    use Capability::{Distinct, Exact, Membership, Ordered, Range};
+    use cq_lang_sequence::{Catalog, CodecToken, ProviderToken};
     use cq_lang_structures::ProviderCapability::{Expand, Keys, Retain};
 
     let levels = vec![vec!["host".into()]];
@@ -140,6 +141,18 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             vec![Membership],
             vec![],
         ),
+        // Formal rule PL-Distinct: canonical rows records. Exists is the
+        // 0-ary set, whose build already yields the distinct rows.
+        (
+            syn::parse_quote!(::cq_storage::dedup::Sort),
+            vec![Distinct],
+            vec![],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::Exists),
+            vec![Distinct],
+            vec![],
+        ),
     ]
     .into_iter()
     .map(|(ty, capabilities, supports)| ProviderToken {
@@ -148,6 +161,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         supports,
         levels: levels.clone(),
         elements: None,
+        max_packed_bits: None,
     })
     .collect();
     Catalog {
@@ -164,11 +178,6 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             levels: levels.clone(),
         })
         .collect(),
-        canons: vec![CanonToken {
-            ty: syn::parse_quote!(::cq_storage::dedup::Sort),
-            levels,
-            max_packed_bits: None,
-        }],
     }
 }
 
@@ -993,62 +1002,90 @@ impl<'a> Emitter<'a> {
         })
     }
 
-    /// Apply the recorded canonicalization strategy to the complete flat stream.
+    /// Realize a canon boundary from its checked canonical reference: a rows
+    /// record is built by its provider's distinct-row build; an existing Built
+    /// index or an `exists` rows record is built from the candidates by its
+    /// own build (at publication); a host carrier is read in verified order.
     pub fn canon(&mut self, mut input: Value) -> syn::Result<Value> {
-        let strategy = input
+        let canonical = input
             .result
             .as_ref()
-            .and_then(|name| self.analysis.structures.dedup.get(name))
+            .and_then(|name| self.analysis.structures.canonical.get(name))
             .or_else(|| {
                 self.analysis
                     .obligations
                     .iter()
                     .find_map(|obligation| match obligation {
-                        cq_lang_sequence::Obligation::Canon { result, strategy }
+                        cq_lang_sequence::Obligation::Canon { result, canonical }
                             if result == &self.owner =>
                         {
-                            strategy.as_ref()
+                            canonical.as_ref()
                         }
                         _ => None,
                     })
             })
+            .cloned()
             .ok_or_else(|| {
                 syn::Error::new(
                     proc_macro2::Span::call_site(),
-                    "Sequence canon requires a recorded strategy",
+                    "Sequence canon requires a canonical reference",
                 )
             })?;
-        let width = input
-            .result
-            .as_ref()
-            .map_or(1, |result| self.context().carried(result).len());
-        let label = format!("{}.dedup", self.owner);
-        let inputs = input.result.iter().cloned().collect();
-        self.context_mut()
-            .profile_label(&label, "DEDUP", "", inputs);
-        let rows = match strategy {
-            cq_lang_structures::CanonStrategy::Sort(_) => {
+        let stored = input.result.as_ref().is_some_and(|result| {
+            self.analysis.structures.physical.modes[result]
+                == cq_lang_structures::physical::ModeKind::Let
+        });
+        let rows = match canonical {
+            cq_lang_structures::CanonSource::Rows(provider) if stored => {
+                let width = input
+                    .result
+                    .as_ref()
+                    .map_or(1, |result| self.context().carried(result).len());
+                let label = format!("{}.dedup", self.owner);
+                let inputs = input.result.iter().cloned().collect();
+                self.context_mut()
+                    .profile_label(&label, "DEDUP", "", inputs);
                 let rows = self.context().profile_inserting(&label, input.rows);
-                RowEmitter::canon_with_target(self.adapters.canon_target(), strategy, rows, width)
+                let rows = RowEmitter::canon_with_target(
+                    self.adapters.canon_target(),
+                    &provider,
+                    rows,
+                    width,
+                );
+                self.context().profile_stream(&label, rows)
             }
-            cq_lang_structures::CanonStrategy::Ordered(_) => {
+            cq_lang_structures::CanonSource::Rows(_)
+            | cq_lang_structures::CanonSource::Index(_) => input.rows,
+            cq_lang_structures::CanonSource::Host => {
+                let label = format!("{}.dedup", self.owner);
+                let inputs = input.result.iter().cloned().collect();
+                self.context_mut()
+                    .profile_label(&label, "DEDUP", "", inputs);
                 let result = input
                     .result
                     .as_deref()
                     .expect("checked direct ordered source");
-                RowEmitter::ordered_source(self.context(), self.adapters.canon_target(), result)
+                let rows = RowEmitter::ordered_source(
+                    self.context(),
+                    self.adapters.canon_target(),
+                    result,
+                );
+                self.context().profile_stream(&label, rows)
             }
         };
-        input.rows = self.context().profile_stream(&label, rows);
+        input.rows = rows;
         input.stored = false;
         Ok(input)
     }
 
     fn store(&self, mut input: Value, nested: bool) -> Value {
+        // STR-RowsByValue: a single-consumer rows record is not Physical
+        // storage, so a nested store of it collects its part like a pipe's.
         let physical_store = input.result.as_ref().is_some_and(|result| {
+            let structures = &self.analysis.structures;
             input.depth == 0
-                && self.analysis.structures.physical.modes[result]
-                    != cq_lang_structures::physical::ModeKind::Pipe
+                && structures.physical.modes[result] != cq_lang_structures::physical::ModeKind::Pipe
+                && !structures.rows_by_value(result)
         });
         if nested && !physical_store {
             let rows = input.rows;
@@ -1071,7 +1108,20 @@ impl<'a> Emitter<'a> {
             self.values.insert(symbol_name(name), value.clone());
             return Ok(value);
         }
-        if value.stored {
+        // STR-RowsByValue: a stored result whose rows record has a single scan
+        // consumer and no Built entry is moved into that reader, like a pipe.
+        if value.stored
+            && value.depth == 0
+            && let Some(result) = value.result.clone()
+            && self.analysis.results.get(&symbol_name(name)) == Some(&result)
+            && self.analysis.structures.rows_by_value(&result)
+        {
+            value.rows = self.context().rows_by_value(&result, value.rows);
+            value.stored = false;
+            self.context_mut()
+                .reprs
+                .insert(result, Repr::Pipe(Some(value.rows.clone())));
+        } else if value.stored {
             let physical_store = value
                 .result
                 .as_ref()
@@ -1079,6 +1129,7 @@ impl<'a> Emitter<'a> {
                     value.depth == 0
                         && self.analysis.structures.physical.modes[*result]
                             != cq_lang_structures::physical::ModeKind::Pipe
+                        && !self.analysis.structures.rows_by_value(result)
                 })
                 .cloned();
             if let Some(result) = physical_store {
@@ -1267,7 +1318,7 @@ fn translate_host(program: &Program, analysis: &Analysis, profile: bool) -> syn:
 /// original child, `owner` its definition and `tiles` its enclosing tile depth.
 /// The hook may replace emitted iterator tokens without inspecting the program.
 /// `workers` evaluates to the target-wide available worker count in every scope.
-/// `canon_target` realizes the recorded sort strategy for the selected CPU target,
+/// `canon_target` realizes the recorded canonical index build for the selected CPU target,
 /// including the final answer-head boundary.
 pub fn translate_with(
     program: &Program,

@@ -11,7 +11,7 @@ fn triangle_source() -> ir::Program {
         s = let rename S@2 {a -> a,c -> c};
         pre_s = pipe semi eager [a] pre_r,s;
         candidate = pipe probe smallest [b] pre_s,r;
-        checked = pipe canon semi eager [a,c] candidate,s;
+        checked = let canon semi eager [a,c] candidate,s;
         return checked as answer(a,b,c);
     } structures {
         r = CustomDirectory [b][c] supports [retain, expand];
@@ -21,7 +21,7 @@ fn triangle_source() -> ir::Program {
         s host scan = ::core::iter::Map<_, _> [];
         r rows = ::std::vec::Vec<_>;
         s rows = ::std::vec::Vec<_>;
-        checked canon = sort;
+        checked rows = ::cq_storage::dedup::Sort; checked canon = rows;
     } }
 }
 
@@ -79,14 +79,14 @@ fn declared_host_lookup_retains_exact_snapshot_ranges() {
         l = pipe rename L@0 {a -> x};
         r = pipe rename R@1 {a -> x,b -> y};
         s = pipe semi eager [x] l,r;
-        p = pipe canon probe first [x] s,r;
+        p = let canon probe first [x] s,r;
         return p as answer(x,y);
     } structures {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         r host result(s) = Snapshot<0> [x] supports [retain];
         r host result(p) = Snapshot<0> [x] supports [retain];
-        p canon = sort;
+        p rows = ::cq_storage::dedup::Sort; p canon = rows;
     } };
     let target = retain_lookups(&source, quote!()).unwrap();
     let facts = ir::contract::check(&target).unwrap();
@@ -151,10 +151,11 @@ fn triangle_prefix_witnesses_do_not_infer_key_types() {
 fn triangle_prefix_witnesses_do_not_escape() {
     let mut escaping = triangle_source();
     escaping.physical.program.definitions[4].canon = Some(Default::default());
-    escaping
-        .structures
-        .entries
-        .push(syn::parse_quote!(pre_s canon = sort;));
+    escaping.physical.program.definitions[4].mode = syn::parse_quote!(let);
+    escaping.structures.entries.extend([
+        syn::parse_quote!(pre_s rows = ::cq_storage::dedup::Sort;),
+        syn::parse_quote!(pre_s canon = rows;),
+    ]);
     assert_eq!(retain_lookups(&escaping, quote!()).unwrap(), escaping);
 }
 
@@ -167,7 +168,7 @@ fn hashed_source() -> ir::Program {
         filtered = pipe select s if (x >= 0);
         projected = pipe project filtered keep {x};
         p = pipe probe first [x] projected,r;
-        out = pipe canon project p keep {x,y};
+        out = let canon project p keep {x,y};
         return out as answer(x,y);
     }};
     cq_structure_selection::compile(&physical).unwrap()
@@ -246,7 +247,7 @@ fn a_probe_before_the_semi_does_not_share() {
         seen = pipe select p if (y >= 0);
         keys = pipe project seen keep {x};
         s = pipe semi eager [x] keys,r;
-        out = pipe canon project s keep {x};
+        out = let canon project s keep {x};
         return out as answer(x);
     }};
     let source = cq_structure_selection::compile(&physical).unwrap();
@@ -284,9 +285,11 @@ fn retained_rows_and_canon_are_not_witness_escape_paths() {
         .find(|definition| definition.name == "s")
         .unwrap();
     definition.canon = Some(Default::default());
-    canonical.structures.entries.push(syn::parse_quote! {
-        s canon = sort;
-    });
+    definition.mode = syn::parse_quote!(let);
+    canonical.structures.entries.extend([
+        syn::parse_quote!(s rows = ::cq_storage::dedup::Sort;),
+        syn::parse_quote!(s canon = rows;),
+    ]);
     ir::contract::check(&canonical).unwrap();
     assert_eq!(retain_lookups(&canonical, quote!()).unwrap(), canonical);
 }
@@ -354,7 +357,7 @@ fn public_rewrite_macro_records_the_cursor() {
             r = let rename R@1 {a -> x,b -> y};
             s = pipe semi eager [x] l,r;
             p = pipe probe first [x] s,r;
-            out = pipe canon project p keep {x,y};
+            out = let canon project p keep {x,y};
             return out as answer(x,y);
         }
     };
@@ -427,7 +430,7 @@ fn retained_cursor_executes_through_select_and_project() {
                 filtered = pipe select s if (x >= 0);
                 projected = pipe project filtered keep {x};
                 p = pipe probe first [x] projected,r;
-                out = pipe canon project p keep {x,y};
+                out = let canon project p keep {x,y};
                 return out as answer(x,y);
             }
         }

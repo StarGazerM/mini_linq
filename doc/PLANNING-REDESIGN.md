@@ -248,7 +248,7 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
 - **P3c Engine-wide storage rules** (`doc/STORAGE.md` §13): intern strings
   at input for the CPU catalog as on GPU; remove V decode sites
   (`doc/DECODE-AUDIT.md`), measured per target. The uncommitted sort-canon
-  work (`canon = sort`, whole-stream collect/sort/unique, push callbacks waiting
+  work (a recorded sort strategy, whole-stream collect/sort/unique, push callbacks waiting
   at the barrier) is superseded by P3d: it treated duplicate state as a buffer
   rather than an index, so it lost laziness and reimplemented index work.
 - **P3d Distinct and admission are anti-joins against an ordinary index**
@@ -342,7 +342,8 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     occupancy-grid partials plus one combine (GPU-GroupGridFold, the one
     intended work change). TPC-H grouped answers record slots and key bounds
     sources (DR-GroupedPublication). GPU Datalog printing is not covered.
-  - **Removes** CQ `CanonStrategy`/`dedup::sort` canon, `__cq_seen` and
+  - **Removes** CQ `CanonStrategy`/`dedup::sort` canon (done by track A),
+    `__cq_seen` and
     callback barriers; CPU Datalog `seen`/`all` (hash, `ShardedSeen`, `RunSeen`
     seeds) and the separate DL-InsertNew/DL-ShardedAdmission stores; GPU fused
     admission. Verified by laziness tests (the first answer after the first
@@ -368,8 +369,9 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     `RuleHole.insertion` and DL-RunAdmission are gone; Datalog uses no
     `maintain::{Fresh, Publish}` trait.
   - **Parallel tracks** (decided 2026-10-30). M0 (`e189e296` baseline plus the
-    contract commit: `cq_storage::maintain::{Fresh, Publish}` with
-    `ExactMembership`; ADM-*/IX-* in `incremental.tex`) is serial on main.
+    contract commit: ADM-*/IX-* in `incremental.tex`; its admission/publication
+    provider traits were later deleted by track A's canonical-reference
+    cutover) is serial on main.
     Each track then works in its own worktree
     `/data/mini_linq-wt/<track>` on branch `codex/p3d-<track>`, rebases on
     main after each milestone and never merges sideways. Agents never commit;
@@ -379,10 +381,29 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
 
     | Track | Scope | Directories | Model |
     |---|---|---|---|
-    | A CQ admit | Replace canon/`__cq_seen`/sort barrier by `admit` (anti-join against the canonical built index of O, publish to O's indices, recorded granularity); canonical selection in Structures index selection; restore first-answer streaming | `languages/cq-lang-{structures,sequence}`, `passes/cq-{physical-lowering,structure-selection,sequence-lowering,sequence-plan,physical-realization}`, `features/rewrites`, facade tests | Claude |
+    | A CQ admit | As built: canon is the one-batch build of O's canonical index, an ordinary index named by a canonical reference (`rows`/`[cols]`/`host`) chosen in Structures index selection and typed by a `Distinct` provider; `__cq_seen` and `CanonStrategy` removed. Row-granularity admission and first-answer streaming are not implemented (see below) | `languages/cq-lang-{structures,sequence}`, `passes/cq-{physical-lowering,structure-selection,sequence-lowering,sequence-plan,physical-realization}`, `features/rewrites`, facade tests | Claude |
     | B Datalog CPU admit | Storage index selection over all reads incl. the anti-join, completed permutations, recorded canonical (SRDatalog policy); Round `admit` = fresh on canonical (δ within round + ▷R) then publish to every layout; remove `seen`/`all`/`ShardedSeen`/`RunSeen` seeds | `features/datalog/*`, `features/datalog-parallel/*` | Claude |
     | C GPU conformance | Printers print recorded providers (CUDA audit list); then GPU Datalog admission split into fresh/publish over Round records from B | `experiments/gpu/{sequence/core,sequence-runtime,datalog,datalog-runtime}` | GPT (task default) |
-    | D Index providers | Implemented `Fresh`/`Publish` for sets, grouped maps, sorted/radix runs and tries; unified `OrderKey`; narrow grouped offsets, merge-path and lazy ratio-bounded radix publication | `runtime/cq-storage` providers, runs, key codecs | GPT (task default) |
+    | D Index providers | Unified `OrderKey`; narrow grouped offsets, merge-path and lazy ratio-bounded `RadixRun::merge` (IX-RunMerge, a multiset union). The admission/publication maintenance traits and their set/map/run/trie impls were deleted by track A's cutover | `runtime/cq-storage` providers, runs, key codecs | GPT (task default) |
+
+    **Track A as built (canonical reference).** By user decision the
+    canonical index is an ordinary index chosen by index selection
+    (SRDatalog `select_indices`/`canonical_index`), with no new IR node,
+    runtime type or printer construct. Structures records `r canon = rows`
+    (the rows record, default `::cq_storage::dedup::Sort`, the sorted array;
+    PL-Distinct), `r canon = [cols]` (an existence-only complete Built index,
+    the result's only storage) or `r canon = host` (a direct load-verified
+    host-rename carrier), and `r head = Type` for the answer
+    (STR-Canon, SEL-Canon, PH-Canon). Single-consumer rows records move by
+    value into their consumer (STR-RowsByValue); Sequence lowering omits the
+    Store of such a canon `let` (`Analysis::rows_by_value`), so Tasks plans
+    it exactly like a canon pipe (routing, per-part canon, partial-group
+    folds over tiles), and a planner Store over it moves by value into its
+    single driver instead of being re-collected. Sequence carries
+    `Obligation::Canon { canonical }` and catalogs offer `Distinct`
+    providers instead of canon tokens. Row-granularity admission would need
+    a recorded admission granularity, which was not added, so the streaming
+    dispatch tests stay ignored.
 
     Merge order: M1 = C's provider printing, then A; M2 = B (rebased on A)
     and D's providers; M3 = C's Datalog admission (needs B's Round records);

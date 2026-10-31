@@ -26,12 +26,13 @@ fn main() {
             physical {
                 relation Input(value:i64) = (&resident);
                 scan = pipe rename Input@0 {value -> value};
-                answer = pipe canon project scan keep {value};
+                answer = let canon project scan keep {value};
                 return answer as answer(value);
             }
             structures {
                 scan host scan = ::cq_gpu_runtime::DeviceColumns<'_, (i64,)> [];
-                answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                answer canon = rows;
             }
             sequence {
                 source = store rows scan;

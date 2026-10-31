@@ -9,6 +9,6 @@ physical { relation A (first : i32 , second : i32);
  r4 = pipe probe first [d , t] r2 , r3;
  r5 = pipe rename Stock@3 { depot - > d , item - > i , day - > t };
  r6 = pipe probe first [d , i , t] r4 , r5;
- r7 = pipe canon project r6 keep { d , i , t };
+ r7 = let canon project r6 keep { d , i , t };
  return r7 as answer (d , i , t);
  }

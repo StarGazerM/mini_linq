@@ -1,19 +1,31 @@
 //! Expose literal atom arguments before selecting physical storage providers.
-use std::collections::BTreeSet;
 use cq_lang_structures::physical::{self, Operator, Program, symbol_name};
 use cq_lang_structures::syntax::EqualityValue;
 use quote::{format_ident, quote};
+use std::collections::BTreeSet;
 
 fn derive(source: &Program) -> syn::Result<Program> {
     let analysis = physical::contract::check(source)?;
-    let mut used: BTreeSet<String> = analysis.headings.values().flatten().cloned()
-        .chain(source.program.definitions.iter().map(|definition| symbol_name(&definition.name)))
+    let mut used: BTreeSet<String> = analysis
+        .headings
+        .values()
+        .flatten()
+        .cloned()
+        .chain(
+            source
+                .program
+                .definitions
+                .iter()
+                .map(|definition| symbol_name(&definition.name)),
+        )
         .collect();
     let mut fresh = |stem: &str| {
         let mut suffix = 0usize;
         loop {
             let name = format!("__cq_constant_{stem}_{suffix}");
-            if used.insert(name.clone()) { break format_ident!("{name}"); }
+            if used.insert(name.clone()) {
+                break format_ident!("{name}");
+            }
             suffix += 1;
         }
     };
@@ -36,15 +48,24 @@ fn derive(source: &Program) -> syn::Result<Program> {
         let filtered = fresh("filtered");
         let mut renamed = rename.clone();
         renamed.constants = None;
-        let keep: Vec<_> = rename.mapping.iter().map(|mapping| mapping.target.clone()).collect();
+        let keep: Vec<_> = rename
+            .mapping
+            .iter()
+            .map(|mapping| mapping.target.clone())
+            .collect();
         let mut conditions = Vec::new();
         for equality in &constants.equalities {
             let column = &equality.left;
             let EqualityValue::Literal(value) = &equality.right else {
-                return Err(syn::Error::new_spanned(definition, "PH-ConstantGuard requires literal occurrence arguments"));
+                return Err(syn::Error::new_spanned(
+                    definition,
+                    "PH-ConstantGuard requires literal occurrence arguments",
+                ));
             };
             let variable = fresh("column");
-            renamed.mapping.push(syn::parse_quote!(#column -> #variable));
+            renamed
+                .mapping
+                .push(syn::parse_quote!(#column -> #variable));
             conditions.push(quote!(#variable = #value));
         }
         definitions.push(syn::parse_quote!(#raw = pipe #renamed;));
@@ -68,7 +89,10 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
 pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
     let expected = derive(source)?;
     if target != &expected {
-        return Err(syn::Error::new_spanned(target, "PH-ConstantGuard differs from the source-derived literal guard rewrite"));
+        return Err(syn::Error::new_spanned(
+            target,
+            "PH-ConstantGuard differs from the source-derived literal guard rewrite",
+        ));
     }
     physical::contract::check(target)?;
     Ok(())
@@ -92,7 +116,9 @@ mod tests {
         assert_eq!(source.program.head, target.program.head);
         check(&source, &target).unwrap();
         let mut changed = target.clone();
-        let Operator::Select(select) = &mut changed.program.definitions[1].operator else { panic!() };
+        let Operator::Select(select) = &mut changed.program.definitions[1].operator else {
+            panic!()
+        };
         select.condition = syn::parse_quote!(__cq_constant_column_0 = 8);
         assert!(check(&source, &changed).is_err());
         let mut changed = target.clone();

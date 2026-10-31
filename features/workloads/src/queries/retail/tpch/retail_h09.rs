@@ -19,7 +19,20 @@ JOIN supplier s ON s.s_suppkey = l.l_suppkey
 JOIN orders o ON o.o_orderkey = l.l_orderkey
 JOIN nation n ON n.n_nationkey = s.s_nationkey
 WHERE p.p_name LIKE '%green%'"#;
-pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", "generic_smallest", "advised"];
+pub const CONFIGS: &[&str] = &[
+    "default",
+    "par",
+    "radix",
+    "radix_retained",
+    "built_hash",
+    "built_radix",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "generic_smallest",
+    "advised",
+];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("lineitem", "l_orderkey,l_partkey,l_suppkey"),
     ("partsupp", "ps_partkey,ps_suppkey"),
@@ -29,13 +42,13 @@ pub const EXPORTS: &[(&str, &str)] = &[
     ("nation", "n_nationkey"),
 ];
 
-pub type Lineitem = (i64, i64, i64,);
-pub type PartSupp = (i64, i64,);
-pub type Part = (i64, cq_load::StringCode,);
-pub type Supplier = (i64, i32,);
+pub type Lineitem = (i64, i64, i64);
+pub type PartSupp = (i64, i64);
+pub type Part = (i64, cq_load::StringCode);
+pub type Supplier = (i64, i32);
 pub type Orders = (i64,);
 pub type Nation = (i32,);
-pub type Answer = (i64, i64, i64,);
+pub type Answer = (i64, i64, i64);
 pub struct Data {
     pub lineitem: Vec<Lineitem>,
     pub partsupp: Vec<PartSupp>,
@@ -90,8 +103,9 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
             cq_load::ParquetOptions::default(),
             &mut dictionaries,
         )?,
-        green_names: cq_load::dictionary_where(
-            &dictionaries, "p_name", |value: &str| value.contains("green")),
+        green_names: cq_load::dictionary_where(&dictionaries, "p_name", |value: &str| {
+            value.contains("green")
+        }),
         dictionaries,
     };
     Ok(data)
@@ -169,5 +183,13 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter().map(|(order_key, part_key, supplier_key,)| vec![order_key.to_string(), part_key.to_string(), supplier_key.to_string()]).collect()
+    rows.iter()
+        .map(|(order_key, part_key, supplier_key)| {
+            vec![
+                order_key.to_string(),
+                part_key.to_string(),
+                supplier_key.to_string(),
+            ]
+        })
+        .collect()
 }

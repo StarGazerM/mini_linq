@@ -39,13 +39,13 @@ fn lookup_program(body: proc_macro2::TokenStream, grades: proc_macro2::TokenStre
             relation L(a:u32); relation R(a:u32,b:u32);
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a,b -> b};
-            j = pipe canon probe first [a] l,r;
+            j = let canon probe first [a] l,r;
             return j as answer(a,b);
         } structures {
             l host scan = Reader [];
             r host scan = Reader [];
             r = Provider [a];
-            j canon = sort;
+            j rows = ::cq_storage::dedup::Sort; j canon = rows;
         } sequence { #body }
         graded target { #grades }
     })
@@ -77,13 +77,13 @@ fn predicates_survive_projection_without_carrying_dead_columns() {
             r = let rename R@1 {a -> a,b -> b};
             j = pipe probe first [a] l,r;
             selected = pipe select j if (x > 0);
-            projected = pipe canon project selected keep {b};
+            projected = let canon project selected keep {b};
             return projected as answer(b);
         } structures {
             l host scan = Reader [];
             r host scan = Reader [];
             r = Provider [a];
-            projected canon = sort;
+            projected rows = ::cq_storage::dedup::Sort; projected canon = rows;
         } sequence {
             result = store map projected compact selected flatten lookup r [a] rows l;
         } graded target { result at engine; }
@@ -180,13 +180,13 @@ fn membership_reads_do_not_allocate_payload_scratch() {
                 relation L(a:u32); relation R(a:u32);
                 l = pipe rename L@0 {a -> a};
                 r = let rename R@1 {a -> a};
-                j = pipe canon #operation eager [a] l,r;
+                j = let canon #operation eager [a] l,r;
                 return j as answer(a);
             } structures {
                 l host scan = Reader [];
                 r host scan = Reader [];
                 r = Provider [a];
-                j canon = sort;
+                j rows = ::cq_storage::dedup::Sort; j canon = rows;
             } sequence {
                 result = store tile 8 compact j lookup r [a] rows l;
             } graded target { result at engine; }
@@ -210,7 +210,7 @@ fn later_lookup_keys_are_live_across_an_earlier_payload() {
             s = let rename S@2 {x -> x,c -> c};
             first = pipe probe first [a] l,r;
             second = pipe probe first [x] first,s;
-            projected = pipe canon project second keep {c};
+            projected = let canon project second keep {c};
             return projected as answer(c);
         } structures {
             l host scan = Reader [];
@@ -218,7 +218,7 @@ fn later_lookup_keys_are_live_across_an_earlier_payload() {
             s host scan = Reader [];
             r = Provider [a];
             s = Provider [x];
-            projected canon = sort;
+            projected rows = ::cq_storage::dedup::Sort; projected canon = rows;
         } sequence {
             result = store map projected flatten lookup s [x] flatten lookup r [a] rows l;
         } graded target { result at engine; }
@@ -238,14 +238,14 @@ fn union_retains_every_arm_without_reusing_allocations() {
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a,b -> b};
             j = let probe first [a] l,r;
-            out = pipe canon union j,j;
+            out = let canon union j,j;
             return out as answer(a,b);
         } structures {
             l host scan = Reader [];
             r host scan = Reader [];
             r = Provider [a];
             j rows = Rows;
-            out canon = sort;
+            out rows = ::cq_storage::dedup::Sort; out canon = rows;
         } sequence {
             result = store capacity 128 union [
                 flatten lookup r [a] rows l,
@@ -276,8 +276,8 @@ fn a_host_consumer_requires_expanded_rows_instead_of_virtual_ranges() {
             l host scan = Reader [];
             r host scan = Reader [];
             r = Provider [a];
-            j rows = Rows;
-            j canon = sort;
+            j rows = ::cq_storage::dedup::Sort;
+            j canon = rows;
         } sequence {
             view = flatten lookup r [a] rows l;
             first = store view;

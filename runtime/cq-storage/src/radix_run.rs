@@ -194,7 +194,7 @@ impl<'a, K: OrderKey<Ordinal = u64> + Copy, V: Copy> RadixRunView<'a, K, V> {
     }
 }
 
-/// Immutable grouped runs with ratio-bounded publication. Membership, counts
+/// Immutable grouped runs with ratio-bounded merging. Membership, counts
 /// and lookup cursors read the runs directly. Legacy contiguous `items()`
 /// materializes a stable merged view only when requested.
 pub struct RadixRun<K, V, C = Vec<V>> {
@@ -281,7 +281,7 @@ impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy> RadixRun<K, V> {
         Self::with_ratio(source, 4)
     }
 
-    /// Select the geometric size ratio for lazy publication. Adjacent runs
+    /// Select the geometric size ratio for lazy merging. Adjacent runs
     /// from oldest to newest satisfy `older.len >= ratio * newer.len`.
     /// Ratios below two cannot bound the number of live runs.
     pub fn with_ratio(source: impl IntoIterator<Item = (K, V)>, ratio: usize) -> Self {
@@ -308,7 +308,7 @@ impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: ItemColumns<Row = V>> RadixR
         }
     }
 
-    /// Borrow each published payload group as columns and a position interval.
+    /// Borrow each payload group as columns and a position interval.
     /// Callers can read only the required tuple-vector component; no complete
     /// row is reconstructed and no contiguous row cache is initialized.
     pub fn column_groups(&self, key: &K) -> impl Iterator<Item = (&C, std::ops::Range<usize>)> {
@@ -433,7 +433,7 @@ impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: ItemColumns<Row = V>> RadixR
     }
 }
 
-/// Borrowed unique keys across all published runs, without touching payloads.
+/// Borrowed unique keys across all runs, without touching payloads.
 pub struct RadixKeys<'a, K, V, C = Vec<V>> {
     runs: &'a [Segment<K, V, C>],
     single: Option<std::slice::Iter<'a, K>>,
@@ -481,7 +481,7 @@ impl<'a, K: OrderKey<Ordinal = u64>, V, C> Iterator for RadixKeys<'a, K, V, C> {
 
 impl<K: OrderKey<Ordinal = u64>, V, C> std::iter::FusedIterator for RadixKeys<'_, K, V, C> {}
 
-/// Copyable, allocation-free cursor across published immutable payload groups.
+/// Copyable, allocation-free cursor across immutable payload groups.
 /// The ordinal is captured, not a borrow of the temporary query key.
 pub struct RadixCursor<'a, K, V, C = Vec<V>> {
     runs: &'a [Segment<K, V, C>],
@@ -616,30 +616,15 @@ impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: ItemColumns<Row = V>> Rows
     }
 }
 
-// Eq-only payloads require O(g) existing-group comparisons per candidate and
-// O(b²) comparisons for a batch group of b rows across the published runs.
-// Ordered/hashed payload directories are distinct selected providers.
-impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy + Eq, C: ItemColumns<Row = V>> crate::Fresh
-    for RadixRun<K, V, C>
-{
-    type Row = (K, V);
-
-    fn fresh(&self, mut batch: Vec<Self::Row>) -> Vec<Self::Row> {
-        batch.retain(|(key, item)| !self.lookup(key).any(|old| old == *item));
-        crate::maintain::distinct_pairs(batch)
-    }
-}
-
-impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: ItemColumns<Row = V>> crate::Publish
-    for RadixRun<K, V, C>
-{
-    type Item = (K, V);
-
-    /// Formal rule IX-RunPublish:
-    /// Appending a disjoint delta then stable merge-path compaction preserves
-    /// every published occurrence; direct reads include all unmerged runs.
-    fn publish<I: IntoIterator<Item = Self::Item>>(&mut self, items: I) {
-        let rows = RunRows::<K, V, C>::from_pairs_cached_key(items, OrderKey::ordinal);
+impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: ItemColumns<Row = V>> RadixRun<K, V, C> {
+    /// Formal rule IX-RunMerge:
+    /// The provider's maintenance merge: afterwards reads observe the old
+    /// occurrences plus every delta occurrence (a multiset union; no
+    /// disjointness is required). The grouped delta is appended as a run and
+    /// adjacent runs are stably merged by merge-path while the geometric ratio
+    /// is violated; direct reads include all unmerged runs.
+    pub fn merge(&mut self, delta: impl IntoIterator<Item = (K, V)>) {
+        let rows = RunRows::<K, V, C>::from_pairs_cached_key(delta, OrderKey::ordinal);
         if rows.items.is_empty() {
             return;
         }
@@ -662,7 +647,6 @@ impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: ItemColumns<Row = V>> crate:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Publish;
 
     #[test]
     fn retained_single_run_expansion_searches_the_directory_once() {
@@ -686,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn published_key_scans_merge_lazily_and_cache_only_the_count() {
+    fn merged_key_scans_merge_lazily_and_cache_only_the_count() {
         thread_local! {
             static ENCODINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
         }
@@ -700,7 +684,7 @@ mod tests {
             }
         }
         let mut run = RadixRun::from_pairs((0..256).map(|key| (Key(key), key)));
-        run.publish([(Key(1024), 1024)]);
+        run.merge([(Key(1024), 1024)]);
         ENCODINGS.with(|count| count.set(0));
         assert_eq!(run.keys().next(), Some(&Key(0)));
         assert!(
@@ -713,7 +697,7 @@ mod tests {
         assert!(counted > 0);
         assert_eq!(crate::Keys::key_count(&run), 257);
         assert_eq!(ENCODINGS.with(|count| count.get()), counted);
-        run.publish([(Key(1025), 1025)]);
+        run.merge([(Key(1025), 1025)]);
         assert_eq!(run.len(), 258);
         assert_eq!(
             run.keys().map(|key| key.0).collect::<Vec<_>>(),
@@ -756,11 +740,11 @@ mod tests {
     }
 
     #[test]
-    fn columnar_publication_and_key_reads_do_not_materialize_items() {
+    fn columnar_merges_and_key_reads_do_not_materialize_items() {
         let mut run = RadixRun::<u64, (u64, u64), ObservedColumns>::from_column_rows([], 4);
         let input: Vec<_> = (0..6001).map(|i| (i % 2053, (i, i + 7))).collect();
         for batch in input.chunks(97) {
-            run.publish(batch.iter().copied());
+            run.merge(batch.iter().copied());
         }
         assert_eq!(run.len(), 2053);
         for key in [0, 1023, 1024, 2052, 2053, u64::MAX] {
@@ -793,9 +777,9 @@ mod tests {
     }
 
     #[test]
-    fn publication_reads_unmerged_runs_without_materializing_items() {
+    fn merge_reads_unmerged_runs_without_materializing_items() {
         let mut run = RadixRun::with_ratio((0_u64..128).map(|key| (key, key)), 4);
-        run.publish([(64, 1000), (200, 2000)]);
+        run.merge([(64, 1000), (200, 2000)]);
         assert!(run.run_count() > 1);
         let cursor = (&run).lookup(&64);
         assert_eq!(cursor.collect::<Vec<_>>(), [64, 1000]);
@@ -811,22 +795,22 @@ mod tests {
             "key-only and cursor reads must not compact items"
         );
         assert_eq!(&run.items()[64..66], [64, 1000]);
-        run.publish([(64, 3000)]);
+        run.merge([(64, 3000)]);
         assert!(
             run.compact.get().is_none(),
-            "publication invalidates the contiguous snapshot"
+            "a merge invalidates the contiguous snapshot"
         );
         assert_eq!((&run).lookup(&64).collect::<Vec<_>>(), [64, 1000, 3000]);
     }
 
     #[test]
-    fn merge_path_publications_preserve_stable_groups_across_partitions() {
+    fn merge_path_merges_preserve_stable_groups_across_partitions() {
         let input: Vec<_> = (0_u64..9001).map(|i| ((i * 7919) % 4099, i)).collect();
         for ratio in [2, 4, 8] {
             for batch_size in [1, 127, 2048, input.len()] {
                 let mut run = RadixRun::with_ratio([], ratio);
                 for batch in input.chunks(batch_size) {
-                    run.publish(batch.iter().copied());
+                    run.merge(batch.iter().copied());
                     for pair in run.runs.windows(2) {
                         assert!(pair[0].rows.items.len() / ratio >= pair[1].rows.items.len());
                     }

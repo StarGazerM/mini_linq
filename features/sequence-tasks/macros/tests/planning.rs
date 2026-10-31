@@ -11,10 +11,10 @@ macro_rules! source {
             $($prefix)*
             physical {
                 relation R(a:i32);
-                r = pipe canon rename R@0 {a -> a};
+                r = let canon rename R@0 {a -> a};
                 return r as answer(a);
             }
-            structures { r host scan = ::core::iter::Map<_,_> []; r canon = sort; }
+            structures { r host scan = ::core::iter::Map<_,_> []; r rows = ::cq_storage::dedup::Sort; r canon = rows; }
             sequence { $($body)* }
         }
     };
@@ -56,10 +56,10 @@ fn authored_grade_output_and_tile_precede_facade_planning() {
     let expected: Program = syn::parse2(quote! {
         physical {
             relation R(a:i32);
-            r = pipe canon rename R@0 {a -> a};
+            r = let canon rename R@0 {a -> a};
             return r as answer(a);
         }
-        structures { r host scan = ::core::iter::Map<_,_> []; r canon = sort; }
+        structures { r host scan = ::core::iter::Map<_,_> []; r rows = ::cq_storage::dedup::Sort; r canon = rows; }
         sequence {
             input = store rows r;
             result = store tile 7 items 3 input;

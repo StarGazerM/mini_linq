@@ -60,22 +60,45 @@ const ELEMENT: [i32; 3] = [11, 12, 13];
 fn instance() -> (Vec<(i32, i32)>, Vec<(i32, i32)>, Vec<(i32, i32)>) {
     let mut alloc = Vec::new();
     let mut heap = 0;
-    for (ty, count) in [(OBJECT_ARRAY, 100), (STRING_ARRAY, 100), (INT_ARRAY, 20), (ELEMENT[0], 100), (ELEMENT[1], 100), (ELEMENT[2], 100)] {
+    for (ty, count) in [
+        (OBJECT_ARRAY, 100),
+        (STRING_ARRAY, 100),
+        (INT_ARRAY, 20),
+        (ELEMENT[0], 100),
+        (ELEMENT[1], 100),
+        (ELEMENT[2], 100),
+    ] {
         for _ in 0..count {
             alloc.push((heap, ty));
             heap += 1;
         }
     }
-    let component = vec![(OBJECT_ARRAY, ELEMENT[0]), (STRING_ARRAY, ELEMENT[1]), (INT_ARRAY, ELEMENT[2])];
-    let supertype = ELEMENT.iter().map(|&e| (e, e)).chain([(ELEMENT[2], OBJECT_ARRAY)]).collect();
+    let component = vec![
+        (OBJECT_ARRAY, ELEMENT[0]),
+        (STRING_ARRAY, ELEMENT[1]),
+        (INT_ARRAY, ELEMENT[2]),
+    ];
+    let supertype = ELEMENT
+        .iter()
+        .map(|&e| (e, e))
+        .chain([(ELEMENT[2], OBJECT_ARRAY)])
+        .collect();
     (alloc, component, supertype)
 }
 
 #[test]
 fn heapalloc_matches_cpu_exactly() {
     let (alloc, component, supertype) = instance();
-    let constants = Constants { c_object_array: OBJECT_ARRAY, c_string_array: STRING_ARRAY };
-    let expected = cpu(alloc.clone(), component.clone(), supertype.clone(), &constants);
+    let constants = Constants {
+        c_object_array: OBJECT_ARRAY,
+        c_string_array: STRING_ARRAY,
+    };
+    let expected = cpu(
+        alloc.clone(),
+        component.clone(),
+        supertype.clone(),
+        &constants,
+    );
     assert_eq!(expected.len(), 4000);
     assert_eq!(gpu(alloc, component, supertype, &constants), expected);
     assert!(gpu(Vec::new(), Vec::new(), Vec::new(), &constants).is_empty());

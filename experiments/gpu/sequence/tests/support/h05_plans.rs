@@ -40,7 +40,7 @@ pub fn b() -> Program {
             co = pipe probe first [customer] asia,orders;
             col = pipe probe first [order] co,lineitem;
             matched = pipe semi eager [nation,supplier] col,supplier;
-            answer = pipe canon project matched keep {order,supplier,nation};
+            answer = let canon project matched keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
         structures {
@@ -52,7 +52,8 @@ pub fn b() -> Program {
             supplier host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
             r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
             r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-            answer canon = sort using ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer canon = rows;
             customer rows = ::cq_gpu_sequence_runtime::RangeProvider;
             orders = ::cq_gpu_sequence_runtime::RangeProvider [customer];
             lineitem = ::cq_gpu_sequence_runtime::RangeProvider [order];
@@ -98,7 +99,7 @@ pub fn a() -> Program {
     physical.push(syn::parse_quote!(asia = pipe semi eager [nation] loc,r2;));
     physical.push(syn::parse_quote!(matched = pipe semi eager [nation,supplier] asia,supplier;));
     physical
-        .push(syn::parse_quote!(answer = pipe canon project matched keep {order,supplier,nation};));
+        .push(syn::parse_quote!(answer = let canon project matched keep {order,supplier,nation};));
     let entries = &mut program.structures.structures.entries;
     entries.retain(|entry| {
         !["customer", "orders", "lineitem", "supplier"].contains(&entry.name.to_string().as_str())

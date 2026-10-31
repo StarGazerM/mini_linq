@@ -8,12 +8,12 @@ fn chain() -> structures::Program {
             l = pipe rename L@0 {k -> k,v -> v};
             s = pipe select l if (k >= 2);
             p = pipe project s keep {v};
-            c = pipe canon project p keep {v};
+            c = let canon project p keep {v};
             return c as answer(v);
         }
         structures {
             l host scan = ::core::iter::Map<_, _> [];
-            c canon = sort;
+            c rows = ::cq_storage::dedup::Sort; c canon = rows;
         }
     }
 }
@@ -45,14 +45,14 @@ fn joins_and_opaque_binds_end_the_positional_chain() {
             r = let rename R@1 {k -> k,v -> v};
             j = pipe probe first [k] l,r;
             b = pipe bind j with n: i32 = (*k + 1);
-            c = pipe canon project b keep {k,v,n};
+            c = let canon project b keep {k,v,n};
             return c as answer(k,v,n);
         }
         structures {
             l host scan = ::core::iter::Map<_, _> [];
             r host scan = ::core::iter::Map<_, _> [];
             r = UserIndex [k]; r rows = ::std::vec::Vec<_>;
-            c canon = sort;
+            c rows = ::cq_storage::dedup::Sort; c canon = rows;
         }
     };
     let target = cq_represent::compile_with(&source, quote!(positions)).unwrap();

@@ -1,6 +1,6 @@
 use cq_lang_sequence::{
-    Analysis, CanonToken, Capability, Catalog, CodecToken, Guard, Len, LevelNode, Machine,
-    OutputProtocol, Program, ProviderToken, Term, check_grading, check_rewrite,
+    Analysis, Capability, Catalog, CodecToken, Guard, Len, LevelNode, Machine, OutputProtocol,
+    Program, ProviderToken, Term, check_grading, check_rewrite,
 };
 use cq_sequence_plan::{Advice, Planned, decompose};
 use proc_macro2::TokenStream;
@@ -98,27 +98,33 @@ fn catalog(machine: &Machine) -> Catalog {
     let mut levels = Vec::new();
     paths(&machine.root, Vec::new(), &mut levels);
     Catalog {
-        providers: vec![ProviderToken {
-            supports: Vec::new(),
-            ty: syn::parse_quote!(Index),
-            elements: None,
-            capabilities: vec![
-                Capability::Exact,
-                Capability::Range,
-                Capability::Membership,
-                Capability::Ordered,
-            ],
-            levels: levels.clone(),
-        }],
+        providers: vec![
+            ProviderToken {
+                supports: Vec::new(),
+                ty: syn::parse_quote!(Index),
+                elements: None,
+                capabilities: vec![
+                    Capability::Exact,
+                    Capability::Range,
+                    Capability::Membership,
+                    Capability::Ordered,
+                ],
+                levels: levels.clone(),
+                max_packed_bits: None,
+            },
+            ProviderToken {
+                supports: Vec::new(),
+                ty: syn::parse_quote!(::cq_storage::dedup::Sort),
+                elements: None,
+                capabilities: vec![Capability::Distinct],
+                levels: levels.clone(),
+                max_packed_bits: None,
+            },
+        ],
         codecs: vec![CodecToken {
             ty: syn::parse_quote!(Identity),
             ordered: true,
-            levels: levels.clone(),
-        }],
-        canons: vec![CanonToken {
-            ty: syn::parse_quote!(::cq_storage::dedup::Sort),
             levels,
-            max_packed_bits: None,
         }],
     }
 }
@@ -127,10 +133,13 @@ fn scan(sequence: TokenStream) -> Program {
     syn::parse2(quote! {
         physical {
             relation R(a:i32);
-            r = pipe canon rename R@0 {a -> a};
+            r = let canon rename R@0 {a -> a};
             return r as answer(a);
         }
-        structures { r host scan = Reader []; r canon = sort; }
+        structures {
+            r host scan = Reader [];
+            r rows = ::cq_storage::dedup::Sort; r canon = rows;
+        }
         sequence { #sequence }
     })
     .unwrap()
@@ -142,14 +151,15 @@ fn join() -> Program {
             relation L(a:i32); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a};
             r = let rename R@1 {a -> a,b -> b};
-            j = pipe canon probe first [a] l,r;
+            j = let canon probe first [a] l,r;
             return j as answer(a,b);
         }
         structures {
             l host scan = Reader [];
             r host scan = Reader [];
             r = Index [a];
-            j canon = sort;
+            j rows = ::cq_storage::dedup::Sort;
+            j canon = rows;
         }
         sequence {
             provider = store rows r;
@@ -174,14 +184,15 @@ fn filtered_multi_join() -> Program {
             jq = pipe probe first [a] l,qf;
             jr = pipe probe first [a] jq,rf;
             joined = pipe probe first [a] jr,sf;
-            result = pipe canon project joined keep {a};
+            result = let canon project joined keep {a};
             return result as answer(a);
         }
         structures {
             l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
             q host scan = Reader []; q host result(qf) = Reader [qtag]; qf = Index [a];
             r host result(rf) = Reader [rtag]; s host result(sf) = Reader [stag];
-            rf = Index [a]; sf = Index [a]; result canon = sort;
+            rf = Index [a]; sf = Index [a];
+            result rows = ::cq_storage::dedup::Sort; result canon = rows;
         }
     };
     cq_sequence_lowering::compile(&structures).unwrap()
@@ -195,12 +206,13 @@ fn reorderable_multi_join() -> Program {
             r = let rename R@1 {a -> a};
             s = let rename S@2 {a -> a};
             jr = pipe probe first [a] l,r;
-            result = pipe canon probe first [a] jr,s;
+            result = let canon probe first [a] jr,s;
             return result as answer(a);
         }
         structures {
             l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
-            r = Index [a]; s = Index [a]; result canon = sort;
+            r = Index [a]; s = Index [a];
+            result rows = ::cq_storage::dedup::Sort; result canon = rows;
         }
     };
     cq_sequence_lowering::compile(&structures).unwrap()
@@ -487,7 +499,9 @@ fn catalog_rejection_identifies_the_unmet_canon_obligation() {
         let mut available = catalog(&machine);
         decompose(&source, &machine, &available)
             .expect("the complete local catalog discharges canonicalization");
-        available.canons.clear();
+        available
+            .providers
+            .retain(|token| !token.capabilities.contains(&Capability::Distinct));
         let error = decompose(&source, &machine, &available)
             .unwrap_err()
             .to_string();
@@ -502,7 +516,6 @@ fn no_provider_catalog_still_supports_a_simple_scan() {
     for machine in machines() {
         let mut available = catalog(&machine);
         available.providers.clear();
-        available.canons.clear();
         assert_eq!(available.codecs[0].ty, syn::parse_quote!(Identity));
         let planned = decompose(&source, &machine, &available).unwrap();
         replay(&source, &machine, &planned);
@@ -570,13 +583,14 @@ fn distinct_union_drivers_publish_in_deterministic_separate_dispatches() {
             left = pipe probe first [a] l,p;
             right = pipe probe first [a] r,p;
             joined = let union left,right;
-            answer = pipe canon project joined keep {a,b};
+            answer = let canon project joined keep {a,b};
             return answer as answer(a,b);
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
             p host scan = Reader []; p = Index [a];
-            joined rows = Index; answer canon = sort;
+            joined rows = Index;
+            answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
         }
         sequence {
             l = store rows l; r = store rows r; p = store rows p;
@@ -624,13 +638,13 @@ fn rust_without_identity_facts_and_its_feeds_stay_host() {
             selected = pipe guard joined if (opaque(b));
             s = let rename S@2 {b -> b,c -> c};
             after = pipe probe first [b] selected,s;
-            answer = pipe canon project after keep {a,b,c};
+            answer = let canon project after keep {a,b,c};
             return answer as answer(a,b,c);
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
             s host scan = Reader []; r = Index [a]; s = Index [b];
-            answer canon = sort;
+            answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
         }
         sequence {
             l = rows l; r = store rows r;
@@ -669,10 +683,13 @@ fn relational_string_predicates_do_not_imply_host_placement() {
             r = pipe rename R@0 {a -> a,s -> s};
             selected = pipe select r if (s = "green");
             numeric = pipe project selected keep {a};
-            answer = pipe canon project numeric keep {a};
+            answer = let canon project numeric keep {a};
             return answer as answer(a);
         }
-        structures { r host scan = Reader []; answer canon = sort; }
+        structures {
+            r host scan = Reader [];
+            answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
+        }
         sequence {
             input = rows r;
             selected = compact selected input;
@@ -697,7 +714,7 @@ fn host_string_filter_uploads_projected_index_before_device_lookups() {
             selected = let project filtered keep {a};
             l = pipe rename L@1 {a -> a};
             joined = pipe probe first [a] l,selected;
-            answer = pipe canon project joined keep {a};
+            answer = let canon project joined keep {a};
             return answer as answer(a);
         }
     };
@@ -757,7 +774,7 @@ fn automatic_h09_keeps_retained_dependencies_in_their_read_extent() {
             supplied = pipe probe first [supplier_key] valid,s;
             n = let rename Nation@6 {nation_key -> nation_key};
             joined = pipe probe first [nation_key] supplied,n;
-            answer = pipe canon project joined keep {order_key,part_key,supplier_key};
+            answer = let canon project joined keep {order_key,part_key,supplier_key};
             return answer as answer(order_key,part_key,supplier_key);
         }
     };
@@ -791,12 +808,13 @@ fn host_predicate_publishes_a_retained_lookup_without_moving_its_producer() {
             r = let rename R@1 {a -> a,b -> b};
             joined = let probe first [a] l,r;
             selected = pipe guard joined if (opaque(b));
-            answer = pipe canon project selected keep {a,b};
+            answer = let canon project selected keep {a,b};
             return answer as answer(a,b);
         }
         structures {
             l host scan = Reader []; r host scan = Reader [];
-            r = Index [a]; joined rows = Index; answer canon = sort;
+            r = Index [a]; joined rows = Index;
+            answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
         }
         sequence {
             l = rows l; r = store rows r;
@@ -887,14 +905,15 @@ fn retained_row_comparisons_publish_before_provider_lookup() {
                 provider = pipe rename Provider@1 {a -> a,value -> value,bound -> bound};
                 selected = let select provider if (#condition);
                 present = pipe semi eager [a] driver,selected;
-                answer = pipe canon project present keep {a};
+                answer = let canon project present keep {a};
                 return answer as answer(a);
             }
             structures {
                 driver host scan = Reader [];
                 provider host scan = Reader [];
                 selected = Index [a];
-                answer canon = sort;
+                answer rows = ::cq_storage::dedup::Sort;
+                answer canon = rows;
             }
             sequence {
                 input = rows driver;
@@ -942,13 +961,13 @@ fn expanding_resource_fixture() -> Program {
             t = let rename T@3 {c -> c,d -> d};
             j = pipe probe first [a] l,r;
             k = pipe probe first [b] j,s;
-            m = pipe canon probe first [c] k,t;
+            m = let canon probe first [c] k,t;
             return m as answer(a,b,c,d);
         } structures {
             l host scan = Reader []; r host scan = Reader [];
             s host scan = Reader []; t host scan = Reader [];
             r = Index [a]; s = Index [b]; t = Index [c];
-            m canon = sort;
+            m rows = ::cq_storage::dedup::Sort; m canon = rows;
         } sequence {
             l = rows l; r = store rows r; s = store rows s; t = store rows t;
             j = flatten lookup r [a] l;

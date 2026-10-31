@@ -129,6 +129,7 @@ pub fn sequence_targets(input: proc_macro::TokenStream) -> proc_macro::TokenStre
                 ],
                 // SortedIndex uses Rc-backed buckets and is a host-only provider.
                 levels: vec![vec!["host".into()]],
+                max_packed_bits: None,
             }],
             ..Default::default()
         };

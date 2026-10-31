@@ -319,12 +319,6 @@ impl<K, V, C> crate::Keys for SortedRun<K, V, C> {
     }
 }
 
-impl<K: Ord + Copy, V: Copy, C: KeyCodec<K> + Default> Default for SortedRun<K, V, C> {
-    fn default() -> Self {
-        Self::from_pairs([], C::default())
-    }
-}
-
 impl<K: Ord + Copy, V: Copy, C: KeyCodec<K> + Default, I: Iterator<Item = (K, V)>> Build<I>
     for SortedRun<K, V, C>
 {
@@ -392,31 +386,6 @@ impl<K: Copy, V: Copy, C> Rows for &SortedRun<K, V, C> {
     type Row = (K, V);
     fn rows(self) -> impl Iterator<Item = Self::Row> {
         self.rows.rows()
-    }
-}
-
-// Eq-only payloads require O(g) existing-group comparisons per candidate and
-// O(b²) comparisons for a batch group of b rows. A faster payload directory
-// belongs to a separately selected provider, not runtime type inspection.
-impl<K: Ord + Copy, V: Copy + Eq, C: KeyCodec<K>> crate::Fresh for SortedRun<K, V, C> {
-    type Row = (K, V);
-
-    fn fresh(&self, mut batch: Vec<Self::Row>) -> Vec<Self::Row> {
-        batch.retain(|(key, item)| !self.rows.cursor(self.slot(key)).any(|old| old == *item));
-        crate::maintain::distinct_pairs(batch)
-    }
-}
-
-impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> crate::Publish for SortedRun<K, V, C> {
-    type Item = (K, V);
-
-    fn publish<I: IntoIterator<Item = Self::Item>>(&mut self, items: I) {
-        let delta = RunRows::<K, V>::from_pairs(items);
-        if delta.items.is_empty() {
-            return;
-        }
-        self.rows = RunRows::merge(&self.rows, &delta);
-        self.rank = Self::rank_directory(&self.rows.keys, self.codec);
     }
 }
 

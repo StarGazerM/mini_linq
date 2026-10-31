@@ -94,7 +94,7 @@ fn retained_positional_range_keeps_its_host_source() {
                     relation r1(c0:i32,c1:i32);
                     r2 = pipe rename r0@0 {c0 -> v0,c1 -> v1};
                     r3 = let range select r2 if (2 <= v1);
-                    r4 = pipe canon project r3 keep {v0};
+                    r4 = let canon project r3 keep {v0};
                     r5 = pipe probe first [v0] r4,r3;
                     r6 = pipe rename r1@1 {c0 -> v2,c1 -> v3};
                     r7 = let canon project r6 keep {v2};
@@ -102,7 +102,7 @@ fn retained_positional_range_keeps_its_host_source() {
                     r9 = pipe probe first [v2] r8,r6;
                     r10 = pipe select r9 if ((v3 <= v0 and 0 <= v1 and v1 >= v0) or (v0 <= v3));
                     r11 = pipe bind r10 with v4:i32 = (v0.to_owned() + -1);
-                    r12 = pipe canon project r11 keep {v1,v2};
+                    r12 = let canon project r11 keep {v1,v2};
                     return r12 as answer(v1,v2);
                 }
     }

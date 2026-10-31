@@ -275,6 +275,21 @@ fn select(
                 }
                 "index"
             }
+            // Formal rule PL-Distinct: a canonical rows record is an identity
+            // index whose build yields the distinct complete rows.
+            Structure::Rows { .. }
+                if matches!(
+                    analysis.canonical.get(&name),
+                    Some(structures::CanonSource::Rows(_))
+                ) =>
+            {
+                required.push(Capability::Distinct);
+                "canon"
+            }
+            Structure::HeadDedup { .. } => {
+                required.push(Capability::Distinct);
+                "canon"
+            }
             Structure::Rows { .. } if admitted.is_some() => continue,
             Structure::Rows { .. } => {
                 required.push(Capability::Range);
@@ -286,15 +301,8 @@ fn select(
                 required.push(Capability::Membership);
                 "set"
             }
-            Structure::Dedup {
-                strategy: structures::CanonStrategy::Ordered(_),
-                ..
-            }
-            | Structure::HeadDedup {
-                strategy: structures::CanonStrategy::Ordered(_),
-                ..
-            } => continue,
-            Structure::Dedup { .. } | Structure::HeadDedup { .. } => "canon",
+            // A canonical reference names an index typed by its own entry.
+            Structure::Dedup { .. } => continue,
             Structure::Host { .. }
             | Structure::Group { .. }
             | Structure::Read { .. }
@@ -310,25 +318,29 @@ fn select(
         };
         let selected = if kind == "canon" {
             let provider = match &entry.structure {
-                Structure::Dedup { strategy, .. } | Structure::HeadDedup { strategy, .. } => {
-                    strategy.provider()
-                }
+                Structure::Rows { ty, .. } | Structure::HeadDedup { ty, .. } => ty,
                 _ => unreachable!(),
             };
-            let recorded = |token: &&cq_lang_sequence::CanonToken| {
-                provider.is_some_and(|provider| crate::catalog::matches_type(&token.ty, provider))
+            let recorded = |token: &&cq_lang_sequence::ProviderToken| {
+                crate::catalog::matches_type(&token.ty, provider)
             };
             // Packed bounds are runtime codec facts, never inferred from Rust types.
             catalog
-                .canons
+                .providers
                 .iter()
                 .filter(recorded)
-                .chain(catalog.canons.iter().filter(|token| !recorded(token)))
-                .find(|token| !token.levels.is_empty() && token.max_packed_bits.is_none())
+                .chain(catalog.providers.iter().filter(|token| !recorded(token)))
+                .find(|token| {
+                    !token.levels.is_empty()
+                        && token.max_packed_bits.is_none()
+                        && token.capabilities.contains(&Capability::Distinct)
+                })
                 .map(|token| {
-                    let ty = provider
-                        .filter(|provider| crate::catalog::matches_type(&token.ty, provider))
-                        .unwrap_or(&token.ty);
+                    let ty = if recorded(&token) {
+                        provider
+                    } else {
+                        &token.ty
+                    };
                     (ty, None)
                 })
         } else {
@@ -395,17 +407,11 @@ fn select(
                 ),
             ));
         };
-        if let Structure::Dedup { strategy, .. } | Structure::HeadDedup { strategy, .. } =
-            &mut target.structures.entries[index].structure
-        {
-            // Selection fills only the implementation of the recorded sort.
-            // It never changes an ordered proof strategy into an unchecked sort.
-            if let structures::CanonStrategy::Sort(sort) = strategy {
-                sort.provider = if crate::catalog::canon_matches_type(ty, None) {
-                    None
-                } else {
-                    Some(syn::parse_quote!(using #ty))
-                };
+        if kind == "canon" {
+            if let Structure::Rows { ty: slot, .. } | Structure::HeadDedup { ty: slot, .. } =
+                &mut target.structures.entries[index].structure
+            {
+                *slot = ty.clone();
             }
             continue;
         }
@@ -735,13 +741,13 @@ mod tests {
                 supports: vec![],
                 levels: vec![vec!["host".into(), "device".into()]],
                 elements: None,
+                max_packed_bits: None,
             };
             let catalog = Catalog {
                 providers: vec![
                     token(syn::parse_quote!(Index)),
                     token(syn::parse_quote!(Native<_, _>)),
                 ],
-                canons: Vec::new(),
                 codecs: Vec::new(),
             };
             let selected = select_from_catalog(&source, &catalog).unwrap();

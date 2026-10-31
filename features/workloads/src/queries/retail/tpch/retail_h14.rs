@@ -60,9 +60,11 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
             &mut dictionaries,
         )?,
         promo_types: PromoTypes::from_dense_keys(
-            cq_load::dictionary_where(&dictionaries, "p_type",
-                |value: &str| value.starts_with("PROMO"))
-                .into_iter().map(|(code,)| code),
+            cq_load::dictionary_where(&dictionaries, "p_type", |value: &str| {
+                value.starts_with("PROMO")
+            })
+            .into_iter()
+            .map(|(code,)| code),
         ),
         dictionaries,
     })

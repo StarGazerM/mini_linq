@@ -71,7 +71,7 @@ fn exists_retains_nonemptiness_and_consumes_its_entire_source() {
         pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical { relation rows(x:i32);
             r = pipe rename rows@0 {x -> x}; p = exists project r keep {};
-            out = pipe canon semi eager [] p,p; return out as answer();
+            out = let canon semi eager [] p,p; return out as answer();
         }
     }
     .collect();
@@ -81,7 +81,7 @@ fn exists_retains_nonemptiness_and_consumes_its_entire_source() {
 #[test]
 fn physical_and_structures_correspondence_reject_changes_in_meaning() {
     let source: cq_lang_physical::Program = syn::parse_quote!(physical {
-        relation R(x:i32); r = pipe canon rename R@0 {x -> x}; return r as answer(x);
+        relation R(x:i32); r = let canon rename R@0 {x -> x}; return r as answer(x);
     });
     let mut changed = source.clone();
     changed.program.head.relation = syn::parse_quote!(wrong);
@@ -134,7 +134,7 @@ fn lazy_semijoin_state_stops_at_a_match_and_keeps_prior_keys() {
         pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical { relation left(x:i32); relation right(x:i32);
             l = pipe rename left@0 {x -> x}; r = pipe rename right@1 {x -> x};
-            out = pipe canon semi lazy [x] l,r; return out as answer(x);
+            out = let canon semi lazy [x] l,r; return out as answer(x);
         }
     }
     .collect();
@@ -167,7 +167,7 @@ fn a_shared_host_point_read_cannot_supply_the_stream_fallback_type() {
         physical { relation rows(x:i32);
             r = pipe rename rows@0 {x -> x};
             a_point = pipe point select r if (x = 1);
-            z_probe = pipe canon probe first [x] a_point,r;
+            z_probe = let canon probe first [x] a_point,r;
             return z_probe as answer(x);
         }
     }
@@ -180,7 +180,7 @@ fn ordered_host_fallback_capabilities_are_rustc_obligations() {
     let source: cq_lang_physical::Program = syn::parse_quote!(physical {
         relation L(x:i32); relation R(x:i32);
         l = pipe rename L@0 {x -> x}; r = pipe rename R@1 {x -> x};
-        out = pipe canon merge[x] l,r; return out as answer(x);
+        out = let canon merge[x] l,r; return out as answer(x);
     });
     let structured = cq_structure_selection::compile(&source).unwrap();
     let mut alternate_provider = structured.clone();
@@ -639,12 +639,12 @@ fn named_sequence_decomposition_preserves_authored_advice_and_target_delegation(
                 }
                 physical {
                     relation rows(x:i32);
-                    r = pipe canon rename rows@0 {x -> x};
+                    r = let canon rename rows@0 {x -> x};
                     return r as answer(x);
                 }
                 structures {
                     r host scan = ::core::iter::Map<_, _> [];
-                    r canon = sort;
+                    r rows = ::cq_storage::dedup::Sort; r canon = rows;
                 }
                 sequence { result = store rows r; $($output)* }
             }
@@ -690,12 +690,12 @@ fn named_sequence_decomposition_preserves_authored_advice_and_target_delegation(
         pipeline { plan = core_pass_fixtures::plan_reserve(expected); }
         physical {
             relation rows(x:i32);
-            r = pipe canon rename rows@0 {x -> x};
+            r = let canon rename rows@0 {x -> x};
             return r as answer(x);
         }
         structures {
             r host scan = ::core::iter::Map<_, _> [];
-            r canon = sort;
+            r rows = ::cq_storage::dedup::Sort; r canon = rows;
         }
         sequence { result = store canon rows r; }
     }

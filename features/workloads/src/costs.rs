@@ -104,7 +104,9 @@ configuration!(keep, {
             struct Disconnected;
             relation r(b:i32,a:i32); relation s(c:i32); relation t(b:i32,c:i32,k:i32);
             answer(k) :- r(b,a),s(c),t(b,c,k),if observe(b,c);
-        }.map(|(k,)| vec![*k]).collect();
+        }
+        .map(|(k,)| vec![*k])
+        .collect();
         (answers, visits.get())
     }
     pub(super) fn elimination(r: &[Edge], s: &[(i32,)], t: &[(i32, i32, i32)]) -> (Answers, usize) {
@@ -118,7 +120,9 @@ configuration!(keep, {
             struct Disconnected;
             relation r(b:i32,a:i32); relation s(c:i32); relation t(b:i32,c:i32,k:i32);
             answer(k) :- r(b,a),s(c),t(b,c,k),if observe(b,c);
-        }.map(|(k,)| vec![*k]).collect();
+        }
+        .map(|(k,)| vec![*k])
+        .collect();
         (answers, visits.get())
     }
 });
@@ -166,7 +170,9 @@ configuration!(reduced, {
             struct Chain;
             relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(c:i32,d:i32);
             answer(a,b,c,d) :- r(a,b),s(b,c),t(c,d);
-        }.map(|(a,b,c,d)| vec![*a,*b,*c,*d]).collect()
+        }
+        .map(|(a, b, c, d)| vec![*a, *b, *c, *d])
+        .collect()
     }
 });
 
