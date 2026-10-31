@@ -1197,6 +1197,7 @@ version = "0.1.0"
 dependencies = [
  "cq-gpu-runtime",
  "cq-load",
+ "cq-storage",
  "cuda-core",
  "cuda-device",
  "cuda-host",

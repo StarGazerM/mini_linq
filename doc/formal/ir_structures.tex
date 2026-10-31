@@ -301,6 +301,33 @@ must serve every read. It decides no canonical (dedup or maintenance) layout
 and no representation type beyond the defaults that \code{sorted\_runs} and
 \code{prefix\_runs} then retype.
 
+\paragraph{Device radix runs.}
+\code{DeviceRadixRun<W,O,C>} (\code{gpu-datalog-runtime}) is the device
+counterpart of \code{RadixRun}. Keys are packed words $W$ whose
+most-significant-first lane order is the \textsc{IX-OrderKey} embedding
+(\textsc{DL-DevicePacking}); they are stored whole. A stable
+least-significant-lane radix permutation clusters occurrences into distinct
+keys $D$, offsets $O$ of the carrier type selected upstream (builds whose
+item count exceeds the carrier are rejected), and gathered item columns.
+The directory is an exact radix prefix: for $r>0$ recorded bits, entry $p$ is
+the first slot whose top $r$ bits of $k-\min D$ at the span's resolution are
+at least $p$; a lower-bound search inside that bucket is exact, also for
+absent keys. Reads over all published runs take the key/offset/directory view
+only; item columns are a separate view. Ratio, directory bits and merge tile
+size are caller parameters; grids follow \textsc{GPU-LAUNCH-OCCUPANCY}.
+\begin{mathpar}
+\Rule{GPU-RadixRun}{
+ \mathsf{stableCluster}(I,K)=(D,O,V)\quad \mathsf{packedOrderKey}(K)\quad
+ |I|\le\max O\\
+ \mathsf{dir}_r(D)[p]=\min\{s\mid \mathsf{prefix}_r(D[s])\ge p\}
+}{\mathsf{lowerBound}(k)=\mathsf{lowerBound}_D(k)\quad
+ \mathsf{lookup}(k)=I|_{K=k}\quad \alpha(D,O,V)=\mathsf{bag}(I)}
+
+\Rule{GPU-RadixItemColumns}{\mathsf{columns}(I)=(C_1,\ldots,C_m)\quad
+ \pi\text{ a stable permutation or merge source map}}
+ {\forall i.\ C_i'[j]=C_i[\pi(j)]\quad (C_1'[j],\ldots,C_m'[j])=I[\pi(j)]}
+\end{mathpar}
+
 \paragraph{Meaning.} That of the embedded Physical. Each Rust type is a
 representation whose abstraction function $\alpha$ satisfies the
 \code{cq-storage} laws: $\alpha(\mathsf{build}(I))=\mathrm{bag}(I)$, lookups

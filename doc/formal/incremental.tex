@@ -249,6 +249,18 @@ Contiguous legacy item reads may cache a merged view, invalidated at publication
  {\alpha(\mathsf{publish}_k(\mathcal L,F))=O\mathbin{\dot\cup}F\quad
   \forall i.\ |L_i|\ge k|L_{i+1}|}
 \end{mathpar}
+The device radix runs obey the same publication law: the delta is grouped
+alone, adjacent newest runs merge by stable merge-path over key directories
+(older groups first) while $|L_i|<k|L_{i+1}|$, and merged items are gathered
+column by column through a source map. A failed merge leaves $\mathcal L$
+unchanged; retained snapshots keep their runs.
+\begin{mathpar}
+\Rule{GPU-RadixPublish}{\alpha(\mathcal L)=O\quad k\ge2\quad
+ |O|+|F|\le\max\mathsf{Offset}}
+ {\alpha(\mathsf{publish}_k(\mathcal L,F))=O\uplus F\quad
+  \forall i.\ |L_i|\ge k|L_{i+1}|\quad
+  \mathsf{lookup}(k')=\mathsf{lookup}_O(k')\mathbin{+\!\!+}\mathsf{lookup}_F(k')}
+\end{mathpar}
 
 \paragraph{Maintained device runs.}
 Let $V_L$ retain the complete row in the recorded permutation $L$.

@@ -333,6 +333,67 @@ ADM-Batch with fixed-seed duplicates, boundaries, replay and row/bounded/
 whole batches. Radix tests additionally exercise lazy reads, geometric
 transitions, and merge-path boundaries against a stable occurrence oracle.
 
+### 8.2 Device RadixRun (GPU, runtime only)
+
+`gpu_datalog_runtime::radix_run::DeviceRadixRun<W,O,C>`
+(`experiments/gpu/datalog-runtime/src/radix_run.rs`) is the CUDA counterpart of
+`RadixRun`, with the same grouped storage laws (GPU-RadixRun,
+GPU-RadixPublish, GPU-RadixItemColumns). No compiler, IR or printer selects it
+yet; provider choices are recorded upstream later, never by type name.
+
+- **Key law.** `W: Word` (`u64`, `u128`, `[u64; L]`) is the DL-DevicePacking
+  word: most-significant-first lanes are the one `OrderKey` embedding. Keys are
+  stored and compared whole; the directory never truncates them.
+- **Storage per run.** Distinct increasing keys, `keys + 1` offsets in the
+  carrier `O: OffsetWord` (`u32`/`u64`), the item columns `C`, and an exact
+  radix-prefix directory (the GPU directory of §8 role 2, not the CPU spline):
+  `2^r + 1` slot lower bounds of the top `r` bits of `key − min` at the run
+  span's resolution. A lower-bound search inside the probed bucket gives exact
+  present and absent positions; `r = 0` uses plain binary search.
+- **Type facts and parameters, never runtime choices.** `O` is chosen
+  upstream from item-count bounds; builds and merges that exceed it fail
+  (`offset_fits`), with no widening. `C` is `Buffer<T>` (one opaque column),
+  a tuple of layouts (independent columns, arity ≤ 12), or `()` (key-only).
+  `RadixRunParams { ratio, radix_bits, merge_tile_rows }` is supplied by the
+  caller. Blocks are the kernels' compiled 256-thread contract
+  (`BLOCK_THREADS`); grids follow GPU-LAUNCH-OCCUPANCY. Scratch is sized by
+  the input/merge row counts.
+- **Build.** The stable lane radix permutation shared with `DeviceRuns`
+  (`runs::stable_order`, RCCL pairs radix sort per lane), a group-start flag
+  kernel, RCCL `device_select_flagged` for offsets (over a counting range)
+  and distinct keys (through the permutation), a per-column gather, and the
+  directory kernel. One group-count readback per build.
+- **Publish/merge.** The CPU ratio law: merge the newest runs while
+  `older.items / ratio < newer.items`, so run counts equal `RadixRun`'s.
+  A merge-path kernel (the co-rank shared with `DeviceRuns::merge_wide`, one
+  strategy for every key width, caller tile size) tags each merged key slot
+  with its source, preceding item count and new-key flag; RCCL selections
+  produce offsets and distinct keys; a load-balanced source map gathers each
+  item column (older groups first). One count readback per merge. A failed
+  merge leaves the published runs unchanged.
+- **Reads.** `snapshot()` uploads run descriptors and retains its runs across
+  later merges. `RadixKeysView` holds keys/offsets/directories only;
+  `RadixItemsView` holds item column addresses. Device functions
+  (`radix_run::device`): `search`, `group`, `contains`, `count`, `range`
+  (CPU `RadixRun::range` positions, `(items, items)` when absent), `interval`
+  (inclusive key interval per run) and `item`. Batch host launches:
+  `probe_keys`, `probe_groups` (per-run item ranges, the cursor groups) and
+  `probe_intervals`. No dense membership bitmap; that would be a separately
+  selected provider.
+- **Relation to existing device storage.** `DeviceRuns`/`DeviceLayout` (unique
+  packed-word sets with admission) and `RangeProvider` (dense `u32` domain
+  directory) are unchanged; this provider is the occurrence-preserving,
+  full-domain grouped index they can later be expressed with.
+
+`experiments/gpu/datalog-runtime/tests/radix_run.rs` checks these laws on
+the device with fixed seeds: `u64` keys against `cq_storage::RadixRun`
+(equal run counts after every publication across ratios 2/4/8, batch sizes
+7/127/2048/all, directory bits 0–16 and tile sizes 1–1000), full-domain
+extremes and absent keys, `u128`/`[u64; 3]` keys against a stable occurrence
+oracle, sorted/reversed/single-key inputs, empty providers and batches,
+`u32` vs `u64` carriers and the `u32::MAX` boundary, key reads identical with
+and without item columns, snapshot retention, and parameter/input rejection.
+
 ## 9. Grouped runs in the compiler's semantics
 
 **A RadixRun is compressed, by factorization rather than by a codec.**
