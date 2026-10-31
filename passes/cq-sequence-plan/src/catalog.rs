@@ -87,10 +87,33 @@ pub(crate) fn provider_available(
     ty: &Type,
 ) -> bool {
     let levels = provider_levels(analysis, provider);
+    provider_admitted(
+        analysis,
+        catalog,
+        provider,
+        capability,
+        ty,
+        levels.iter().any(|level| level.len() > 1),
+        |registered| levels.iter().all(|level| registered.contains(level)),
+    )
+}
+
+/// The single provider admission predicate shared by the final catalog check
+/// and placement's prediction of a read level. `below_host` tells whether a
+/// read executes below host; `admits` whether a registered level set covers
+/// the read levels.
+pub(crate) fn provider_admitted(
+    analysis: &Analysis,
+    catalog: &Catalog,
+    provider: &str,
+    capability: &cq_lang_sequence::Capability,
+    ty: &Type,
+    below_host: bool,
+    admits: impl Fn(&[Vec<String>]) -> bool,
+) -> bool {
     // Formal rule PL-Resident: Only an explicit resident token admits an
     // unretained host handle below host; all read/type/level facts still apply.
-    let needs_resident =
-        analysis.structures.host_read(provider) && levels.iter().any(|level| level.len() > 1);
+    let needs_resident = analysis.structures.host_read(provider) && below_host;
     catalog.providers.iter().any(|token| {
         matches_type(&token.ty, ty)
             && (!needs_resident
@@ -108,7 +131,7 @@ pub(crate) fn provider_available(
                 })
             })
             && token.capabilities.contains(capability)
-            && levels.iter().all(|level| token.levels.contains(level))
+            && admits(&token.levels)
     })
 }
 

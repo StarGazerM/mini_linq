@@ -614,6 +614,8 @@ fn requires_host(term: &Term, opaque: &BTreeSet<String>) -> bool {
 // Provider levels describe where a read executes, independently of where its
 // index was constructed. This also keeps authored grades untouched: impossible
 // authored reads are rejected by the final catalog check, not silently moved.
+// Lookup admission is the catalog checker's own predicate (including
+// PL-Resident for a host handle read below host), never a second rule.
 fn reads_at(
     term: &Term,
     result: Option<&str>,
@@ -635,11 +637,6 @@ fn reads_at(
             provider, inner, ..
         } => {
             let provider = symbol_name(provider);
-            // A Host entry describes an unretained adapter, including its lazy
-            // fallback, not a published instance of the catalog storage type.
-            if facts.structures.host_read(&provider) && level.len() > 1 {
-                return false;
-            }
             facts.obligations.iter().all(|obligation| {
                 let Obligation::Provider {
                     provider: name,
@@ -650,24 +647,16 @@ fn reads_at(
                 else {
                     return true;
                 };
-                if *name != provider {
-                    return true;
-                }
-                catalog.providers.iter().any(|token| {
-                    crate::catalog::matches_type(&token.ty, ty)
-                        && token.capabilities.contains(capability)
-                        && token.levels.iter().any(|registered| at(registered, level))
-                        && token.elements.as_ref().is_none_or(|accepted| {
-                            facts.structures.layouts[&provider].iter().all(|column| {
-                                accepted.iter().any(|ty| {
-                                    crate::catalog::matches_type(
-                                        ty,
-                                        &facts.structures.physical.rows[&provider].types[column],
-                                    )
-                                })
-                            })
-                        })
-                })
+                *name != provider
+                    || crate::catalog::provider_admitted(
+                        facts,
+                        catalog,
+                        &provider,
+                        capability,
+                        ty,
+                        level.len() > 1,
+                        |registered| registered.iter().any(|registered| at(registered, level)),
+                    )
             }) && reads_at(inner, result, facts, catalog, level, canon_level)
         }
         Term::Canon(inner) => {

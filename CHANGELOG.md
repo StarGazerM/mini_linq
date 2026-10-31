@@ -7,6 +7,17 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- `doop-gpu` builds again (broken since contract 7, `0124315f`). Placement
+  predicted descendant reads of a pipe-host handle with its own blanket
+  rejection, while the catalog check admits them under an explicit `Resident`
+  token (PL-Resident, added in `1c0523a7`). A resident `DeviceLayout`
+  anti-join membership or exact probe feeding opaque host Rust over encoded
+  Symbol columns (MethodImplemented, both MethodLookup inheritance rules) was
+  therefore left at host, where no token admits it. Placement now predicts
+  read levels with the catalog's own `provider_admitted` predicate. Cassandra
+  matches `doop-mini` on all 26 outputs; GPU TPC-H advised modules and every
+  `srd-doop-gpu` planned Sequence program are unchanged.
+
 - `HashIndex` initialization reserves the remaining source rows once its first
   65,536 rows carry distinct keys, instead of doubling through a chain of
   Swiss tables and arenas. Large unique-key builds (H12's 1.5M-key Orders

@@ -587,6 +587,11 @@ that handle's recorded descendant reads without constructing a host fallback
 index. It is not inferred from a Rust type name, a range capability, or the
 presence of device levels. Ordinary pipe-host adapters still require retention;
 resident tokens must also satisfy every type, element, read and level obligation.
+Placement predicts every candidate read level with this same admission; it
+applies no stricter host-handle rule. A resident handle read (for example a
+full-key membership) whose consumer is opaque host Rust is therefore stored at
+its admitted descendant level and published to host, not left at host where
+no token admits it.
 
 PL-Closure inherits its value laws from BE-* and the Sequence extension
 rewrites; it adds no new equality of values. PL-Precedence preserves

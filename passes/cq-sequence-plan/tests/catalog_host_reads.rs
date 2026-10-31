@@ -402,3 +402,65 @@ fn admitted_storage_type_does_not_move_unretained_host_membership_to_workers() {
         cq_sequence_plan::rewrites::grade(&source, quote::quote!(gpu, answer at device)).unwrap();
     assert!(decompose(&authored, &machine(), &available).is_err());
 }
+
+// PL-Resident: placement predicts a read level with the catalog's own
+// admission. A resident native handle's anti-join membership feeding opaque
+// host Rust is read below host and published, not left at an unadmitted host.
+#[test]
+fn resident_host_membership_before_opaque_host_rust_is_read_below_host() {
+    let structures: structures::Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32,b:i32); relation R(a:i32);
+            relation answer(c:i32);
+            consumer canonical;
+            l = pipe rename L@0 {a -> a,b -> b};
+            r = pipe rename R@1 {a -> a};
+            kept = pipe anti eager [a] l,r;
+            bound = pipe bind kept with c : i32 = (*b);
+            projected = pipe project bound keep {c};
+            return projected as answer(c);
+        }
+        structures {
+            l host scan = Native []; r host scan = Native [];
+            r host result(kept) = Native [a];
+        }
+    };
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let resident = |capabilities: Vec<Capability>| Catalog {
+        providers: vec![ProviderToken {
+            supports: Vec::new(),
+            ty: syn::parse_quote!(Native),
+            elements: None,
+            capabilities,
+            levels: vec![
+                vec!["host".into(), "device".into()],
+                vec!["host".into(), "device".into(), "block".into()],
+            ],
+            max_packed_bits: None,
+        }],
+        codecs: catalog().codecs,
+    };
+    let native = vec![Capability::Exact, Capability::Range, Capability::Membership];
+    let mut capabilities = native.clone();
+    capabilities.push(Capability::Resident);
+    let available = resident(capabilities);
+    let facts = cq_lang_sequence::contract::check(&source).unwrap();
+    assert!(facts.structures.host_read("r"));
+    let planned = decompose(&source, &machine(), &available).unwrap();
+    let facts = check_grading(&planned.program, &machine()).unwrap();
+    let reader = facts
+        .provider_reads
+        .iter()
+        .find(|(_, providers)| providers.contains("r"))
+        .map(|(name, _)| name)
+        .unwrap();
+    assert!(
+        facts.levels[reader].len() > 1,
+        "{reader}: {:?}",
+        facts.levels
+    );
+    assert_eq!(facts.levels["bound"], ["host"]);
+    check_rewrite(&source, &planned.program).unwrap();
+    // Without the explicit resident token the same handle is not admitted below host.
+    assert!(decompose(&source, &machine(), &resident(native)).is_err());
+}
