@@ -201,28 +201,7 @@ pub fn group(
             writes.push(quote!(*values.add(position*#width+#column)=1i64;));
         }
     }
-    let mut decoded = Vec::new();
-    for column in output_columns {
-        let slot = columns
-            .iter()
-            .position(|name| name == column)
-            .ok_or_else(|| syn::Error::new_spanned(group, "GPU grouped output column is absent"))?;
-        let ty = &output_types[column];
-        let optional = group.aggregates.iter().any(|aggregate| {
-            symbol_name(&aggregate.name) == *column
-                && matches!(aggregate.kind, AggregateKind::Min | AggregateKind::Max)
-        });
-        // DECODE P: grouped answer decoder resolves symbols, nullable extrema and scalars only when the host requests logical rows.
-        decoded.push(if let Some(codec) = codecs.get(ty) {
-            quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(
-                u32::try_from(values[#slot]).map_err(|_| "GPU symbol code exceeds u32")?
-            ))
-        } else if optional {
-            quote!(if valid[#slot]==0 {None} else {Some(::cq_gpu_runtime::decode_value(values[#slot], &__cq_dictionary)?)})
-        } else {
-            quote!(::cq_gpu_runtime::decode_value::<#ty>(values[#slot], &__cq_dictionary)?)
-        });
-    }
+    let decoded = decoders(group, &columns, output_columns, output_types, codecs)?;
     let filtered = direct.is_some();
     let (load, input_parameters, input_arguments, status, live_argument) =
         if let Some(input) = direct {
@@ -285,6 +264,212 @@ pub fn group(
                 move |values:&[i64],valid:&[u8]| -> ::cq_gpu_sequence_runtime::Result<_> {Ok((#(#decoded,)*))}
             );
             #release_live
+        },
+    ))
+}
+
+/// Decode each grouped output column from its machine value and validity.
+fn decoders(
+    group: &cq_lang_structures::syntax::algebra::Group,
+    columns: &[String],
+    output_columns: &[String],
+    output_types: &std::collections::BTreeMap<String, syn::Type>,
+    codecs: &crate::runs::Codecs,
+) -> syn::Result<Vec<TokenStream>> {
+    use cq_lang_structures::{physical::symbol_name, syntax::algebra::AggregateKind};
+    let mut decoded = Vec::new();
+    for column in output_columns {
+        let slot = columns
+            .iter()
+            .position(|name| name == column)
+            .ok_or_else(|| syn::Error::new_spanned(group, "GPU grouped output column is absent"))?;
+        let ty = &output_types[column];
+        let optional = group.aggregates.iter().any(|aggregate| {
+            symbol_name(&aggregate.name) == *column
+                && matches!(aggregate.kind, AggregateKind::Min | AggregateKind::Max)
+        });
+        // DECODE P: grouped answer decoder resolves symbols, nullable extrema and scalars only when the host requests logical rows.
+        decoded.push(if let Some(codec) = codecs.get(ty) {
+            quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(
+                u32::try_from(values[#slot]).map_err(|_| "GPU symbol code exceeds u32")?
+            ))
+        } else if optional {
+            quote!(if valid[#slot]==0 {None} else {Some(::cq_gpu_runtime::decode_value(values[#slot], &__cq_dictionary)?)})
+        } else {
+            quote!(::cq_gpu_runtime::decode_value::<#ty>(values[#slot], &__cq_dictionary)?)
+        });
+    }
+    Ok(decoded)
+}
+
+/// Formal rule GPU-GroupGridFold: a keyless group folds its canonical
+/// valuations in one fused pass: every occupancy-grid block reduces its
+/// grid-stride rows into typed per-aggregate partials (with presence for
+/// extrema), and one stream-ordered block combines the partials into the
+/// single global row, keeping the empty-input identity and checked overflow.
+pub fn global(
+    group: &cq_lang_structures::syntax::algebra::Group,
+    input_columns: &[String],
+    output_columns: &[String],
+    output_types: &std::collections::BTreeMap<String, syn::Type>,
+    input_index: usize,
+    kernel: &Ident,
+    direct: Option<GroupInput>,
+    codecs: &crate::runs::Codecs,
+) -> syn::Result<(TokenStream, TokenStream)> {
+    use cq_lang_structures::{physical::symbol_name, syntax::algebra::AggregateKind};
+    use quote::format_ident;
+    if !group.keys.is_empty() {
+        return Err(syn::Error::new_spanned(group, "GPU-GroupGridFold: keyed groups use the recorded accumulator"));
+    }
+    let owner = format_ident!("__cq_canonical_{input_index}");
+    let fields = format_ident!("__cq_fields_{input_index}");
+    let length = direct
+        .as_ref()
+        .map(|input| input.length.clone())
+        .unwrap_or_else(|| {
+            let id = format_ident!("__cq_store_length_{input_index}");
+            quote!(#id)
+        });
+    let prepare = format_ident!("prepare_{kernel}");
+    let mut params = direct.as_ref().map(|input| input.parameters.clone()).unwrap_or_default();
+    let mut args = direct.as_ref().map(|input| input.arguments.clone()).unwrap_or_default();
+    let mut columns = Vec::new();
+    let mut descriptors = Vec::new();
+    let mut declare = Vec::new();
+    let mut update = Vec::new();
+    let mut reduce = Vec::new();
+    let width = group.aggregates.len();
+    for (column, aggregate) in group.aggregates.iter().enumerate() {
+        let (kind, identity) = match aggregate.kind {
+            AggregateKind::Count => (0u32, quote!(0i64)),
+            AggregateKind::Sum => (1, quote!(0i64)),
+            AggregateKind::Min => (2, quote!(i64::MAX)),
+            AggregateKind::Max => (3, quote!(i64::MIN)),
+        };
+        let ty = &aggregate.ty;
+        let optional = kind >= 2;
+        descriptors.push(quote!(::cq_gpu_sequence_runtime::group::aggregate::<#ty, #optional>(#kind)?));
+        columns.push(symbol_name(&aggregate.name));
+        let value = format_ident!("__cq_value_{column}");
+        let present = format_ident!("__cq_present_{column}");
+        declare.push(quote!(let mut #value = #identity; let mut #present = false;));
+        let argument = if kind == 0 {
+            quote!(1i64)
+        } else {
+            let expression = aggregate.expression.as_ref().expect("checked aggregate argument");
+            let name = symbol_name(cq_lang_structures::syntax::rust::variable(expression).ok_or_else(|| {
+                syn::Error::new_spanned(expression, "GPU aggregate argument must be a normalized variable")
+            })?);
+            if let Some(input) = &direct {
+                let value = input.columns.get(&name).ok_or_else(|| {
+                    syn::Error::new_spanned(group, "GPU resident group argument is absent")
+                })?;
+                quote!((#value as i64))
+            } else {
+                let field = input_columns.iter().position(|column| *column == name).ok_or_else(|| {
+                    syn::Error::new_spanned(group, "GPU group input lacks a canonical valuation column")
+                })?;
+                let base = format_ident!("base_{column}");
+                let shift = format_ident!("shift_{column}");
+                let bits = format_ident!("bits_{column}");
+                params.extend([quote!(#base:i64), quote!(#shift:u32), quote!(#bits:u32)]);
+                args.extend([
+                    quote!(#fields[#field].base),
+                    quote!(#fields[#field].shift),
+                    quote!(#fields[#field].bits),
+                ]);
+                let offset = crate::emit::packed_offset(quote!(packed), quote!(position), quote!(lanes), quote!(#shift), quote!(#bits));
+                // DECODE V: P6 keyless grid fold reconstructs packed FOR fields before typed per-block partials.
+                quote!({ let offset = #offset; #base.wrapping_add(offset as i64) })
+            }
+        };
+        let combine = |into: TokenStream, from: TokenStream, from_present: TokenStream, present: TokenStream| match kind {
+            2 => quote!(if #from_present && (!#present || #from < #into) { #into = #from; } #present |= #from_present;),
+            3 => quote!(if #from_present && (!#present || #from > #into) { #into = #from; } #present |= #from_present;),
+            _ => quote! {
+                match (#into).checked_add(#from) {
+                    Some(sum) => #into = sum,
+                    None => ::cq_gpu_sequence_runtime::device::flag_overflow(error),
+                }
+            },
+        };
+        let accumulate = combine(quote!(#value), quote!(__argument), quote!(true), quote!(#present));
+        update.push(quote!({ let __argument = #argument; #accumulate }));
+        let shared_combine = combine(
+            quote!(*values.add(__tid)),
+            quote!(*values.add(__tid + stride)),
+            quote!((*present.add(__tid + stride) != 0)),
+            quote!(__present),
+        );
+        reduce.push(quote! {
+            *values.add(__tid) = #value;
+            *present.add(__tid) = #present as u32;
+            ::cuda_device::thread::sync_threads();
+            let mut stride = 128usize;
+            while stride != 0 {
+                if __tid < stride {
+                    let mut __present = *present.add(__tid) != 0;
+                    #shared_combine
+                    *present.add(__tid) = __present as u32;
+                }
+                ::cuda_device::thread::sync_threads();
+                stride /= 2;
+            }
+            if __tid == 0 {
+                let block = ::cuda_device::thread::blockIdx_x() as usize;
+                *partials.add(block * #width + #column) = *values;
+                *partial_present.add(block * #width + #column) = *present;
+            }
+            ::cuda_device::thread::sync_threads();
+        });
+    }
+    let decoded = decoders(group, &columns, output_columns, output_types, codecs)?;
+    let (load, input_parameters, input_arguments, status) = if let Some(input) = direct {
+        (input.load, quote!(), quote!(), quote!())
+    } else {
+        (
+            quote!(),
+            quote!(packed:*const u64,lanes:usize,),
+            quote!(#owner.keys().ptr(),#owner.lanes(),),
+            quote!(__cq_statuses.push(#owner.metadata().clone());),
+        )
+    };
+    Ok((
+        quote! {
+            #[kernel]
+            #[launch_bounds(256)]
+            #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(3072,3072))]
+            pub fn #kernel(partials:*mut i64,partial_present:*mut u32,error:*mut u32,length:usize,#input_parameters #(#params),*) {
+                unsafe {
+                    let __tid = ::cuda_device::thread::threadIdx_x() as usize;
+                    #(#declare)*
+                    let mut position = ::cuda_device::thread::index_1d().get() as usize;
+                    while position < length {
+                        let mut __live = true;
+                        #load
+                        if __live { #(#update)* }
+                        position += ::cuda_device::thread::gridDim_x() as usize * 256;
+                    }
+                    let shared = ::cuda_device::DynamicSharedArray::<u8, 16>::get_raw();
+                    let values = shared.cast::<i64>();
+                    let present = shared.add(2048).cast::<u32>();
+                    #(#reduce)*
+                }
+            }
+        },
+        quote! {
+            let shape = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(1,256,3072))?;
+            let grid = ::cq_gpu_runtime::launch_grid_for_kernel(shape.function(),#length.div_ceil(256),256,3072)?;
+            let __cq_global = ::cq_gpu_sequence_runtime::group::GlobalFold::new(
+                __cq_pool.clone(), grid as usize, &[#(#descriptors),*])?;
+            let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(grid,256,3072))?;
+            __cq_module.#kernel(__cq_pool.stream(),&prepared,__cq_global.partials(),__cq_global.present(),
+                __cq_global.error(),#length,#input_arguments #(#args),*)?;
+            #status
+            let __cq_result = unsafe { __cq_global.finish(__cq_statuses)? }.with_decoder(
+                move |values:&[i64],valid:&[u8]| -> ::cq_gpu_sequence_runtime::Result<_> {Ok((#(#decoded,)*))}
+            );
         },
     ))
 }

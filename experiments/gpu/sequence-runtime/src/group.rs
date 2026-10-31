@@ -487,6 +487,80 @@ pub unsafe fn fold(
     })
 }
 
+/// Formal rule GPU-GroupGridFold: grid partials of a keyless group. The
+/// generated fused kernel writes one typed partial (and extremum presence)
+/// per aggregate and block; [`GlobalFold::finish`] combines them on the same
+/// stream into the single global row, retaining the empty-input identity.
+pub struct GlobalFold {
+    pool: Arc<Pool>,
+    partials: Buffer<i64>,
+    present: Buffer<u32>,
+    metadata: Arc<Buffer<OutputCount>>,
+    blocks: usize,
+    aggregates: Vec<Aggregate>,
+}
+
+impl GlobalFold {
+    pub fn new(pool: Arc<Pool>, blocks: usize, aggregates: &[Aggregate]) -> Result<Self> {
+        if blocks == 0 || blocks > u32::MAX as usize || aggregates.is_empty() {
+            return Err("invalid global fold grid or aggregate list".into());
+        }
+        let cells = blocks.checked_mul(aggregates.len()).ok_or("global fold size overflow")?;
+        Ok(Self {
+            partials: Buffer::zeroed(pool.clone(), cells)?,
+            present: Buffer::zeroed(pool.clone(), cells)?,
+            metadata: Arc::new(Buffer::from_host(
+                pool.clone(),
+                &[OutputCount { rows: 1, error: 0, padding: 0 }],
+            )?),
+            pool,
+            blocks,
+            aggregates: aggregates.to_vec(),
+        })
+    }
+    pub fn partials(&self) -> *mut i64 {
+        self.partials.ptr()
+    }
+    pub fn present(&self) -> *mut u32 {
+        self.present.ptr()
+    }
+    /// Sticky arithmetic failure word of the published row's metadata.
+    pub fn error(&self) -> *mut u32 {
+        self.metadata.ptr().cast::<u64>().cast::<u32>().wrapping_add(2)
+    }
+    /// Combine every block's partials into the one global row.
+    ///
+    /// # Safety
+    /// Exactly `blocks` blocks of the fused partial kernel must have been
+    /// launched on this pool's stream, each writing every aggregate's partial.
+    pub unsafe fn finish(self, statuses: Vec<Arc<Buffer<OutputCount>>>) -> Result<GroupedOutput> {
+        let width = self.aggregates.len();
+        let values = Buffer::<i64>::zeroed(self.pool.clone(), width)?;
+        let valid = Buffer::<u8>::zeroed(self.pool.clone(), width)?;
+        let programs = programs(&self.pool)?;
+        let module = &programs.module;
+        let config = cuda_core::LaunchConfig1D::new(1, 256, 3072);
+        for (column, aggregate) in self.aggregates.iter().enumerate() {
+            module.global_combine(
+                self.pool.stream(),
+                &module.prepare_global_combine(config)?,
+                self.partials.ptr(),
+                self.present.ptr(),
+                self.blocks as u32,
+                width,
+                column,
+                aggregate.kind,
+                aggregate.min,
+                aggregate.max,
+                values.ptr(),
+                valid.ptr(),
+                self.error(),
+            )?;
+        }
+        Ok(GroupedOutput { values, valid, metadata: self.metadata, statuses, width })
+    }
+}
+
 #[cuda_device::cuda_module]
 mod group_kernels {
     use cuda_device::{kernel, launch_bounds, launch_contract};
@@ -636,6 +710,98 @@ mod group_kernels {
             }
         }
     }
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(3072,3072))]
+    pub fn global_combine(
+        partials: *const i64,
+        present: *const u32,
+        blocks: u32,
+        width: usize,
+        column: usize,
+        kind: u32,
+        min: i64,
+        max: i64,
+        output: *mut i64,
+        valid: *mut u8,
+        error: *mut u32,
+    ) {
+        unsafe {
+            let lane = cuda_device::thread::threadIdx_x() as usize;
+            let mut value = if kind == 2 {
+                i64::MAX
+            } else if kind == 3 {
+                i64::MIN
+            } else {
+                0
+            };
+            let mut seen = false;
+            let mut block = lane;
+            while block < blocks as usize {
+                let next = *partials.add(block * width + column);
+                let next_seen = *present.add(block * width + column) != 0;
+                if kind == 2 {
+                    if next_seen && (!seen || next < value) {
+                        value = next;
+                    }
+                    seen |= next_seen;
+                } else if kind == 3 {
+                    if next_seen && (!seen || next > value) {
+                        value = next;
+                    }
+                    seen |= next_seen;
+                } else {
+                    match value.checked_add(next) {
+                        Some(sum) => value = sum,
+                        None => crate::device::flag_overflow(error),
+                    }
+                }
+                block += 256;
+            }
+            let shared = cuda_device::DynamicSharedArray::<u8, 16>::get_raw();
+            let values = shared.cast::<i64>();
+            let flags = shared.add(2048).cast::<u32>();
+            *values.add(lane) = value;
+            *flags.add(lane) = seen as u32;
+            cuda_device::thread::sync_threads();
+            let mut stride = 128;
+            while stride != 0 {
+                if lane < stride {
+                    let a = *values.add(lane);
+                    let b = *values.add(lane + stride);
+                    let a_seen = *flags.add(lane) != 0;
+                    let b_seen = *flags.add(lane + stride) != 0;
+                    if kind == 2 {
+                        if b_seen && (!a_seen || b < a) {
+                            *values.add(lane) = b;
+                        }
+                        *flags.add(lane) = (a_seen || b_seen) as u32;
+                    } else if kind == 3 {
+                        if b_seen && (!a_seen || b > a) {
+                            *values.add(lane) = b;
+                        }
+                        *flags.add(lane) = (a_seen || b_seen) as u32;
+                    } else {
+                        match a.checked_add(b) {
+                            Some(sum) => *values.add(lane) = sum,
+                            None => crate::device::flag_overflow(error),
+                        }
+                    }
+                }
+                cuda_device::thread::sync_threads();
+                stride /= 2;
+            }
+            if lane == 0 {
+                let value = *values;
+                let present = kind < 2 || *flags != 0;
+                if present && (value < min || value > max) {
+                    crate::device::flag_overflow(error);
+                }
+                *output.add(column) = if present { value } else { 0 };
+                *valid.add(column) = present as u8;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -673,6 +839,30 @@ mod publication_tests {
             assert!(Rc::ptr_eq(&reloaded, &programs(&first_pool)?));
         }
         GROUP_PROGRAMS.with(|cache| assert!(cache.borrow().is_none()));
+        Ok(())
+    }
+
+    #[test]
+    fn global_fold_combines_typed_partials_and_keeps_the_empty_identity() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let count = Aggregate { kind: 0, min: 0, max: i64::MAX };
+        let sum = Aggregate { kind: 1, min: i64::MIN, max: i64::MAX };
+        let min = Aggregate { kind: 2, min: i64::MIN, max: i64::MAX };
+        let mut fold = GlobalFold::new(pool.clone(), 3, &[count, sum, min])?;
+        // Block-major partials; only the last block saw an extremum.
+        fold.partials = Buffer::from_host(pool.clone(), &[2i64, 10, 0, 0, 0, 0, 1, -4, 7])?;
+        fold.present = Buffer::from_host(pool.clone(), &[0u32, 0, 0, 0, 0, 0, 0, 0, 1])?;
+        let rows = unsafe { fold.finish(Vec::new())? }
+            .with_decoder(|values: &[i64], valid: &[u8]| -> Result<_> { Ok((values.to_vec(), valid.to_vec())) });
+        assert_eq!(rows.to_host()?, vec![(vec![3, 6, 7], vec![1, 1, 1])]);
+        let empty = GlobalFold::new(pool.clone(), 1, &[count, min])?;
+        let rows = unsafe { empty.finish(Vec::new())? }
+            .with_decoder(|values: &[i64], valid: &[u8]| -> Result<_> { Ok((values.to_vec(), valid.to_vec())) });
+        assert_eq!(rows.to_host()?, vec![(vec![0, 0], vec![1, 0])]);
+        let mut overflow = GlobalFold::new(pool.clone(), 2, &[sum])?;
+        overflow.partials = Buffer::from_host(pool.clone(), &[i64::MAX, 1])?;
+        let rows = unsafe { overflow.finish(Vec::new())? }.with_decoder(|values: &[i64], _: &[u8]| -> Result<_> { Ok(values[0]) });
+        assert!(rows.to_host().is_err());
         Ok(())
     }
 

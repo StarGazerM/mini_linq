@@ -226,10 +226,12 @@ pub(crate) fn check_grading_in(
         for (dispatch, execution) in analysis.dispatches.iter_mut().zip(executions) {
             dispatch.gpu = Some(execution);
         }
+        crate::gpu::check(program, &analysis)?;
         // Publication codecs copy the column bounds sources recorded by bindings.
         analysis.gpu_bindings = (gpu.bindings)(program, &analysis)?;
         analysis.gpu_publications = crate::gpu::publication::derive(program, &analysis)?;
         crate::gpu::publication::check(program, &analysis, &analysis.gpu_publications)?;
+        analysis.gpu_bindings.realization = (gpu.realize)(program, &analysis)?;
     }
     // Check the target layout of the recorded resource demands against capacity.
     for dispatch in &analysis.dispatches {

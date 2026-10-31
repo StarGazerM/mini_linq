@@ -56,4 +56,7 @@ pub struct Bindings {
     pub downloads: BTreeMap<String, syn::Type>,
     pub bounds: BTreeMap<String, ColumnBounds>,
     pub uploads: BTreeMap<String, UploadAdapter>,
+    /// Source access, publication steps, transfers, captures and auxiliary
+    /// kernels selected by the target before printing.
+    pub realization: super::realization::Realization,
 }

@@ -1034,11 +1034,23 @@ emission consume the same recorded publication kind, never independent
 deferred-range recognizers. Host references stop at completed publication
 boundaries; a host consumer of a later expanded store is not a host consumer
 of that store's deferred-range input.
+The same record fixes the first attempt's output capacity (zero for
+\code{count}, the store's declared capacity, the machine's default
+reservation for an undeclared \code{reserve}, or the arena's previous count),
+the output compaction (each lane gathers its stripe items; the block reserves
+one range per stripe batch), and one strip per strip-mined level of every
+chain in pre-order: rows per expansion batch, items per lane, nested tile
+sizes and the fold's implementation scope (whole domain or the first $n$
+local tiles). Omitted items cover a tile in one block pass; an untiled
+expansion batches one block of children with one item. The checker accepts
+any positive implicit strip and requires explicit tiles and fold scopes to be
+the chain's.
 \begin{mathpar}
 \Rule{GPU-Launch}{d\text{ is a checked dispatch}\quad M.\mathsf{gpu}\text{ supplied}}
  {\mathsf{execution}(d)=
   (\mathsf{partition},\mathsf{kernelOccupancy},\mathsf{publication},
-   \mathsf{offsetScan},\mathsf{foldCompletion},\mathsf{synchronizations})}
+   \mathsf{offsetScan},\mathsf{foldCompletion},\mathsf{synchronizations},
+   \mathsf{capacity},\mathsf{reservation},\mathsf{strips})}
 \Rule{GPU-LAUNCH-OCCUPANCY}{P=\text{domain tile count}\quad
  S=\text{device SM count}\quad R=\mathsf{residentBlocks}(K,\mathsf{threads},\mathsf{shared})>0}
  {\mathsf{grid}(K,P)=\min(\max(1,P),S R)}
@@ -1228,8 +1240,8 @@ Downloaded host scans consume a recorded host adapter replacement; every
 resident scan has exactly one such record. Uploads consume the recorded
 empty-row or numeric-column adapter and its declared carrier tuple.
 Keyed terminal groups print the accumulator recorded in Structures; keyless
-global folds have no keyed accumulator record. This provider refinement does
-not itself supply the separate terminal-group execution-placement refinement.
+global folds have no keyed accumulator record. Terminal-group execution and
+input realization are recorded separately (\textsc{GPU-TerminalGroup}).
 GPU publication refinement records flat carrier columns and stride, or a
 frame-of-reference equality-key recipe with ordered fields and bounds sources.
 Each packed field uses its minimum as base and its range bit width; fields and
@@ -1243,6 +1255,69 @@ their flat staging carrier. The checker traverses Sequence constructors and
 checks coverage, canonical obligations, field provenance, stride and staging
 without calling the producer's context/selection helpers. A codec does not
 select a canonicalization provider.
+
+\paragraph{GPU realization selection.}
+After publication storage, the target selects one realization of the graded
+program and records it with the bindings; printers consume only these
+records, and an independent checker validates them without calling the
+selection. A selection failure is a recorded fact raised only when that
+candidate is printed: planner candidates are graded, not printed.
+\emph{Sources} record, per Physical result read by a dispatch, its origin
+(resident columns, packed runs with their native lookups, or a host
+evaluation uploaded during the build), its column map, its access (scan, an
+interval's materialized positions, or the recorded Range provider restricted
+to an optional interval) and its construction phase. Intervals fold explicit
+relational selections on one column; the checker re-derives that uniquely
+determined interval from the selection syntax and requires equality, as in
+\textsc{PH-ConstantGuard}. Runs never take an interval. \emph{Steps} record,
+per Sequence definition in order, whether it is a terminal-group alias, the
+terminal group, a dispatch, a host union, a host upload, or host-only.
+Host evaluations record the completed publications bound to their results and
+their transfers, each of complete rows. Provider builds over a completed
+publication record each descriptor column's bounds: the union of the resident
+input columns renamed into it or of upload metadata, merged pairwise with later
+uploads, or the Scalar carrier range; a key over packed runs records one
+measured reduction with its readback. Auxiliary element kernels (union decode
+and pack, host-output pack) record one-thread-per-element geometry.
+Closed captures and device Rust callables are extracted once into records:
+values with their column codec, callables with their reads and closed host
+subexpressions, the captures each definition uses, the device expression of
+each row function and the host-bound selection conditions.
+\begin{mathpar}
+\Rule{GPU-Realization}{R=\mathsf{select}(P,A)\text{ after }\textsc{GPU-PublicationStorage}\quad
+ \mathsf{check}(P,A,R)}
+ {\mathsf{print}_{\rm gpu}(P)\text{ consumes }R\text{ (sources, steps, transfers, captures, geometry)}}
+\Rule{GPU-SourceAccess}{\rho=\text{recorded source of }r\quad
+ \rho.\mathsf{interval}=\mathsf{fold}(\text{contiguous selections of }r)}
+ {\mathsf{read}_{\rm gpu}(r)=\rho.\mathsf{access}(\rho.\mathsf{origin})}
+\Rule{GPU-Transfer}{e=\text{recorded host evaluation}\quad
+ \tau\in e.\mathsf{transfers}\quad \tau.\mathsf{granularity}=\mathsf{completeRows}}
+ {\mathsf{host}(e)\text{ reads }\tau.\mathsf{source}\text{ downloaded once per invocation}}
+\Rule{GPU-ProviderDomain}{B=\text{recorded descriptor bounds of column }c\quad
+ \text{every source of }B\text{ publishes }c}
+ {\mathsf{descriptor}(c).\mathsf{bounds}=B\quad
+  \mathsf{domain}(c)=B\text{ or one recorded measurement}}
+\Rule{GPU-TerminalGroup}{G=\text{recorded terminal group of the final publication}\quad
+ \text{aliases are transparent stores of }G}
+ {\mathsf{group}_{\rm gpu}=G.\mathsf{completion}(G.\mathsf{input})}
+\Rule{GPU-GroupGridFold}{G\text{ keyless}\quad
+ B=\biguplus_b B_b\text{ over an occupancy grid}\quad
+ p_b=(\mathsf{fold}_a(B_b),\mathsf{present}_a(B_b))_a}
+ {\mathsf{group}_{\rm gpu}(G)=\bigoplus_b p_b\text{ in one stream-ordered combine}}
+\end{mathpar}
+The terminal group record names the Physical group, its input realization and
+its completion. The input is the packed canonical publication (whose recorded
+fields extraction decodes), a completed flat publication or device source
+fused with the chain's row maps under a live mask, or a host evaluation of the
+Physical input, uploaded unless already a device source. Store aliases that
+wrap the same group are realized by its fold rather than published. Keyed
+groups extract arguments on the occupancy grid and call the recorded
+accumulator. Keyless groups fold in one fused pass: each block accumulates its
+grid-stride live rows into typed per-aggregate partials (count and checked sum,
+extrema with presence), and one block combines the partials on the producing
+stream. The empty input keeps one row with zero counts and sums and absent
+extrema; overflow and representation-range failures set the published row's
+sticky failure word.
 
 A literal atom argument such as \code{method\_modifier(sym("abstract"), m)}
 reaches the translator as a constant inside a rename. The checked Physical

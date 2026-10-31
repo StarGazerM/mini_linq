@@ -119,6 +119,11 @@ with the recipe cleared; the report retains the original recipe separately.
  \ell=device\Rightarrow(\mathsf{inputTarget}(p)=device\land\neg\mathsf{nullable}(v))}
  {\mathsf{publication}(s,p)=(\ell,v)}
 
+\Rule{DR-GroupedPublication}{\mathsf{publication}(s,p)=(device,v)\quad
+ s\text{ grouped}\quad \sigma=\text{head slots over keys then aggregates}\quad
+ \beta_k=\text{first positive atom field binding key }k\text{, else full}}
+ {\mathsf{grouped}(s,p)=(\sigma,\beta)\text{ recorded and checked before generation}}
+
 \Rule{DR-Recipe}{r=\mathsf{inputRecipe}(p)\quad
  \rho=\mathsf{expandRecipe}(s,r)\quad\mathsf{checkedReplay}(s,\rho)=t}
  {\mathsf{recipeCompile}(s,p)=(t,\rho)}
@@ -133,6 +138,10 @@ kinds and propagates recorded nullable columns through publication inputs, not
 from Rust type spelling. Nullable outputs use the host transfer protocol;
 device publication without validity support is rejected. Generated carriers
 and downstream input bindings consume the same recorded placement.
+DR-GroupedPublication records a resident grouped answer's conversion: the
+column slots and each key's bounds source (resident column metadata or one host
+scan of a host relation; aggregates take the full domain). The wrapper prints
+that record; it adds no device fence, and its timing remains host wall time.
 DR-Recipe uses only explicit selectors and geometry, applying the existing
 checked rewrites. Workload labels occur only in catalog registration.
 DR-Registry shares one Physical/Structures registry between proc-macro adapters

@@ -6,20 +6,124 @@
 //! Closed relational operands use the compared column's recorded codec; Rust reads require identity.
 //! DO NOT infer semantics from types, recognize `if` comparisons, or rewrite Rust arithmetic.
 //! Capturing query-closed inputs does not authorize splitting Rust into relational predicates.
+//! Extraction runs once in GPU realization and records `realization::Captures`;
+//! printing consumes those records without re-extracting.
 use std::collections::{BTreeMap, BTreeSet};
+use cq_lang_sequence::gpu::realization::Capture;
 use cq_lang_structures::syntax::{rust, algebra::Theta, constraint::{Comparison, Constraint, Term}, EqualityValue};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 use syn::{Expr, Ident, Type, visit_mut::VisitMut};
 
+/// Capture extraction state: recorded captures in parameter order, the
+/// deduplicated closed values, and the indices read by the current definition.
 #[derive(Default)]
 pub(crate) struct Captures {
+    pub records: Vec<Capture>,
+    values: BTreeMap<String, usize>,
+    pub used: BTreeSet<usize>,
+}
+
+/// Printed capture support: setup statements, kernel parameters with their
+/// host values, device Rust callable bounds, and disabled-launch witnesses.
+pub(crate) struct Printed {
     pub setup: TokenStream,
     pub parameters: Vec<(Ident, Type, TokenStream)>,
     pub rust_functions: Vec<(Ident, TokenStream, Ident)>,
     pub disabled: BTreeMap<usize, TokenStream>,
-    values: BTreeMap<String, usize>,
-    pub used: BTreeSet<usize>,
+}
+
+fn value_carrier(expression: &Expr, logical: &Type, codec: Option<&Type>) -> (Type, TokenStream) {
+    match codec {
+        Some(codec) => (syn::parse_quote!(u32), quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#logical>>::code(&(#expression)))),
+        None => (logical.clone(), quote!(#expression)),
+    }
+}
+
+/// Host value of a recorded closed capture, shared by every invocation use.
+fn host_value(index: usize, expression: &Expr, logical: &Type, codec: Option<&Type>) -> TokenStream {
+    let cache = format_ident!("__cq_capture_cache_{index}");
+    let (_, value) = value_carrier(expression, logical, codec);
+    quote!(*#cache.get_or_init(|| #value))
+}
+
+/// Print recorded captures in parameter order.
+pub(crate) fn print(records: &[Capture]) -> Printed {
+    let mut printed = Printed {
+        setup: TokenStream::new(),
+        parameters: Vec::new(),
+        rust_functions: Vec::new(),
+        disabled: BTreeMap::new(),
+    };
+    for (index, capture) in records.iter().enumerate() {
+        match capture {
+            Capture::Value { expression, logical, codec } => {
+                let name = format_ident!("__cq_capture_{index}");
+                let cache = format_ident!("__cq_capture_cache_{index}");
+                let (ty, _) = value_carrier(expression, logical, codec.as_ref());
+                printed.setup.extend(quote!(let #cache = ::std::cell::OnceCell::<#ty>::new();));
+                printed.parameters.push((name, ty, host_value(index, expression, logical, codec.as_ref())));
+            }
+            Capture::Callable { reads, output, closed, body } => {
+                let closed = closed.iter().enumerate().map(|(at, expression)| {
+                    let name = format_ident!("__cq_closed_{at}");
+                    quote!(let #name = __cq_enabled.then(|| #expression);)
+                });
+                let names = reads.iter().map(|(name, _)| name);
+                let types: Vec<_> = reads.iter().map(|(_, ty)| ty).collect();
+                let name = format_ident!("__cq_rust_{index}");
+                let generic = format_ident!("__CqRust{index}");
+                let factory = format_ident!("__cq_rust_factory_{index}");
+                let cache = format_ident!("__cq_rust_cache_{index}");
+                printed.setup.extend(quote! {
+                    let #factory = |__cq_enabled: bool| {
+                        #(#closed)* move |#(#names: &#types),*| -> #output { #body }
+                    };
+                    let #name = #factory(false);
+                    let #cache = {
+                        // A checked callable can be unused by the chosen schedule.
+                        // Infer its cache from the disabled witness, not a later launch.
+                        fn cache<T>(_: &T) -> ::std::cell::OnceCell<T> {
+                            ::std::cell::OnceCell::new()
+                        }
+                        cache(&#name)
+                    };
+                });
+                printed.rust_functions.push((generic.clone(), quote!(Fn(#(&#types),*) -> #output), name.clone()));
+                printed.parameters.push((name.clone(), syn::parse_quote!(#generic), quote!(*#cache.get_or_init(|| #factory(true)))));
+                printed.disabled.insert(index, quote!(#name));
+            }
+        }
+    }
+    printed
+}
+
+/// GPU-Capture checker: validate recorded captures without re-extracting
+/// them. Closed values have no row reads and use their column's codec
+/// identity; uses name recorded captures.
+pub(crate) fn check(records: &cq_lang_sequence::gpu::realization::Captures, columns: &BTreeSet<String>, codecs: &crate::runs::Codecs) -> syn::Result<()> {
+    let error = |message: &str| syn::Error::new(proc_macro2::Span::call_site(), format!("GPU-Capture: {message}"));
+    for capture in &records.captures {
+        match capture {
+            Capture::Value { expression, logical, codec } => {
+                if !rust::free_variables(expression).dependencies(columns).is_empty() {
+                    return Err(error("closed value reads a row column"));
+                }
+                if codec.as_ref() != codecs.get(logical) {
+                    return Err(error("closed value codec differs from its column codec identity"));
+                }
+            }
+            Capture::Callable { closed, .. } => {
+                if closed.iter().any(|expression| !rust::free_variables(expression).dependencies(columns).is_empty()) {
+                    return Err(error("callable host subexpression reads a row column"));
+                }
+            }
+        }
+    }
+    if records.uses.values().flatten().any(|&index| index >= records.captures.len()) {
+        return Err(error("definition reads an unrecorded capture"));
+    }
+    Ok(())
 }
 
 impl Captures {
@@ -27,29 +131,31 @@ impl Captures {
     /// the host and encoded with the compared column's recorded codec.
     pub fn value(&mut self, expression: &Expr, logical: &Type, codecs: &crate::runs::Codecs) -> Expr {
         let key = format!("{}:{}", logical.to_token_stream(), expression.to_token_stream());
-        if let Some(&index) = self.values.get(&key) {
-            self.used.insert(index);
-            let name = &self.parameters[index].0;
-            return syn::parse_quote!(#name);
-        }
-        let name = format_ident!("__cq_capture_{}", self.parameters.len());
-        let cache = format_ident!("__cq_capture_cache_{}", self.parameters.len());
-        let (ty, value) = if let Some(codec) = codecs.get(logical) {
-            (syn::parse_quote!(u32), quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#logical>>::code(&(#expression))))
-        } else { (logical.clone(), quote!(#expression)) };
-        self.setup.extend(quote!(let #cache = ::std::cell::OnceCell::<#ty>::new();));
-        self.parameters.push((name.clone(), ty, quote!(*#cache.get_or_init(|| #value))));
-        let index = self.parameters.len() - 1;
-        self.values.insert(key, index);
+        let index = match self.values.get(&key) {
+            Some(&index) => index,
+            None => {
+                self.records.push(Capture::Value {
+                    expression: expression.clone(),
+                    logical: logical.clone(),
+                    codec: codecs.get(logical).cloned(),
+                });
+                let index = self.records.len() - 1;
+                self.values.insert(key, index);
+                index
+            }
+        };
         self.used.insert(index);
+        let name = format_ident!("__cq_capture_{index}");
         syn::parse_quote!(#name)
     }
     pub fn host_relational(&mut self, theta: &mut Theta, types: &BTreeMap<String, Type>, codecs: &crate::runs::Codecs) {
         fn bound(captures: &mut Captures, value: &mut Expr, ty: &Type, codecs: &crate::runs::Codecs) {
             let argument = captures.value(value, ty, codecs);
             let Expr::Path(path) = argument else { unreachable!() };
-            let name = path.path.get_ident().expect("capture parameter");
-            let (_, _, host) = captures.parameters.iter().find(|(id, _, _)| id == name).expect("recorded capture");
+            let name = path.path.get_ident().expect("capture parameter").to_string();
+            let index: usize = name.strip_prefix("__cq_capture_").and_then(|index| index.parse().ok()).expect("recorded capture");
+            let Capture::Value { expression, logical, codec } = &captures.records[index] else { unreachable!() };
+            let host = host_value(index, expression, logical, codec.as_ref());
             *value = syn::parse_quote!(#host);
         }
         fn term(captures: &mut Captures, value: &mut Term, ty: &Type, codecs: &crate::runs::Codecs) {
@@ -103,17 +209,15 @@ impl Captures {
         }
         struct Closed {
             scope: BTreeSet<String>,
-            setup: TokenStream,
-            count: usize,
+            closed: Vec<Expr>,
         }
         impl VisitMut for Closed {
             fn visit_expr_mut(&mut self, expression: &mut Expr) {
                 if !matches!(expression, Expr::Lit(_))
                     && rust::free_variables(expression).dependencies(&self.scope).is_empty()
                 {
-                    let name = format_ident!("__cq_closed_{}", self.count);
-                    self.count += 1;
-                    self.setup.extend(quote!(let #name = __cq_enabled.then(|| #expression);));
+                    let name = format_ident!("__cq_closed_{}", self.closed.len());
+                    self.closed.push(expression.clone());
                     // The launch domain enables every callable used by a live
                     // row. Disabled witnesses establish only its Rust type.
                     *expression = syn::parse_quote!(unsafe { #name.unwrap_unchecked() });
@@ -133,33 +237,17 @@ impl Captures {
         let mut body = expression.clone();
         let mut locals = Locals(scope);
         locals.visit_expr_mut(&mut body);
-        let mut closed = Closed { scope: locals.0, setup: TokenStream::new(), count: 0 };
+        let mut closed = Closed { scope: locals.0, closed: Vec::new() };
         closed.visit_expr_mut(&mut body);
-        let setup = closed.setup;
         let names: Vec<_> = reads.iter().map(|name| bindings[name].clone()).collect();
-        let types: Vec<_> = reads.iter().map(|name| &types[name]).collect();
-        let index = self.parameters.len();
-        let name = format_ident!("__cq_rust_{index}");
-        let generic = format_ident!("__CqRust{index}");
-        let factory = format_ident!("__cq_rust_factory_{index}");
-        let cache = format_ident!("__cq_rust_cache_{index}");
-        self.setup.extend(quote! {
-            let #factory = |__cq_enabled: bool| {
-                #setup move |#(#names: &#types),*| -> #output { #body }
-            };
-            let #name = #factory(false);
-            let #cache = {
-                // A checked callable can be unused by the chosen schedule.
-                // Infer its cache from the disabled witness, not a later launch.
-                fn cache<T>(_: &T) -> ::std::cell::OnceCell<T> {
-                    ::std::cell::OnceCell::new()
-                }
-                cache(&#name)
-            };
+        self.records.push(Capture::Callable {
+            reads: reads.iter().map(|name| (bindings[name].clone(), types[name].clone())).collect(),
+            output: output.clone(),
+            closed: closed.closed,
+            body,
         });
-        self.rust_functions.push((generic.clone(), quote!(Fn(#(&#types),*) -> #output), name.clone()));
-        self.parameters.push((name.clone(), syn::parse_quote!(#generic), quote!(*#cache.get_or_init(|| #factory(true)))));
-        self.disabled.insert(index, quote!(#name));
+        let index = self.records.len() - 1;
+        let name = format_ident!("__cq_rust_{index}");
         self.used.insert(index);
         syn::parse_quote!(#name(#(#names),*))
     }
@@ -240,18 +328,20 @@ mod tests {
         let mut codecs = crate::runs::Codecs::default();
         codecs.record(&syn::parse_quote!(TestSymbol), &syn::parse_quote!(TestCodec)).unwrap();
         captures.value(&syn::parse_quote!(sym("x")), &syn::parse_quote!(TestSymbol), &codecs);
-        assert_eq!(captures.parameters[0].1, syn::parse_quote!(u32));
-        assert!(captures.parameters[0].2.to_string().contains("SymbolCodec < TestSymbol >"));
+        let printed = print(&captures.records);
+        assert_eq!(printed.parameters[0].1, syn::parse_quote!(u32));
+        assert!(printed.parameters[0].2.to_string().contains("SymbolCodec < TestSymbol >"));
     }
     #[test]
     fn rust_callable_preserves_arbitrary_operations_and_local_scope() {
         let mut captures = Captures::default();
         let types = BTreeMap::from([("x".into(), syn::parse_quote!(i64))]);
         captures.rust_expression(&syn::parse_quote!({ let local = opaque(*x); local + host_value() }), &types, &BTreeMap::from([("x".into(), syn::parse_quote!(x))]), &syn::parse_quote!(i64), &crate::runs::Codecs::default());
-        let setup = captures.setup.to_string();
+        let printed = print(&captures.records);
+        let setup = printed.setup.to_string();
         assert!(setup.contains("opaque (* x)"), "{setup}");
         assert!(setup.contains("let __cq_closed_0 = __cq_enabled . then (|| host_value ())"), "{setup}");
         assert!(!setup.contains("wrapping"));
-        assert_eq!(captures.rust_functions.len(), 1);
+        assert_eq!(printed.rust_functions.len(), 1);
     }
 }
