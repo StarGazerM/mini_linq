@@ -109,7 +109,7 @@ fn malformed_variants_fail_standalone_cq_validation_before_erasure() {
         ),
         (quote!(Reach(*x) :- ReachChanges(x,y), Reach(y,z);), "arity"),
         (
-            quote!(Reach(*missing,*z) :- ReachChanges(x,y), Reach(y,z);),
+            quote!(Reach(missing,*z) :- ReachChanges(x,y), Reach(y,z);),
             "range restricted",
         ),
         (

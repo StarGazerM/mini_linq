@@ -549,9 +549,14 @@ fn host_printer_rejects_batch_but_custom_splicing_accepts_it() {
             .contains("compile_error")
     );
     assert!(
-        collect_hole(HoleInterface::Batch, &quote!(batch()), quote!(Vec<Row>))
-            .to_string()
-            .contains("compile_error")
+        collect_hole(
+            HoleInterface::Batch,
+            &quote!(batch()),
+            quote!(Vec<Row>),
+            None
+        )
+        .to_string()
+        .contains("compile_error")
     );
 }
 
@@ -592,6 +597,7 @@ fn pull_collection_tokens_remain_unchanged() {
         HoleInterface::Pull,
         &quote!(authored_rows()),
         provider.clone(),
+        None,
     );
     assert_eq!(
         actual.to_string(),

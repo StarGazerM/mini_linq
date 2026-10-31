@@ -166,7 +166,10 @@ protocol below, never by a store outside the relation's recorded indices.
 Cost includes processing the candidate bag, not only the accepted delta; no
 universal $O(|\delta R_t|)$ round bound follows from these equations.
 (CPU Datalog realizes them in its canonical layout, below. CQ's canon is the
-build of its canonical index, an ordinary index of the result.)
+build of its canonical index, an ordinary index of the result. A candidate's
+columns may be borrowed stored values or owned computed values, as each hole
+records (\textsc{DL-AnswerOwnership}); admission builds its owned key from either
+representation and forms the owned new row only for admitted candidates.)
 
 \paragraph{Admission is an anti-join against an ordinary index (P3d).}
 Let $O$ be an output relation (a CQ result or a Datalog IDB) and let its

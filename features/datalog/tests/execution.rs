@@ -62,6 +62,55 @@ fn push_holes_match_pull_for_owned_heads_and_constant_filtered_keys() {
 }
 
 #[test]
+fn variable_heads_admit_borrowed_answer_columns_on_pull_and_push() {
+    let names = [
+        ("alice".to_owned(),),
+        ("bob".to_owned(),),
+        ("alice".to_owned(),),
+    ];
+    let modifiers = [
+        ("blocked".to_owned(), "bob".to_owned()),
+        ("other".to_owned(), "alice".to_owned()),
+    ];
+    // Variable heads project stored (borrowed) non-Copy columns; `*n + 1` and
+    // the constant are owned values in the same answer row (DL-AnswerOwnership).
+    macro_rules! run {
+        ($printer:path, $input:ident) => {
+            cq_datalog::datalog! {
+                pipeline { cq = pipeline { print = $printer; print_input = $input; }; }
+                struct Names;
+                relation Name(name:String) = (&names);
+                relation Modifier(kind:String,name:String) = (&modifiers);
+                relation Allowed(name:String,n:i32);
+                relation Pair(left:String,right:String);
+                output Allowed, Pair;
+                Allowed(name, 0) :- Name(name), !Modifier("blocked",name);
+                Allowed(name, *n + 1) :- Allowed(name,n), where n < 2;
+                Pair(kind, name) :- Modifier(kind, name), Allowed(name, n);
+            }
+        };
+    }
+    let (allowed, pairs) = run!(::mini_linq::passes::translate_pull, sequence);
+    let (pushed_allowed, pushed_pairs) = run!(::cq_datalog::passes::print_push, structures);
+    let allowed: BTreeSet<_> = allowed.collect();
+    let pairs: BTreeSet<_> = pairs.collect();
+    assert_eq!(pushed_allowed.collect::<BTreeSet<_>>(), allowed);
+    assert_eq!(pushed_pairs.collect::<BTreeSet<_>>(), pairs);
+    assert_eq!(
+        allowed,
+        BTreeSet::from([
+            ("alice".to_owned(), 0),
+            ("alice".to_owned(), 1),
+            ("alice".to_owned(), 2),
+        ])
+    );
+    assert_eq!(
+        pairs,
+        BTreeSet::from([("other".to_owned(), "alice".to_owned())])
+    );
+}
+
+#[test]
 fn push_key_holes_preserve_empty_tuple_and_empty_input_semantics() {
     let domain = [(1_i32,), (2,), (2,)];
     macro_rules! run {

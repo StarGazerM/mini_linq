@@ -533,6 +533,43 @@ measuring GPU execution alone. Set `GPU_DATALOG_PHASES=1` to report synchronized
 setup, fixpoint, and output phase times on stderr; disabled phase marks add no
 stream synchronization.
 
+#### Relational heads (2026-10-31)
+
+Since contract 7 (`0124315f`) every Rust expression is opaque, and Rust that
+reads a codec-encoded column must run at host (BE-RustRepresentation). The DOOP
+source wrote every head as an Ascent copy (`varpointsto(*heap, *to) :- ...`),
+so each head column became an opaque binding `__cq_k_j: IStr = (*x)` over a
+Symbol-encoded column. Placement put it at host, mid-pipeline where its
+variable is bound: all 155 holes downloaded complete rows, ran the copy at
+host, and re-encoded and uploaded the result (`upload_numeric_columns`) every
+dispatch. Before contract 7, `capture_binding` recognized `*x`; at `4944b917`
+no hole had a host stage.
+
+The DOOP source now writes heads as variables (`varpointsto(heap, to)`), a
+relational projection; Datalog fork projects batch key-hole columns as plain
+variables; and each Round hole records its answer ownership
+(DL-AnswerOwnership: a host-interface head variable defined by a positive atom
+is borrowed, everything else owned), which CPU admission uses to build owned
+keys and rows. All 155 Sequence programs have no host stage.
+
+Cassandra, `--gpu-only`, five interleaved pairs against main (`aad2670d`
+binary), RTX 6000 Ada, other CPU work running:
+
+| | main | relational heads | new/main, mean (bootstrap 95% CI) |
+|---|---:|---:|---:|
+| fixpoint (median) | 6.849 s | 1.942 s | 0.284 (0.276–0.292) |
+| GPU evaluation (median) | 7.133 s | 2.251 s | 0.315 (0.306–0.324) |
+| minor page faults / max RSS | 663K–767K / 2.39 GB | 435K / 1.74 GB | |
+
+One exact-comparison run matched `doop-mini` on all 26 outputs. Nsight Systems
+fixpoint windows (profiled 8.16 s → 2.29 s): 307K → 34.5K kernel launches,
+device-to-host 1,392 → 0.2 MB, host-to-device 1,719 → 8.5 MB, `encode` /
+`numeric_bounds` launches 44,439 → 7 each. `4944b917` measured
+2.12–2.14 s fixpoint in the same session. Per-hole attribution of the
+regression (top holes, main vs `4944b917`), the paired timings and the profile
+summaries are in
+[`compare/doop_cassandra.relational_heads.results.json`](compare/doop_cassandra.relational_heads.results.json).
+
 #### Delta-driven rule scheduling
 
 On Cassandra with Rust 1.99.1, CUDA 13.0 and `sm_89` cubins, paired untraced

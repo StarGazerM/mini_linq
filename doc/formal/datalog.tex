@@ -50,6 +50,10 @@ using the whole lexical environment when free-variable analysis is opaque.
 \paragraph{Contract.} Declared names, arities, types and outputs are consistent;
 head and negative variables are safely bound; negative variables must occur
 in an earlier positive atom, not only a scalar \code{let} or generator.
+A bare head variable is a relational projection and must be bound. A Rust head
+term is opaque: every rule variable among its free names (body bindings,
+including branch-local and negated ones) must be bound, and its remaining free
+names are host captures. No head term is recognized as a copy.
 Signed dependencies are stratifiable. Aggregates and nested blocks remain
 outside this base language.
 Opaque Rust must not hide reads of evolving IDBs.
@@ -373,15 +377,34 @@ Datalog's push adapter uses the public consumer form of that feature printer.
 A third interface, \code{batch}, asserts that the terminal returns an opaque
 candidate batch to a batch-capable round printer: it neither enumerates rows on
 the host nor invokes a host consumer. Its key-set holes therefore declare
-owned key columns and dereference their arguments, since a batch holds values,
+owned key columns and project plain variables, since a batch holds values,
 not borrows of host rows. Host round printers reject batch holes.
 This check examines terminal invocations, not Rust tokens that do not yet exist.
+Each hole also records its answer ownership $h.\mathrm{answer}$, one
+\code{borrowed} or \code{owned} per head column. On a host interface a head
+variable whose defining binder (the first top-level binder in written order;
+CQ forbids rebinding) is a positive atom is the stored column, which the CQ
+terminal yields as \code{\&T}; every other head term (a Rust value or a
+\code{let}/\code{for} binding) is owned. Batch holes own every column. Fork
+records exactly this, reading CQ syntax and the interface, never a Rust type.
+The checker does not rerun fork: it admits any sound record, where a borrow
+exists only for such a positive-atom-defined column on a host interface
+($\mathrm{borrowable}(h,\iota)_i$), and \code{owned} (a clone) is always
+admitted. Admission (\textsc{DL-InsertNew}) builds its owned key from either
+representation and forms the owned new row only for admitted candidates;
+printers that materialize candidates clone borrowed columns at collection.
 With $\Gamma$ the recorded registry and $\mathrm{last}(Q)$ the terminal:
 \begin{mathpar}
+\Rule{DL-AnswerOwnership}{\iota\ne\mathrm{batch}\quad
+ h.\mathrm{head}_i=x\quad \mathrm{def}_h(x)\text{ is a positive atom}}
+ {\mathrm{borrowable}(h,\iota)_i}
+\and
 \Rule{WF-DL-Hole}{\mathrm{WF}_{\mathrm{CQ}}(h)\quad
  \mathrm{last}(Q)=(p,a)\quad \Gamma(p)=\iota\quad
  h.\mathrm{lower}<|Q|\quad \mathrm{args}(Q_{h.\mathrm{lower}})=h.\mathrm{facts}\quad
- h.\mathrm{plan}\ne\varnothing\Rightarrow h.\mathrm{plan}<h.\mathrm{lower}}
+ h.\mathrm{plan}\ne\varnothing\Rightarrow h.\mathrm{plan}<h.\mathrm{lower}\quad
+ |h.\mathrm{answer}|=|h.\mathrm{head}|\quad
+ h.\mathrm{answer}_i=\mathrm{borrowed}\Rightarrow\mathrm{borrowable}(h,\iota)_i}
  {\Gamma\vdash(h,Q,\iota)\ \mathrm{hole}}
 \end{mathpar}
 \begin{mathpar}

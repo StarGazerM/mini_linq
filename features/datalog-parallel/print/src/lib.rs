@@ -138,6 +138,9 @@ fn evaluate(
         let invocation = &holes[rule.hole];
         let head = &context.relations[rule.head];
         let types = head.declaration.columns.iter().map(|column| &column.ty);
+        // Task candidates cross the wave join as owned rows (DL-AnswerOwnership).
+        let owned =
+            cq_datalog_print::owned_answer(&head.declaration, &specifications[rule.hole].answer);
         let consume = if self_dedup {
             let hasher = format_ident!("__cq_task_hasher_{}", rule.hole, span = Span::mixed_site());
             // Task-local deduplication only needs some hasher of the canonical
@@ -157,12 +160,14 @@ fn evaluate(
                 quote!((#(#types,)*)),
                 &hasher,
                 !standalone,
+                owned,
             )
         } else {
             cq_datalog_print::collect_hole(
                 specifications[rule.hole].interface,
                 invocation,
                 quote!(::std::vec::Vec<(#(#types,)*)>),
+                owned,
             )
         };
         #[cfg(feature = "hole-timing")]
@@ -430,6 +435,7 @@ fn collect_task(
     row_type: TokenStream,
     hasher: &Ident,
     timing: bool,
+    owned: Option<TokenStream>,
 ) -> TokenStream {
     let candidates = Ident::new("__cq_task_candidates", Span::mixed_site());
     #[cfg(feature = "hole-timing")]
@@ -445,12 +451,13 @@ fn collect_task(
     let _ = timing;
     #[cfg(not(feature = "hole-timing"))]
     let count = TokenStream::new();
+    let row = owned.map_or_else(|| quote!(row), |owned| quote!((#owned)(row)));
     let consume = cq_datalog_print::consume_hole(
         interface,
         invocation,
         quote!(|row| {
             #count
-            #candidates.insert(row);
+            #candidates.insert(#row);
         }),
     );
     quote!({

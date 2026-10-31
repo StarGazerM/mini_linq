@@ -574,6 +574,19 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   with the data-path string length. Recorded as a repeated-run allocator
   effect; benchmarks should report page faults beside timings. Index
   footprint reductions (P4 compiler selection) are the real lever.
+  (9) `cq-ext-recursion` still recognizes `*x` / `(*x).clone()` heads
+  (`features/extensions/cq-ext-recursion/src/expansion.rs`, `active_column`)
+  to guarantee an active-domain, terminating recursion (ui case
+  `recursive_infinite`). Free-variable analysis cannot replace it (`*x + 1`
+  has bound free variables but an infinite domain). The contract-7 form is
+  bare-variable heads, which needs that extension's printer to own borrowed
+  answers as Datalog's DL-AnswerOwnership does; not a local change. DL-Source's
+  copy recognition was replaced by free variables (2026-10-31).
+  (10) DL-Source invariant hoisting still classifies host types
+  (`features/datalog/languages/dl-source/src/invariants.rs`, `owned_column`:
+  a primitive-type list chooses `*x` versus `(*x).clone()`), a contract-7 type
+  inspection; its replacement is an owned-copy printer obligation recorded per
+  column, as for hole answers.
 
 ## Progress
 

@@ -7,7 +7,7 @@ fn unsafe_unstratified_modes_and_optional_syntax_are_rejected() {
     for source in [
         "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(*x) :- E(x), !A(x);",
         "struct P; relation E(x:i32) = (e); relation A(x:i32); relation B(x:i32); output A; A(*x) :- E(x), !B(x); B(*x) :- A(x);",
-        "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(*y) :- E(x);",
+        "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(y) :- E(x);",
         "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(*x) :- E(x), !E(y);",
         "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(*x) :- !E(x), E(x);",
         "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(*x) :- E(x), !E(*x+1);",
@@ -88,7 +88,7 @@ fn rewrites_admit_changed_rules_under_the_semantic_refinement_premise() {
 fn rewrites_check_both_programs_and_preserve_models() {
     let original: Program = syn::parse_str(SOURCE).unwrap();
     let mutations: Vec<Mutation> = vec![
-        Box::new(|p| p.rules[0].head.args[0] = syn::parse_quote!(*missing)),
+        Box::new(|p| p.rules[0].head.args[0] = syn::parse_quote!(missing)),
         Box::new(|p| {
             p.rules[1] = syn::parse_quote!(
                 Reach(*x,*y) :- Edge(x,y), !Reach(x,y);

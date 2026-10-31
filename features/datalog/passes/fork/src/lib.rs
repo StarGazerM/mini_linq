@@ -425,15 +425,13 @@ fn construct(
                         (vec![quote!(())], vec![quote!(#column: ())])
                     } else {
                         (
+                            // Key columns are projected variables on every
+                            // interface; a batch arena stores them as values.
                             key.columns
                                 .iter()
                                 .map(|&i| {
                                     let variable = &variables[i];
-                                    if interface == HoleInterface::Batch {
-                                        quote!(*#variable)
-                                    } else {
-                                        quote!(#variable)
-                                    }
+                                    quote!(#variable)
                                 })
                                 .collect(),
                             key.columns
@@ -694,6 +692,7 @@ fn construct(
                 }
             }
             Hole {
+                answer: round::answer_ownership(&cq, interface),
                 cq,
                 pipeline,
                 interface,

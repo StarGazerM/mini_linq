@@ -181,19 +181,6 @@ impl ToTokens for Program {
         }
     }
 }
-fn active_column(e: &Expr) -> Option<&Ident> {
-    match rust::unparen(e) {
-        Expr::Unary(e) if matches!(e.op, syn::UnOp::Deref(_)) => {
-            rust::variable(rust::unparen(&e.expr))
-        }
-        Expr::MethodCall(e)
-            if e.method == "clone" && e.args.is_empty() && e.turbofish.is_none() =>
-        {
-            active_column(&e.receiver)
-        }
-        _ => None,
-    }
-}
 /// Dependency graph indexed by declaration order; an edge is (head, input, negative).
 #[derive(Clone, Debug)]
 pub struct Graph {
@@ -468,14 +455,43 @@ impl<'a> QueryChecker<'a> {
             }
         }
         let bound = cq_lang_cq::blocks::bound(&query.body);
-        for arg in &q.head.args {
-            if let Some(id) = active_column(arg).or_else(|| rust::variable(arg)) {
-                ensure(
-                    bound.contains_key(&symbol_name(id)),
-                    arg,
-                    "head variable must be range restricted",
-                )?;
+        // Rule variables are every name a body clause binds or reads, including
+        // branch-local and negated ones. A bare head variable is a relational
+        // projection and must be bound; a Rust head expression is opaque and
+        // must find each rule variable it names bound. Its other free names are
+        // host captures (contract 7: placement by free variables, no recognition).
+        let mut rule_variables: BTreeSet<String> = bound.keys().cloned().collect();
+        for item in cq_lang_cq::blocks::walk(&query.body) {
+            match item {
+                BodyItem::Positive { atom } => {
+                    rule_variables.extend(atom.variables().map(symbol_name))
+                }
+                BodyItem::Negation(negative) => {
+                    rule_variables.extend(negative.atom.variables().map(symbol_name))
+                }
+                BodyItem::Let(binding) => {
+                    rule_variables.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
+                }
+                BodyItem::For(binding) => {
+                    rule_variables.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
+                }
+                _ => {}
             }
+        }
+        for arg in &q.head.args {
+            let needed: BTreeSet<String> = match rust::variable(arg) {
+                Some(id) => BTreeSet::from([symbol_name(id)]),
+                None => rust::free_variables(arg)
+                    .names
+                    .intersection(&rule_variables)
+                    .cloned()
+                    .collect(),
+            };
+            ensure(
+                needed.iter().all(|name| bound.contains_key(name)),
+                arg,
+                "head variable must be range restricted",
+            )?;
         }
         // Each projection is an independent CQ program, so reuse precisely the
         // name that a standalone check would allocate from the source tokens.

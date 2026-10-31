@@ -20,6 +20,56 @@ fn storage_and_round_are_complete_checked_languages() {
 }
 
 #[test]
+fn answer_ownership_follows_each_head_variable_defining_binder() {
+    let source = syn::parse_quote! {
+        struct Q;
+        relation E(x:i32,y:i32) = (e);
+        relation R(x:i32,y:i32,z:i32,w:i32);
+        output R;
+        R(x, *y, z, w) :- E(x,y), for z in [*x], E(z,w);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    let target = compile(&storage).unwrap();
+    let rule = &target.context.strata[0].seeds[0];
+    // `x` and `w` are atom-defined columns; `*y` is a value and `z` is defined
+    // by its generator even though a later atom joins on it.
+    assert_eq!(
+        target.holes[rule.hole].answer,
+        [
+            round::AnswerColumn::Borrowed,
+            round::AnswerColumn::Owned,
+            round::AnswerColumn::Owned,
+            round::AnswerColumn::Borrowed,
+        ]
+    );
+    // The recorded fact is printed in Round text and parsed back unchanged.
+    let reparsed: round::Program = syn::parse2(target.to_token_stream()).unwrap();
+    assert_eq!(
+        reparsed.holes[rule.hole].answer,
+        target.holes[rule.hole].answer
+    );
+    // WF-DL-Hole admits any sound record: `owned` (a clone) everywhere, and
+    // `borrowed` only where a positive atom defines the column.
+    let mut cloned = target.clone();
+    cloned.holes[rule.hole].answer = vec![round::AnswerColumn::Owned; 4];
+    round::contract::check(&cloned).unwrap();
+    for (column, binder) in [(1, "computed head"), (2, "generator-defined join variable")] {
+        let mut tampered = target.clone();
+        tampered.holes[rule.hole].answer[column] = round::AnswerColumn::Borrowed;
+        let error = round::contract::check(&tampered).unwrap_err().to_string();
+        assert!(
+            error.contains("answer ownership claims a borrow"),
+            "{binder}: {error}"
+        );
+    }
+    let mut short = target.clone();
+    short.holes[rule.hole].answer.pop();
+    assert!(round::contract::check(&short).is_err());
+}
+
+#[test]
 fn default_negation_sets_use_fx_without_a_hole_dedup_override() {
     let source = syn::parse_quote! {
         struct Q;
@@ -79,7 +129,24 @@ fn default_negation_sets_use_fx_without_a_hole_dedup_override() {
         let query = batch.holes[key.hole].cq.to_token_stream().to_string();
         assert!(query.contains(": i32"));
         assert!(!query.contains(": & i32"));
-        assert!(query.contains("*"));
+        // Key columns are projected variables; a batch arena owns their values.
+        assert!(!query.contains("*"));
+        assert!(
+            batch.holes[key.hole]
+                .answer
+                .iter()
+                .all(|column| *column == round::AnswerColumn::Owned)
+        );
+        // A batch arena holds values: a borrow claim is unsound even for an
+        // atom-defined key variable.
+        let mut tampered = batch.clone();
+        tampered.holes[key.hole].answer[0] = round::AnswerColumn::Borrowed;
+        assert!(
+            round::contract::check(&tampered)
+                .unwrap_err()
+                .to_string()
+                .contains("answer ownership claims a borrow")
+        );
     }
     check(&storage, &batch).unwrap();
 }

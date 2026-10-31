@@ -167,6 +167,8 @@ pub struct Hole {
     pub plan: Option<usize>,
     /// Invocation owning the complete device input binding packet.
     pub binding: Option<usize>,
+    /// How each answer column reaches the round printer (DL-AnswerOwnership).
+    pub answer: Vec<AnswerColumn>,
 }
 impl PartialEq for Hole {
     fn eq(&self, other: &Self) -> bool {
@@ -176,6 +178,7 @@ impl PartialEq for Hole {
             && self.lower == other.lower
             && self.plan == other.plan
             && self.binding == other.binding
+            && self.answer == other.answer
             && self.pipeline.to_token_stream().to_string()
                 == other.pipeline.to_token_stream().to_string()
     }
@@ -191,6 +194,108 @@ impl Hole {
             }
         }
     }
+}
+
+/// Representation of one hole answer column at the host round boundary.
+/// A head variable defined by a positive atom is the stored column itself,
+/// which a host CQ terminal yields as `&T`; any other head term is a value the
+/// hole computes. Batch holes write values into their arena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnswerColumn {
+    Borrowed,
+    Owned,
+}
+impl syn::parse::Parse for AnswerColumn {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let name: Ident = input.parse()?;
+        match name.to_string().as_str() {
+            "borrowed" => Ok(Self::Borrowed),
+            "owned" => Ok(Self::Owned),
+            _ => Err(syn::Error::new_spanned(name, "expected borrowed or owned")),
+        }
+    }
+}
+impl ToTokens for AnswerColumn {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.extend(match self {
+            Self::Borrowed => quote!(borrowed),
+            Self::Owned => quote!(owned),
+        });
+    }
+}
+impl Text for AnswerColumn {
+    fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        input.parse()
+    }
+    fn text(&self) -> TokenStream {
+        self.to_token_stream()
+    }
+}
+
+/// Head columns for which a borrow exists: on a host interface, a head
+/// variable whose defining binder is a positive atom occurrence of the body.
+/// CQ well-formedness forbids rebinding (IF-Environment), so a variable's first
+/// top-level binder in written order defines it; later atoms that mention it
+/// only join, and a generator- or `let`-defined value has no stored column.
+/// Batch holes write values, so none of their columns is borrowable.
+pub fn borrowable_columns(cq: &CqProgram, interface: HoleInterface) -> Vec<bool> {
+    let mut defined = BTreeSet::new();
+    let mut stored = BTreeSet::new();
+    for item in &cq.query.body {
+        let (names, from_atom): (Vec<String>, bool) = match item {
+            BodyItem::Positive { atom } => (atom.variables().map(symbol_name).collect(), true),
+            BodyItem::Let(binding) => (
+                rust::bindings(&binding.pattern)
+                    .iter()
+                    .map(symbol_name)
+                    .collect(),
+                false,
+            ),
+            BodyItem::For(binding) => (
+                rust::bindings(&binding.pattern)
+                    .iter()
+                    .map(symbol_name)
+                    .collect(),
+                false,
+            ),
+            BodyItem::Block(block) => (
+                block.analyze(&defined).interface.into_keys().collect(),
+                false,
+            ),
+            _ => continue,
+        };
+        for name in names {
+            if defined.insert(name.clone()) && from_atom {
+                stored.insert(name);
+            }
+        }
+    }
+    cq.query
+        .head
+        .args
+        .iter()
+        .map(|argument| {
+            interface != HoleInterface::Batch
+                && rust::variable(argument).is_some_and(|v| stored.contains(&symbol_name(v)))
+        })
+        .collect()
+}
+
+/// Formal rule DL-AnswerOwnership: fork records each answer column's
+/// representation from the hole's CQ syntax and interface, never from Rust
+/// types: `borrowed` exactly where a borrow exists ([`borrowable_columns`]),
+/// `owned` elsewhere. The checker admits any sound record (WF-DL-Hole).
+pub fn answer_ownership(cq: &CqProgram, interface: HoleInterface) -> Vec<AnswerColumn> {
+    borrowable_columns(cq, interface)
+        .into_iter()
+        .map(|borrowable| {
+            if borrowable {
+                AnswerColumn::Borrowed
+            } else {
+                AnswerColumn::Owned
+            }
+        })
+        .collect()
 }
 
 /// The calling convention of an embedded CQ result.
@@ -351,7 +456,8 @@ record!(Hole {
     facts: cq_stage::Context,
     lower: usize,
     plan: Option<usize>,
-    binding: Option<usize>
+    binding: Option<usize>,
+    answer: Vec<AnswerColumn>
 });
 record!(Execution {
     hole: usize,
@@ -533,12 +639,26 @@ pub fn erase(program: &Program) -> syn::Result<Program> {
     erased.execution.clear();
     Ok(erased)
 }
-/// Formal rule WF-DL-Hole: the terminal assertion matches the hole interface.
+/// Formal rule WF-DL-Hole: the terminal assertion matches the hole interface,
+/// and the recorded answer ownership is sound: one record per head column,
+/// `borrowed` only where a borrow exists ([`borrowable_columns`]); `owned`
+/// (a clone) is always admitted.
 pub fn check_pipeline(hole: &Hole, terminals: &TerminalRegistry) -> syn::Result<()> {
     ensure(
         terminals.interface(&hole.pipeline)? == hole.interface,
         hole,
         "hole interface does not match its registered terminal interface",
+    )?;
+    let borrowable = borrowable_columns(&hole.cq, hole.interface);
+    ensure(
+        hole.answer.len() == borrowable.len()
+            && hole
+                .answer
+                .iter()
+                .zip(&borrowable)
+                .all(|(column, &borrowable)| *column == AnswerColumn::Owned || borrowable),
+        hole,
+        "hole answer ownership claims a borrow where no positive atom defines the column on a host interface",
     )?;
     ensure(
         hole.plan
@@ -879,6 +999,8 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
         before.plan = after.plan;
         before.binding = after.binding;
         before.interface = after.interface;
+        // Answer ownership follows the interface and is rechecked by WF-DL-Hole.
+        before.answer = after.answer.clone();
     }
     ensure(
         source == erased,

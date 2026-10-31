@@ -1,5 +1,7 @@
 // Translated from flowlog-rs/flowlog-bench programs/oracle/ascent/doop/src/main.rs.
 // All 135 rules and body atom order match the upstream DOOP default.dl.
+// Head variables are relational projections (Ascent's `*x` copies would be
+// opaque Rust, which must run at host on symbol-encoded GPU columns).
 #![allow(unused_variables)]
 /// Instantiate the unchanged DOOP program with arbitrary named pipeline tokens.
 #[macro_export]
@@ -141,216 +143,216 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
         relation arrayindexpointsto(c0: IStr, c1: IStr);
         relation reachable(c0: IStr);
         output mainclass, method_simplename, method_declaringtype, method_modifier, method_paramtypes, method_returntype, method_descriptor, methodlookup, methodimplemented, directsubclass, subclass, superclass, superinterface, subtypeof, supertypeof, subtypeofdifferent, mainmethoddeclaration, classinitializer, initializedclass, assign, varpointsto, instancefieldpointsto, staticfieldpointsto, callgraphedge, arrayindexpointsto, reachable;
-    istype(*class) :- _classtype(class);
-    isreferencetype(*class) :- _classtype(class);
-    isclasstype(*class) :- _classtype(class);
+    istype(class) :- _classtype(class);
+    isreferencetype(class) :- _classtype(class);
+    isclasstype(class) :- _classtype(class);
 
-    istype(*arraytype) :- _arraytype(arraytype);
-    isreferencetype(*arraytype) :- _arraytype(arraytype);
-    isarraytype(*arraytype) :- _arraytype(arraytype);
+    istype(arraytype) :- _arraytype(arraytype);
+    isreferencetype(arraytype) :- _arraytype(arraytype);
+    isarraytype(arraytype) :- _arraytype(arraytype);
 
-    istype(*interface) :- _interfacetype(interface);
-    isreferencetype(*interface) :- _interfacetype(interface);
-    isinterfacetype(*interface) :- _interfacetype(interface);
+    istype(interface) :- _interfacetype(interface);
+    isreferencetype(interface) :- _interfacetype(interface);
+    isinterfacetype(interface) :- _interfacetype(interface);
 
-    var_declaringmethod(*var, *method) :- _var_declaringmethod(var, method);
+    var_declaringmethod(var, method) :- _var_declaringmethod(var, method);
 
-    istype(*type_) :- _applicationclass(type_);
-    isreferencetype(*type_) :- _applicationclass(type_);
-    applicationclass(*type_) :- _applicationclass(type_);
+    istype(type_) :- _applicationclass(type_);
+    isreferencetype(type_) :- _applicationclass(type_);
+    applicationclass(type_) :- _applicationclass(type_);
 
-    thisvar(*method, *var) :- _thisvar(method, var);
+    thisvar(method, var) :- _thisvar(method, var);
 
-    istype(*type_) :- _normalheap(_, type_);
-    heapallocation_type(*id, *type_) :- _normalheap(id, type_);
-    heapallocation_type(*id, sym("java.lang.String")) :- _stringconstant(id);
+    istype(type_) :- _normalheap(_, type_);
+    heapallocation_type(id, type_) :- _normalheap(id, type_);
+    heapallocation_type(id, sym("java.lang.String")) :- _stringconstant(id);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _assignheapallocation(instruction, index, heap, to, method, linenumber);
-    assigninstruction_to(*instruction, *to) :-
+    assigninstruction_to(instruction, to) :-
             _assignheapallocation(instruction, index, heap, to, method, linenumber);
-    assignheapallocation_heap(*instruction, *heap) :-
+    assignheapallocation_heap(instruction, heap) :-
             _assignheapallocation(instruction, index, heap, to, method, linenumber);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _assignlocal(instruction, index, from, to, method);
-    assignlocal_from(*instruction, *from) :-
+    assignlocal_from(instruction, from) :-
             _assignlocal(instruction, index, from, to, method);
-    assigninstruction_to(*instruction, *to) :-
+    assigninstruction_to(instruction, to) :-
             _assignlocal(instruction, index, from, to, method);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _assigncast(instruction, index, from, to, type_, method);
-    assigncast_type(*instruction, *type_) :-
+    assigncast_type(instruction, type_) :-
             _assigncast(instruction, index, from, to, type_, method);
-    assigncast_from(*instruction, *from) :-
+    assigncast_from(instruction, from) :-
             _assigncast(instruction, index, from, to, type_, method);
-    assigninstruction_to(*instruction, *to) :-
+    assigninstruction_to(instruction, to) :-
             _assigncast(instruction, index, from, to, type_, method);
 
-    field_declaringtype(*signature, *declaringtype) :- _field(signature, declaringtype, _, _);
+    field_declaringtype(signature, declaringtype) :- _field(signature, declaringtype, _, _);
 
-    methodinvocation_base(*invocation, *base) :- virtualmethodinvocation_base(invocation, base);
-    methodinvocation_base(*invocation, *base) :- specialmethodinvocation_base(invocation, base);
+    methodinvocation_base(invocation, base) :- virtualmethodinvocation_base(invocation, base);
+    methodinvocation_base(invocation, base) :- specialmethodinvocation_base(invocation, base);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _staticmethodinvocation(instruction, index, signature, method);
-    isstaticmethodinvocation_insn(*instruction) :-
+    isstaticmethodinvocation_insn(instruction) :-
             _staticmethodinvocation(instruction, index, signature, method);
-    methodinvocation_method(*instruction, *signature) :-
+    methodinvocation_method(instruction, signature) :-
             _staticmethodinvocation(instruction, index, signature, method);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _specialmethodinvocation(instruction, index, signature, base, method);
-    specialmethodinvocation_base(*instruction, *base) :-
+    specialmethodinvocation_base(instruction, base) :-
             _specialmethodinvocation(instruction, index, signature, base, method);
-    methodinvocation_method(*instruction, *signature) :-
+    methodinvocation_method(instruction, signature) :-
             _specialmethodinvocation(instruction, index, signature, base, method);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _virtualmethodinvocation(instruction, index, signature, base, method);
-    isvirtualmethodinvocation_insn(*instruction) :-
+    isvirtualmethodinvocation_insn(instruction) :-
             _virtualmethodinvocation(instruction, index, signature, base, method);
-    virtualmethodinvocation_base(*instruction, *base) :-
+    virtualmethodinvocation_base(instruction, base) :-
             _virtualmethodinvocation(instruction, index, signature, base, method);
-    methodinvocation_method(*instruction, *signature) :-
+    methodinvocation_method(instruction, signature) :-
             _virtualmethodinvocation(instruction, index, signature, base, method);
 
-    method_simplename(*method, *simplename) :-
+    method_simplename(method, simplename) :-
             _method(method, simplename, params, declaringtype, returntype, jvmdescriptor, arity);
-    method_paramtypes(*method, *params) :-
+    method_paramtypes(method, params) :-
             _method(method, simplename, params, declaringtype, returntype, jvmdescriptor, arity);
-    method_declaringtype(*method, *declaringtype) :-
+    method_declaringtype(method, declaringtype) :-
             _method(method, simplename, params, declaringtype, returntype, jvmdescriptor, arity);
-    method_returntype(*method, *returntype) :-
+    method_returntype(method, returntype) :-
             _method(method, simplename, params, declaringtype, returntype, jvmdescriptor, arity);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _storeinstancefield(instruction, index, from, base, signature, method);
-    fieldinstruction_signature(*instruction, *signature) :-
+    fieldinstruction_signature(instruction, signature) :-
             _storeinstancefield(instruction, index, from, base, signature, method);
-    storeinstancefield_base(*instruction, *base) :-
+    storeinstancefield_base(instruction, base) :-
             _storeinstancefield(instruction, index, from, base, signature, method);
-    storeinstancefield_from(*instruction, *from) :-
+    storeinstancefield_from(instruction, from) :-
             _storeinstancefield(instruction, index, from, base, signature, method);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _loadinstancefield(instruction, index, to, base, signature, method);
-    fieldinstruction_signature(*instruction, *signature) :-
+    fieldinstruction_signature(instruction, signature) :-
             _loadinstancefield(instruction, index, to, base, signature, method);
-    loadinstancefield_base(*instruction, *base) :-
+    loadinstancefield_base(instruction, base) :-
             _loadinstancefield(instruction, index, to, base, signature, method);
-    loadinstancefield_to(*instruction, *to) :-
+    loadinstancefield_to(instruction, to) :-
             _loadinstancefield(instruction, index, to, base, signature, method);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _storestaticfield(instruction, index, from, signature, method);
-    fieldinstruction_signature(*instruction, *signature) :-
+    fieldinstruction_signature(instruction, signature) :-
             _storestaticfield(instruction, index, from, signature, method);
-    storestaticfield_from(*instruction, *from) :-
+    storestaticfield_from(instruction, from) :-
             _storestaticfield(instruction, index, from, signature, method);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _loadstaticfield(instruction, index, to, signature, method);
-    fieldinstruction_signature(*instruction, *signature) :-
+    fieldinstruction_signature(instruction, signature) :-
             _loadstaticfield(instruction, index, to, signature, method);
-    loadstaticfield_to(*instruction, *to) :-
+    loadstaticfield_to(instruction, to) :-
             _loadstaticfield(instruction, index, to, signature, method);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _storearrayindex(instruction, index, from, base, method);
-    storearrayindex_base(*instruction, *base) :-
+    storearrayindex_base(instruction, base) :-
             _storearrayindex(instruction, index, from, base, method);
-    storearrayindex_from(*instruction, *from) :-
+    storearrayindex_from(instruction, from) :-
             _storearrayindex(instruction, index, from, base, method);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _loadarrayindex(instruction, index, to, base, method);
-    loadarrayindex_base(*instruction, *base) :-
+    loadarrayindex_base(instruction, base) :-
             _loadarrayindex(instruction, index, to, base, method);
-    loadarrayindex_to(*instruction, *to) :-
+    loadarrayindex_to(instruction, to) :-
             _loadarrayindex(instruction, index, to, base, method);
 
-    instruction_method(*instruction, *method) :-
+    instruction_method(instruction, method) :-
             _return(instruction, index, var, method);
-    returnnonvoid_var(*instruction, *var) :-
+    returnnonvoid_var(instruction, var) :-
             _return(instruction, index, var, method);
 
         // fat schema population
-    loadinstancefield(*base, *sig, *to, *inmethod) :-
+    loadinstancefield(base, sig, to, inmethod) :-
             instruction_method(insn, inmethod),
             loadinstancefield_base(insn, base),
             fieldinstruction_signature(insn, sig),
             loadinstancefield_to(insn, to);
-    storeinstancefield(*from, *base, *sig, *inmethod) :-
+    storeinstancefield(from, base, sig, inmethod) :-
             instruction_method(insn, inmethod),
             storeinstancefield_from(insn, from),
             storeinstancefield_base(insn, base),
             fieldinstruction_signature(insn, sig);
-    loadstaticfield(*sig, *to, *inmethod) :-
+    loadstaticfield(sig, to, inmethod) :-
             instruction_method(insn, inmethod),
             fieldinstruction_signature(insn, sig),
             loadstaticfield_to(insn, to);
-    storestaticfield(*from, *sig, *inmethod) :-
+    storestaticfield(from, sig, inmethod) :-
             instruction_method(insn, inmethod),
             storestaticfield_from(insn, from),
             fieldinstruction_signature(insn, sig);
-    loadarrayindex(*base, *to, *inmethod) :-
+    loadarrayindex(base, to, inmethod) :-
             instruction_method(insn, inmethod),
             loadarrayindex_base(insn, base),
             loadarrayindex_to(insn, to);
-    storearrayindex(*from, *base, *inmethod) :-
+    storearrayindex(from, base, inmethod) :-
             instruction_method(insn, inmethod),
             storearrayindex_from(insn, from),
             storearrayindex_base(insn, base);
-    assigncast(*type_, *from, *to, *inmethod) :-
+    assigncast(type_, from, to, inmethod) :-
             instruction_method(insn, inmethod),
             assigncast_from(insn, from),
             assigninstruction_to(insn, to),
             assigncast_type(insn, type_);
-    assignlocal(*from, *to, *inmethod) :-
+    assignlocal(from, to, inmethod) :-
             assigninstruction_to(insn, to),
             instruction_method(insn, inmethod),
             assignlocal_from(insn, from);
-    assignheapallocation(*heap, *to, *inmethod) :-
+    assignheapallocation(heap, to, inmethod) :-
             instruction_method(insn, inmethod),
             assignheapallocation_heap(insn, heap),
             assigninstruction_to(insn, to);
-    returnvar(*var, *method) :-
+    returnvar(var, method) :-
             instruction_method(insn, method),
             returnnonvoid_var(insn, var);
-    staticmethodinvocation(*invocation, *signature, *inmethod) :-
+    staticmethodinvocation(invocation, signature, inmethod) :-
             isstaticmethodinvocation_insn(invocation),
             instruction_method(invocation, inmethod),
             methodinvocation_method(invocation, signature);
-    virtualmethodinvocation_simplename(*invocation, *simplename) :-
+    virtualmethodinvocation_simplename(invocation, simplename) :-
             isvirtualmethodinvocation_insn(invocation),
             methodinvocation_method(invocation, signature),
             method_simplename(signature, simplename),
             method_descriptor(signature, descriptor);
-    virtualmethodinvocation_descriptor(*invocation, *descriptor) :-
+    virtualmethodinvocation_descriptor(invocation, descriptor) :-
             isvirtualmethodinvocation_insn(invocation),
             methodinvocation_method(invocation, signature),
             method_simplename(signature, simplename),
             method_descriptor(signature, descriptor);
 
         // Basic (type-based) analysis
-    methodlookup(*simplename, *descriptor, *type_, *method) :-
+    methodlookup(simplename, descriptor, type_, method) :-
             methodimplemented(simplename, descriptor, type_, method);
-    methodlookup(*simplename, *descriptor, *type_, *method) :-
+    methodlookup(simplename, descriptor, type_, method) :-
             directsuperclass(type_, supertype),
             methodlookup(simplename, descriptor, supertype, method),
             !methodimplemented(simplename, descriptor, type_, _);
-    methodlookup(*simplename, *descriptor, *type_, *method) :-
+    methodlookup(simplename, descriptor, type_, method) :-
             directsuperinterface(type_, supertype),
             methodlookup(simplename, descriptor, supertype, method),
             !methodimplemented(simplename, descriptor, type_, _);
-    methodimplemented(*simplename, *descriptor, *type_, *method) :-
+    methodimplemented(simplename, descriptor, type_, method) :-
             method_simplename(method, simplename),
             method_descriptor(method, descriptor),
             method_declaringtype(method, type_),
             !method_modifier(sym("abstract"), method);
-    mainmethoddeclaration(*method) :-
+    mainmethoddeclaration(method) :-
             mainclass(type_),
             method_declaringtype(method, type_),
             where method != sym("<java.util.prefs.Base64: void main(java.lang.String[])>"),
@@ -361,120 +363,120 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             method_modifier(sym("public"), method),
             method_modifier(sym("static"), method);
 
-    directsubclass(*a, *c) :- directsuperclass(a, c);
-    subclass(*c, *a) :- directsubclass(a, c);
-    subclass(*c, *a) :-
+    directsubclass(a, c) :- directsuperclass(a, c);
+    subclass(c, a) :- directsubclass(a, c);
+    subclass(c, a) :-
             subclass(b, a),
             directsubclass(b, c);
-    superclass(*c, *a) :- subclass(a, c);
-    superinterface(*k, *c) :- directsuperinterface(c, k);
-    superinterface(*k, *c) :-
+    superclass(c, a) :- subclass(a, c);
+    superinterface(k, c) :- directsuperinterface(c, k);
+    superinterface(k, c) :-
             directsuperinterface(c, j),
             superinterface(k, j);
-    superinterface(*k, *c) :-
+    superinterface(k, c) :-
             directsuperclass(c, super_),
             superinterface(k, super_);
 
-    subtypeof(*s, *s) :- isclasstype(s);
-    subtypeof(*t, *t) :- istype(t);
-    subtypeof(*s, *t) :- subclass(t, s);
-    subtypeof(*s, *s) :- isinterfacetype(s);
-    subtypeof(*s, *t) :-
+    subtypeof(s, s) :- isclasstype(s);
+    subtypeof(t, t) :- istype(t);
+    subtypeof(s, t) :- subclass(t, s);
+    subtypeof(s, s) :- isinterfacetype(s);
+    subtypeof(s, t) :-
             isclasstype(s),
             superinterface(t, s);
-    subtypeof(*s, *t) :-
+    subtypeof(s, t) :-
             isinterfacetype(s),
             istype(t),
             where t == sym("java.lang.Object");
-    subtypeof(*s, *t) :-
+    subtypeof(s, t) :-
             isarraytype(s),
             istype(t),
             where t == sym("java.lang.Object");
-    subtypeof(*s, *t) :-
+    subtypeof(s, t) :-
             isinterfacetype(s),
             superinterface(t, s);
-    subtypeof(*s, *t) :-
+    subtypeof(s, t) :-
             subtypeof(sc, tc),
             componenttype(s, sc),
             componenttype(t, tc),
             isreferencetype(sc),
             isreferencetype(tc);
-    subtypeof(*s, *t) :-
+    subtypeof(s, t) :-
             isarraytype(s),
             isinterfacetype(t),
             istype(t),
             where t == sym("java.lang.Cloneable");
-    subtypeof(*s, *t) :-
+    subtypeof(s, t) :-
             isarraytype(s),
             isinterfacetype(t),
             istype(t),
             where t == sym("java.io.Serializable");
 
-    supertypeof(*s, *t) :- subtypeof(t, s);
-    subtypeofdifferent(*s, *t) :-
+    supertypeof(s, t) :- subtypeof(t, s);
+    subtypeofdifferent(s, t) :-
             subtypeof(s, t),
             where s != t;
 
         // class initialization
-    classinitializer(*type_, *method) :-
+    classinitializer(type_, method) :-
             methodimplemented(sym("<clinit>"), sym("void()"), type_, method);
-    initializedclass(*superclass_) :-
+    initializedclass(superclass_) :-
             initializedclass(class),
             directsuperclass(class, superclass_);
-    initializedclass(*superinterface_) :-
+    initializedclass(superinterface_) :-
             initializedclass(classorinterface),
             directsuperinterface(classorinterface, superinterface_);
-    initializedclass(*class) :-
+    initializedclass(class) :-
             mainmethoddeclaration(method),
             method_declaringtype(method, class);
-    initializedclass(*class) :-
+    initializedclass(class) :-
             reachable(inmethod),
             assignheapallocation(heap, _, inmethod),
             heapallocation_type(heap, class);
-    initializedclass(*class) :-
+    initializedclass(class) :-
             reachable(inmethod),
             instruction_method(invocation, inmethod),
             isstaticmethodinvocation_insn(invocation),
             methodinvocation_method(invocation, signature),
             method_declaringtype(signature, class);
-    initializedclass(*classorinterface) :-
+    initializedclass(classorinterface) :-
             reachable(inmethod),
             storestaticfield(_, signature, inmethod),
             field_declaringtype(signature, classorinterface);
-    initializedclass(*classorinterface) :-
+    initializedclass(classorinterface) :-
             reachable(inmethod),
             loadstaticfield(signature, _, inmethod),
             field_declaringtype(signature, classorinterface);
-    reachable(*clinit) :-
+    reachable(clinit) :-
             initializedclass(class),
             classinitializer(class, clinit);
 
         // Main (value-based) analysis
-    assign(*actual, *formal) :-
+    assign(actual, formal) :-
             callgraphedge(invocation, method),
             formalparam(index, method, formal),
             actualparam(index, invocation, actual);
-    assign(*ret, *local) :-
+    assign(ret, local) :-
             callgraphedge(invocation, method),
             returnvar(ret, method),
             assignreturnvalue(invocation, local);
-    varpointsto(*heap, *var) :-
+    varpointsto(heap, var) :-
             assignheapallocation(heap, var, inmethod),
             reachable(inmethod);
-    varpointsto(*heap, *to) :-
+    varpointsto(heap, to) :-
             assign(from, to),
             varpointsto(heap, from);
-    varpointsto(*heap, *to) :-
+    varpointsto(heap, to) :-
             reachable(inmethod),
             assignlocal(from, to, inmethod),
             varpointsto(heap, from);
-    varpointsto(*heap, *to) :-
+    varpointsto(heap, to) :-
             reachable(inmethod),
             assigncast(type_, from, to, inmethod),
             supertypeof(type_, heaptype),
             heapallocation_type(heap, heaptype),
             varpointsto(heap, from);
-    arrayindexpointsto(*baseheap, *heap) :-
+    arrayindexpointsto(baseheap, heap) :-
             reachable(inmethod),
             storearrayindex(from, base, inmethod),
             varpointsto(baseheap, base),
@@ -483,7 +485,7 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             heapallocation_type(baseheap, baseheaptype),
             componenttype(baseheaptype, componenttype_),
             supertypeof(componenttype_, heaptype);
-    varpointsto(*heap, *to) :-
+    varpointsto(heap, to) :-
             reachable(inmethod),
             loadarrayindex(base, to, inmethod),
             varpointsto(baseheap, base),
@@ -492,16 +494,16 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             heapallocation_type(baseheap, baseheaptype),
             componenttype(baseheaptype, basecomponenttype),
             supertypeof(type_, basecomponenttype);
-    varpointsto(*heap, *to) :-
+    varpointsto(heap, to) :-
             reachable(inmethod),
             loadinstancefield(base, signature, to, inmethod),
             varpointsto(baseheap, base),
             instancefieldpointsto(heap, signature, baseheap);
-    varpointsto(*heap, *to) :-
+    varpointsto(heap, to) :-
             reachable(inmethod),
             loadstaticfield(fld, to, inmethod),
             staticfieldpointsto(heap, fld);
-    varpointsto(*heap, *this) :-
+    varpointsto(heap, this) :-
             reachable(inmethod),
             instruction_method(invocation, inmethod),
             virtualmethodinvocation_base(invocation, base),
@@ -511,18 +513,18 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             virtualmethodinvocation_descriptor(invocation, descriptor),
             methodlookup(simplename, descriptor, heaptype, tomethod),
             thisvar(tomethod, this);
-    instancefieldpointsto(*heap, *fld, *baseheap) :-
+    instancefieldpointsto(heap, fld, baseheap) :-
             reachable(inmethod),
             storeinstancefield(from, base, fld, inmethod),
             varpointsto(heap, from),
             varpointsto(baseheap, base);
-    staticfieldpointsto(*heap, *fld) :-
+    staticfieldpointsto(heap, fld) :-
             reachable(inmethod),
             storestaticfield(from, fld, inmethod),
             varpointsto(heap, from);
 
         // Reachable(toMethod), CallGraphEdge(invocation, toMethod)
-    reachable(*tomethod) :-
+    reachable(tomethod) :-
             reachable(inmethod),
             instruction_method(invocation, inmethod),
             virtualmethodinvocation_base(invocation, base),
@@ -531,7 +533,7 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             virtualmethodinvocation_simplename(invocation, simplename),
             virtualmethodinvocation_descriptor(invocation, descriptor),
             methodlookup(simplename, descriptor, heaptype, tomethod);
-    callgraphedge(*invocation, *tomethod) :-
+    callgraphedge(invocation, tomethod) :-
             reachable(inmethod),
             instruction_method(invocation, inmethod),
             virtualmethodinvocation_base(invocation, base),
@@ -541,28 +543,28 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             virtualmethodinvocation_descriptor(invocation, descriptor),
             methodlookup(simplename, descriptor, heaptype, tomethod);
 
-    reachable(*tomethod) :-
+    reachable(tomethod) :-
             reachable(inmethod),
             staticmethodinvocation(invocation, tomethod, inmethod);
-    callgraphedge(*invocation, *tomethod) :-
+    callgraphedge(invocation, tomethod) :-
             reachable(inmethod),
             staticmethodinvocation(invocation, tomethod, inmethod);
 
-    reachable(*tomethod) :-
+    reachable(tomethod) :-
             reachable(inmethod),
             instruction_method(invocation, inmethod),
             specialmethodinvocation_base(invocation, base),
             varpointsto(heap, base),
             methodinvocation_method(invocation, tomethod),
             thisvar(tomethod, this);
-    callgraphedge(*invocation, *tomethod) :-
+    callgraphedge(invocation, tomethod) :-
             reachable(inmethod),
             instruction_method(invocation, inmethod),
             specialmethodinvocation_base(invocation, base),
             varpointsto(heap, base),
             methodinvocation_method(invocation, tomethod),
             thisvar(tomethod, this);
-    varpointsto(*heap, *this) :-
+    varpointsto(heap, this) :-
             reachable(inmethod),
             instruction_method(invocation, inmethod),
             specialmethodinvocation_base(invocation, base),
@@ -570,7 +572,7 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             methodinvocation_method(invocation, tomethod),
             thisvar(tomethod, this);
 
-    reachable(*method) :- mainmethoddeclaration(method);
+    reachable(method) :- mainmethoddeclaration(method);
         };
     Results {
         mainclass: mainclass.collect(),

@@ -402,17 +402,7 @@ pub(crate) fn check_storage_with_analysis(
                         column
                     })
                     .collect();
-                key.columns
-                    .iter()
-                    .map(|&i| {
-                        let argument = args[i];
-                        if batch {
-                            syn::parse_quote!(*#argument)
-                        } else {
-                            argument.clone()
-                        }
-                    })
-                    .collect()
+                key.columns.iter().map(|&i| args[i].clone()).collect()
             };
             let mut expected_declarations = required_inputs(context, &[], &hole.query);
             expected_declarations.push(output);

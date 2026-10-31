@@ -7,6 +7,32 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- DOOP heads are relational projections. Since contract 7 every Ascent-style
+  head copy `rel(*x, ..)` was opaque Rust reading a Symbol-encoded column, so
+  BE-RustRepresentation put all 155 `doop-gpu` holes partly at host: each
+  dispatch downloaded complete rows, ran the copy and re-encoded the result
+  (cassandra fixpoint 2.1 s at `4944b917`, 6.8 s on main). The shared DOOP
+  source now writes `rel(x, ..)`; Datalog fork projects batch key-hole columns
+  as plain variables instead of generating `*column`; and each Round hole
+  records its answer ownership (DL-AnswerOwnership: on host interfaces a head
+  variable whose defining binder is a positive atom is borrowed, everything
+  else owned; batch columns owned), printed in Round text. WF-DL-Hole checks
+  soundness without rerunning fork: `borrowed` only where a positive atom
+  defines the column on a host interface, `owned` always. DL-InsertNew builds its owned key from either representation and forms
+  the owned NEW row only for admitted candidates; printers that materialize
+  candidates clone at collection;
+  the hard-coded owned admission is gone. DL-Source checks head range
+  restriction by free variables instead of recognizing `*x` / `x.clone()`.
+  Cassandra `doop-gpu`: no host stage in any Sequence program, 26/26 exact,
+  fixpoint 6.85 → 1.94 s (5 interleaved pairs, new/main 0.284, 95% CI
+  0.276–0.292), 307K → 34.5K launches, D2H 1,392 → 0.2 MB. CPU DOOP `--check`
+  passes on xalan and batik for every engine; CPU paired timings show no CI
+  entirely above 1.0
+  (`experiments/gpu/compare/doop_cassandra.relational_heads.results.json`).
+  Open: `cq-ext-recursion` still recognizes `*x` heads for its active-domain
+  check, and DL-Source invariant hoisting still classifies host types
+  (plan open issues 9 and 10).
+
 - `doop-gpu` builds again (broken since contract 7, `0124315f`). Placement
   predicted descendant reads of a pipe-host handle with its own blanket
   rejection, while the catalog check admits them under an explicit `Resident`

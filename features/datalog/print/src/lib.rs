@@ -85,20 +85,28 @@ pub fn consume_hole(
 
 /// Collect directly into the requested provider, without an intermediate buffer.
 /// Push providers implement `Default + Extend<Row>`; pull retains `FromIterator`.
+/// `owned` converts each answer before collection (see [`owned_answer`]).
 pub fn collect_hole(
     interface: HoleInterface,
     invocation: &TokenStream,
     provider: TokenStream,
+    owned: Option<TokenStream>,
 ) -> TokenStream {
     match interface {
-        HoleInterface::Pull => quote!((#invocation).collect::<#provider>()),
+        HoleInterface::Pull => match owned {
+            Some(owned) => quote!(
+                ::core::iter::Iterator::map(#invocation, #owned).collect::<#provider>()
+            ),
+            None => quote!((#invocation).collect::<#provider>()),
+        },
         HoleInterface::Push => {
             let rows = Ident::new("__cq_collected_rows", Span::mixed_site());
+            let row = owned.map_or_else(|| quote!(row), |owned| quote!((#owned)(row)));
             let consume = consume_hole(
                 interface,
                 invocation,
                 quote!(|row| {
-                    #rows.extend(::core::iter::once(row));
+                    #rows.extend(::core::iter::once(#row));
                 }),
             );
             quote!({
@@ -111,6 +119,45 @@ pub fn collect_hole(
             "host Datalog printers do not support batch holes"
         )),
     }
+}
+
+/// The answer row type of a hole: `&T` for borrowed columns, `T` for owned.
+pub fn answer_types(
+    declaration: &cq_syntax::RelationDecl,
+    answer: &[round::AnswerColumn],
+) -> Vec<TokenStream> {
+    declaration
+        .columns
+        .iter()
+        .zip(answer)
+        .map(|(column, ownership)| {
+            let ty = &column.ty;
+            match ownership {
+                round::AnswerColumn::Borrowed => quote!(&#ty),
+                round::AnswerColumn::Owned => quote!(#ty),
+            }
+        })
+        .collect()
+}
+
+/// Formal rule DL-AnswerOwnership: a closure from an answer row to its owned
+/// relation row. Borrowed columns are cloned and owned columns move; `None`
+/// when every column is already owned, so the answer itself is the row.
+pub fn owned_answer(
+    declaration: &cq_syntax::RelationDecl,
+    answer: &[round::AnswerColumn],
+) -> Option<TokenStream> {
+    answer.contains(&round::AnswerColumn::Borrowed).then(|| {
+        let types = answer_types(declaration, answer);
+        let columns = answer.iter().enumerate().map(|(index, column)| {
+            let index = syn::Index::from(index);
+            match column {
+                round::AnswerColumn::Borrowed => quote!(::core::clone::Clone::clone(row.#index)),
+                round::AnswerColumn::Owned => quote!(row.#index),
+            }
+        });
+        quote!((|row: (#(#types,)*)| (#(#columns,)*)))
+    })
 }
 /// Splice one caller-owned expansion per checked hole, in recorded order.
 /// Push callbacks must emit an expression consuming the terminal's
@@ -235,6 +282,7 @@ fn render_admitted(
                 program.holes[key.hole].interface,
                 invocation,
                 quote!(#provider),
+                None,
             );
             quote!(let #name = &#collection;)
         });
@@ -427,7 +475,15 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
                 layout.relation == index && position != relation.providers.canonical
             })
             .map(|(_, layout)| insert_layout(layout, true));
-        let admit = admit_canonical(canonical, None, &canonical.host, true, quote!(#(#inserts)*));
+        // `Rows::rows` yields every input column borrowed.
+        let borrowed = vec![round::AnswerColumn::Borrowed; relation.declaration.arity()];
+        let admit = admit_canonical(
+            canonical,
+            None,
+            &canonical.host,
+            &borrowed,
+            quote!(#(#inserts)*),
+        );
         let input = Ident::new("__cq_input", Span::mixed_site());
         // Keep the original host alive, including temporary and grouped hosts.
         bindings.push(quote!({
@@ -440,16 +496,18 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
 /// Formal rule DL-InsertNew: a row is new iff its all-column key is absent from
 /// the committed canonical layout and first inserted into `target`, the round's
 /// NEW version of that layout (or the canonical layout itself while loading EDBs).
-/// `then` runs exactly once per new row; `row` is the candidate in scope.
+/// `then` runs exactly once per new row; `row` is the candidate in scope, with
+/// relation-order columns represented as `columns` records (DL-AnswerOwnership):
+/// the owned key clones each column from its representation.
 pub fn admit_canonical(
     canonical: &Layout,
     committed: Option<&Ident>,
     target: &Ident,
-    borrowed_columns: bool,
+    columns: &[round::AnswerColumn],
     then: TokenStream,
 ) -> TokenStream {
     let key = Ident::new("__cq_key", Span::mixed_site());
-    let identity = !borrowed_columns
+    let identity = !columns.contains(&round::AnswerColumn::Borrowed)
         && canonical
             .columns
             .iter()
@@ -462,7 +520,7 @@ pub fn admit_canonical(
             quote!(::core::clone::Clone::clone(&row)),
         )
     } else {
-        let columns = layout_columns(canonical, borrowed_columns);
+        let columns = layout_columns(canonical, columns);
         (
             quote!(let #key = (#(#columns,)*);),
             quote!(&#key),
@@ -663,16 +721,18 @@ pub fn evaluate(
                 specifications[rule.hole].interface,
                 invocation,
                 quote!(::std::vec::Vec<(#(#types,)*)>),
+                owned_answer(&head.declaration, &specifications[rule.hole].answer),
             )
         } else if specifications[rule.hole].interface == HoleInterface::Push {
-            let admit = admit_row(head, context);
+            let admit = admit_row(head, context, &specifications[rule.hole].answer);
+            let types = answer_types(&head.declaration, &specifications[rule.hole].answer);
             consume_hole(
                 HoleInterface::Push,
                 invocation,
                 quote!(|row: (#(#types,)*)| #admit),
             )
         } else {
-            insert_new(rule, context, invocation)
+            insert_new(rule, context, invocation, &specifications[rule.hole].answer)
         };
         let evaluation = if let Some(scan) = &rule.scan {
             let binding = &scan.binding;
@@ -697,7 +757,9 @@ pub fn evaluate(
         let evaluation = split_evaluation(rule, context, evaluation);
         if materialize {
             evaluations.push(quote!(let #candidates=#evaluation;));
-            let insert = insert_new(rule, context, &quote!(#admitted));
+            // Materialized candidates are owned rows.
+            let owned = vec![round::AnswerColumn::Owned; head.declaration.arity()];
+            let insert = insert_new(rule, context, &quote!(#admitted), &owned);
             let count = candidate_count();
             admissions.push(quote!(
                 #count.fetch_add(
@@ -771,24 +833,30 @@ pub fn round_body(
     quote!(#(#allocate)* #count #(#bodies)*)
 }
 
-fn layout_columns(layout: &Layout, borrowed_columns: bool) -> Vec<TokenStream> {
+/// Owned layout-order key columns of `row`; `columns` gives each relation
+/// column's representation in `row`.
+fn layout_columns(layout: &Layout, columns: &[round::AnswerColumn]) -> Vec<TokenStream> {
     layout
         .columns
         .iter()
         .map(|&i| {
             let index = syn::Index::from(i);
-            if borrowed_columns {
-                quote!(::core::clone::Clone::clone(row.#index))
-            } else {
-                quote!(::core::clone::Clone::clone(&row.#index))
+            match columns[i] {
+                round::AnswerColumn::Borrowed => quote!(::core::clone::Clone::clone(row.#index)),
+                round::AnswerColumn::Owned => quote!(::core::clone::Clone::clone(&row.#index)),
             }
         })
         .collect()
 }
 
+/// One representation for every relation column a layout reads.
+fn uniform(layout: &Layout, column: round::AnswerColumn) -> Vec<round::AnswerColumn> {
+    vec![column; layout.columns.iter().max().map_or(0, |&last| last + 1)]
+}
+
 fn extend_layout(layout: &Layout, rows: &Ident) -> TokenStream {
     let host = &layout.host;
-    let columns = layout_columns(layout, false);
+    let columns = layout_columns(layout, &uniform(layout, round::AnswerColumn::Owned));
     let (keys, values) = columns.split_at(layout.key);
     quote!(#host.extend_from(&#rows, |row| (#(#keys,)*), |row| (#(#values,)*));)
 }
@@ -798,7 +866,12 @@ fn extend_layout(layout: &Layout, rows: &Ident) -> TokenStream {
 // EDB bindings use maps and sets; sharded and sorted-run IDBs use bulk publication above.
 pub fn insert_layout(layout: &Layout, borrowed_columns: bool) -> TokenStream {
     let host = &layout.host;
-    let columns = layout_columns(layout, borrowed_columns);
+    let column = if borrowed_columns {
+        round::AnswerColumn::Borrowed
+    } else {
+        round::AnswerColumn::Owned
+    };
+    let columns = layout_columns(layout, &uniform(layout, column));
     let (keys, values) = columns.split_at(layout.key);
     match layout.protocol {
         round::storage::LayoutProtocol::Bulk => {
@@ -811,25 +884,34 @@ pub fn insert_layout(layout: &Layout, borrowed_columns: bool) -> TokenStream {
     }
 }
 
-/// Admit every candidate row of one hole into its head relation.
+/// Admit every candidate row of one hole into its head relation; `answer`
+/// is the hole's recorded answer ownership (DL-AnswerOwnership).
 pub fn insert_new(
     rule: &RuleHole,
     context: &RoundContext,
     invocation: &TokenStream,
+    answer: &[round::AnswerColumn],
 ) -> TokenStream {
-    let admit = admit_row(&context.relations[rule.head], context);
+    let admit = admit_row(&context.relations[rule.head], context, answer);
     quote!(for row in #invocation #admit)
 }
 /// Admit `row` against the committed canonical layout and the round's NEW
-/// version of it, pushing each new row once to `next`.
-pub fn admit_row(relation: &round::Relation, context: &RoundContext) -> TokenStream {
+/// version of it, pushing each new row once to `next`. Borrowed answer
+/// columns form the owned NEW row only for admitted candidates.
+pub fn admit_row(
+    relation: &round::Relation,
+    context: &RoundContext,
+    answer: &[round::AnswerColumn],
+) -> TokenStream {
     let canonical = &context.layouts[relation.providers.canonical];
     let next = &relation.next;
+    let row = owned_answer(&relation.declaration, answer)
+        .map_or_else(|| quote!(row), |owned| quote!((#owned)(row)));
     admit_canonical(
         canonical,
         Some(&canonical.host),
         &relation.next_canonical,
-        false,
-        quote!(#next.push(row);),
+        answer,
+        quote!(#next.push(#row);),
     )
 }
