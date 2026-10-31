@@ -555,13 +555,32 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   Cassandra (host round-trip bound, joins 0.45 s of an 8 s profiled fixpoint) it
   measured 1.032× [1.021, 1.045] of main; without it the remaining changes measure
   0.992× [0.966, 1.013]. Revisit after the Cassandra host-transfer track. Making
-  `Spread` a default from size evidence is a later
-  decision. Remaining (approved order): per-hole op reduction (fused metadata
-  memset, cached per-publication descriptors, no zero-length partials), then
-  DL-WaveLanes (`/data/p6b-work/lanes-design.md`: recorded `StratumSchedule.lanes`,
-  `Pool::lane` sharing allocator/context, `shares_memory` identity, event
-  fork/join); idle is ~97K gaps under 20 µs per xalan run on one stream. Sort/unique
-  (~0.23 s) stays with P4-GPU.
+  `Spread` a default from size evidence is a later decision.
+  (5) Op reduction (P6c): GPU-ResidentMeta (`Execution.meta`, arena-resident
+  count/failure/cursor words re-zeroed by the last block; no per-attempt
+  allocation, memset or partials buffer) and `DeviceLayout::republish`
+  (shared field descriptors, unchanged runs republish the same layout):
+  xalan 0.983× [0.763, 0.985], batik 0.983× [0.982, 0.990] of (4); memsets
+  17.8K→6.2K and H2D 16.0K→6.2K per xalan fixpoint.
+  (6) DL-WaveLanes: `Schedule.streams`, `StratumSchedule.lanes` (WF-DL-Lanes)
+  by the explicit rewrite `::cq_gpu_datalog::lanes(streams = K)`; `Pool::lane`
+  streams share the allocator (`Pool::shares_memory`), persistent lane workers
+  with per-(lane, head) component-scoped arenas, event fork/join before
+  admission. Batches stay on their lane pool: each lane waits the next fork,
+  which follows the main stream's consumption, so no rebinding is needed.
+  Counts identical at K=2/4 and 43/43 relations byte-identical at K=4; peak
+  pool memory unchanged (xalan 6224 MiB, batik 4998 MiB at K=1/2/4). Locked
+  pairs vs (5): K=2 xalan 1.009× [0.972, 1.072], batik 0.979× [0.976, 1.026];
+  K=4 xalan 0.865× [0.852, 0.892] (1.046 → 0.905 s), batik 0.811×
+  [0.800, 0.816] (1.947 → 1.580 s). `srd-doop-gpu` records `lanes(streams = 4)`.
+  The ~5.4 µs host setup per hole (occupancy query, module lookup) is the next
+  per-hole cost.
+  doop-gpu (relational heads, c1b75718) records `roots(spread)` again:
+  0.953× [0.923, 0.960] (7 pairs) and, rebased, 0.962× [0.825, 1.049] (5
+  locked pairs) of no spread; and `lanes(streams = 4)`: Cassandra fixpoint
+  1.668 → 1.205 s, 0.723× [0.702, 0.765] of one stream (5 locked pairs);
+  26/26 outputs exact.
+  Sort/unique (~0.23 s) stays with P4-GPU.
 - **P7 Join filters and evidence** across targets (exact min/max and
   membership from runs; published key/row/group statistics for `choose`).
 - **P8 Remaining items.** Key-partition routing projection, placement spine

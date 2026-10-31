@@ -44,3 +44,13 @@ pub fn bind_round(input: TokenStream) -> TokenStream {
     )
     .into()
 }
+
+/// `lanes(streams = K)`: record DL-WaveLanes for every multi-hole wave.
+#[proc_macro]
+pub fn lanes(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_datalog_round::Program>(
+        input.into(),
+        cq_gpu_datalog_core::lanes::compile_with,
+    )
+    .into()
+}

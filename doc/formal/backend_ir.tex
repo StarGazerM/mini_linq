@@ -1069,7 +1069,12 @@ exhausts the descendants of the roots it claims, but root tiles shrink at
 launch so a small driver occupies every resident block (GPU-RootSpread). A
 dispatch with a fold keeps its declared partition, because block-local fold
 scopes depend on the root tile. Only the assignment of roots to blocks
-changes; the multiset of published rows is the declared partition's.
+changes; the multiset of published rows is the declared partition's. An arena
+terminal (\code{reserve\_previous}) with a local fold keeps its count,
+failure and claim-cursor words in its arena's resident words
+(GPU-ResidentMeta): they are zero on entry, the last block to finish
+publishes count and failure and re-zeroes them, so a launch attempt neither
+allocates nor clears metadata.
 \begin{mathpar}
 \Rule{GPU-Launch}{d\text{ is a checked dispatch}\quad M.\mathsf{gpu}\text{ supplied}}
  {\mathsf{execution}(d)=
@@ -1089,6 +1094,12 @@ changes; the multiset of published rows is the declared partition's.
  \text{its source level has one local tile and it expands}\quad
  \text{inputs immutable during the launch}}
  {\text{first-expansion batches of tile }t<T\text{ are numbered in replay order and each is claimed once from }\mathsf{cursor}_t\text{; idle blocks replay }t\text{ while }\mathsf{cursor}_t<\mathsf{announced}_t\text{; the published multiset is unchanged}}
+\Rule{GPU-ResidentMeta}{d.\mathsf{capacity}=\mathsf{PreviousCount}\quad
+ d.\mathsf{foldCompletion}=\mathsf{Local}\quad
+ \text{the arena's resident words are zero before the launch}}
+ {d.\mathsf{meta}=\mathsf{Resident}\quad
+  \text{blocks fence, then count themselves finished; the last copies count and failure to the result words and zeroes every used word}\quad
+  \text{the readback equals the fresh-words protocol's, and the words are zero again}}
 \Rule{GPU-OffsetScan}{d.\mathsf{publication}=\mathsf{DeferredRange}(p)\quad
  \ell_0,\ldots,\ell_{n-1}\text{ initialized}\quad \ell_n=0}
  {d.\mathsf{offsetScan}=\mathsf{DeviceExclusive}\quad

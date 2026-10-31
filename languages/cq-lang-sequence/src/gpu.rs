@@ -118,6 +118,19 @@ pub struct Execution {
     /// One record per publication chain, in Sequence constructor order.
     pub chains: Vec<ChainExecution>,
     pub share: Share,
+    pub meta: Meta,
+}
+
+/// GPU-ResidentMeta: where a launch attempt's count, failure and claim-cursor
+/// words live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Meta {
+    /// A fresh zeroed allocation per attempt.
+    Fresh,
+    /// The arena's resident words, zero on entry. The last block to finish
+    /// publishes count and failure to the arena's result words and re-zeroes
+    /// every word the launch used, so no attempt allocates or clears metadata.
+    Resident,
 }
 
 /// GPU-RootShare: how blocks divide the first expansion level of a root tile.
@@ -205,6 +218,7 @@ pub(crate) fn derive(
             reservation: Reservation::StripeBatch,
             chains: Vec::new(),
             share: Share::None,
+            meta: Meta::Fresh,
         };
         if let Some(name) = dispatch
             .inner_stores
@@ -311,6 +325,7 @@ pub(crate) fn derive(
             execution.partition = Partition::Spread { max_rows };
             execution.share = shared_first(&execution);
         }
+        execution.meta = resident_meta(&execution);
         executions.push(execution);
     }
     Ok(executions)
@@ -358,6 +373,20 @@ fn shared_first(execution: &Execution) -> Share {
             }
         }
         _ => Share::None,
+    }
+}
+
+/// Formal rule GPU-ResidentMeta: an arena terminal (`reserve_previous`, the
+/// recorded arena protocol) without a block-partial combine keeps its metadata
+/// in the arena's resident words. The combine kernel reads the dispatch's
+/// words after the main kernel, so a block-partial fold keeps fresh words.
+fn resident_meta(execution: &Execution) -> Meta {
+    if execution.capacity == InitialCapacity::PreviousCount
+        && execution.fold == FoldCompletion::Local
+    {
+        Meta::Resident
+    } else {
+        Meta::Fresh
     }
 }
 
@@ -565,6 +594,11 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         if execution.share != shared_first(execution) {
             return Err(error(
                 "first-expansion sharing contradicts the spread single-chain dispatch",
+            ));
+        }
+        if execution.meta != resident_meta(execution) {
+            return Err(error(
+                "resident metadata contradicts the arena terminal protocol",
             ));
         }
         let Some(name) = dispatch

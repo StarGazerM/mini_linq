@@ -7,6 +7,25 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- P6b GPU Datalog, per-hole op reduction and wave lanes. GPU-ResidentMeta
+  (`Execution.meta`): a `reserve_previous` arena terminal with a local fold
+  keeps its count/failure/cursor words in arena-resident words that its last
+  block re-zeroes, so attempts no longer allocate or clear metadata (and skip
+  the zero-length partials buffer). `DeviceLayout::republish` shares field
+  descriptors with its predecessor and returns the same layout for unchanged
+  runs. xalan profile: memsets 17.8K→6.2K, H2D copies 16.0K→6.2K per
+  fixpoint; 43/43 relations byte-identical. DL-WaveLanes: the Round schedule
+  records `streams` and per-wave `lanes` (WF-DL-Lanes), written by the explicit
+  rewrite `::cq_gpu_datalog::lanes(streams = K)`; the GPU printer forks lanes
+  onto persistent worker threads with `Pool::lane` streams sharing the
+  allocator (`Pool::shares_memory` identity) and joins by events before
+  admission. `srd-doop-gpu` records `lanes(streams = 4)`: fixpoint xalan
+  0.865× [0.852, 0.892], batik 0.811× [0.800, 0.816] of one stream (locked
+  pairs), peak pool memory unchanged. `doop-gpu` records `lanes(streams = 4)`
+  (Cassandra 0.723× [0.702, 0.765]) and `roots(spread)` again (0.953×
+  [0.923, 0.960] with relational heads); 26/26 outputs exact. Host printers
+  reject recorded lanes. `radix_run.rs` uses `RadixRun::merge` and compiles
+  again.
 - P5 S1 adds runtime-only `cq_storage::scan` Plain/Bytes block columns,
   same-input-pass optional min/max summaries, caller-buffer vector decoding
   and exact encoded point/window/membership filtering. Bytes caps residuals

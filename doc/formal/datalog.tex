@@ -636,8 +636,20 @@ evaluations may overlap and when an admission may start.
 \Rule{DL-WaveCommute}{\text{holes read only }(A_r,\Delta_r)\quad
  \text{admission of head }H\text{ runs after every hole with head }H}
  {\mathrm{supp}\bigl(\textstyle\biguplus_h C_h\bigr)\text{ and }\Delta_{r+1}
- \text{ are independent of wave partition and overlap}}
+  \text{ are independent of wave partition and overlap}}
+\Rule{WF-DL-Lanes}{\text{each lane entry names a distinct wave }w\quad
+ 1\le|\mathsf{lanes}(w)|\le\mathsf{streams}\quad
+ \biguplus_j\mathsf{lanes}(w)_j=\mathsf{holes}(w)\text{, each lane nonempty}}
+ {\mathrm{WF}_{\mathrm{Lanes}}(s)}
+\Rule{DL-WaveLanes}{\mathrm{WF}_{\mathrm{Lanes}}(s)\quad
+ \text{every lane starts after the wave's fork on the committed snapshot}\quad
+ \text{the wave joins before any admission (DL-PublishAfterReaders)}}
+ {\text{evaluating the lanes of }w\text{ concurrently yields the same candidate multiset per head (DL-WaveCommute)}}
 \end{mathpar}
+A recorded lane split (\code{lanes(streams = K)}, round-robin over each
+multi-hole wave's holes in order) is realization advice like waves: lane 0 is
+the program stream, other lanes are persistent device-stream workers, and
+admission still sorts, so values are unchanged.
 The schedule is a Round rewrite target: a \code{schedule} pass changes only
 the schedule record, and the correspondence checker requires both contracts
 and exact equality of the erased programs modulo that record.

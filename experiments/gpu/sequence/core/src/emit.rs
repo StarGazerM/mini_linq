@@ -22,6 +22,14 @@ fn error(message: impl std::fmt::Display) -> syn::Error {
     syn::Error::new(Span::call_site(), message)
 }
 
+// GPU-ResidentMeta word layout of the arena's resident words: the last block
+// copies the first `RESIDENT_RESULT` dispatch words (count, -, failure, -) to
+// the header, `RESIDENT_FINISHED` counts finished blocks, and the dispatch's
+// own metadata words start after `RESIDENT_HEADER` header words.
+const RESIDENT_RESULT: usize = 4;
+const RESIDENT_FINISHED: usize = 4;
+const RESIDENT_HEADER: usize = 8;
+
 fn publication_record<'a>(
     analysis: &'a Analysis,
     name: &str,
@@ -2694,13 +2702,61 @@ fn translate_observed(
         }
         let shared_u32 =
             u32::try_from(shared).map_err(|_| error("Sequence shared memory exceeds u32"))?;
+        // Formal rule GPU-ResidentMeta: the dispatch's words are the arena's
+        // resident words, zero on entry. Every block fences its metadata
+        // updates before counting itself finished; the last block publishes
+        // the count and failure words and re-zeroes every word the launch used.
+        let resident = execution.meta == cq_lang_sequence::gpu::Meta::Resident;
+        if resident && !(arena.is_some() && final_output) {
+            return Err(error("GPU-ResidentMeta: resident metadata requires a final GPU arena dispatch"));
+        }
+        let (resident_parameter, resident_epilogue) = if resident {
+            let used_words = 4 + chains.len();
+            let share_used = matches!(execution.share, cq_lang_sequence::gpu::Share::FirstExpansion { .. })
+                .then(|| quote!(+ 3 * __cq_share_tiles as usize + 1));
+            let finished = RESIDENT_FINISHED;
+            let result_words = RESIDENT_RESULT;
+            (
+                quote!(__meta_result:*mut u32,),
+                quote! {
+                    ::cuda_device::threadfence();
+                    ::cuda_device::thread::sync_threads();
+                    if __tid==0 {
+                        let __finished=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta_result.add(#finished))
+                            .fetch_add(1,::cuda_device::atomic::AtomicOrdering::AcqRel);
+                        *__tile_slot=(__finished+1==__blocks) as u32;
+                    }
+                    ::cuda_device::thread::sync_threads();
+                    if *__tile_slot!=0 {
+                        ::cuda_device::threadfence();
+                        if __tid<#result_words {
+                            *__meta_result.add(__tid)=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(__tid))
+                                .fetch_add(0,::cuda_device::atomic::AtomicOrdering::Relaxed);
+                        }
+                        ::cuda_device::thread::sync_threads();
+                        let mut __word=__tid;
+                        while __word<#used_words #share_used {
+                            ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(__word))
+                                .store(0,::cuda_device::atomic::AtomicOrdering::Relaxed);
+                            __word+=256;
+                        }
+                        if __tid==0 {
+                            ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta_result.add(#finished))
+                                .store(0,::cuda_device::atomic::AtomicOrdering::Relaxed);
+                        }
+                    }
+                },
+            )
+        } else {
+            (quote!(), quote!())
+        };
         kernels.push(quote! {
             #[kernel]
             #[launch_bounds(256)]
             #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_u32,#shared_u32))]
             pub fn #kernel_name(#(#parameters,)* __output_rows:*mut i64,__output_begin:*mut u32,
                 __output_offsets:*mut u32,__output_keys:*mut u64,__capacity:u32,__meta:*mut u32,
-                __partials:*mut i64,__blocks:u32)
+                #resident_parameter __partials:*mut i64,__blocks:u32)
             {
                 unsafe {
                     let __tid=::cuda_device::thread::threadIdx_x() as usize;
@@ -2710,6 +2766,7 @@ fn translate_observed(
                     let __tile_slot=__shared.add(36).cast::<u32>();
                     let __abort_slot=__shared.add(40).cast::<u32>();
                     #(#bodies)*
+                    #resident_epilogue
                 }
             }
         });
@@ -2908,7 +2965,10 @@ fn translate_observed(
             .synchronization
             .iter()
             .find_map(|point| match point {
-                cq_lang_sequence::gpu::Synchronization::CountAndFailure => Some(if share_words.is_some() {
+                cq_lang_sequence::gpu::Synchronization::CountAndFailure => Some(if resident {
+                    // GPU-ResidentMeta: the last block published the result words.
+                    quote!(let __cq_counts=__cq_resident.to_host_prefix(#RESIDENT_RESULT)?;)
+                } else if share_words.is_some() {
                     // GPU-RootShare cursors stay on the device.
                     quote!(let __cq_counts=#store_meta.to_host_prefix(#meta_words)?;)
                 } else {
@@ -2919,6 +2979,31 @@ fn translate_observed(
             .ok_or_else(|| {
                 error("GPU-Launch: output protocol lacks a count/failure synchronization")
             })?;
+        // GPU-ResidentMeta: a resident dispatch neither allocates nor clears
+        // per-attempt metadata, and its local fold has no block partials.
+        let (partials_setup, partials_pointer, meta_setup, meta_allocation, meta_pointers, meta_value) =
+            if resident {
+                (
+                    quote!(),
+                    quote!(::core::ptr::null_mut::<i64>()),
+                    quote!(let __cq_resident=__cq_arena.resident_words(#RESIDENT_HEADER + #meta_words #share_words)?;),
+                    quote!(),
+                    quote!(__cq_resident.ptr().wrapping_add(#RESIDENT_HEADER),__cq_resident.ptr(),),
+                    quote!(()),
+                )
+            } else {
+                (
+                    quote! {
+                        let __cq_partials=::cq_gpu_runtime::Buffer::<i64>::zeroed(
+                            __cq_pool.clone(), __cq_grid as usize * #partial_count)?;
+                    },
+                    quote!(__cq_partials.ptr()),
+                    quote!(),
+                    quote!(let #store_meta=::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),#meta_words #share_words)?;),
+                    quote!(#store_meta.ptr(),),
+                    quote!(#store_meta),
+                )
+            };
         let expansion_stages = generator.expansion_stages;
         let allocate_expansions = expansion_counters.then(|| {
             quote! {
@@ -2941,18 +3026,18 @@ fn translate_observed(
                 __cq_probe.function(), #parts, 256, #shared_u32)?;
             #spread
             let __cq_prepared=__cq_module.#prepare_name(::cuda_core::LaunchConfig1D::new(__cq_grid,256,#shared_u32))?;
-            let __cq_partials=::cq_gpu_runtime::Buffer::<i64>::zeroed(
-                __cq_pool.clone(), __cq_grid as usize * #partial_count)?;
+            #partials_setup
+            #meta_setup
             let mut __cq_capacity=#initial;
             let (#stores #output_keys,#store_meta,#store_length)=loop {
                 if __cq_capacity>u32::MAX as usize {return Err("Sequence output exceeds u32 positions".into());}
                 #allocations
                 #key_allocation
-                let #store_meta=::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),#meta_words #share_words)?;
+                #meta_allocation
                 #allocate_expansions
                 __cq_module.#kernel_name(__cq_pool.stream(),&__cq_prepared,#(#arguments,)*
                     #pointers #key_pointer,
-                    __cq_capacity as u32,#store_meta.ptr(),__cq_partials.ptr(),__cq_grid)?;
+                    __cq_capacity as u32,#meta_pointers #partials_pointer,__cq_grid)?;
                 #combine_launch
                 #count_readback
                 #record_readback
@@ -2965,7 +3050,7 @@ fn translate_observed(
                 }
                 #report_expansions
                 let __cq_logical = #complete_offsets;
-                break (#stores #output_keys,#store_meta,__cq_logical);
+                break (#stores #output_keys,#meta_value,__cq_logical);
             };
             #remember_count
         });
@@ -3169,8 +3254,8 @@ fn translate_observed(
         ::cq_gpu_sequence_runtime::__codegen::#partition::run(#[inline] || -> ::cq_gpu_sequence_runtime::Result<_> {
             #(#support_before)*
             #setup
-            #(#support_after)*
             #arena_setup
+            #(#support_after)*
             ::std::thread_local! {
                 static __CQ_SEQUENCE_MODULE: ::std::cell::RefCell<Option<(
                     ::std::sync::Arc<::cuda_core::CudaContext>,

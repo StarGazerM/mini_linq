@@ -23,18 +23,21 @@ doop_shared::doop_engine!(run, pipeline {
         physical = [::cq_gpu_sequence::capture_constants];
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs, ::cq_gpu_sequence::select_catalog];
         sequence = ::mini_linq::passes::sequence;
-        // Each arena hole reuses only its last validated count as a capacity hint.
-        // No `roots(spread)`: Cassandra's joins are not occupancy-bound and the
-        // spread/shared launches measured 1.032x [1.021, 1.045] of main (P6b).
+        // Each arena hole reuses only its last validated count as a capacity hint;
+        // root tiles are sized at launch to fill the device (GPU-RootSpread).
+        // With relational heads (c1b75718) spread measured 0.953x [0.923, 0.960]
+        // of no spread on Cassandra (P6b).
         decompose = [
             ::cq_gpu_sequence::decompose,
             ::cq_sequence_rewrites::output(reserve_previous),
+            ::cq_sequence_rewrites::roots(spread),
         ];
         stage = ::cq_gpu_sequence::stage;
         grade = ::cq_gpu_sequence::machine_grade;
         print = ::cq_gpu_sequence::translate_arena;
     };
     terminals = [::cq_gpu_sequence::translate_arena => batch];
-    round = [::cq_gpu_datalog::bind_round(binding = 5)];
+    // DL-WaveLanes: four streams measured 0.723x [0.702, 0.765] of one on Cassandra.
+    round = [::cq_gpu_datalog::bind_round(binding = 5), ::cq_gpu_datalog::lanes(streams = 4)];
     print = ::cq_gpu_datalog::print_rounds;
 });

@@ -1,11 +1,13 @@
 //! GPU-resident packed Datalog tuples and immutable, disjoint sorted runs.
-//! All device work uses the owning [`Pool`]'s legacy default stream.
+//! All device work uses the owning [`Pool`]'s stream: the program pool's
+//! legacy default stream, or a [`Lanes`] worker's lane stream (DL-WaveLanes).
 //! [`DeviceLayout`] retains typed, immutable run inputs and uploads only their
 //! erased descriptors. [`CandidateArena`] leases packed output lanes to Sequence
 //! terminals; [`CandidateBatch`] retains those lanes and input owners without a
 //! candidate-row download. Signed packing preserves numeric lexicographic order.
 //! [`DeviceRadixRun`] is the occurrence-preserving grouped index provider.
 pub mod arena;
+pub mod lanes;
 pub mod layout;
 pub mod pack;
 pub mod radix_run;
@@ -18,8 +20,24 @@ pub use pack::{Column, Packing, Word};
 pub use runs::{AdmissionTimings, DeviceRuns, Run, RunView};
 pub use radix_run::{DeviceItemColumns, DeviceRadixRun, OffsetWord, RadixRunParams, RadixSnapshot};
 pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
+pub use lanes::{Job, Lane, Lanes};
 pub use layout::{device, encode_scalar, DeviceLayout, PackedProvider, PackedField, PackedRunView, RunsView, Scalar, ScalarTuple};
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
+
+// DL-WaveLanes Sync audit: lane workers receive cloned input layouts, run holes
+// into their own arenas on lane pools, and return batches to the main thread.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    const fn send<T: Send>() {}
+    send_sync::<Pool>();
+    send_sync::<Buffer<u64>>();
+    send_sync::<Packing>();
+    send_sync::<DeviceLayout<(u32,), (i64,)>>();
+    send_sync::<PackedProvider>();
+    send_sync::<CandidateBatch>();
+    send::<CandidateArena>();
+    send::<Job>();
+};
 
 /// Host-side bijection between logical symbols and their device integer codes.
 ///

@@ -42,8 +42,10 @@ fn allocation_error(error: rccl_memory::MemoryError) -> Box<dyn std::error::Erro
 /// Asynchronous uploads share a pinned staging arena. Completed chunks are
 /// reused without waiting; staging is released only when the pool is dropped.
 /// Pool teardown waits for outstanding uploads before freeing their sources.
+/// [`Pool::lane`] pools share the allocator and context with their own stream
+/// and staging; RCCL orders cross-stream reuse of freed blocks by events.
 pub struct Pool {
-    memory: MemoryResource,
+    memory: Arc<MemoryResource>,
     stream: Arc<CudaStream>,
     context: Arc<CudaContext>,
     uploads: Mutex<UploadStaging>,
@@ -57,11 +59,28 @@ impl Pool {
                 .map_err(allocation_error)?,
         );
         Ok(Arc::new(Self {
-            memory,
+            memory: Arc::new(memory),
             stream,
             context,
             uploads: Mutex::new(UploadStaging::default()),
         }))
+    }
+    /// A pool on a new non-blocking stream sharing this pool's allocator and
+    /// context, with its own upload staging (DL-WaveLanes). Work on the lane
+    /// is unordered with this pool's stream except through explicit events
+    /// and RCCL's ordering of reused blocks.
+    pub fn lane(&self) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self {
+            memory: self.memory.clone(),
+            stream: self.context.new_stream()?,
+            context: self.context.clone(),
+            uploads: Mutex::new(UploadStaging::default()),
+        }))
+    }
+    /// Whether two pools allocate from the same memory resource and context,
+    /// so buffers of one may be read and freed under the other's ordering.
+    pub fn shares_memory(&self, other: &Pool) -> bool {
+        Arc::ptr_eq(&self.memory, &other.memory)
     }
     pub fn resource(&self) -> &MemoryResource {
         &self.memory

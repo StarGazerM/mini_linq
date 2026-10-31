@@ -3,7 +3,7 @@
 //! occurrence list for every key width. Fixed seeds throughout.
 use std::{collections::BTreeMap, sync::Arc};
 
-use cq_storage::{ExactMembership, IndexRead, Publish, RadixRun};
+use cq_storage::{ExactMembership, IndexRead, RadixRun};
 use gpu_datalog_runtime::{
     pack::Word,
     radix_run::{
@@ -267,7 +267,7 @@ fn u64_publication_matches_cpu_radix_run_across_ratio_transitions() -> Result {
             for (index, chunk) in chunks.iter().enumerate() {
                 let before = device.run_count();
                 publish_rows(&mut device, chunk)?;
-                cpu.publish(chunk.iter().copied());
+                cpu.merge(chunk.iter().copied());
                 oracle.rows.extend_from_slice(chunk);
                 assert_eq!(device.run_count(), cpu.run_count(), "ratio {ratio} batch {batch} publish {index}");
                 merges += usize::from(device.run_count() <= before);
@@ -309,7 +309,7 @@ fn full_domain_u64_keys_have_exact_absent_positions() -> Result {
                 .map(|i| (keys[(random.next() % keys.len() as u64) as usize], (round * 100 + i, i as u32)))
                 .collect();
             publish_rows(&mut device, &rows)?;
-            cpu.publish(rows.iter().copied());
+            cpu.merge(rows.iter().copied());
             oracle.rows.extend(rows);
             assert_eq!(device.run_count(), cpu.run_count());
             let probes = probes(&oracle, &mut random);

@@ -111,7 +111,8 @@ fn reordered(context: &RoundContext, index: usize, fresh: &Ident, columns: &[usi
 }
 
 /// Bulk `full_layouts` maintenance: append the fresh rows to each layout's
-/// recorded state in its own order, then republish its view from those runs.
+/// recorded state in its own order, then republish its view from those runs
+/// (unchanged runs republish the same view; field descriptors are shared).
 fn full_layouts(context: &RoundContext, index: usize, fresh: &Ident, layouts: &[usize]) -> TokenStream {
     let updates = layouts.iter().map(|&j| {
         let layout = &context.layouts[j];
@@ -124,7 +125,7 @@ fn full_layouts(context: &RoundContext, index: usize, fresh: &Ident, layouts: &[
             // SAFETY: fresh rows are absent from the canonical layout, and every
             // full layout holds exactly the canonical rows in its own order.
             unsafe { #state.append_sorted(run)?; }
-            #host = <#ty>::from_runs(__cq_gpu_pool.clone(), #packing.clone(), #state.owned_runs())?;
+            #host = #host.republish(__cq_gpu_pool.clone(), #packing.clone(), #state.owned_runs())?;
         })
     });
     quote!(#(#updates)*)
@@ -156,7 +157,7 @@ fn admit_publish(program: &Program, index_in_stratum: usize, transaction: &round
                 // Recorded `fresh_run` NEW: the fresh rows in relation order,
                 // built directly; publishing it as the next delta is a move.
                 quote!(
-                    let #next: #ty = <#ty>::from_runs(__cq_gpu_pool.clone(), #packing.clone(), ::std::vec![#run])?;
+                    let #next: #ty = #delta.republish(__cq_gpu_pool.clone(), #packing.clone(), ::std::vec![#run])?;
                     #delta = #next;
                 )
             }
@@ -165,9 +166,9 @@ fn admit_publish(program: &Program, index_in_stratum: usize, transaction: &round
                     let layout = &context.delta_layouts[j];
                     let state = local("delta_layout", j);
                     let schema = local("delta_packing", j);
-                    let (host, ty) = (&layout.host, &layout.provider);
+                    let host = &layout.host;
                     let run = reordered(context, i, &fresh, &layout.columns, &state);
-                    quote!(#host = <#ty>::from_runs(__cq_gpu_pool.clone(), #schema.clone(), ::std::vec![#run])?;)
+                    quote!(#host = #host.republish(__cq_gpu_pool.clone(), #schema.clone(), ::std::vec![#run])?;)
                 });
                 quote!(#(#rebuilds)*)
             }
@@ -221,7 +222,7 @@ fn substitute(
 /// local of the function containing `datalog!`. Host declaration values are
 /// substituted separately. Callees (`sym("…")`) are items visible to nested
 /// functions; macros are opaque and conservatively count as environment reads.
-fn reads_environment(cq: &round::cq::Program) -> bool {
+pub(crate) fn reads_environment(cq: &round::cq::Program) -> bool {
     use round::cq::BodyItem;
     use syn::visit::Visit;
     struct Callees(std::collections::BTreeSet<String>);
@@ -267,6 +268,12 @@ fn reads_environment(cq: &round::cq::Program) -> bool {
     })
 }
 
+/// A standalone hole's function item and the hosts it reads, in parameter order.
+struct HoleCall {
+    function: Ident,
+    hosts: Vec<Ident>,
+}
+
 /// Formal rule P-DL-Gpu: interpret the recorded waves, admission owners,
 /// publication placement and transactions over the recorded device states on
 /// one device stream. Admission is fresh = unique(candidates) minus the
@@ -275,6 +282,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     crate::storage::check_device(&program.storage)?;
     round::contract::check(program)?;
     crate::bindings::check(program)?;
+    crate::lanes::check(program)?;
     ensure(program.context.observer.is_none(), program, "GPU Datalog does not support observer callbacks")?;
     ensure(program.policy.timing == "none", program, "GPU Datalog does not support recorded phase timing")?;
     ensure(program.execution.is_empty(), program, "GPU Datalog does not support host execution certificates")?;
@@ -329,10 +337,13 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     // closure form, because a function item cannot capture locals.
     let mut hole_items = Vec::new();
     let mut hole_index = 0usize;
+    // Standalone hole items with the hosts they read, for DL-WaveLanes workers.
+    let mut calls: Vec<Option<HoleCall>> = Vec::new();
     let holes = cq_datalog_print::splice_with(program, |hole| {
         let index = hole_index;
         hole_index += 1;
         let standalone = !reads_environment(&hole.cq);
+        calls.push(None);
         let mut cq = hole.cq.clone();
         let mut parameters = Vec::new();
         if standalone {
@@ -366,6 +377,10 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 #invocation
             }
         ));
+        calls[index] = Some(HoleCall {
+            function: function.clone(),
+            hosts: parameters.iter().map(|(_, host, _)| host.clone()).collect(),
+        });
         Ok(quote!(#function(&mut *__cq_gpu_arena, #scan_argument #(#arguments,)*)))
     })?;
     // Setup and output run through the same partitioned runners as strata, so
@@ -452,6 +467,17 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             })?;
         ));
     }
+    // DL-WaveLanes: recorded streams beyond the program's own run persistent
+    // lane workers; their arenas are component-scoped like the main arenas.
+    let streams = program.schedule.streams;
+    let (create_lanes, release_lanes) = if streams > 1 {
+        (
+            quote!(let __cq_gpu_lanes = ::gpu_datalog_runtime::Lanes::new(&__cq_gpu_pool, #streams)?;),
+            quote!(__cq_gpu_lanes.release()?;),
+        )
+    } else {
+        (quote!(), quote!())
+    };
     let mut strata = Vec::new();
     for (index, stratum) in context.strata.iter().enumerate() {
         let mut keys = Vec::new();
@@ -482,9 +508,9 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             quote!(::cq_gpu_sequence_runtime::__codegen::#partition::run)
         };
         let (stratum_runner, seed_runner, step_runner) = (runner(0), runner(1), runner(2));
-        let seed = phase(program, index, round::schedule::SEED, &holes)?;
+        let seed = phase(program, index, round::schedule::SEED, &holes, &calls)?;
         let seed = quote!(#seed_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #seed Ok(()) })?;);
-        let step = phase(program, index, round::schedule::STEP, &holes)?;
+        let step = phase(program, index, round::schedule::STEP, &holes, &calls)?;
         let step = quote!(#step_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #step Ok(()) })?;);
         let lengths = stratum.termination.iter().map(|&i| {
             let delta = context.relations[i].delta_host.as_ref().expect("checked delta");
@@ -517,6 +543,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 #rounds
                 Ok(())
             })?;
+            #release_lanes
             ::cq_gpu_sequence_runtime::release_cached_scratch(&__cq_gpu_pool);
             __cq_gpu_pool.release_unused()?;
             #released
@@ -557,6 +584,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         #(#hole_items)*
         (|| -> ::gpu_datalog_runtime::Result<_> {
             let __cq_gpu_pool = ::gpu_datalog_runtime::thread_pool()?;
+            #create_lanes
             ::gpu_datalog_runtime::phases::start();
             let __cq_gpu_trace_rounds = ::std::env::var_os("GPU_DATALOG_TRACE_ROUNDS").is_some();
             let __cq_gpu_trace_memory = ::std::env::var_os("GPU_DATALOG_TRACE_MEMORY").is_some();
@@ -575,7 +603,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     }))
 }
 
-fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream]) -> syn::Result<TokenStream> {
+fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], calls: &[Option<HoleCall>]) -> syn::Result<TokenStream> {
     let context = &program.context;
     let device = device(program);
     let stratum = &context.strata[index];
@@ -595,10 +623,22 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream]) ->
     let mut steps = Vec::new();
     for (global, wave) in schedule.waves.iter().enumerate() {
         if wave.phase != phase { continue; }
+        // P-DL-Gpu prints recorded lanes only (DL-WaveLanes): lane 0 runs on
+        // this thread and stream, later lanes on the program's lane workers.
+        let laned = schedule.lanes.iter().find(|entry| entry.wave == global && entry.lanes.len() > 1);
+        let position = |hole: usize| wave.holes.iter().position(|&h| h == hole).expect("checked lane partition");
         let mut launches = Vec::new();
-        for &rule_index in &wave.holes {
+        let main_lane: &[usize] = laned.map_or(&wave.holes, |entry| &entry.lanes[0]);
+        for &rule_index in main_lane {
             let rule = &rules[rule_index];
             let candidates = local("candidates", rule.head);
+            let deliver = match laned {
+                Some(_) => {
+                    let at = position(rule_index);
+                    quote!(__cq_gpu_wave[#at] = Some(__cq_gpu_batch);)
+                }
+                None => quote!(#candidates.push(__cq_gpu_batch);),
+            };
             let arena = local("arena", rule.head);
             let invocation = &holes[rule.hole];
             let hole = rule.hole;
@@ -664,11 +704,60 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream]) ->
                     ::std::eprintln!("gpu_datalog_hole_result\tstratum={}\tphase={}\thole={}\trows={}\tcapacity={}\tbytes={}",
                         #index, #phase, #hole, __cq_gpu_batch.len(), __cq_gpu_batch.reserved_capacity(), __cq_gpu_batch.allocated_bytes());
                 }
-                #candidates.push(__cq_gpu_batch);
+                #deliver
             }));
         }
-        // A single stream supplies both intra-wave order and inter-wave barriers.
-        steps.push(quote!({ #(#launches)* }));
+        match laned {
+            // A single stream supplies both intra-wave order and inter-wave barriers.
+            None => steps.push(quote!({ #(#launches)* })),
+            Some(entry) => {
+                let mut submits = Vec::new();
+                for (lane, holes) in entry.lanes.iter().enumerate().skip(1) {
+                    for &rule_index in holes {
+                        let rule = &rules[rule_index];
+                        let call = calls[rule.hole].as_ref().ok_or_else(|| syn::Error::new_spanned(entry,
+                            "a worker-lane hole must be a standalone function item"))?;
+                        let function = &call.function;
+                        let at = position(rule_index);
+                        let (head, hole) = (rule.head, rule.hole);
+                        let (scan_clone, scan_argument) = match &rule.scan {
+                            Some(scan) => {
+                                let source = match scan.source {
+                                    InputSource::Delta(i) => context.relations[i].delta_host.as_ref().expect("checked delta"),
+                                    InputSource::Layout(i) => &context.layouts[i].host,
+                                };
+                                (quote!(let __cq_lane_scan = #source.clone();), quote!(&__cq_lane_scan,))
+                            }
+                            None => (quote!(), quote!()),
+                        };
+                        let names = (0..call.hosts.len()).map(|i| format_ident!("__cq_lane_host_{i}")).collect::<Vec<_>>();
+                        let hosts = &call.hosts;
+                        submits.push(quote!({
+                            #scan_clone
+                            #(let #names = #hosts.clone();)*
+                            __cq_gpu_lanes.submit(#lane, #at, ::std::boxed::Box::new(
+                                move |__cq_lane: &mut ::gpu_datalog_runtime::Lane| {
+                                    #function(__cq_lane.arena(#head, #hole), #scan_argument #(&#names,)*)
+                                }))?;
+                        }));
+                    }
+                }
+                let count = wave.holes.len();
+                let delivered = wave.holes.iter().enumerate().map(|(at, &rule_index)| {
+                    let candidates = local("candidates", rules[rule_index].head);
+                    quote!(#candidates.push(__cq_gpu_wave[#at].take().expect("joined wave hole"));)
+                });
+                steps.push(quote!({
+                    let mut __cq_gpu_wave: ::std::vec::Vec<::std::option::Option<::gpu_datalog_runtime::CandidateBatch>> =
+                        (0..#count).map(|_| None).collect();
+                    __cq_gpu_lanes.fork()?;
+                    #(#submits)*
+                    #(#launches)*
+                    for (at, batch) in __cq_gpu_lanes.join()? { __cq_gpu_wave[at] = Some(batch); }
+                    #(#delivered)*
+                }));
+            }
+        }
         for transaction in &stratum.publication {
             if after(transaction.relation) == Some(global) {
                 published.insert(transaction.relation);

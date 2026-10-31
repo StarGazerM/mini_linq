@@ -27,7 +27,7 @@ impl<const LANES: usize> NativeWord for WordWidth<LANES, false> {
 
 /// An unsigned packed key. Array words store their most significant lane first.
 /// Lane access numbers lanes from the least significant end for all word types.
-pub trait Word: sealed::Sealed + Copy + Ord + Debug + DeviceCopy {
+pub trait Word: sealed::Sealed + Copy + Ord + Debug + DeviceCopy + Send + Sync {
     const BITS: u32;
     const MS_FIRST: bool;
     fn zero() -> Self;
@@ -413,12 +413,26 @@ impl Packing {
         rows: usize,
         order: &[usize],
     ) -> Result<Buffer<W>> {
+        self.permute_device_on(input.pool(), input, rows, order)
+    }
+
+    /// [`Self::permute_device`] on `pool`'s stream, which must share the
+    /// input's memory and be ordered after the input's initialization.
+    pub fn permute_device_on<W: Word>(
+        &self,
+        pool: &Arc<Pool>,
+        input: &Buffer<W>,
+        rows: usize,
+        order: &[usize],
+    ) -> Result<Buffer<W>> {
         self.check_word::<W>()?;
         self.check_order(order)?;
         if rows > input.len() {
             return Err("permutation rows exceed input capacity".into());
         }
-        let pool = input.pool();
+        if !pool.shares_memory(input.pool()) {
+            return Err("permutation pool does not share the input's memory".into());
+        }
         let output = unsafe { Buffer::uninitialized(pool.clone(), rows)? };
         if rows == 0 {
             return Ok(output);

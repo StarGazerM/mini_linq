@@ -424,9 +424,9 @@ impl Rows {
         let mut raw = BTreeMap::new();
         let mut first = true;
         let mut run_hosts = BTreeMap::new();
-        setup.extend(quote! {
-            let mut __cq_run_owners: ::std::vec::Vec<::std::sync::Arc<dyn ::std::any::Any>> = ::std::vec::Vec::new();
-        });
+        // Inputs below extend their own setup; the owner list's declaration is
+        // placed between captures and inputs once run bindings are known.
+        let captured_setup = std::mem::take(&mut setup);
         for input in physical.inputs() {
             let name = symbol_name(&input.name);
             let mut run_binding = None;
@@ -481,8 +481,8 @@ impl Rows {
                 let schema: Vec<_> = types.iter().map(crate::runs::scalar).collect();
                 let view = format_ident!("__cq_sequence_runs_{name}");
                 setup.extend(quote! {
-                    if !::std::sync::Arc::ptr_eq(&__cq_pool, #id.pool()) {
-                        return Err("T-Gpu: resident inputs must share a pool and stream".into());
+                    if !__cq_pool.shares_memory(#id.pool()) {
+                        return Err("T-Gpu: resident inputs must share a pool's memory".into());
                     }
                     #id.validate(&[#(#schema),*])?;
                     let #length = #id.len();
@@ -525,6 +525,21 @@ impl Rows {
             raw.insert(name.clone(), fields);
             hosts.insert(name, (id, length));
         }
+        // DL-WaveLanes: run-input owners travel with candidate batches across
+        // lane threads, so a program with run bindings retains Send + Sync owners.
+        let owner = if run_hosts.is_empty() {
+            quote!(dyn ::std::any::Any)
+        } else {
+            quote!(dyn ::std::any::Any + Send + Sync)
+        };
+        setup = {
+            let mut ordered = captured_setup;
+            ordered.extend(quote! {
+                let mut __cq_run_owners: ::std::vec::Vec<::std::sync::Arc<#owner>> = ::std::vec::Vec::new();
+            });
+            ordered.extend(setup);
+            ordered
+        };
         if first {
             setup.extend(quote!(let __cq_pool = ::gpu_datalog_runtime::thread_pool()?;));
         }
@@ -695,7 +710,7 @@ impl Rows {
                             let owner = format_ident!("__cq_native_provider_{provider_name}");
                             let provider_view = format_ident!("__cq_native_view_{provider_name}");
                             build.extend(quote! {
-                                let #owner: #provider = #host.permuted_provider(&[#(#order),*])?;
+                                let #owner: #provider = #host.permuted_provider(&__cq_pool, &[#(#order),*])?;
                                 __cq_run_owners.push(#owner.owner());
                             });
                             parameters.push((
@@ -2034,7 +2049,7 @@ mod tests {
         impl VisitMut for Permutations {
             fn visit_expr_method_call_mut(&mut self, call: &mut syn::ExprMethodCall) {
                 if call.method == "permuted_provider" {
-                    let Some(syn::Expr::Reference(reference)) = call.args.first() else {
+                    let Some(syn::Expr::Reference(reference)) = call.args.iter().nth(1) else {
                         panic!("permutation argument must borrow its recorded array")
                     };
                     let syn::Expr::Array(array) = reference.expr.as_ref() else {

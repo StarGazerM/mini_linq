@@ -21,6 +21,8 @@ use syn::Ident;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Schedule {
     pub progress: Ident,
+    /// Concurrent evaluation streams available to wave lanes; one means none.
+    pub streams: usize,
     pub strata: Vec<StratumSchedule>,
 }
 
@@ -32,6 +34,18 @@ pub struct StratumSchedule {
     pub policy: Vec<HolePolicy>,
     /// Derived: the wave after which each member's publication may begin.
     pub publication: Vec<PublishAfter>,
+    /// Per wave, the lanes its holes run on concurrently (DL-WaveLanes); a
+    /// wave without an entry runs its holes in order on one lane.
+    pub lanes: Vec<WaveLanes>,
+}
+
+/// Formal rule DL-WaveLanes: the holes of global wave `wave`, partitioned into
+/// ordered per-lane lists. Lane 0 is the program's main stream; every lane
+/// starts after the wave's fork and the wave joins before any admission.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WaveLanes {
+    pub wave: usize,
+    pub lanes: Vec<Vec<usize>>,
 }
 
 /// Realization advice for one hole: chunk grain and the driver length below
@@ -77,13 +91,19 @@ pub struct Wave {
 
 record!(Schedule {
     progress: Ident,
+    streams: usize,
     strata: Vec<StratumSchedule>
 });
 record!(StratumSchedule {
     reads: Vec<HoleReads>,
     waves: Vec<Wave>,
     policy: Vec<HolePolicy>,
-    publication: Vec<PublishAfter>
+    publication: Vec<PublishAfter>,
+    lanes: Vec<WaveLanes>
+});
+record!(WaveLanes {
+    wave: usize,
+    lanes: Vec<Vec<usize>>
 });
 record!(HolePolicy {
     phase: Ident,
@@ -211,17 +231,20 @@ impl Schedule {
                     waves,
                     policy: Vec::new(),
                     publication,
+                    lanes: Vec::new(),
                 })
             })
             .collect::<syn::Result<_>>()?;
         Ok(Self {
             progress: ident(SYNCHRONOUS),
+            streams: 1,
             strata,
         })
     }
 
     /// Replace the waves of one component, keeping its derived read sets and
-    /// re-deriving its publication placement.
+    /// re-deriving its publication placement. Lanes name waves, so the
+    /// component's lanes are dropped.
     pub fn with_stratum_waves(
         mut self,
         stratum: usize,
@@ -233,6 +256,7 @@ impl Schedule {
         {
             entry.publication = derive_publication(&entry.reads, &waves, members);
             entry.waves = waves;
+            entry.lanes.clear();
         }
         self
     }
@@ -393,7 +417,7 @@ pub fn check_progress(program: &Program) -> syn::Result<()> {
     }
 }
 
-/// Formal rule WF-DL-Schedule: derived read sets, partitioning phase-ordered waves, policy, derived publication and an admissible progress mode.
+/// Formal rule WF-DL-Schedule: derived read sets, partitioning phase-ordered waves, policy, derived publication, wave lanes and an admissible progress mode.
 pub fn check(program: &Program, analysis: &storage::Analysis) -> syn::Result<()> {
     let schedule = &program.schedule;
     check_progress(program)?;
@@ -402,6 +426,7 @@ pub fn check(program: &Program, analysis: &storage::Analysis) -> syn::Result<()>
         schedule,
         "schedule must cover every component exactly once",
     )?;
+    ensure(schedule.streams >= 1, schedule, "a schedule needs at least one stream")?;
     for (entry, stratum) in schedule.strata.iter().zip(&program.context.strata) {
         let derived = derive_reads(&program.storage, analysis, stratum)?;
         ensure(
@@ -442,6 +467,40 @@ pub fn check(program: &Program, analysis: &storage::Analysis) -> syn::Result<()>
             entry.publication == derive_publication(&entry.reads, &entry.waves, stratum),
             entry,
             "recorded publication placement differs from the last writer or reader wave of each member",
+        )?;
+        check_lanes(&entry.lanes, &entry.waves, schedule.streams)?;
+    }
+    Ok(())
+}
+
+/// Formal rule WF-DL-Lanes: each lane entry names a distinct wave, has at most
+/// `streams` nonempty lanes, and its lanes partition exactly that wave's holes.
+/// A wave without an entry runs on one lane.
+pub fn check_lanes(lanes: &[WaveLanes], waves: &[Wave], streams: usize) -> syn::Result<()> {
+    let mut seen = BTreeSet::new();
+    for entry in lanes {
+        let wave = waves.get(entry.wave).ok_or_else(|| {
+            syn::Error::new_spanned(entry, "lanes name a wave outside the component")
+        })?;
+        ensure(seen.insert(entry.wave), entry, "lanes repeat a wave")?;
+        ensure(
+            !entry.lanes.is_empty() && entry.lanes.len() <= streams,
+            entry,
+            "a wave's lane count must be between one and the schedule's streams",
+        )?;
+        ensure(
+            entry.lanes.iter().all(|lane| !lane.is_empty()),
+            entry,
+            "a lane must hold at least one hole",
+        )?;
+        let mut holes: Vec<usize> = entry.lanes.iter().flatten().copied().collect();
+        let mut expected = wave.holes.clone();
+        holes.sort_unstable();
+        expected.sort_unstable();
+        ensure(
+            holes == expected,
+            entry,
+            "a wave's lanes must partition exactly its holes",
         )?;
     }
     Ok(())
@@ -602,9 +661,30 @@ mod tests {
     }
 
     #[test]
+    fn lanes_partition_their_wave_within_the_streams() {
+        let waves = [wave(SEED, &[0]), wave(STEP, &[0, 1, 2])];
+        let lanes = |wave: usize, lanes: &[&[usize]]| WaveLanes {
+            wave,
+            lanes: lanes.iter().map(|lane| lane.to_vec()).collect(),
+        };
+        check_lanes(&[lanes(1, &[&[0, 2], &[1]])], &waves, 2).unwrap();
+        check_lanes(&[], &waves, 1).unwrap();
+        let rejected = |entries: &[WaveLanes], streams| {
+            check_lanes(entries, &waves, streams).unwrap_err().to_string()
+        };
+        assert!(rejected(&[lanes(1, &[&[0, 2], &[1]])], 1).contains("lane count"));
+        assert!(rejected(&[lanes(1, &[&[0, 2]])], 2).contains("partition"));
+        assert!(rejected(&[lanes(1, &[&[0, 1, 2], &[1]])], 2).contains("partition"));
+        assert!(rejected(&[lanes(1, &[&[0, 1, 2], &[]])], 2).contains("at least one"));
+        assert!(rejected(&[lanes(2, &[&[0]])], 2).contains("outside"));
+        assert!(rejected(&[lanes(0, &[&[0]]), lanes(0, &[&[0]])], 2).contains("repeat"));
+    }
+
+    #[test]
     fn schedule_text_roundtrips() {
         let schedule = Schedule {
             progress: ident(SYNCHRONOUS),
+            streams: 2,
             strata: vec![StratumSchedule {
                 reads: vec![HoleReads {
                     phase: ident(STEP),
@@ -631,6 +711,10 @@ mod tests {
                     phase: ident(STEP),
                     relation: 1,
                     wave: 0,
+                }],
+                lanes: vec![WaveLanes {
+                    wave: 0,
+                    lanes: vec![vec![0]],
                 }],
             }],
         };

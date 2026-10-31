@@ -30,13 +30,17 @@ impl Packing {
         Ok(Self { columns, bits })
     }
 
+    /// Bind the arena and make its pool the execution pool: a hole runs on its
+    /// arena's stream (a DL-WaveLanes lane, or the program stream), reading
+    /// inputs that share the arena pool's memory.
     pub fn setup(&self, arena: &syn::Expr) -> TokenStream {
         let columns = &self.columns;
         quote! {
             let __cq_arena = &mut (#arena);
-            if !::std::sync::Arc::ptr_eq(__cq_arena.pool(), &__cq_pool) {
-                return Err("GPU arena and inputs must share a pool and stream".into());
+            if !__cq_arena.pool().shares_memory(&__cq_pool) {
+                return Err("GPU arena and inputs must share a pool's memory".into());
             }
+            let __cq_pool = __cq_arena.pool().clone();
             let __cq_arena_packing = ::gpu_datalog_runtime::Packing::with_columns(
                 &[#(#columns),*])?;
         }

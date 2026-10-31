@@ -43,6 +43,49 @@ fn layouts_retain_runs_and_validate_native_schema() -> Result<()> {
 }
 
 #[test]
+fn republished_layouts_share_fields_and_reuse_unchanged_runs() -> Result<()> {
+    let pool = Pool::new(0, 0, 0)?;
+    type Layout = DeviceLayout<(i32,), (u32,)>;
+    let packing = Layout::derive_packing()?;
+    let words = [packing.pack::<u64>(&[-3, 7])?, packing.pack::<u64>(&[9, 2])?];
+    // SAFETY: uploads initialize sorted unique prefixes and no writer is kept.
+    let empty = || unsafe { Run::from_sorted(Buffer::<u64>::from_host_async(pool.clone(), &[]).unwrap(), 0) };
+    let run = unsafe { Run::from_sorted(Buffer::from_host_async(pool.clone(), &words)?, 2)? };
+    let layout = Layout::from_runs(pool.clone(), packing.clone(), vec![run.clone()])?;
+    // The same immutable runs republish the layout itself.
+    let same = layout.republish(pool.clone(), packing.clone(), vec![run.clone()])?;
+    assert_eq!(same.view().runs, layout.view().runs);
+    assert_eq!(same.view().fields, layout.view().fields);
+    // New runs upload run descriptors only; field descriptors are shared.
+    let grown = layout.republish(pool.clone(), packing.clone(), vec![run.clone(), empty()?])?;
+    assert_ne!(grown.view().runs, layout.view().runs);
+    assert_eq!(grown.view().fields, layout.view().fields);
+    assert_eq!((grown.len(), grown.view().run_count), (2, 2));
+    // Empty runs compare by length: their pointers are never read.
+    let empty_delta = Layout::from_runs(pool.clone(), packing.clone(), vec![empty()?])?;
+    let next = empty_delta.republish(pool.clone(), packing.clone(), vec![empty()?])?;
+    assert_eq!(next.view().runs, empty_delta.view().runs);
+    // A different packing never borrows the predecessor's descriptors.
+    assert!(layout.republish(pool.clone(), Packing::new(&[32, 32])?, vec![run]).is_err());
+    assert_eq!(grown.to_host_codes()?, vec![vec![-3, 7], vec![9, 2]]);
+    Ok(())
+}
+
+#[test]
+fn resident_words_are_zeroed_once_and_grow() -> Result<()> {
+    let pool = Pool::new(0, 0, 0)?;
+    let mut arena = CandidateArena::new(pool);
+    let first = arena.resident_words(12)?;
+    assert!(first.len() >= 12);
+    assert!(first.to_host()?.iter().all(|&word| word == 0));
+    assert_eq!(arena.resident_words(first.len())?.ptr(), first.ptr());
+    let grown = arena.resident_words(first.len() + 1)?;
+    assert!(grown.len() > first.len());
+    assert!(grown.to_host()?.iter().all(|&word| word == 0));
+    Ok(())
+}
+
+#[test]
 fn candidate_batches_retain_inputs_and_prevent_arena_reuse() -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
     let packing = Packing::with_columns(&[Column::U64, Column::I64])?;
@@ -64,7 +107,7 @@ fn candidate_batches_retain_inputs_and_prevent_arena_reuse() -> Result<()> {
     unsafe {
         lease.buffer().write_async(&lanes)?;
     }
-    let input: Arc<dyn Any> = Arc::new(17_u32);
+    let input: Arc<dyn Any + Send + Sync> = Arc::new(17_u32);
     let weak_input = Arc::downgrade(&input);
     let batch = unsafe { lease.finish(2, vec![input])? };
     assert_eq!(batch.len(), 2);
@@ -281,14 +324,15 @@ fn permuted_provider_preserves_rows_and_searches_new_leading_key() -> Result<()>
     let layout = Layout::from_runs(pool.clone(), packing, vec![run.clone(), empty, run])?;
     // DECODE P: diagnostic original layout unpack exposes the pre-permutation host answer.
     let before = layout.to_host_codes()?;
-    let provider = layout.permuted_provider(&[1, 0])?;
+    let provider = layout.permuted_provider(&pool, &[1, 0])?;
     // DECODE P: diagnostic retained layout unpack exposes the unchanged post-permutation answer.
     assert_eq!(
         layout.to_host_codes()?,
         before,
         "permutation leaves source storage unchanged"
     );
-    assert!(layout.permuted_provider(&[0, 0]).is_err());
+    assert!(layout.permuted_provider(&pool, &[0, 0]).is_err());
+    assert!(layout.permuted_provider(&Pool::new(0, 0, 0)?, &[1, 0]).is_err());
     assert_eq!(provider.view().run_count, 3);
     let output = Buffer::<i64>::zeroed(pool.clone(), 12)?;
     let ranges = Buffer::<u32>::zeroed(pool.clone(), 12)?;

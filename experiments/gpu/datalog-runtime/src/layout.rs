@@ -13,6 +13,10 @@ pub struct PackedRunView {
 }
 // SAFETY: the descriptor contains only a device pointer and initialized integers.
 unsafe impl DeviceCopy for PackedRunView {}
+// SAFETY: the pointer names immutable device storage and is never dereferenced
+// on the host, so sharing or moving the descriptor between threads is sound.
+unsafe impl Send for PackedRunView {}
+unsafe impl Sync for PackedRunView {}
 
 /// A most-significant-first packed column. Signed values use sign-bit bias.
 #[repr(C)]
@@ -166,22 +170,36 @@ tuples!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
 
 struct LayoutStorage {
     runs: Buffer<PackedRunView>,
-    fields: Buffer<PackedField>,
+    // Constant per packing: a republished layout shares its predecessor's.
+    fields: Arc<Buffer<PackedField>>,
     packing: Packing,
     rows: usize,
     word_bits: u32,
     allocated_run_bytes: usize,
     // Descriptors borrow these immutable runs, never the caller's vector.
-    _owner: Box<dyn Any>,
+    _owner: Box<dyn Any + Send + Sync>,
     download: fn(&dyn Any, &Packing, usize) -> Result<Vec<Vec<i128>>>,
-    permute: fn(&LayoutStorage, &[usize]) -> Result<Arc<LayoutStorage>>,
+    permute: fn(&LayoutStorage, &Arc<Pool>, &[usize]) -> Result<Arc<LayoutStorage>>,
+}
+
+/// Whether two descriptor lists denote the same rows: equal lengths, and equal
+/// device pointers for every nonempty run. Empty runs are never dereferenced.
+fn same_runs(left: &[PackedRunView], right: &[PackedRunView]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(a, b)| {
+            a.len == b.len && a.ms_first == b.ms_first && (a.len == 0 || a.ptr == b.ptr)
+        })
 }
 
 impl LayoutStorage {
+    /// Upload run descriptors for `runs`. A `predecessor` with the same
+    /// packing lends its field descriptors; when its runs are the same
+    /// immutable runs, it is itself the publication and nothing is uploaded.
     fn from_runs<W: Word + 'static>(
         pool: Arc<Pool>,
         packing: Packing,
         runs: Vec<Run<W>>,
+        predecessor: Option<&Arc<LayoutStorage>>,
     ) -> Result<Arc<Self>> {
         if packing.bits() > W::BITS {
             return Err("device layout packing exceeds its run word width".into());
@@ -211,7 +229,30 @@ impl LayoutStorage {
                 ms_first: W::MS_FIRST as u32,
             });
         }
-        let fields = packing.packed_fields().collect::<Vec<_>>();
+        let predecessor = predecessor.filter(|previous| {
+            previous.packing == packing
+                && previous.word_bits == W::BITS
+                && Arc::ptr_eq(&pool, previous.runs.pool())
+        });
+        let unchanged = predecessor.filter(|previous| {
+            previous
+                ._owner
+                .downcast_ref::<Vec<Run<W>>>()
+                .is_some_and(|retained| {
+                    let retained = retained
+                        .iter()
+                        .map(|run| PackedRunView {
+                            ptr: run.view().ptr.cast(),
+                            len: run.len() as u32,
+                            ms_first: W::MS_FIRST as u32,
+                        })
+                        .collect::<Vec<_>>();
+                    same_runs(&retained, &descriptors)
+                })
+        });
+        if let Some(previous) = unchanged {
+            return Ok(previous.clone());
+        }
         let device_descriptors = Buffer::from_host_async(pool.clone(), &descriptors)?;
         if crate::trace_kernels() {
             eprint!(
@@ -226,7 +267,13 @@ impl LayoutStorage {
             }
             eprintln!();
         }
-        let fields = Buffer::from_host_async(pool, &fields)?;
+        let fields = match predecessor {
+            Some(previous) => previous.fields.clone(),
+            None => {
+                let fields = packing.packed_fields().collect::<Vec<_>>();
+                Arc::new(Buffer::from_host_async(pool, &fields)?)
+            }
+        };
         fn download<W: Word + 'static>(
             owner: &dyn Any,
             packing: &Packing,
@@ -246,10 +293,11 @@ impl LayoutStorage {
         }
         fn permute<W: Word + 'static>(
             storage: &LayoutStorage,
+            pool: &Arc<Pool>,
             order: &[usize],
         ) -> Result<Arc<LayoutStorage>> {
             let packing = storage.packing.permute(order)?;
-            let pool = storage.runs.pool().clone();
+            let pool = pool.clone();
             let source = storage
                 ._owner
                 .downcast_ref::<Vec<Run<W>>>()
@@ -259,12 +307,12 @@ impl LayoutStorage {
             for run in source {
                 let values = storage
                     .packing
-                    .permute_device(run.buffer(), run.len(), order)?;
+                    .permute_device_on(&pool, run.buffer(), run.len(), order)?;
                 // SAFETY: a column permutation is injective, and each retained
                 // immutable Run already contains pairwise distinct rows.
                 runs.push(unsafe { sorter.sort_known_unique(&values, run.len())? });
             }
-            LayoutStorage::from_runs(pool, packing, runs)
+            LayoutStorage::from_runs(pool, packing, runs, None)
         }
         Ok(Arc::new(Self {
             runs: device_descriptors,
@@ -301,7 +349,7 @@ impl PackedProvider {
     pub fn view(&self) -> RunsView {
         self.storage.view()
     }
-    pub fn owner(&self) -> Arc<dyn Any> {
+    pub fn owner(&self) -> Arc<dyn Any + Send + Sync> {
         self.storage.clone()
     }
 }
@@ -340,6 +388,27 @@ impl<K: ScalarTuple, V: ScalarTuple> DeviceLayout<K, V> {
         packing: Packing,
         runs: Vec<Run<W>>,
     ) -> Result<Self> {
+        Self::publish(pool, packing, runs, None)
+    }
+
+    /// Publish `runs` as this layout's successor. With the same packing and
+    /// pool, the successor shares this layout's field descriptors, and the
+    /// same immutable runs republish this layout itself without an upload.
+    pub fn republish<W: Word + 'static>(
+        &self,
+        pool: Arc<Pool>,
+        packing: Packing,
+        runs: Vec<Run<W>>,
+    ) -> Result<Self> {
+        Self::publish(pool, packing, runs, Some(&self.storage))
+    }
+
+    fn publish<W: Word + 'static>(
+        pool: Arc<Pool>,
+        packing: Packing,
+        runs: Vec<Run<W>>,
+        predecessor: Option<&Arc<LayoutStorage>>,
+    ) -> Result<Self> {
         let columns = K::COLUMNS.iter().chain(V::COLUMNS);
         if packing.len() != K::COLUMNS.len() + V::COLUMNS.len()
             || !packing.packed_fields().zip(columns).all(|(field, column)| {
@@ -349,7 +418,7 @@ impl<K: ScalarTuple, V: ScalarTuple> DeviceLayout<K, V> {
             return Err("device layout packing differs from its scalar tuple schema".into());
         }
         Ok(Self {
-            storage: LayoutStorage::from_runs(pool, packing, runs)?,
+            storage: LayoutStorage::from_runs(pool, packing, runs, predecessor)?,
             marker: PhantomData,
         })
     }
@@ -381,7 +450,7 @@ impl<K: ScalarTuple, V: ScalarTuple> DeviceLayout<K, V> {
     pub fn packing(&self) -> &Packing {
         &self.storage.packing
     }
-    pub fn owner(&self) -> Arc<dyn Any> {
+    pub fn owner(&self) -> Arc<dyn Any + Send + Sync> {
         self.storage.clone()
     }
     /// Download rows in physical run order, retaining encoded symbol codes.
@@ -396,11 +465,12 @@ impl<K: ScalarTuple, V: ScalarTuple> DeviceLayout<K, V> {
     pub fn view(&self) -> RunsView {
         self.storage.view()
     }
-    /// Materialize a sorted lookup provider without changing the source runs.
-    /// `order[destination]` is the source column at that destination.
-    pub fn permuted_provider(&self, order: &[usize]) -> Result<PackedProvider> {
+    /// Materialize a sorted lookup provider without changing the source runs,
+    /// on `pool`'s stream (the executing hole's pool, which must share this
+    /// layout's memory). `order[destination]` is the source column there.
+    pub fn permuted_provider(&self, pool: &Arc<Pool>, order: &[usize]) -> Result<PackedProvider> {
         Ok(PackedProvider {
-            storage: (self.storage.permute)(&self.storage, order)?,
+            storage: (self.storage.permute)(&self.storage, pool, order)?,
         })
     }
     /// Check the emitter's fixed physical column order without device readback.

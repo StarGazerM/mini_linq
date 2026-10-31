@@ -17,6 +17,7 @@ pub struct CandidateArena {
     slots: Vec<Arc<Buffer<u64>>>,
     previous_counts: Vec<usize>,
     hole: usize,
+    resident: Option<Arc<Buffer<u32>>>,
 }
 impl CandidateArena {
     pub fn new(pool: Arc<Pool>) -> Self {
@@ -25,6 +26,7 @@ impl CandidateArena {
             slots: Vec::new(),
             previous_counts: Vec::new(),
             hole: 0,
+            resident: None,
         }
     }
     pub fn pool(&self) -> &Arc<Pool> {
@@ -48,6 +50,18 @@ impl CandidateArena {
     pub fn record_count(&mut self, rows: usize) {
         let hole = self.hole;
         self.hole(hole).previous_counts[hole] = rows;
+    }
+    /// GPU-ResidentMeta: at least `words` resident metadata words, zero on
+    /// entry. Each dispatch that uses them must leave every word zero again in
+    /// stream order (its last block re-zeroes them), so attempts neither
+    /// allocate nor clear metadata. Only growth allocates and clears, once.
+    pub fn resident_words(&mut self, words: usize) -> Result<Arc<Buffer<u32>>> {
+        if let Some(resident) = self.resident.as_ref().filter(|resident| resident.len() >= words) {
+            return Ok(resident.clone());
+        }
+        let resident = Arc::new(Buffer::zeroed(self.pool.clone(), words.next_power_of_two())?);
+        self.resident = Some(resident.clone());
+        Ok(resident)
     }
 
     /// Device bytes retained by all slots, including spare capacity and slots
@@ -183,7 +197,7 @@ impl CandidateLease {
     pub unsafe fn finish(
         self,
         live_len: usize,
-        owners: Vec<Arc<dyn Any>>,
+        owners: Vec<Arc<dyn Any + Send + Sync>>,
     ) -> Result<CandidateBatch> {
         if live_len > self.capacity {
             return Err("candidate live length exceeds reserved row capacity".into());
@@ -207,7 +221,7 @@ struct BatchStorage {
     buffer: Buffer<u64>,
     packing: Packing,
     rows: usize,
-    _owners: Vec<Arc<dyn Any>>,
+    _owners: Vec<Arc<dyn Any + Send + Sync>>,
 }
 
 /// An immutable, not necessarily sorted or unique device candidate batch.
@@ -246,7 +260,7 @@ impl CandidateBatch {
     pub fn buffer(&self) -> &Buffer<u64> {
         &self.storage.buffer
     }
-    pub fn owner(&self) -> Arc<dyn Any> {
+    pub fn owner(&self) -> Arc<dyn Any + Send + Sync> {
         self.storage.clone()
     }
 }
@@ -257,6 +271,8 @@ impl CandidateBatch {
 /// 64 bits, `u128` through 128 bits, then `[u64; L]` with MS-first lanes.
 /// Batch order and duplicates are preserved; admission remains separate.
 /// The returned allocation is initialized by stream-ordered device copies.
+/// Batches may come from lane pools sharing this pool's memory; the caller
+/// orders their production before this pool's stream (DL-WaveLanes join).
 pub fn concatenate_batches<W: Word>(
     pool: Arc<Pool>,
     packing: &Packing,
@@ -270,7 +286,7 @@ pub fn concatenate_batches<W: Word>(
     }
     let mut rows = 0usize;
     for batch in batches {
-        if !Arc::ptr_eq(&pool, batch.pool()) {
+        if !pool.shares_memory(batch.pool()) {
             return Err("candidate concatenation pool differs from batch".into());
         }
         if batch.packing() != packing {

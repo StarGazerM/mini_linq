@@ -34,6 +34,13 @@ pub fn check_host_interfaces(program: &Program) -> syn::Result<()> {
             "host Datalog printers do not support batch holes; use a batch-capable printer",
         )?;
     }
+    // DL-WaveLanes realize device streams; host printers have their own
+    // wave concurrency and must not silently drop a recorded lane split.
+    ensure(
+        program.schedule.strata.iter().all(|stratum| stratum.lanes.is_empty()),
+        &program.schedule,
+        "host Datalog printers do not realize wave lanes; use a device printer",
+    )?;
     Ok(())
 }
 
