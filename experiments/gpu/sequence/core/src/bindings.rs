@@ -4,6 +4,7 @@ use cq_lang_sequence::gpu::bindings::{
 };
 use cq_lang_sequence::{Analysis, Program};
 use cq_lang_structures::{ReaderRef, Structure, physical::symbol_name};
+use cq_lang_structures::provider::NativeAbi;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn error(message: &str) -> syn::Error {
@@ -32,26 +33,23 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         for (levels, provider) in layouts {
             let ty = &provider.ty;
             let keys: Vec<_> = levels.iter().flatten().cloned().collect();
-            let (abi, directory) = match crate::native_abi(ty) {
-                Some(native @ (crate::NativeAbi::Range | crate::NativeAbi::Runs)) => {
+            let (abi, directory) = match analysis.structures.facts(provider).abi {
+                Some(native @ (NativeAbi::Range | NativeAbi::Runs)) => {
                     catalog
                         .providers
                         .iter()
-                        .find(|token| {
-                            crate::native_abi(&token.provider.ty) == Some(native)
-                                && (native != crate::NativeAbi::Range || token.provider.ty == *ty)
-                        })
+                        .find(|token| token.provider.same_token(provider))
                         .ok_or_else(|| {
                             error("GPU-ProviderLayout: built provider has no catalog token")
                         })?;
                     match native {
-                        crate::NativeAbi::Range => (
+                        NativeAbi::Range => (
                             ProviderAbi::Range,
                             Some(DirectoryPolicy::DenseU32 {
                                 terminal_entries: 1,
                             }),
                         ),
-                        crate::NativeAbi::Runs => (ProviderAbi::Runs, None),
+                        NativeAbi::Runs => (ProviderAbi::Runs, None),
                         _ => unreachable!(),
                     }
                 }
@@ -92,13 +90,13 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         };
         let name = symbol_name(&entry.name);
         if let Some(host) = analysis.structures.physical.hosts.get(&name) {
-            if crate::native_abi(&keyed.provider.ty) == Some(crate::NativeAbi::Runs) {
+            if analysis.structures.facts(&keyed.provider).abi == Some(NativeAbi::Runs) {
                 native_hosts.insert(host.clone());
             }
             if matches!(reader, ReaderRef::Scan)
                 && matches!(
-                    crate::native_abi(&keyed.provider.ty),
-                    Some(crate::NativeAbi::Runs | crate::NativeAbi::Columns)
+                    analysis.structures.facts(&keyed.provider).abi,
+                    Some(NativeAbi::Runs | NativeAbi::Columns)
                 )
             {
                 result
@@ -111,12 +109,12 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         let native_lookup = analysis.structures.built.get(name).is_some_and(|layouts| {
             layouts
                 .iter()
-                .any(|(_, provider)| crate::native_abi(&provider.ty) == Some(crate::NativeAbi::Runs))
+                .any(|(_, provider)| analysis.structures.facts(provider).abi == Some(NativeAbi::Runs))
         }) || analysis.structures.fallbacks.iter().any(
             |((owner, reader, _), provider)| {
                 owner == name
                     && !matches!(reader, ReaderRef::Scan)
-                    && crate::native_abi(&provider.ty) == Some(crate::NativeAbi::Runs)
+                    && analysis.structures.facts(provider).abi == Some(NativeAbi::Runs)
             },
         );
         if !native_lookup {
@@ -179,14 +177,16 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
             Ok(())
         };
         if let Some(layouts) = analysis.structures.built.get(name) {
-            if layouts.len() == 1 && crate::runs::layout_types(&layouts[0].1.ty)?.is_some() {
+            if layouts.len() == 1 && layouts[0].1.input.is_some()
+                && analysis.structures.facts(&layouts[0].1).abi == Some(NativeAbi::Runs) {
                 record(name.clone(), layouts[0].0.concat())?;
             }
         } else {
             for ((owner, reader, keys), provider) in &analysis.structures.fallbacks {
                 if owner != name
                     || matches!(reader, ReaderRef::Scan)
-                    || crate::runs::layout_types(&provider.ty)?.is_none()
+                    || analysis.structures.facts(provider).abi != Some(NativeAbi::Runs)
+                    || provider.input.is_none()
                 {
                     continue;
                 }
@@ -259,25 +259,24 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
             let valid = match layout.abi {
                 ProviderAbi::Range => {
                     catalog.providers.iter().any(|token| {
-                        token.provider.ty == *ty
-                            && crate::native_abi(&token.provider.ty) == Some(crate::NativeAbi::Range)
+                        token.provider.same_token(provider)
+                            && analysis.structures.facts(provider).abi == Some(NativeAbi::Range)
                     }) && layout.directory
                         == Some(DirectoryPolicy::DenseU32 {
                             terminal_entries: 1,
                         })
                 }
                 ProviderAbi::Runs => {
-                    crate::runs::layout_types(ty)?.is_some()
-                        && catalog.providers.iter().any(|token| {
-                            crate::native_abi(&token.provider.ty) == Some(crate::NativeAbi::Runs)
-                        })
+                    analysis.structures.facts(provider).abi == Some(NativeAbi::Runs)
+                        && provider.input.is_some()
+                        && catalog.providers.iter().any(|token| token.provider.same_token(provider))
                         && layout.directory.is_none()
                 }
                 ProviderAbi::Host => {
                     layout.directory.is_none()
                         && !matches!(
-                            crate::native_abi(ty),
-                            Some(crate::NativeAbi::Range | crate::NativeAbi::Runs)
+                            analysis.structures.facts(provider).abi,
+                            Some(NativeAbi::Range | NativeAbi::Runs)
                         )
                 }
             };
@@ -329,8 +328,8 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                 ..
             } = &entry.structure
                 && matches!(
-                    crate::native_abi(&keyed.provider.ty),
-                    Some(crate::NativeAbi::Runs | crate::NativeAbi::Columns)
+                    analysis.structures.facts(&keyed.provider).abi,
+                    Some(NativeAbi::Runs | NativeAbi::Columns)
                 )
             {
                 Some(symbol_name(&entry.name))

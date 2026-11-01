@@ -567,6 +567,7 @@ dependencies = [
  "cq-datalog-support",
  "cq-lang-cq",
  "cq-lang-datalog-incremental",
+ "cq-lang-structures",
  "cq-stage",
  "cq-syntax",
  "proc-macro2",

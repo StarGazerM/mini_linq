@@ -113,6 +113,8 @@ syntax_text!(
     syn::Type,
     cq_syntax::RelationDecl,
     cq_lang_cq::Program,
+    cq_lang_structures::Declaration,
+    cq_lang_structures::provider::InputSchema,
     cq_stage::Pipeline,
     cq_stage::Context,
     crate::incremental::Program

@@ -15,8 +15,6 @@ pub struct Machine {
     /// GR-RetainPrefix: evidence-bounded rows a stored prefix must reach to
     /// replace a stream root smaller than one root tile as the distributed root.
     pub retain_prefix_rows: usize,
-    /// Catalog identity predicate, never a type-name suffix test.
-    pub contiguous_range: fn(&syn::Type) -> bool,
     /// Target refinement records concrete provider/storage bindings upstream.
     pub bindings: fn(&Program, &Analysis) -> syn::Result<bindings::Bindings>,
     /// Target realization after publication storage is recorded.
@@ -294,7 +292,9 @@ pub(crate) fn derive(
                             if analysis.obligations.iter().any(|o| {
                                 matches!(o,
                                 Obligation::Provider { provider: p, keys: k, instance, .. }
-                                if p == provider && k == keys && (machine.contiguous_range)(&instance.ty))
+                                if p == provider && k == keys
+                                    && analysis.structures.providers.get(&instance.token)
+                                        .is_some_and(|declaration| declaration.facts.contiguous_range))
                             }) {
                                 execution.publication = Publication::DeferredRange {
                                     provider: provider.clone(),

@@ -2,67 +2,8 @@
 use cq_lang_structures::{Program, Structure, physical::symbol_name};
 use quote::quote;
 use std::collections::BTreeMap;
-use syn::{GenericArgument, PathArguments, Type};
-
-pub(crate) fn layout_types(ty: &Type) -> syn::Result<Option<(Vec<Type>, usize)>> {
-    let Type::Path(path) = ty else {
-        return Ok(None);
-    };
-    let Some(segment) = path.path.segments.last() else {
-        return Ok(None);
-    };
-    if crate::native_abi(ty) != Some(crate::NativeAbi::Runs) {
-        return Ok(None);
-    }
-    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-        return Err(syn::Error::new_spanned(
-            ty,
-            "GPU-Runs: DeviceLayout requires key and value tuple types",
-        ));
-    };
-    let arguments = arguments.args.iter().collect::<Vec<_>>();
-    let [GenericArgument::Type(keys), GenericArgument::Type(values)] = arguments.as_slice() else {
-        return Err(syn::Error::new_spanned(
-            ty,
-            "GPU-Runs: DeviceLayout requires exactly two tuple types",
-        ));
-    };
-    // A catalog admission pattern is not a concrete packed-run schema.
-    if matches!(keys, Type::Infer(_)) && matches!(values, Type::Infer(_)) {
-        return Ok(None);
-    }
-    fn fields(ty: &Type) -> syn::Result<Vec<Type>> {
-        let Type::Tuple(tuple) = ty else {
-            return Err(syn::Error::new_spanned(
-                ty,
-                "GPU-Runs: layout columns must be tuples",
-            ));
-        };
-        Ok(tuple.elems.iter().cloned().collect())
-    }
-    let mut columns = fields(keys)?;
-    let key_count = columns.len();
-    columns.extend(fields(values)?);
-    Ok(Some((columns, key_count)))
-}
-
-pub(crate) fn symbol(ty: &Type) -> Option<(&Type, &Type)> {
-    let Type::Path(path) = ty else { return None };
-    let segment = path.path.segments.last()?;
-    if crate::native_abi(ty) != Some(crate::NativeAbi::Symbol) {
-        return None;
-    }
-    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-        return None;
-    };
-    let mut args = arguments.args.iter();
-    match (args.next()?, args.next()?, args.next()) {
-        (GenericArgument::Type(logical), GenericArgument::Type(codec), None) => {
-            Some((logical, codec))
-        }
-        _ => None,
-    }
-}
+use syn::Type;
+use cq_lang_structures::provider::NativeAbi;
 
 /// Compared columns share one checked encoding for each logical Rust type.
 #[derive(Default)]
@@ -98,10 +39,10 @@ impl Codecs {
                 Structure::Host { keyed, .. } | Structure::Built { keyed, .. } => keyed,
                 _ => continue,
             };
-            if let Some((columns, _)) = layout_types(&keyed.provider.ty)? {
-                for column in columns {
-                    if let Some((logical, codec)) = symbol(&column) {
-                        codecs.record(logical, codec)?;
+            if let Some(input) = &keyed.provider.input {
+                for column in &input.columns {
+                    if let Some(codec) = &column.codec {
+                        codecs.record(&column.logical, codec)?;
                     }
                 }
             }
@@ -133,9 +74,14 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
         if !matches!(reader, cq_lang_structures::ReaderRef::Scan) {
             continue;
         }
-        let Some((types, key_count)) = layout_types(&keyed.provider.ty)? else {
+        if analysis.facts(&keyed.provider).abi != Some(NativeAbi::Runs) {
             continue;
-        };
+        }
+        let input = keyed.provider.input.as_ref().ok_or_else(|| {
+            syn::Error::new_spanned(entry, "GPU-Runs: input schema is not recorded")
+        })?;
+        let types = &input.columns;
+        let key_count = input.key_count;
         let host = &analysis.physical.hosts[&symbol_name(&entry.name)];
         let layout = &analysis.host_layouts[host];
         let row = &analysis.physical.rows[&symbol_name(&entry.name)];
@@ -152,8 +98,7 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
         for (column, ty) in &row.types {
             if let Some(source) = origin.columns.get(column) {
                 let position = layout.iter().position(|name| name == source).unwrap();
-                let logical =
-                    symbol(&types[position]).map_or(&types[position], |(logical, _)| logical);
+                let logical = &types[position].logical;
                 if ty != logical {
                     return Err(syn::Error::new_spanned(
                         entry,
@@ -228,7 +173,8 @@ pub fn record_representation(
         let Some(host) = analysis.physical.hosts.get(&name) else {
             continue;
         };
-        if let Some((columns, _)) = layout_types(&keyed.provider.ty)? {
+        if let Some(input) = &keyed.provider.input {
+            let columns = &input.columns;
             let layout = &analysis.host_layouts[host];
             if columns.len() != layout.len() {
                 return Err(syn::Error::new_spanned(
@@ -237,11 +183,7 @@ pub fn record_representation(
                 ));
             }
             for (column, ty) in layout.iter().zip(columns) {
-                hosts.insert((host.clone(), column.clone()), symbol(&ty).is_some());
-            }
-        } else if crate::native_abi(&keyed.provider.ty) == Some(crate::NativeAbi::Columns) {
-            for column in &analysis.host_layouts[host] {
-                hosts.insert((host.clone(), column.clone()), false);
+                hosts.insert((host.clone(), column.clone()), ty.codec.is_some());
             }
         }
     }
@@ -286,7 +228,7 @@ pub fn record_representation(
         let Structure::Built { keyed, .. } = &entry.structure else {
             continue;
         };
-        if crate::native_abi(&keyed.provider.ty) != Some(crate::NativeAbi::Range) {
+        if analysis.facts(&keyed.provider).abi != Some(NativeAbi::Range) {
             continue;
         }
         // The native range provider publishes Scalar-ABI rows, including
@@ -324,8 +266,8 @@ mod tests {
                 result = let canon project bound keep {value};
                 return result as answer(value);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
                 result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
             }
@@ -359,8 +301,8 @@ mod tests {
                 result = let canon project selected keep {x,y};
                 return result as answer(x,y);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
                 result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
             }
@@ -379,18 +321,58 @@ mod tests {
     }
 
     #[test]
-    fn checks_declared_layout_width_and_scalar_domains() {
-        let valid: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(i64,), (i64,)>);
-        let (columns, keys) = layout_types(&valid).unwrap().unwrap();
-        assert_eq!((columns.len(), keys), (2, 1));
-        let wide: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(i64,), (i64,u8)>);
-        assert_eq!(layout_types(&wide).unwrap().unwrap().0.len(), 3);
-        let alias: Type =
-            syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(MyScalar,), (u32,)>);
-        assert!(layout_types(&alias).unwrap().is_some());
-        let template: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<_, _>);
-        assert!(layout_types(&template).unwrap().is_none());
-        let ordinary: Type = syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider);
-        assert!(layout_types(&ordinary).unwrap().is_none());
+    fn schema_and_codecs_do_not_depend_on_provider_spelling() {
+        let provider: cq_lang_structures::Provider = syn::parse_quote! {
+            @custom input {
+                keys 1;
+                columns [MyScalar => OpaqueScalar, Logical => Stored codec Codec]
+            } as CompletelyUnrelatedAlias
+        };
+        let input = provider.input.as_ref().unwrap();
+        assert_eq!((input.columns.len(), input.key_count), (2, 1));
+        assert_eq!(input.columns[0].logical, syn::parse_quote!(MyScalar));
+        assert_eq!(input.columns[1].codec, Some(syn::parse_quote!(Codec)));
+        let printed = quote!(#provider);
+        let roundtrip: cq_lang_structures::Provider = syn::parse2(printed).unwrap();
+        assert_eq!(provider, roundtrip);
+    }
+
+    #[test]
+    fn native_binding_reads_declared_abi_and_copies_the_input_instance() {
+        let source: Program = syn::parse_quote! {
+            physical {
+                relation R(x:i64) = (&data.r);
+                relation D(x:i64) = (&data.d);
+                d = pipe rename D@1 {x -> x};
+                r = let rename R@0 {x -> x};
+                joined = pipe probe first [x] d,r;
+                result = let canon project joined keep {x};
+                return result as answer(x);
+            }
+            structures {
+                providers {
+                    native = AnyDefaultSpelling { reads [exact, range, membership, resident], abi runs };
+                    index = OtherDefaultSpelling { reads [exact] };
+                    host_scan = Host { reads [] };
+                    packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon {
+                        reads [distinct], build inferred, packed_bits 128
+                    };
+                }
+                r host scan = @native input { keys 1; columns [i64 => StoredScalar] } as Alias [];
+                r = @index as Index [x];
+                d host scan = @host_scan as Host [];
+                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result canon = rows;
+            }
+        };
+        let target = bind(&source).unwrap();
+        let Structure::Host { keyed: host, .. } = &source.structures.entries[0].structure else {
+            unreachable!()
+        };
+        let Structure::Built { keyed: built, .. } = &target.structures.entries[1].structure else {
+            unreachable!()
+        };
+        assert_eq!(built.provider, host.provider);
+        assert_eq!(built.provider.ty, syn::parse_quote!(Alias));
     }
 }

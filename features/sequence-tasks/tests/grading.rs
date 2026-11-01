@@ -2224,6 +2224,7 @@ fn routed_provider_projects_the_stored_key_after_constant_elision() {
                 inner: Some(Box::new(
                     cq_lang_sequence::structures::provider::base::declaration("sharded_index").instance(),
                 )),
+                input: None,
                 ty: syn::parse_quote!(
                     ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _>
                 ),

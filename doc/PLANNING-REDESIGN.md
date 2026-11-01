@@ -859,8 +859,8 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   matcher, A-46 catalog rewrites/placement, A-47 `supports[keys]`,
   A-48/49/50 cq-print `Vec`/`HashSet` spellings, A-129 rewrites indexes,
   A-130 rewrites structures, A-131 sequence-tasks levels, A-132 workloads
-  `HashIndex` suffix. C2 closed A-126..128 (below). Open: G1/G2 GPU
-  (A-138..140; GPU Sequence core is compile-only against C1).
+  `HashIndex` suffix. C2 closed A-126..128 (below). G1/G2 implementation
+  closes A-138..140 below; its gates are not included in these C1 results.
   Gates: expanded gate vs `c1b75718` passes 46/46 with identical expansions
   (29 runtime-changed targets verified by TPC-H SF1 29/29 DuckDB-exact,
   default and par, counters unchanged); DOOP xalan `--check` ok; regressions
@@ -911,3 +911,31 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   119/119; root 1,217, datalog 304, datalog-parallel 107, workloads 2,272,
   planners 35 passed. `passes/cq-order` is unchanged, so GPU automatic plans
   are unchanged.
+- C7Provider G1/G2 (contract 7, GPU native providers), 2026-11-01:
+  implementation closure of A-138..140. Provider declarations record native
+  ABI, contiguous-range eligibility and resident-column bounds; Host instances
+  record ordered logical/storage input columns, key count and optional codecs.
+  GPU binding consumes these facts and carries input schemas into Built
+  instances instead of recovering ABI, layout or encoding from Rust types.
+  Sequence publication reads declared contiguous-range eligibility directly,
+  without a target type-predicate callback. Structures checks schema cardinality,
+  required native Host schemas and declaration consistency. Round-trip,
+  mutation and opaque-alias coverage passes. Builds: advised/automatic
+  `cq-gpu-tpch`, `srd-doop-gpu`, `doop-gpu`. GPU suites: Sequence 52,
+  Sequence core 40, Datalog core 22, Datalog facade 3 (one timing probe
+  ignored), SRD exactness 1 checking all 43 relations. Structures/Sequence
+  language suites: 166. GPU TPC-H SF1 advised and automatic each 26/26 exact;
+  Cassandra all 26 complete tuple sets match CPU. GPU executions held the GPU
+  lock; no timing improvement is claimed.
+  Identity vs `c395fe83`: 81 advised and 161 combined advised/automatic
+  Sequence dumps and kernel modules match after erasing only added provider
+  facts and IR-derived module hashes. All 138 advised / 304 combined PTX entry
+  instruction bodies, ten helper bodies and shared declarations match after
+  compiler-generated symbol renaming, function-order and comment normalization;
+  raw PTX is not byte-identical. Evidence is in `target/c7-evidence/`.
+  Expanded Rust matches on all 46 targets (the interrupted `aggregate_stats`
+  snapshot passed separately). The full gate still requires CPU verification
+  for 29 conservative runtime-fingerprint changes: adding an empty instance
+  schema to `cq-sequence-tasks` catalog constructors changes the crate hash,
+  although every emitted expansion is identical. This verification was not
+  run in this slice; do not report the full gate as passed.

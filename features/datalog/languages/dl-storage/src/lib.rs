@@ -16,6 +16,7 @@ use cq_datalog_support::{columns, ensure, equalities, filters, key_columns};
 pub use cq_lang_datalog_incremental as incremental;
 use cq_syntax::symbol_name;
 pub use incremental::strata::source::{BodyItem, Query};
+use cq_lang_structures::{Declaration, provider::InputSchema};
 use std::collections::BTreeSet;
 use syn::{Expr, Ident, Type};
 mod layouts;
@@ -43,6 +44,8 @@ pub struct Program {
 /// initializers or scratch lifetimes. Expressions may read the device pool.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceStorage {
+    /// GPU read facts keyed by the Storage provider token, never its spelling.
+    pub providers: Vec<Declaration>,
     pub symbols: Vec<(Type, Type)>,
     /// Geometric run-maintenance advice consumed by every state initializer.
     pub ratio: usize,
@@ -59,6 +62,8 @@ pub struct DeviceStorage {
 /// Relation-order packed rows: EDB upload, rule candidates and output decoding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceRelation {
+    /// Relation-order logical/storage columns and authored codecs for delta views.
+    pub input: InputSchema,
     pub word: Type,
     pub packing: Expr,
     /// Container of one round's candidate batches, before admission.
@@ -75,6 +80,9 @@ pub struct DeviceRelation {
 /// The maintained backing state of one device provider and its empty view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceState {
+    /// Physical layout order and key boundary, recorded by device storage.
+    pub input: InputSchema,
+    pub token: Ident,
     pub provider: Type,
     pub word: Type,
     pub packing: Expr,
@@ -91,6 +99,7 @@ pub struct DeviceScratch {
     pub release: Ident,
 }
 record!(DeviceStorage {
+    providers: Vec<Declaration>,
     symbols: Vec<(Type, Type)>,
     ratio: usize,
     relations: Vec<DeviceRelation>,
@@ -100,6 +109,7 @@ record!(DeviceStorage {
     scratch: DeviceScratch
 });
 record!(DeviceRelation {
+    input: InputSchema,
     word: Type,
     packing: Expr,
     candidates: Type,
@@ -109,6 +119,8 @@ record!(DeviceRelation {
     next: Ident
 });
 record!(DeviceState {
+    input: InputSchema,
+    token: Ident,
     provider: Type,
     word: Type,
     packing: Expr,
@@ -460,6 +472,50 @@ pub mod contract {
                 program,
                 "device records must cover every relation, layout and negative key set",
             )?;
+            for (index, declaration) in device.providers.iter().enumerate() {
+                ensure(
+                    !device.providers[..index].iter().any(|previous| previous.token == declaration.token)
+                        && program.tokens.iter().any(|token| token.token == declaration.token)
+                        && declaration.facts.abi.is_some(),
+                    program,
+                    "device provider declarations require unique declared Storage tokens and a native ABI",
+                )?;
+            }
+            let declared = |token: &Ident| device.providers.iter().any(|declaration| declaration.token == *token);
+            let schema_matches = |input: &InputSchema, columns: &[&Type], keys: usize| {
+                input.key_count == keys && input.columns.len() == columns.len()
+                    && input.columns.iter().zip(columns).all(|(input, logical)| input.logical == **logical)
+            };
+            for (index, (relation, declaration)) in device.relations.iter()
+                .zip(&program.incremental.strata.source.declarations).enumerate()
+            {
+                let columns = declaration.columns.iter().map(|column| &column.ty).collect::<Vec<_>>();
+                ensure(schema_matches(&relation.input, &columns, columns.len()), program,
+                    "device relation input must record its complete logical schema")?;
+                if declaration.value.is_none() {
+                    ensure(program.providers.get(index).is_some_and(|provider| declared(&provider.delta.token)), program,
+                        "device delta provider must have declared GPU facts")?;
+                }
+            }
+            for (state, layout) in device.layouts.iter().zip(&program.layouts)
+                .chain(device.delta_layouts.iter().zip(&program.delta_layouts))
+            {
+                let relation = analysis.positions.get(&symbol_name(&layout.relation))
+                    .and_then(|&index| program.incremental.strata.source.declarations.get(index))
+                    .ok_or_else(|| syn::Error::new_spanned(layout, "unknown device layout relation"))?;
+                let columns = layout.columns.iter().filter_map(|&column| relation.columns.get(column).map(|column| &column.ty)).collect::<Vec<_>>();
+                ensure(declared(&state.token) && state.token == layout.provider.token
+                    && columns.len() == layout.columns.len() && schema_matches(&state.input, &columns, layout.key), program,
+                    "device layout input and token must match its recorded logical layout")?;
+            }
+            for (state, negative) in device.negations.iter().zip(&program.negations) {
+                let relation = program.incremental.strata.source.declarations.get(negative.relation)
+                    .ok_or_else(|| syn::Error::new_spanned(negative, "unknown device negative relation"))?;
+                let columns = negative.columns.iter().filter_map(|&column| relation.columns.get(column).map(|column| &column.ty)).collect::<Vec<_>>();
+                ensure(declared(&state.token) && columns.len() == negative.columns.len()
+                    && schema_matches(&state.input, &columns, columns.len()), program,
+                    "device negative input must match its recorded logical projection")?;
+            }
         }
         provider::check_table(&program.tokens)?;
         ensure(

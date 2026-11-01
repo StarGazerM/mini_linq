@@ -4,6 +4,7 @@ use cq_lang_datalog_storage::{
     self as storage, DeviceRelation, DeviceScratch, DeviceState, DeviceStorage, Hasher, LayoutProtocol, Program,
     Provider, Providers, provider,
 };
+use cq_lang_structures::provider::{InputColumn, InputSchema};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Expr, Ident, Type};
@@ -80,6 +81,17 @@ impl Symbols {
         }
     }
 
+    fn input(&self, logical: &[&Type], key_count: usize) -> InputSchema {
+        InputSchema {
+            key_count,
+            columns: logical.iter().map(|ty| InputColumn {
+                logical: (*ty).clone(),
+                storage: self.device_type(ty),
+                codec: self.codec(ty).cloned(),
+            }).collect(),
+        }
+    }
+
     fn validate(&self, program: &Program) -> syn::Result<()> {
         for (ty, _) in &self.0 {
             if !program.incremental.strata.source.declarations.iter()
@@ -127,25 +139,15 @@ pub fn layout_type(types: &[&Type], key: usize) -> Type {
     syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(#(#keys,)*), (#(#values,)*)>)
 }
 
-/// Device tokens (verbatim spellings; G2 owns their device facts): packed
-/// bulk layout views and the relation-order delta/NEW views.
+/// The device layout token covers maintained layouts and relation-order views.
 pub const DEVICE_LAYOUT: &str = "device_layout";
-pub const DEVICE_VIEW: &str = "device_view";
 
-fn device_tokens() -> [provider::Token; 2] {
+fn device_tokens() -> [provider::Token; 1] {
     [
         provider::declared(
             DEVICE_LAYOUT,
             provider::Spelling::Verbatim,
             Some(LayoutProtocol::Bulk),
-            provider::Admission::None,
-            false,
-            provider::TaskHasher::Fx,
-        ),
-        provider::declared(
-            DEVICE_VIEW,
-            provider::Spelling::Verbatim,
-            None,
             provider::Admission::None,
             false,
             provider::TaskHasher::Fx,
@@ -183,7 +185,7 @@ fn device_provider(logical: &[&Type], device: &[&Type], edb: bool, canonical: us
     if edb { return Ok(default_provider(logical, canonical)); }
     let view = layout_type(device, device.len());
     let init = empty_view(&view, &word_type(device.iter().copied())?);
-    let view = instance(DEVICE_VIEW, view);
+    let view = instance(DEVICE_LAYOUT, view);
     Ok(Providers { canonical, delta: view.clone(), next: view, delta_init: init.clone(), next_init: init })
 }
 
@@ -204,10 +206,13 @@ fn empty_view(provider: &Type, word: &Type) -> Expr {
 }
 
 /// A device view maintained as sorted packed runs in its own column order.
-fn device_state(provider: Type, types: &[&Type], ratio: usize) -> syn::Result<DeviceState> {
+fn device_state(provider: Type, input: InputSchema, ratio: usize) -> syn::Result<DeviceState> {
+    let types = input.columns.iter().map(|column| &column.storage).collect::<Vec<_>>();
     let word = word_type(types.iter().copied())?;
     let state: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>);
     Ok(DeviceState {
+        token: Ident::new(DEVICE_LAYOUT, proc_macro2::Span::call_site()),
+        input,
         packing: syn::parse_quote!(<#provider>::derive_packing()?),
         state_init: syn::parse_quote!(<#state>::new(__cq_gpu_pool.clone(), #ratio)?),
         init: empty_view(&provider, &word),
@@ -217,9 +222,10 @@ fn device_state(provider: Type, types: &[&Type], ratio: usize) -> syn::Result<De
     })
 }
 
-fn device_relation(types: &[&Type]) -> syn::Result<DeviceRelation> {
+fn device_relation(input: InputSchema) -> syn::Result<DeviceRelation> {
+    let types = input.columns.iter().map(|column| &column.storage).collect::<Vec<_>>();
     let columns = types.iter().map(|ty| quote!(<#ty as ::gpu_datalog_runtime::Scalar>::COLUMN));
-    Ok(DeviceRelation {
+    let relation = DeviceRelation {
         word: word_type(types.iter().copied())?,
         packing: syn::parse_quote!(::gpu_datalog_runtime::Packing::with_columns(&[#(#columns),*])?),
         candidates: syn::parse_quote!(::std::vec::Vec<::gpu_datalog_runtime::CandidateBatch>),
@@ -227,7 +233,9 @@ fn device_relation(types: &[&Type]) -> syn::Result<DeviceRelation> {
         arena: syn::parse_quote!(::gpu_datalog_runtime::CandidateArena),
         arena_init: syn::parse_quote!(::gpu_datalog_runtime::CandidateArena::new(__cq_gpu_pool.clone())),
         next: syn::parse_quote!(fresh_run),
-    })
+        input,
+    };
+    Ok(relation)
 }
 
 /// Realize a default Storage program on the device: every layout becomes a
@@ -249,26 +257,31 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
         let device = device_types(index, &(0..declaration.arity()).collect::<Vec<_>>());
         let device = device.iter().collect::<Vec<_>>();
         *provider = device_provider(&logical, &device, declaration.value.is_some(), provider.canonical)?;
-        relations.push(device_relation(&device)?);
+        relations.push(device_relation(symbols.input(&logical, logical.len()))?);
     }
     let mut states = [Vec::new(), Vec::new()];
     for (states, layouts) in states.iter_mut().zip([&mut target.layouts, &mut target.delta_layouts]) {
         for layout in layouts.iter_mut() {
-            let types = device_types(analysis.positions[&cq_syntax::symbol_name(&layout.relation)], &layout.columns);
-            let types = types.iter().collect::<Vec<_>>();
+            let declaration = &declarations[analysis.positions[&cq_syntax::symbol_name(&layout.relation)]];
+            let logical = layout.columns.iter().map(|&column| &declaration.columns[column].ty).collect::<Vec<_>>();
+            let input = symbols.input(&logical, layout.key);
+            let types = input.columns.iter().map(|column| &column.storage).collect::<Vec<_>>();
             layout.provider = instance(DEVICE_LAYOUT, layout_type(&types, layout.key));
             layout.hasher = Hasher::None;
             layout.protocol = LayoutProtocol::Bulk;
-            states.push(device_state(layout.provider.ty.clone(), &types, ratio)?);
+            states.push(device_state(layout.provider.ty.clone(), input, ratio)?);
         }
     }
     let [layouts, delta_layouts] = states;
     let negations = source.negations.iter().map(|negative| {
-        let types = device_types(negative.relation, &negative.columns);
-        let types = types.iter().collect::<Vec<_>>();
-        device_state(layout_type(&types, types.len()), &types, ratio)
+        let declaration = &declarations[negative.relation];
+        let logical = negative.columns.iter().map(|&column| &declaration.columns[column].ty).collect::<Vec<_>>();
+        let input = symbols.input(&logical, logical.len());
+        let types = input.columns.iter().map(|column| &column.storage).collect::<Vec<_>>();
+        device_state(layout_type(&types, types.len()), input, ratio)
     }).collect::<syn::Result<Vec<_>>>()?;
     target.device = Some(DeviceStorage {
+        providers: vec![cq_gpu_sequence_core::providers::declaration(DEVICE_LAYOUT)],
         symbols: symbols.0.clone(),
         ratio,
         relations,
@@ -286,7 +299,7 @@ fn restore(target: &Program) -> syn::Result<Program> {
     let declarations = &target.incremental.strata.source.declarations;
     let mut source = target.clone();
     source.device = None;
-    source.tokens.retain(|token| token.token != DEVICE_LAYOUT && token.token != DEVICE_VIEW);
+    source.tokens.retain(|token| token.token != DEVICE_LAYOUT);
     for (provider, declaration) in source.providers.iter_mut().zip(declarations) {
         let types = declaration.columns.iter().map(|column| &column.ty).collect::<Vec<_>>();
         *provider = default_provider(&types, provider.canonical);
@@ -372,6 +385,15 @@ mod tests {
         ));
         assert_eq!(device.relations[0].word, word);
         assert_eq!(Symbols::from_program(&target).unwrap().codec(&syn::parse_quote!(String)), Some(&syn::parse_quote!(TextCodec)));
+        assert_eq!(device.providers, vec![cq_gpu_sequence_core::providers::declaration(DEVICE_LAYOUT)]);
+        for input in device.relations.iter().map(|relation| &relation.input)
+            .chain(device.layouts.iter().chain(&device.delta_layouts).chain(&device.negations).map(|state| &state.input))
+        {
+            assert!(input.key_count <= input.columns.len());
+            assert!(input.columns.iter().all(|column|
+                column.logical == syn::parse_quote!(String) && column.storage == ty
+                    && column.codec == Some(syn::parse_quote!(TextCodec))));
+        }
         check(&source, &target).unwrap();
         check_device(&target).unwrap();
         let roundtrip: Program = syn::parse2(quote!(#target)).unwrap();
@@ -472,7 +494,7 @@ mod tests {
         let word = word_type([&ty, &ty]).unwrap();
         // EDB relations keep the defaults of their unused IDB fields.
         assert_eq!(target.providers[0], source.providers[0]);
-        let view: Provider = syn::parse_quote!(@device_view as ::gpu_datalog_runtime::DeviceLayout<(i32, i32,), ()>);
+        let view: Provider = syn::parse_quote!(@device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32, i32,), ()>);
         let idb = &target.providers[2];
         assert_eq!((&idb.delta, &idb.next, idb.canonical), (&view, &view, source.providers[2].canonical));
         assert_eq!(idb.delta_init, idb.next_init);
@@ -566,7 +588,6 @@ mod tests {
             assert!(check(&changed, &target).is_err(), "checker source {index}");
             let mut changed = target.clone();
             mutate(&mut changed);
-            storage::contract::check(&changed).unwrap();
             assert!(check(&source, &changed).is_err(), "target {index}");
         }
         let mut wrong_width = target.clone();
@@ -574,6 +595,14 @@ mod tests {
         wrong_width.device.as_mut().unwrap().layouts[canonical].state = syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<u128>);
         assert!(check(&source, &wrong_width).is_err());
         let records: &[fn(&mut DeviceStorage)] = &[
+            |d| d.providers.clear(),
+            |d| d.providers.push(d.providers[0].clone()),
+            |d| d.providers[0].facts.abi = None,
+            |d| d.layouts[0].token = syn::parse_quote!(unknown),
+            |d| d.layouts[0].input.key_count += 1,
+            |d| { d.relations[0].input.columns.pop(); },
+            |d| d.negations[0].input.columns[0].logical = syn::parse_quote!(Wrong),
+            |d| d.layouts[0].input.columns[0].codec = Some(syn::parse_quote!(WrongCodec)),
             |d| d.relations[2].candidates_init = syn::parse_quote!(custom()),
             |d| d.relations[2].arena = syn::parse_quote!(Custom),
             |d| d.relations[2].next = syn::parse_quote!(empty_then_extend),

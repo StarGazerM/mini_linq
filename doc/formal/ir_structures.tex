@@ -7,9 +7,12 @@ Structures ::= Physical structures { providers { Decl* } Entry* }
 Decl ::= x = Type { Fact, ... };
 Fact ::= reads [Cap,...] | supports [Support,...] | build (inferred | macro)
        | accounting (rows | keys) | (nested | routed) N | join_filter
-       | shared | packed_bits N
+       | shared | packed_bits N | abi (range | runs | columns)
+       | contiguous_range | bounds resident_columns
 Cap ::= exact | range | membership | ordered | distinct | resident
-Provider ::= @x [(Provider)] as Type
+Provider ::= @x [(Provider)] [InputSchema] as Type
+InputSchema ::= input { keys N; columns [InputColumn,...] }
+InputColumn ::= Type => Type [codec Type]
 Entry ::= r = Provider [K]... [supports [Support,...]]
               [membership] [payload[P] constants{c = term, ...}];
         | r host ReaderRef = Provider [K]... [supports [Support,...]];
@@ -41,8 +44,11 @@ referenced token once: its read capabilities, the strongest support an
 instance may declare, its construction (\code{inferred}: a bare path built by
 \code{Build::build}; \code{macro}: \code{cq\_storage::build!}), allocation
 accounting, composition with the inner's generic argument index, supplementary
-join-filter eligibility, sharing with pool and task readers, and a packed-key
-width limit. Every later pass reads these facts; none inspects a spelling.
+join-filter eligibility, sharing with pool and task readers, a packed-key
+width limit, native ABI, contiguous-range eligibility and bounds source.
+Native Host input instances additionally record ordered logical/storage columns
+and optional codecs; all types are opaque. Codec presence records encoding.
+Every later pass reads these facts; none inspects a spelling.
 Comparing token ids is identity, not recognition.
 \begin{mathpar}
 \Rule{STR-Provider}{\mathsf{tokens}(t)=\mathrm{dom}(\mathsf{decls}(t))\quad

@@ -12,6 +12,18 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   Removed the unused join-reexpression certificate; result-support equality
   remains for construction checks. Formal rules and conformance now record
   this boundary and GR-RetainPrefix's stop at the first unknown bound.
+- GPU provider identity (contract 7, C7Provider G1/G2): provider declarations
+  record native ABI, contiguous-range eligibility and resident-column bounds;
+  input instances record ordered logical/storage schemas and explicit codecs.
+  Native binding and range publication consume these records rather than Rust
+  constructor/generic-argument recognition. Structures checks schema cardinality,
+  required native Host input and declaration consistency. GPU builds and suites
+  pass; TPC-H SF1 advised/automatic are each 26/26 exact, SRD field-flow fixture
+  checks all 43 outputs, and Cassandra matches all 26 complete tuple sets.
+  Advised and automatic Sequence execution records and kernel sources preserve
+  identity after erasing added facts/module hashes. All 46 expanded-Rust targets
+  match `c395fe83`; 29 require fresh CPU verification for the conservative
+  `cq-sequence-tasks` runtime fingerprint change (catalog initialization only).
 
 - Datalog provider identity (contract 7, C7Provider C2). Storage/Round
   providers are recorded `@token as Type` instances: `Layout.provider` plus

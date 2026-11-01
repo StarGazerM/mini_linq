@@ -29,8 +29,8 @@ fn main() {
                 answer = let canon project scan keep {value};
                 return answer as answer(value);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                scan host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'_, (i64,)> [];
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                scan host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'_, (i64,)> [];
                 answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 answer canon = rows;
             }

@@ -885,8 +885,9 @@ scale-2 integers. Substring predicates receive real strings, not dictionary IDs.
 This affects H03 (`c_mktsegment`), H05 (`r_name`), H07/H07-block (`n_name`),
 H08 (`p_type`, `r_name`), H09 (`p_name`), H21-positive (`o_orderstatus`, `n_name`),
 D19/D85 (`n_name`), and D27 (`p_brand`, `n_name`); D72-inner has no string columns.
-Catalog provider tokens declare their accepted element types: resident range
-providers accept scalar codes, while host providers retain unsupported rows.
+Catalog provider tokens declare their native ABI, contiguous-range promise and
+bounds source. Loader-authored input instances record their logical/storage
+columns and codecs; no ABI or scalar support is inferred from Rust spelling.
 The explicit `tpch_dictionary` profile also stores String columns as codes when
 their uses are literal equality predicates, including relational `Or` arms and
 `In` sets. Each literal uses its own column's dictionary; H07's country-pair

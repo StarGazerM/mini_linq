@@ -50,10 +50,10 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
             checked = let canon probe first [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-            l host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-            r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-            s host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            l host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+            r host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+            s host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
             r = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [b][c];
             s = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a][c];
             r rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;

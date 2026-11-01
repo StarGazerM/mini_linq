@@ -181,6 +181,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                 token: sharded.token.clone(),
                 ty: syn::parse_quote!(::cq_storage::sharded::Sharded<#ty, _>),
                 inner: Some(Box::new(inner)),
+                input: None,
             },
             levels: levels.clone(),
         });

@@ -1393,7 +1393,17 @@ equal symbols have equal codes in every relation and round. The device sees only
 Relations, columns, keys and layout maintenance are unchanged. Storage records
 the declared codec map and resolved geometric maintenance ratio in
 \code{device}; \code{DeviceRuns<W>} carries no logical schema metadata.
-No consumer infers codecs from provider names or generic arguments.
+The device record also carries GPU provider declarations keyed by the Storage
+token, with \code{abi runs}; maintained layouts, negative projections and IDB
+delta/NEW views use the same \code{device\_layout} identity. Each relation and
+layout records an explicit input schema: key count and ordered
+\code{logical => storage codec C} columns (the codec is optional).
+These records are produced from relation declarations, layout permutations and
+the authored codec map, not recovered from Rust types. Storage checks token
+membership, schema cardinality, logical column order and key boundaries.
+The Round binding packet copies these declarations and input records into CQ
+Host providers; Rust spellings remain opaque and are printed unchanged.
+No consumer infers codecs or native ABIs from provider names or generic arguments.
 \begin{mathpar}
 \Rule{DL-DeviceSymbols}{D=\mathrm{Storage.device.symbols}\quad
  \mathrm{dom}(D)\text{ consists of distinct, declared nonnative logical types}\quad

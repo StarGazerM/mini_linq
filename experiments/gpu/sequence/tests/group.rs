@@ -35,8 +35,8 @@ fn translates_grouped_canonical_publication() {
             grouped = let group r by [k] { n:usize=count(); total:i64=sum(value); low:Option<i64> = min(value); high:Option<i64> = max(value); };
             return grouped as answer(k,n,total,low,high);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build macro }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
-            r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build macro }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
+            r host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
             r rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
             r canon = rows;
             grouped rows = @grouped_rows as ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
@@ -84,8 +84,8 @@ fn gpu_grouped_counts_sums_extrema_and_canonical_valuations() -> Result<()> {
                 grouped = let group r by [k] { n:usize=count(); total:i64=sum(value); low:Option<i64> = min(value); high:Option<i64> = max(value); };
                 return grouped as answer(k,n,total,low,high);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build macro }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
-                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build macro }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
+                r host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
                 r rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 r canon = rows;
                 grouped rows = @grouped_rows as ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
@@ -139,8 +139,8 @@ fn gpu_keyed_group_reads_resident_columns_and_filters_before_folding() -> Result
                 };
                 return grouped as answer(k,n,total,low,high);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build macro }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
-                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build macro }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
+                r host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
                 f rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 f canon = rows;
                 grouped rows = @grouped_rows as ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
@@ -187,8 +187,8 @@ fn whole_input_fold_combines_block_partials_including_empty_identity() -> Result
                 r = let canon rename R@0 {a -> a};
                 return r as answer(a);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
                 r rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 r canon = rows;
             }

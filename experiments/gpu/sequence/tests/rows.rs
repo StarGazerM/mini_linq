@@ -15,9 +15,9 @@ fn filtered_probe(condition: proc_macro2::TokenStream) -> Program {
             result = let canon project joined keep {a, value, payload};
             return result as answer(a, value, payload);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-            driver host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns [];
-            provider host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns [];
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            driver host scan = @device_columns input { keys 0; columns [i32 => i32, i32 => i32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns [];
+            provider host scan = @device_columns input { keys 0; columns [i32 => i32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns [];
             provider = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a];
             result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
             result canon = rows;
@@ -144,9 +144,9 @@ fn negative_membership_inverts_the_provider_probe_without_expanding_witnesses() 
                 result = let canon project present keep {a, b};
                 return result as answer(a, b);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                driver host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns [];
-                provider host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns [];
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                driver host scan = @device_columns input { keys 0; columns [i32 => i32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns [];
+                provider host scan = @device_columns input { keys 0; columns [i32 => i32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns [];
                 provider = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a, b];
                 result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
@@ -189,9 +189,9 @@ fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
             result = let canon project present keep {a};
             return result as answer(a);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-            driver host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns [];
-            provider host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns [];
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            driver host scan = @device_columns input { keys 0; columns [i32 => i32] } as ::cq_gpu_runtime::DeviceColumns [];
+            provider host scan = @device_columns input { keys 0; columns [i32 => i32, i32 => i32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns [];
             selected = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a];
             result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
             result canon = rows;
@@ -232,9 +232,9 @@ fn segmented_binding(expression: proc_macro2::TokenStream) -> Program {
             result = let canon project computed keep {a, doubled};
             return result as answer(a, doubled);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-            driver host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns [];
-            provider host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns [];
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            driver host scan = @device_columns input { keys 0; columns [i32 => i32] } as ::cq_gpu_runtime::DeviceColumns [];
+            provider host scan = @device_columns input { keys 0; columns [i32 => i32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns [];
             provider = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a];
             result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
             result canon = rows;

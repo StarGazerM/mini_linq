@@ -3356,10 +3356,10 @@ mod tests {
                 result = let canon project joined keep {a,b};
                 return result as answer(a,b);
             }
-            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                d host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
-                r host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
-                r = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro, abi runs }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                d host scan = @device_layout input { keys 1; columns [i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
+                r host scan = @device_layout input { keys 2; columns [i32 => i32, i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
+                r = @device_layout input { keys 2; columns [i32 => i32, i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
                 result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
             }
@@ -3470,8 +3470,8 @@ mod tests {
                     result = let canon project second keep {out0,out1};
                     return result as answer(out0,out1);
                 }
-                structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                    r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i32,i32)> [];
+                structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                    r host scan = @device_columns input { keys 0; columns [i32 => i32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(i32,i32)> [];
                     result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                     result canon = rows;
                 }
@@ -3598,8 +3598,8 @@ mod tests {
                 r = let canon rename R@0 {a -> a,b -> b};
                 return r as answer(b,a);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,u32)> [];
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_columns input { keys 0; columns [i64 => i64, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,u32)> [];
                 r rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 r canon = rows;
             }
@@ -3809,8 +3809,8 @@ mod tests {
                     r = let canon rename R@0 {a -> a};
                     return r as answer(a);
                 }
-                structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                    r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+                structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                    r host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
                     r rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                     r canon = rows;
                 }
@@ -3872,8 +3872,8 @@ mod tests {
                 host = let canon semi eager [a] host_input,resident;
                 return host as answer(a);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                resident host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                resident host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
                 host_input host scan = @host_scan as ::core::iter::Map<_,_> [];
                 resident = @sorted_run as ::cq_storage::SortedRun<_,_> [a];
                 host rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
@@ -3933,8 +3933,8 @@ mod tests {
                     };
                     return grouped as answer(#output_key total,rows);
                 }
-                structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; #group_map }
-                    r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
+                structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; #group_map }
+                    r host scan = @device_columns input { keys 0; columns [i64 => i64, i32 => i32, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
                     valuation rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                     valuation canon = rows;
                     #accumulator
@@ -3977,8 +3977,8 @@ mod tests {
                 grouped = pipe group valuation by [key] { total:i64=sum(value); rows:usize=count(); };
                 return grouped as answer(key,total,rows);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
-                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
+                r host scan = @device_columns input { keys 0; columns [i64 => i64, i32 => i32, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
                 valuation rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 valuation canon = rows;
                 grouped group = @group_map as ::cq_gpu_sequence_runtime::group::SegmentedGroup;
@@ -4016,9 +4016,9 @@ mod tests {
                 quote!(host_scan = ::core::iter::Map<_, _> { reads [], build macro };),
             ),
             (
-                quote!(@device_layout as ::gpu_datalog_runtime::DeviceLayout<
+                quote!(@device_layout input { keys 1; columns [i64 => i64, i32 => ::gpu_datalog_runtime::Symbol<i32, TestCodec> codec TestCodec] } as ::gpu_datalog_runtime::DeviceLayout<
                     (i64,), (::gpu_datalog_runtime::Symbol<i32, TestCodec>,)>),
-                quote!(device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro };),
+                quote!(device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro, abi runs };),
             ),
         ] {
             let program: Program = syn::parse2(quote! {
@@ -4186,8 +4186,8 @@ mod tests {
                 present = let canon semi eager [a] r,p;
                 return present as answer(a);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
                 p host scan = @host_scan as ::core::iter::Map<_,_> [];
                 p = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a];
                 present rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
@@ -4242,8 +4242,8 @@ mod tests {
                     guarded = let canon guard filtered if (a % 2 == 0);
                     return guarded as answer(a);
                 }
-                structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; #vec }
-                    r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+                structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; #vec }
+                    r host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
                     #filtered_rows
                     guarded rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                     guarded canon = rows;
@@ -4365,8 +4365,8 @@ mod tests {
                     r = let canon rename R@0 {a -> a};
                     return r as answer(a);
                 }
-                structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                    r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(#ty,),::cq_gpu_runtime::For> [];
+                structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                    r host scan = @device_columns input { keys 0; columns [#ty => #ty] } as ::cq_gpu_runtime::DeviceColumns<'static,(#ty,),::cq_gpu_runtime::For> [];
                     r rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                     r canon = rows;
                 }

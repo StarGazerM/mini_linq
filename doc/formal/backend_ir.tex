@@ -1280,9 +1280,9 @@ enable expression; generated names and kernel argument offsets carry no meaning.
 The invocation-local cache is shared across capacity retries.
 
 \paragraph{GPU realization records.}
-Native ABI constructors are complete catalog identities, with generic arguments
-carrying their declared schemas. An unrelated type with the same last identifier
-does not acquire native residency or an encoding ABI.
+Native ABI is a declared provider-token fact. Input instances record the ordered
+logical/storage column schema and optional codec explicitly; every Rust type is
+opaque. Neither constructor paths nor generic arguments confer native residency.
 \begin{mathpar}
 \Rule{GPU-Representation}{\rho=\text{recorded provider/codec facts}\quad
  R=\mathrm{fv}(e)\cap\text{row columns}\quad R\subseteq\rho.\mathrm{identity}\quad
@@ -1293,8 +1293,11 @@ Binding records identity or encoded columns from the selected provider;
 unrecorded columns are unknown. Encoded or unknown Rust reads execute at host,
 and encoded relational operands follow \textsc{GPU-Capture}.
 \begin{mathpar}
-\Rule{GPU-NativeAbi}{\mathrm{constructor}(T)=\mathrm{identity}(a)\quad a\in\mathrm{nativeCatalog}}
- {\mathrm{abi}(T)=a\quad\mathrm{residency}(T)=\mathrm{residency}(a)}
+\Rule{GPU-NativeAbi}{p.\mathrm{token}=t\quad \Delta(t).\mathrm{abi}=a\quad
+ a\in\{\mathrm{range},\mathrm{runs},\mathrm{columns}\}\quad
+ I=p.\mathrm{input}\quad I\ne\bot\Longrightarrow I.\mathrm{keys}\leq |I.\mathrm{columns}|}
+ {\mathrm{abi}(p)=a\quad\mathrm{schema}(p)=I\quad
+ \mathrm{encoded}(I_i)\iff I_i.\mathrm{codec}\ne\varnothing}
 \Rule{GPU-CodecIdentity}{\forall (T,c),(T,c')\in\mathrm{declaredSymbols}.\ c=c'}
  {\mathrm{codecs}(T)=c\quad\mathrm{captureCodec}(x:T)=\mathrm{codecs}(T)}
 \Rule{GPU-ProviderLayout}{T=\text{recorded built provider}\quad
@@ -1310,8 +1313,12 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  \text{each field names its bounds provenance}}
  {\mathsf{publish}_{\rm gpu}\text{ consumes }(S,C)\text{ without selecting storage, codec or canonicality}}
 \end{mathpar}
-Codec identities are checked structurally for every declared native layout
-before translating expressions; a conflict is rejected, never overwritten.
+Native run and column Host scans require an input schema whose arity and opaque
+logical type tokens equal the source relation's ordered declaration; catalog
+templates may omit it. Contiguous ranges require the range ABI and range read capability;
+resident-column bounds require the columns ABI. Codec identities are compared
+as opaque recorded types across input schemas before translating expressions;
+a conflict is rejected, never overwritten.
 Thus a compared column and its closed capture use the same declared encoding.
 The GPU binding pass records one catalog-backed provider realization for both
 resident and computed paths; the checker validates supplied records without

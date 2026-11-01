@@ -74,6 +74,7 @@ fn explicit_providers_dispatch_build_capabilities_without_type_recognition() {
                 keyed.provider = cq_lang_structures::Provider {
                     token: declaration.token.clone(),
                     inner: None,
+                    input: None,
                     ty: provider.clone(),
                 };
             }

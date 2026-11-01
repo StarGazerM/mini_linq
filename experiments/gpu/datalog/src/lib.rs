@@ -15,9 +15,13 @@ pub fn bind_inputs(
     source: &cq_lang_structures::Program,
     args: proc_macro2::TokenStream,
 ) -> syn::Result<cq_lang_structures::Program> {
-    struct Bindings(std::collections::BTreeMap<String, cq_lang_structures::Provider>);
+    struct Bindings {
+        providers: cq_lang_structures::Providers,
+        inputs: std::collections::BTreeMap<String, cq_lang_structures::Provider>,
+    }
     impl syn::parse::Parse for Bindings {
         fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+            let providers = input.parse()?;
             let mut bindings = std::collections::BTreeMap::new();
             while !input.is_empty() {
                 let name: syn::Ident = input.parse()?;
@@ -31,10 +35,10 @@ pub fn bind_inputs(
                     ));
                 }
             }
-            Ok(Self(bindings))
+            Ok(Self { providers, inputs: bindings })
         }
     }
-    let bindings = syn::parse2::<Bindings>(args)?.0;
+    let bindings = syn::parse2::<Bindings>(args)?;
     let analysis = cq_lang_structures::contract::check(source)?;
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
@@ -43,7 +47,7 @@ pub fn bind_inputs(
         }
         let name = &entry.name;
         let host = &analysis.physical.hosts[&cq_syntax::symbol_name(name)];
-        let provider = bindings.get(host).ok_or_else(|| {
+        let provider = bindings.inputs.get(host).ok_or_else(|| {
             syn::Error::new_spanned(
                 entry.to_token_stream(),
                 "GPU Datalog input has no recorded device layout",
@@ -53,9 +57,7 @@ pub fn bind_inputs(
             keyed.provider = provider.clone();
         }
     }
-    target
-        .structures
-        .declare(&cq_gpu_sequence_core::providers::declarations());
+    target.structures.declare(&bindings.providers.declarations);
     cq_lang_structures::contract::check(&target)?;
     Ok(target)
 }

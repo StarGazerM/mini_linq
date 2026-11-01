@@ -9,14 +9,17 @@
 //! obligations. Comparing a recorded token id with an id is identity, not
 //! recognition.
 //! ```text
-//! Provider    ::= "@" Ident ["(" Provider ")"] "as" RustType
+//! Provider    ::= "@" Ident ["(" Provider ")"] [InputSchema] "as" RustType
+//! InputSchema ::= "input" "{" "keys" Integer ";" "columns" "[" InputColumn,* "]" "}"
+//! InputColumn ::= RustType "=>" RustType ["codec" RustType]
 //! Declaration ::= Ident "=" RustType "{" Fact,* "}" ";"
 //! Fact ::= "reads" "[" ("exact" | "range" | "membership" | "ordered"
 //!              | "distinct" | "resident"),* "]"
 //!        | "supports" "[" ("retain" | "expand" | "keys"),* "]"
 //!        | "build" ("inferred" | "macro") | "accounting" ("rows" | "keys")
 //!        | ("nested" | "routed") Integer | "join_filter" | "shared"
-//!        | "packed_bits" Integer
+//!        | "packed_bits" Integer | "abi" ("range" | "runs" | "columns")
+//!        | "contiguous_range" | "bounds" "resident_columns"
 //! ```
 
 // DESIGN provider-token
@@ -51,6 +54,14 @@ pub mod kw {
     syn::custom_keyword!(resident);
     syn::custom_keyword!(retain);
     syn::custom_keyword!(expand);
+    syn::custom_keyword!(input);
+    syn::custom_keyword!(columns);
+    syn::custom_keyword!(codec);
+    syn::custom_keyword!(abi);
+    syn::custom_keyword!(runs);
+    syn::custom_keyword!(contiguous_range);
+    syn::custom_keyword!(bounds);
+    syn::custom_keyword!(resident_columns);
 }
 
 /// Declared read capabilities, discharged against Sequence obligations.
@@ -117,6 +128,37 @@ pub enum Composition {
     Routed(usize),
 }
 
+/// Formal rule GPU-NativeAbi: native ABI and input representation are recorded
+/// facts; no Rust type structure selects a protocol, encoding or bounds source.
+/// Native binding protocol declared independently of its opaque Rust spelling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeAbi {
+    Range,
+    Runs,
+    Columns,
+}
+
+/// The recorded source of native input column bounds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoundsSource {
+    ResidentColumns,
+}
+
+/// Loader-authored input layout; the first `key_count` columns form the key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputSchema {
+    pub key_count: usize,
+    pub columns: Vec<InputColumn>,
+}
+
+/// All three types are opaque. Codec presence, not spelling, records encoding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputColumn {
+    pub logical: syn::Type,
+    pub storage: syn::Type,
+    pub codec: Option<syn::Type>,
+}
+
 /// Declared facts of one provider token.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Facts {
@@ -132,6 +174,9 @@ pub struct Facts {
     pub shared: bool,
     /// Packed equality-key width limit, checked against codec bounds at setup.
     pub packed_bits: Option<u32>,
+    pub abi: Option<NativeAbi>,
+    pub contiguous_range: bool,
+    pub bounds: Option<BoundsSource>,
 }
 
 impl Facts {
@@ -180,6 +225,7 @@ impl Declaration {
         Provider {
             token: self.token.clone(),
             inner: None,
+            input: None,
             ty: self.ty.clone(),
         }
     }
@@ -217,6 +263,7 @@ impl Declaration {
         Ok(Provider {
             token: self.token.clone(),
             inner: Some(Box::new(inner)),
+            input: None,
             ty,
         })
     }
@@ -227,6 +274,7 @@ impl Declaration {
 pub struct Provider {
     pub token: Ident,
     pub inner: Option<Box<Provider>>,
+    pub input: Option<InputSchema>,
     /// Printed spelling only.
     pub ty: syn::Type,
 }
@@ -264,10 +312,16 @@ impl syn::parse::Parse for Provider {
         } else {
             None
         };
+        let schema = if input.peek(kw::input) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
         input.parse::<Token![as]>()?;
         Ok(Self {
             token,
             inner,
+            input: schema,
             ty: input.parse()?,
         })
     }
@@ -277,10 +331,73 @@ impl ToTokens for Provider {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         let token = &self.token;
         let ty = &self.ty;
+        let input = &self.input;
         tokens.extend(match &self.inner {
-            Some(inner) => quote::quote!(@#token(#inner) as #ty),
-            None => quote::quote!(@#token as #ty),
+            Some(inner) => quote::quote!(@#token(#inner) #input as #ty),
+            None => quote::quote!(@#token #input as #ty),
         });
+    }
+}
+
+impl syn::parse::Parse for InputSchema {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<kw::input>()?;
+        let body;
+        syn::braced!(body in input);
+        body.parse::<kw::keys>()?;
+        let key_count = body.parse::<syn::LitInt>()?.base10_parse()?;
+        body.parse::<Token![;]>()?;
+        body.parse::<kw::columns>()?;
+        let columns;
+        syn::bracketed!(columns in body);
+        let columns = CommaList::<InputColumn>::parse_terminated(&columns)?
+            .into_iter()
+            .collect();
+        if !body.is_empty() {
+            return Err(body.error("expected end of input schema"));
+        }
+        Ok(Self { key_count, columns })
+    }
+}
+
+impl syn::parse::Parse for InputColumn {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let logical = input.parse()?;
+        input.parse::<Token![=>]>()?;
+        let storage = input.parse()?;
+        let codec = if input.peek(kw::codec) {
+            input.parse::<kw::codec>()?;
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        Ok(Self {
+            logical,
+            storage,
+            codec,
+        })
+    }
+}
+
+impl ToTokens for InputSchema {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let keys = syn::Index::from(self.key_count);
+        let columns = &self.columns;
+        tokens.extend(quote::quote!(input { keys #keys; columns [#(#columns),*] }));
+    }
+}
+
+impl ToTokens for InputColumn {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let Self {
+            logical,
+            storage,
+            codec,
+        } = self;
+        tokens.extend(quote::quote!(#logical => #storage));
+        if let Some(codec) = codec {
+            tokens.extend(quote::quote!(codec #codec));
+        }
     }
 }
 
@@ -360,6 +477,9 @@ impl syn::parse::Parse for Declaration {
             join_filter: false,
             shared: false,
             packed_bits: None,
+            abi: None,
+            contiguous_range: false,
+            bounds: None,
         };
         let mut seen = BTreeSet::new();
         while !body.is_empty() {
@@ -431,6 +551,22 @@ impl syn::parse::Parse for Declaration {
             } else if lookahead.peek(kw::packed_bits) {
                 body.parse::<kw::packed_bits>()?;
                 facts.packed_bits = Some(body.parse::<syn::LitInt>()?.base10_parse()?);
+            } else if lookahead.peek(kw::abi) {
+                body.parse::<kw::abi>()?;
+                let abi: Ident = body.parse()?;
+                facts.abi = Some(match abi.to_string().as_str() {
+                    "range" => NativeAbi::Range,
+                    "runs" => NativeAbi::Runs,
+                    "columns" => NativeAbi::Columns,
+                    _ => return error(&abi, "unknown native ABI"),
+                });
+            } else if lookahead.peek(kw::contiguous_range) {
+                body.parse::<kw::contiguous_range>()?;
+                facts.contiguous_range = true;
+            } else if lookahead.peek(kw::bounds) {
+                body.parse::<kw::bounds>()?;
+                body.parse::<kw::resident_columns>()?;
+                facts.bounds = Some(BoundsSource::ResidentColumns);
             } else {
                 return Err(lookahead.error());
             }
@@ -454,6 +590,9 @@ impl ToTokens for Declaration {
             join_filter,
             shared,
             packed_bits,
+            abi,
+            contiguous_range,
+            bounds,
         } = &self.facts;
         let reads = reads
             .iter()
@@ -497,6 +636,19 @@ impl ToTokens for Declaration {
             let bits = proc_macro2::Literal::u32_unsuffixed(*bits);
             facts.push(quote::quote!(packed_bits #bits));
         }
+        if let Some(abi) = abi {
+            facts.push(match abi {
+                NativeAbi::Range => quote::quote!(abi range),
+                NativeAbi::Runs => quote::quote!(abi runs),
+                NativeAbi::Columns => quote::quote!(abi columns),
+            });
+        }
+        if *contiguous_range {
+            facts.push(quote::quote!(contiguous_range));
+        }
+        if let Some(BoundsSource::ResidentColumns) = bounds {
+            facts.push(quote::quote!(bounds resident_columns));
+        }
         let token = &self.token;
         let ty = &self.ty;
         tokens.extend(quote::quote!(#token = #ty { #(#facts),* };));
@@ -513,10 +665,29 @@ pub(crate) fn check(structures: &Structures) -> syn::Result<()> {
             return error(&declaration.token, "duplicate provider declaration");
         }
         concrete_type(&declaration.ty)?;
+        let facts = &declaration.facts;
+        if facts.contiguous_range
+            && (facts.abi != Some(NativeAbi::Range) || !facts.reads(&Capability::Range))
+        {
+            return error(
+                &declaration.token,
+                "contiguous_range requires range ABI and range reads",
+            );
+        }
+        if facts.bounds.is_some() && facts.abi != Some(NativeAbi::Columns) {
+            return error(
+                &declaration.token,
+                "resident column bounds require columns ABI",
+            );
+        }
+        if facts.abi.is_some() && facts.composition.is_some() {
+            return error(&declaration.token, "native ABI requires a simple provider");
+        }
         if declaration.facts.composition.is_some() {
             declaration.compose(Provider {
                 token: declaration.token.clone(),
                 inner: None,
+                input: None,
                 ty: syn::parse_quote!(_),
             })?;
         }
@@ -532,6 +703,20 @@ pub(crate) fn check(structures: &Structures) -> syn::Result<()> {
             .providers
             .facts(provider)
             .expect("checked instance");
+        if matches!(
+            &entry.structure,
+            Structure::Host {
+                reader: ReaderRef::Scan,
+                ..
+            }
+        ) && matches!(facts.abi, Some(NativeAbi::Runs | NativeAbi::Columns))
+            && provider.input.is_none()
+        {
+            return error(
+                &provider.token,
+                "native runs and columns scans require an input schema",
+            );
+        }
         for capability in support
             .into_iter()
             .flat_map(|support| &support.capabilities)
@@ -557,6 +742,11 @@ fn check_instance(providers: &Providers, provider: &Provider, in_routed: bool) -
         return error(&provider.token, "undeclared provider token");
     };
     concrete_type(&provider.ty)?;
+    if let Some(input) = &provider.input {
+        if input.key_count > input.columns.len() {
+            return error(&provider.token, "input key count exceeds column count");
+        }
+    }
     match (declaration.facts.composition, &provider.inner) {
         (None, None) => Ok(()),
         (Some(Composition::Routed(_)), Some(_)) if in_routed => {

@@ -645,6 +645,16 @@ fn compile_stage(
                 continue;
             }
             let types = relation.columns.iter().map(|c| &c.ty);
+            let input = cq_lang_structures::provider::InputSchema {
+                key_count: 0,
+                columns: relation.columns.iter().map(|column| {
+                    cq_lang_structures::provider::InputColumn {
+                        logical: column.ty.clone(),
+                        storage: column.ty.clone(),
+                        codec: None,
+                    }
+                }).collect(),
+            };
             let device_columns = cq_gpu_sequence::providers::declaration("device_columns");
             structures = checked(
                 "loader host adapter",
@@ -656,9 +666,9 @@ fn compile_stage(
                         .iter()
                         .any(|input| input.name == relation.name)
                     {
-                        quote!(providers { #device_columns } entry(#index) => @device_columns as ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*)>)
+                        quote!(providers { #device_columns } entry(#index) => @device_columns #input as ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*)>)
                     } else {
-                        quote!(providers { #device_columns } entry(#index) => @device_columns as ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*), ::cq_gpu_runtime::For>)
+                        quote!(providers { #device_columns } entry(#index) => @device_columns #input as ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*), ::cq_gpu_runtime::For>)
                     },
                 ),
             )?;

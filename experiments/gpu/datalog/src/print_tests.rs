@@ -200,11 +200,13 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
             e host result(joined) = @hash_index as ::cq_storage::HashIndex<'_,_,_> [y];
         }
     };
+    let declaration = cq_gpu_sequence_core::providers::declaration("device_layout");
     let target = crate::bind_inputs(
         &source,
         quote! {
-            Delta => @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> ;
-            Edge => @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> ;
+            providers { #declaration }
+            Delta => @device_layout input { keys 1; columns [i32 => i32, i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> ;
+            Edge => @device_layout input { keys 1; columns [i32 => i32, i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> ;
         },
     )
     .unwrap();
@@ -223,6 +225,17 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
         };
         assert_eq!(before, after);
     }
+    let mut opaque = target.clone();
+    for entry in &mut opaque.structures.entries {
+        if let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure {
+            let input = keyed.provider.input.as_ref().unwrap();
+            assert_eq!(input.key_count, 1);
+            assert_eq!(input.columns.len(), 2);
+            keyed.provider.ty = syn::parse_quote!(OpaqueLayoutAlias);
+        }
+    }
+    cq_lang_structures::contract::check(&opaque).unwrap();
+    cq_gpu_sequence_core::runs::bind(&opaque).unwrap();
 }
 
 #[test]

@@ -28,7 +28,7 @@ This section extends the printer audit to the requested R/E/C and BE rules. All 
 | GPU-CodecIdentity | `doc/formal/backend_ir.tex` GPU-CodecIdentity | `experiments/gpu/sequence/core/src/runs.rs` `Codecs::record` | One codec for each logical symbol type. | Checks structural type/codec equality across every native layout before lowering captures; rejects conflicts. | **exact** (was no-rule) | Captures use the compared column’s compatible encoding |
 | GPU-Capture | `doc/formal/backend_ir.tex` GPU-Capture | `experiments/gpu/sequence/core/src/capture.rs` `Captures::value`; `experiments/gpu/sequence/core/src/rows.rs` `capture_arguments` | Recorded consuming definitions and nonempty enabled launch domains. | Records capture IDs while lowering expressions and consumes explicit domain conditions; no generated-name/launch-ABI recovery. | **exact** (was no-rule) | Captures execute only in their required invocation domain |
 | GPU-ProviderLayout | `doc/formal/backend_ir.tex` GPU-ProviderLayout | `experiments/gpu/sequence/core/src/bindings.rs` `select`, `check`; `languages/cq-lang-sequence/src/gpu/bindings.rs` | Recorded provider/catalog ABI, key reconstruction, payload, native permutation, download adapter and dense policy. | GPU binding selects facts upstream; independent checking rejects stale records; both construction paths consume them. | **exact** for recorded provider realization | Provider reconstruction and allocation are checked facts |
-| GPU-NativeAbi | `doc/formal/backend_ir.tex` GPU-NativeAbi | `experiments/gpu/sequence/core/src/lib.rs` `native_abi`; `experiments/gpu/sequence/core/src/runs.rs` | Complete native catalog constructor identity. | Native schemas and residency are selected by complete structural path identity, never a type suffix. | **exact** (was no-rule) | ABI and residency follow recorded capability identity |
+| GPU-NativeAbi | `doc/formal/backend_ir.tex` GPU-NativeAbi | `languages/cq-lang-structures/src/provider.rs`; `experiments/gpu/sequence/core/src/runs.rs` | Declared token ABI, contiguous-range and bounds facts; instance logical/storage columns and optional codec. | Native schemas and residency consume recorded facts; no Rust path or generic-argument recognition. | **exact** implementation; gates not rerun | ABI and encoding follow checked provider/input records |
 | GPU-GroupProvider | `doc/formal/backend_ir.tex` GPU-GroupProvider | `experiments/gpu/sequence/core/src/grouping.rs`; `experiments/gpu/sequence/core/src/reduce.rs` | Keyed accumulator provider recorded in Structures. | GPU binding selects `SegmentedGroup`; terminal keyed emission invokes that recorded provider. | **exact** for provider ownership; execution recorded by GPU-TerminalGroup | Group accumulator selection is not a printer decision |
 | GPU-Realization | `doc/formal/backend_ir.tex` GPU-Realization | `experiments/gpu/sequence/core/src/realize.rs` `select`, `check` | Graded program, provider bindings and publication storage. | Records sources, per-definition steps, transfers, descriptor bounds, element geometry and captures once; checker validates without selection; a selection failure is recorded and raised only at printing. | **exact** | Printers consume one realization record |
 | GPU-TerminalGroup | `doc/formal/backend_ir.tex` GPU-TerminalGroup | `experiments/gpu/sequence/core/src/realize.rs` `Steps::group`; `experiments/gpu/sequence/core/src/emit.rs` | Final grouped publication and its Physical group. | Records aliases, canonical/stored/source/host input with upload, and segmented or grid-partials completion; the emitter verifies the record against its chain. | **exact** | No unrecorded group rerouting |
@@ -113,9 +113,14 @@ unsupported constructors are rejected rather than replaced by RangeProvider.
 runtime; validation checks the sentinel instead of inventing allocation size.
 Sparse codes still use the recorded dense policy, with explicit resource demand.
 
-GPU-NativeAbi recognizes complete native catalog constructor identities.
-`DeviceLayout`, `Symbol`, `DeviceColumns` and `RangeProvider` suffixes no longer
-select ABI/residency. The catalog and recognition share those canonical paths.
+GPU-NativeAbi consumes the declared token's `abi range|runs|columns`,
+`contiguous_range` and `bounds resident_columns`. Native run/column Host scans
+carry `input { keys n; columns [Logical => Storage codec Codec, ...] }`;
+codec absence explicitly denotes identity representation. Catalog templates may
+omit the instance schema. Structures checks key count, required Host schemas and
+ABI/contiguous/bounds consistency; the binder copies input facts to Built
+instances. Every Rust spelling is opaque, including `Symbol` and provider
+constructors. This is an implementation claim, not fresh gate evidence.
 
 ### Resolved: task ownership, carrier publications and pull choice
 

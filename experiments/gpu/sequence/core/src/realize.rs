@@ -137,10 +137,12 @@ impl<'a> Facts<'a> {
                     if !matches!(reader, cq_lang_structures::ReaderRef::Scan) {
                         continue;
                     }
-                    if crate::runs::layout_types(&keyed.provider.ty)?.is_some() {
+                    if analysis.structures.facts(&keyed.provider).abi
+                        == Some(cq_lang_structures::provider::NativeAbi::Runs) {
                         runs.insert(name.clone());
                         resident.insert(name.clone());
-                    } else if crate::native_abi(&keyed.provider.ty) == Some(crate::NativeAbi::Columns) {
+                    } else if analysis.structures.facts(&keyed.provider).abi
+                        == Some(cq_lang_structures::provider::NativeAbi::Columns) {
                         resident.insert(name.clone());
                     }
                 }
@@ -397,7 +399,8 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                 }
                 let mut providers = Vec::new();
                 if let Some(layouts) = analysis.structures.built.get(name) {
-                    if layouts.len() != 1 || crate::runs::layout_types(&layouts[0].1.ty)?.is_some() {
+                    if layouts.len() != 1 || analysis.structures.facts(&layouts[0].1).abi
+                        == Some(cq_lang_structures::provider::NativeAbi::Runs) {
                         providers.push(name.clone());
                     }
                 } else {
@@ -410,7 +413,8 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                         if !demands.contains(&(result.clone(), sorted.clone())) {
                             continue;
                         }
-                        if crate::runs::layout_types(&ty.ty)?.is_none() {
+                        if analysis.structures.facts(ty).abi
+                            != Some(cq_lang_structures::provider::NativeAbi::Runs) {
                             return Err(error(
                                 "GPU-Runs: native lookup requires a declared run layout",
                             ));

@@ -97,58 +97,6 @@ mod capability_tests {
     }
 }
 
-/// Native constructor identities in the GPU catalog. Generic arguments carry
-/// the concrete schema; neither aliases nor unrelated suffixes imply an ABI.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NativeAbi {
-    Runs,
-    Symbol,
-    Columns,
-    Range,
-}
-
-impl NativeAbi {
-    pub fn identity(self) -> syn::Path {
-        match self {
-            Self::Runs => syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout),
-            Self::Symbol => syn::parse_quote!(::gpu_datalog_runtime::Symbol),
-            Self::Columns => syn::parse_quote!(::cq_gpu_runtime::DeviceColumns),
-            Self::Range => syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
-        }
-    }
-}
-
-/// Formal rule GPU-NativeAbi: native ABI and residency follow complete catalog constructor identity.
-pub fn native_abi(ty: &syn::Type) -> Option<NativeAbi> {
-    let syn::Type::Path(ty) = ty else { return None };
-    if ty.qself.is_some() {
-        return None;
-    }
-    [
-        NativeAbi::Runs,
-        NativeAbi::Symbol,
-        NativeAbi::Columns,
-        NativeAbi::Range,
-    ]
-    .into_iter()
-    .find(|abi| {
-        let identity = abi.identity();
-        ty.path.segments.len() == identity.segments.len()
-            && ty
-                .path
-                .segments
-                .iter()
-                .zip(&identity.segments)
-                .all(|(actual, expected)| actual.ident == expected.ident)
-            && ty
-                .path
-                .segments
-                .iter()
-                .rev()
-                .skip(1)
-                .all(|segment| matches!(segment.arguments, syn::PathArguments::None))
-    })
-}
 /// Collective block width of every generated CUDA template.
 pub(crate) const BLOCK_THREADS: u32 = 256;
 
@@ -162,7 +110,6 @@ pub fn machine() -> Machine {
             retain_prefix_rows: 65536,
             bindings: bindings::select,
             realize: realize::select,
-            contiguous_range: |ty| native_abi(ty) == Some(NativeAbi::Range),
         }),
         name: syn::parse_quote!(gpu),
         items: 4,
@@ -233,8 +180,8 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     // type spellings. Native Scalar bounds and explicit codec declarations
     // establish the publication representation.
     catalog.register(providers::declaration("range_provider"), levels.clone());
-    // The declared layout checks primitives and Symbol<T, Codec> columns;
-    // logical symbol types do not appear in device rows.
+    // Input schema and codecs are recorded by the provider's producer;
+    // runtime trait obligations check the opaque storage spellings.
     catalog.register(providers::declaration("device_layout"), levels.clone());
     catalog.register(
         cq_lang_structures::provider::base::declaration("sorted_run"),

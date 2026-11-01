@@ -127,6 +127,15 @@ No type inspection anywhere: codec sets, widths and preserved-op sets are
 representation facts produced by the loader/binder catalog and recorded in
 IR (contract 7).
 
+The native GPU boundary records these facts in the provider IR:
+declarations carry `abi range|runs|columns`, `contiguous_range` and
+`bounds resident_columns`; Host instances carry
+`input { keys n; columns [Logical => Storage codec Codec, ...] }`.
+All types remain opaque, and codec presence alone records encoding.
+Native run/column scans require input schemas; catalog templates may omit
+them. Binding copies the recorded schema to Built instances rather than
+recovering layout or codecs from provider generic arguments.
+
 ## 5. Merging compressed indexes
 
 Two data regimes need different maintenance; both keep α exact.

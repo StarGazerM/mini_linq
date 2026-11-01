@@ -31,28 +31,42 @@ pub(crate) fn negation(program: &Program, component: usize, key: &KeySet) -> syn
 }
 
 /// The recorded provider of every input name a hole may declare.
-pub(crate) fn input_types(program: &Program) -> syn::Result<BTreeMap<String, Type>> {
+pub(crate) fn input_providers(program: &Program) -> syn::Result<BTreeMap<String, cq_lang_structures::Provider>> {
     let context = &program.context;
+    let device = device(program);
+    let provider = |source: &storage::Provider, input: &cq_lang_structures::provider::InputSchema| {
+        cq_lang_structures::Provider {
+            token: source.token.clone(),
+            inner: None,
+            input: Some(input.clone()),
+            ty: source.ty.clone(),
+        }
+    };
     let mut inputs = BTreeMap::new();
-    for relation in &context.relations {
-        if let Some(delta) = &relation.delta { inputs.insert(delta.to_string(), relation.providers.delta.ty.clone()); }
+    for (relation, state) in context.relations.iter().zip(&device.relations) {
+        if let Some(delta) = &relation.delta {
+            inputs.insert(delta.to_string(), provider(&relation.providers.delta, &state.input));
+        }
     }
-    for layout in context.layouts.iter().chain(&context.delta_layouts) {
-        inputs.insert(layout.name.to_string(), layout.provider.ty.clone());
+    for (layout, state) in context.layouts.iter().zip(&device.layouts)
+        .chain(context.delta_layouts.iter().zip(&device.delta_layouts))
+    {
+        inputs.insert(layout.name.to_string(), provider(&layout.provider, &state.input));
     }
-    for stratum in &context.strata {
+    for (component, stratum) in context.strata.iter().enumerate() {
         for key in &stratum.keys {
             ensure(!key.columns.is_empty(), program,
                 "GPU Datalog does not support unit-valued existential negation keys")?;
-            inputs.insert(key.name.to_string(), key.provider.ty.clone());
+            let state = &device.negations[negation(program, component, key)?];
+            inputs.insert(key.name.to_string(), provider(&key.provider, &state.input));
         }
         for rule in stratum.seeds.iter().chain(&stratum.steps) {
             if let Some(scan) = &rule.scan {
-                let ty = match scan.source {
-                    InputSource::Delta(index) => context.relations[index].providers.delta.ty.clone(),
-                    InputSource::Layout(index) => context.layouts[index].provider.ty.clone(),
+                let input = match scan.source {
+                    InputSource::Delta(index) => provider(&context.relations[index].providers.delta, &device.relations[index].input),
+                    InputSource::Layout(index) => provider(&context.layouts[index].provider, &device.layouts[index].input),
                 };
-                inputs.insert(scan.binding.to_string(), ty);
+                inputs.insert(scan.binding.to_string(), input);
             }
         }
     }
@@ -118,7 +132,7 @@ fn full_layouts(context: &RoundContext, index: usize, fresh: &Ident, layouts: &[
         let layout = &context.layouts[j];
         let state = local("layout", j);
         let packing = local("layout_packing", j);
-        let (host, ty) = (&layout.host, &layout.provider.ty);
+        let host = &layout.host;
         let run = reordered(context, index, fresh, &layout.columns, &state);
         quote!({
             let run = #run;
@@ -313,7 +327,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             "GPU Datalog outputs read borrowed canonical rows")?;
     }
     let symbols = crate::storage::Symbols::from_program(&program.storage)?;
-    let input_types = input_types(program)?;
+    let input_providers = input_providers(program)?;
     // Hosts a hole may read through its CQ declarations, with their providers.
     let mut hosts = BTreeMap::<String, Type>::new();
     for relation in &context.relations {
@@ -365,7 +379,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let function = format_ident!("__cq_gpu_hole_{}", index);
         let (scan_parameter, scan_argument) = match scans.get(&index) {
             Some(binding) => {
-                let ty = &input_types[&binding.to_string()];
+                let ty = &input_providers[&binding.to_string()].ty;
                 (quote!(#binding: &#ty,), quote!(#binding,))
             }
             None => (quote!(), quote!()),

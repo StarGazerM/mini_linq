@@ -920,6 +920,30 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                         "fallback requires a reusable host rename or initial host scan",
                     );
                 }
+                if matches!(reader, ReaderRef::Scan)
+                    && let Some(input) = &keyed.provider.input
+                {
+                    let Some(host) = analysis.physical.hosts.get(&name) else {
+                        return error(keyed, "GPU-NativeAbi: input schema has no host origin");
+                    };
+                    let source = program
+                        .physical
+                        .inputs()
+                        .find(|relation| symbol_name(&relation.name) == *host)
+                        .expect("checked host input");
+                    if input.columns.len() != source.columns.len()
+                        || input
+                            .columns
+                            .iter()
+                            .zip(&source.columns)
+                            .any(|(recorded, column)| recorded.logical != column.ty)
+                    {
+                        return error(
+                            keyed,
+                            "GPU-NativeAbi: recorded input schema differs from the relation",
+                        );
+                    }
+                }
                 keyed.check_support()?;
                 if let Some(items) = &keyed.items {
                     return error(items, "an item layout belongs to a built payload provider");
