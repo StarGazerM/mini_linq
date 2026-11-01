@@ -19,7 +19,11 @@
 //! caller orders the read after publication (fork readiness) and consumers of
 //! the results after the read (join readiness), and retains the snapshot owner
 //! until every stream user has completed.
-use crate::{layout::{PackedField, ScalarTuple}, runs::{self, Native}, Column, Packing, Result, Word};
+use crate::{
+    layout::{PackedField, ScalarTuple},
+    runs::{self, Native},
+    Column, Packing, Result, Word,
+};
 use cuda_core::{DeviceCopy, LaunchConfig1D};
 use gpu_device_columns::{Buffer, Pool};
 use rccl_cub::{DeviceArithmeticRange, DeviceMap, DeviceSliceRead, DeviceSliceWrite};
@@ -27,7 +31,10 @@ use std::{
     any::Any,
     marker::PhantomData,
     ops::RangeInclusive,
-    sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 /// Threads per block of every radix-run kernel: their compiled launch contract.
@@ -43,7 +50,15 @@ mod sealed {
 /// A group-offset carrier, selected upstream from item-count bound evidence.
 /// Builds and merges whose terminal item count exceeds `MAX` are rejected.
 pub trait OffsetWord:
-    sealed::Offset + Copy + Ord + std::fmt::Debug + DeviceCopy + rccl_cub::DeviceArithmetic + Send + Sync + 'static
+    sealed::Offset
+    + Copy
+    + Ord
+    + std::fmt::Debug
+    + DeviceCopy
+    + rccl_cub::DeviceArithmetic
+    + Send
+    + Sync
+    + 'static
 {
     const MAX: u64;
     /// Device-side conversion; host callers check [`offset_fits`] first.
@@ -54,17 +69,25 @@ impl sealed::Offset for u32 {}
 impl OffsetWord for u32 {
     const MAX: u64 = u32::MAX as u64;
     #[inline(always)]
-    fn from_u64(value: u64) -> Self { value as u32 }
+    fn from_u64(value: u64) -> Self {
+        value as u32
+    }
     #[inline(always)]
-    fn to_u64(self) -> u64 { self as u64 }
+    fn to_u64(self) -> u64 {
+        self as u64
+    }
 }
 impl sealed::Offset for u64 {}
 impl OffsetWord for u64 {
     const MAX: u64 = u64::MAX;
     #[inline(always)]
-    fn from_u64(value: u64) -> Self { value }
+    fn from_u64(value: u64) -> Self {
+        value
+    }
     #[inline(always)]
-    fn to_u64(self) -> u64 { self }
+    fn to_u64(self) -> u64 {
+        self
+    }
 }
 
 /// Whether carrier `O` represents the terminal offset of `items` occurrences.
@@ -108,7 +131,10 @@ lanes!(u8 => false, i8 => true, u16 => false, i16 => true, u32 => false, i32 => 
     u64 => false, i64 => true, u128 => false);
 impl<const L: usize> sealed::Lane for [u64; L] {}
 impl<const L: usize> ItemLane for [u64; L] {
-    const KIND: LaneKind = LaneKind { bits: 64 * L as u32, signed: false };
+    const KIND: LaneKind = LaneKind {
+        bits: 64 * L as u32,
+        signed: false,
+    };
 }
 
 /// Formal rule GPU-RadixItemColumns:
@@ -130,7 +156,12 @@ pub trait DeviceItemColumns: sealed::Columns + Sized + Send + Sync + 'static {
     fn gather(&self, kernels: &ItemKernels, order: *const u32, rows: usize) -> Result<Self>;
     #[doc(hidden)]
     fn merge<O: OffsetWord>(
-        left: &Self, right: &Self, kernels: &ItemKernels, left_items: usize, sources: *const O, rows: usize,
+        left: &Self,
+        right: &Self,
+        kernels: &ItemKernels,
+        left_items: usize,
+        sources: *const O,
+        rows: usize,
     ) -> Result<Self>;
     /// Append each column's device address in layout order.
     fn column_pointers(&self, out: &mut Vec<u64>);
@@ -146,10 +177,16 @@ pub struct ItemKernels {
 impl ItemKernels {
     fn config(&self, function: &cuda_core::CudaFunction, parts: usize) -> Result<LaunchConfig1D> {
         let grid = cq_gpu_runtime::launch_grid_for_kernel(
-            function, parts.div_ceil(BLOCK_THREADS as usize), BLOCK_THREADS, 0)?;
+            function,
+            parts.div_ceil(BLOCK_THREADS as usize),
+            BLOCK_THREADS,
+            0,
+        )?;
         Ok(LaunchConfig1D::new(grid, BLOCK_THREADS, 0))
     }
-    fn shape() -> LaunchConfig1D { LaunchConfig1D::new(1, BLOCK_THREADS, 0) }
+    fn shape() -> LaunchConfig1D {
+        LaunchConfig1D::new(1, BLOCK_THREADS, 0)
+    }
 }
 
 impl<T: ItemLane> sealed::Columns for Buffer<T> {}
@@ -162,7 +199,9 @@ impl<T: ItemLane> DeviceItemColumns for Buffer<T> {
         }
         Ok(())
     }
-    fn lanes(out: &mut Vec<LaneKind>) { out.push(T::KIND); }
+    fn lanes(out: &mut Vec<LaneKind>) {
+        out.push(T::KIND);
+    }
     fn gather(&self, kernels: &ItemKernels, order: *const u32, rows: usize) -> Result<Self> {
         // SAFETY: the gather initializes every output position before publication.
         let output = unsafe { Buffer::<T>::uninitialized(kernels.pool.clone(), rows)? };
@@ -171,14 +210,23 @@ impl<T: ItemLane> DeviceItemColumns for Buffer<T> {
             let initial = module.prepare_gather_items::<T>(ItemKernels::shape())?;
             let config = kernels.config(initial.function(), rows)?;
             module.gather_items::<T>(
-                kernels.pool.stream(), &module.prepare_gather_items::<T>(config)?,
-                self.ptr(), order, rows as u64, output.ptr(),
+                kernels.pool.stream(),
+                &module.prepare_gather_items::<T>(config)?,
+                self.ptr(),
+                order,
+                rows as u64,
+                output.ptr(),
             )?;
         }
         Ok(output)
     }
     fn merge<O: OffsetWord>(
-        left: &Self, right: &Self, kernels: &ItemKernels, left_items: usize, sources: *const O, rows: usize,
+        left: &Self,
+        right: &Self,
+        kernels: &ItemKernels,
+        left_items: usize,
+        sources: *const O,
+        rows: usize,
     ) -> Result<Self> {
         // SAFETY: every output position has exactly one source occurrence.
         let output = unsafe { Buffer::<T>::uninitialized(kernels.pool.clone(), rows)? };
@@ -187,28 +235,51 @@ impl<T: ItemLane> DeviceItemColumns for Buffer<T> {
             let initial = module.prepare_merge_items::<T, O>(ItemKernels::shape())?;
             let config = kernels.config(initial.function(), rows)?;
             module.merge_items::<T, O>(
-                kernels.pool.stream(), &module.prepare_merge_items::<T, O>(config)?,
-                left.ptr(), right.ptr(), left_items as u64, sources, rows as u64, output.ptr(),
+                kernels.pool.stream(),
+                &module.prepare_merge_items::<T, O>(config)?,
+                left.ptr(),
+                right.ptr(),
+                left_items as u64,
+                sources,
+                rows as u64,
+                output.ptr(),
             )?;
         }
         Ok(output)
     }
-    fn column_pointers(&self, out: &mut Vec<u64>) { out.push(self.cu_deviceptr()); }
-    fn to_host(&self, rows: usize) -> Result<Vec<T>> { self.to_host_prefix(rows) }
+    fn column_pointers(&self, out: &mut Vec<u64>) {
+        out.push(self.cu_deviceptr());
+    }
+    fn to_host(&self, rows: usize) -> Result<Vec<T>> {
+        self.to_host_prefix(rows)
+    }
 }
 
 impl sealed::Columns for () {}
 impl DeviceItemColumns for () {
     type Host = ();
     const COLUMNS: usize = 0;
-    fn check(&self, _: &Arc<Pool>, _: usize) -> Result<()> { Ok(()) }
+    fn check(&self, _: &Arc<Pool>, _: usize) -> Result<()> {
+        Ok(())
+    }
     fn lanes(_: &mut Vec<LaneKind>) {}
-    fn gather(&self, _: &ItemKernels, _: *const u32, _: usize) -> Result<()> { Ok(()) }
-    fn merge<O: OffsetWord>(_: &(), _: &(), _: &ItemKernels, _: usize, _: *const O, _: usize) -> Result<()> {
+    fn gather(&self, _: &ItemKernels, _: *const u32, _: usize) -> Result<()> {
+        Ok(())
+    }
+    fn merge<O: OffsetWord>(
+        _: &(),
+        _: &(),
+        _: &ItemKernels,
+        _: usize,
+        _: *const O,
+        _: usize,
+    ) -> Result<()> {
         Ok(())
     }
     fn column_pointers(&self, _: &mut Vec<u64>) {}
-    fn to_host(&self, _: usize) -> Result<()> { Ok(()) }
+    fn to_host(&self, _: usize) -> Result<()> {
+        Ok(())
+    }
 }
 
 macro_rules! tuple_columns {
@@ -269,9 +340,15 @@ pub struct RadixRunParams {
 
 impl RadixRunParams {
     pub fn validate(&self) -> Result<()> {
-        if self.ratio < 2 { return Err("radix run ratio must be at least two".into()); }
-        if self.radix_bits > 32 { return Err("radix directory bits must be at most 32".into()); }
-        if self.merge_tile_rows == 0 { return Err("merge tile must contain at least one slot".into()); }
+        if self.ratio < 2 {
+            return Err("radix run ratio must be at least two".into());
+        }
+        if self.radix_bits > 32 {
+            return Err("radix directory bits must be at most 32".into());
+        }
+        if self.merge_tile_rows == 0 {
+            return Err("merge tile must contain at least one slot".into());
+        }
         Ok(())
     }
 }
@@ -376,8 +453,12 @@ pub struct RadixMatch {
 unsafe impl DeviceCopy for RadixMatch {}
 
 impl RadixMatch {
-    pub fn len(&self) -> u64 { self.end - self.begin }
-    pub fn is_empty(&self) -> bool { self.begin == self.end }
+    pub fn len(&self) -> u64 {
+        self.end - self.begin
+    }
+    pub fn is_empty(&self) -> bool {
+        self.begin == self.end
+    }
 }
 
 /// Inclusive key-interval read summed over runs: group slots and occurrences.
@@ -405,7 +486,11 @@ impl<W: Word, O: OffsetWord, C> Segment<W, O, C> {
         RadixRunView {
             keys: self.keys.ptr(),
             offsets: self.offsets.ptr(),
-            directory: if self.radix_bits == 0 { std::ptr::null() } else { self.directory.ptr() },
+            directory: if self.radix_bits == 0 {
+                std::ptr::null()
+            } else {
+                self.directory.ptr()
+            },
             keys_len: self.key_count as u64,
             items: self.item_count as u64,
             radix_bits: self.radix_bits,
@@ -448,28 +533,54 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         let module = unsafe { radix_kernels::load(pool.context())? };
         let order = unsafe { runs::run_kernels::load(pool.context())? };
         Ok(Self {
-            kernels: ItemKernels { pool: pool.clone(), module },
-            pool, params, runs: Vec::new(), published: Mutex::new(None), order,
+            kernels: ItemKernels {
+                pool: pool.clone(),
+                module,
+            },
+            pool,
+            params,
+            runs: Vec::new(),
+            published: Mutex::new(None),
+            order,
         })
     }
 
     /// Group `rows` occurrences: the first `rows` keys with the same positions
     /// of every item column. Equal keys keep their input occurrence order.
-    pub fn build(pool: Arc<Pool>, params: RadixRunParams, keys: &Buffer<W>, items: &C, rows: usize) -> Result<Self> {
+    pub fn build(
+        pool: Arc<Pool>,
+        params: RadixRunParams,
+        keys: &Buffer<W>,
+        items: &C,
+        rows: usize,
+    ) -> Result<Self> {
         let mut run = Self::new(pool, params)?;
         run.publish(keys, items, rows)?;
         Ok(run)
     }
 
-    pub fn pool(&self) -> &Arc<Pool> { &self.pool }
-    pub fn params(&self) -> RadixRunParams { self.params }
-    pub fn run_count(&self) -> usize { self.runs.len() }
-    pub fn is_empty(&self) -> bool { self.runs.is_empty() }
+    pub fn pool(&self) -> &Arc<Pool> {
+        &self.pool
+    }
+    pub fn params(&self) -> RadixRunParams {
+        self.params
+    }
+    pub fn run_count(&self) -> usize {
+        self.runs.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.runs.is_empty()
+    }
     /// Total occurrences across all runs.
-    pub fn item_count(&self) -> usize { self.runs.iter().map(|run| run.item_count).sum() }
+    pub fn item_count(&self) -> usize {
+        self.runs.iter().map(|run| run.item_count).sum()
+    }
     /// `(distinct keys, occurrences)` per run, oldest first.
     pub fn run_lengths(&self) -> Vec<(usize, usize)> {
-        self.runs.iter().map(|run| (run.key_count, run.item_count)).collect()
+        self.runs
+            .iter()
+            .map(|run| (run.key_count, run.item_count))
+            .collect()
     }
 
     /// Formal rule GPU-RadixPublish:
@@ -479,7 +590,9 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
     /// Reads of every snapshot include all unmerged runs. Empty deltas are no-ops;
     /// a failed build or merge leaves the published runs unchanged.
     pub fn publish(&mut self, keys: &Buffer<W>, items: &C, rows: usize) -> Result<()> {
-        let Some(segment) = self.group(keys, items, rows)? else { return Ok(()) };
+        let Some(segment) = self.group(keys, items, rows)? else {
+            return Ok(());
+        };
         let mut merged = Arc::new(segment);
         let mut keep = self.runs.len();
         while keep > 0 && self.runs[keep - 1].item_count / self.params.ratio < merged.item_count {
@@ -505,7 +618,9 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         let views = self.runs.iter().map(|run| run.view()).collect::<Vec<_>>();
         u32::try_from(views.len()).map_err(|_| "radix run count exceeds u32")?;
         let mut columns = Vec::with_capacity(views.len() * C::COLUMNS);
-        for run in &self.runs { run.items.column_pointers(&mut columns); }
+        for run in &self.runs {
+            run.items.column_pointers(&mut columns);
+        }
         let items = self.item_count() as u64;
         let snapshot = Arc::new(RadixSnapshot {
             id: NEXT_SNAPSHOT.fetch_add(1, Ordering::Relaxed),
@@ -523,15 +638,28 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
 
     /// Explicit diagnostic download of every run, oldest first.
     pub fn to_host(&self) -> Result<Vec<HostRadixRun<W, O, C::Host>>> {
-        self.runs.iter().map(|run| Ok(HostRadixRun {
-            keys: run.keys.to_host_prefix(run.key_count)?,
-            offsets: run.offsets.to_host_prefix(run.key_count + 1)?,
-            directory: if run.radix_bits == 0 { Vec::new() } else { run.directory.to_host()? },
-            items: run.items.to_host(run.item_count)?,
-        })).collect()
+        self.runs
+            .iter()
+            .map(|run| {
+                Ok(HostRadixRun {
+                    keys: run.keys.to_host_prefix(run.key_count)?,
+                    offsets: run.offsets.to_host_prefix(run.key_count + 1)?,
+                    directory: if run.radix_bits == 0 {
+                        Vec::new()
+                    } else {
+                        run.directory.to_host()?
+                    },
+                    items: run.items.to_host(run.item_count)?,
+                })
+            })
+            .collect()
     }
 
-    fn launch_config(&self, function: &cuda_core::CudaFunction, parts: usize) -> Result<LaunchConfig1D> {
+    fn launch_config(
+        &self,
+        function: &cuda_core::CudaFunction,
+        parts: usize,
+    ) -> Result<LaunchConfig1D> {
         self.kernels.config(function, parts)
     }
 
@@ -540,9 +668,15 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             return Err("radix run keys use another pool's memory or exceed their capacity".into());
         }
         items.check(&self.pool, rows)?;
-        if rows > u32::MAX as usize { return Err("radix run build exceeds the u32 row domain".into()); }
-        if !offset_fits::<O>(rows) { return Err("radix run items exceed the offset carrier".into()); }
-        if rows == 0 { return Ok(None); }
+        if rows > u32::MAX as usize {
+            return Err("radix run build exceeds the u32 row domain".into());
+        }
+        if !offset_fits::<O>(rows) {
+            return Err("radix run items exceed the offset carrier".into());
+        }
+        if rows == 0 {
+            return Ok(None);
+        }
         let pool = &self.pool;
         let module = &self.kernels.module;
         let cub = rccl_cub::cuda::Program::load(pool.context())?;
@@ -554,39 +688,69 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         let initial = module.prepare_group_flags::<W>(ItemKernels::shape())?;
         let config = self.launch_config(initial.function(), rows + 1)?;
         module.group_flags::<W>(
-            pool.stream(), &module.prepare_group_flags::<W>(config)?,
-            keys.ptr(), order, rows as u64, flags.ptr(),
+            pool.stream(),
+            &module.prepare_group_flags::<W>(config)?,
+            keys.ptr(),
+            order,
+            rows as u64,
+            flags.ptr(),
         )?;
         // SAFETY: stable selections initialize the prefixes read below.
         let offsets = unsafe { Buffer::<O>::uninitialized(pool.clone(), rows + 1)? };
         let distinct = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
         let mut offset_count = Native::<u64>::new(pool, 1)?;
         let mut key_count = Native::<u64>::new(pool, 1)?;
-        let mut workspace = rccl_cub::thrust_integration::compaction_workspace_in(pool.resource(), &launch, rows + 1)?;
+        let mut workspace = rccl_cub::thrust_integration::compaction_workspace_in(
+            pool.resource(),
+            &launch,
+            rows + 1,
+        )?;
         rccl_cub::thrust_integration::device_select_flagged(
-            &launch, DeviceArithmeticRange::new(O::from_u64(0), O::from_u64(1)),
-            DeviceSliceRead::new(flags.ptr() as *const u32), DeviceSliceWrite::new(offsets.ptr()),
-            offset_count.get_mut(), rows + 1, &mut workspace,
+            &launch,
+            DeviceArithmeticRange::new(O::from_u64(0), O::from_u64(1)),
+            DeviceSliceRead::new(flags.ptr() as *const u32),
+            DeviceSliceWrite::new(offsets.ptr()),
+            offset_count.get_mut(),
+            rows + 1,
+            &mut workspace,
         )?;
         let source = keys.ptr() as *const W;
-        let sorted = DeviceMap::new(DeviceSliceRead::new(order), move |row: u32| unsafe { *source.add(row as usize) });
-        let mut workspace = rccl_cub::thrust_integration::compaction_workspace_in(pool.resource(), &launch, rows)?;
+        let sorted = DeviceMap::new(DeviceSliceRead::new(order), move |row: u32| unsafe {
+            *source.add(row as usize)
+        });
+        let mut workspace =
+            rccl_cub::thrust_integration::compaction_workspace_in(pool.resource(), &launch, rows)?;
         rccl_cub::thrust_integration::device_select_flagged(
-            &launch, sorted, DeviceSliceRead::new(flags.ptr() as *const u32),
-            DeviceSliceWrite::new(distinct.ptr()), key_count.get_mut(), rows, &mut workspace,
+            &launch,
+            sorted,
+            DeviceSliceRead::new(flags.ptr() as *const u32),
+            DeviceSliceWrite::new(distinct.ptr()),
+            key_count.get_mut(),
+            rows,
+            &mut workspace,
         )?;
         let items = items.gather(&self.kernels, order, rows)?;
         let key_count = runs::read_count(pool, offset_count.get())? - 1;
         let directory = self.directory(&distinct, key_count)?;
         Ok(Some(Segment {
-            keys: distinct, offsets, directory, items, key_count, item_count: rows,
+            keys: distinct,
+            offsets,
+            directory,
+            items,
+            key_count,
+            item_count: rows,
             radix_bits: self.params.radix_bits,
         }))
     }
 
     fn merge(&self, left: &Segment<W, O, C>, right: &Segment<W, O, C>) -> Result<Segment<W, O, C>> {
-        let total = left.item_count.checked_add(right.item_count).ok_or("merged item count overflow")?;
-        if !offset_fits::<O>(total) { return Err("merged radix run items exceed the offset carrier".into()); }
+        let total = left
+            .item_count
+            .checked_add(right.item_count)
+            .ok_or("merged item count overflow")?;
+        if !offset_fits::<O>(total) {
+            return Err("merged radix run items exceed the offset carrier".into());
+        }
         let slots = left.key_count + right.key_count;
         let pool = &self.pool;
         let module = &self.kernels.module;
@@ -598,8 +762,14 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         let initial = module.prepare_merge_slots::<W, O>(ItemKernels::shape())?;
         let config = self.launch_config(initial.function(), slots.div_ceil(tile))?;
         module.merge_slots::<W, O>(
-            pool.stream(), &module.prepare_merge_slots::<W, O>(config)?,
-            left.view(), right.view(), tile as u64, tags.ptr(), positions.ptr(), flags.ptr(),
+            pool.stream(),
+            &module.prepare_merge_slots::<W, O>(config)?,
+            left.view(),
+            right.view(),
+            tile as u64,
+            tags.ptr(),
+            positions.ptr(),
+            flags.ptr(),
         )?;
         let cub = rccl_cub::cuda::Program::load(pool.context())?;
         let launch = cub.on(pool.stream())?;
@@ -608,34 +778,74 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         let distinct = unsafe { Buffer::<W>::uninitialized(pool.clone(), slots)? };
         let mut offset_count = Native::<u64>::new(pool, 1)?;
         let mut key_count = Native::<u64>::new(pool, 1)?;
-        let mut workspace = rccl_cub::thrust_integration::compaction_workspace_in(pool.resource(), &launch, slots + 1)?;
+        let mut workspace = rccl_cub::thrust_integration::compaction_workspace_in(
+            pool.resource(),
+            &launch,
+            slots + 1,
+        )?;
         rccl_cub::thrust_integration::device_select_flagged(
-            &launch, DeviceSliceRead::new(positions.ptr() as *const O),
-            DeviceSliceRead::new(flags.ptr() as *const u32), DeviceSliceWrite::new(offsets.ptr()),
-            offset_count.get_mut(), slots + 1, &mut workspace,
+            &launch,
+            DeviceSliceRead::new(positions.ptr() as *const O),
+            DeviceSliceRead::new(flags.ptr() as *const u32),
+            DeviceSliceWrite::new(offsets.ptr()),
+            offset_count.get_mut(),
+            slots + 1,
+            &mut workspace,
         )?;
         let (left_keys, right_keys) = (left.keys.ptr() as *const W, right.keys.ptr() as *const W);
-        let merged = DeviceMap::new(DeviceSliceRead::new(tags.ptr() as *const u64), move |tag: u64| unsafe {
-            if tag & SIDE == 0 { *left_keys.add(tag as usize) } else { *right_keys.add((tag & !SIDE) as usize) }
-        });
-        let mut workspace = rccl_cub::thrust_integration::compaction_workspace_in(pool.resource(), &launch, slots)?;
+        let merged = DeviceMap::new(
+            DeviceSliceRead::new(tags.ptr() as *const u64),
+            move |tag: u64| unsafe {
+                if tag & SIDE == 0 {
+                    *left_keys.add(tag as usize)
+                } else {
+                    *right_keys.add((tag & !SIDE) as usize)
+                }
+            },
+        );
+        let mut workspace =
+            rccl_cub::thrust_integration::compaction_workspace_in(pool.resource(), &launch, slots)?;
         rccl_cub::thrust_integration::device_select_flagged(
-            &launch, merged, DeviceSliceRead::new(flags.ptr() as *const u32),
-            DeviceSliceWrite::new(distinct.ptr()), key_count.get_mut(), slots, &mut workspace,
+            &launch,
+            merged,
+            DeviceSliceRead::new(flags.ptr() as *const u32),
+            DeviceSliceWrite::new(distinct.ptr()),
+            key_count.get_mut(),
+            slots,
+            &mut workspace,
         )?;
         // SAFETY: each merged item position has exactly one source occurrence.
         let sources = unsafe { Buffer::<O>::uninitialized(pool.clone(), total)? };
         let initial = module.prepare_item_sources::<W, O>(ItemKernels::shape())?;
         let config = self.launch_config(initial.function(), total)?;
         module.item_sources::<W, O>(
-            pool.stream(), &module.prepare_item_sources::<W, O>(config)?,
-            left.view(), right.view(), tags.ptr(), positions.ptr(), slots as u64, total as u64, sources.ptr(),
+            pool.stream(),
+            &module.prepare_item_sources::<W, O>(config)?,
+            left.view(),
+            right.view(),
+            tags.ptr(),
+            positions.ptr(),
+            slots as u64,
+            total as u64,
+            sources.ptr(),
         )?;
-        let items = C::merge(&left.items, &right.items, &self.kernels, left.item_count, sources.ptr(), total)?;
+        let items = C::merge(
+            &left.items,
+            &right.items,
+            &self.kernels,
+            left.item_count,
+            sources.ptr(),
+            total,
+        )?;
         let key_count = runs::read_count(pool, offset_count.get())? - 1;
         let directory = self.directory(&distinct, key_count)?;
         Ok(Segment {
-            keys: distinct, offsets, directory, items, key_count, item_count: total,
+            keys: distinct,
+            offsets,
+            directory,
+            items,
+            key_count,
+            item_count: total,
             radix_bits: self.params.radix_bits,
         })
     }
@@ -653,8 +863,12 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         let initial = module.prepare_build_directory::<W, O>(ItemKernels::shape())?;
         let config = self.launch_config(initial.function(), entries)?;
         module.build_directory::<W, O>(
-            self.pool.stream(), &module.prepare_build_directory::<W, O>(config)?,
-            keys.ptr(), key_count as u64, bits, directory.ptr(),
+            self.pool.stream(),
+            &module.prepare_build_directory::<W, O>(config)?,
+            keys.ptr(),
+            key_count as u64,
+            bits,
+            directory.ptr(),
         )?;
         Ok(directory)
     }
@@ -692,35 +906,56 @@ fn check_execution(publication: &Pool, execution: &Pool) -> Result<()> {
 
 impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
     /// The publication pool: the stream that uploaded these descriptors.
-    pub fn pool(&self) -> &Arc<Pool> { &self.pool }
-    pub fn id(&self) -> u64 { self.id }
-    pub fn run_count(&self) -> usize { self.runs.len() }
-    pub fn item_count(&self) -> usize { self.items as usize }
+    pub fn pool(&self) -> &Arc<Pool> {
+        &self.pool
+    }
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+    pub fn run_count(&self) -> usize {
+        self.runs.len()
+    }
+    pub fn item_count(&self) -> usize {
+        self.items as usize
+    }
     /// Resident logical occurrence count (one `u64`), readable by count-gated
     /// device consumers after publication readiness, without a host download.
-    pub fn count_ptr(&self) -> *const u64 { self.count.ptr() }
+    pub fn count_ptr(&self) -> *const u64 {
+        self.count.ptr()
+    }
     /// Descriptor, column-table and count bytes uploaded for this snapshot.
     pub fn descriptor_bytes(&self) -> usize {
-        self.descriptors.allocated_bytes() + self.columns.allocated_bytes() + self.count.allocated_bytes()
+        self.descriptors.allocated_bytes()
+            + self.columns.allocated_bytes()
+            + self.count.allocated_bytes()
     }
     /// Key-read ABI: keys, offsets and directories only.
     pub fn keys_view(&self) -> RadixKeysView<W, O> {
         RadixKeysView {
-            runs: self.descriptors.ptr(), run_count: self.runs.len() as u32, reserved: 0, items: self.items,
+            runs: self.descriptors.ptr(),
+            run_count: self.runs.len() as u32,
+            reserved: 0,
+            items: self.items,
             snapshot: self.id,
         }
     }
     /// Item-read ABI, separate from every key read.
     pub fn items_view(&self) -> RadixItemsView {
         RadixItemsView {
-            columns: self.columns.ptr(), column_count: C::COLUMNS as u32, run_count: self.runs.len() as u32,
+            columns: self.columns.ptr(),
+            column_count: C::COLUMNS as u32,
+            run_count: self.runs.len() as u32,
             snapshot: self.id,
         }
     }
 
     fn config(&self, function: &cuda_core::CudaFunction, parts: usize) -> Result<LaunchConfig1D> {
         let grid = cq_gpu_runtime::launch_grid_for_kernel(
-            function, parts.div_ceil(BLOCK_THREADS as usize), BLOCK_THREADS, 0)?;
+            function,
+            parts.div_ceil(BLOCK_THREADS as usize),
+            BLOCK_THREADS,
+            0,
+        )?;
         Ok(LaunchConfig1D::new(grid, BLOCK_THREADS, 0))
     }
 
@@ -734,16 +969,27 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
 
     /// Membership, count and logical merged-order range for each probe key,
     /// on `pool`'s stream. Range positions are counts, not item addresses.
-    pub fn probe_keys(&self, pool: &Arc<Pool>, probes: &Buffer<W>, count: usize) -> Result<Buffer<KeyProbe>> {
+    pub fn probe_keys(
+        &self,
+        pool: &Arc<Pool>,
+        probes: &Buffer<W>,
+        count: usize,
+    ) -> Result<Buffer<KeyProbe>> {
         self.check_probes(pool, probes, count)?;
         // SAFETY: one thread initializes each result.
         let output = unsafe { Buffer::<KeyProbe>::uninitialized(pool.clone(), count)? };
         if count != 0 {
-            let initial = self.module.prepare_probe_keys::<W, O>(ItemKernels::shape())?;
+            let initial = self
+                .module
+                .prepare_probe_keys::<W, O>(ItemKernels::shape())?;
             let config = self.config(initial.function(), count)?;
             self.module.probe_keys::<W, O>(
-                pool.stream(), &self.module.prepare_probe_keys::<W, O>(config)?,
-                self.keys_view(), probes.ptr(), count as u64, output.ptr(),
+                pool.stream(),
+                &self.module.prepare_probe_keys::<W, O>(config)?,
+                self.keys_view(),
+                probes.ptr(),
+                count as u64,
+                output.ptr(),
             )?;
         }
         Ok(output)
@@ -751,38 +997,64 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
 
     /// Per-run match cursors for each probe, `[probe * run_count + run]`, on
     /// `pool`'s stream. The result retains this snapshot as its witness.
-    pub fn probe_matches(self: &Arc<Self>, pool: &Arc<Pool>, probes: &Buffer<W>, count: usize)
-        -> Result<RadixMatches<W, O, C>>
-    {
+    pub fn probe_matches(
+        self: &Arc<Self>,
+        pool: &Arc<Pool>,
+        probes: &Buffer<W>,
+        count: usize,
+    ) -> Result<RadixMatches<W, O, C>> {
         self.check_probes(pool, probes, count)?;
-        let len = count.checked_mul(self.runs.len()).ok_or("probe match count overflow")?;
+        let len = count
+            .checked_mul(self.runs.len())
+            .ok_or("probe match count overflow")?;
         // SAFETY: one thread initializes every run cursor of its probe.
         let matches = unsafe { Buffer::<RadixMatch>::uninitialized(pool.clone(), len)? };
         if len != 0 {
-            let initial = self.module.prepare_probe_matches::<W, O>(ItemKernels::shape())?;
+            let initial = self
+                .module
+                .prepare_probe_matches::<W, O>(ItemKernels::shape())?;
             let config = self.config(initial.function(), count)?;
             self.module.probe_matches::<W, O>(
-                pool.stream(), &self.module.prepare_probe_matches::<W, O>(config)?,
-                self.keys_view(), probes.ptr(), count as u64, matches.ptr(),
+                pool.stream(),
+                &self.module.prepare_probe_matches::<W, O>(config)?,
+                self.keys_view(),
+                probes.ptr(),
+                count as u64,
+                matches.ptr(),
             )?;
         }
-        Ok(RadixMatches { matches, probes: count, snapshot: self.clone() })
+        Ok(RadixMatches {
+            matches,
+            probes: count,
+            snapshot: self.clone(),
+        })
     }
 
     /// Groups and occurrences with keys in each inclusive interval `[low, high]`.
-    pub fn probe_intervals(&self, pool: &Arc<Pool>, low: &Buffer<W>, high: &Buffer<W>, count: usize)
-        -> Result<Buffer<IntervalProbe>>
-    {
+    pub fn probe_intervals(
+        &self,
+        pool: &Arc<Pool>,
+        low: &Buffer<W>,
+        high: &Buffer<W>,
+        count: usize,
+    ) -> Result<Buffer<IntervalProbe>> {
         self.check_probes(pool, low, count)?;
         self.check_probes(pool, high, count)?;
         // SAFETY: one thread initializes each result.
         let output = unsafe { Buffer::<IntervalProbe>::uninitialized(pool.clone(), count)? };
         if count != 0 {
-            let initial = self.module.prepare_probe_intervals::<W, O>(ItemKernels::shape())?;
+            let initial = self
+                .module
+                .prepare_probe_intervals::<W, O>(ItemKernels::shape())?;
             let config = self.config(initial.function(), count)?;
             self.module.probe_intervals::<W, O>(
-                pool.stream(), &self.module.prepare_probe_intervals::<W, O>(config)?,
-                self.keys_view(), low.ptr(), high.ptr(), count as u64, output.ptr(),
+                pool.stream(),
+                &self.module.prepare_probe_intervals::<W, O>(config)?,
+                self.keys_view(),
+                low.ptr(),
+                high.ptr(),
+                count as u64,
+                output.ptr(),
             )?;
         }
         Ok(output)
@@ -799,23 +1071,39 @@ pub struct RadixMatches<W: Word, O: OffsetWord, C> {
 }
 
 impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixMatches<W, O, C> {
-    pub fn snapshot_id(&self) -> u64 { self.snapshot.id }
-    pub fn probe_count(&self) -> usize { self.probes }
-    pub fn run_count(&self) -> usize { self.snapshot.runs.len() }
+    pub fn snapshot_id(&self) -> u64 {
+        self.snapshot.id
+    }
+    pub fn probe_count(&self) -> usize {
+        self.probes
+    }
+    pub fn run_count(&self) -> usize {
+        self.snapshot.runs.len()
+    }
     /// Cursors `[probe * run_count + run]`, on the reading pool's memory.
-    pub fn cursors(&self) -> &Buffer<RadixMatch> { &self.matches }
+    pub fn cursors(&self) -> &Buffer<RadixMatch> {
+        &self.matches
+    }
     /// Explicit diagnostic download of every cursor.
     pub fn to_host(&self) -> Result<Vec<RadixMatch>> {
-        if self.matches.is_empty() { Ok(Vec::new()) } else { self.matches.to_host() }
+        if self.matches.is_empty() {
+            Ok(Vec::new())
+        } else {
+            self.matches.to_host()
+        }
     }
 
     /// Expand every cursor's occurrences of one demanded column on `pool`'s
     /// stream: cursor `i` writes its items, in stable run order, from
     /// `bases[i]` of a `total`-entry output. Writes beyond `total` are dropped.
     /// The column must belong to this match set's snapshot.
-    pub fn gather<T: ItemLane>(&self, pool: &Arc<Pool>, column: &ItemColumn<T>, bases: &Buffer<u64>, total: usize)
-        -> Result<Buffer<T>>
-    {
+    pub fn gather<T: ItemLane>(
+        &self,
+        pool: &Arc<Pool>,
+        column: &ItemColumn<T>,
+        bases: &Buffer<u64>,
+        total: usize,
+    ) -> Result<Buffer<T>> {
         check_execution(&self.snapshot.pool, pool)?;
         if column.view.snapshot != self.snapshot.id {
             return Err("item column and match cursors belong to different snapshots".into());
@@ -832,8 +1120,14 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixMatches<W, O, C> {
             let initial = module.prepare_gather_matches::<T>(ItemKernels::shape())?;
             let config = self.snapshot.config(initial.function(), cursors)?;
             module.gather_matches::<T>(
-                pool.stream(), &module.prepare_gather_matches::<T>(config)?,
-                column.view, self.matches.ptr(), cursors as u64, bases.ptr(), total as u64, output.ptr(),
+                pool.stream(),
+                &module.prepare_gather_matches::<T>(config)?,
+                column.view,
+                self.matches.ptr(),
+                cursors as u64,
+                bases.ptr(),
+                total as u64,
+                output.ptr(),
             )?;
         }
         Ok(output)
@@ -880,7 +1174,8 @@ struct RadixPublication<W: Word, O: OffsetWord, C> {
 /// descriptors, resident count) and field descriptors; republication over
 /// unchanged runs is this layout, otherwise it shares the field descriptors.
 /// No host synchronization constructs it; key reads take no item pointers.
-pub struct RadixLayout<K: ScalarTuple, V: ScalarTuple, W: Word, O: OffsetWord, C: DeviceItemColumns> {
+pub struct RadixLayout<K: ScalarTuple, V: ScalarTuple, W: Word, O: OffsetWord, C: DeviceItemColumns>
+{
     publication: Arc<RadixPublication<W, O, C>>,
     marker: PhantomData<fn() -> (K, V)>,
 }
@@ -889,21 +1184,33 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word, O: OffsetWord, C: DeviceItemColumn
     for RadixLayout<K, V, W, O, C>
 {
     fn clone(&self) -> Self {
-        Self { publication: self.publication.clone(), marker: PhantomData }
+        Self {
+            publication: self.publication.clone(),
+            marker: PhantomData,
+        }
     }
 }
 
-impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: DeviceItemColumns> RadixLayout<K, V, W, O, C> {
+impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: DeviceItemColumns>
+    RadixLayout<K, V, W, O, C>
+{
     /// The key packing of `K`'s columns in recorded order.
     pub fn derive_packing() -> Result<Packing> {
-        Packing::build(K::COLUMNS.iter().map(|column| (column.bits(), column.is_signed())))
+        Packing::build(
+            K::COLUMNS
+                .iter()
+                .map(|column| (column.bits(), column.is_signed())),
+        )
     }
 
     fn check_schema(packing: &Packing) -> Result<()> {
         if packing.len() != K::COLUMNS.len()
-            || !packing.packed_fields().zip(K::COLUMNS).all(|(field, column)| {
-                field.bits == column.bits() && (field.signed != 0) == column.is_signed()
-            })
+            || !packing
+                .packed_fields()
+                .zip(K::COLUMNS)
+                .all(|(field, column)| {
+                    field.bits == column.bits() && (field.signed != 0) == column.is_signed()
+                })
         {
             return Err("radix layout packing differs from its key tuple schema".into());
         }
@@ -913,7 +1220,10 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Device
         let mut lanes = Vec::with_capacity(C::COLUMNS);
         C::lanes(&mut lanes);
         if lanes.len() != V::COLUMNS.len()
-            || !lanes.iter().zip(V::COLUMNS).all(|(lane, &column)| lane.holds(column))
+            || !lanes
+                .iter()
+                .zip(V::COLUMNS)
+                .all(|(lane, &column)| lane.holds(column))
         {
             return Err("radix layout item lanes do not hold its value tuple schema".into());
         }
@@ -953,24 +1263,46 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Device
         })
     }
 
-    pub fn snapshot(&self) -> &Arc<RadixSnapshot<W, O, C>> { &self.publication.snapshot }
-    pub fn snapshot_id(&self) -> u64 { self.publication.snapshot.id }
-    pub fn pool(&self) -> &Arc<Pool> { &self.publication.snapshot.pool }
-    pub fn packing(&self) -> &Packing { &self.publication.packing }
-    pub fn run_count(&self) -> usize { self.publication.snapshot.runs.len() }
+    pub fn snapshot(&self) -> &Arc<RadixSnapshot<W, O, C>> {
+        &self.publication.snapshot
+    }
+    pub fn snapshot_id(&self) -> u64 {
+        self.publication.snapshot.id
+    }
+    pub fn pool(&self) -> &Arc<Pool> {
+        &self.publication.snapshot.pool
+    }
+    pub fn packing(&self) -> &Packing {
+        &self.publication.packing
+    }
+    pub fn run_count(&self) -> usize {
+        self.publication.snapshot.runs.len()
+    }
     /// Occurrences, known on the host from the build's exact counts.
-    pub fn len(&self) -> usize { self.publication.snapshot.item_count() }
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn len(&self) -> usize {
+        self.publication.snapshot.item_count()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     /// Resident logical occurrence count, without a host download.
-    pub fn count_ptr(&self) -> *const u64 { self.publication.snapshot.count_ptr() }
+    pub fn count_ptr(&self) -> *const u64 {
+        self.publication.snapshot.count_ptr()
+    }
     /// Explicitly synchronize and download the resident count.
     pub fn logical_count(&self) -> Result<usize> {
-        Ok(usize::try_from(self.publication.snapshot.count.to_host()?[0])?)
+        Ok(usize::try_from(
+            self.publication.snapshot.count.to_host()?[0],
+        )?)
     }
     /// Field-descriptor buffer address, shared by republished successors.
-    pub fn fields_ptr(&self) -> *const PackedField { self.publication.fields.ptr() }
+    pub fn fields_ptr(&self) -> *const PackedField {
+        self.publication.fields.ptr()
+    }
     /// Retain runs, descriptors and fields through every stream user.
-    pub fn owner(&self) -> Arc<dyn Any + Send + Sync> { self.publication.clone() }
+    pub fn owner(&self) -> Arc<dyn Any + Send + Sync> {
+        self.publication.clone()
+    }
 
     pub fn view(&self) -> RadixLayoutView<W, O> {
         let publication = &self.publication;
@@ -989,7 +1321,9 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Device
         C::lanes(&mut lanes);
         match lanes.get(column) {
             Some(&kind) if kind == T::KIND => {}
-            Some(_) => return Err("item column lane differs from the requested element type".into()),
+            Some(_) => {
+                return Err("item column lane differs from the requested element type".into())
+            }
             None => return Err("item column outside the value tuple".into()),
         }
         let snapshot = &self.publication.snapshot;
@@ -1011,22 +1345,40 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Device
         self.publication.packing.prefix_range(prefix)
     }
 
-    pub fn probe_keys(&self, pool: &Arc<Pool>, probes: &Buffer<W>, count: usize) -> Result<Buffer<KeyProbe>> {
+    pub fn probe_keys(
+        &self,
+        pool: &Arc<Pool>,
+        probes: &Buffer<W>,
+        count: usize,
+    ) -> Result<Buffer<KeyProbe>> {
         self.publication.snapshot.probe_keys(pool, probes, count)
     }
-    pub fn probe_matches(&self, pool: &Arc<Pool>, probes: &Buffer<W>, count: usize) -> Result<RadixMatches<W, O, C>> {
+    pub fn probe_matches(
+        &self,
+        pool: &Arc<Pool>,
+        probes: &Buffer<W>,
+        count: usize,
+    ) -> Result<RadixMatches<W, O, C>> {
         self.publication.snapshot.probe_matches(pool, probes, count)
     }
-    pub fn probe_intervals(&self, pool: &Arc<Pool>, low: &Buffer<W>, high: &Buffer<W>, count: usize)
-        -> Result<Buffer<IntervalProbe>>
-    {
-        self.publication.snapshot.probe_intervals(pool, low, high, count)
+    pub fn probe_intervals(
+        &self,
+        pool: &Arc<Pool>,
+        low: &Buffer<W>,
+        high: &Buffer<W>,
+        count: usize,
+    ) -> Result<Buffer<IntervalProbe>> {
+        self.publication
+            .snapshot
+            .probe_intervals(pool, low, high, count)
     }
 }
 
 /// Pointer-only reads usable inside generated device kernels.
 pub mod device {
-    use super::{OffsetWord, RadixItemColumn, RadixItemsView, RadixKeysView, RadixMatch, RadixRunView};
+    use super::{
+        OffsetWord, RadixItemColumn, RadixItemsView, RadixKeysView, RadixMatch, RadixRunView,
+    };
     use crate::Word;
 
     /// `a - b` for `a >= b`, lane-wise with borrow.
@@ -1052,7 +1404,9 @@ pub mod device {
         while lane != 0 {
             lane -= 1;
             let value = word.lane(lane);
-            if value != 0 { return lane * 64 + 64 - value.leading_zeros(); }
+            if value != 0 {
+                return lane * 64 + 64 - value.leading_zeros();
+            }
         }
         0
     }
@@ -1071,22 +1425,50 @@ pub mod device {
     #[inline(always)]
     pub unsafe fn search<W: Word, O: OffsetWord>(run: RadixRunView<W, O>, key: W) -> (u64, bool) {
         let len = run.keys_len;
-        if len == 0 { return (0, false); }
+        if len == 0 {
+            return (0, false);
+        }
         let min = unsafe { *run.keys };
-        if key.compare(&min).is_lt() { return (0, false); }
+        if key.compare(&min).is_lt() {
+            return (0, false);
+        }
         let max = unsafe { *run.keys.add(len as usize - 1) };
         let last = key.compare(&max);
-        if last.is_gt() { return (len, false); }
-        if last.is_eq() { return (len - 1, true); }
-        let (mut low, mut high) = if run.radix_bits == 0 { (0, len) } else {
+        if last.is_gt() {
+            return (len, false);
+        }
+        if last.is_eq() {
+            return (len - 1, true);
+        }
+        let (mut low, mut high) = if run.radix_bits == 0 {
+            (0, len)
+        } else {
             let bucket = prefix(key, min, max, run.radix_bits) as usize;
-            unsafe { ((*run.directory.add(bucket)).to_u64(), (*run.directory.add(bucket + 1)).to_u64()) }
+            unsafe {
+                (
+                    (*run.directory.add(bucket)).to_u64(),
+                    (*run.directory.add(bucket + 1)).to_u64(),
+                )
+            }
         };
         while low < high {
             let middle = low + (high - low) / 2;
-            if unsafe { &*run.keys.add(middle as usize) }.compare(&key).is_lt() { low = middle + 1; } else { high = middle; }
+            if unsafe { &*run.keys.add(middle as usize) }
+                .compare(&key)
+                .is_lt()
+            {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
         }
-        (low, low < len && unsafe { &*run.keys.add(low as usize) }.compare(&key).is_eq())
+        (
+            low,
+            low < len
+                && unsafe { &*run.keys.add(low as usize) }
+                    .compare(&key)
+                    .is_eq(),
+        )
     }
 
     /// Item position of a slot's group start (`slot <= keys_len`).
@@ -1103,13 +1485,20 @@ pub mod device {
     #[inline(always)]
     pub unsafe fn group<W: Word, O: OffsetWord>(run: RadixRunView<W, O>, key: W) -> (u64, u64) {
         let (slot, found) = unsafe { search(run, key) };
-        if found { unsafe { (offset(run, slot), offset(run, slot + 1)) } } else { (run.items, run.items) }
+        if found {
+            unsafe { (offset(run, slot), offset(run, slot + 1)) }
+        } else {
+            (run.items, run.items)
+        }
     }
 
     /// # Safety
     /// `view` must describe live runs readable on this device.
     #[inline(always)]
-    pub unsafe fn run<W: Word, O: OffsetWord>(view: RadixKeysView<W, O>, run: u32) -> RadixRunView<W, O> {
+    pub unsafe fn run<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        run: u32,
+    ) -> RadixRunView<W, O> {
         unsafe { *view.runs.add(run as usize) }
     }
 
@@ -1119,7 +1508,9 @@ pub mod device {
     pub unsafe fn contains<W: Word, O: OffsetWord>(view: RadixKeysView<W, O>, key: W) -> bool {
         let mut index = 0;
         while index < view.run_count {
-            if unsafe { search(run(view, index), key) }.1 { return true; }
+            if unsafe { search(run(view, index), key) }.1 {
+                return true;
+            }
             index += 1;
         }
         false
@@ -1154,17 +1545,27 @@ pub mod device {
             let (slot, found) = unsafe { search(current, key) };
             let start = unsafe { offset(current, slot) };
             begin += start;
-            if found { count += unsafe { offset(current, slot + 1) } - start; }
+            if found {
+                count += unsafe { offset(current, slot + 1) } - start;
+            }
             index += 1;
         }
-        if count == 0 { (view.items, view.items) } else { (begin, begin + count) }
+        if count == 0 {
+            (view.items, view.items)
+        } else {
+            (begin, begin + count)
+        }
     }
 
     /// Slot interval `[first, last)` of one run's keys within inclusive `[low, high]`.
     /// # Safety
     /// `run` must describe a live run readable on this device.
     #[inline(always)]
-    pub unsafe fn interval<W: Word, O: OffsetWord>(run: RadixRunView<W, O>, low: W, high: W) -> (u64, u64) {
+    pub unsafe fn interval<W: Word, O: OffsetWord>(
+        run: RadixRunView<W, O>,
+        low: W,
+        high: W,
+    ) -> (u64, u64) {
         let (first, _) = unsafe { search(run, low) };
         let (last, found) = unsafe { search(run, high) };
         let last = if found { last + 1 } else { last };
@@ -1176,7 +1577,11 @@ pub mod device {
     /// `T` must be the column's element type and the position live.
     #[inline(always)]
     pub unsafe fn item<T: Copy>(items: RadixItemsView, run: u32, column: u32, position: u64) -> T {
-        let address = unsafe { *items.columns.add((run * items.column_count + column) as usize) };
+        let address = unsafe {
+            *items
+                .columns
+                .add((run * items.column_count + column) as usize)
+        };
         unsafe { *(address as *const T).add(position as usize) }
     }
 
@@ -1185,9 +1590,19 @@ pub mod device {
     /// # Safety
     /// `view` must describe live runs readable on this device; `index < run_count`.
     #[inline(always)]
-    pub unsafe fn cursor<W: Word, O: OffsetWord>(view: RadixKeysView<W, O>, index: u32, key: W) -> RadixMatch {
+    pub unsafe fn cursor<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        index: u32,
+        key: W,
+    ) -> RadixMatch {
         let (begin, end) = unsafe { group(run(view, index), key) };
-        RadixMatch { snapshot: view.snapshot, run: index, reserved: 0, begin, end }
+        RadixMatch {
+            snapshot: view.snapshot,
+            run: index,
+            reserved: 0,
+            begin,
+            end,
+        }
     }
 
     /// Whether `cursor` addresses the snapshot `column` belongs to.
@@ -1201,8 +1616,16 @@ pub mod device {
     /// `T` must be the column's lane, `same_snapshot(column, cursor)` must hold,
     /// the snapshot must be live and `offset < cursor.end - cursor.begin`.
     #[inline(always)]
-    pub unsafe fn cursor_item<T: Copy>(column: RadixItemColumn, cursor: RadixMatch, offset: u64) -> T {
-        let address = unsafe { *column.columns.add((cursor.run * column.column_count + column.column) as usize) };
+    pub unsafe fn cursor_item<T: Copy>(
+        column: RadixItemColumn,
+        cursor: RadixMatch,
+        offset: u64,
+    ) -> T {
+        let address = unsafe {
+            *column
+                .columns
+                .add((cursor.run * column.column_count + column.column) as usize)
+        };
         unsafe { *(address as *const T).add((cursor.begin + offset) as usize) }
     }
 }
@@ -1211,8 +1634,8 @@ pub mod device {
 mod radix_kernels {
     use crate::{
         radix_run::{
-            device, IntervalProbe, ItemLane, KeyProbe, OffsetWord, RadixItemColumn, RadixKeysView, RadixMatch,
-            RadixRunView, SIDE,
+            device, IntervalProbe, ItemLane, KeyProbe, OffsetWord, RadixItemColumn, RadixKeysView,
+            RadixMatch, RadixRunView, SIDE,
         },
         Word,
     };
@@ -1226,11 +1649,16 @@ mod radix_kernels {
         let mut row = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
         while row <= rows {
-            let start = row == 0 || row == rows || unsafe {
-                !(*input.add(*order.add(row as usize) as usize))
-                    .compare(&*input.add(*order.add(row as usize - 1) as usize)).is_eq()
-            };
-            unsafe { *flags.add(row as usize) = start as u32; }
+            let start = row == 0
+                || row == rows
+                || unsafe {
+                    !(*input.add(*order.add(row as usize) as usize))
+                        .compare(&*input.add(*order.add(row as usize - 1) as usize))
+                        .is_eq()
+                };
+            unsafe {
+                *flags.add(row as usize) = start as u32;
+            }
             row += stride;
         }
     }
@@ -1238,11 +1666,18 @@ mod radix_kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn gather_items<T: ItemLane>(input: *const T, order: *const u32, rows: u64, output: *mut T) {
+    pub fn gather_items<T: ItemLane>(
+        input: *const T,
+        order: *const u32,
+        rows: u64,
+        output: *mut T,
+    ) {
         let mut row = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
         while row < rows {
-            unsafe { *output.add(row as usize) = *input.add(*order.add(row as usize) as usize); }
+            unsafe {
+                *output.add(row as usize) = *input.add(*order.add(row as usize) as usize);
+            }
             row += stride;
         }
     }
@@ -1254,8 +1689,12 @@ mod radix_kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub fn merge_slots<W: Word, O: OffsetWord>(
-        left: RadixRunView<W, O>, right: RadixRunView<W, O>, tile_rows: u64,
-        tags: *mut u64, positions: *mut O, flags: *mut u32,
+        left: RadixRunView<W, O>,
+        right: RadixRunView<W, O>,
+        tile_rows: u64,
+        tags: *mut u64,
+        positions: *mut O,
+        flags: *mut u32,
     ) {
         let (left_len, right_len) = (left.keys_len as usize, right.keys_len as usize);
         let slots = left_len + right_len;
@@ -1271,27 +1710,42 @@ mod radix_kernels {
         while tile < tiles {
             let start = tile * tile_rows as usize;
             let end = start + (slots - start).min(tile_rows as usize);
-            let mut a = unsafe { crate::runs::corank(left.keys, left_len, right.keys, right_len, start) };
+            let mut a =
+                unsafe { crate::runs::corank(left.keys, left_len, right.keys, right_len, start) };
             let mut b = start - a;
             let mut slot = start;
             while slot < end {
-                let take_left = a < left_len && (b == right_len
-                    || !unsafe { &*left.keys.add(a) }.compare(unsafe { &*right.keys.add(b) }).is_gt());
-                let position = unsafe { device::offset(left, a as u64) + device::offset(right, b as u64) };
+                let take_left = a < left_len
+                    && (b == right_len
+                        || !unsafe { &*left.keys.add(a) }
+                            .compare(unsafe { &*right.keys.add(b) })
+                            .is_gt());
+                let position =
+                    unsafe { device::offset(left, a as u64) + device::offset(right, b as u64) };
                 // Runs hold distinct keys, so only the other run's predecessor can repeat this key.
                 let (tag, repeat) = if take_left {
                     let key = unsafe { &*left.keys.add(a) };
-                    (a as u64, b > 0 && unsafe { &*right.keys.add(b - 1) }.compare(key).is_eq())
+                    (
+                        a as u64,
+                        b > 0 && unsafe { &*right.keys.add(b - 1) }.compare(key).is_eq(),
+                    )
                 } else {
                     let key = unsafe { &*right.keys.add(b) };
-                    (b as u64 | SIDE, a > 0 && unsafe { &*left.keys.add(a - 1) }.compare(key).is_eq())
+                    (
+                        b as u64 | SIDE,
+                        a > 0 && unsafe { &*left.keys.add(a - 1) }.compare(key).is_eq(),
+                    )
                 };
                 unsafe {
                     *tags.add(slot) = tag;
                     *positions.add(slot) = O::from_u64(position);
                     *flags.add(slot) = !repeat as u32;
                 }
-                if take_left { a += 1; } else { b += 1; }
+                if take_left {
+                    a += 1;
+                } else {
+                    b += 1;
+                }
                 slot += 1;
             }
             tile += stride;
@@ -1303,8 +1757,13 @@ mod radix_kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub fn item_sources<W: Word, O: OffsetWord>(
-        left: RadixRunView<W, O>, right: RadixRunView<W, O>, tags: *const u64, positions: *const O,
-        slots: u64, total: u64, sources: *mut O,
+        left: RadixRunView<W, O>,
+        right: RadixRunView<W, O>,
+        tags: *const u64,
+        positions: *const O,
+        slots: u64,
+        total: u64,
+        sources: *mut O,
     ) {
         let mut item = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
@@ -1313,7 +1772,11 @@ mod radix_kernels {
             let (mut low, mut high) = (0_u64, slots);
             while low < high {
                 let middle = low + (high - low) / 2;
-                if unsafe { *positions.add(middle as usize) }.to_u64() <= item { low = middle + 1; } else { high = middle; }
+                if unsafe { *positions.add(middle as usize) }.to_u64() <= item {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
             }
             let slot = low - 1;
             let tag = unsafe { *tags.add(slot as usize) };
@@ -1323,7 +1786,9 @@ mod radix_kernels {
                 left.items + unsafe { device::offset(right, tag & !SIDE) }
             };
             let start = unsafe { *positions.add(slot as usize) }.to_u64();
-            unsafe { *sources.add(item as usize) = O::from_u64(base + item - start); }
+            unsafe {
+                *sources.add(item as usize) = O::from_u64(base + item - start);
+            }
             item += stride;
         }
     }
@@ -1332,7 +1797,12 @@ mod radix_kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub fn merge_items<T: ItemLane, O: OffsetWord>(
-        left: *const T, right: *const T, left_items: u64, sources: *const O, rows: u64, output: *mut T,
+        left: *const T,
+        right: *const T,
+        left_items: u64,
+        sources: *const O,
+        rows: u64,
+        output: *mut T,
     ) {
         let mut row = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
@@ -1353,7 +1823,12 @@ mod radix_kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn build_directory<W: Word, O: OffsetWord>(keys: *const W, len: u64, radix_bits: u32, directory: *mut O) {
+    pub fn build_directory<W: Word, O: OffsetWord>(
+        keys: *const W,
+        len: u64,
+        radix_bits: u32,
+        directory: *mut O,
+    ) {
         let entries = (1_u64 << radix_bits) + 1;
         let mut bucket = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
@@ -1363,13 +1838,17 @@ mod radix_kernels {
             let (mut low, mut high) = (0_u64, len);
             while low < high {
                 let middle = low + (high - low) / 2;
-                if device::prefix(unsafe { *keys.add(middle as usize) }, min, max, radix_bits) < bucket {
+                if device::prefix(unsafe { *keys.add(middle as usize) }, min, max, radix_bits)
+                    < bucket
+                {
                     low = middle + 1;
                 } else {
                     high = middle;
                 }
             }
-            unsafe { *directory.add(bucket as usize) = O::from_u64(low); }
+            unsafe {
+                *directory.add(bucket as usize) = O::from_u64(low);
+            }
             bucket += stride;
         }
     }
@@ -1377,7 +1856,12 @@ mod radix_kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn probe_keys<W: Word, O: OffsetWord>(view: RadixKeysView<W, O>, probes: *const W, count: u64, output: *mut KeyProbe) {
+    pub fn probe_keys<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        probes: *const W,
+        count: u64,
+        output: *mut KeyProbe,
+    ) {
         let mut probe = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
         while probe < count {
@@ -1385,7 +1869,14 @@ mod radix_kernels {
             let (begin, end) = unsafe { device::range(view, key) };
             let contains = unsafe { device::contains(view, key) };
             let total = unsafe { device::count(view, key) };
-            unsafe { *output.add(probe as usize) = KeyProbe { contains: contains as u64, count: total, begin, end }; }
+            unsafe {
+                *output.add(probe as usize) = KeyProbe {
+                    contains: contains as u64,
+                    count: total,
+                    begin,
+                    end,
+                };
+            }
             probe += stride;
         }
     }
@@ -1393,7 +1884,12 @@ mod radix_kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn probe_matches<W: Word, O: OffsetWord>(view: RadixKeysView<W, O>, probes: *const W, count: u64, output: *mut RadixMatch) {
+    pub fn probe_matches<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        probes: *const W,
+        count: u64,
+        output: *mut RadixMatch,
+    ) {
         let mut probe = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
         while probe < count {
@@ -1401,7 +1897,9 @@ mod radix_kernels {
             let mut index = 0;
             while index < view.run_count {
                 let cursor = unsafe { device::cursor(view, index, key) };
-                unsafe { *output.add((probe * view.run_count as u64 + index as u64) as usize) = cursor; }
+                unsafe {
+                    *output.add((probe * view.run_count as u64 + index as u64) as usize) = cursor;
+                }
                 index += 1;
             }
             probe += stride;
@@ -1413,7 +1911,12 @@ mod radix_kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub fn gather_matches<T: ItemLane>(
-        column: RadixItemColumn, cursors: *const RadixMatch, count: u64, bases: *const u64, total: u64, output: *mut T,
+        column: RadixItemColumn,
+        cursors: *const RadixMatch,
+        count: u64,
+        bases: *const u64,
+        total: u64,
+        output: *mut T,
     ) {
         let mut index = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
@@ -1423,7 +1926,10 @@ mod radix_kernels {
             if device::same_snapshot(column, cursor) {
                 let mut offset = 0;
                 while offset < cursor.end - cursor.begin && base + offset < total {
-                    unsafe { *output.add((base + offset) as usize) = device::cursor_item::<T>(column, cursor, offset); }
+                    unsafe {
+                        *output.add((base + offset) as usize) =
+                            device::cursor_item::<T>(column, cursor, offset);
+                    }
                     offset += 1;
                 }
             }
@@ -1435,13 +1941,20 @@ mod radix_kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub fn probe_intervals<W: Word, O: OffsetWord>(
-        view: RadixKeysView<W, O>, low: *const W, high: *const W, count: u64, output: *mut IntervalProbe,
+        view: RadixKeysView<W, O>,
+        low: *const W,
+        high: *const W,
+        count: u64,
+        output: *mut IntervalProbe,
     ) {
         let mut probe = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
         while probe < count {
             let (lo, hi) = unsafe { (*low.add(probe as usize), *high.add(probe as usize)) };
-            let mut result = IntervalProbe { groups: 0, items: 0 };
+            let mut result = IntervalProbe {
+                groups: 0,
+                items: 0,
+            };
             let mut index = 0;
             while index < view.run_count {
                 let run = unsafe { device::run(view, index) };
@@ -1450,7 +1963,9 @@ mod radix_kernels {
                 result.items += unsafe { device::offset(run, last) - device::offset(run, first) };
                 index += 1;
             }
-            unsafe { *output.add(probe as usize) = result; }
+            unsafe {
+                *output.add(probe as usize) = result;
+            }
             probe += stride;
         }
     }

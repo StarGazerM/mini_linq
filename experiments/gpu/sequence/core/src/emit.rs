@@ -2592,7 +2592,9 @@ fn translate_observed(
                 return Err(error("GPU-Launch: unconsumed strip records"));
             }
             if generator.share.take().is_some() {
-                return Err(error("GPU-RootShare: the chain has no shared first expansion"));
+                return Err(error(
+                    "GPU-RootShare: the chain has no shared first expansion",
+                ));
             }
             if whole {
                 let combine = generator.combine.take().expect("whole-fold combine");
@@ -2708,12 +2710,17 @@ fn translate_observed(
         // the count and failure words and re-zeroes every word the launch used.
         let resident = execution.meta == cq_lang_sequence::gpu::Meta::Resident;
         if resident && !(arena.is_some() && final_output) {
-            return Err(error("GPU-ResidentMeta: resident metadata requires a final GPU arena dispatch"));
+            return Err(error(
+                "GPU-ResidentMeta: resident metadata requires a final GPU arena dispatch",
+            ));
         }
         let (resident_parameter, resident_epilogue) = if resident {
             let used_words = 4 + chains.len();
-            let share_used = matches!(execution.share, cq_lang_sequence::gpu::Share::FirstExpansion { .. })
-                .then(|| quote!(+ 3 * __cq_share_tiles as usize + 1));
+            let share_used = matches!(
+                execution.share,
+                cq_lang_sequence::gpu::Share::FirstExpansion { .. }
+            )
+            .then(|| quote!(+ 3 * __cq_share_tiles as usize + 1));
             let finished = RESIDENT_FINISHED;
             let result_words = RESIDENT_RESULT;
             (
@@ -2846,8 +2853,11 @@ fn translate_observed(
         };
         // GPU-RootShare: per shared tile a claim cursor and announced batches,
         // then the hot-tile list count and entries.
-        let share_words = matches!(execution.share, cq_lang_sequence::gpu::Share::FirstExpansion { .. })
-            .then(|| quote!(+ 3 * __cq_share_tiles as usize + 1));
+        let share_words = matches!(
+            execution.share,
+            cq_lang_sequence::gpu::Share::FirstExpansion { .. }
+        )
+        .then(|| quote!(+ 3 * __cq_share_tiles as usize + 1));
         use cq_lang_sequence::gpu::InitialCapacity;
         let initial = match (&execution.capacity, capacity) {
             (InitialCapacity::Zero, _) => quote!(0usize),
@@ -2884,7 +2894,11 @@ fn translate_observed(
         // GPU-ReservePrevious: a keys-only arena attempt uses the leased slot's
         // full capacity, which is at least the hint; replay still follows a
         // validated shortfall.
-        let key_allocation = if arena.is_some() && final_output && row_width == 0 && range_width == 0 {
+        let key_allocation = if arena.is_some()
+            && final_output
+            && row_width == 0
+            && range_width == 0
+        {
             quote! {
                 let #output_keys = __cq_arena.reserve(__cq_arena_packing.clone(), __cq_capacity)?;
                 __cq_capacity = #output_keys.capacity();
@@ -2981,29 +2995,35 @@ fn translate_observed(
             })?;
         // GPU-ResidentMeta: a resident dispatch neither allocates nor clears
         // per-attempt metadata, and its local fold has no block partials.
-        let (partials_setup, partials_pointer, meta_setup, meta_allocation, meta_pointers, meta_value) =
-            if resident {
-                (
-                    quote!(),
-                    quote!(::core::ptr::null_mut::<i64>()),
-                    quote!(let __cq_resident=__cq_arena.resident_words(#RESIDENT_HEADER + #meta_words #share_words)?;),
-                    quote!(),
-                    quote!(__cq_resident.ptr().wrapping_add(#RESIDENT_HEADER),__cq_resident.ptr(),),
-                    quote!(()),
-                )
-            } else {
-                (
-                    quote! {
-                        let __cq_partials=::cq_gpu_runtime::Buffer::<i64>::zeroed(
-                            __cq_pool.clone(), __cq_grid as usize * #partial_count)?;
-                    },
-                    quote!(__cq_partials.ptr()),
-                    quote!(),
-                    quote!(let #store_meta=::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),#meta_words #share_words)?;),
-                    quote!(#store_meta.ptr(),),
-                    quote!(#store_meta),
-                )
-            };
+        let (
+            partials_setup,
+            partials_pointer,
+            meta_setup,
+            meta_allocation,
+            meta_pointers,
+            meta_value,
+        ) = if resident {
+            (
+                quote!(),
+                quote!(::core::ptr::null_mut::<i64>()),
+                quote!(let __cq_resident=__cq_arena.resident_words(#RESIDENT_HEADER + #meta_words #share_words)?;),
+                quote!(),
+                quote!(__cq_resident.ptr().wrapping_add(#RESIDENT_HEADER),__cq_resident.ptr(),),
+                quote!(()),
+            )
+        } else {
+            (
+                quote! {
+                    let __cq_partials=::cq_gpu_runtime::Buffer::<i64>::zeroed(
+                        __cq_pool.clone(), __cq_grid as usize * #partial_count)?;
+                },
+                quote!(__cq_partials.ptr()),
+                quote!(),
+                quote!(let #store_meta=::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),#meta_words #share_words)?;),
+                quote!(#store_meta.ptr(),),
+                quote!(#store_meta),
+            )
+        };
         let expansion_stages = generator.expansion_stages;
         let allocate_expansions = expansion_counters.then(|| {
             quote! {

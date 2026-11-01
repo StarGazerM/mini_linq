@@ -305,9 +305,10 @@ impl LayoutStorage {
             let sorter = crate::DeviceRuns::<W>::new(pool.clone(), 4)?;
             let mut runs = Vec::with_capacity(source.len());
             for run in source {
-                let values = storage
-                    .packing
-                    .permute_device_on(&pool, run.buffer(), run.len(), order)?;
+                let values =
+                    storage
+                        .packing
+                        .permute_device_on(&pool, run.buffer(), run.len(), order)?;
                 // SAFETY: a column permutation is injective, and each retained
                 // immutable Run already contains pairwise distinct rows.
                 runs.push(unsafe { sorter.sort_known_unique(&values, run.len())? });

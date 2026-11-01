@@ -158,7 +158,9 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
             logical.clone()
         };
         if records.bounds.get(column) != Some(&ColumnBounds::Scalar { ty: expected }) {
-            return Err(error("GPU-Bounds: a capture column has its type's scalar bounds"));
+            return Err(error(
+                "GPU-Bounds: a capture column has its type's scalar bounds",
+            ));
         }
     }
     for (column, domain) in &records.bounds {

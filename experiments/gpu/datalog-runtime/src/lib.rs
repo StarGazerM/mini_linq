@@ -11,21 +11,24 @@ pub mod arena;
 pub mod lanes;
 pub mod layout;
 pub mod pack;
+pub mod phases;
 pub mod radix_run;
 pub mod runs;
-pub mod phases;
 mod stats;
-pub use stats::{readback_count, record_readback, trace_kernels, trace_memory, MemoryUse};
-pub use gpu_device_columns::{Buffer, Pool};
-pub use pack::{Column, Packing, Word};
-pub use runs::{AdmissionTimings, DeviceRuns, Run, RunView};
-pub use radix_run::{
-    DeviceItemColumns, DeviceRadixRun, ItemColumn, OffsetWord, RadixLayout, RadixMatch, RadixMatches, RadixRunParams,
-    RadixSnapshot,
-};
 pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
+pub use gpu_device_columns::{Buffer, Pool};
 pub use lanes::{Job, Lane, Lanes};
-pub use layout::{device, encode_scalar, DeviceLayout, PackedProvider, PackedField, PackedRunView, RunsView, Scalar, ScalarTuple};
+pub use layout::{
+    device, encode_scalar, DeviceLayout, PackedField, PackedProvider, PackedRunView, RunsView,
+    Scalar, ScalarTuple,
+};
+pub use pack::{Column, Packing, Word};
+pub use radix_run::{
+    DeviceItemColumns, DeviceRadixRun, ItemColumn, OffsetWord, RadixLayout, RadixMatch,
+    RadixMatches, RadixRunParams, RadixSnapshot,
+};
+pub use runs::{AdmissionTimings, DeviceRuns, Run, RunView};
+pub use stats::{readback_count, record_readback, trace_kernels, trace_memory, MemoryUse};
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
 // DL-WaveLanes Sync audit: lane workers receive cloned input layouts, run holes

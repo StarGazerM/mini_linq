@@ -24,8 +24,8 @@ use crate::{CandidateArena, CandidateBatch, Pool, Result};
 use cuda_core::CudaEvent;
 use std::{
     collections::BTreeMap,
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
-    sync::{Arc, mpsc},
+    panic::{catch_unwind, resume_unwind, AssertUnwindSafe},
+    sync::{mpsc, Arc},
     thread,
 };
 
@@ -223,7 +223,10 @@ fn work(
                         Box::new(format!("wave lane join event failed: {error:?}"));
                     results.push((usize::MAX, Err(failure)));
                 }
-                if outbox.send(Reply::Joined(std::mem::take(&mut results))).is_err() {
+                if outbox
+                    .send(Reply::Joined(std::mem::take(&mut results)))
+                    .is_err()
+                {
                     return;
                 }
             }

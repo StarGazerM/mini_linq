@@ -701,27 +701,28 @@ impl Rows {
                     if recorded.source != payload || recorded.host != origin_host {
                         return Err(error("GPU-NativeAbi: stale native lookup"));
                     }
-                    let (provider_view, provider_payload) =
-                        if let Some(order) = &recorded.permutation {
-                            let provider =
-                                recorded.materialized_provider.as_ref().ok_or_else(|| {
-                                    error("GPU-NativeAbi: missing materialization provider")
-                                })?;
-                            let owner = format_ident!("__cq_native_provider_{provider_name}");
-                            let provider_view = format_ident!("__cq_native_view_{provider_name}");
-                            build.extend(quote! {
+                    let (provider_view, provider_payload) = if let Some(order) =
+                        &recorded.permutation
+                    {
+                        let provider =
+                            recorded.materialized_provider.as_ref().ok_or_else(|| {
+                                error("GPU-NativeAbi: missing materialization provider")
+                            })?;
+                        let owner = format_ident!("__cq_native_provider_{provider_name}");
+                        let provider_view = format_ident!("__cq_native_view_{provider_name}");
+                        build.extend(quote! {
                                 let #owner: #provider = #host.permuted_provider(&__cq_pool, &[#(#order),*])?;
                                 __cq_run_owners.push(#owner.owner());
                             });
-                            parameters.push((
-                                provider_view.clone(),
-                                syn::parse_quote!(::gpu_datalog_runtime::RunsView),
-                                quote!(#owner.view()),
-                            ));
-                            (provider_view, recorded.payload.clone())
-                        } else {
-                            (view.clone(), recorded.payload.clone())
-                        };
+                        parameters.push((
+                            provider_view.clone(),
+                            syn::parse_quote!(::gpu_datalog_runtime::RunsView),
+                            quote!(#owner.view()),
+                        ));
+                        (provider_view, recorded.payload.clone())
+                    } else {
+                        (view.clone(), recorded.payload.clone())
+                    };
                     providers.insert(
                         provider_name.clone(),
                         Provider {

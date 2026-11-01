@@ -8,11 +8,16 @@
 //! Capturing query-closed inputs does not authorize splitting Rust into relational predicates.
 //! Extraction runs once in GPU realization and records `realization::Captures`;
 //! printing consumes those records without re-extracting.
-use std::collections::{BTreeMap, BTreeSet};
 use cq_lang_sequence::gpu::realization::Capture;
-use cq_lang_structures::syntax::{rust, algebra::Theta, constraint::{Comparison, Constraint, Term}, EqualityValue};
+use cq_lang_structures::syntax::{
+    EqualityValue,
+    algebra::Theta,
+    constraint::{Comparison, Constraint, Term},
+    rust,
+};
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote, ToTokens};
+use quote::{ToTokens, format_ident, quote};
+use std::collections::{BTreeMap, BTreeSet};
 use syn::{Expr, Ident, Type, visit_mut::VisitMut};
 
 /// Capture extraction state: recorded captures in parameter order, the
@@ -35,13 +40,21 @@ pub(crate) struct Printed {
 
 fn value_carrier(expression: &Expr, logical: &Type, codec: Option<&Type>) -> (Type, TokenStream) {
     match codec {
-        Some(codec) => (syn::parse_quote!(u32), quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#logical>>::code(&(#expression)))),
+        Some(codec) => (
+            syn::parse_quote!(u32),
+            quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#logical>>::code(&(#expression))),
+        ),
         None => (logical.clone(), quote!(#expression)),
     }
 }
 
 /// Host value of a recorded closed capture, shared by every invocation use.
-fn host_value(index: usize, expression: &Expr, logical: &Type, codec: Option<&Type>) -> TokenStream {
+fn host_value(
+    index: usize,
+    expression: &Expr,
+    logical: &Type,
+    codec: Option<&Type>,
+) -> TokenStream {
     let cache = format_ident!("__cq_capture_cache_{index}");
     let (_, value) = value_carrier(expression, logical, codec);
     quote!(*#cache.get_or_init(|| #value))
@@ -57,14 +70,29 @@ pub(crate) fn print(records: &[Capture]) -> Printed {
     };
     for (index, capture) in records.iter().enumerate() {
         match capture {
-            Capture::Value { expression, logical, codec } => {
+            Capture::Value {
+                expression,
+                logical,
+                codec,
+            } => {
                 let name = format_ident!("__cq_capture_{index}");
                 let cache = format_ident!("__cq_capture_cache_{index}");
                 let (ty, _) = value_carrier(expression, logical, codec.as_ref());
-                printed.setup.extend(quote!(let #cache = ::std::cell::OnceCell::<#ty>::new();));
-                printed.parameters.push((name, ty, host_value(index, expression, logical, codec.as_ref())));
+                printed
+                    .setup
+                    .extend(quote!(let #cache = ::std::cell::OnceCell::<#ty>::new();));
+                printed.parameters.push((
+                    name,
+                    ty,
+                    host_value(index, expression, logical, codec.as_ref()),
+                ));
             }
-            Capture::Callable { reads, output, closed, body } => {
+            Capture::Callable {
+                reads,
+                output,
+                closed,
+                body,
+            } => {
                 let closed = closed.iter().enumerate().map(|(at, expression)| {
                     let name = format_ident!("__cq_closed_{at}");
                     quote!(let #name = __cq_enabled.then(|| #expression);)
@@ -89,8 +117,16 @@ pub(crate) fn print(records: &[Capture]) -> Printed {
                         cache(&#name)
                     };
                 });
-                printed.rust_functions.push((generic.clone(), quote!(Fn(#(&#types),*) -> #output), name.clone()));
-                printed.parameters.push((name.clone(), syn::parse_quote!(#generic), quote!(*#cache.get_or_init(|| #factory(true)))));
+                printed.rust_functions.push((
+                    generic.clone(),
+                    quote!(Fn(#(&#types),*) -> #output),
+                    name.clone(),
+                ));
+                printed.parameters.push((
+                    name.clone(),
+                    syn::parse_quote!(#generic),
+                    quote!(*#cache.get_or_init(|| #factory(true))),
+                ));
                 printed.disabled.insert(index, quote!(#name));
             }
         }
@@ -101,26 +137,53 @@ pub(crate) fn print(records: &[Capture]) -> Printed {
 /// GPU-Capture checker: validate recorded captures without re-extracting
 /// them. Closed values have no row reads and use their column's codec
 /// identity; uses name recorded captures.
-pub(crate) fn check(records: &cq_lang_sequence::gpu::realization::Captures, columns: &BTreeSet<String>, codecs: &crate::runs::Codecs) -> syn::Result<()> {
-    let error = |message: &str| syn::Error::new(proc_macro2::Span::call_site(), format!("GPU-Capture: {message}"));
+pub(crate) fn check(
+    records: &cq_lang_sequence::gpu::realization::Captures,
+    columns: &BTreeSet<String>,
+    codecs: &crate::runs::Codecs,
+) -> syn::Result<()> {
+    let error = |message: &str| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("GPU-Capture: {message}"),
+        )
+    };
     for capture in &records.captures {
         match capture {
-            Capture::Value { expression, logical, codec } => {
-                if !rust::free_variables(expression).dependencies(columns).is_empty() {
+            Capture::Value {
+                expression,
+                logical,
+                codec,
+            } => {
+                if !rust::free_variables(expression)
+                    .dependencies(columns)
+                    .is_empty()
+                {
                     return Err(error("closed value reads a row column"));
                 }
                 if codec.as_ref() != codecs.get(logical) {
-                    return Err(error("closed value codec differs from its column codec identity"));
+                    return Err(error(
+                        "closed value codec differs from its column codec identity",
+                    ));
                 }
             }
             Capture::Callable { closed, .. } => {
-                if closed.iter().any(|expression| !rust::free_variables(expression).dependencies(columns).is_empty()) {
+                if closed.iter().any(|expression| {
+                    !rust::free_variables(expression)
+                        .dependencies(columns)
+                        .is_empty()
+                }) {
                     return Err(error("callable host subexpression reads a row column"));
                 }
             }
         }
     }
-    if records.uses.values().flatten().any(|&index| index >= records.captures.len()) {
+    if records
+        .uses
+        .values()
+        .flatten()
+        .any(|&index| index >= records.captures.len())
+    {
         return Err(error("definition reads an unrecorded capture"));
     }
     Ok(())
@@ -129,8 +192,17 @@ pub(crate) fn check(records: &cq_lang_sequence::gpu::realization::Captures, colu
 impl Captures {
     /// Formal rule GPU-Capture: closed relational operands are evaluated once on
     /// the host and encoded with the compared column's recorded codec.
-    pub fn value(&mut self, expression: &Expr, logical: &Type, codecs: &crate::runs::Codecs) -> Expr {
-        let key = format!("{}:{}", logical.to_token_stream(), expression.to_token_stream());
+    pub fn value(
+        &mut self,
+        expression: &Expr,
+        logical: &Type,
+        codecs: &crate::runs::Codecs,
+    ) -> Expr {
+        let key = format!(
+            "{}:{}",
+            logical.to_token_stream(),
+            expression.to_token_stream()
+        );
         let index = match self.values.get(&key) {
             Some(&index) => index,
             None => {
@@ -148,24 +220,60 @@ impl Captures {
         let name = format_ident!("__cq_capture_{index}");
         syn::parse_quote!(#name)
     }
-    pub fn host_relational(&mut self, theta: &mut Theta, types: &BTreeMap<String, Type>, codecs: &crate::runs::Codecs) {
-        fn bound(captures: &mut Captures, value: &mut Expr, ty: &Type, codecs: &crate::runs::Codecs) {
+    pub fn host_relational(
+        &mut self,
+        theta: &mut Theta,
+        types: &BTreeMap<String, Type>,
+        codecs: &crate::runs::Codecs,
+    ) {
+        fn bound(
+            captures: &mut Captures,
+            value: &mut Expr,
+            ty: &Type,
+            codecs: &crate::runs::Codecs,
+        ) {
             let argument = captures.value(value, ty, codecs);
-            let Expr::Path(path) = argument else { unreachable!() };
-            let name = path.path.get_ident().expect("capture parameter").to_string();
-            let index: usize = name.strip_prefix("__cq_capture_").and_then(|index| index.parse().ok()).expect("recorded capture");
-            let Capture::Value { expression, logical, codec } = &captures.records[index] else { unreachable!() };
+            let Expr::Path(path) = argument else {
+                unreachable!()
+            };
+            let name = path
+                .path
+                .get_ident()
+                .expect("capture parameter")
+                .to_string();
+            let index: usize = name
+                .strip_prefix("__cq_capture_")
+                .and_then(|index| index.parse().ok())
+                .expect("recorded capture");
+            let Capture::Value {
+                expression,
+                logical,
+                codec,
+            } = &captures.records[index]
+            else {
+                unreachable!()
+            };
             let host = host_value(index, expression, logical, codec.as_ref());
             *value = syn::parse_quote!(#host);
         }
-        fn term(captures: &mut Captures, value: &mut Term, ty: &Type, codecs: &crate::runs::Codecs) {
+        fn term(
+            captures: &mut Captures,
+            value: &mut Term,
+            ty: &Type,
+            codecs: &crate::runs::Codecs,
+        ) {
             match value {
                 Term::Closed(value) => bound(captures, value, ty, codecs),
                 Term::Literal(value) => bound(captures, value, ty, codecs),
                 Term::Variable(_) => {}
             }
         }
-        fn constraint(captures: &mut Captures, value: &mut Constraint, types: &BTreeMap<String, Type>, codecs: &crate::runs::Codecs) {
+        fn constraint(
+            captures: &mut Captures,
+            value: &mut Constraint,
+            types: &BTreeMap<String, Type>,
+            codecs: &crate::runs::Codecs,
+        ) {
             match value {
                 Constraint::Compare { left, right, .. } => {
                     let column = match (&*left, &*right) {
@@ -175,15 +283,26 @@ impl Captures {
                     term(captures, left, &types[&column], codecs);
                     term(captures, right, &types[&column], codecs);
                 }
-                Constraint::Between { term: Term::Variable(name), low, high } => {
+                Constraint::Between {
+                    term: Term::Variable(name),
+                    low,
+                    high,
+                } => {
                     term(captures, low, &types[&name.to_string()], codecs);
                     term(captures, high, &types[&name.to_string()], codecs);
                 }
-                Constraint::In { term: Term::Variable(name), literals } => {
-                    for value in literals.iter_mut() { bound(captures, value, &types[&name.to_string()], codecs); }
+                Constraint::In {
+                    term: Term::Variable(name),
+                    literals,
+                } => {
+                    for value in literals.iter_mut() {
+                        bound(captures, value, &types[&name.to_string()], codecs);
+                    }
                 }
                 Constraint::Or(branches) => {
-                    for value in branches.iter_mut().flatten() { constraint(captures, value, types, codecs); }
+                    for value in branches.iter_mut().flatten() {
+                        constraint(captures, value, types, codecs);
+                    }
                 }
                 _ => {}
             }
@@ -193,17 +312,27 @@ impl Captures {
                 bound(self, value, &types[&equality.left.to_string()], codecs);
             }
         }
-        for value in &mut theta.constraints { constraint(self, value, types, codecs); }
+        for value in &mut theta.constraints {
+            constraint(self, value, types, codecs);
+        }
     }
 
     /// Rust remains a single callable whose body is compiled by cuda-oxide.
     /// Only query-closed subexpressions cross the host capture boundary; rustc,
     /// not the query compiler, infers their types and the callable's operations.
-    pub fn rust_expression(&mut self, expression: &Expr, types: &BTreeMap<String, Type>, bindings: &BTreeMap<String, Ident>, output: &Type, codecs: &crate::runs::Codecs) -> Expr {
+    pub fn rust_expression(
+        &mut self,
+        expression: &Expr,
+        types: &BTreeMap<String, Type>,
+        bindings: &BTreeMap<String, Ident>,
+        output: &Type,
+        codecs: &crate::runs::Codecs,
+    ) -> Expr {
         struct Locals(BTreeSet<String>);
         impl VisitMut for Locals {
             fn visit_pat_mut(&mut self, pattern: &mut syn::Pat) {
-                self.0.extend(rust::bindings(pattern).iter().map(ToString::to_string));
+                self.0
+                    .extend(rust::bindings(pattern).iter().map(ToString::to_string));
                 syn::visit_mut::visit_pat_mut(self, pattern);
             }
         }
@@ -214,7 +343,9 @@ impl Captures {
         impl VisitMut for Closed {
             fn visit_expr_mut(&mut self, expression: &mut Expr) {
                 if !matches!(expression, Expr::Lit(_))
-                    && rust::free_variables(expression).dependencies(&self.scope).is_empty()
+                    && rust::free_variables(expression)
+                        .dependencies(&self.scope)
+                        .is_empty()
                 {
                     let name = format_ident!("__cq_closed_{}", self.closed.len());
                     self.closed.push(expression.clone());
@@ -227,21 +358,33 @@ impl Captures {
             }
             fn visit_expr_call_mut(&mut self, call: &mut syn::ExprCall) {
                 // A callee is Rust syntax, not a value supplied by the query.
-                if !matches!(&*call.func, Expr::Path(_)) { self.visit_expr_mut(&mut call.func); }
-                for argument in &mut call.args { self.visit_expr_mut(argument); }
+                if !matches!(&*call.func, Expr::Path(_)) {
+                    self.visit_expr_mut(&mut call.func);
+                }
+                for argument in &mut call.args {
+                    self.visit_expr_mut(argument);
+                }
             }
         }
         let scope: BTreeSet<_> = types.keys().cloned().collect();
         let reads = rust::free_variables(expression).dependencies(&scope);
-        if reads.is_empty() { return self.value(expression, output, codecs); }
+        if reads.is_empty() {
+            return self.value(expression, output, codecs);
+        }
         let mut body = expression.clone();
         let mut locals = Locals(scope);
         locals.visit_expr_mut(&mut body);
-        let mut closed = Closed { scope: locals.0, closed: Vec::new() };
+        let mut closed = Closed {
+            scope: locals.0,
+            closed: Vec::new(),
+        };
         closed.visit_expr_mut(&mut body);
         let names: Vec<_> = reads.iter().map(|name| bindings[name].clone()).collect();
         self.records.push(Capture::Callable {
-            reads: reads.iter().map(|name| (bindings[name].clone(), types[name].clone())).collect(),
+            reads: reads
+                .iter()
+                .map(|name| (bindings[name].clone(), types[name].clone()))
+                .collect(),
             output: output.clone(),
             closed: closed.closed,
             body,
@@ -252,13 +395,22 @@ impl Captures {
         syn::parse_quote!(#name(#(#names),*))
     }
 
-    pub fn relational(&mut self, theta: &Theta, types: &BTreeMap<String, Type>, codecs: &crate::runs::Codecs) -> syn::Result<Expr> {
+    pub fn relational(
+        &mut self,
+        theta: &Theta,
+        types: &BTreeMap<String, Type>,
+        codecs: &crate::runs::Codecs,
+    ) -> syn::Result<Expr> {
         let mut predicates = Vec::new();
         for equality in &theta.equalities {
             let left = &equality.left;
             let right = match &equality.right {
                 EqualityValue::Variable(right) => quote!(*#right),
-                EqualityValue::Literal(value) if codecs.get(&types[&left.to_string()]).is_none() => quote!(#value),
+                EqualityValue::Literal(value)
+                    if codecs.get(&types[&left.to_string()]).is_none() =>
+                {
+                    quote!(#value)
+                }
                 EqualityValue::Literal(value) => {
                     let value = self.value(value, &types[&left.to_string()], codecs);
                     quote!(#value)
@@ -266,44 +418,83 @@ impl Captures {
             };
             predicates.push(quote!(*#left == #right));
         }
-        for constraint in &theta.constraints { predicates.push(self.constraint(constraint, types, codecs)?); }
+        for constraint in &theta.constraints {
+            predicates.push(self.constraint(constraint, types, codecs)?);
+        }
         syn::parse2(quote!(true #(&& (#predicates))*))
     }
 
-    fn constraint(&mut self, constraint: &Constraint, types: &BTreeMap<String, Type>, codecs: &crate::runs::Codecs) -> syn::Result<TokenStream> {
-        let context = |term: &Term| match term { Term::Variable(name) => types.get(&name.to_string()), _ => None };
+    fn constraint(
+        &mut self,
+        constraint: &Constraint,
+        types: &BTreeMap<String, Type>,
+        codecs: &crate::runs::Codecs,
+    ) -> syn::Result<TokenStream> {
+        let context = |term: &Term| match term {
+            Term::Variable(name) => types.get(&name.to_string()),
+            _ => None,
+        };
         match constraint {
-            Constraint::Compare { left, comparison, right } => {
-                let ty = context(left).or_else(|| context(right)).ok_or_else(|| syn::Error::new_spanned(constraint, "GPU-Capture: relational comparison requires a column"))?;
+            Constraint::Compare {
+                left,
+                comparison,
+                right,
+            } => {
+                let ty = context(left).or_else(|| context(right)).ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        constraint,
+                        "GPU-Capture: relational comparison requires a column",
+                    )
+                })?;
                 let left = self.term(left, ty, codecs);
                 let right = self.term(right, ty, codecs);
                 let op = match comparison {
-                    Comparison::Eq(_) => quote!(==), Comparison::Ne(_) => quote!(!=),
-                    Comparison::Lt(_) => quote!(<), Comparison::Le(_) => quote!(<=),
-                    Comparison::Gt(_) => quote!(>), Comparison::Ge(_) => quote!(>=),
+                    Comparison::Eq(_) => quote!(==),
+                    Comparison::Ne(_) => quote!(!=),
+                    Comparison::Lt(_) => quote!(<),
+                    Comparison::Le(_) => quote!(<=),
+                    Comparison::Gt(_) => quote!(>),
+                    Comparison::Ge(_) => quote!(>=),
                 };
                 Ok(quote!(#left #op #right))
             }
             Constraint::Between { term, low, high } => {
-                let ty = context(term).ok_or_else(|| syn::Error::new_spanned(term, "GPU-Capture: range requires a column"))?;
+                let ty = context(term).ok_or_else(|| {
+                    syn::Error::new_spanned(term, "GPU-Capture: range requires a column")
+                })?;
                 let term = self.term(term, ty, codecs);
                 let low = self.term(low, ty, codecs);
                 let high = self.term(high, ty, codecs);
                 Ok(quote!((#term) >= (#low) && (#term) <= (#high)))
             }
             Constraint::In { term, literals } => {
-                let ty = context(term).ok_or_else(|| syn::Error::new_spanned(term, "GPU-Capture: membership requires a column"))?;
+                let ty = context(term).ok_or_else(|| {
+                    syn::Error::new_spanned(term, "GPU-Capture: membership requires a column")
+                })?;
                 let term = self.term(term, ty, codecs);
-                let values: Vec<_> = literals.iter().map(|value| {
-                    if codecs.get(ty).is_none() { value.clone() } else { self.value(value, ty, codecs) }
-                }).collect();
+                let values: Vec<_> = literals
+                    .iter()
+                    .map(|value| {
+                        if codecs.get(ty).is_none() {
+                            value.clone()
+                        } else {
+                            self.value(value, ty, codecs)
+                        }
+                    })
+                    .collect();
                 Ok(quote!(false #(|| #term == #values)*))
             }
             Constraint::Or(branches) => {
-                let branches = branches.iter().map(|branch| {
-                    let predicates = branch.iter().map(|predicate| self.constraint(predicate, types, codecs)).collect::<syn::Result<Vec<_>>>()?;
-                    Ok(quote!(true #(&& (#predicates))*))
-                }).collect::<syn::Result<Vec<TokenStream>>>()?;
+                let branches = branches
+                    .iter()
+                    .map(|branch| {
+                        let predicates = branch
+                            .iter()
+                            .map(|predicate| self.constraint(predicate, types, codecs))
+                            .collect::<syn::Result<Vec<_>>>()?;
+                        Ok(quote!(true #(&& (#predicates))*))
+                    })
+                    .collect::<syn::Result<Vec<TokenStream>>>()?;
                 Ok(quote!(false #(|| (#branches))*))
             }
         }
@@ -326,21 +517,47 @@ mod tests {
     fn relational_symbol_operand_uses_recorded_codec() {
         let mut captures = Captures::default();
         let mut codecs = crate::runs::Codecs::default();
-        codecs.record(&syn::parse_quote!(TestSymbol), &syn::parse_quote!(TestCodec)).unwrap();
-        captures.value(&syn::parse_quote!(sym("x")), &syn::parse_quote!(TestSymbol), &codecs);
+        codecs
+            .record(
+                &syn::parse_quote!(TestSymbol),
+                &syn::parse_quote!(TestCodec),
+            )
+            .unwrap();
+        captures.value(
+            &syn::parse_quote!(sym("x")),
+            &syn::parse_quote!(TestSymbol),
+            &codecs,
+        );
         let printed = print(&captures.records);
         assert_eq!(printed.parameters[0].1, syn::parse_quote!(u32));
-        assert!(printed.parameters[0].2.to_string().contains("SymbolCodec < TestSymbol >"));
+        assert!(
+            printed.parameters[0]
+                .2
+                .to_string()
+                .contains("SymbolCodec < TestSymbol >")
+        );
     }
     #[test]
     fn rust_callable_preserves_arbitrary_operations_and_local_scope() {
         let mut captures = Captures::default();
         let types = BTreeMap::from([("x".into(), syn::parse_quote!(i64))]);
-        captures.rust_expression(&syn::parse_quote!({ let local = opaque(*x); local + host_value() }), &types, &BTreeMap::from([("x".into(), syn::parse_quote!(x))]), &syn::parse_quote!(i64), &crate::runs::Codecs::default());
+        captures.rust_expression(
+            &syn::parse_quote!({
+                let local = opaque(*x);
+                local + host_value()
+            }),
+            &types,
+            &BTreeMap::from([("x".into(), syn::parse_quote!(x))]),
+            &syn::parse_quote!(i64),
+            &crate::runs::Codecs::default(),
+        );
         let printed = print(&captures.records);
         let setup = printed.setup.to_string();
         assert!(setup.contains("opaque (* x)"), "{setup}");
-        assert!(setup.contains("let __cq_closed_0 = __cq_enabled . then (|| host_value ())"), "{setup}");
+        assert!(
+            setup.contains("let __cq_closed_0 = __cq_enabled . then (|| host_value ())"),
+            "{setup}"
+        );
         assert!(!setup.contains("wrapping"));
         assert_eq!(printed.rust_functions.len(), 1);
     }

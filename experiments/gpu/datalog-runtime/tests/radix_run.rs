@@ -34,7 +34,11 @@ fn pool() -> Result<Arc<Pool>> {
 }
 
 fn params(ratio: usize, radix_bits: u32, merge_tile_rows: u32) -> RadixRunParams {
-    RadixRunParams { ratio, radix_bits, merge_tile_rows }
+    RadixRunParams {
+        ratio,
+        radix_bits,
+        merge_tile_rows,
+    }
 }
 
 fn ones<W: Word>() -> W {
@@ -47,8 +51,14 @@ fn ones<W: Word>() -> W {
 
 fn upload_items(pool: &Arc<Pool>, rows: &[(impl Copy, Item)]) -> Result<Items> {
     Ok((
-        Buffer::from_host(pool.clone(), &rows.iter().map(|row| row.1 .0).collect::<Vec<_>>())?,
-        Buffer::from_host(pool.clone(), &rows.iter().map(|row| row.1 .1).collect::<Vec<_>>())?,
+        Buffer::from_host(
+            pool.clone(),
+            &rows.iter().map(|row| row.1 .0).collect::<Vec<_>>(),
+        )?,
+        Buffer::from_host(
+            pool.clone(),
+            &rows.iter().map(|row| row.1 .1).collect::<Vec<_>>(),
+        )?,
     ))
 }
 
@@ -61,9 +71,16 @@ fn publish<W: Word, O: OffsetWord, C: DeviceItemColumns>(
     run.publish(&buffer, items, keys.len())
 }
 
-fn publish_rows<W: Word, O: OffsetWord>(run: &mut DeviceRadixRun<W, O, Items>, rows: &[(W, Item)]) -> Result {
+fn publish_rows<W: Word, O: OffsetWord>(
+    run: &mut DeviceRadixRun<W, O, Items>,
+    rows: &[(W, Item)],
+) -> Result {
     let items = upload_items(run.pool(), rows)?;
-    publish(run, &rows.iter().map(|row| row.0).collect::<Vec<_>>(), &items)
+    publish(
+        run,
+        &rows.iter().map(|row| row.0).collect::<Vec<_>>(),
+        &items,
+    )
 }
 
 /// Stable occurrence oracle: every published `(key, item)` in publication order.
@@ -95,21 +112,36 @@ impl<W: Word> Oracle<W> {
             *start = before;
             before += items.len() as u64;
         }
-        Index { groups, total: before }
+        Index {
+            groups,
+            total: before,
+        }
     }
 }
 
 impl<W: Word> Index<W> {
     fn lookup(&self, key: W) -> Vec<Item> {
-        self.groups.get(&key).map_or_else(Vec::new, |group| group.1.clone())
+        self.groups
+            .get(&key)
+            .map_or_else(Vec::new, |group| group.1.clone())
     }
     fn range(&self, key: W) -> (u64, u64) {
-        self.groups.get(&key).map_or((self.total, self.total), |(start, items)| (*start, start + items.len() as u64))
+        self.groups
+            .get(&key)
+            .map_or((self.total, self.total), |(start, items)| {
+                (*start, start + items.len() as u64)
+            })
     }
     /// Occurrences with keys `<= key` (or `< key` when `inclusive` is false).
     fn rank(&self, key: W, inclusive: bool) -> u64 {
-        let end = if inclusive { std::ops::Bound::Included(key) } else { std::ops::Bound::Excluded(key) };
-        self.groups.range((std::ops::Bound::Unbounded, end)).next_back()
+        let end = if inclusive {
+            std::ops::Bound::Included(key)
+        } else {
+            std::ops::Bound::Excluded(key)
+        };
+        self.groups
+            .range((std::ops::Bound::Unbounded, end))
+            .next_back()
             .map_or(0, |(_, (start, items))| start + items.len() as u64)
     }
     fn interval_items(&self, low: W, high: W) -> u64 {
@@ -142,7 +174,11 @@ fn probes<W: Word>(oracle: &Oracle<W>, random: &mut Random) -> Vec<W> {
 }
 
 fn download<T: Copy + cuda_core::DeviceCopy>(buffer: Buffer<T>) -> Result<Vec<T>> {
-    if buffer.is_empty() { Ok(Vec::new()) } else { Ok(buffer.to_host()?) }
+    if buffer.is_empty() {
+        Ok(Vec::new())
+    } else {
+        Ok(buffer.to_host()?)
+    }
 }
 
 /// Storage laws of the downloaded runs: distinct increasing keys, exact
@@ -154,15 +190,27 @@ fn check_structure<W: Word, O: OffsetWord, H>(
 ) {
     assert_eq!(host.len(), lengths.len());
     for pair in lengths.windows(2) {
-        assert!(pair[0].1 / parameters.ratio >= pair[1].1, "ratio law violated: {lengths:?}");
+        assert!(
+            pair[0].1 / parameters.ratio >= pair[1].1,
+            "ratio law violated: {lengths:?}"
+        );
     }
     for (run, &(keys, items)) in host.iter().zip(lengths) {
-        assert!(keys > 0 && items >= keys, "published runs are nonempty groups");
+        assert!(
+            keys > 0 && items >= keys,
+            "published runs are nonempty groups"
+        );
         assert_eq!(run.keys.len(), keys);
-        assert!(run.keys.windows(2).all(|pair| pair[0] < pair[1]), "keys must be distinct and increasing");
+        assert!(
+            run.keys.windows(2).all(|pair| pair[0] < pair[1]),
+            "keys must be distinct and increasing"
+        );
         assert_eq!(run.offsets.len(), keys + 1);
         assert_eq!(run.offsets[0].to_u64(), 0);
-        assert!(run.offsets.windows(2).all(|pair| pair[0] < pair[1]), "groups must be nonempty");
+        assert!(
+            run.offsets.windows(2).all(|pair| pair[0] < pair[1]),
+            "groups must be nonempty"
+        );
         assert_eq!(run.offsets[keys].to_u64(), items as u64);
         if parameters.radix_bits == 0 {
             assert!(run.directory.is_empty());
@@ -171,8 +219,9 @@ fn check_structure<W: Word, O: OffsetWord, H>(
         let (min, max) = (run.keys[0], run.keys[keys - 1]);
         assert_eq!(run.directory.len(), (1 << parameters.radix_bits) + 1);
         for (bucket, entry) in run.directory.iter().enumerate() {
-            let lower = run.keys
-                .partition_point(|&key| device::prefix(key, min, max, parameters.radix_bits) < bucket as u64);
+            let lower = run.keys.partition_point(|&key| {
+                device::prefix(key, min, max, parameters.radix_bits) < bucket as u64
+            });
             assert_eq!(entry.to_u64(), lower as u64, "directory bucket {bucket}");
         }
     }
@@ -193,20 +242,39 @@ fn read<W: Word, O: OffsetWord, C: DeviceItemColumns>(
     let pool = snapshot.pool().clone();
     let buffer = Buffer::from_host(pool.clone(), probes)?;
     // Deterministic interval endpoints over the sorted probe set.
-    let pairs: Vec<_> = (0..probes.len()).map(|i| (i, (i * 7 + 3) % probes.len())).collect();
-    let low = Buffer::from_host(pool.clone(), &pairs.iter().map(|&(a, _)| probes[a]).collect::<Vec<_>>())?;
-    let high = Buffer::from_host(pool.clone(), &pairs.iter().map(|&(_, b)| probes[b]).collect::<Vec<_>>())?;
+    let pairs: Vec<_> = (0..probes.len())
+        .map(|i| (i, (i * 7 + 3) % probes.len()))
+        .collect();
+    let low = Buffer::from_host(
+        pool.clone(),
+        &pairs.iter().map(|&(a, _)| probes[a]).collect::<Vec<_>>(),
+    )?;
+    let high = Buffer::from_host(
+        pool.clone(),
+        &pairs.iter().map(|&(_, b)| probes[b]).collect::<Vec<_>>(),
+    )?;
     let matches = snapshot.probe_matches(&pool, &buffer, probes.len())?;
     assert_eq!(matches.snapshot_id(), snapshot.id());
     let cursors = matches.to_host()?;
     let runs = snapshot.run_count();
     for (index, cursor) in cursors.iter().enumerate() {
-        assert_eq!(cursor.snapshot, snapshot.id(), "cursor carries its snapshot identity");
-        assert_eq!(cursor.run as usize, index % runs, "cursor carries its run index");
+        assert_eq!(
+            cursor.snapshot,
+            snapshot.id(),
+            "cursor carries its snapshot identity"
+        );
+        assert_eq!(
+            cursor.run as usize,
+            index % runs,
+            "cursor carries its run index"
+        );
     }
     Ok(DeviceReads {
         keys: download(snapshot.probe_keys(&pool, &buffer, probes.len())?)?,
-        groups: cursors.iter().map(|cursor| (cursor.run, cursor.begin, cursor.end)).collect(),
+        groups: cursors
+            .iter()
+            .map(|cursor| (cursor.run, cursor.begin, cursor.end))
+            .collect(),
         intervals: download(snapshot.probe_intervals(&pool, &low, &high, probes.len())?)?,
         pairs,
     })
@@ -229,7 +297,11 @@ fn check<W: Word, O: OffsetWord>(
     for (index, &key) in probes.iter().enumerate() {
         let expected = oracle.lookup(key);
         let probe = reads.keys[index];
-        assert_eq!(probe.contains != 0, !expected.is_empty(), "contains {key:?}");
+        assert_eq!(
+            probe.contains != 0,
+            !expected.is_empty(),
+            "contains {key:?}"
+        );
         assert_eq!(probe.count, expected.len() as u64, "count {key:?}");
         assert_eq!((probe.begin, probe.end), oracle.range(key), "range {key:?}");
         let mut items = Vec::new();
@@ -248,14 +320,21 @@ fn check<W: Word, O: OffsetWord>(
     }
     for (index, &(a, b)) in reads.pairs.iter().enumerate() {
         let (low, high) = (probes[a], probes[b]);
-        let groups = host.iter()
+        let groups = host
+            .iter()
             .map(|run| {
                 let first = run.keys.partition_point(|&key| key < low);
                 let last = run.keys.partition_point(|&key| key <= high);
                 last.saturating_sub(first) as u64
             })
             .sum::<u64>();
-        assert_eq!(reads.intervals[index], IntervalProbe { groups, items: oracle.interval_items(low, high) });
+        assert_eq!(
+            reads.intervals[index],
+            IntervalProbe {
+                groups,
+                items: oracle.interval_items(low, high)
+            }
+        );
     }
     Ok((reads, oracle))
 }
@@ -263,8 +342,9 @@ fn check<W: Word, O: OffsetWord>(
 #[test]
 fn u64_publication_matches_cpu_radix_run_across_ratio_transitions() -> Result {
     let pool = pool()?;
-    let input: Vec<(u64, Item)> =
-        (0_u64..3001).map(|i| (((i * 7919) % 4099) * 3 + 5, (i, (i as u32) ^ 0x5555_aaaa))).collect();
+    let input: Vec<(u64, Item)> = (0_u64..3001)
+        .map(|i| (((i * 7919) % 4099) * 3 + 5, (i, (i as u32) ^ 0x5555_aaaa)))
+        .collect();
     let mut random = Random(0x51ed_270b_7c3a_9e44);
     for (ratio, radix_bits, tile) in [(2, 12, 1), (4, 4, 32), (8, 0, 7), (4, 16, 1000)] {
         for batch in [7, 127, 2048, input.len()] {
@@ -279,7 +359,11 @@ fn u64_publication_matches_cpu_radix_run_across_ratio_transitions() -> Result {
                 publish_rows(&mut device, chunk)?;
                 cpu.merge(chunk.iter().copied());
                 oracle.rows.extend_from_slice(chunk);
-                assert_eq!(device.run_count(), cpu.run_count(), "ratio {ratio} batch {batch} publish {index}");
+                assert_eq!(
+                    device.run_count(),
+                    cpu.run_count(),
+                    "ratio {ratio} batch {batch} publish {index}"
+                );
                 merges += usize::from(device.run_count() <= before);
                 if index % 37 != 0 && index + 1 != chunks.len() {
                     continue;
@@ -291,14 +375,20 @@ fn u64_publication_matches_cpu_radix_run_across_ratio_transitions() -> Result {
                     assert_eq!(probe.contains != 0, cpu.contains(&key));
                     assert_eq!(probe.count as usize, cpu.count(&key));
                     assert_eq!((probe.begin as usize, probe.end as usize), cpu.range(&key));
-                    assert_eq!(expected.lookup(key), (&cpu).lookup(&key).collect::<Vec<_>>());
+                    assert_eq!(
+                        expected.lookup(key),
+                        (&cpu).lookup(&key).collect::<Vec<_>>()
+                    );
                 }
             }
             if batch <= 127 {
                 assert!(merges > 0, "ratio transitions must merge runs");
             }
             if batch == 7 {
-                assert!(checked_runs >= 3, "reads must be checked across several unmerged runs");
+                assert!(
+                    checked_runs >= 3,
+                    "reads must be checked across several unmerged runs"
+                );
             }
         }
     }
@@ -308,15 +398,30 @@ fn u64_publication_matches_cpu_radix_run_across_ratio_transitions() -> Result {
 #[test]
 fn full_domain_u64_keys_have_exact_absent_positions() -> Result {
     let pool = pool()?;
-    let keys = [0, 1, 2, 1 << 32, 1 << 63, (1 << 63) + 1, u64::MAX - 1, u64::MAX];
+    let keys = [
+        0,
+        1,
+        2,
+        1 << 32,
+        1 << 63,
+        (1 << 63) + 1,
+        u64::MAX - 1,
+        u64::MAX,
+    ];
     let mut random = Random(0x0dd1_ce5e_ed00_0001);
     for radix_bits in [0, 1, 12, 20] {
-        let mut device = DeviceRadixRun::<u64, u64, Items>::new(pool.clone(), params(4, radix_bits, 3))?;
+        let mut device =
+            DeviceRadixRun::<u64, u64, Items>::new(pool.clone(), params(4, radix_bits, 3))?;
         let mut cpu = RadixRun::<u64, Item>::with_ratio([], 4);
         let mut oracle = Oracle::default();
         for round in 0..6_u64 {
             let rows: Vec<_> = (0..(round * 5 + 1))
-                .map(|i| (keys[(random.next() % keys.len() as u64) as usize], (round * 100 + i, i as u32)))
+                .map(|i| {
+                    (
+                        keys[(random.next() % keys.len() as u64) as usize],
+                        (round * 100 + i, i as u32),
+                    )
+                })
                 .collect();
             publish_rows(&mut device, &rows)?;
             cpu.merge(rows.iter().copied());
@@ -340,21 +445,34 @@ fn wide_keys<W: Word>(seed: u64) -> Result {
     for _ in 0..300 {
         let mut word = W::zero();
         for lane in 0..W::BITS / 64 {
-            word.set_lane(lane, if random.next() % 4 == 0 { random.next() % 3 } else { random.next() });
+            word.set_lane(
+                lane,
+                if random.next() % 4 == 0 {
+                    random.next() % 3
+                } else {
+                    random.next()
+                },
+            );
         }
         let mut neighbour = word;
         neighbour.set_lane(0, word.lane(0) ^ 1);
         words.extend([word, neighbour]);
     }
     for (ratio, radix_bits, tile) in [(2, 8, 5), (4, 0, 64), (3, 20, 1)] {
-        let mut device = DeviceRadixRun::<W, u32, Items>::new(pool.clone(), params(ratio, radix_bits, tile))?;
+        let mut device =
+            DeviceRadixRun::<W, u32, Items>::new(pool.clone(), params(ratio, radix_bits, tile))?;
         let mut oracle = Oracle::default();
         let mut serial = 0_u64;
         for size in [1_usize, 17, 0, 257, 3, 900, 64, 2] {
-            let rows: Vec<_> = (0..size).map(|_| {
-                serial += 1;
-                (words[(random.next() % words.len() as u64) as usize], (serial, serial as u32 * 3))
-            }).collect();
+            let rows: Vec<_> = (0..size)
+                .map(|_| {
+                    serial += 1;
+                    (
+                        words[(random.next() % words.len() as u64) as usize],
+                        (serial, serial as u32 * 3),
+                    )
+                })
+                .collect();
             publish_rows(&mut device, &rows)?;
             oracle.rows.extend(rows);
             let probes = probes(&oracle, &mut random);
@@ -383,8 +501,17 @@ fn sorted_reversed_and_single_key_inputs_keep_occurrence_order() -> Result {
     let mut random = Random(7);
     for rows in [ascending, reversed, single] {
         let items = upload_items(&pool, &rows)?;
-        let keys = Buffer::from_host(pool.clone(), &rows.iter().map(|row| row.0).collect::<Vec<_>>())?;
-        let device = DeviceRadixRun::<u64, u32, Items>::build(pool.clone(), params(4, 6, 16), &keys, &items, rows.len())?;
+        let keys = Buffer::from_host(
+            pool.clone(),
+            &rows.iter().map(|row| row.0).collect::<Vec<_>>(),
+        )?;
+        let device = DeviceRadixRun::<u64, u32, Items>::build(
+            pool.clone(),
+            params(4, 6, 16),
+            &keys,
+            &items,
+            rows.len(),
+        )?;
         assert_eq!(device.run_count(), 1);
         let oracle = Oracle { rows };
         check(&device, &oracle, &probes(&oracle, &mut random))?;
@@ -397,7 +524,13 @@ fn empty_providers_and_batches_read_exact_empty_results() -> Result {
     let pool = pool()?;
     let empty_items = upload_items(&pool, &[] as &[(u64, Item)])?;
     let keys = Buffer::<u64>::from_host(pool.clone(), &[])?;
-    let mut device = DeviceRadixRun::<u64, u32, Items>::build(pool.clone(), params(4, 12, 32), &keys, &empty_items, 0)?;
+    let mut device = DeviceRadixRun::<u64, u32, Items>::build(
+        pool.clone(),
+        params(4, 12, 32),
+        &keys,
+        &empty_items,
+        0,
+    )?;
     assert!(device.is_empty());
     assert_eq!(device.run_count(), 0);
     let probes = [0, 7, u64::MAX];
@@ -405,14 +538,23 @@ fn empty_providers_and_batches_read_exact_empty_results() -> Result {
     let reads = read(&snapshot, &probes)?;
     assert!(reads.keys.iter().all(|probe| *probe == KeyProbe::default()));
     assert!(reads.groups.is_empty());
-    assert!(reads.intervals.iter().all(|probe| *probe == IntervalProbe::default()));
+    assert!(reads
+        .intervals
+        .iter()
+        .all(|probe| *probe == IntervalProbe::default()));
     publish(&mut device, &[], &empty_items)?;
     assert_eq!(device.run_count(), 0);
     let rows = [(7_u64, (1, 1)), (7, (2, 2))];
     publish_rows(&mut device, &rows)?;
     publish(&mut device, &[], &empty_items)?;
     assert_eq!(device.run_lengths(), [(1, 2)]);
-    check(&device, &Oracle { rows: rows.to_vec() }, &probes)?;
+    check(
+        &device,
+        &Oracle {
+            rows: rows.to_vec(),
+        },
+        &probes,
+    )?;
     Ok(())
 }
 
@@ -424,7 +566,9 @@ fn offset_carriers_are_type_facts_with_exact_bounds() -> Result {
     assert!(offset_fits::<u64>(usize::MAX));
     let pool = pool()?;
     let mut random = Random(99);
-    let rows: Vec<(u64, Item)> = (0..5000).map(|i| (random.next() % 1500, (i, i as u32))).collect();
+    let rows: Vec<(u64, Item)> = (0..5000)
+        .map(|i| (random.next() % 1500, (i, i as u32)))
+        .collect();
     let mut narrow = DeviceRadixRun::<u64, u32, Items>::new(pool.clone(), params(4, 10, 32))?;
     let mut wide = DeviceRadixRun::<u64, u64, Items>::new(pool.clone(), params(4, 10, 32))?;
     let mut oracle = Oracle::default();
@@ -443,8 +587,16 @@ fn offset_carriers_are_type_facts_with_exact_bounds() -> Result {
     for (n, w) in narrow.to_host()?.into_iter().zip(wide.to_host()?) {
         assert_eq!(n.keys, w.keys);
         assert_eq!(n.items, w.items);
-        assert!(n.offsets.iter().map(|o| *o as u64).eq(w.offsets.iter().copied()));
-        assert!(n.directory.iter().map(|o| *o as u64).eq(w.directory.iter().copied()));
+        assert!(n
+            .offsets
+            .iter()
+            .map(|o| *o as u64)
+            .eq(w.offsets.iter().copied()));
+        assert!(n
+            .directory
+            .iter()
+            .map(|o| *o as u64)
+            .eq(w.directory.iter().copied()));
     }
     Ok(())
 }
@@ -453,13 +605,19 @@ fn offset_carriers_are_type_facts_with_exact_bounds() -> Result {
 fn key_reads_are_independent_of_item_columns() -> Result {
     let pool = pool()?;
     let mut random = Random(0xfeed);
-    let rows: Vec<(u64, Item)> = (0..4000).map(|i| (random.next() % 900, (i, i as u32))).collect();
+    let rows: Vec<(u64, Item)> = (0..4000)
+        .map(|i| (random.next() % 900, (i, i as u32)))
+        .collect();
     let mut keyed = DeviceRadixRun::<u64, u32, Items>::new(pool.clone(), params(2, 8, 32))?;
     let mut key_only = DeviceRadixRun::<u64, u32, ()>::new(pool.clone(), params(2, 8, 32))?;
     let mut oracle = Oracle::default();
     for chunk in rows.chunks(333) {
         publish_rows(&mut keyed, chunk)?;
-        publish(&mut key_only, &chunk.iter().map(|row| row.0).collect::<Vec<_>>(), &())?;
+        publish(
+            &mut key_only,
+            &chunk.iter().map(|row| row.0).collect::<Vec<_>>(),
+            &(),
+        )?;
         oracle.rows.extend_from_slice(chunk);
     }
     assert_eq!(keyed.run_lengths(), key_only.run_lengths());
@@ -489,8 +647,9 @@ fn snapshots_retain_runs_across_later_merges() -> Result {
     let mut oracle = Oracle::default();
     let mut retained = Vec::new();
     for round in 0..12_u64 {
-        let rows: Vec<(u64, Item)> =
-            (0..(round + 1) * 40).map(|i| (random.next() % 300, (round * 1000 + i, round as u32))).collect();
+        let rows: Vec<(u64, Item)> = (0..(round + 1) * 40)
+            .map(|i| (random.next() % 300, (round * 1000 + i, round as u32)))
+            .collect();
         publish_rows(&mut device, &rows)?;
         oracle.rows.extend(rows);
         let probes = probes(&oracle, &mut random);
@@ -514,8 +673,18 @@ fn invalid_parameters_and_inputs_are_rejected() -> Result {
     let mut device = DeviceRadixRun::<u64, u32, Items>::new(pool.clone(), params(4, 4, 32))?;
     let keys = Buffer::from_host(pool.clone(), &[1_u64, 2, 3])?;
     let short = upload_items(&pool, &[(1_u64, (1, 1))])?;
-    assert!(device.publish(&keys, &short, 3).is_err(), "item columns shorter than keys");
-    assert!(device.publish(&keys, &short, 4).is_err(), "rows exceed key capacity");
-    assert_eq!(device.run_count(), 0, "failed publication leaves state unchanged");
+    assert!(
+        device.publish(&keys, &short, 3).is_err(),
+        "item columns shorter than keys"
+    );
+    assert!(
+        device.publish(&keys, &short, 4).is_err(),
+        "rows exceed key capacity"
+    );
+    assert_eq!(
+        device.run_count(),
+        0,
+        "failed publication leaves state unchanged"
+    );
     Ok(())
 }

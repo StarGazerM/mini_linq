@@ -47,9 +47,17 @@ fn republished_layouts_share_fields_and_reuse_unchanged_runs() -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
     type Layout = DeviceLayout<(i32,), (u32,)>;
     let packing = Layout::derive_packing()?;
-    let words = [packing.pack::<u64>(&[-3, 7])?, packing.pack::<u64>(&[9, 2])?];
+    let words = [
+        packing.pack::<u64>(&[-3, 7])?,
+        packing.pack::<u64>(&[9, 2])?,
+    ];
     // SAFETY: uploads initialize sorted unique prefixes and no writer is kept.
-    let empty = || unsafe { Run::from_sorted(Buffer::<u64>::from_host_async(pool.clone(), &[]).unwrap(), 0) };
+    let empty = || unsafe {
+        Run::from_sorted(
+            Buffer::<u64>::from_host_async(pool.clone(), &[]).unwrap(),
+            0,
+        )
+    };
     let run = unsafe { Run::from_sorted(Buffer::from_host_async(pool.clone(), &words)?, 2)? };
     let layout = Layout::from_runs(pool.clone(), packing.clone(), vec![run.clone()])?;
     // The same immutable runs republish the layout itself.
@@ -66,7 +74,9 @@ fn republished_layouts_share_fields_and_reuse_unchanged_runs() -> Result<()> {
     let next = empty_delta.republish(pool.clone(), packing.clone(), vec![empty()?])?;
     assert_eq!(next.view().runs, empty_delta.view().runs);
     // A different packing never borrows the predecessor's descriptors.
-    assert!(layout.republish(pool.clone(), Packing::new(&[32, 32])?, vec![run]).is_err());
+    assert!(layout
+        .republish(pool.clone(), Packing::new(&[32, 32])?, vec![run])
+        .is_err());
     assert_eq!(grown.to_host_codes()?, vec![vec![-3, 7], vec![9, 2]]);
     Ok(())
 }
@@ -332,7 +342,9 @@ fn permuted_provider_preserves_rows_and_searches_new_leading_key() -> Result<()>
         "permutation leaves source storage unchanged"
     );
     assert!(layout.permuted_provider(&pool, &[0, 0]).is_err());
-    assert!(layout.permuted_provider(&Pool::new(0, 0, 0)?, &[1, 0]).is_err());
+    assert!(layout
+        .permuted_provider(&Pool::new(0, 0, 0)?, &[1, 0])
+        .is_err());
     assert_eq!(provider.view().run_count, 3);
     let output = Buffer::<i64>::zeroed(pool.clone(), 12)?;
     let ranges = Buffer::<u32>::zeroed(pool.clone(), 12)?;

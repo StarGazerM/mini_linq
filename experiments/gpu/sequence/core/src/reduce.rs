@@ -113,7 +113,11 @@ pub fn group(
             quote!(#id)
         });
     let prepare = format_ident!("prepare_{kernel}");
-    if let Some(key) = group.keys.iter().find(|key| captures.contains(&symbol_name(key))) {
+    if let Some(key) = group
+        .keys
+        .iter()
+        .find(|key| captures.contains(&symbol_name(key)))
+    {
         return Err(syn::Error::new_spanned(
             key,
             "T-Gpu: a capture group key has no GPU realization",
@@ -307,7 +311,10 @@ fn capture_argument(
         .binders()
         .find(|binder| cq_lang_structures::physical::symbol_name(binder) == argument)?;
     let parameter = quote::format_ident!("__cq_capture_argument_{column}");
-    Some((parameter, quote!((::core::clone::Clone::clone(#binder) as i64))))
+    Some((
+        parameter,
+        quote!((::core::clone::Clone::clone(#binder) as i64)),
+    ))
 }
 
 /// Decode each grouped output column from its machine value and validity.
@@ -363,7 +370,10 @@ pub fn global(
     use cq_lang_structures::{physical::symbol_name, syntax::algebra::AggregateKind};
     use quote::format_ident;
     if !group.keys.is_empty() {
-        return Err(syn::Error::new_spanned(group, "GPU-GroupGridFold: keyed groups use the recorded accumulator"));
+        return Err(syn::Error::new_spanned(
+            group,
+            "GPU-GroupGridFold: keyed groups use the recorded accumulator",
+        ));
     }
     let owner = format_ident!("__cq_canonical_{input_index}");
     let fields = format_ident!("__cq_fields_{input_index}");
@@ -375,8 +385,14 @@ pub fn global(
             quote!(#id)
         });
     let prepare = format_ident!("prepare_{kernel}");
-    let mut params = direct.as_ref().map(|input| input.parameters.clone()).unwrap_or_default();
-    let mut args = direct.as_ref().map(|input| input.arguments.clone()).unwrap_or_default();
+    let mut params = direct
+        .as_ref()
+        .map(|input| input.parameters.clone())
+        .unwrap_or_default();
+    let mut args = direct
+        .as_ref()
+        .map(|input| input.arguments.clone())
+        .unwrap_or_default();
     let mut columns = Vec::new();
     let mut descriptors = Vec::new();
     let mut declare = Vec::new();
@@ -392,7 +408,8 @@ pub fn global(
         };
         let ty = &aggregate.ty;
         let optional = kind >= 2;
-        descriptors.push(quote!(::cq_gpu_sequence_runtime::group::aggregate::<#ty, #optional>(#kind)?));
+        descriptors
+            .push(quote!(::cq_gpu_sequence_runtime::group::aggregate::<#ty, #optional>(#kind)?));
         columns.push(symbol_name(&aggregate.name));
         let value = format_ident!("__cq_value_{column}");
         let present = format_ident!("__cq_present_{column}");
@@ -400,10 +417,18 @@ pub fn global(
         let argument = if kind == 0 {
             quote!(1i64)
         } else {
-            let expression = aggregate.expression.as_ref().expect("checked aggregate argument");
-            let name = symbol_name(cq_lang_structures::syntax::rust::variable(expression).ok_or_else(|| {
-                syn::Error::new_spanned(expression, "GPU aggregate argument must be a normalized variable")
-            })?);
+            let expression = aggregate
+                .expression
+                .as_ref()
+                .expect("checked aggregate argument");
+            let name = symbol_name(
+                cq_lang_structures::syntax::rust::variable(expression).ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        expression,
+                        "GPU aggregate argument must be a normalized variable",
+                    )
+                })?,
+            );
             if let Some((parameter, value)) = capture_argument(captures, &name, column) {
                 params.push(quote!(#parameter:i64));
                 args.push(value);
@@ -414,9 +439,15 @@ pub fn global(
                 })?;
                 quote!((#value as i64))
             } else {
-                let field = input_columns.iter().position(|column| *column == name).ok_or_else(|| {
-                    syn::Error::new_spanned(group, "GPU group input lacks a canonical valuation column")
-                })?;
+                let field = input_columns
+                    .iter()
+                    .position(|column| *column == name)
+                    .ok_or_else(|| {
+                        syn::Error::new_spanned(
+                            group,
+                            "GPU group input lacks a canonical valuation column",
+                        )
+                    })?;
                 let base = format_ident!("base_{column}");
                 let shift = format_ident!("shift_{column}");
                 let bits = format_ident!("bits_{column}");
@@ -426,14 +457,27 @@ pub fn global(
                     quote!(#fields[#field].shift),
                     quote!(#fields[#field].bits),
                 ]);
-                let offset = crate::emit::packed_offset(quote!(packed), quote!(position), quote!(lanes), quote!(#shift), quote!(#bits));
+                let offset = crate::emit::packed_offset(
+                    quote!(packed),
+                    quote!(position),
+                    quote!(lanes),
+                    quote!(#shift),
+                    quote!(#bits),
+                );
                 // DECODE V: P6 keyless grid fold reconstructs packed FOR fields before typed per-block partials.
                 quote!({ let offset = #offset; #base.wrapping_add(offset as i64) })
             }
         };
-        let combine = |into: TokenStream, from: TokenStream, from_present: TokenStream, present: TokenStream| match kind {
-            2 => quote!(if #from_present && (!#present || #from < #into) { #into = #from; } #present |= #from_present;),
-            3 => quote!(if #from_present && (!#present || #from > #into) { #into = #from; } #present |= #from_present;),
+        let combine = |into: TokenStream,
+                       from: TokenStream,
+                       from_present: TokenStream,
+                       present: TokenStream| match kind {
+            2 => {
+                quote!(if #from_present && (!#present || #from < #into) { #into = #from; } #present |= #from_present;)
+            }
+            3 => {
+                quote!(if #from_present && (!#present || #from > #into) { #into = #from; } #present |= #from_present;)
+            }
             _ => quote! {
                 match (#into).checked_add(#from) {
                     Some(sum) => #into = sum,
@@ -441,7 +485,12 @@ pub fn global(
                 }
             },
         };
-        let accumulate = combine(quote!(#value), quote!(__argument), quote!(true), quote!(#present));
+        let accumulate = combine(
+            quote!(#value),
+            quote!(__argument),
+            quote!(true),
+            quote!(#present),
+        );
         update.push(quote!({ let __argument = #argument; #accumulate }));
         let shared_combine = combine(
             quote!(*values.add(__tid)),

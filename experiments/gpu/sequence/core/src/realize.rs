@@ -17,13 +17,18 @@ use cq_lang_structures::syntax as cq_syntax;
 use quote::format_ident;
 
 fn error(message: impl std::fmt::Display) -> syn::Error {
-    syn::Error::new(proc_macro2::Span::call_site(), format!("GPU-Realization: {message}"))
+    syn::Error::new(
+        proc_macro2::Span::call_site(),
+        format!("GPU-Realization: {message}"),
+    )
 }
 
 /// Auxiliary element kernels (union decode/pack, host-output pack) launch one
 /// thread per element in blocks of the target's collective width.
 fn elements() -> Grid {
-    Grid::Elements { block_threads: crate::BLOCK_THREADS }
+    Grid::Elements {
+        block_threads: crate::BLOCK_THREADS,
+    }
 }
 
 /// Formal rule GPU-Realization: select source access, publication steps,
@@ -35,12 +40,24 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Real
         let captures = captures(&facts)?;
         let sources = sources(&facts, &captures)?;
         let (steps, output) = Steps::new(&facts, &sources).run()?;
-        Ok(Realization { rejection: None, sources, steps, output, captures })
+        Ok(Realization {
+            rejection: None,
+            sources,
+            steps,
+            output,
+            captures,
+        })
     })();
     let realization = match selected {
         Ok(realization) => realization,
         Err(error) => Realization {
-            rejection: Some(error.into_iter().map(|error| error.to_string()).collect::<Vec<_>>().join("\n")),
+            rejection: Some(
+                error
+                    .into_iter()
+                    .map(|error| error.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
             ..Realization::default()
         },
     };
@@ -89,7 +106,11 @@ impl<'a> Facts<'a> {
                     .types
                     .iter()
                     .map(|(column, ty)| {
-                        let ty = if codecs.get(ty).is_some() { syn::parse_quote!(u32) } else { ty.clone() };
+                        let ty = if codecs.get(ty).is_some() {
+                            syn::parse_quote!(u32)
+                        } else {
+                            ty.clone()
+                        };
                         (column.clone(), ty)
                     })
                     .collect();
@@ -101,10 +122,17 @@ impl<'a> Facts<'a> {
         for input in program.structures.physical.inputs() {
             let name = symbol_name(&input.name);
             for entry in &program.structures.structures.entries {
-                if analysis.structures.physical.hosts.get(&symbol_name(&entry.name)) != Some(&name) {
+                if analysis
+                    .structures
+                    .physical
+                    .hosts
+                    .get(&symbol_name(&entry.name))
+                    != Some(&name)
+                {
                     continue;
                 }
-                if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &entry.structure {
+                if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &entry.structure
+                {
                     if !matches!(reader, cq_lang_structures::ReaderRef::Scan) {
                         continue;
                     }
@@ -130,7 +158,17 @@ impl<'a> Facts<'a> {
                     .cloned()
             })
             .collect();
-        Ok(Self { program, analysis, definitions, sequence, carriers, resident, runs, device_results, codecs })
+        Ok(Self {
+            program,
+            analysis,
+            definitions,
+            sequence,
+            carriers,
+            resident,
+            runs,
+            device_results,
+            codecs,
+        })
     }
 
     fn host_level(&self, name: &str) -> bool {
@@ -159,7 +197,9 @@ impl<'a> Facts<'a> {
                 .get(&current)
                 .ok_or_else(|| error("unknown Physical row function"))?;
             chain.push(definition);
-            let Some(next) = definition.operator.input() else { break };
+            let Some(next) = definition.operator.input() else {
+                break;
+            };
             current = symbol_name(next);
         }
         Ok(chain)
@@ -170,7 +210,13 @@ impl<'a> Facts<'a> {
             .output
             .as_ref()
             .map(|(name, _)| name.clone())
-            .or_else(|| self.program.sequence.definitions.last().map(|d| symbol_name(&d.name)))
+            .or_else(|| {
+                self.program
+                    .sequence
+                    .definitions
+                    .last()
+                    .map(|d| symbol_name(&d.name))
+            })
             .ok_or_else(|| error("GPU Sequence lacks a checked output"))
     }
 }
@@ -197,13 +243,26 @@ fn captures(facts: &Facts) -> syn::Result<Captures> {
         let expression = match &definition.operator {
             Operator::Guard(guard) if !analysis.rust_requires_host(&definition.operator) => {
                 let row = &analysis.structures.physical.rows[&symbol_name(&guard.input)];
-                captures.rust_expression(&guard.condition, &row.types, &row.bindings, &syn::parse_quote!(bool), &facts.codecs)
+                captures.rust_expression(
+                    &guard.condition,
+                    &row.types,
+                    &row.bindings,
+                    &syn::parse_quote!(bool),
+                    &facts.codecs,
+                )
             }
             Operator::Bind(bind) if !analysis.rust_requires_host(&definition.operator) => {
                 let row = &analysis.structures.physical.rows[&symbol_name(&bind.input)];
                 let names = cq_syntax::rust::bindings(&bind.pattern);
-                let output = &analysis.structures.physical.rows[name].types[&symbol_name(&names[0])];
-                captures.rust_expression(&bind.expression, &row.types, &row.bindings, output, &facts.codecs)
+                let output =
+                    &analysis.structures.physical.rows[name].types[&symbol_name(&names[0])];
+                captures.rust_expression(
+                    &bind.expression,
+                    &row.types,
+                    &row.bindings,
+                    output,
+                    &facts.codecs,
+                )
             }
             Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
                 let types = &analysis.structures.physical.rows[&symbol_name(&select.input)].types;
@@ -215,7 +274,9 @@ fn captures(facts: &Facts) -> syn::Result<Captures> {
         records.device.insert(name.clone(), expression);
     }
     for (name, definition) in &facts.definitions {
-        if let Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) = &definition.operator {
+        if let Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) =
+            &definition.operator
+        {
             let types = &analysis.structures.physical.rows[&symbol_name(&select.input)].types;
             let mut condition = select.condition.clone();
             captures.host_relational(&mut condition, types, &facts.codecs);
@@ -233,7 +294,8 @@ pub(crate) fn host_bound(
 ) -> BTreeMap<String, Definition> {
     let mut bound = definitions.clone();
     for (name, definition) in &mut bound {
-        if let Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) = &mut definition.operator
+        if let Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) =
+            &mut definition.operator
             && let Some(condition) = captures.host.get(name)
         {
             select.condition = condition.clone();
@@ -267,7 +329,10 @@ fn resident_transfers(
         .collect();
     hosts
         .into_iter()
-        .map(|host| Transfer { source: TransferSource::Resident(host.clone()), granularity: Granularity::CompleteRows })
+        .map(|host| Transfer {
+            source: TransferSource::Resident(host.clone()),
+            granularity: Granularity::CompleteRows,
+        })
         .collect()
 }
 
@@ -288,11 +353,20 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
             continue;
         }
         let dependencies = crate::rows::host_dependencies(name, &facts.definitions);
-        if !rename && dependencies.iter().any(|result| facts.device_results.contains(result)) {
+        if !rename
+            && dependencies
+                .iter()
+                .any(|result| facts.device_results.contains(result))
+        {
             continue;
         }
         let needs_host = dependencies.iter().any(|result| {
-            analysis.structures.physical.hosts.get(result).is_some_and(|host| !facts.resident.contains(host))
+            analysis
+                .structures
+                .physical
+                .hosts
+                .get(result)
+                .is_some_and(|host| !facts.resident.contains(host))
         });
         let (origin, columns, selection) = if needs_host {
             if !required.contains(name) {
@@ -308,7 +382,9 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                 .collect();
             (SourceOrigin::Uploaded { evaluation }, columns, None)
         } else {
-            let Some(origin) = crate::rows::origin(name, &host_bound)? else { continue };
+            let Some(origin) = crate::rows::origin(name, &host_bound)? else {
+                continue;
+            };
             // A predicate-filtered result is computed from its run as row work.
             if origin.predicate {
                 continue;
@@ -334,7 +410,9 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                             continue;
                         }
                         if crate::runs::layout_types(ty)?.is_none() {
-                            return Err(error("GPU-Runs: native lookup requires a declared run layout"));
+                            return Err(error(
+                                "GPU-Runs: native lookup requires a declared run layout",
+                            ));
                         }
                         let provider = format!("{name}__{}", sorted.join("__"));
                         if !providers.contains(&provider) {
@@ -342,21 +420,37 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                         }
                     }
                 }
-                sources.insert(name.clone(), SourceRealization {
-                    origin: SourceOrigin::Runs { host: origin.host.clone(), providers },
-                    columns: origin.columns.clone(),
-                    access: SourceAccess::Scan,
-                    phase: Phase::Setup,
-                });
+                sources.insert(
+                    name.clone(),
+                    SourceRealization {
+                        origin: SourceOrigin::Runs {
+                            host: origin.host.clone(),
+                            providers,
+                        },
+                        columns: origin.columns.clone(),
+                        access: SourceAccess::Scan,
+                        phase: Phase::Setup,
+                    },
+                );
                 continue;
             }
             let selection = origin.selection.as_ref().map(interval).transpose()?;
-            (SourceOrigin::Resident { host: origin.host.clone() }, origin.columns.clone(), selection)
+            (
+                SourceOrigin::Resident {
+                    host: origin.host.clone(),
+                },
+                origin.columns.clone(),
+                selection,
+            )
         };
         let built = !facts.device_results.contains(name)
-            && analysis.gpu_bindings.providers.get(name).is_some_and(|layouts| {
-                layouts.iter().any(|layout| layout.abi != ProviderAbi::Host)
-            })
+            && analysis
+                .gpu_bindings
+                .providers
+                .get(name)
+                .is_some_and(|layouts| {
+                    layouts.iter().any(|layout| layout.abi != ProviderAbi::Host)
+                })
             && analysis.structures.built.contains_key(name);
         let access = if built {
             SourceAccess::Provider { selection }
@@ -365,8 +459,20 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
         } else {
             SourceAccess::Scan
         };
-        let phase = if matches!(origin, SourceOrigin::Uploaded { .. }) { Phase::Build } else { Phase::Setup };
-        sources.insert(name.clone(), SourceRealization { origin, columns, access, phase });
+        let phase = if matches!(origin, SourceOrigin::Uploaded { .. }) {
+            Phase::Build
+        } else {
+            Phase::Setup
+        };
+        sources.insert(
+            name.clone(),
+            SourceRealization {
+                origin,
+                columns,
+                access,
+                phase,
+            },
+        );
     }
     Ok(sources)
 }
@@ -430,47 +536,79 @@ impl<'f, 'a> Steps<'f, 'a> {
         let mut bounds = BoundsState::default();
         // Run reads carry Scalar ranges; a provider key over them is measured.
         for (name, source) in sources {
-            let SourceOrigin::Runs { host, .. } = &source.origin else { continue };
+            let SourceOrigin::Runs { host, .. } = &source.origin else {
+                continue;
+            };
             for original in &facts.analysis.structures.host_layouts[host] {
-                let Some((column, _)) = source.columns.iter().find(|(_, o)| *o == original) else { continue };
+                let Some((column, _)) = source.columns.iter().find(|(_, o)| *o == original) else {
+                    continue;
+                };
                 let ty = facts.carriers[name][column].clone();
                 bounds.measured.insert(column.clone());
-                bounds.columns.insert(column.clone(), (BaseBounds::Scalar(ty), Vec::new()));
+                bounds
+                    .columns
+                    .insert(column.clone(), (BaseBounds::Scalar(ty), Vec::new()));
             }
         }
         let mut origins: BTreeMap<String, BTreeSet<(String, usize, bool)>> = BTreeMap::new();
         for (name, source) in sources {
             let (host, layout, upload) = match &source.origin {
-                SourceOrigin::Resident { host } => (host, &facts.analysis.structures.host_layouts[host], false),
-                SourceOrigin::Uploaded { .. } => (name, &facts.analysis.structures.layouts[name], true),
+                SourceOrigin::Resident { host } => {
+                    (host, &facts.analysis.structures.host_layouts[host], false)
+                }
+                SourceOrigin::Uploaded { .. } => {
+                    (name, &facts.analysis.structures.layouts[name], true)
+                }
                 SourceOrigin::Runs { .. } => continue,
             };
             for (column, original) in &source.columns {
-                let index = layout.iter().position(|c| c == original).expect("source column in layout");
-                origins.entry(column.clone()).or_default().insert((host.clone(), index, upload));
+                let index = layout
+                    .iter()
+                    .position(|c| c == original)
+                    .expect("source column in layout");
+                origins
+                    .entry(column.clone())
+                    .or_default()
+                    .insert((host.clone(), index, upload));
             }
         }
         for (column, origins) in origins {
             bounds.measured.remove(&column);
             let union = origins
                 .into_iter()
-                .map(|(host, index, upload)| if upload {
-                    BoundSource::Upload { publication: host, index }
-                } else {
-                    BoundSource::Resident { host, index }
+                .map(|(host, index, upload)| {
+                    if upload {
+                        BoundSource::Upload {
+                            publication: host,
+                            index,
+                        }
+                    } else {
+                        BoundSource::Resident { host, index }
+                    }
                 })
                 .collect();
-            bounds.columns.insert(column, (BaseBounds::Union(union), Vec::new()));
+            bounds
+                .columns
+                .insert(column, (BaseBounds::Union(union), Vec::new()));
         }
         for (name, row) in &facts.analysis.structures.physical.rows {
             for column in &row.computed {
-                bounds
-                    .columns
-                    .entry(column.clone())
-                    .or_insert_with(|| (BaseBounds::Scalar(facts.carriers[name][column].clone()), Vec::new()));
+                bounds.columns.entry(column.clone()).or_insert_with(|| {
+                    (
+                        BaseBounds::Scalar(facts.carriers[name][column].clone()),
+                        Vec::new(),
+                    )
+                });
             }
         }
-        Self { facts, sources, stored: Vec::new(), uploaded: BTreeSet::new(), downloaded: BTreeSet::new(), bounds }
+        Self {
+            facts,
+            sources,
+            stored: Vec::new(),
+            uploaded: BTreeSet::new(),
+            downloaded: BTreeSet::new(),
+            bounds,
+        }
     }
 
     fn has_source(&self, name: &str) -> bool {
@@ -513,7 +651,10 @@ impl<'f, 'a> Steps<'f, 'a> {
                         operations: false,
                     }]);
                 }
-                let term = facts.sequence.get(&name).ok_or_else(|| error("Sequence reference lacks definition"))?;
+                let term = facts
+                    .sequence
+                    .get(&name)
+                    .ok_or_else(|| error("Sequence reference lacks definition"))?;
                 let mut shapes = self.shapes(term)?;
                 if let Some(result) = facts.analysis.results.get(&name) {
                     for shape in &mut shapes {
@@ -537,7 +678,9 @@ impl<'f, 'a> Steps<'f, 'a> {
                 shapes
             }
             Term::Compact(name, inner) if matches!(inner.as_ref(), Term::Lookup { .. }) => {
-                let Term::Lookup { inner, .. } = inner.as_ref() else { unreachable!() };
+                let Term::Lookup { inner, .. } = inner.as_ref() else {
+                    unreachable!()
+                };
                 let mut shapes = self.shapes(inner)?;
                 for shape in &mut shapes {
                     shape.result = symbol_name(name);
@@ -554,26 +697,39 @@ impl<'f, 'a> Steps<'f, 'a> {
                 }
                 shapes
             }
-            Term::Lookup { provider, keys, inner } => {
+            Term::Lookup {
+                provider,
+                keys,
+                inner,
+            } => {
                 let mut shapes = self.shapes(inner)?;
                 let provider = symbol_name(provider);
                 let mut keys: Vec<_> = keys.iter().map(symbol_name).collect();
                 keys.sort();
-                let membership = facts.analysis.capabilities.get(&(provider.clone(), keys.clone()))
+                let membership = facts
+                    .analysis
+                    .capabilities
+                    .get(&(provider.clone(), keys.clone()))
                     == Some(&Capability::Membership);
                 for shape in &mut shapes {
                     if !membership {
-                        let result = facts.definitions.values().find_map(|definition| match &definition.operator {
-                            Operator::Probe(_, keyed) | Operator::Merge(_, keyed)
-                                if symbol_name(&keyed.right) == provider && symbol_name(&keyed.left) == shape.result =>
-                            {
-                                let mut read: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
-                                read.sort();
-                                (read == keys).then(|| symbol_name(&definition.name))
+                        let result = facts.definitions.values().find_map(|definition| {
+                            match &definition.operator {
+                                Operator::Probe(_, keyed) | Operator::Merge(_, keyed)
+                                    if symbol_name(&keyed.right) == provider
+                                        && symbol_name(&keyed.left) == shape.result =>
+                                {
+                                    let mut read: Vec<_> =
+                                        keyed.columns.iter().map(symbol_name).collect();
+                                    read.sort();
+                                    (read == keys).then(|| symbol_name(&definition.name))
+                                }
+                                _ => None,
                             }
-                            _ => None,
                         });
-                        shape.result = result.ok_or_else(|| error("Sequence lookup lacks checked Physical row provenance"))?;
+                        shape.result = result.ok_or_else(|| {
+                            error("Sequence lookup lacks checked Physical row provenance")
+                        })?;
                     }
                     shape.operations = true;
                 }
@@ -582,7 +738,11 @@ impl<'f, 'a> Steps<'f, 'a> {
             Term::Group(..) | Term::PartitionK { .. } => {
                 return Err(error("group or key partition is not a dispatch chain"));
             }
-            Term::Flatten(inner) | Term::Canon(inner) | Term::Store { inner, .. } | Term::Tile { inner, .. } | Term::Fold(_, inner) => {
+            Term::Flatten(inner)
+            | Term::Canon(inner)
+            | Term::Store { inner, .. }
+            | Term::Tile { inner, .. }
+            | Term::Fold(_, inner) => {
                 let mut shapes = self.shapes(inner)?;
                 for shape in &mut shapes {
                     shape.operations = true;
@@ -604,7 +764,8 @@ impl<'f, 'a> Steps<'f, 'a> {
             .keys()
             .map(|result| (result.clone(), format_ident!("__cq_bound")))
             .collect();
-        let dependencies = crate::rows::host_dependencies_from(result, &self.facts.definitions, &bindings);
+        let dependencies =
+            crate::rows::host_dependencies_from(result, &self.facts.definitions, &bindings);
         let mut transfers = Vec::new();
         let mut bound = Vec::new();
         for (index, stored) in self.stored.iter().enumerate() {
@@ -616,7 +777,9 @@ impl<'f, 'a> Steps<'f, 'a> {
                 continue;
             }
             if stored.range {
-                return Err(error("host consumer requires a materialized row publication"));
+                return Err(error(
+                    "host consumer requires a materialized row publication",
+                ));
             }
             if self.downloaded.insert(stored.name.clone()) {
                 transfers.push(Transfer {
@@ -626,15 +789,25 @@ impl<'f, 'a> Steps<'f, 'a> {
             }
         }
         let bound_results = last.keys().cloned().collect();
-        transfers.extend(resident_transfers(self.facts, &dependencies, &bound_results));
+        transfers.extend(resident_transfers(
+            self.facts,
+            &dependencies,
+            &bound_results,
+        ));
         Ok(HostEvaluation { bound, transfers })
     }
 
     /// An upload publishes its layout columns; their bounds merge pairwise.
     fn upload(&mut self, result: &str) {
         self.uploaded.insert(result.to_owned());
-        for (index, column) in self.facts.analysis.structures.layouts[result].iter().enumerate() {
-            let source = BoundSource::Upload { publication: result.to_owned(), index };
+        for (index, column) in self.facts.analysis.structures.layouts[result]
+            .iter()
+            .enumerate()
+        {
+            let source = BoundSource::Upload {
+                publication: result.to_owned(),
+                index,
+            };
             self.bounds
                 .columns
                 .entry(column.clone())
@@ -650,12 +823,18 @@ impl<'f, 'a> Steps<'f, 'a> {
         let mut columns = BTreeMap::new();
         for layout in layouts {
             for column in layout.keys.iter().chain(&layout.payload) {
-                let Some((base, merges)) = self.bounds.columns.get(column) else { continue };
-                columns.insert(column.clone(), DescriptorBounds {
-                    base: base.clone(),
-                    merges: merges.clone(),
-                    measure: self.bounds.measured.contains(column) && layout.keys.contains(column),
-                });
+                let Some((base, merges)) = self.bounds.columns.get(column) else {
+                    continue;
+                };
+                columns.insert(
+                    column.clone(),
+                    DescriptorBounds {
+                        base: base.clone(),
+                        merges: merges.clone(),
+                        measure: self.bounds.measured.contains(column)
+                            && layout.keys.contains(column),
+                    },
+                );
             }
         }
         Some(ProviderBuild { columns })
@@ -668,14 +847,21 @@ impl<'f, 'a> Steps<'f, 'a> {
             .gpu_publications
             .get(name)
             .is_some_and(|record| record.storage.codec().is_some());
-        self.stored.push(Stored { name: name.to_owned(), result, range, packed });
+        self.stored.push(Stored {
+            name: name.to_owned(),
+            result,
+            range,
+            packed,
+        });
     }
 
     fn group(&mut self, name: &syn::Ident, input: &Term) -> syn::Result<TerminalGroup> {
         let facts = self.facts;
         let shapes = self.shapes(input)?;
         let [shape] = shapes.as_slice() else {
-            return Err(error("GPU group requires one canonical valuation publication"));
+            return Err(error(
+                "GPU group requires one canonical valuation publication",
+            ));
         };
         let result = symbol_name(name);
         let Operator::Group(group) = &facts
@@ -705,26 +891,43 @@ impl<'f, 'a> Steps<'f, 'a> {
         } else if let Some(index) = shape.stored {
             let stored = &self.stored[index];
             if !shape.operations && stored.packed {
-                GroupInput::Canonical { publication: stored.name.clone() }
+                GroupInput::Canonical {
+                    publication: stored.name.clone(),
+                }
             } else {
-                GroupInput::Stored { publication: stored.name.clone() }
+                GroupInput::Stored {
+                    publication: stored.name.clone(),
+                }
             }
         } else {
-            GroupInput::Source { source: shape.source.clone() }
+            GroupInput::Source {
+                source: shape.source.clone(),
+            }
         };
         let completion = if group.keys.is_empty() {
-            GroupCompletion::GridPartials { partials: Grid::KernelOccupancy }
+            GroupCompletion::GridPartials {
+                partials: Grid::KernelOccupancy,
+            }
         } else {
-            GroupCompletion::Segmented { arguments: Grid::KernelOccupancy }
+            GroupCompletion::Segmented {
+                arguments: Grid::KernelOccupancy,
+            }
         };
-        Ok(TerminalGroup { group: result, input, completion })
+        Ok(TerminalGroup {
+            group: result,
+            input,
+            completion,
+        })
     }
 
     fn run(mut self) -> syn::Result<(Vec<(String, Step)>, Option<HostOutput>)> {
         let facts = self.facts;
         let analysis = facts.analysis;
         let final_name = facts.final_name()?;
-        let final_group = facts.sequence.get(&final_name).and_then(|term| grouped_boundary(term, &facts.sequence));
+        let final_group = facts
+            .sequence
+            .get(&final_name)
+            .and_then(|term| grouped_boundary(term, &facts.sequence));
         let device_sources = crate::rows::device_source_results(analysis);
         let mut steps = Vec::new();
         let mut output = false;
@@ -737,19 +940,28 @@ impl<'f, 'a> Steps<'f, 'a> {
                 .is_some_and(|level| level.last().is_some_and(|level| level == "host"));
             let step = if !terminal
                 && final_group.is_some_and(|(group, _)| {
-                    grouped_boundary(&definition.term, &facts.sequence).is_some_and(|(other, _)| other == group)
+                    grouped_boundary(&definition.term, &facts.sequence)
+                        .is_some_and(|(other, _)| other == group)
                 }) {
                 Step::GroupAlias
-            } else if let (true, Some((name, input))) = (terminal, grouped_boundary(&definition.term, &facts.sequence)) {
+            } else if let (true, Some((name, input))) = (
+                terminal,
+                grouped_boundary(&definition.term, &facts.sequence),
+            ) {
                 output = true;
                 Step::Group(self.group(name, input)?)
             } else if let Some(dispatch) = analysis.dispatches.iter().find(|dispatch| {
                 dispatch.inner_stores.iter().rev().find(|name| {
-                    facts.sequence.get(*name).is_some_and(|term| matches!(term, Term::Store { .. }))
+                    facts
+                        .sequence
+                        .get(*name)
+                        .is_some_and(|term| matches!(term, Term::Store { .. }))
                 }) == Some(&publication)
             }) {
                 let Term::Store { inner, .. } = definition.term.clone() else {
-                    return Err(error("GPU dispatch publication must be an explicit outer store"));
+                    return Err(error(
+                        "GPU dispatch publication must be an explicit outer store",
+                    ));
                 };
                 let result = match analysis.results.get(&publication) {
                     Some(result) => result.clone(),
@@ -761,11 +973,18 @@ impl<'f, 'a> Steps<'f, 'a> {
                         .clone(),
                 };
                 let range = matches!(
-                    dispatch.gpu.as_ref().map(|execution| &execution.publication),
+                    dispatch
+                        .gpu
+                        .as_ref()
+                        .map(|execution| &execution.publication),
                     Some(Publication::DeferredRange { .. })
                 );
                 output |= terminal;
-                let provider = if terminal { None } else { self.provider(&result) };
+                let provider = if terminal {
+                    None
+                } else {
+                    self.provider(&result)
+                };
                 self.push(&publication, result, range);
                 Step::Dispatch { provider }
             } else if host_level
@@ -779,15 +998,24 @@ impl<'f, 'a> Steps<'f, 'a> {
                         if shape.operations || !shape.maps.is_empty() {
                             return Err(error("host union operands must be published stores"));
                         }
-                        let index = shape.stored.ok_or_else(|| error("host union operand has not published"))?;
+                        let index = shape
+                            .stored
+                            .ok_or_else(|| error("host union operand has not published"))?;
                         let stored = &self.stored[index];
                         if stored.range {
-                            return Err(error("host union operand requires a materialized row publication"));
+                            return Err(error(
+                                "host union operand requires a materialized row publication",
+                            ));
                         }
                         records.push(if stored.packed {
-                            UnionArm::Decode { publication: stored.name.clone(), grid: elements() }
+                            UnionArm::Decode {
+                                publication: stored.name.clone(),
+                                grid: elements(),
+                            }
                         } else {
-                            UnionArm::Copy { publication: stored.name.clone() }
+                            UnionArm::Copy {
+                                publication: stored.name.clone(),
+                            }
                         });
                     }
                 }
@@ -796,9 +1024,17 @@ impl<'f, 'a> Steps<'f, 'a> {
                     .get(&publication)
                     .is_some_and(|record| record.storage.codec().is_some());
                 output |= terminal && codec;
-                let provider = if terminal { None } else { self.provider(&result) };
+                let provider = if terminal {
+                    None
+                } else {
+                    self.provider(&result)
+                };
                 self.push(&publication, result, false);
-                Step::HostUnion(HostUnion { arms: records, pack: codec.then(elements), provider })
+                Step::HostUnion(HostUnion {
+                    arms: records,
+                    pack: codec.then(elements),
+                    provider,
+                })
             } else if matches!(definition.term, Term::Store { .. })
                 && host_level
                 && let Some(result) = analysis.results.get(&publication)
@@ -807,7 +1043,10 @@ impl<'f, 'a> Steps<'f, 'a> {
             {
                 let evaluation = self.evaluation(result)?;
                 self.upload(result);
-                Step::Upload { evaluation, provider: None }
+                Step::Upload {
+                    evaluation,
+                    provider: None,
+                }
             } else {
                 Step::Host
             };
@@ -819,10 +1058,17 @@ impl<'f, 'a> Steps<'f, 'a> {
             let mut name = final_name.clone();
             loop {
                 if facts.is_host_store(&name) {
-                    break analysis.results.get(&name).map(|source| HostOutput { source: source.clone(), pack: elements() });
+                    break analysis.results.get(&name).map(|source| HostOutput {
+                        source: source.clone(),
+                        pack: elements(),
+                    });
                 }
-                let Some(Term::Store { inner, .. }) = facts.sequence.get(&name).copied() else { break None };
-                let Term::Ref(parent) = inner.as_ref() else { break None };
+                let Some(Term::Store { inner, .. }) = facts.sequence.get(&name).copied() else {
+                    break None;
+                };
+                let Term::Ref(parent) = inner.as_ref() else {
+                    break None;
+                };
                 name = symbol_name(parent);
                 if !facts.sequence.contains_key(&name) {
                     break None;
@@ -836,7 +1082,11 @@ impl<'f, 'a> Steps<'f, 'a> {
 /// Validate supplied realization records against checked facts and their
 /// stated invariants. The checker never calls `select`; it accepts any
 /// sound record, and re-derives only uniquely determined syntax (intervals).
-pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Realization) -> syn::Result<()> {
+pub(crate) fn check(
+    program: &Program,
+    analysis: &Analysis,
+    records: &Realization,
+) -> syn::Result<()> {
     if records.rejection.is_some() {
         return Ok(());
     }
@@ -860,7 +1110,12 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Realizatio
         }
         let dependencies = crate::rows::host_dependencies(name, &facts.definitions);
         let nonresident = dependencies.iter().any(|result| {
-            analysis.structures.physical.hosts.get(result).is_some_and(|host| !facts.resident.contains(host))
+            analysis
+                .structures
+                .physical
+                .hosts
+                .get(result)
+                .is_some_and(|host| !facts.resident.contains(host))
         });
         let layout = match &source.origin {
             SourceOrigin::Resident { host } | SourceOrigin::Runs { host, .. } => {
@@ -871,7 +1126,10 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Realizatio
                     if !facts.runs.contains(host) || source.access != SourceAccess::Scan {
                         return Err(error("packed runs have no interval or provider access"));
                     }
-                    if providers.iter().any(|provider| !analysis.gpu_bindings.native.contains_key(provider)) {
+                    if providers
+                        .iter()
+                        .any(|provider| !analysis.gpu_bindings.native.contains_key(provider))
+                    {
                         return Err(error("run source names an unrecorded native lookup"));
                     }
                 }
@@ -879,25 +1137,40 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Realizatio
             }
             SourceOrigin::Uploaded { evaluation } => {
                 if !nonresident || source.phase != Phase::Build || !evaluation.bound.is_empty() {
-                    return Err(error("upload requires a nonresident host dependency at build"));
+                    return Err(error(
+                        "upload requires a nonresident host dependency at build",
+                    ));
                 }
                 check_transfers(&facts, evaluation, &BTreeSet::new())?;
                 &analysis.structures.layouts[name]
             }
         };
-        if (source.phase == Phase::Build) != matches!(source.origin, SourceOrigin::Uploaded { .. }) {
-            return Err(error("only uploaded sources are constructed during the build"));
+        if (source.phase == Phase::Build) != matches!(source.origin, SourceOrigin::Uploaded { .. })
+        {
+            return Err(error(
+                "only uploaded sources are constructed during the build",
+            ));
         }
-        if source.columns.values().any(|original| !layout.contains(original)) {
+        if source
+            .columns
+            .values()
+            .any(|original| !layout.contains(original))
+        {
             return Err(error("source column is absent from its origin layout"));
         }
         let selection = match &source.access {
             SourceAccess::Scan => None,
             SourceAccess::Positions(interval) => Some(interval),
             SourceAccess::Provider { selection } => {
-                let built = analysis.gpu_bindings.providers.get(name).is_some_and(|layouts| {
-                    layouts.iter().any(|layout| layout.abi == ProviderAbi::Range)
-                });
+                let built = analysis
+                    .gpu_bindings
+                    .providers
+                    .get(name)
+                    .is_some_and(|layouts| {
+                        layouts
+                            .iter()
+                            .any(|layout| layout.abi == ProviderAbi::Range)
+                    });
                 if !built {
                     return Err(error("provider access without a recorded Range layout"));
                 }
@@ -908,25 +1181,46 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Realizatio
             let origin = crate::rows::origin(name, &host_bound)?
                 .ok_or_else(|| error("resident source lacks a rename origin"))?;
             let expected = origin.selection.as_ref().map(interval).transpose()?;
-            if origin.predicate || expected.as_ref() != selection || origin.columns != source.columns {
-                return Err(error("source interval differs from its recorded contiguous selections"));
+            if origin.predicate
+                || expected.as_ref() != selection
+                || origin.columns != source.columns
+            {
+                return Err(error(
+                    "source interval differs from its recorded contiguous selections",
+                ));
             }
         } else if selection.is_some() {
             return Err(error("only resident sources fold interval selections"));
         }
     }
-    let definitions: Vec<_> = program.sequence.definitions.iter().map(|d| symbol_name(&d.name)).collect();
-    if records.steps.iter().map(|(name, _)| name).ne(definitions.iter()) {
+    let definitions: Vec<_> = program
+        .sequence
+        .definitions
+        .iter()
+        .map(|d| symbol_name(&d.name))
+        .collect();
+    if records
+        .steps
+        .iter()
+        .map(|(name, _)| name)
+        .ne(definitions.iter())
+    {
         return Err(error("steps differ from the Sequence definitions"));
     }
     let final_name = facts.final_name()?;
-    let final_group = facts.sequence.get(&final_name).and_then(|term| grouped_boundary(term, &facts.sequence));
+    let final_group = facts
+        .sequence
+        .get(&final_name)
+        .and_then(|term| grouped_boundary(term, &facts.sequence));
     let mut published: Vec<&String> = Vec::new();
     for (name, step) in &records.steps {
         let term = facts.sequence[name];
         let dispatch = analysis.dispatches.iter().any(|dispatch| {
             dispatch.inner_stores.iter().rev().find(|store| {
-                facts.sequence.get(*store).is_some_and(|term| matches!(term, Term::Store { .. }))
+                facts
+                    .sequence
+                    .get(*store)
+                    .is_some_and(|term| matches!(term, Term::Store { .. }))
             }) == Some(name)
         });
         match step {
@@ -939,10 +1233,16 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Realizatio
                 }
             }
             Step::Group(group) => {
-                let Some((ident, _)) = grouped_boundary(term, &facts.sequence).filter(|_| *name == final_name) else {
-                    return Err(error("terminal group step is not the terminal grouped publication"));
+                let Some((ident, _)) =
+                    grouped_boundary(term, &facts.sequence).filter(|_| *name == final_name)
+                else {
+                    return Err(error(
+                        "terminal group step is not the terminal grouped publication",
+                    ));
                 };
-                let Some(Operator::Group(physical)) = facts.definitions.get(&group.group).map(|d| &d.operator) else {
+                let Some(Operator::Group(physical)) =
+                    facts.definitions.get(&group.group).map(|d| &d.operator)
+                else {
                     return Err(error("terminal group lacks its Physical group"));
                 };
                 if symbol_name(ident) != group.group {
@@ -951,7 +1251,11 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Realizatio
                 match (&group.completion, physical.keys.is_empty()) {
                     (GroupCompletion::GridPartials { partials }, true) if grid(partials) => {}
                     (GroupCompletion::Segmented { arguments }, false) if grid(arguments) => {}
-                    _ => return Err(error("keyless groups combine grid partials; keyed groups use the accumulator")),
+                    _ => {
+                        return Err(error(
+                            "keyless groups combine grid partials; keyed groups use the accumulator",
+                        ));
+                    }
                 }
                 match &group.input {
                     GroupInput::Canonical { publication } => {
@@ -960,7 +1264,9 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Realizatio
                             .get(publication)
                             .is_some_and(|record| record.storage.canonical_provider().is_some());
                         if !published.contains(&publication) || !canonical {
-                            return Err(error("canonical group input is not a completed canonical publication"));
+                            return Err(error(
+                                "canonical group input is not a completed canonical publication",
+                            ));
                         }
                     }
                     GroupInput::Stored { publication } => {
@@ -969,7 +1275,9 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Realizatio
                         }
                     }
                     GroupInput::Source { source } => {
-                        if !records.sources.contains_key(source) && !uploaded(records, analysis, source) {
+                        if !records.sources.contains_key(source)
+                            && !uploaded(records, analysis, source)
+                        {
                             return Err(error("group source has no device realization"));
                         }
                     }
@@ -978,9 +1286,17 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Realizatio
                             return Err(error("host group input is not the Physical group input"));
                         }
                         if let Some(evaluation) = upload {
-                            check_transfers(&facts, evaluation, &published.iter().map(|n| (*n).clone()).collect())?;
-                        } else if !records.sources.contains_key(input) && !uploaded(records, analysis, input) {
-                            return Err(error("host group input is neither uploaded nor a device source"));
+                            check_transfers(
+                                &facts,
+                                evaluation,
+                                &published.iter().map(|n| (*n).clone()).collect(),
+                            )?;
+                        } else if !records.sources.contains_key(input)
+                            && !uploaded(records, analysis, input)
+                        {
+                            return Err(error(
+                                "host group input is neither uploaded nor a device source",
+                            ));
                         }
                     }
                 }
@@ -993,34 +1309,53 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Realizatio
                 published.push(name);
             }
             Step::HostUnion(union) => {
-                if dispatch || host_union(term, &facts.sequence).is_none() || !facts.host_store_term(name) {
+                if dispatch
+                    || host_union(term, &facts.sequence).is_none()
+                    || !facts.host_store_term(name)
+                {
                     return Err(error("host union step without a host union store"));
                 }
                 for arm in &union.arms {
                     let (publication, packed) = match arm {
                         UnionArm::Copy { publication } => (publication, false),
-                        UnionArm::Decode { publication, grid: g } => (publication, grid(g)),
+                        UnionArm::Decode {
+                            publication,
+                            grid: g,
+                        } => (publication, grid(g)),
                     };
                     let codec = analysis
                         .gpu_publications
                         .get(publication)
                         .is_some_and(|record| record.storage.codec().is_some());
                     if !published.contains(&publication) || codec != packed {
-                        return Err(error("union arm realization contradicts its publication storage"));
+                        return Err(error(
+                            "union arm realization contradicts its publication storage",
+                        ));
                     }
                 }
-                let codec = analysis.gpu_publications.get(name).is_some_and(|record| record.storage.codec().is_some());
+                let codec = analysis
+                    .gpu_publications
+                    .get(name)
+                    .is_some_and(|record| record.storage.codec().is_some());
                 if codec != union.pack.as_ref().is_some_and(grid) {
                     return Err(error("union packing contradicts its recorded codec"));
                 }
                 check_provider(&facts, union.provider.as_ref())?;
                 published.push(name);
             }
-            Step::Upload { evaluation, provider } => {
-                if dispatch || !facts.host_store_term(name) || !analysis.results.contains_key(name) {
+            Step::Upload {
+                evaluation,
+                provider,
+            } => {
+                if dispatch || !facts.host_store_term(name) || !analysis.results.contains_key(name)
+                {
                     return Err(error("upload step without a host store"));
                 }
-                check_transfers(&facts, evaluation, &published.iter().map(|n| (*n).clone()).collect())?;
+                check_transfers(
+                    &facts,
+                    evaluation,
+                    &published.iter().map(|n| (*n).clone()).collect(),
+                )?;
                 check_provider(&facts, provider.as_ref())?;
             }
             Step::Host => {
@@ -1041,13 +1376,27 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Realizatio
 /// Whether an earlier step uploads the Physical result `name`.
 fn uploaded(records: &Realization, analysis: &Analysis, name: &str) -> bool {
     records.steps.iter().any(|(publication, step)| match step {
-        Step::Upload { .. } => analysis.results.get(publication).is_some_and(|result| result == name),
-        Step::Group(TerminalGroup { input: GroupInput::Host { input, upload: Some(_) }, .. }) => input == name,
+        Step::Upload { .. } => analysis
+            .results
+            .get(publication)
+            .is_some_and(|result| result == name),
+        Step::Group(TerminalGroup {
+            input:
+                GroupInput::Host {
+                    input,
+                    upload: Some(_),
+                },
+            ..
+        }) => input == name,
         _ => false,
     })
 }
 
-fn check_transfers(facts: &Facts, evaluation: &HostEvaluation, published: &BTreeSet<String>) -> syn::Result<()> {
+fn check_transfers(
+    facts: &Facts,
+    evaluation: &HostEvaluation,
+    published: &BTreeSet<String>,
+) -> syn::Result<()> {
     for name in &evaluation.bound {
         if !published.contains(name) {
             return Err(error("host evaluation binds an incomplete publication"));
@@ -1060,7 +1409,9 @@ fn check_transfers(facts: &Facts, evaluation: &HostEvaluation, published: &BTree
             TransferSource::Resident(host) => facts.resident.contains(host),
         };
         if !known {
-            return Err(error("transfer names neither a bound publication nor a resident input"));
+            return Err(error(
+                "transfer names neither a bound publication nor a resident input",
+            ));
         }
     }
     Ok(())
@@ -1069,7 +1420,9 @@ fn check_transfers(facts: &Facts, evaluation: &HostEvaluation, published: &BTree
 /// Descriptor bounds enclose the column: resident origins rename an input
 /// column into it, uploads publish the column, Scalar is its carrier.
 fn check_provider(facts: &Facts, provider: Option<&ProviderBuild>) -> syn::Result<()> {
-    let Some(provider) = provider else { return Ok(()) };
+    let Some(provider) = provider else {
+        return Ok(());
+    };
     for (column, bounds) in &provider.columns {
         let sources = match &bounds.base {
             BaseBounds::Union(sources) => sources.iter().collect(),
@@ -1086,15 +1439,25 @@ fn check_provider(facts: &Facts, provider: Option<&ProviderBuild>) -> syn::Resul
             let sound = match source {
                 BoundSource::Resident { host, index } => {
                     facts.resident.contains(host)
-                        && facts.program.structures.physical.program.definitions.iter().any(|definition| {
-                            let Operator::Rename(rename) = &definition.operator else { return false };
-                            symbol_name(&rename.relation) == *host
-                                && rename.mapping.iter().any(|mapping| {
-                                    symbol_name(&mapping.target) == *column
-                                        && facts.analysis.structures.host_layouts[host].get(*index)
-                                            == Some(&symbol_name(&mapping.source))
-                                })
-                        })
+                        && facts
+                            .program
+                            .structures
+                            .physical
+                            .program
+                            .definitions
+                            .iter()
+                            .any(|definition| {
+                                let Operator::Rename(rename) = &definition.operator else {
+                                    return false;
+                                };
+                                symbol_name(&rename.relation) == *host
+                                    && rename.mapping.iter().any(|mapping| {
+                                        symbol_name(&mapping.target) == *column
+                                            && facts.analysis.structures.host_layouts[host]
+                                                .get(*index)
+                                                == Some(&symbol_name(&mapping.source))
+                                    })
+                            })
                 }
                 BoundSource::Upload { publication, index } => facts
                     .analysis
@@ -1104,7 +1467,9 @@ fn check_provider(facts: &Facts, provider: Option<&ProviderBuild>) -> syn::Resul
                     .is_some_and(|layout| layout.get(*index) == Some(column)),
             };
             if !sound {
-                return Err(error("descriptor bounds name a domain that does not publish the column"));
+                return Err(error(
+                    "descriptor bounds name a domain that does not publish the column",
+                ));
             }
         }
     }

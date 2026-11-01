@@ -27,7 +27,11 @@ impl Random {
 }
 
 fn params(ratio: usize, radix_bits: u32) -> RadixRunParams {
-    RadixRunParams { ratio, radix_bits, merge_tile_rows: 16 }
+    RadixRunParams {
+        ratio,
+        radix_bits,
+        merge_tile_rows: 16,
+    }
 }
 
 fn pack<W: Word>(packing: &Packing, key: &[i128]) -> W {
@@ -35,12 +39,22 @@ fn pack<W: Word>(packing: &Packing, key: &[i128]) -> W {
 }
 
 /// Publish `(key, (serial, tag))` rows with `i64` keys.
-fn publish_rows(run: &mut DeviceRadixRun<u64, u32, Items>, packing: &Packing, rows: &[(i64, (u64, i32))]) -> Result {
+fn publish_rows(
+    run: &mut DeviceRadixRun<u64, u32, Items>,
+    packing: &Packing,
+    rows: &[(i64, (u64, i32))],
+) -> Result {
     let pool = run.pool().clone();
-    let keys: Vec<u64> = rows.iter().map(|row| pack(packing, &[row.0 as i128])).collect();
+    let keys: Vec<u64> = rows
+        .iter()
+        .map(|row| pack(packing, &[row.0 as i128]))
+        .collect();
     let keys = Buffer::from_host(pool.clone(), &keys)?;
     let items = (
-        Buffer::from_host(pool.clone(), &rows.iter().map(|row| row.1 .0).collect::<Vec<_>>())?,
+        Buffer::from_host(
+            pool.clone(),
+            &rows.iter().map(|row| row.1 .0).collect::<Vec<_>>(),
+        )?,
         Buffer::from_host(pool, &rows.iter().map(|row| row.1 .1).collect::<Vec<_>>())?,
     );
     run.publish(&keys, &items, rows.len())
@@ -62,9 +76,20 @@ fn expand<W: Word, O: OffsetWord, C: DeviceItemColumns, T: ItemLane>(
         bases.push(total);
         total += cursor.len();
     }
-    let bases_buffer = Buffer::from_host(pool.clone(), &if bases.is_empty() { vec![0] } else { bases.clone() })?;
+    let bases_buffer = Buffer::from_host(
+        pool.clone(),
+        &if bases.is_empty() {
+            vec![0]
+        } else {
+            bases.clone()
+        },
+    )?;
     let output = matches.gather(pool, column, &bases_buffer, total as usize)?;
-    let values = if total == 0 { Vec::new() } else { output.to_host()? };
+    let values = if total == 0 {
+        Vec::new()
+    } else {
+        output.to_host()?
+    };
     let runs = matches.run_count();
     let mut result = Vec::with_capacity(matches.probe_count());
     for probe in 0..matches.probe_count() {
@@ -102,25 +127,44 @@ fn probe_keys(groups: &BTreeMap<i64, Vec<(u64, i32)>>) -> Vec<i64> {
 /// Read every probe of `layout` on `pool` through both narrow columns and
 /// check exact groups, stable order and run-local cursor bounds. Returns the
 /// expansion of every distinct key (the factorization's image).
-fn check_layout(layout: &Layout, pool: &Arc<Pool>, rows: &[(i64, (u64, i32))], run_items: &[usize]) -> Result<Vec<(i64, (u64, i32))>> {
+fn check_layout(
+    layout: &Layout,
+    pool: &Arc<Pool>,
+    rows: &[(i64, (u64, i32))],
+    run_items: &[usize],
+) -> Result<Vec<(i64, (u64, i32))>> {
     let expected = groups(rows);
     let probes = probe_keys(&expected);
-    let packed: Vec<u64> = probes.iter().map(|&key| pack(layout.packing(), &[key as i128])).collect();
+    let packed: Vec<u64> = probes
+        .iter()
+        .map(|&key| pack(layout.packing(), &[key as i128]))
+        .collect();
     let buffer = Buffer::from_host(pool.clone(), &packed)?;
     let matches = layout.probe_matches(pool, &buffer, probes.len())?;
     assert_eq!(matches.snapshot_id(), layout.snapshot_id());
     assert_eq!(matches.run_count(), run_items.len());
     for cursor in matches.to_host()? {
         // Cursors are run-local: they never exceed their own run's items.
-        assert!(cursor.end as usize <= run_items[cursor.run as usize], "cursor {cursor:?} leaves its run");
+        assert!(
+            cursor.end as usize <= run_items[cursor.run as usize],
+            "cursor {cursor:?} leaves its run"
+        );
     }
     let serials = expand(pool, &matches, &layout.item_column::<u64>(0)?)?;
     let tags = expand(pool, &matches, &layout.item_column::<i32>(1)?)?;
     let mut image = Vec::new();
     for (index, &key) in probes.iter().enumerate() {
-        let got: Vec<(u64, i32)> = serials[index].iter().copied().zip(tags[index].iter().copied()).collect();
+        let got: Vec<(u64, i32)> = serials[index]
+            .iter()
+            .copied()
+            .zip(tags[index].iter().copied())
+            .collect();
         assert_eq!(serials[index].len(), tags[index].len());
-        assert_eq!(&got, expected.get(&key).unwrap_or(&Vec::new()), "stable occurrences of key {key}");
+        assert_eq!(
+            &got,
+            expected.get(&key).unwrap_or(&Vec::new()),
+            "stable occurrences of key {key}"
+        );
         image.extend(got.into_iter().map(|item| (key, item)));
     }
     Ok(image)
@@ -136,7 +180,10 @@ fn layout_factorizes_and_preserves_occurrence_order_across_runs() -> Result {
         let mut rows = Vec::new();
         let mut layout = Layout::publish(&run, packing.clone())?;
         let (mut most_runs, mut spanning) = (0, false);
-        for (round, size) in [700_usize, 300, 90, 40, 1, 13, 500, 7, 3, 260].into_iter().enumerate() {
+        for (round, size) in [700_usize, 300, 90, 40, 1, 13, 500, 7, 3, 260]
+            .into_iter()
+            .enumerate()
+        {
             let batch: Vec<(i64, (u64, i32))> = (0..size)
                 .map(|i| {
                     let key = (random.next() % 97) as i64 - 48;
@@ -147,18 +194,38 @@ fn layout_factorizes_and_preserves_occurrence_order_across_runs() -> Result {
             rows.extend(batch);
             layout = layout.republish(&run)?;
             assert_eq!(layout.len(), rows.len());
-            assert_eq!(layout.logical_count()?, rows.len(), "resident count equals occurrences");
-            let lengths: Vec<usize> = run.run_lengths().into_iter().map(|(_, items)| items).collect();
+            assert_eq!(
+                layout.logical_count()?,
+                rows.len(),
+                "resident count equals occurrences"
+            );
+            let lengths: Vec<usize> = run
+                .run_lengths()
+                .into_iter()
+                .map(|(_, items)| items)
+                .collect();
             most_runs = most_runs.max(lengths.len());
             let mut image = check_layout(&layout, &pool, &rows, &lengths)?;
             // Factorization: ⋃ {k} × V_k over distinct keys is the input multiset.
             let mut input = rows.clone();
             image.sort_unstable();
             input.sort_unstable();
-            assert_eq!(image, input, "factorization preserves the occurrence multiset");
+            assert_eq!(
+                image, input,
+                "factorization preserves the occurrence multiset"
+            );
             // Some key's occurrences span several runs after unmerged publications.
-            let matches = layout.probe_matches(&pool, &Buffer::from_host(pool.clone(), &[pack::<u64>(&packing, &[0])])?, 1)?;
-            spanning |= matches.to_host()?.iter().filter(|cursor| !cursor.is_empty()).count() > 1;
+            let matches = layout.probe_matches(
+                &pool,
+                &Buffer::from_host(pool.clone(), &[pack::<u64>(&packing, &[0])])?,
+                1,
+            )?;
+            spanning |= matches
+                .to_host()?
+                .iter()
+                .filter(|cursor| !cursor.is_empty())
+                .count()
+                > 1;
         }
         assert!(most_runs >= 3, "laws must be checked over several runs");
         assert!(spanning, "a key must span several runs");
@@ -171,11 +238,19 @@ fn snapshot_publication_constructs_without_host_readback() -> Result {
     let pool = Pool::new(0, 0, 0)?;
     let packing = Layout::derive_packing()?;
     let mut run = DeviceRadixRun::<u64, u32, Items>::new(pool.clone(), params(4, 4))?;
-    publish_rows(&mut run, &packing, &[(3, (1, 1)), (3, (2, 2)), (-9, (3, 3))])?;
+    publish_rows(
+        &mut run,
+        &packing,
+        &[(3, (1, 1)), (3, (2, 2)), (-9, (3, 3))],
+    )?;
     let before = readback_count();
     let layout = Layout::publish(&run, packing.clone())?;
     let republished = layout.republish(&run)?;
-    assert_eq!(readback_count(), before, "constructing a snapshot downloads no count");
+    assert_eq!(
+        readback_count(),
+        before,
+        "constructing a snapshot downloads no count"
+    );
     assert_eq!(republished.snapshot_id(), layout.snapshot_id());
     assert_eq!(layout.len(), 3);
     assert!(!layout.count_ptr().is_null());
@@ -191,10 +266,16 @@ fn republish_reuses_descriptors_and_snapshots_survive_publish_and_release() -> R
     let pool = Pool::new(0, 0, 0)?;
     let packing = Layout::derive_packing()?;
     let mut run = DeviceRadixRun::<u64, u32, Items>::new(pool.clone(), params(2, 6))?;
-    let first: Vec<(i64, (u64, i32))> = (0..400).map(|i| ((i % 37) as i64 - 18, (i as u64, i as i32))).collect();
+    let first: Vec<(i64, (u64, i32))> = (0..400)
+        .map(|i| ((i % 37) as i64 - 18, (i as u64, i as i32)))
+        .collect();
     publish_rows(&mut run, &packing, &first)?;
     let layout = Layout::publish(&run, packing.clone())?;
-    let lengths: Vec<usize> = run.run_lengths().into_iter().map(|(_, items)| items).collect();
+    let lengths: Vec<usize> = run
+        .run_lengths()
+        .into_iter()
+        .map(|(_, items)| items)
+        .collect();
 
     // An empty delta keeps the publication: same snapshot, same descriptors.
     publish_rows(&mut run, &packing, &[])?;
@@ -202,7 +283,10 @@ fn republish_reuses_descriptors_and_snapshots_survive_publish_and_release() -> R
     assert_eq!(same.snapshot_id(), layout.snapshot_id());
     assert!(Arc::ptr_eq(same.snapshot(), layout.snapshot()));
     assert_eq!(same.fields_ptr(), layout.fields_ptr());
-    assert!(Arc::ptr_eq(&run.snapshot()?, layout.snapshot()), "the run caches its publication");
+    assert!(
+        Arc::ptr_eq(&run.snapshot()?, layout.snapshot()),
+        "the run caches its publication"
+    );
 
     // Retain a match set of the first publication before later publications.
     let probes: Vec<u64> = (-20..20).map(|key| pack(&packing, &[key])).collect();
@@ -214,16 +298,29 @@ fn republish_reuses_descriptors_and_snapshots_survive_publish_and_release() -> R
     let mut rows = first.clone();
     let mut successor = layout.clone();
     for round in 1..8_u64 {
-        let batch: Vec<(i64, (u64, i32))> =
-            (0..round * 50).map(|i| ((i % 11) as i64, (round * 10_000 + i, round as i32))).collect();
+        let batch: Vec<(i64, (u64, i32))> = (0..round * 50)
+            .map(|i| ((i % 11) as i64, (round * 10_000 + i, round as i32)))
+            .collect();
         publish_rows(&mut run, &packing, &batch)?;
         rows.extend(batch);
         let next = successor.republish(&run)?;
-        assert_ne!(next.snapshot_id(), successor.snapshot_id(), "changed runs are a new publication");
-        assert_eq!(next.fields_ptr(), layout.fields_ptr(), "successors share field descriptors");
+        assert_ne!(
+            next.snapshot_id(),
+            successor.snapshot_id(),
+            "changed runs are a new publication"
+        );
+        assert_eq!(
+            next.fields_ptr(),
+            layout.fields_ptr(),
+            "successors share field descriptors"
+        );
         successor = next;
     }
-    let final_lengths: Vec<usize> = run.run_lengths().into_iter().map(|(_, items)| items).collect();
+    let final_lengths: Vec<usize> = run
+        .run_lengths()
+        .into_iter()
+        .map(|(_, items)| items)
+        .collect();
     // Release the run and the newest layout; the retained ones stay exact.
     check_layout(&successor, &pool, &rows, &final_lengths)?;
     drop(run);
@@ -232,7 +329,10 @@ fn republish_reuses_descriptors_and_snapshots_survive_publish_and_release() -> R
     drop(same);
     drop(layout);
     // The retained match set alone keeps its snapshot's runs and columns.
-    assert_eq!(expand(&pool, &retained, &retained_column)?, expected_retained);
+    assert_eq!(
+        expand(&pool, &retained, &retained_column)?,
+        expected_retained
+    );
     Ok(())
 }
 
@@ -245,14 +345,22 @@ fn zero_publication_reads_exact_empty_results() -> Result {
     assert!(layout.is_empty());
     assert_eq!(layout.run_count(), 0);
     assert_eq!(layout.logical_count()?, 0);
-    let probes: Vec<u64> = [i64::MIN, 0, i64::MAX].iter().map(|&key| pack(&packing, &[key as i128])).collect();
+    let probes: Vec<u64> = [i64::MIN, 0, i64::MAX]
+        .iter()
+        .map(|&key| pack(&packing, &[key as i128]))
+        .collect();
     let buffer = Buffer::from_host(pool.clone(), &probes)?;
     let keys = layout.probe_keys(&pool, &buffer, probes.len())?.to_host()?;
-    assert!(keys.iter().all(|probe| probe.contains == 0 && probe.count == 0 && probe.begin == 0 && probe.end == 0));
+    assert!(keys.iter().all(|probe| probe.contains == 0
+        && probe.count == 0
+        && probe.begin == 0
+        && probe.end == 0));
     let matches = layout.probe_matches(&pool, &buffer, probes.len())?;
     assert!(matches.to_host()?.is_empty());
-    assert_eq!(expand(&pool, &matches, &layout.item_column::<u64>(0)?)?,
-        vec![Vec::<u64>::new(); 3]);
+    assert_eq!(
+        expand(&pool, &matches, &layout.item_column::<u64>(0)?)?,
+        vec![Vec::<u64>::new(); 3]
+    );
     let full = layout.prefix_interval(&[])?;
     let low = Buffer::from_host(pool.clone(), &[*full.start()])?;
     let high = Buffer::from_host(pool.clone(), &[*full.end()])?;
@@ -275,13 +383,23 @@ fn lane_reads_follow_fork_and_join_readiness() -> Result {
     let mut random = Random(77);
     let mut rows = Vec::new();
     for round in 0..4_u64 {
-        let batch: Vec<(i64, (u64, i32))> =
-            (0..300).map(|i| ((random.next() % 50) as i64, (round * 1000 + i, round as i32))).collect();
+        let batch: Vec<(i64, (u64, i32))> = (0..300)
+            .map(|i| {
+                (
+                    (random.next() % 50) as i64,
+                    (round * 1000 + i, round as i32),
+                )
+            })
+            .collect();
         publish_rows(&mut run, &packing, &batch)?;
         rows.extend(batch);
     }
     let layout = Layout::publish(&run, packing.clone())?;
-    let lengths: Vec<usize> = run.run_lengths().into_iter().map(|(_, items)| items).collect();
+    let lengths: Vec<usize> = run
+        .run_lengths()
+        .into_iter()
+        .map(|(_, items)| items)
+        .collect();
     let main_image = check_layout(&layout, &main, &rows, &lengths)?;
 
     // Fork readiness: the lane stream waits for the publication's uploads.
@@ -289,14 +407,31 @@ fn lane_reads_follow_fork_and_join_readiness() -> Result {
     fork.record(main.stream())?;
     lane.stream().wait(&fork)?;
     let lane_image = check_layout(&layout, &lane, &rows, &lengths)?;
-    assert_eq!(lane_image, main_image, "lane reads equal publication-stream reads");
+    assert_eq!(
+        lane_image, main_image,
+        "lane reads equal publication-stream reads"
+    );
 
     // Lane-produced keys become build input on main only after join readiness.
-    let delta: Vec<(i64, (u64, i32))> = (0..100).map(|i| ((i % 7) as i64, (90_000 + i, 9))).collect();
-    let keys = Buffer::from_host_async(lane.clone(), &delta.iter().map(|row| pack::<u64>(&packing, &[row.0 as i128])).collect::<Vec<_>>())?;
+    let delta: Vec<(i64, (u64, i32))> = (0..100)
+        .map(|i| ((i % 7) as i64, (90_000 + i, 9)))
+        .collect();
+    let keys = Buffer::from_host_async(
+        lane.clone(),
+        &delta
+            .iter()
+            .map(|row| pack::<u64>(&packing, &[row.0 as i128]))
+            .collect::<Vec<_>>(),
+    )?;
     let items = (
-        Buffer::from_host_async(lane.clone(), &delta.iter().map(|row| row.1 .0).collect::<Vec<_>>())?,
-        Buffer::from_host_async(lane.clone(), &delta.iter().map(|row| row.1 .1).collect::<Vec<_>>())?,
+        Buffer::from_host_async(
+            lane.clone(),
+            &delta.iter().map(|row| row.1 .0).collect::<Vec<_>>(),
+        )?,
+        Buffer::from_host_async(
+            lane.clone(),
+            &delta.iter().map(|row| row.1 .1).collect::<Vec<_>>(),
+        )?,
     );
     let join = main.context().new_event(None)?;
     join.record(lane.stream())?;
@@ -304,7 +439,11 @@ fn lane_reads_follow_fork_and_join_readiness() -> Result {
     run.publish(&keys, &items, delta.len())?;
     rows.extend(delta);
     let next = layout.republish(&run)?;
-    let lengths: Vec<usize> = run.run_lengths().into_iter().map(|(_, items)| items).collect();
+    let lengths: Vec<usize> = run
+        .run_lengths()
+        .into_iter()
+        .map(|(_, items)| items)
+        .collect();
     check_layout(&next, &main, &rows, &lengths)?;
 
     // Pools that do not share the snapshot's memory cannot read it.
@@ -312,8 +451,14 @@ fn lane_reads_follow_fork_and_join_readiness() -> Result {
     assert!(layout.probe_keys(&foreign, &probe, 1).is_err());
     assert!(layout.probe_matches(&foreign, &probe, 1).is_err());
     let main_probe = Buffer::from_host(main.clone(), &[0_u64])?;
-    assert!(layout.probe_keys(&foreign, &main_probe, 1).is_err(), "execution pool, not probe pool, qualifies the read");
-    assert!(layout.probe_keys(&main, &probe, 1).is_err(), "probes must share the execution pool's memory");
+    assert!(
+        layout.probe_keys(&foreign, &main_probe, 1).is_err(),
+        "execution pool, not probe pool, qualifies the read"
+    );
+    assert!(
+        layout.probe_keys(&main, &probe, 1).is_err(),
+        "probes must share the execution pool's memory"
+    );
     Ok(())
 }
 
@@ -328,16 +473,27 @@ fn empty_keys_and_all_equal_keys_form_one_group() -> Result {
     for size in [5_usize, 64, 2, 1] {
         let values: Vec<u32> = (0..size as u32).map(|i| serial + i).collect();
         serial += size as u32;
-        run.publish(&Buffer::from_host(pool.clone(), &vec![0_u64; size])?, &Buffer::from_host(pool.clone(), &values)?, size)?;
+        run.publish(
+            &Buffer::from_host(pool.clone(), &vec![0_u64; size])?,
+            &Buffer::from_host(pool.clone(), &values)?,
+            size,
+        )?;
     }
     let layout = Unit::publish(&run, packing)?;
-    assert!(run.run_lengths().iter().all(|&(keys, _)| keys == 1), "one distinct key per run");
+    assert!(
+        run.run_lengths().iter().all(|&(keys, _)| keys == 1),
+        "one distinct key per run"
+    );
     let range = layout.prefix_interval(&[])?;
     assert_eq!((*range.start(), *range.end()), (0, 0));
     let probe = Buffer::from_host(pool.clone(), &[0_u64])?;
     let matches = layout.probe_matches(&pool, &probe, 1)?;
     let items = expand(&pool, &matches, &layout.item_column::<u32>(0)?)?;
-    assert_eq!(items, vec![(0..serial).collect::<Vec<_>>()], "all-equal keys keep publication order");
+    assert_eq!(
+        items,
+        vec![(0..serial).collect::<Vec<_>>()],
+        "all-equal keys keep publication order"
+    );
     Ok(())
 }
 
@@ -359,9 +515,16 @@ fn multiword_extrema_and_prefix_intervals_are_exact() -> Result {
     }
     let mut run = DeviceRadixRun::<u128, u64, Buffer<u8>>::new(pool.clone(), params(2, 16))?;
     for chunk in rows.chunks(5) {
-        let keys: Vec<u128> = chunk.iter().map(|row| pack(&packing, &[row.0 .0 as i128, row.0 .1 as i128])).collect();
+        let keys: Vec<u128> = chunk
+            .iter()
+            .map(|row| pack(&packing, &[row.0 .0 as i128, row.0 .1 as i128]))
+            .collect();
         let items: Vec<u8> = chunk.iter().map(|row| row.1).collect();
-        run.publish(&Buffer::from_host(pool.clone(), &keys)?, &Buffer::from_host(pool.clone(), &items)?, chunk.len())?;
+        run.publish(
+            &Buffer::from_host(pool.clone(), &keys)?,
+            &Buffer::from_host(pool.clone(), &items)?,
+            chunk.len(),
+        )?;
     }
     let layout = Wide::publish(&run, packing.clone())?;
     // Every complete key, present or absent, reads its exact group.
@@ -371,11 +534,22 @@ fn multiword_extrema_and_prefix_intervals_are_exact() -> Result {
             probes.push((a, b));
         }
     }
-    let packed: Vec<u128> = probes.iter().map(|&(a, b)| pack(&packing, &[a as i128, b as i128])).collect();
-    let matches = layout.probe_matches(&pool, &Buffer::from_host(pool.clone(), &packed)?, probes.len())?;
+    let packed: Vec<u128> = probes
+        .iter()
+        .map(|&(a, b)| pack(&packing, &[a as i128, b as i128]))
+        .collect();
+    let matches = layout.probe_matches(
+        &pool,
+        &Buffer::from_host(pool.clone(), &packed)?,
+        probes.len(),
+    )?;
     let items = expand(&pool, &matches, &layout.item_column::<u8>(0)?)?;
     for (index, key) in probes.iter().enumerate() {
-        let expected: Vec<u8> = rows.iter().filter(|row| row.0 == *key).map(|row| row.1).collect();
+        let expected: Vec<u8> = rows
+            .iter()
+            .filter(|row| row.0 == *key)
+            .map(|row| row.1)
+            .collect();
         assert_eq!(items[index], expected, "key {key:?}");
     }
     // Prefix intervals: present first columns count their groups, absent ones none.
@@ -386,13 +560,22 @@ fn multiword_extrema_and_prefix_intervals_are_exact() -> Result {
         low.push(*range.start());
         high.push(*range.end());
     }
-    let intervals = layout.probe_intervals(
-        &pool, &Buffer::from_host(pool.clone(), &low)?, &Buffer::from_host(pool.clone(), &high)?, prefixes.len(),
-    )?.to_host()?;
+    let intervals = layout
+        .probe_intervals(
+            &pool,
+            &Buffer::from_host(pool.clone(), &low)?,
+            &Buffer::from_host(pool.clone(), &high)?,
+            prefixes.len(),
+        )?
+        .to_host()?;
     for (index, &a) in prefixes.iter().enumerate() {
         let items = rows.iter().filter(|row| row.0 .0 == a).count() as u64;
         assert_eq!(intervals[index].items, items, "prefix {a}");
-        assert_eq!(intervals[index].groups == 0, items == 0, "absent prefix {a}");
+        assert_eq!(
+            intervals[index].groups == 0,
+            items == 0,
+            "absent prefix {a}"
+        );
     }
     Ok(())
 }
@@ -404,50 +587,106 @@ fn many_runs_keep_run_local_cursors() -> Result {
     let mut run = DeviceRadixRun::<u64, u32, Items>::new(pool.clone(), params(2, 2))?;
     let mut rows = Vec::new();
     for (round, size) in [1024_usize, 256, 64, 16, 4, 1].into_iter().enumerate() {
-        let batch: Vec<(i64, (u64, i32))> =
-            (0..size).map(|i| ((i % 5) as i64, ((round * 10_000 + i) as u64, round as i32))).collect();
+        let batch: Vec<(i64, (u64, i32))> = (0..size)
+            .map(|i| ((i % 5) as i64, ((round * 10_000 + i) as u64, round as i32)))
+            .collect();
         publish_rows(&mut run, &packing, &batch)?;
         rows.extend(batch);
     }
-    assert_eq!(run.run_count(), 6, "decreasing batches stay unmerged under ratio 2");
+    assert_eq!(
+        run.run_count(),
+        6,
+        "decreasing batches stay unmerged under ratio 2"
+    );
     let layout = Layout::publish(&run, packing)?;
-    let lengths: Vec<usize> = run.run_lengths().into_iter().map(|(_, items)| items).collect();
+    let lengths: Vec<usize> = run
+        .run_lengths()
+        .into_iter()
+        .map(|(_, items)| items)
+        .collect();
     check_layout(&layout, &pool, &rows, &lengths)?;
     Ok(())
 }
 
 #[test]
 fn partial_payload_demand_reads_only_named_columns() -> Result {
-    type Triple = RadixLayout<(u32,), (u16, i64, u8), u64, u32, (Buffer<u16>, Buffer<i64>, Buffer<u8>)>;
+    type Triple =
+        RadixLayout<(u32,), (u16, i64, u8), u64, u32, (Buffer<u16>, Buffer<i64>, Buffer<u8>)>;
     let pool = Pool::new(0, 0, 0)?;
     let packing = Triple::derive_packing()?;
-    let rows: Vec<(u32, (u16, i64, u8))> = (0..900).map(|i| (i % 13, (i as u16, -(i as i64) * 3, (i % 251) as u8))).collect();
-    let mut run = DeviceRadixRun::<u64, u32, (Buffer<u16>, Buffer<i64>, Buffer<u8>)>::new(pool.clone(), params(2, 4))?;
-    let mut other = DeviceRadixRun::<u64, u32, (Buffer<u16>, Buffer<i64>, Buffer<u8>)>::new(pool.clone(), params(2, 4))?;
+    let rows: Vec<(u32, (u16, i64, u8))> = (0..900)
+        .map(|i| (i % 13, (i as u16, -(i as i64) * 3, (i % 251) as u8)))
+        .collect();
+    let mut run = DeviceRadixRun::<u64, u32, (Buffer<u16>, Buffer<i64>, Buffer<u8>)>::new(
+        pool.clone(),
+        params(2, 4),
+    )?;
+    let mut other = DeviceRadixRun::<u64, u32, (Buffer<u16>, Buffer<i64>, Buffer<u8>)>::new(
+        pool.clone(),
+        params(2, 4),
+    )?;
     for chunk in rows.chunks(200) {
-        let keys: Vec<u64> = chunk.iter().map(|row| pack(&packing, &[row.0 as i128])).collect();
+        let keys: Vec<u64> = chunk
+            .iter()
+            .map(|row| pack(&packing, &[row.0 as i128]))
+            .collect();
         let items = (
-            Buffer::from_host(pool.clone(), &chunk.iter().map(|row| row.1 .0).collect::<Vec<_>>())?,
-            Buffer::from_host(pool.clone(), &chunk.iter().map(|row| row.1 .1).collect::<Vec<_>>())?,
-            Buffer::from_host(pool.clone(), &chunk.iter().map(|row| row.1 .2).collect::<Vec<_>>())?,
+            Buffer::from_host(
+                pool.clone(),
+                &chunk.iter().map(|row| row.1 .0).collect::<Vec<_>>(),
+            )?,
+            Buffer::from_host(
+                pool.clone(),
+                &chunk.iter().map(|row| row.1 .1).collect::<Vec<_>>(),
+            )?,
+            Buffer::from_host(
+                pool.clone(),
+                &chunk.iter().map(|row| row.1 .2).collect::<Vec<_>>(),
+            )?,
         );
-        run.publish(&Buffer::from_host(pool.clone(), &keys)?, &items, chunk.len())?;
-        other.publish(&Buffer::from_host(pool.clone(), &keys)?, &items, chunk.len())?;
+        run.publish(
+            &Buffer::from_host(pool.clone(), &keys)?,
+            &items,
+            chunk.len(),
+        )?;
+        other.publish(
+            &Buffer::from_host(pool.clone(), &keys)?,
+            &items,
+            chunk.len(),
+        )?;
     }
     let layout = Triple::publish(&run, packing.clone())?;
     let foreign = Triple::publish(&other, packing.clone())?;
     let probes: Vec<u64> = (0..14).map(|key| pack(&packing, &[key])).collect();
-    let matches = layout.probe_matches(&pool, &Buffer::from_host(pool.clone(), &probes)?, probes.len())?;
+    let matches = layout.probe_matches(
+        &pool,
+        &Buffer::from_host(pool.clone(), &probes)?,
+        probes.len(),
+    )?;
     let third = expand(&pool, &matches, &layout.item_column::<u8>(2)?)?;
     for (key, items) in third.iter().enumerate() {
-        let expected: Vec<u8> = rows.iter().filter(|row| row.0 == key as u32).map(|row| row.1 .2).collect();
+        let expected: Vec<u8> = rows
+            .iter()
+            .filter(|row| row.0 == key as u32)
+            .map(|row| row.1 .2)
+            .collect();
         assert_eq!(items, &expected);
     }
-    assert!(layout.item_column::<u16>(1).is_err(), "lane type must match the demanded column");
-    assert!(layout.item_column::<u8>(3).is_err(), "column must lie in the value tuple");
+    assert!(
+        layout.item_column::<u16>(1).is_err(),
+        "lane type must match the demanded column"
+    );
+    assert!(
+        layout.item_column::<u8>(3).is_err(),
+        "column must lie in the value tuple"
+    );
     let bases = Buffer::from_host(pool.clone(), &vec![0_u64; matches.to_host()?.len()])?;
-    assert!(matches.gather(&pool, &foreign.item_column::<u8>(2)?, &bases, 1).is_err(),
-        "cursors read only columns of their own snapshot");
+    assert!(
+        matches
+            .gather(&pool, &foreign.item_column::<u8>(2)?, &bases, 1)
+            .is_err(),
+        "cursors read only columns of their own snapshot"
+    );
     Ok(())
 }
 
@@ -459,7 +698,8 @@ fn layout_schemas_are_checked_against_their_carriers() -> Result {
     assert!(Layout::publish(&run, Packing::with_columns(&[Column::U64])?).is_err());
     assert!(Layout::publish(&run, Packing::with_columns(&[Column::I64, Column::I64])?).is_err());
     // Value lanes that cannot hold the value schema or differ in arity.
-    let narrow = DeviceRadixRun::<u64, u32, (Buffer<u64>, Buffer<u32>)>::new(pool.clone(), params(4, 0))?;
+    let narrow =
+        DeviceRadixRun::<u64, u32, (Buffer<u64>, Buffer<u32>)>::new(pool.clone(), params(4, 0))?;
     type Narrow = RadixLayout<(i64,), (u64, i64), u64, u32, (Buffer<u64>, Buffer<u32>)>;
     assert!(Narrow::publish(&narrow, Narrow::derive_packing()?).is_err());
     type Arity = RadixLayout<(i64,), (u64,), u64, u32, Items>;
@@ -470,9 +710,27 @@ fn layout_schemas_are_checked_against_their_carriers() -> Result {
     // Wider lanes of the same signedness, and unsigned values in wider signed lanes, hold exactly.
     type Widened = RadixLayout<(i64,), (u32, u16), u64, u32, Items>;
     assert!(Widened::publish(&run, Widened::derive_packing()?).is_ok());
-    assert!(LaneKind { bits: 64, signed: true }.holds(Column::U32));
-    assert!(!LaneKind { bits: 32, signed: true }.holds(Column::U32));
-    assert!(!LaneKind { bits: 64, signed: false }.holds(Column::I8));
-    assert_eq!(<[u64; 2] as ItemLane>::KIND, LaneKind { bits: 128, signed: false });
+    assert!(LaneKind {
+        bits: 64,
+        signed: true
+    }
+    .holds(Column::U32));
+    assert!(!LaneKind {
+        bits: 32,
+        signed: true
+    }
+    .holds(Column::U32));
+    assert!(!LaneKind {
+        bits: 64,
+        signed: false
+    }
+    .holds(Column::I8));
+    assert_eq!(
+        <[u64; 2] as ItemLane>::KIND,
+        LaneKind {
+            bits: 128,
+            signed: false
+        }
+    );
     Ok(())
 }

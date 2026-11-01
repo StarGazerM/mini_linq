@@ -56,10 +56,17 @@ impl CandidateArena {
     /// stream order (its last block re-zeroes them), so attempts neither
     /// allocate nor clear metadata. Only growth allocates and clears, once.
     pub fn resident_words(&mut self, words: usize) -> Result<Arc<Buffer<u32>>> {
-        if let Some(resident) = self.resident.as_ref().filter(|resident| resident.len() >= words) {
+        if let Some(resident) = self
+            .resident
+            .as_ref()
+            .filter(|resident| resident.len() >= words)
+        {
             return Ok(resident.clone());
         }
-        let resident = Arc::new(Buffer::zeroed(self.pool.clone(), words.next_power_of_two())?);
+        let resident = Arc::new(Buffer::zeroed(
+            self.pool.clone(),
+            words.next_power_of_two(),
+        )?);
         self.resident = Some(resident.clone());
         Ok(resident)
     }
