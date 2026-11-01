@@ -319,8 +319,10 @@ merge-path boundaries against a stable occurrence oracle.
 `gpu_datalog_runtime::radix_run::DeviceRadixRun<W,O,C>`
 (`experiments/gpu/datalog-runtime/src/radix_run.rs`) is the CUDA counterpart of
 `RadixRun`, with the same grouped storage laws (GPU-RadixRun,
-GPU-RadixPublish, GPU-RadixItemColumns). No compiler, IR or printer selects it
-yet; provider choices are recorded upstream later, never by type name.
+GPU-RadixPublish, GPU-RadixItemColumns), plus its typed view `RadixLayout`
+(GPU-RadixLayout, GPU-RadixCursor, GPU-RadixLaneRead). No compiler, IR or
+printer selects either yet; provider choices are recorded upstream later,
+never by type name.
 
 - **Key law.** `W: Word` (`u64`, `u128`, `[u64; L]`) is the DL-DevicePacking
   word: most-significant-first lanes are the one `OrderKey` embedding. Keys are
@@ -352,15 +354,58 @@ yet; provider choices are recorded upstream later, never by type name.
   produce offsets and distinct keys; a load-balanced source map gathers each
   item column (older groups first). One count readback per merge. A failed
   merge leaves the published runs unchanged.
-- **Reads.** `snapshot()` uploads run descriptors and retains its runs across
-  later merges. `RadixKeysView` holds keys/offsets/directories only;
+- **Reads.** `snapshot()` returns the current publication's
+  `Arc<RadixSnapshot>`: descriptors, the run-major item column table and a
+  one-entry resident occurrence count are uploaded once per publication on the
+  run's pool stream with no host synchronization, cached until a nonempty
+  publication changes the runs (empty deltas keep it), and retained across
+  later merges and release of the run. Every snapshot has a process-unique
+  identity. `RadixKeysView` holds keys/offsets/directories only;
   `RadixItemsView` holds item column addresses. Device functions
   (`radix_run::device`): `search`, `group`, `contains`, `count`, `range`
-  (CPU `RadixRun::range` positions, `(items, items)` when absent), `interval`
-  (inclusive key interval per run) and `item`. Batch host launches:
-  `probe_keys`, `probe_groups` (per-run item ranges, the cursor groups) and
-  `probe_intervals`. No dense membership bitmap; that would be a separately
-  selected provider.
+  (CPU `RadixRun::range` positions, `(items, items)` when absent; counts, not
+  addresses), `interval` (inclusive key interval per run), `item`, `cursor`,
+  `same_snapshot` and `cursor_item`. Batch host launches: `probe_keys`,
+  `probe_matches` (per-run match cursors) and `probe_intervals`. No dense
+  membership bitmap; that would be a separately selected provider.
+- **Typed view (P4-GPU slice A, GPU-RadixLayout).**
+  `RadixLayout<K, V, W, O, C>` owns one snapshot plus the key packing's field
+  descriptors. `publish(run, packing)` checks the packing against `K`'s
+  scalar schema and `W` (`derive_packing()` builds it), and that each of `V`'s
+  fields is stored in a `C` lane that holds its domain (`LaneKind::holds`:
+  same signedness and at least its width, or unsigned in a strictly wider
+  signed lane; never a narrowing). `republish(run)` returns this layout itself
+  when the run's cached snapshot is unchanged and otherwise shares the field
+  descriptors (the `DeviceLayout::republish` contract). `view()` is the key
+  field ABI (`RadixLayoutView`: keys view, field descriptors, packed bits and
+  the resident count pointer) and carries no item pointers;
+  `item_column::<T>(i)` is narrow access to one value field whose lane must be
+  `T`. `count_ptr()` gives count-gated consumers the resident count without a
+  host download (CanonicalKeys parity); `logical_count()` is an explicit
+  synchronizing diagnostic. `owner()` retains runs, descriptors and fields
+  for every stream user; `prefix_interval` gives the packed inclusive interval
+  of a key prefix.
+- **Match cursors (GPU-RadixCursor).** `RadixMatch { snapshot, run, begin,
+  end }`: snapshot identity, run index and the run-local group (the run's
+  `(items, items)` when absent). Expansion never dereferences logical merged
+  positions. `RadixMatches` retains its snapshot as a witness that survives
+  later publications and release of the run and layout; `gather(pool,
+  column, bases, total)` writes each cursor's group of one demanded column
+  from a caller base and rejects columns of another snapshot.
+- **Execution pools (GPU-RadixLaneRead).** Build, merge and snapshot uploads
+  run on the run's own (main) pool stream. Every read names an execution pool
+  that must share the snapshot's memory (`Pool::shares_memory`: the main pool
+  or one of its `Pool::lane`s); probe and base buffers must share it too, and
+  build inputs need only share memory. Shared memory is not a happens-before
+  proof: a lane reads only after fork readiness on the publication stream,
+  results reach main-stream consumers after join readiness, and owners
+  outlive every stream user. The runtime never relaunches a read on the
+  snapshot's own stream.
+- **Not in this slice.** No catalog token, provider declaration, Candidates
+  or Distinct capability, set build or compiler record exists yet; arity above
+  12 item columns has no `DeviceItemColumns` implementation; builds above
+  `u32::MAX` rows and offset-carrier overflow at a merge are rejected errors
+  (no widening, no chunked build).
 - **Relation to existing device storage.** `DeviceRuns`/`DeviceLayout` (unique
   packed-word sets with admission) and `RangeProvider` (dense `u32` domain
   directory) are unchanged; this provider is the occurrence-preserving,
@@ -373,7 +418,21 @@ the device with fixed seeds: `u64` keys against `cq_storage::RadixRun`
 extremes and absent keys, `u128`/`[u64; 3]` keys against a stable occurrence
 oracle, sorted/reversed/single-key inputs, empty providers and batches,
 `u32` vs `u64` carriers and the `u32::MAX` boundary, key reads identical with
-and without item columns, snapshot retention, and parameter/input rejection.
+and without item columns, snapshot retention, and parameter/input rejection;
+every read also checks that cursors carry their snapshot identity and run.
+`tests/radix_layout.rs` checks the view's laws (design §4): factorization
+(expanding every distinct key's cursors through both narrow columns gives the
+input multiset) and stable occurrence order across several runs and keys
+spanning runs, at directory bits 0 and 8; snapshot construction without a
+metadata readback and the resident count; republication identity and shared
+field descriptors; retained layouts and match sets exact after later
+publications and release of the run and newer layouts; the zero publication;
+lane reads after a fork event equal main-stream reads, lane-produced build
+input after a join event, and rejection of pools with other memory; empty
+key tuples and all-equal keys; `u128` `(i64, u64)` keys at both extrema with
+present and absent prefix intervals; six unmerged runs; demand of one of
+three value columns, wrong lane types, out-of-range columns and foreign
+snapshot columns; and schema/lane-domain rejection.
 
 ## 9. Grouped runs in the compiler's semantics
 

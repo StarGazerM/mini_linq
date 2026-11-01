@@ -507,7 +507,14 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   gpu-datalog-runtime: whole packed order-key words, offset carrier as a type
   fact, explicit item layouts, caller-supplied ratio/radix bits/merge tile,
   exact radix-prefix directory, stable merge-path, key reads without items;
-  law tests against `cq_storage::RadixRun`). Remaining: index selection
+  law tests against `cq_storage::RadixRun`). **Slice A runtime done**
+  (`RadixLayout<K, V, W, O, C>`: checked key packing and value-lane domains,
+  per-publication cached snapshot with identity and resident count and no
+  host sync, republish reuse, narrow item columns, run-local match cursors
+  with retained witnesses, execution-pool-qualified reads under
+  fork/join readiness; GPU-RadixLayout/Cursor/LaneRead law tests). Remaining:
+  slice A compiler records/checkers (after C7Provider G1 defines the
+  provider declaration format; no catalog token yet), then index selection
   records it as a provider for GPU CQ built indices (range reads unblock
   `probe smallest`, `triangle-compiled`, L&E match-set reuse), GPU Datalog
   layouts (replacing plain-word `DeviceRuns`), and GPU canonical indices.

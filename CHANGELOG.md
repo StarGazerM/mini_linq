@@ -7,6 +7,21 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- P4-GPU slice A (runtime only): `gpu_datalog_runtime::RadixLayout<K, V, W,
+  O, C>`, the typed relational view over one immutable `DeviceRadixRun`
+  publication (GPU-RadixLayout). The key packing is checked against `K` and
+  `W`; each `V` field needs a `C` lane holding its domain (`LaneKind`).
+  `DeviceRadixRun::snapshot` now returns a cached `Arc<RadixSnapshot>` per
+  publication with a process-unique identity and a resident occurrence count
+  (no host sync); `republish` returns the same layout for unchanged runs and
+  shares field descriptors otherwise. `probe_groups`/`ItemRange` are replaced
+  by `probe_matches` returning `RadixMatches` of `RadixMatch` cursors
+  (snapshot, run, run-local `[begin, end)`; GPU-RadixCursor) that retain
+  their snapshot and `gather` one demanded `ItemColumn`. Reads name an
+  execution pool sharing the snapshot's memory (GPU-RadixLaneRead); pool
+  checks use `Pool::shares_memory`. New `tests/radix_layout.rs` laws. No
+  catalog token, compiler record or Candidates/Distinct claim; no generated
+  code uses the provider yet.
 - P6b GPU Datalog, per-hole op reduction and wave lanes. GPU-ResidentMeta
   (`Execution.meta`): a `reserve_previous` arena terminal with a local fold
   keeps its count/failure/cursor words in arena-resident words that its last

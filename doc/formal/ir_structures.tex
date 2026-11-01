@@ -368,6 +368,31 @@ size are caller parameters; grids follow \textsc{GPU-LAUNCH-OCCUPANCY}.
  {\forall i.\ C_i'[j]=C_i[\pi(j)]\quad (C_1'[j],\ldots,C_m'[j])=I[\pi(j)]}
 \end{mathpar}
 
+A \code{RadixLayout<K,V,W,O,C>} is the typed relational view of one
+immutable publication: a checked most-significant-first packing of $K$ into
+whole $W$ keys, one item column per field of $V$ in a lane that holds its
+domain, the retained snapshot and its resident occurrence count. Match
+cursors $(\sigma,j,b,e)$ name snapshot $\sigma$, run $j$ and the run-local
+group $[b,e)$; merged-order ranges are counts, never addresses. Reads launch on
+an execution pool sharing the snapshot's memory, ordered after publication by
+fork readiness and before consumers by join readiness.
+\begin{mathpar}
+\Rule{GPU-RadixLayout}{\mathsf{pack}(K)\text{ checked against }W\quad
+ \forall i.\ \mathsf{lane}(C_i)\supseteq\mathsf{dom}(V_i)\quad
+ \sigma=\mathsf{snapshot}(\mathcal L)}
+ {\alpha(\mathsf{view}(\sigma))=\alpha(\mathcal L)\quad
+  \mathsf{count}(\sigma)=|\alpha(\mathcal L)|\quad
+  \mathsf{republish}(\sigma,\mathcal L)=\sigma\ \text{if runs unchanged}}
+
+\Rule{GPU-RadixCursor}{\mathsf{cursor}_\sigma(k)=((\sigma,j,b_j,e_j))_{j}}
+ {\mathsf{lookup}_\sigma(k)=\mathop{+\!\!+}_{j}\ C^{\sigma,j}[b_j,e_j)\quad
+  e_j\le|L_j|\quad \text{columns of }\sigma'\neq\sigma\text{ rejected}}
+
+\Rule{GPU-RadixLaneRead}{\mathsf{sharesMemory}(P,\mathsf{pool}(\sigma))\quad
+ \mathsf{publish}(\sigma)\prec_{\mathsf{fork}}\mathsf{read}_P\prec_{\mathsf{join}}\mathsf{use}}
+ {\mathsf{read}_P(\sigma)=\mathsf{read}_{\mathsf{pool}(\sigma)}(\sigma)}
+\end{mathpar}
+
 \paragraph{Meaning.} That of the embedded Physical. Each Rust type is a
 representation whose abstraction function $\alpha$ satisfies the
 \code{cq-storage} laws: $\alpha(\mathsf{build}(I))=\mathrm{bag}(I)$, lookups

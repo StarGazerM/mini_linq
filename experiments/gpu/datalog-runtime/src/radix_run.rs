@@ -10,12 +10,25 @@
 //! Grid sizes follow the shared occupancy convention for the target device.
 //!
 //! Key reads ([`RadixKeysView`]) carry no item pointers; item columns are read
-//! by position through the separate [`RadixItemsView`].
-use crate::{runs::{self, Native}, Result, Word};
+//! by position through the separate [`RadixItemsView`], or one demanded column
+//! at a time through a [`RadixLayout`]'s [`ItemColumn`].
+//!
+//! Construction (build, merge, snapshot upload) runs on the run's own pool
+//! stream. Reads name an execution pool that must share the snapshot's memory
+//! (GPU-RadixLaneRead); shared memory is not a happens-before proof, so the
+//! caller orders the read after publication (fork readiness) and consumers of
+//! the results after the read (join readiness), and retains the snapshot owner
+//! until every stream user has completed.
+use crate::{layout::{PackedField, ScalarTuple}, runs::{self, Native}, Column, Packing, Result, Word};
 use cuda_core::{DeviceCopy, LaunchConfig1D};
 use gpu_device_columns::{Buffer, Pool};
 use rccl_cub::{DeviceArithmeticRange, DeviceMap, DeviceSliceRead, DeviceSliceWrite};
-use std::sync::Arc;
+use std::{
+    any::Any,
+    marker::PhantomData,
+    ops::RangeInclusive,
+    sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex},
+};
 
 /// Threads per block of every radix-run kernel: their compiled launch contract.
 pub const BLOCK_THREADS: u32 = 256;
@@ -30,7 +43,7 @@ mod sealed {
 /// A group-offset carrier, selected upstream from item-count bound evidence.
 /// Builds and merges whose terminal item count exceeds `MAX` are rejected.
 pub trait OffsetWord:
-    sealed::Offset + Copy + Ord + std::fmt::Debug + DeviceCopy + rccl_cub::DeviceArithmetic + 'static
+    sealed::Offset + Copy + Ord + std::fmt::Debug + DeviceCopy + rccl_cub::DeviceArithmetic + Send + Sync + 'static
 {
     const MAX: u64;
     /// Device-side conversion; host callers check [`offset_fits`] first.
@@ -59,14 +72,44 @@ pub fn offset_fits<O: OffsetWord>(items: usize) -> bool {
     u64::try_from(items).is_ok_and(|items| items <= O::MAX)
 }
 
-/// A fixed-width, byte-addressable item column element.
-pub trait ItemLane: sealed::Lane + Copy + DeviceCopy + 'static {}
-macro_rules! lanes {
-    ($($ty:ty),*) => {$( impl sealed::Lane for $ty {} impl ItemLane for $ty {} )*};
+/// Stored width and signedness of one item lane: a type fact of [`ItemLane`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LaneKind {
+    pub bits: u32,
+    pub signed: bool,
 }
-lanes!(u8, i8, u16, i16, u32, i32, u64, i64, u128);
+
+impl LaneKind {
+    /// Whether every value of `column`'s numeric domain is stored exactly:
+    /// same signedness and at least the column's width, or an unsigned
+    /// column in a strictly wider signed lane. Never a narrowing.
+    pub const fn holds(self, column: Column) -> bool {
+        if self.signed == column.is_signed() {
+            self.bits >= column.bits()
+        } else {
+            self.signed && self.bits > column.bits()
+        }
+    }
+}
+
+/// A fixed-width, byte-addressable item column element.
+pub trait ItemLane: sealed::Lane + Copy + DeviceCopy + Send + Sync + 'static {
+    const KIND: LaneKind;
+}
+macro_rules! lanes {
+    ($($ty:ty => $signed:expr),*) => {$(
+        impl sealed::Lane for $ty {}
+        impl ItemLane for $ty {
+            const KIND: LaneKind = LaneKind { bits: <$ty>::BITS, signed: $signed };
+        }
+    )*};
+}
+lanes!(u8 => false, i8 => true, u16 => false, i16 => true, u32 => false, i32 => true,
+    u64 => false, i64 => true, u128 => false);
 impl<const L: usize> sealed::Lane for [u64; L] {}
-impl<const L: usize> ItemLane for [u64; L] {}
+impl<const L: usize> ItemLane for [u64; L] {
+    const KIND: LaneKind = LaneKind { bits: 64 * L as u32, signed: false };
+}
 
 /// Formal rule GPU-RadixItemColumns:
 /// An explicit item layout: one `Buffer<T>` column, a tuple of layouts stored as
@@ -74,12 +117,15 @@ impl<const L: usize> ItemLane for [u64; L] {}
 /// occurrence in every column; grouping and merging gather whole columns by
 /// position and never reconstruct rows. The layout is selected by the provider
 /// type, never by inspecting a row type.
-pub trait DeviceItemColumns: sealed::Columns + Sized + 'static {
+pub trait DeviceItemColumns: sealed::Columns + Sized + Send + Sync + 'static {
     /// Downloaded diagnostic columns.
     type Host;
     const COLUMNS: usize;
-    /// Every column belongs to `pool` and has at least `rows` initialized entries.
+    /// Every column shares `pool`'s memory and has at least `rows` entries.
+    /// Shared memory is an allocation fact; the caller orders initialization.
     fn check(&self, pool: &Arc<Pool>, rows: usize) -> Result<()>;
+    /// Append each column's lane kind in layout order.
+    fn lanes(out: &mut Vec<LaneKind>);
     #[doc(hidden)]
     fn gather(&self, kernels: &ItemKernels, order: *const u32, rows: usize) -> Result<Self>;
     #[doc(hidden)]
@@ -111,11 +157,12 @@ impl<T: ItemLane> DeviceItemColumns for Buffer<T> {
     type Host = Vec<T>;
     const COLUMNS: usize = 1;
     fn check(&self, pool: &Arc<Pool>, rows: usize) -> Result<()> {
-        if !Arc::ptr_eq(pool, self.pool()) || rows > self.len() {
-            return Err("item column pool or live length differs from its keys".into());
+        if !pool.shares_memory(self.pool()) || rows > self.len() {
+            return Err("item column memory or live length differs from its keys".into());
         }
         Ok(())
     }
+    fn lanes(out: &mut Vec<LaneKind>) { out.push(T::KIND); }
     fn gather(&self, kernels: &ItemKernels, order: *const u32, rows: usize) -> Result<Self> {
         // SAFETY: the gather initializes every output position before publication.
         let output = unsafe { Buffer::<T>::uninitialized(kernels.pool.clone(), rows)? };
@@ -155,6 +202,7 @@ impl DeviceItemColumns for () {
     type Host = ();
     const COLUMNS: usize = 0;
     fn check(&self, _: &Arc<Pool>, _: usize) -> Result<()> { Ok(()) }
+    fn lanes(_: &mut Vec<LaneKind>) {}
     fn gather(&self, _: &ItemKernels, _: *const u32, _: usize) -> Result<()> { Ok(()) }
     fn merge<O: OffsetWord>(_: &(), _: &(), _: &ItemKernels, _: usize, _: *const O, _: usize) -> Result<()> {
         Ok(())
@@ -172,6 +220,9 @@ macro_rules! tuple_columns {
             fn check(&self, pool: &Arc<Pool>, rows: usize) -> Result<()> {
                 $(self.$field.check(pool, rows)?;)+
                 Ok(())
+            }
+            fn lanes(out: &mut Vec<LaneKind>) {
+                $($C::lanes(out);)+
             }
             fn gather(&self, kernels: &ItemKernels, order: *const u32, rows: usize) -> Result<Self> {
                 Ok(($(self.$field.gather(kernels, order, rows)?,)+))
@@ -242,8 +293,12 @@ pub struct RadixRunView<W: Word, O: OffsetWord> {
 }
 // SAFETY: this C-layout descriptor contains only device pointers and integers.
 unsafe impl<W: Word, O: OffsetWord> DeviceCopy for RadixRunView<W, O> {}
+// SAFETY: the pointers name immutable device storage and are never
+// dereferenced on the host, so moving or sharing descriptors is sound.
+unsafe impl<W: Word, O: OffsetWord> Send for RadixRunView<W, O> {}
+unsafe impl<W: Word, O: OffsetWord> Sync for RadixRunView<W, O> {}
 
-/// All published runs, oldest first. Reads visit every run.
+/// All published runs of one snapshot, oldest first. Reads visit every run.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RadixKeysView<W: Word, O: OffsetWord> {
@@ -252,6 +307,8 @@ pub struct RadixKeysView<W: Word, O: OffsetWord> {
     pub reserved: u32,
     /// Total occurrences across all runs; the exact absent-key position.
     pub items: u64,
+    /// The snapshot identity every [`RadixMatch`] read through this view carries.
+    pub snapshot: u64,
 }
 // SAFETY: this C-layout descriptor contains only device pointers and integers.
 unsafe impl<W: Word, O: OffsetWord> DeviceCopy for RadixKeysView<W, O> {}
@@ -263,9 +320,29 @@ pub struct RadixItemsView {
     pub columns: *const u64,
     pub column_count: u32,
     pub run_count: u32,
+    pub snapshot: u64,
 }
 // SAFETY: this C-layout descriptor contains only a device pointer and integers.
 unsafe impl DeviceCopy for RadixItemsView {}
+
+/// One demanded item column of a snapshot (narrow item access): reads touch
+/// no other column. `T` of the typed [`ItemColumn`] is the column's lane.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RadixItemColumn {
+    /// The snapshot's run-major column address table.
+    pub columns: *const u64,
+    pub snapshot: u64,
+    pub column: u32,
+    pub column_count: u32,
+    pub run_count: u32,
+    pub reserved: u32,
+}
+// SAFETY: this C-layout descriptor contains only a device pointer and integers.
+unsafe impl DeviceCopy for RadixItemColumn {}
+// SAFETY: the column table is immutable device storage, never dereferenced on the host.
+unsafe impl Send for RadixItemColumn {}
+unsafe impl Sync for RadixItemColumn {}
 
 /// Batch key-read result: membership, occurrence count and the exact range in
 /// the concatenated stable order of all runs (`(items, items)` when absent).
@@ -280,15 +357,28 @@ pub struct KeyProbe {
 // SAFETY: plain integers.
 unsafe impl DeviceCopy for KeyProbe {}
 
-/// Half-open item positions of one run's group (empty when absent).
+/// Formal rule GPU-RadixCursor:
+/// A match cursor names one run's group: the snapshot identity, the run index
+/// and the half-open item positions `[begin, end)` local to that run's item
+/// columns (`(items, items)` of the run when absent). Logical merged-order
+/// positions ([`KeyProbe`]) are counts, never item addresses; expansion reads
+/// each run's cursor through a column of the same snapshot.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ItemRange {
+pub struct RadixMatch {
+    pub snapshot: u64,
+    pub run: u32,
+    pub reserved: u32,
     pub begin: u64,
     pub end: u64,
 }
 // SAFETY: plain integers.
-unsafe impl DeviceCopy for ItemRange {}
+unsafe impl DeviceCopy for RadixMatch {}
+
+impl RadixMatch {
+    pub fn len(&self) -> u64 { self.end - self.begin }
+    pub fn is_empty(&self) -> bool { self.begin == self.end }
+}
 
 /// Inclusive key-interval read summed over runs: group slots and occurrences.
 #[repr(C)]
@@ -344,6 +434,9 @@ pub struct DeviceRadixRun<W: Word, O: OffsetWord, C: DeviceItemColumns> {
     pool: Arc<Pool>,
     params: RadixRunParams,
     runs: Vec<Arc<Segment<W, O, C>>>,
+    /// The current publication's descriptors, uploaded once on first read and
+    /// replaced only when a publication changes the runs.
+    published: Mutex<Option<Arc<RadixSnapshot<W, O, C>>>>,
     kernels: ItemKernels,
     order: runs::run_kernels::LoadedModule,
 }
@@ -356,7 +449,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         let order = unsafe { runs::run_kernels::load(pool.context())? };
         Ok(Self {
             kernels: ItemKernels { pool: pool.clone(), module },
-            pool, params, runs: Vec::new(), order,
+            pool, params, runs: Vec::new(), published: Mutex::new(None), order,
         })
     }
 
@@ -395,24 +488,37 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         }
         self.runs.truncate(keep);
         self.runs.push(merged);
+        *self.published.get_mut().expect("radix publication cache") = None;
         Ok(())
     }
 
-    /// Upload run descriptors. The snapshot retains its runs across later
-    /// publications; all reads must use [`Self::pool`]'s stream.
-    pub fn snapshot(&self) -> Result<RadixSnapshot<W, O, C>> {
+    /// The current publication's immutable snapshot. Descriptors, the item
+    /// column table and the resident count are uploaded once per publication
+    /// on [`Self::pool`]'s stream without a host synchronization; until the
+    /// runs change, every call returns the same snapshot (same identity).
+    /// A snapshot retains its runs across later publications and release.
+    pub fn snapshot(&self) -> Result<Arc<RadixSnapshot<W, O, C>>> {
+        let mut published = self.published.lock().expect("radix publication cache");
+        if let Some(snapshot) = published.as_ref() {
+            return Ok(snapshot.clone());
+        }
         let views = self.runs.iter().map(|run| run.view()).collect::<Vec<_>>();
         u32::try_from(views.len()).map_err(|_| "radix run count exceeds u32")?;
         let mut columns = Vec::with_capacity(views.len() * C::COLUMNS);
         for run in &self.runs { run.items.column_pointers(&mut columns); }
-        Ok(RadixSnapshot {
+        let items = self.item_count() as u64;
+        let snapshot = Arc::new(RadixSnapshot {
+            id: NEXT_SNAPSHOT.fetch_add(1, Ordering::Relaxed),
             descriptors: Buffer::from_host_async(self.pool.clone(), &views)?,
             columns: Buffer::from_host_async(self.pool.clone(), &columns)?,
-            items: self.item_count() as u64,
+            count: Buffer::from_host_async(self.pool.clone(), &[items])?,
+            items,
             runs: self.runs.clone(),
             module: self.kernels.module.clone(),
             pool: self.pool.clone(),
-        })
+        });
+        *published = Some(snapshot.clone());
+        Ok(snapshot)
     }
 
     /// Explicit diagnostic download of every run, oldest first.
@@ -430,8 +536,8 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
     }
 
     fn group(&self, keys: &Buffer<W>, items: &C, rows: usize) -> Result<Option<Segment<W, O, C>>> {
-        if !Arc::ptr_eq(&self.pool, keys.pool()) || rows > keys.len() {
-            return Err("radix run keys belong to another pool or exceed their capacity".into());
+        if !self.pool.shares_memory(keys.pool()) || rows > keys.len() {
+            return Err("radix run keys use another pool's memory or exceed their capacity".into());
         }
         items.check(&self.pool, rows)?;
         if rows > u32::MAX as usize { return Err("radix run build exceeds the u32 row domain".into()); }
@@ -554,31 +660,61 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
     }
 }
 
-/// Immutable descriptors over a set of published runs, retained independently
-/// of later publications. Batch reads launch on the pool stream.
+static NEXT_SNAPSHOT: AtomicU64 = AtomicU64::new(1);
+
+/// Immutable descriptors over one publication's runs, retained independently
+/// of later publications and of the [`DeviceRadixRun`] itself. Its identity is
+/// unique per process; reads launch on a caller-named execution pool.
 pub struct RadixSnapshot<W: Word, O: OffsetWord, C> {
+    id: u64,
     descriptors: Buffer<RadixRunView<W, O>>,
     columns: Buffer<u64>,
+    /// One-entry resident logical occurrence count for count-gated kernels.
+    count: Buffer<u64>,
     items: u64,
     runs: Vec<Arc<Segment<W, O, C>>>,
     module: radix_kernels::LoadedModule,
     pool: Arc<Pool>,
 }
 
+/// Formal rule GPU-RadixLaneRead:
+/// Reads of an immutable radix snapshot launch on an execution pool that
+/// shares the snapshot's memory: the publication pool or one of its lanes.
+/// Shared memory is no happens-before proof: a lane reads only after fork
+/// readiness on the publication stream, its results are consumed after join
+/// readiness, and every retained owner outlives those stream users.
+fn check_execution(publication: &Pool, execution: &Pool) -> Result<()> {
+    if !execution.shares_memory(publication) {
+        return Err("radix reads must run on a pool sharing the snapshot's memory".into());
+    }
+    Ok(())
+}
+
 impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
+    /// The publication pool: the stream that uploaded these descriptors.
     pub fn pool(&self) -> &Arc<Pool> { &self.pool }
+    pub fn id(&self) -> u64 { self.id }
     pub fn run_count(&self) -> usize { self.runs.len() }
     pub fn item_count(&self) -> usize { self.items as usize }
+    /// Resident logical occurrence count (one `u64`), readable by count-gated
+    /// device consumers after publication readiness, without a host download.
+    pub fn count_ptr(&self) -> *const u64 { self.count.ptr() }
+    /// Descriptor, column-table and count bytes uploaded for this snapshot.
+    pub fn descriptor_bytes(&self) -> usize {
+        self.descriptors.allocated_bytes() + self.columns.allocated_bytes() + self.count.allocated_bytes()
+    }
     /// Key-read ABI: keys, offsets and directories only.
     pub fn keys_view(&self) -> RadixKeysView<W, O> {
         RadixKeysView {
             runs: self.descriptors.ptr(), run_count: self.runs.len() as u32, reserved: 0, items: self.items,
+            snapshot: self.id,
         }
     }
     /// Item-read ABI, separate from every key read.
     pub fn items_view(&self) -> RadixItemsView {
         RadixItemsView {
             columns: self.columns.ptr(), column_count: C::COLUMNS as u32, run_count: self.runs.len() as u32,
+            snapshot: self.id,
         }
     }
 
@@ -588,58 +724,64 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
         Ok(LaunchConfig1D::new(grid, BLOCK_THREADS, 0))
     }
 
-    fn check_probes(&self, probes: &Buffer<W>, count: usize) -> Result<()> {
-        if !Arc::ptr_eq(&self.pool, probes.pool()) || count > probes.len() {
-            return Err("probe keys belong to another pool or exceed their capacity".into());
+    fn check_probes(&self, pool: &Pool, probes: &Buffer<W>, count: usize) -> Result<()> {
+        check_execution(&self.pool, pool)?;
+        if !pool.shares_memory(probes.pool()) || count > probes.len() {
+            return Err("probe keys use another pool's memory or exceed their capacity".into());
         }
         Ok(())
     }
 
-    /// Membership, count and concatenated stable range for each probe key.
-    pub fn probe_keys(&self, probes: &Buffer<W>, count: usize) -> Result<Buffer<KeyProbe>> {
-        self.check_probes(probes, count)?;
+    /// Membership, count and logical merged-order range for each probe key,
+    /// on `pool`'s stream. Range positions are counts, not item addresses.
+    pub fn probe_keys(&self, pool: &Arc<Pool>, probes: &Buffer<W>, count: usize) -> Result<Buffer<KeyProbe>> {
+        self.check_probes(pool, probes, count)?;
         // SAFETY: one thread initializes each result.
-        let output = unsafe { Buffer::<KeyProbe>::uninitialized(self.pool.clone(), count)? };
+        let output = unsafe { Buffer::<KeyProbe>::uninitialized(pool.clone(), count)? };
         if count != 0 {
             let initial = self.module.prepare_probe_keys::<W, O>(ItemKernels::shape())?;
             let config = self.config(initial.function(), count)?;
             self.module.probe_keys::<W, O>(
-                self.pool.stream(), &self.module.prepare_probe_keys::<W, O>(config)?,
+                pool.stream(), &self.module.prepare_probe_keys::<W, O>(config)?,
                 self.keys_view(), probes.ptr(), count as u64, output.ptr(),
             )?;
         }
         Ok(output)
     }
 
-    /// Per-run item ranges for each probe: `output[probe * run_count + run]`.
-    /// These are the cursor groups an expansion reads through [`Self::items_view`].
-    pub fn probe_groups(&self, probes: &Buffer<W>, count: usize) -> Result<Buffer<ItemRange>> {
-        self.check_probes(probes, count)?;
-        let len = count.checked_mul(self.runs.len()).ok_or("probe group count overflow")?;
-        // SAFETY: one thread initializes every run range of its probe.
-        let output = unsafe { Buffer::<ItemRange>::uninitialized(self.pool.clone(), len)? };
+    /// Per-run match cursors for each probe, `[probe * run_count + run]`, on
+    /// `pool`'s stream. The result retains this snapshot as its witness.
+    pub fn probe_matches(self: &Arc<Self>, pool: &Arc<Pool>, probes: &Buffer<W>, count: usize)
+        -> Result<RadixMatches<W, O, C>>
+    {
+        self.check_probes(pool, probes, count)?;
+        let len = count.checked_mul(self.runs.len()).ok_or("probe match count overflow")?;
+        // SAFETY: one thread initializes every run cursor of its probe.
+        let matches = unsafe { Buffer::<RadixMatch>::uninitialized(pool.clone(), len)? };
         if len != 0 {
-            let initial = self.module.prepare_probe_groups::<W, O>(ItemKernels::shape())?;
+            let initial = self.module.prepare_probe_matches::<W, O>(ItemKernels::shape())?;
             let config = self.config(initial.function(), count)?;
-            self.module.probe_groups::<W, O>(
-                self.pool.stream(), &self.module.prepare_probe_groups::<W, O>(config)?,
-                self.keys_view(), probes.ptr(), count as u64, output.ptr(),
+            self.module.probe_matches::<W, O>(
+                pool.stream(), &self.module.prepare_probe_matches::<W, O>(config)?,
+                self.keys_view(), probes.ptr(), count as u64, matches.ptr(),
             )?;
         }
-        Ok(output)
+        Ok(RadixMatches { matches, probes: count, snapshot: self.clone() })
     }
 
     /// Groups and occurrences with keys in each inclusive interval `[low, high]`.
-    pub fn probe_intervals(&self, low: &Buffer<W>, high: &Buffer<W>, count: usize) -> Result<Buffer<IntervalProbe>> {
-        self.check_probes(low, count)?;
-        self.check_probes(high, count)?;
+    pub fn probe_intervals(&self, pool: &Arc<Pool>, low: &Buffer<W>, high: &Buffer<W>, count: usize)
+        -> Result<Buffer<IntervalProbe>>
+    {
+        self.check_probes(pool, low, count)?;
+        self.check_probes(pool, high, count)?;
         // SAFETY: one thread initializes each result.
-        let output = unsafe { Buffer::<IntervalProbe>::uninitialized(self.pool.clone(), count)? };
+        let output = unsafe { Buffer::<IntervalProbe>::uninitialized(pool.clone(), count)? };
         if count != 0 {
             let initial = self.module.prepare_probe_intervals::<W, O>(ItemKernels::shape())?;
             let config = self.config(initial.function(), count)?;
             self.module.probe_intervals::<W, O>(
-                self.pool.stream(), &self.module.prepare_probe_intervals::<W, O>(config)?,
+                pool.stream(), &self.module.prepare_probe_intervals::<W, O>(config)?,
                 self.keys_view(), low.ptr(), high.ptr(), count as u64, output.ptr(),
             )?;
         }
@@ -647,9 +789,244 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
     }
 }
 
+/// A retained match set: per-run cursors of a batch of probes and the
+/// snapshot they address. It survives later publications and release of the
+/// run and layout, and is consumed only where its owner forces it.
+pub struct RadixMatches<W: Word, O: OffsetWord, C> {
+    matches: Buffer<RadixMatch>,
+    probes: usize,
+    snapshot: Arc<RadixSnapshot<W, O, C>>,
+}
+
+impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixMatches<W, O, C> {
+    pub fn snapshot_id(&self) -> u64 { self.snapshot.id }
+    pub fn probe_count(&self) -> usize { self.probes }
+    pub fn run_count(&self) -> usize { self.snapshot.runs.len() }
+    /// Cursors `[probe * run_count + run]`, on the reading pool's memory.
+    pub fn cursors(&self) -> &Buffer<RadixMatch> { &self.matches }
+    /// Explicit diagnostic download of every cursor.
+    pub fn to_host(&self) -> Result<Vec<RadixMatch>> {
+        if self.matches.is_empty() { Ok(Vec::new()) } else { self.matches.to_host() }
+    }
+
+    /// Expand every cursor's occurrences of one demanded column on `pool`'s
+    /// stream: cursor `i` writes its items, in stable run order, from
+    /// `bases[i]` of a `total`-entry output. Writes beyond `total` are dropped.
+    /// The column must belong to this match set's snapshot.
+    pub fn gather<T: ItemLane>(&self, pool: &Arc<Pool>, column: &ItemColumn<T>, bases: &Buffer<u64>, total: usize)
+        -> Result<Buffer<T>>
+    {
+        check_execution(&self.snapshot.pool, pool)?;
+        if column.view.snapshot != self.snapshot.id {
+            return Err("item column and match cursors belong to different snapshots".into());
+        }
+        let cursors = self.matches.len();
+        if !pool.shares_memory(bases.pool()) || bases.len() < cursors {
+            return Err("gather bases use another pool's memory or miss cursors".into());
+        }
+        // SAFETY: callers supply disjoint bases covering `total`; unwritten
+        // positions are unspecified, never read past the output.
+        let output = unsafe { Buffer::<T>::uninitialized(pool.clone(), total)? };
+        if cursors != 0 && total != 0 {
+            let module = &self.snapshot.module;
+            let initial = module.prepare_gather_matches::<T>(ItemKernels::shape())?;
+            let config = self.snapshot.config(initial.function(), cursors)?;
+            module.gather_matches::<T>(
+                pool.stream(), &module.prepare_gather_matches::<T>(config)?,
+                column.view, self.matches.ptr(), cursors as u64, bases.ptr(), total as u64, output.ptr(),
+            )?;
+        }
+        Ok(output)
+    }
+}
+
+/// A typed, narrow item-column handle; `T` equals the column's lane type.
+/// It borrows the snapshot's addresses: retain the layout or match set owner.
+#[derive(Clone, Copy, Debug)]
+pub struct ItemColumn<T> {
+    pub view: RadixItemColumn,
+    marker: PhantomData<fn() -> T>,
+}
+
+/// Device field ABI of a [`RadixLayout`]: key reads plus the key packing's
+/// field descriptors and the resident count. Contains no item pointers.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RadixLayoutView<W: Word, O: OffsetWord> {
+    pub keys: RadixKeysView<W, O>,
+    /// Most-significant-first key fields of `K`.
+    pub fields: *const PackedField,
+    pub field_count: u32,
+    /// Significant key bits of the packing (at most `W::BITS`).
+    pub bits: u32,
+    /// Resident logical occurrence count.
+    pub count: *const u64,
+}
+// SAFETY: this C-layout descriptor contains only device pointers and integers.
+unsafe impl<W: Word, O: OffsetWord> DeviceCopy for RadixLayoutView<W, O> {}
+
+struct RadixPublication<W: Word, O: OffsetWord, C> {
+    snapshot: Arc<RadixSnapshot<W, O, C>>,
+    // Constant per packing: a republished layout shares its predecessor's.
+    fields: Arc<Buffer<PackedField>>,
+    packing: Packing,
+}
+
+/// Formal rule GPU-RadixLayout:
+/// A typed relational view over one immutable radix publication: key tuple
+/// `K` packed by a checked most-significant-first packing into whole `W`
+/// keys, value tuple `V` stored one item column per field in `C` lanes that
+/// hold each field's domain, offsets in `O`. It owns the snapshot (runs,
+/// descriptors, resident count) and field descriptors; republication over
+/// unchanged runs is this layout, otherwise it shares the field descriptors.
+/// No host synchronization constructs it; key reads take no item pointers.
+pub struct RadixLayout<K: ScalarTuple, V: ScalarTuple, W: Word, O: OffsetWord, C: DeviceItemColumns> {
+    publication: Arc<RadixPublication<W, O, C>>,
+    marker: PhantomData<fn() -> (K, V)>,
+}
+
+impl<K: ScalarTuple, V: ScalarTuple, W: Word, O: OffsetWord, C: DeviceItemColumns> Clone
+    for RadixLayout<K, V, W, O, C>
+{
+    fn clone(&self) -> Self {
+        Self { publication: self.publication.clone(), marker: PhantomData }
+    }
+}
+
+impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: DeviceItemColumns> RadixLayout<K, V, W, O, C> {
+    /// The key packing of `K`'s columns in recorded order.
+    pub fn derive_packing() -> Result<Packing> {
+        Packing::build(K::COLUMNS.iter().map(|column| (column.bits(), column.is_signed())))
+    }
+
+    fn check_schema(packing: &Packing) -> Result<()> {
+        if packing.len() != K::COLUMNS.len()
+            || !packing.packed_fields().zip(K::COLUMNS).all(|(field, column)| {
+                field.bits == column.bits() && (field.signed != 0) == column.is_signed()
+            })
+        {
+            return Err("radix layout packing differs from its key tuple schema".into());
+        }
+        if packing.bits() > W::BITS {
+            return Err("radix layout key packing exceeds the key word".into());
+        }
+        let mut lanes = Vec::with_capacity(C::COLUMNS);
+        C::lanes(&mut lanes);
+        if lanes.len() != V::COLUMNS.len()
+            || !lanes.iter().zip(V::COLUMNS).all(|(lane, &column)| lane.holds(column))
+        {
+            return Err("radix layout item lanes do not hold its value tuple schema".into());
+        }
+        Ok(())
+    }
+
+    /// Publish `run`'s current snapshot as a layout with key `packing`.
+    pub fn publish(run: &DeviceRadixRun<W, O, C>, packing: Packing) -> Result<Self> {
+        Self::check_schema(&packing)?;
+        let fields = packing.packed_fields().collect::<Vec<_>>();
+        Ok(Self {
+            publication: Arc::new(RadixPublication {
+                snapshot: run.snapshot()?,
+                fields: Arc::new(Buffer::from_host_async(run.pool().clone(), &fields)?),
+                packing,
+            }),
+            marker: PhantomData,
+        })
+    }
+
+    /// This layout's successor over `run`'s current publication. Unchanged
+    /// runs (the same cached snapshot) return this layout itself with no
+    /// upload; otherwise the successor shares this layout's field descriptors.
+    pub fn republish(&self, run: &DeviceRadixRun<W, O, C>) -> Result<Self> {
+        check_execution(&self.publication.snapshot.pool, run.pool())?;
+        let snapshot = run.snapshot()?;
+        if Arc::ptr_eq(&snapshot, &self.publication.snapshot) {
+            return Ok(self.clone());
+        }
+        Ok(Self {
+            publication: Arc::new(RadixPublication {
+                snapshot,
+                fields: self.publication.fields.clone(),
+                packing: self.publication.packing.clone(),
+            }),
+            marker: PhantomData,
+        })
+    }
+
+    pub fn snapshot(&self) -> &Arc<RadixSnapshot<W, O, C>> { &self.publication.snapshot }
+    pub fn snapshot_id(&self) -> u64 { self.publication.snapshot.id }
+    pub fn pool(&self) -> &Arc<Pool> { &self.publication.snapshot.pool }
+    pub fn packing(&self) -> &Packing { &self.publication.packing }
+    pub fn run_count(&self) -> usize { self.publication.snapshot.runs.len() }
+    /// Occurrences, known on the host from the build's exact counts.
+    pub fn len(&self) -> usize { self.publication.snapshot.item_count() }
+    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    /// Resident logical occurrence count, without a host download.
+    pub fn count_ptr(&self) -> *const u64 { self.publication.snapshot.count_ptr() }
+    /// Explicitly synchronize and download the resident count.
+    pub fn logical_count(&self) -> Result<usize> {
+        Ok(usize::try_from(self.publication.snapshot.count.to_host()?[0])?)
+    }
+    /// Field-descriptor buffer address, shared by republished successors.
+    pub fn fields_ptr(&self) -> *const PackedField { self.publication.fields.ptr() }
+    /// Retain runs, descriptors and fields through every stream user.
+    pub fn owner(&self) -> Arc<dyn Any + Send + Sync> { self.publication.clone() }
+
+    pub fn view(&self) -> RadixLayoutView<W, O> {
+        let publication = &self.publication;
+        RadixLayoutView {
+            keys: publication.snapshot.keys_view(),
+            fields: publication.fields.ptr(),
+            field_count: publication.fields.len() as u32,
+            bits: publication.packing.bits(),
+            count: publication.snapshot.count_ptr(),
+        }
+    }
+
+    /// Narrow access to value field `column`, whose lane type must be `T`.
+    pub fn item_column<T: ItemLane>(&self, column: usize) -> Result<ItemColumn<T>> {
+        let mut lanes = Vec::with_capacity(C::COLUMNS);
+        C::lanes(&mut lanes);
+        match lanes.get(column) {
+            Some(&kind) if kind == T::KIND => {}
+            Some(_) => return Err("item column lane differs from the requested element type".into()),
+            None => return Err("item column outside the value tuple".into()),
+        }
+        let snapshot = &self.publication.snapshot;
+        Ok(ItemColumn {
+            view: RadixItemColumn {
+                columns: snapshot.columns.ptr(),
+                snapshot: snapshot.id,
+                column: column as u32,
+                column_count: C::COLUMNS as u32,
+                run_count: snapshot.runs.len() as u32,
+                reserved: 0,
+            },
+            marker: PhantomData,
+        })
+    }
+
+    /// Inclusive packed-key interval of a key-prefix (all keys when empty).
+    pub fn prefix_interval(&self, prefix: &[i128]) -> Result<RangeInclusive<W>> {
+        self.publication.packing.prefix_range(prefix)
+    }
+
+    pub fn probe_keys(&self, pool: &Arc<Pool>, probes: &Buffer<W>, count: usize) -> Result<Buffer<KeyProbe>> {
+        self.publication.snapshot.probe_keys(pool, probes, count)
+    }
+    pub fn probe_matches(&self, pool: &Arc<Pool>, probes: &Buffer<W>, count: usize) -> Result<RadixMatches<W, O, C>> {
+        self.publication.snapshot.probe_matches(pool, probes, count)
+    }
+    pub fn probe_intervals(&self, pool: &Arc<Pool>, low: &Buffer<W>, high: &Buffer<W>, count: usize)
+        -> Result<Buffer<IntervalProbe>>
+    {
+        self.publication.snapshot.probe_intervals(pool, low, high, count)
+    }
+}
+
 /// Pointer-only reads usable inside generated device kernels.
 pub mod device {
-    use super::{OffsetWord, RadixItemsView, RadixKeysView, RadixRunView};
+    use super::{OffsetWord, RadixItemColumn, RadixItemsView, RadixKeysView, RadixMatch, RadixRunView};
     use crate::Word;
 
     /// `a - b` for `a >= b`, lane-wise with borrow.
@@ -802,12 +1179,41 @@ pub mod device {
         let address = unsafe { *items.columns.add((run * items.column_count + column) as usize) };
         unsafe { *(address as *const T).add(position as usize) }
     }
+
+    /// The match cursor of `key` in run `index`: snapshot identity, run index
+    /// and the run-local group `[begin, end)` (`(items, items)` if absent).
+    /// # Safety
+    /// `view` must describe live runs readable on this device; `index < run_count`.
+    #[inline(always)]
+    pub unsafe fn cursor<W: Word, O: OffsetWord>(view: RadixKeysView<W, O>, index: u32, key: W) -> RadixMatch {
+        let (begin, end) = unsafe { group(run(view, index), key) };
+        RadixMatch { snapshot: view.snapshot, run: index, reserved: 0, begin, end }
+    }
+
+    /// Whether `cursor` addresses the snapshot `column` belongs to.
+    #[inline(always)]
+    pub fn same_snapshot(column: RadixItemColumn, cursor: RadixMatch) -> bool {
+        column.snapshot == cursor.snapshot
+    }
+
+    /// Item `offset` of a cursor's group in one demanded column.
+    /// # Safety
+    /// `T` must be the column's lane, `same_snapshot(column, cursor)` must hold,
+    /// the snapshot must be live and `offset < cursor.end - cursor.begin`.
+    #[inline(always)]
+    pub unsafe fn cursor_item<T: Copy>(column: RadixItemColumn, cursor: RadixMatch, offset: u64) -> T {
+        let address = unsafe { *column.columns.add((cursor.run * column.column_count + column.column) as usize) };
+        unsafe { *(address as *const T).add((cursor.begin + offset) as usize) }
+    }
 }
 
 #[cuda_host::cuda_module]
 mod radix_kernels {
     use crate::{
-        radix_run::{device, IntervalProbe, ItemLane, ItemRange, KeyProbe, OffsetWord, RadixKeysView, RadixRunView, SIDE},
+        radix_run::{
+            device, IntervalProbe, ItemLane, KeyProbe, OffsetWord, RadixItemColumn, RadixKeysView, RadixMatch,
+            RadixRunView, SIDE,
+        },
         Word,
     };
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
@@ -987,18 +1393,41 @@ mod radix_kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn probe_groups<W: Word, O: OffsetWord>(view: RadixKeysView<W, O>, probes: *const W, count: u64, output: *mut ItemRange) {
+    pub fn probe_matches<W: Word, O: OffsetWord>(view: RadixKeysView<W, O>, probes: *const W, count: u64, output: *mut RadixMatch) {
         let mut probe = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
         while probe < count {
             let key = unsafe { *probes.add(probe as usize) };
             let mut index = 0;
             while index < view.run_count {
-                let (begin, end) = unsafe { device::group(device::run(view, index), key) };
-                unsafe { *output.add((probe * view.run_count as u64 + index as u64) as usize) = ItemRange { begin, end }; }
+                let cursor = unsafe { device::cursor(view, index, key) };
+                unsafe { *output.add((probe * view.run_count as u64 + index as u64) as usize) = cursor; }
                 index += 1;
             }
             probe += stride;
+        }
+    }
+
+    /// Copy each cursor's group of one column to `output[bases[i]..]`.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn gather_matches<T: ItemLane>(
+        column: RadixItemColumn, cursors: *const RadixMatch, count: u64, bases: *const u64, total: u64, output: *mut T,
+    ) {
+        let mut index = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * 256;
+        while index < count {
+            let cursor = unsafe { *cursors.add(index as usize) };
+            let base = unsafe { *bases.add(index as usize) };
+            if device::same_snapshot(column, cursor) {
+                let mut offset = 0;
+                while offset < cursor.end - cursor.begin && base + offset < total {
+                    unsafe { *output.add((base + offset) as usize) = device::cursor_item::<T>(column, cursor, offset); }
+                    offset += 1;
+                }
+            }
+            index += stride;
         }
     }
 

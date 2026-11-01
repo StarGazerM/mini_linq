@@ -7,7 +7,7 @@ use cq_storage::{ExactMembership, IndexRead, RadixRun};
 use gpu_datalog_runtime::{
     pack::Word,
     radix_run::{
-        device, offset_fits, DeviceItemColumns, DeviceRadixRun, HostRadixRun, IntervalProbe, ItemRange,
+        device, offset_fits, DeviceItemColumns, DeviceRadixRun, HostRadixRun, IntervalProbe,
         KeyProbe, OffsetWord, RadixRunParams, RadixSnapshot,
     },
 };
@@ -180,13 +180,14 @@ fn check_structure<W: Word, O: OffsetWord, H>(
 
 struct DeviceReads {
     keys: Vec<KeyProbe>,
-    groups: Vec<ItemRange>,
+    /// Match cursors without their snapshot identity: `(run, begin, end)`.
+    groups: Vec<(u32, u64, u64)>,
     intervals: Vec<IntervalProbe>,
     pairs: Vec<(usize, usize)>,
 }
 
 fn read<W: Word, O: OffsetWord, C: DeviceItemColumns>(
-    snapshot: &RadixSnapshot<W, O, C>,
+    snapshot: &Arc<RadixSnapshot<W, O, C>>,
     probes: &[W],
 ) -> Result<DeviceReads> {
     let pool = snapshot.pool().clone();
@@ -194,11 +195,19 @@ fn read<W: Word, O: OffsetWord, C: DeviceItemColumns>(
     // Deterministic interval endpoints over the sorted probe set.
     let pairs: Vec<_> = (0..probes.len()).map(|i| (i, (i * 7 + 3) % probes.len())).collect();
     let low = Buffer::from_host(pool.clone(), &pairs.iter().map(|&(a, _)| probes[a]).collect::<Vec<_>>())?;
-    let high = Buffer::from_host(pool, &pairs.iter().map(|&(_, b)| probes[b]).collect::<Vec<_>>())?;
+    let high = Buffer::from_host(pool.clone(), &pairs.iter().map(|&(_, b)| probes[b]).collect::<Vec<_>>())?;
+    let matches = snapshot.probe_matches(&pool, &buffer, probes.len())?;
+    assert_eq!(matches.snapshot_id(), snapshot.id());
+    let cursors = matches.to_host()?;
+    let runs = snapshot.run_count();
+    for (index, cursor) in cursors.iter().enumerate() {
+        assert_eq!(cursor.snapshot, snapshot.id(), "cursor carries its snapshot identity");
+        assert_eq!(cursor.run as usize, index % runs, "cursor carries its run index");
+    }
     Ok(DeviceReads {
-        keys: download(snapshot.probe_keys(&buffer, probes.len())?)?,
-        groups: download(snapshot.probe_groups(&buffer, probes.len())?)?,
-        intervals: download(snapshot.probe_intervals(&low, &high, probes.len())?)?,
+        keys: download(snapshot.probe_keys(&pool, &buffer, probes.len())?)?,
+        groups: cursors.iter().map(|cursor| (cursor.run, cursor.begin, cursor.end)).collect(),
+        intervals: download(snapshot.probe_intervals(&pool, &low, &high, probes.len())?)?,
         pairs,
     })
 }
@@ -225,12 +234,13 @@ fn check<W: Word, O: OffsetWord>(
         assert_eq!((probe.begin, probe.end), oracle.range(key), "range {key:?}");
         let mut items = Vec::new();
         for (position, stored) in host.iter().enumerate() {
-            let group = reads.groups[index * runs + position];
-            if group.begin == group.end {
+            let (run, begin, end) = reads.groups[index * runs + position];
+            assert_eq!(run as usize, position);
+            if begin == end {
                 // Absent groups use the run's exact terminal position.
-                assert_eq!(group.begin, stored.offsets.last().unwrap().to_u64());
+                assert_eq!(begin, stored.offsets.last().unwrap().to_u64());
             }
-            for item in group.begin..group.end {
+            for item in begin..end {
                 items.push((stored.items.0[item as usize], stored.items.1[item as usize]));
             }
         }
