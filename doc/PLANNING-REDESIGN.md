@@ -131,7 +131,7 @@ sit where a representation is introduced.**
 | Layer | Owns (decisions) | Semantics / laws | Contracts | State |
 |---|---|---|---|---|
 | CQ surface | atoms, `where` relational predicates, opaque total Rust `if/let/for` | set denotation; `where` = selection by representation Eq/Ord; Rust placed by free variables | 7 | implemented; expanded-Rust audit in progress |
-| CQ → VO → RA (planning) | join order, reductions, **Lookup/Expand order and Expand placement** (L&E §4), block placement | VO/RA refinement of the written order | 1, 2, 5 | order + Datalog advice done; Sequence replanning removed (P3.3-lite); evidence-driven L&E remains P3.3 |
+| CQ → VO → RA (planning) | join order, reductions, **Lookup/Expand order and Expand placement** (L&E §4), block placement | VO/RA refinement of the written order | 1, 2, 5 | order + Datalog advice done; Sequence replanning removed (P3.3-lite); evidence-driven L&E (O-EvidenceLe) on the GPU TPC-H automatic route; CPU evidence is the P3.3e follow-up |
 | Structures (representation) | provider role (scan column vs index run), codec, summaries, grouped runs, copy vs read, join filters (exact / min-max / Bloom), positions | α abstraction laws: decode, enclosure, factorization, bounded-error directory, preserved ops | 8 (`doc/STORAGE.md`) | designed; type-blind provider dispatch partly implemented |
 | Sequence + grading (execution shape) | tiles aligned to vectors/blocks, deferred ranges from stored offsets, launch/scan/fold/sync facts, adaptive choose from evidence | positions and sizes; BE-* rules | translator-decides-nothing, 7 (representation facts) | launch facts done; storage-aware shape open |
 | Translators (pull, Rayon, CUDA, Metal) | nothing | per-construct correctness | T-Pull/T-Tasks/T-Gpu | audit violations fixed; anchors pending |
@@ -277,7 +277,26 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     Sequence recipes, `choose` and key partitions remain.
   - **P3.3** Default planner emits L&E phases from evidence; grading learns
     R's schedule shapes (retained small prefixes, segmented fan-out) from
-    recorded evidence; GPU match-set carrier follows P4.
+    recorded evidence; GPU match-set carrier follows P4. **Status
+    (2026-10-31):** slice A (O-EvidenceLe/CK-EvidenceLe: recorded counts and
+    TPC-H keys in the VO; a key-functional root replaces the written root only
+    when it dominates it — count ≥, filter rank ≥, and no neighbour other
+    than the written root filtered as strongly), slice B (GR-RetainPrefix,
+    GR-SegmentFanout, `retain(name, rows)` advice) and slice C (ADM-InPlan,
+    CPU Datalog, advice-only: the structural default measured DOOP xalan
+    `mini` 2.36x, batik `mini-par` 2.95x) are implemented. Only the GPU TPC-H automatic route records
+    CQ evidence. Paired GPU vs `c1b75718`: H04 automatic SF1 0.661
+    [0.652, 0.676], SF10 0.500 [0.497, 0.503]; d85 SF1 identical code
+    (1.007 [0.996, 1.022]; without the neighbour clause 1.363 [1.358, 1.367]);
+    advised H02 SF10 0.733 [0.720, 0.745] and H11 SF10 0.422 [0.417, 0.427]
+    from retained prefixes; H05 step-R order SF1 0.121, SF10 0.070.
+  - **P3.3e CPU evidence (follow-up)** Record manifest counts and keys on
+    the CPU TPC-H and Datalog routes (DOOP fact counts per round) so
+    O-EvidenceLe and GR-RetainPrefix decide there too, and FK-Known can put
+    holes in plan by default where a later read is recorded to fan out
+    (no recorded key covers it); needs a CPU
+    evidence source equivalent to `experiments/gpu/tpch/build.rs`
+    `relation_facts` and paired CPU timing over all 29 kernels.
 - **P3b Profile the engine gaps** (`doc/STORAGE.md` §12.4): GPU h06
   reduce/dedup at 16–74× a hand kernel; CPU h01 at ~140× a String-grouping
   microbenchmark. Profiles (perf, nsys/ncu) decide whether these come before
@@ -604,8 +623,10 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   answers has no realization without a new construct; the two facade
   streaming tests stay ignored. (4) `compiler.tex` does not build
   (`backend_ir.tex` `\inferrule*` error). (5) Datalog outputs are sets in
-  layout order, no longer insertion order. (6) ADM-InPlan (anti-join at the
-  deepest join layer) and its advice are unimplemented. (7) The LianJie repo
+  layout order, no longer insertion order. (6) ADM-InPlan is implemented for
+  CPU Datalog, advice-only (P3.3 slice C: FK-Known, DL-AdmitOnce, `known(admit)` /
+  `known(at(level k))` advice); GPU Datalog records `admit` for every hole and
+  rejects in-plan advice until a follow-up after P6c. (7) The LianJie repo
   split is undecided and out of scope here. (8) CPU TPC-H h10 1.116x and h19
   1.168x of M0 (h14 1.028x) with identical instructions per query: glibc
   heap layout. M0's loader left long-lived allocations that kept the heap top
@@ -778,8 +799,10 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   h01 1.15; paired timing is owed by track A, which replaces this
   realization. GPU H04 SF1 automatic 1.213 [1.169, 1.225] is accepted: the
   deleted `lookup_first` hid it; the preserved order materializes filtered
-  Lineitem (dispatches 1 → 2). Recovering it belongs to P3.3 grading, not to a
-  revived transfer. `cq_storage::dedup::sort` defers work to the first
+  Lineitem (dispatches 1 → 2). **Correction (P3.3, 2026-10-31):** recovering
+  it was a CQ → VO ordering decision (O-EvidenceLe streams Lineitem and reads
+  Orders through its key, one dispatch), not grading: H04 SF1 automatic is now 0.661
+  of `c1b75718`, without a revived transfer. `cq_storage::dedup::sort` defers work to the first
   `next()`, so an undemanded result evaluates nothing.
 - Closed capture (A-Capture, A-CaptureRef, WF-Capture, IF-Capture), on
   `6bf2ca20`, 2026-10-31: CQ normalization records each query-closed

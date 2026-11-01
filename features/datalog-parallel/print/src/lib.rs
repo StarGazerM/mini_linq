@@ -112,7 +112,8 @@ fn evaluate(
     let execution = &program.execution;
     let mut declarations = Vec::new();
     let mut evaluations = Vec::new();
-    let mut candidates_by_head = ::std::collections::BTreeMap::<usize, Vec<Ident>>::new();
+    let mut candidates_by_head =
+        ::std::collections::BTreeMap::<usize, Vec<(Ident, round::Admission)>>::new();
     let scope = Ident::new("__cq_scope", Span::mixed_site());
     let source_name = Ident::new("__cq_source", Span::mixed_site());
     let evaluator = Ident::new("__cq_evaluate", Span::mixed_site());
@@ -266,7 +267,7 @@ fn evaluate(
         candidates_by_head
             .entry(rule.head)
             .or_default()
-            .push(candidates);
+            .push((candidates, rule.known));
     }
     if standalone {
         assert_eq!(rules.len(), 1);
@@ -291,14 +292,26 @@ fn evaluate(
         .map(|(index, candidates)| {
             let new = format_ident!("__cq_admit_new_{index}", span = Span::mixed_site());
             let next = format_ident!("__cq_admit_next_{index}", span = Span::mixed_site());
-            let first = &candidates[0];
-            let rest = &candidates[1..];
+            // DL-AdmitOnce: in-plan holes' candidates form their own batch,
+            // admitted without the committed probe.
+            let (covered, checked): (Vec<_>, Vec<_>) = candidates
+                .into_iter()
+                .partition(|(_, known)| *known == round::Admission::InPlan);
+            let batch = |batch: &[(Ident, round::Admission)]| {
+                batch.split_first().map(|((first, _), rest)| {
+                    let rest = rest.iter().map(|(rest, _)| rest);
+                    (quote!(#(#first.extend(#rest);)*), quote!(#first))
+                })
+            };
+            let (extend_checked, checked) = batch(&checked).unzip();
+            let (extend_covered, covered) = batch(&covered).unzip();
             let canonical = &context.layouts[context.relations[index].providers.canonical];
             let committed = &canonical.host;
             let admit = admit_chunks(
                 context,
                 index,
-                &quote!(#first),
+                checked.as_ref(),
+                covered.as_ref(),
                 &quote!(&#committed),
                 &quote!(#new),
                 threshold,
@@ -307,7 +320,8 @@ fn evaluate(
             (
                 index,
                 quote!(
-                    #(#first.extend(#rest);)*
+                    #extend_checked
+                    #extend_covered
                     *#next = #admit;
                 ),
             )
@@ -511,10 +525,16 @@ fn task_hasher(canonical: &round::Layout) -> TokenStream {
 /// the committed hasher so one hash serves both); the per-shard results are
 /// concatenated. A sorted-run canonical layout subtracts per chunk (in parallel
 /// above the threshold) and its NEW is the sorted, deduplicated survivor vector.
+/// `checked` chunks come from `admit` holes; `covered` chunks come from
+/// `in_plan` holes, which already discharged the committed anti-join in their
+/// plans (DL-AdmitOnce), so they only join the shared round-local distinct
+/// (`ShardedLayout::admit_batches`; runs skip their subtraction). Without
+/// covered chunks the realization is unchanged.
 fn admit_chunks(
     context: &RoundContext,
     head: usize,
-    chunks: &TokenStream,
+    checked: Option<&TokenStream>,
+    covered: Option<&TokenStream>,
     committed: &TokenStream,
     new: &TokenStream,
     threshold: usize,
@@ -543,9 +563,16 @@ fn admit_chunks(
     let rows = Ident::new("__cq_admit_chunks", Span::mixed_site());
     let count = Ident::new("__cq_admit_count", Span::mixed_site());
     let membership = Ident::new("__cq_admit_committed", Span::mixed_site());
-    let counted = timing.then(|| {
-        let total = cq_datalog_print::candidate_count();
-        quote!(#total.fetch_add(#count, ::core::sync::atomic::Ordering::Relaxed);)
+    let covered_rows = Ident::new("__cq_admit_covered", Span::mixed_site());
+    let covered_count = Ident::new("__cq_admit_covered_count", Span::mixed_site());
+    let total = cq_datalog_print::candidate_count();
+    let counted = timing
+        .then(|| quote!(#total.fetch_add(#count, ::core::sync::atomic::Ordering::Relaxed);));
+    let covered_counted = timing.then(|| {
+        quote!(
+            let #covered_count = #covered_rows.iter().map(::std::vec::Vec::len).sum::<usize>();
+            #total.fetch_add(#covered_count, ::core::sync::atomic::Ordering::Relaxed);
+        )
     });
     let (name, _) = provider_parts(canonical);
     if name != "RunLayout" {
@@ -554,11 +581,29 @@ fn admit_chunks(
         let sharded_count = counted.as_ref().map_or_else(TokenStream::new, |counted| {
             quote!(let #count = #rows.iter().map(::std::vec::Vec::len).sum::<usize>(); #counted)
         });
+        let Some(covered) = covered else {
+            return quote!({
+                let #rows = #checked;
+                #sharded_count
+                let (#fresh, #admitted) = ::cq_datalog_parallel_runtime::ShardedLayout::admit(
+                    #committed,
+                    #rows,
+                    |row| #key,
+                    #threshold,
+                );
+                *#new = #fresh;
+                #admitted
+            });
+        };
+        let checked = checked.map_or_else(|| quote!(::std::vec::Vec::new()), Clone::clone);
         return quote!({
-            let #rows = #chunks;
+            let #rows = #checked;
+            let #covered_rows = #covered;
             #sharded_count
-            let (#fresh, #admitted) = ::cq_datalog_parallel_runtime::ShardedLayout::admit(
+            #covered_counted
+            let (#fresh, #admitted) = ::cq_datalog_parallel_runtime::ShardedLayout::admit_batches(
                 #committed,
+                #covered_rows,
                 #rows,
                 |row| #key,
                 #threshold,
@@ -567,31 +612,49 @@ fn admit_chunks(
             #admitted
         });
     }
-    let subtract = quote!(
-        let mut #rows = #chunks;
-        let #membership = #committed;
-        let #count = #rows.iter().map(::std::vec::Vec::len).sum::<usize>();
-        #counted
-        if #count < #threshold || ::rayon::current_num_threads() == 1 {
-            for chunk in &mut #rows {
-                chunk.retain(|row| !::cq_storage::ExactMembership::contains(#membership, #probe));
+    let subtract = checked.map(|checked| {
+        quote!(
+            let mut #rows = #checked;
+            let #membership = #committed;
+            let #count = #rows.iter().map(::std::vec::Vec::len).sum::<usize>();
+            #counted
+            if #count < #threshold || ::rayon::current_num_threads() == 1 {
+                for chunk in &mut #rows {
+                    chunk.retain(|row| !::cq_storage::ExactMembership::contains(#membership, #probe));
+                }
+            } else {
+                use ::rayon::prelude::*;
+                #rows.par_iter_mut().for_each(|chunk| {
+                    chunk.retain(|row| !::cq_storage::ExactMembership::contains(#membership, #probe));
+                });
             }
-        } else {
-            use ::rayon::prelude::*;
-            #rows.par_iter_mut().for_each(|chunk| {
-                chunk.retain(|row| !::cq_storage::ExactMembership::contains(#membership, #probe));
-            });
-        }
-    );
+        )
+    });
     let survivors = Ident::new("__cq_admit_rows", Span::mixed_site());
+    let batches: Vec<_> = subtract
+        .as_ref()
+        .map(|_| &rows)
+        .into_iter()
+        .chain(covered.map(|_| &covered_rows))
+        .collect();
+    let capacity = batches
+        .iter()
+        .map(|batch| quote!(#batch.iter().map(::std::vec::Vec::len).sum::<usize>()));
+    let covered = covered.map(|covered| {
+        quote!(
+            let #covered_rows = #covered;
+            #covered_counted
+        )
+    });
     quote!({
         #subtract
+        #covered
         let mut #survivors = ::std::vec::Vec::with_capacity(
-            #rows.iter().map(::std::vec::Vec::len).sum::<usize>(),
+            #(#capacity)+*,
         );
-        for chunk in #rows {
+        #(for chunk in #batches {
             #survivors.extend(chunk);
-        }
+        })*
         if #survivors.len() < #threshold || ::rayon::current_num_threads() == 1 {
             #survivors.sort_unstable();
         } else {

@@ -31,7 +31,11 @@ use syn::LitInt;
 mod branch_check;
 mod branches;
 
+pub mod evidence;
+pub mod known;
 pub mod le;
+
+pub use known::Known;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Options {
@@ -600,6 +604,7 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
         cq: source.clone(),
         valuation: valuation::Valuation {
             valuation_token: Default::default(),
+            evidence: None,
             join_branches: if options.heuristic == Heuristic::Filtered
                 && options.split == Split::Coarse
             {

@@ -18,6 +18,13 @@ pub struct PlanOptions {
     pub reduce: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
     /// `(target, support)` atom selectors whose Masks reduction is dropped.
     pub skip: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
+    /// Recorded counts and keys with provenance; the planner streams a
+    /// key-functional root and emits Lookup/Expand phases (O-EvidenceLe).
+    /// Exclusive with an explicit `order`, which is itself the plan.
+    pub evidence: Option<vo::Evidence>,
+    /// `known(Rel@i at k)`: pin the top-level negation at clause i after the
+    /// k-th positive read (ADM-InPlan advice transported by Datalog Fork).
+    pub known: Vec<cq_order::Known>,
 }
 
 impl Parse for PlanOptions {
@@ -25,6 +32,16 @@ impl Parse for PlanOptions {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut options = Self::default();
         while !input.is_empty() {
+            if input.peek(vo::evidence::kw::evidence) && options.evidence.is_none() {
+                options.evidence = Some(input.parse()?);
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                    if input.is_empty() {
+                        return Err(input.error("trailing comma after plan options"));
+                    }
+                }
+                continue;
+            }
             let option: Ident = input.parse()?;
             if option == "order" && options.order.is_none() {
                 let content;
@@ -54,10 +71,34 @@ impl Parse for PlanOptions {
                 } else {
                     options.skip.push((target, support));
                 }
+            } else if option == "known" {
+                let content;
+                syn::parenthesized!(content in input);
+                let known: cq_order::Known = content.parse()?;
+                if !content.is_empty() {
+                    return Err(content.error("expected (Relation@clause at level)"));
+                }
+                if known.level == 0 {
+                    return Err(syn::Error::new_spanned(
+                        &known.relation,
+                        "known placement names no positive read 0",
+                    ));
+                }
+                if options
+                    .known
+                    .iter()
+                    .any(|other| other.clause == known.clause)
+                {
+                    return Err(syn::Error::new_spanned(
+                        &known.relation,
+                        "duplicate known placement for one negation",
+                    ));
+                }
+                options.known.push(known);
             } else {
                 return Err(syn::Error::new_spanned(
                     option,
-                    "expected order(Relation, ...), no_reduce, or reduce/skip(Target with Support)",
+                    "expected order(Relation, ...), no_reduce, reduce/skip(Target with Support), known(Relation@clause at level), or evidence from \"provenance\" { count R = n; key R [columns]; }",
                 ));
             }
             if !input.is_empty() {
@@ -66,6 +107,10 @@ impl Parse for PlanOptions {
                     return Err(input.error("trailing comma after plan options"));
                 }
             }
+        }
+        if options.order.is_some() && options.evidence.is_some() {
+            return Err(input
+                .error("evidence and order are exclusive: an explicit order is itself the plan"));
         }
         Ok(options)
     }
@@ -83,9 +128,10 @@ fn normalized_advice(
         .flatten()
         .chain(args.reduce.iter().flat_map(|(a, b)| [a, b]))
         .chain(args.skip.iter().flat_map(|(a, b)| [a, b]));
-    if !selectors
-        .into_iter()
-        .any(|selector| selector.occurrence.is_some())
+    if args.known.is_empty()
+        && !selectors
+            .into_iter()
+            .any(|selector| selector.occurrence.is_some())
     {
         return Ok(None);
     }
@@ -115,6 +161,31 @@ fn normalized_advice(
         }
         Ok(selector)
     };
+    let negations = |program: &cq::Program| {
+        program
+            .query
+            .body
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| matches!(item, cq::BodyItem::Negation(_)).then_some(index))
+            .collect::<Vec<_>>()
+    };
+    // Negations are copied verbatim and in order by normalization.
+    let negation_mapping: std::collections::BTreeMap<_, _> = negations(source)
+        .into_iter()
+        .zip(negations(normal))
+        .collect();
+    let known = args
+        .known
+        .iter()
+        .map(|known| {
+            known.negation(source)?;
+            Ok(cq_order::Known {
+                clause: negation_mapping[&known.clause],
+                ..known.clone()
+            })
+        })
+        .collect::<syn::Result<Vec<_>>>()?;
     let pairs = |pairs: &[(cq_order::OrderAtom, cq_order::OrderAtom)]| {
         pairs
             .iter()
@@ -130,6 +201,8 @@ fn normalized_advice(
         no_reduce: args.no_reduce,
         reduce: pairs(&args.reduce)?,
         skip: pairs(&args.skip)?,
+        evidence: args.evidence.clone(),
+        known,
     }))
 }
 
@@ -143,13 +216,20 @@ pub fn prefix_valuation(source: &cq::Program, args: &PlanOptions) -> syn::Result
         heuristic: Heuristic::Prefix(Ranking::Connected),
         split: Split::Coarse,
     };
-    let plan = if let Some(relations) = &args.order {
+    let mut plan = if let Some(relations) = &args.order {
         cq_order::compile_explicit(&normal, relations)?
+    } else if let Some(evidence) = &args.evidence {
+        let plan = cq_order::evidence::compile(&normal, evidence, &ordering)?;
+        cq_order::evidence::check_evidence(&normal, &plan, &ordering)?;
+        plan
     } else {
         let plan = cq_order::compile(&normal, &ordering)?;
         cq_order::check(&normal, &plan, &ordering)?;
         plan
     };
+    for known in &args.known {
+        known.place(&mut plan)?;
+    }
     let options = cq_reduce::Options {
         semijoins: if args.no_reduce {
             cq_reduce::Reductions::None
@@ -160,6 +240,9 @@ pub fn prefix_valuation(source: &cq::Program, args: &PlanOptions) -> syn::Result
     let mut reduced = cq_reduce::compile(&plan, &options)?;
     cq_reduce::check(&plan, &reduced, &options)?;
     advise_prefix(&mut reduced, args)?;
+    for known in &args.known {
+        known.check(&reduced)?;
+    }
     Ok(reduced)
 }
 
@@ -420,6 +503,158 @@ mod tests {
             syn::parse_quote!(no_reduce, order(Lineitem, Part, block @ 5)),
         ] {
             compile_prefix(&source, &options).unwrap();
+        }
+    }
+
+    fn reads(plan: &vo::Program) -> Vec<String> {
+        plan.valuation
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                vo::Step::Atom(atom, _) => Some(quote::ToTokens::to_token_stream(atom).to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn evidence_streams_the_key_functional_root() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation Orders(o_orderkey:i64,o_orderdate:i32);
+            relation Lineitem(l_orderkey:i64,l_commitdate:i32,l_receiptdate:i32);
+            answer(o) :- Orders(o,d), where d >= 10 && d < 20,
+                Lineitem(o,c,r), where c < r;
+        };
+        let options: PlanOptions = syn::parse_quote!(evidence from "test manifest" {
+            count Orders = 1500000; key Orders [o_orderkey]; count Lineitem = 6001215;
+        });
+        let plan = prefix_valuation(&source, &options).unwrap();
+        assert_eq!(
+            reads(&plan),
+            ["Lineitem @ 3 (o , c , r)", "Orders @ 0 (o , d)"]
+        );
+        assert!(plan.valuation.evidence.is_some());
+        // Without a key on Orders no root is functional: the default order stays.
+        let options: PlanOptions = syn::parse_quote!(evidence from "test manifest" {
+            count Orders = 1500000; count Lineitem = 6001215;
+        });
+        let plan = prefix_valuation(&source, &options).unwrap();
+        assert_eq!(
+            reads(&plan),
+            ["Orders @ 0 (o , d)", "Lineitem @ 3 (o , c , r)"]
+        );
+        // The checker rejects a recorded root that is not the largest functional root.
+        let normal = cq::normal::normalize(&source).unwrap();
+        let mut written = cq_order::compile(
+            &normal,
+            &Options {
+                heuristic: Heuristic::Prefix(Ranking::Connected),
+                split: Split::Coarse,
+            },
+        )
+        .unwrap();
+        written.valuation.evidence = Some(syn::parse_quote!(evidence from "test manifest" {
+            count Orders = 1500000; key Orders [o_orderkey]; count Lineitem = 6001215;
+        }));
+        assert!(
+            cq_order::evidence::check_evidence(
+                &normal,
+                &written,
+                &Options {
+                    heuristic: Heuristic::Prefix(Ranking::Connected),
+                    split: Split::Coarse,
+                },
+            )
+            .is_err()
+        );
+        // Evidence must name its provenance and declared columns.
+        for bad in [
+            quote::quote!(evidence from "" { count Orders = 1; }),
+            quote::quote!(evidence from "m" { key Orders [missing]; }),
+            quote::quote!(evidence from "m" { count Orders = 1; count Orders = 2; }),
+        ] {
+            let options: PlanOptions = syn::parse2(bad).unwrap();
+            assert!(prefix_valuation(&source, &options).is_err());
+        }
+        assert!(
+            syn::parse_str::<PlanOptions>(
+                "order(Lineitem, Orders), evidence from \"m\" { count Orders = 1; }"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn evidence_looks_up_filtered_keyed_occurrences_before_expansion() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation A(a:i64,x:i64);
+            relation B(b:i64,y:i64);
+            relation F(a:i64,b:i64,v:i64);
+            answer(v,x,y) :- A(a,x), where x == 1, B(b,y), where y < 5, F(a,b,v);
+        };
+        let options: PlanOptions = syn::parse_quote!(no_reduce, evidence from "test" {
+            count A = 10; key A [a]; count B = 20; key B [b]; count F = 1000;
+        });
+        let plan = prefix_valuation(&source, &options).unwrap();
+        // F streams; B (range filter) is looked up before A (point filter) expands.
+        assert_eq!(
+            reads(&plan),
+            [
+                "F @ 4 (a , b , v)",
+                "B @ 2 (b , _)",
+                "A @ 0 (a , x)",
+                "B @ 2 (b , y)"
+            ]
+        );
+        compile_prefix(&source, &options).unwrap();
+    }
+
+    #[test]
+    fn evidence_keeps_the_written_root_against_a_root_with_a_filtered_neighbour() {
+        // L outnumbers the filtered written root P, but reduction semi-joins L
+        // by O, filtered as strongly as P: L does not dominate P.
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation P(p:i64,s:i64,v:i64);
+            relation L(o:i64,p:i64,s:i64);
+            relation O(o:i64,d:i32);
+            answer(o,p) :- P(p,s,v), where v > 0, L(o,p,s), O(o,d), where d >= 10 && d < 20;
+        };
+        let options: PlanOptions = syn::parse_quote!(evidence from "test" {
+            count P = 800000; key P [p, s]; count L = 6001215; count O = 1500000; key O [o];
+        });
+        let plan = prefix_valuation(&source, &options).unwrap();
+        assert_eq!(reads(&plan)[0], "P @ 0 (p , s , v)");
+        compile_prefix(&source, &options).unwrap();
+    }
+
+    #[test]
+    fn known_pins_a_negation_after_a_positive_read() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation R(x:i64,y:i64);
+            relation S(y:i64,z:i64);
+            relation Old(x:i64);
+            answer(x) :- R(x,y), S(y,z), !Old(x);
+        };
+        let natural = prefix_valuation(&source, &PlanOptions::default()).unwrap();
+        let position = |plan: &vo::Program| {
+            plan.valuation
+                .steps
+                .iter()
+                .position(|step| matches!(step, vo::Step::Negation(..)))
+                .unwrap()
+        };
+        assert_eq!(position(&natural), 1);
+        let options: PlanOptions = syn::parse_quote!(no_reduce, known(Old@2 at 2));
+        let pinned = prefix_valuation(&source, &options).unwrap();
+        assert_eq!(position(&pinned), 2);
+        compile_prefix(&source, &options).unwrap();
+        for bad in ["known(Old@2 at 3)", "known(R@0 at 1)", "known(Old@2 at 0)"] {
+            let parsed = syn::parse_str::<PlanOptions>(bad);
+            assert!(parsed.is_err() || prefix_valuation(&source, &parsed.unwrap()).is_err());
         }
     }
 }

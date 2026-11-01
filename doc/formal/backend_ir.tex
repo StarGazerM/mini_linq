@@ -935,7 +935,34 @@ replanning or optional-filter discovery.
  E_{\rm key}\text{ holds}\quad (t',\rho)=\mathsf{plan}(t,M,K,E)}
  {\mathrm{supp}(\alpha(t'))=\mathrm{supp}(\alpha(t))\quad
   \rho\text{ satisfies PL-Closure under }E_{\rm key}}
+
+\Rule{BE-PrefixBound}{\beta(\mathsf{rename}\ R)=(\mathsf{count}_E(R),\mathsf{keys}_E(R))\quad
+ \beta(\sigma\,x)=\beta(\pi_{\supseteq K}x)=\beta(x\ltimes y)=\beta(x\rhd y)=\beta(x)\\
+ \beta(\mathsf{probe}[\bar k]\,x,y)={\begin{cases}\beta(x)&\exists K\in\mathsf{keys}(y).\ K\subseteq\bar k\\
+ \beta(y)&\exists K\in\mathsf{keys}(x).\ K\subseteq\bar k\\
+ \bot&\text{otherwise}\end{cases}}}
+ {|\alpha(p)|\le\beta(p).rows\text{ whenever }E_{\rm key}\text{ and the counts hold}}
+
+\Rule{GR-RetainPrefix}{M.gpu\quad \beta(\mathsf{root}(d))<w_M\quad
+ e_1,\ldots,e_n\text{ the expansions of }d\text{ from its root}\\
+ j=\min\{j\mid \beta(e_j).rows\ge M.retain\_prefix\_rows\}\quad j<n}
+ {\mathsf{plan}\text{ records }\mathsf{retain}(e_j,\beta(e_j).rows);\ \mathsf{partition}(\mathsf{consumer}(d),w_M)}
+
+\Rule{GR-SegmentFanout}{\mathsf{retain}(e_j,\_)\text{ recorded}\quad j<i\le n\quad
+ \neg\exists K\in\mathsf{keys}(\mathsf{provider}(e_i)).\ K\subseteq\mathsf{lookupKeys}(e_i)}
+ {\mathsf{plan}\text{ records }\mathsf{segment}(e_i,w_M\cdot M.items,\ \mathsf{items}\ M.items)}
 \end{mathpar}
+
+A recorded \code{retain(e, n)} is the checked \code{store\_level(e)} rewrite
+whose replay first requires $\beta(e).rows=n$ under the recorded evidence; a
+bound the evidence does not establish is rejected. GR-RetainPrefix and
+GR-SegmentFanout change only execution shape (stores, tiles and offsets
+publication), never the recorded relational plan, and apply before
+placement, so ordinary decomposition, grading and PL-Cost continue from the
+result. They reproduce the authored H05 recipe R from the preserved step-R
+order: the one-row region root fills less than one tile, the Customer prefix is
+bounded by its customer count, and the Orders and Lineitem expansions, whose
+lookups cover no provider key, publish offsets before distribution.
 
 Evidence records row counts, keys, foreign keys, selectivities, bounds and
 sortedness beside analysis obligations. Keys are explicit author assertions

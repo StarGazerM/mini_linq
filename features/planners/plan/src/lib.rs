@@ -454,6 +454,7 @@ fn written_valuation(normal: &cq::Program) -> syn::Result<vo::Program> {
         cq: normal.clone(),
         valuation: vo::Valuation {
             valuation_token: Default::default(),
+            evidence: None,
             join_branches: None,
             brace: Default::default(),
             steps,

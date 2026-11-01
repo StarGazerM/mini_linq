@@ -21,6 +21,14 @@ impl Parse for Advice {
             "group_without_canon" => Self::GroupWithoutCanon(arguments.parse()?),
             "key_partition" => Self::KeyPartition(arguments.parse()?),
             "store_level" => Self::StoreLevel(arguments.parse()?),
+            "retain" => {
+                let name = arguments.parse()?;
+                arguments.parse::<Token![,]>()?;
+                Self::Retain {
+                    name,
+                    rows: arguments.parse::<LitInt>()?.base10_parse()?,
+                }
+            }
             "publish" => {
                 let name = arguments.parse()?;
                 arguments.parse::<Token![,]>()?;
@@ -84,6 +92,10 @@ impl ToTokens for Advice {
             Self::Store(name) => quote!(store(#name)),
             Self::GroupWithoutCanon(name) => quote!(group_without_canon(#name)),
             Self::StoreLevel(name) => quote!(store_level(#name)),
+            Self::Retain { name, rows } => {
+                let rows = LitInt::new(&rows.to_string(), name.span());
+                quote!(retain(#name, #rows))
+            }
             Self::KeyPartition(arguments) => quote!(key_partition(#arguments)),
             Self::Publish { name, producer } => quote!(publish(#name, #producer)),
             Self::Tile { name, n, items }
@@ -123,6 +135,7 @@ mod tests {
             "store(result)",
             "group_without_canon(grouped)",
             "store_level(joined)",
+            "retain(joined, 150000)",
             "publish(result, producer)",
             "tile(result, 256)",
             "partition(result, 256, items 4)",

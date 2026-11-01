@@ -131,7 +131,7 @@ fn authored_round_expansion_matches_independent_fixture() {
 
 
             variant 0 seed { R(*x) :- E(x); }
-            variant 1 delta 1 { R(*x) :- E(x), Recent(x); }
+            variant 1 delta 1 known(admit) { R(*x) :- E(x), Recent(x); }
         }
     })
     .unwrap();
@@ -152,6 +152,49 @@ fn authored_round_expansion_matches_independent_fixture() {
     let actual: syn::Expr = syn::parse2(render(fork)).unwrap();
     let expected: syn::Expr = syn::parse_str(include_str!("fixtures/round.rs")).unwrap();
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn in_plan_holes_admit_without_the_committed_probe() {
+    let source = source();
+    // Two producers of R: the delta variant is advised in plan after its
+    // first read (`x` binds there); the seed keeps the default (admit).
+    let program: incremental::Program = syn::parse2(quote! {
+        #source
+        R(*x) :- E(x), R(x);
+        strata { component [R]; }
+        incremental { scheme seminaive_covering;
+            delta R = Recent;
+            variant 0 seed { R(*x) :- E(x); }
+            variant 1 delta 1 known(at(level 1)) { R(*x) :- E(x), Recent(x); }
+        }
+    })
+    .unwrap();
+    let fork = expand(&program, |_| Ok(quote!(authored_rows()))).unwrap();
+    let stratum = &fork.context.strata[0];
+    assert_eq!(stratum.seeds[0].known, round::Admission::Admit);
+    assert_eq!(stratum.steps[0].known, round::Admission::InPlan);
+    let relation = &fork.context.relations[1];
+    let canonical = &fork.context.layouts[relation.providers.canonical].host;
+    let admit = |known| {
+        admit_row(
+            relation,
+            &fork.context,
+            &[round::AnswerColumn::Owned],
+            known,
+        )
+        .to_string()
+    };
+    // The printer reads the record only: in_plan omits the committed probe,
+    // and both keep the round-local NEW insert-if-absent.
+    let probe = format!("{canonical} . contains");
+    assert!(admit(round::Admission::Admit).contains(&probe));
+    assert!(!admit(round::Admission::InPlan).contains(&probe));
+    for known in [round::Admission::Admit, round::Admission::InPlan] {
+        assert!(admit(known).contains(&format!("{} . insert", relation.next_canonical)));
+    }
+    let rendered = render(fork).to_string();
+    assert_eq!(rendered.matches(&probe).count(), 1, "{rendered}");
 }
 
 #[test]

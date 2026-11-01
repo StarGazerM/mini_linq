@@ -255,6 +255,52 @@ fn checked<T>(
     })
 }
 
+/// Manifest row counts and the declared TPC-H primary keys of each base
+/// relation. Keys are assertions about the dbgen input, not cardinality
+/// estimates; a projected loader carries a key only when every key column is
+/// present.
+fn relation_facts(
+    kernel: &source::Kernel,
+    manifest: &Manifest,
+) -> Vec<(syn::Ident, usize, Option<Vec<syn::Ident>>)> {
+    kernel
+        .relations
+        .iter()
+        .map(|relation| {
+            let table = relation.table.to_string();
+            let key: &[&str] = match table.as_str() {
+                "lineitem" => &["l_orderkey", "l_linenumber"],
+                "orders" => &["o_orderkey"],
+                "part" => &["p_partkey"],
+                "partsupp" => &["ps_partkey", "ps_suppkey"],
+                "supplier" => &["s_suppkey"],
+                "customer" => &["c_custkey"],
+                "nation" => &["n_nationkey"],
+                "region" => &["r_regionkey"],
+                _ => &[],
+            };
+            let columns = (!key.is_empty())
+                .then(|| {
+                    key.iter()
+                        .map(|key| {
+                            relation
+                                .columns
+                                .iter()
+                                .find(|(name, _)| name == key)
+                                .map(|(name, _)| name.clone())
+                        })
+                        .collect::<Option<Vec<_>>>()
+                })
+                .flatten();
+            (
+                relation.name.clone(),
+                manifest.relations[&table].rows,
+                columns,
+            )
+        })
+        .collect()
+}
+
 fn compile(
     kernel: &source::Kernel,
     manifest: &Manifest,
@@ -383,10 +429,42 @@ fn compile_stage(
             })
         })
         .collect();
+    // The automatic route plans from recorded evidence (O-EvidenceLe); an
+    // authored recipe keeps its own plan arguments.
+    let plan = if pipeline.recipe.automatic && !pipeline.complete {
+        let evidence = cq_lang_vo::Evidence {
+            provenance: syn::LitStr::new(
+                &format!(
+                    "{} row counts; TPC-H primary keys",
+                    manifest.root.join("manifest.json").display()
+                ),
+                proc_macro2::Span::call_site(),
+            ),
+            facts: relation_facts(kernel, manifest)
+                .into_iter()
+                .flat_map(|(relation, rows, key)| {
+                    std::iter::once(cq_lang_vo::evidence::Fact::Count {
+                        relation: relation.clone(),
+                        rows: rows as u64,
+                    })
+                    .chain(key.map(|columns| cq_lang_vo::evidence::Fact::Key { relation, columns }))
+                })
+                .collect(),
+        }
+        .to_token_stream()
+        .to_string();
+        if pipeline.plan.trim().is_empty() {
+            evidence
+        } else {
+            format!("{}, {evidence}", pipeline.plan)
+        }
+    } else {
+        pipeline.plan.clone()
+    };
     let reduced = checked(
         "CQ plan advice",
         &normal,
-        advice::valuation(&cq, &pipeline.plan),
+        advice::valuation(&cq, &plan),
     )?;
     let ra = checked("CQ elaborate", &reduced, cq_elaborate::compile(&reduced))?;
     checked(
@@ -655,47 +733,14 @@ fn compile_stage(
     )?;
     if !pipeline.complete {
         let evidence = cq_lang_sequence::Evidence {
-            facts: kernel
-                .relations
-                .iter()
-                .flat_map(|relation| {
-                    let table = relation.table.to_string();
-                    let mut facts = vec![cq_lang_sequence::EvidenceFact::Count {
-                        subject: relation.name.clone(),
-                        rows: manifest.relations[&table].rows,
-                    }];
-                    // TPC-H's declared primary keys are assertions about the
-                    // dbgen input, not cardinality estimates. A projected loader
-                    // only carries a key when every key column is present.
-                    let key: &[&str] = match table.as_str() {
-                        "lineitem" => &["l_orderkey", "l_linenumber"],
-                        "orders" => &["o_orderkey"],
-                        "part" => &["p_partkey"],
-                        "partsupp" => &["ps_partkey", "ps_suppkey"],
-                        "supplier" => &["s_suppkey"],
-                        "customer" => &["c_custkey"],
-                        "nation" => &["n_nationkey"],
-                        "region" => &["r_regionkey"],
-                        _ => &[],
-                    };
-                    if !key.is_empty()
-                        && let Some(columns) = key
-                            .iter()
-                            .map(|key| {
-                                relation
-                                    .columns
-                                    .iter()
-                                    .find(|(name, _)| name == key)
-                                    .map(|(name, _)| name.clone())
-                            })
-                            .collect::<Option<Vec<_>>>()
-                    {
-                        facts.push(cq_lang_sequence::EvidenceFact::Key {
-                            subject: relation.name.clone(),
-                            columns,
-                        });
-                    }
-                    facts
+            facts: relation_facts(kernel, manifest)
+                .into_iter()
+                .flat_map(|(subject, rows, key)| {
+                    std::iter::once(cq_lang_sequence::EvidenceFact::Count {
+                        subject: subject.clone(),
+                        rows,
+                    })
+                    .chain(key.map(|columns| cq_lang_sequence::EvidenceFact::Key { subject, columns }))
                 })
                 .collect(),
         };

@@ -523,8 +523,11 @@ fn literal_key_filter_correspondence_preserves_atom_literals() {
 
 #[test]
 fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
-    let source =
-        schedule(&syn::parse_str(include_str!("fixtures/written_order.datalog")).unwrap()).unwrap();
+    // This test fixes the admit-hole shape; in-plan holes are covered below.
+    let mut incremental: cq_lang_datalog_round::incremental::Program =
+        syn::parse_str(include_str!("fixtures/written_order.datalog")).unwrap();
+    incremental.variants[4].known = Some(cq_lang_datalog_round::incremental::Known::Admit);
+    let source = schedule(&incremental).unwrap();
     let target = compile(&source).unwrap();
     let context = &target.context;
     let probe = &context.layouts[1];
@@ -608,8 +611,8 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
 
 
 
-            variant 0 seed { R(*x) :- E(x,x,7), E(_,x,(1 + 2)); }
-            variant 1 delta 2 { R(*y) :- E(y,7,_), where y != 0, D(x), E(x,x,7); }
+            variant 0 seed known(admit) { R(*x) :- E(x,x,7), E(_,x,(1 + 2)); }
+            variant 1 delta 2 known(admit) { R(*y) :- E(y,7,_), where y != 0, D(x), E(x,x,7); }
         }
     })
     .unwrap();
@@ -935,6 +938,7 @@ fn authored_variant_orders_become_explicit_plan_advice_on_their_holes() {
             rule: syn::parse_quote!(Helper),
             delta: None,
             smallest: Vec::new(),
+            known: None,
             order: vec![
                 syn::parse_quote!(Super),
                 syn::parse_quote!(Component),
@@ -945,6 +949,7 @@ fn authored_variant_orders_become_explicit_plan_advice_on_their_holes() {
             rule: syn::parse_quote!(Step),
             delta: Some(syn::parse_quote!(Reach)),
             smallest: Vec::new(),
+            known: None,
             order: vec![syn::parse_quote!(Reach), syn::parse_quote!(Alloc@2)],
         },
     ];
@@ -1038,6 +1043,7 @@ fn step_advice_remaps_delta_occurrences_and_uses_cq_checkers() {
             syn::parse_quote!(E),
         ],
         smallest: Vec::new(),
+        known: None,
     };
     let specific = RulePlan {
         delta: Some(syn::parse_quote!(R@1)),
@@ -1120,6 +1126,7 @@ fn smallest_rule_sites_preserve_recorded_pipeline_ordinals() {
             syn::parse_quote!(S),
         ],
         smallest: vec![vec![syn::parse_quote!(R), syn::parse_quote!(S)]],
+        known: None,
     };
     let incremental =
         cq_datalog_incremental::compile_with_advice(&strata, DriverPolicy::WrittenOrder, &[advice])

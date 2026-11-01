@@ -121,3 +121,59 @@ fn same_round_duplicates_from_two_holes_are_admitted_once() {
         });
     }
 }
+
+macro_rules! advised {
+    ($threshold:literal; $($storage:tt)*) => {{
+        let mut rounds = Vec::new();
+        let edges = [(1, 5), (2, 5), (5, 7), (5, 7), (6, 7), (5, 8), (7, 8), (8, 5)];
+        let tags = [(5, 0), (7, 0), (7, 1), (8, 0)];
+        let seed = [(1,), (2,), (6,)];
+        let rows: Vec<_> = cq_datalog::datalog! {
+            pipeline {
+                incremental = cq_datalog::passes::incremental(plan(Step, known(at(level 2))););
+                storage_rewrites = [$($storage)*];
+                round = [cq_datalog_parallel::partition(threshold = $threshold)];
+                print = cq_datalog_parallel::print_rounds;
+            }
+            observe = (|round, count| rounds.push((round, count)));
+            struct Advised;
+            relation Edge(x:i32,y:i32) = (&edges);
+            relation Tag(x:i32,t:i32) = (&tags);
+            relation Seed(x:i32) = (&seed);
+            relation Out(y:i32);
+            output Out;
+            Out(*y) :- Seed(x), Edge(x,y);
+            Step: Out(*z) :- Out(y), Edge(y,z), Tag(z,_);
+        }
+        .collect();
+        (rows, rounds)
+    }};
+}
+
+/// ADM-InPlan under `known(at(level 2))`: the step hole's candidates are
+/// covered batches (`admit_batches` skips their committed check) while the
+/// seed hole stays checked; both still admit same-round duplicates once.
+#[test]
+fn advised_in_plan_candidates_are_admitted_once() {
+    for pool in pools() {
+        pool.install(|| {
+            macro_rules! check {
+                ($threshold:literal; $($storage:tt)*) => {{
+                    let (rows, rounds): (Vec<(i32,)>, Vec<(usize, usize)>) =
+                        advised!($threshold; $($storage)*);
+                    let configuration = stringify!($threshold; $($storage)*);
+                    assert_eq!(rows.len(), 3, "{configuration}");
+                    assert_eq!(
+                        rows.into_iter().collect::<BTreeSet<_>>(),
+                        BTreeSet::from([(5,), (7,), (8,)]),
+                        "{configuration}"
+                    );
+                    // Seed admits {5, 7}; step candidates 7, 8 (twice) from
+                    // 5 and 8 from 7 admit {8}: known 7 is pruned in plan.
+                    assert_eq!(rounds, [(0, 2), (1, 1)], "{configuration}");
+                }};
+            }
+            configurations!(check);
+        });
+    }
+}

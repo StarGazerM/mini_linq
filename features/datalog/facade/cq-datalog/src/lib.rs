@@ -113,6 +113,20 @@
 //! GPU experiments preserve these orders with `cq_gpu_sequence::decompose`
 //! in the decomposition phase; Sequence does not replan relational decisions.
 //!
+//! Admission placement (ADM-InPlan): by default every rule hole probes the
+//! head's committed layout at admission. `plan(Label, known(at(level k)));`
+//! anti-joins the hole's candidates with the head's committed canonical layout
+//! inside its plan (`!C(x̄)`), so later fan-out reads expand only unknown heads
+//! and admission keeps only the round-local insert-if-absent; where later reads
+//! only filter, the early anti-join probes every intermediate row, so it is
+//! advice-only until fan-out evidence is recorded. `plan(Label, known(admit));`
+//! states the default explicitly; `known(at(level k))` pins the in-plan read after the
+//! k-th positive read (1-based, at or after the read binding the last head
+//! variable; needs a planning invocation). `known(..)` combines with
+//! `delta(..)`, `order(..)` and `smallest(..)`, and `order` is optional when
+//! it is given. GPU Datalog records `admit` for every hole and rejects
+//! `known(at(..))`.
+//!
 //! Select streaming push holes with
 //! `cq = pipeline { print = ::cq_datalog::passes::print_push; print_input = structures; };`.
 //! Rule answers are passed directly to canonical admission, and negation keys

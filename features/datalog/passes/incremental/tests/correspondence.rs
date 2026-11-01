@@ -142,6 +142,7 @@ fn plans(tokens: proc_macro2::TokenStream) -> Vec<seminaive::RulePlan> {
                 delta,
                 order: order.into_iter().collect(),
                 smallest: Vec::new(),
+                known: None,
             });
         }
         Ok(plans)
@@ -444,4 +445,60 @@ fn authored_coarser_cover_with_redundancy_is_admitted_independently() {
     assert_eq!(default.variants.len(), 2);
     assert_eq!(default.variants[0].delta, None);
     assert_eq!(default.variants[1].delta, Some(0));
+}
+
+#[test]
+fn known_only_advice_keeps_driver_order_and_round_trips() {
+    let strata = stratify::compile(&labelled()).unwrap();
+    let known = |rule: syn::Ident, delta, known| seminaive::RulePlan {
+        rule,
+        delta,
+        order: Vec::new(),
+        smallest: Vec::new(),
+        known: Some(known),
+    };
+    let plans = vec![
+        known(syn::parse_quote!(Step), None, incremental::Known::Admit),
+        known(
+            syn::parse_quote!(Step),
+            Some(syn::parse_quote!(Reach)),
+            incremental::Known::At(2),
+        ),
+        known(syn::parse_quote!(Helper), None, incremental::Known::At(1)),
+    ];
+    let written = seminaive::compile(&strata).unwrap();
+    let advised =
+        seminaive::compile_with_advice(&strata, seminaive::DriverPolicy::WrittenOrder, &plans)
+            .unwrap();
+    roundtrip(&advised);
+    for (advised, written) in advised.variants.iter().zip(&written.variants) {
+        // Known-only advice never authors an order.
+        assert_eq!(advised.order, written.order);
+        assert!(!advised.authored);
+        let expected = match (advised.rule, advised.delta) {
+            (0, None) => Some(incremental::Known::At(1)),
+            // The version-specific plan overrides the rule-wide one.
+            (2, Some(1)) => Some(incremental::Known::At(2)),
+            (2, _) => Some(incremental::Known::Admit),
+            _ => None,
+        };
+        assert_eq!(advised.known, expected, "{advised:?}");
+    }
+    // A level beyond the rule's positive reads is rejected by the contract.
+    let beyond = vec![known(syn::parse_quote!(Step), None, incremental::Known::At(4))];
+    let error =
+        seminaive::compile_with_advice(&strata, seminaive::DriverPolicy::WrittenOrder, &beyond)
+            .unwrap_err();
+    assert!(error.to_string().contains("names no positive read"), "{error}");
+    // One version accepts one plan, so duplicate known advice is rejected.
+    let duplicate = vec![
+        known(syn::parse_quote!(Step), None, incremental::Known::Admit),
+        known(syn::parse_quote!(Step), None, incremental::Known::At(1)),
+    ];
+    assert!(
+        seminaive::compile_with_advice(&strata, seminaive::DriverPolicy::WrittenOrder, &duplicate)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate plan advice")
+    );
 }

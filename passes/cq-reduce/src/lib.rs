@@ -253,6 +253,7 @@ pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<va
         cq: source.cq.clone(),
         valuation: valuation::Valuation {
             valuation_token: source.valuation.valuation_token,
+            evidence: source.valuation.evidence.clone(),
             join_branches: source.valuation.join_branches.clone(),
             brace: Default::default(),
             steps,

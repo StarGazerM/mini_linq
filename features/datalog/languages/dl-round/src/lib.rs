@@ -36,7 +36,7 @@ pub use storage::incremental;
 use storage::{record, text::Text};
 use syn::{Expr, Ident};
 mod correspondence;
-pub use correspondence::{check_storage, scan_source, use_layouts, use_scan};
+pub use correspondence::{admission_negation, check_storage, scan_source, use_layouts, use_scan};
 pub mod schedule;
 pub use schedule::Schedule;
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,6 +95,33 @@ pub struct RuleHole {
     pub head: usize,
     pub hole: usize,
     pub scan: Option<ScanBinding>,
+    /// Where this producer discharges the committed anti-join `▷R` (ADM-InPlan).
+    pub known: Admission,
+}
+
+/// `admit`: admission probes the committed canonical layout. `in_plan`: the
+/// hole's CQ ends with `!C(x̄)` over the head's committed canonical layout, so
+/// admission keeps only the round-local NEW insert-if-absent (DL-AdmitOnce).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Admission {
+    Admit,
+    InPlan,
+}
+impl Text for Admission {
+    fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let name: Ident = input.parse()?;
+        match name.to_string().as_str() {
+            "admit" => Ok(Self::Admit),
+            "in_plan" => Ok(Self::InPlan),
+            _ => Err(syn::Error::new_spanned(name, "expected admit or in_plan")),
+        }
+    }
+    fn text(&self) -> TokenStream {
+        match self {
+            Self::Admit => quote!(admit),
+            Self::InPlan => quote!(in_plan),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -474,7 +501,7 @@ record!(ScanBinding {
     source: InputSource,
     binding: Ident
 });
-record!(RuleHole { variant: usize, head: usize, hole: usize, scan: Option<ScanBinding> });
+record!(RuleHole { variant: usize, head: usize, hole: usize, scan: Option<ScanBinding>, known: Admission });
 record!(Stratum { members: Vec<usize>, keys: Vec<KeySet>, seeds: Vec<RuleHole>, steps: Vec<RuleHole>, phases: Vec<Ident>, publication: Vec<Publication>, termination: Vec<usize>, termination_test: Ident, observer: Ident, key_scope: Ident, loop_form: Ident });
 record!(Publication { relation: usize, operations: Vec<PublicationOp> });
 record!(PublicationOp { kind: Ident, layouts: Vec<usize> });
@@ -840,6 +867,49 @@ fn check_execution(program: &Program) -> syn::Result<()> {
     }
     Ok(())
 }
+/// Formal rule DL-AdmitOnce: every producer of `R` discharges `▷R` exactly once.
+/// An `in_plan` rule hole reads `R`'s committed canonical layout negatively
+/// exactly once, as its last clause (so admission omits the committed probe);
+/// an `admit` hole never reads it negatively (admission keeps the probe). Both
+/// remain admission-owned by `R`, whose round-local NEW insert-if-absent (the
+/// residual δ) runs in the `admit` phase for every candidate.
+fn check_admit_once(program: &Program) -> syn::Result<()> {
+    let context = &program.context;
+    for rule in context.strata.iter().flat_map(|s| s.seeds.iter().chain(&s.steps)) {
+        let relation = context.relations.get(rule.head).ok_or_else(|| {
+            syn::Error::new_spanned(rule, "rule hole names no head relation")
+        })?;
+        let canonical = context
+            .layouts
+            .get(relation.providers.canonical)
+            .ok_or_else(|| syn::Error::new_spanned(relation, "missing canonical layout"))?;
+        let hole = program
+            .holes
+            .get(rule.hole)
+            .ok_or_else(|| syn::Error::new_spanned(rule, "rule hole is missing"))?;
+        let body = &hole.cq.query.body;
+        let reads = body
+            .iter()
+            .filter(|item| {
+                matches!(item, BodyItem::Negation(negative) if negative.atom.relation == canonical.name)
+            })
+            .count();
+        let last = matches!(
+            body.iter().last(),
+            Some(BodyItem::Negation(negative)) if negative.atom.relation == canonical.name
+        );
+        ensure(
+            relation.admit.contains(&rule.hole)
+                && match rule.known {
+                    Admission::InPlan => reads == 1 && last,
+                    Admission::Admit => reads == 0,
+                },
+            rule,
+            "every producer must discharge the committed anti-join exactly once, in its plan or at admission",
+        )?;
+    }
+    Ok(())
+}
 /// Formal rule DL-Admit-Owner: every candidate has exactly one matching set consumer.
 fn check_facts(program: &Program) -> syn::Result<()> {
     let context = &program.context;
@@ -954,6 +1024,7 @@ pub mod contract {
         let erased = erase(program)?;
         correspondence::check_storage_with_analysis(&program.storage, &erased, &analysis)?;
         check_facts(&erased)?;
+        check_admit_once(&erased)?;
         check_execution(program)?;
         schedule::check(program, &analysis)?;
         Ok(Analysis { storage: analysis })

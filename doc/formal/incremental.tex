@@ -201,6 +201,35 @@ not recursion through negation, and $A\cup(Q\triangleright A)=A\cup Q$. Each
 producer of $O$ discharges $\triangleright O$ exactly once, in its plan or at
 admission; $\delta$ of the batch is always discharged at admission.
 
+CPU Datalog realizes \textsc{ADM-InPlan} per rule hole. Fork records
+$\mathit{known}\in\{\mathsf{admit},\mathsf{in\_plan}\}$; an in-plan hole
+names computed head terms by ordinary bindings and appends $\neg C(\bar x)$
+over the head's committed canonical layout $C$, columns in canonical order.
+A hole is in plan only under advice \code{known(at(level k))}, which pins the
+read after the $k$-th positive read, at or after the level $\ell$ binding the
+last head variable and at most the last positive read $p$, transported as CQ
+\code{known(C@i at k)} (\textsc{O-KnownAt}); otherwise, including
+\code{known(admit)}, it is $\mathsf{admit}$. The early anti-join saves work
+only when later reads fan out and probes every intermediate row where they
+filter; CPU Datalog records no fan-out evidence, and the structural default
+$\ell<p$ measured DOOP xalan \code{mini} 2.36$\times$ and batik
+\code{mini-par} 2.95$\times$ slower, so in-plan is advice-only. Device
+storage records $\mathsf{admit}$ only.
+\begin{mathpar}
+\Rule{FK-Known}{\ell\le k\le p\ \text{(advice } \mathit{at}(k))}
+ {\mathit{known}(h)=\mathsf{in\_plan}\quad Q_h' = Q_h,\ \mathit{lets},\ \neg C(\bar x)}
+
+\Rule{DL-AdmitOnce}{\mathit{known}(h)=\mathsf{in\_plan}\iff \neg C\in Q_h\ \text{exactly once, last}}
+ {\textstyle N_t=\delta\big(\biguplus_{\mathsf{in\_plan}}Q_h \uplus
+  \biguplus_{\mathsf{admit}}(Q_h\triangleright C)\big)\triangleright\emptyset}
+\end{mathpar}
+Fork correspondence erases exactly that suffix (complete head key, canonical
+committed layout, declared column types); Round checks \textsc{DL-AdmitOnce}
+and records the committed head read in the schedule before publication
+(\textsc{IX-Stable}). Printers consume the record: the serial printer omits
+the committed probe for in-plan holes; the parallel printer admits covered and
+checked candidates as two batches sharing one NEW. GPU Datalog follow-up.
+
 \paragraph{Index protocol.}
 The anti-join reads the \emph{canonical} index $V$ of $O$: one ordinary member
 of $O$'s index set, every member a complete column permutation, recorded by

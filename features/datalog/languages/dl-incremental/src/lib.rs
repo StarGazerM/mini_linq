@@ -29,6 +29,10 @@ pub mod kw {
     syn::custom_keyword!(authored);
     syn::custom_keyword!(steps);
     syn::custom_keyword!(smallest);
+    syn::custom_keyword!(known);
+    syn::custom_keyword!(admit);
+    syn::custom_keyword!(at);
+    syn::custom_keyword!(level);
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
@@ -49,7 +53,49 @@ pub struct Variant {
     pub steps: Vec<AdviceStep>,
     /// Exact Physical intersection sites, in original occurrence numbering.
     pub smallest: Vec<Vec<usize>>,
+    /// Authored admission placement advice for this version (FK-Known in Fork).
+    pub known: Option<Known>,
     pub query: Query,
+}
+
+/// Authored ADM-InPlan advice: `known(admit)` pins admission-time discharge of
+/// the committed anti-join; `known(at(level k))` pins it in the hole plan,
+/// immediately after the k-th positive read (1-based).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Known {
+    Admit,
+    At(usize),
+}
+impl Parse for Known {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(kw::admit) {
+            input.parse::<kw::admit>()?;
+            return Ok(Self::Admit);
+        }
+        input.parse::<kw::at>()?;
+        let content;
+        syn::parenthesized!(content in input);
+        content.parse::<kw::level>()?;
+        let level = number(&content)?;
+        if !content.is_empty() {
+            return Err(content.error("expected at(level k)"));
+        }
+        if level == 0 {
+            return Err(input.error("known(at(level k)) counts positive reads from 1"));
+        }
+        Ok(Self::At(level))
+    }
+}
+impl ToTokens for Known {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.extend(match self {
+            Self::Admit => quote!(admit),
+            Self::At(level) => {
+                let level = syn::Index::from(*level);
+                quote!(at(level #level))
+            }
+        });
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,6 +212,18 @@ impl Parse for Program {
                         .collect(),
                 );
             }
+            let known = if body.peek(kw::known) {
+                body.parse::<kw::known>()?;
+                let known;
+                syn::parenthesized!(known in body);
+                let parsed = known.parse()?;
+                if !known.is_empty() {
+                    return Err(known.error("expected known(admit) or known(at(level k))"));
+                }
+                Some(parsed)
+            } else {
+                None
+            };
             let query;
             syn::braced!(query in body);
             variants.push(Variant {
@@ -175,6 +233,7 @@ impl Parse for Program {
                 authored,
                 steps,
                 smallest,
+                known,
                 query: query.parse()?,
             });
             if !query.is_empty() {
@@ -215,7 +274,8 @@ impl ToTokens for Program {
                 let site = site.iter().map(|&i| syn::Index::from(i));
                 quote!(smallest(#(#site),*))
             });
-            quote!(variant #rule #kind order [#(#order),*] #authored #steps #(#smallest)* { #query })
+            let known = v.known.map(|known| quote!(known(#known)));
+            quote!(variant #rule #kind order [#(#order),*] #authored #steps #(#smallest)* #known { #query })
         });
         let deltas = deltas.iter().map(|d| {
             let Delta { relation, name } = d;
@@ -292,6 +352,18 @@ fn check_variants(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 site.len() >= 2 && site.iter().collect::<BTreeSet<_>>().len() == site.len(),
                 p,
                 "smallest requires distinct positive occurrences",
+            )?;
+        }
+        if let Some(Known::At(level)) = v.known {
+            let reads = p.rules[v.rule]
+                .body
+                .iter()
+                .filter(|item| matches!(item, BodyItem::Positive { .. }))
+                .count();
+            ensure(
+                (1..=reads).contains(&level),
+                p,
+                "known(at(level k)) names no positive read of the rule",
             )?;
         }
         ensure(

@@ -34,6 +34,8 @@ use syn::{Ident, Token, token};
 pub use cq_syntax::{CommaList, Occurrence, symbol_name};
 pub mod blocks;
 pub use blocks::Placement;
+pub mod evidence;
+pub use evidence::Evidence;
 pub mod join_branches;
 pub use join_branches::{JoinBranch, JoinBranches};
 
@@ -47,6 +49,8 @@ pub mod kw {
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Valuation {
     pub valuation_token: kw::valuation,
+    #[parse(evidence::parse_optional)]
+    pub evidence: Option<Evidence>,
     #[parse(join_branches::parse_optional)]
     pub join_branches: Option<JoinBranches>,
     #[syn(braced)]
@@ -221,6 +225,9 @@ fn error<T>(
 
 fn analyze(program: &Program) -> syn::Result<Analysis> {
     join_branches::check(program)?;
+    if let Some(evidence) = &program.valuation.evidence {
+        evidence.check(&program.cq)?;
+    }
     let schema = program
         .cq
         .inputs()

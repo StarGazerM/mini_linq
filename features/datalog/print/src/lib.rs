@@ -731,7 +731,7 @@ pub fn evaluate(
                 owned_answer(&head.declaration, &specifications[rule.hole].answer),
             )
         } else if specifications[rule.hole].interface == HoleInterface::Push {
-            let admit = admit_row(head, context, &specifications[rule.hole].answer);
+            let admit = admit_row(head, context, &specifications[rule.hole].answer, rule.known);
             let types = answer_types(&head.declaration, &specifications[rule.hole].answer);
             consume_hole(
                 HoleInterface::Push,
@@ -899,16 +899,19 @@ pub fn insert_new(
     invocation: &TokenStream,
     answer: &[round::AnswerColumn],
 ) -> TokenStream {
-    let admit = admit_row(&context.relations[rule.head], context, answer);
+    let admit = admit_row(&context.relations[rule.head], context, answer, rule.known);
     quote!(for row in #invocation #admit)
 }
-/// Admit `row` against the committed canonical layout and the round's NEW
-/// version of it, pushing each new row once to `next`. Borrowed answer
-/// columns form the owned NEW row only for admitted candidates.
+/// Admit `row` into the round's NEW version of the canonical layout, pushing
+/// each new row once to `next`. An `admit` hole is also anti-joined with the
+/// committed canonical layout here; an `in_plan` hole already discharged that
+/// read in its plan (DL-AdmitOnce), so only the round-local δ remains.
+/// Borrowed answer columns form the owned NEW row only for admitted candidates.
 pub fn admit_row(
     relation: &round::Relation,
     context: &RoundContext,
     answer: &[round::AnswerColumn],
+    known: round::Admission,
 ) -> TokenStream {
     let canonical = &context.layouts[relation.providers.canonical];
     let next = &relation.next;
@@ -916,7 +919,7 @@ pub fn admit_row(
         .map_or_else(|| quote!(row), |owned| quote!((#owned)(row)));
     admit_canonical(
         canonical,
-        Some(&canonical.host),
+        (known == round::Admission::Admit).then_some(&canonical.host),
         &relation.next_canonical,
         answer,
         quote!(#next.push(#row);),

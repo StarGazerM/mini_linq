@@ -552,6 +552,7 @@ dependencies = [
  "cq-lang-vo",
  "cq-order",
  "cq-reduce",
+ "quote",
  "syn 2.0.119",
 ]
 

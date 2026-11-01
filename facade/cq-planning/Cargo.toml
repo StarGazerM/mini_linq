@@ -14,3 +14,6 @@ cq-order.workspace = true
 cq-reduce.workspace = true
 cq-elaborate.workspace = true
 syn.workspace = true
+
+[dev-dependencies]
+quote.workspace = true

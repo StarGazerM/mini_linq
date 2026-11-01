@@ -11,10 +11,12 @@ pub use catalog::matches_type;
 pub mod cost;
 pub use cost::{Cost, cost};
 mod advice;
+mod bounds;
 mod decomposition;
 mod key_partition;
 mod placement;
 mod planner;
+mod retain;
 pub use key_partition::{KeyPartitionPolicy, decompose_with_key_partitions};
 pub mod rewrites;
 pub use planner::Planner;
@@ -29,6 +31,11 @@ pub enum Advice {
     GroupWithoutCanon(Ident),
     Store(Ident),
     StoreLevel(Ident),
+    /// GR-RetainPrefix: store an expansion whose evidence bound is `rows`.
+    Retain {
+        name: Ident,
+        rows: u128,
+    },
     Publish {
         name: Ident,
         producer: Ident,
@@ -76,6 +83,7 @@ impl Advice {
             }
             Self::Store(name) => rewrites::store_in(checker, source, quote!(#name)),
             Self::StoreLevel(name) => rewrites::store_level_in(checker, source, quote!(#name)),
+            Self::Retain { name, rows } => retain::apply_in(checker, source, name, *rows),
             Self::Publish { name, producer } => {
                 rewrites::publish_in(checker, source, name, producer)
             }
@@ -183,6 +191,9 @@ fn decompose_in(
             prepared.program = target;
             prepared.trace.push(advice);
         }
+    }
+    for advice in retain::advise(&prepared.program, machine) {
+        push(checker, &mut prepared, advice)?;
     }
     let program = &prepared.program;
     let prefix_trace = prepared.trace.clone();

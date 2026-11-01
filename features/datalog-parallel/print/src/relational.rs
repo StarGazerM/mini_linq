@@ -52,6 +52,20 @@ pub(super) fn step_loop(
     let admits: Vec<_> = (0..stratum.members.len())
         .map(|m| format_ident!("__cq_rel_admit_{m}", span = Span::mixed_site()))
         .collect();
+    // DL-AdmitOnce: in-plan producers' candidates wait in their own buffer and
+    // are admitted without the committed probe.
+    let covered: Vec<_> = stratum
+        .members
+        .iter()
+        .enumerate()
+        .map(|(m, &member)| {
+            stratum
+                .steps
+                .iter()
+                .any(|rule| rule.head == member && rule.known == round::Admission::InPlan)
+                .then(|| format_ident!("__cq_rel_covered_{m}", span = Span::mixed_site()))
+        })
+        .collect();
     let local: BTreeMap<_, _> = stratum
         .members
         .iter()
@@ -89,16 +103,20 @@ pub(super) fn step_loop(
         let admit = &admits[m];
         let hosts = &hosts[m];
         let relation = &context.relations[member];
-        let types = relation.declaration.columns.iter().map(|column| &column.ty);
+        let types: Vec<_> = relation.declaration.columns.iter().map(|column| &column.ty).collect();
         let hasher = format_ident!("__cq_rel_hasher_{member}", span = Span::mixed_site());
         let state = super::task_hasher(&context.layouts[relation.providers.canonical]);
         let hasher = program.certificate.self_dedup.is_some().then(|| {
             quote!(let #hasher = <#state as ::core::default::Default>::default();)
         });
+        let covered = covered[m].as_ref().map(|covered| {
+            quote!(let #covered = ::std::sync::Mutex::new(::std::vec::Vec::<::std::vec::Vec<(#(#types,)*)>>::new());)
+        });
         quote!(
             #hasher
             let #lock = ::std::sync::RwLock::new((#(&mut #hosts,)*));
             let #admit = ::std::sync::Mutex::new(::std::vec::Vec::<::std::vec::Vec<(#(#types,)*)>>::new());
+            #covered
         )
     });
     let mut hole_reads = Vec::new();
@@ -140,7 +158,10 @@ pub(super) fn step_loop(
             }
         }
         let head = local[&rule.head];
-        let admit = &admits[head];
+        let admit = match rule.known {
+            round::Admission::InPlan => covered[head].as_ref().expect("in-plan member buffer"),
+            round::Admission::Admit => &admits[head],
+        };
         let (evaluation, candidates) = super::evaluate(
             std::slice::from_ref(rule),
             context,
@@ -181,10 +202,14 @@ pub(super) fn step_loop(
                 .position(|host| *host == canonical.host)
                 .expect("canonical layout is published by its member"),
         );
+        let take = |buffer: &Ident| quote!(::core::mem::take(&mut *#buffer.lock().unwrap()));
+        let checked = take(admit);
+        let covered = covered[m].as_ref().map(take);
         let admission = super::admit_chunks(
             context,
             member,
-            &quote!(::core::mem::take(&mut *#admit.lock().unwrap())),
+            Some(&checked),
+            covered.as_ref(),
             &quote!(&*__cq_rel_write.#field),
             &quote!((&mut __cq_rel_new)),
             threshold,

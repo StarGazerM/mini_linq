@@ -130,7 +130,52 @@ equality-class map and $s_i=|\kappa(O_i)\cap\kappa(B)|$:
  \mathsf{WF}_{VO}(t)\quad
  (L\ne\varnothing\Rightarrow\mathsf{CK\text{-}Le}(n,t,L))}
  {\mathsf{orderAdvice}(q,A)=t}
+
+\Rule{O-EvidenceLe}{n=N(q)\quad \mathcal{E}\text{ recorded counts and keys}\quad
+ \forall i\in\mathsf{occ}(n).\ \mathsf{count}_{\mathcal{E}}(i)\text{ defined}\\
+ F=\{r\mid \mathsf{functional}_{\mathcal{E}}(n,r)\wedge\mathsf{dom}_{\mathcal{E}}(n,r)\}\ne\varnothing\quad
+ r=\arg\max_{r\in F}(\mathsf{count}_{\mathcal{E}}(r),-r)\\
+ t=\mathsf{orderAdvice}(n,\mathsf{keyedReads}_{\mathcal{E}}(n,r))}
+ {\mathsf{order}^{\mathcal{E}}(q)=t[\mathit{evidence}:=\mathcal{E}]}
+
+\Rule{CK-EvidenceLe}{t.\mathit{evidence}=\mathcal{E}\quad \mathsf{WF}_{VO}(t)\quad
+ F=\{r\mid \mathsf{functional}_{\mathcal{E}}(n,r)\wedge\mathsf{dom}_{\mathcal{E}}(n,r)\}\ne\varnothing\\
+ \mathsf{first}(t)\in F\quad
+ \mathsf{count}_{\mathcal{E}}(\mathsf{first}(t))=\max_{r\in F}\mathsf{count}_{\mathcal{E}}(r)\\
+ \forall i\ne\mathsf{first}(t).\ \mathsf{keyBound}_{\mathcal{E}}(i,\mathsf{boundBefore}(\mathsf{firstRead}(i)))\\
+ L=\{i\mid\mathsf{firstRead}(i)\text{ introduces nothing}\}\quad
+ \forall i\in L.\ f_i<3\quad \mathsf{CK\text{-}Le}(n,t,L)}
+ {\mathsf{check}^{\mathcal{E}}(n,t)\Downarrow\ok}
+
+\Rule{O-KnownAt}{\neg R(\bar x)\text{ at top-level clause }i\quad
+ t'=t\text{ with }\neg R(\bar x)\text{ moved after the }k\text{-th positive read}\\
+ \mathsf{WF}_{VO}(t')}
+ {\mathsf{known}(R@i\ \mathsf{at}\ k)(t)=t'}
 \end{mathpar}
+A read of occurrence $i$ is \emph{keyed} under bound variables $B$
+($\mathsf{keyBound}_{\mathcal{E}}(i,B)$) when every column of some recorded key
+of its relation is a literal or a variable in $B$: it matches at most one row.
+$\mathsf{functional}_{\mathcal{E}}(n,r)$ holds when, starting from $r$ and
+closing over ready Rust bindings, every other top-level occurrence can follow as
+a keyed read. With $w$ the written root (the first top-level occurrence ready
+with nothing bound), $\mathsf{dom}_{\mathcal{E}}(n,r)$ holds when $r\ne w$,
+$\mathsf{count}_{\mathcal{E}}(r)\ge\mathsf{count}_{\mathcal{E}}(w)$, $f_r\ge f_w$, and
+no occurrence $j\notin\{r,w\}$ with $f_j\le f_w$ shares a variable with $r$: reduction
+semi-joins $r$ by its filtered neighbours, so such a neighbour filters $r$ at least as strongly as $w$ by a
+predicate $w$ lacks. A dominating root never trades a larger filtered input for a
+smaller one under any selectivity monotone in filter rank. $\mathsf{keyedReads}$ then repeatedly expands the ready keyed
+occurrence of least $(f_i,i)$ and, before it, looks up every other ready keyed
+occurrence with $f_i<3$ (a non-introducing read of its bound columns). This is
+RPT's LargestRoot restricted to key-functional trees: expansions never fan out,
+filters reject before payload is read. Without a count for every occurrence,
+with top-level blocks, or without a dominating functional root, $\mathsf{order}^{\mathcal{E}}$
+is $O_{Prefix(Connected),Coarse}$ and CK-EvidenceLe reduces to CK-Order; when the
+keyed order equals that order without lookups, the default plan is kept.
+Evidence chooses only: every result is a plan WF-VO and CK-Le accept on their own,
+so a false count or key changes speed, never answers. O-KnownAt pins the
+admission anti-join of ADM-InPlan when advice asks for a later level than the
+ready placement; it is applied before Masks and re-checked after reduction.
+
 In $\mathsf{authorSteps}$ unadvised filters (constraints, negations,
 guards) are placed as soon as ready; an unadvised Rust binding waits until the
 next advised step reads one of its bindings, or the end. Pure totality makes any
@@ -856,11 +901,14 @@ and restrictions induce a positional map $\rho$ from those source clauses
 to $N(q)$. Apply $\rho$ to qualified order, reduction and skip selectors before
 passing them to the normal-IR ordering API; unqualified selectors are unchanged.
 \begin{mathpar}
-\Rule{Plan-Prefix}{p=\rho(\mathsf{parsePlanOptions}(args))\quad n=N(q)\\
- v={\begin{cases}O_{explicit(p.order),Coarse}(n)&p.order\text{ present}\\
+\Rule{Plan-Prefix}{p=\rho(\mathsf{parsePlanOptions}(args))\quad n=N(q)\quad
+ \neg(p.order\land p.evidence)\\
+ v_0={\begin{cases}O_{explicit(p.order),Coarse}(n)&p.order\text{ present}\\
+ \mathsf{order}^{p.evidence}(n)\ \text{checked by CK-EvidenceLe}&p.evidence\text{ present}\\
  O_{Prefix(Connected),Coarse}(n)&\text{otherwise}\end{cases}}\\
+ v=\mathsf{known}(p.known)(v_0)\quad
  r=\text{None if }p.no\_reduce,\text{ otherwise Masks}\\
- w=\mathsf{advise}(R_{None,r}(v),p)\quad a=E(w)}
+ w=\mathsf{advise}(R_{None,r}(v),p)\quad \mathsf{known}(p.known)\text{ re-checked on }w\quad a=E(w)}
  {\code{compile_prefix}(q,p)=\code{mini_linq::passes::plan}(q,args)=a}
 
 \Rule{R-Advice}{\mathsf{skip}(T,S)\Rightarrow\mathsf{red}(T,S)\in w\quad
@@ -886,12 +934,13 @@ passing them to the normal-IR ordering API; unqualified selectors are unchanged.
 \Rule{CK-Transfer}{\mathsf{erase}(t)=v\quad t=\mathsf{transfer}(R_{None,Masks}(v))}
  {\mathsf{check}^{Transfer}(q,t)\Downarrow\ok}
 
-\Rule{Plan-Le}{n=N(q)\quad v=O_{Written,Coarse}(n)\quad w=R_{None,Masks}(v)\\
+\Rule{Plan-Le}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
  \text{for each inner occurrence }R\text{ in GYO ear order:}\\
  \mathsf{lookup}(R)=R(\bar b,\_)\ \text{at the first point its bound key }\bar b\text{ is available}\\
  \mathsf{expand}(R)=R(\bar b,\bar y)\ \text{at the latest point before }
- \mathsf{firstUse}(\bar y)\lor\text{scope exit}}
- {\code{cq_planners::order(le)}(q)=E(\mathsf{le}(w))}
+ \mathsf{firstUse}(\bar y)\lor\text{scope exit}\\
+ \mathsf{CK\text{-}Le}(n,\mathsf{le}(v),L)\quad w=R_{None,Masks}(\mathsf{le}(v))}
+ {\code{cq_planners::order(le)}(q)=\mathsf{simplify}(E(w))}
 
 \Rule{CK-Le}{\mathsf{erase}(t)=n\quad
  \forall R\in L.\ \mathsf{lookup}(R)<\mathsf{expand}(R)\ \text{exactly once each}\\
@@ -946,9 +995,10 @@ than reimplemented by the facade. For Plan-Le, $L$ is every inner occurrence
 in each scope, the outer has one full read with written ownership, and the
 caller additionally checks Masks reductions. For step advice, $L$ is only the
 explicit lookup occurrences at the top level; unselected Fine/coarse reads and
-unchanged nested scopes retain WF-VO obligations. CK-Le then requires the
-written outer stream whenever $L$ is nonempty. The phase check runs before
-optional reduction advice.
+unchanged nested scopes retain WF-VO obligations, and the advised outer stream
+is the schedule's first read (not necessarily the written one). The phase check
+runs before Masks and before optional reduction advice; checked expansion
+simplification follows elaboration.
 
 \code{plan} is left-deep in written order and defaults to checked Masks
 reduction: every scope, acyclic or cyclic, reduces its inner clauses along the

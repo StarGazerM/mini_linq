@@ -289,6 +289,10 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     for hole in &program.holes {
         ensure(hole.interface == HoleInterface::Batch, hole, "GPU Datalog requires batch holes")?;
     }
+    for rule in program.context.strata.iter().flat_map(|stratum| stratum.seeds.iter().chain(&stratum.steps)) {
+        ensure(rule.known == round::Admission::Admit, rule,
+            "GPU Datalog admission is at admit only (ADM-InPlan GPU follow-up)")?;
+    }
     ensure(program.schedule.strata.iter().all(|stratum| stratum.policy.is_empty()), &program.schedule,
         "GPU Datalog runs each hole as one device invocation; hole grain and inline advice are unsupported")?;
     let context = &program.context;

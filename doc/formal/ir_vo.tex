@@ -3,7 +3,8 @@
 
 \paragraph{Grammar.} VO extends a complete CQ$_{\rm NF}$ program with a schedule.
 \begin{lstlisting}
-VO   ::= CQProgram valuation [branches { JoinBranch* }] { Step* }
+VO   ::= CQProgram valuation [Evidence] [branches { JoinBranch* }] { Step* }
+Evidence ::= evidence from "provenance" { (count R = n; | key R [col, ...];)* }
 JoinBranch ::= branch [clause, ...] (interface, ...);
 Step ::= R@path(x, _, ...); | !R(Arg, ...); | x = y; | where Constraint;
        | if Expr; | let Pat [: Type] = Expr;
@@ -62,8 +63,15 @@ only other members, so a branch cannot depend on its future fact-side probe.
  \mathsf{ReductionOperands}(t)\cap\mathsf{CorrelatedBlocks}(t)=\emptyset}
  {\mathsf{BlockPlacement}(b,B,t)\Downarrow\ok}
 
+\Rule{WF-Evidence}{\mathcal{E}.provenance\ne\epsilon\quad
+ \forall f\in\mathcal{E}.\ \mathsf{relation}(f)\in\mathsf{inputs}(t.cq)\\
+ \le 1\ \mathsf{count}\text{ per relation}\quad
+ \text{keys nonempty, distinct, of declared columns}}
+ {\mathsf{Evidence}(t.cq,\mathcal{E})\Downarrow\ok}
+
 \Rule{WF-VO}{\mathsf{WF}_{NF}(t.cq)\quad\mathsf{Schedule}(t,A)\quad
- \mathsf{JoinBranches}(t.cq,t.branches)\Downarrow\ok}
+ \mathsf{JoinBranches}(t.cq,t.branches)\Downarrow\ok\\
+ t.evidence\text{ present}\Rightarrow\mathsf{Evidence}(t.cq,t.evidence)\Downarrow\ok}
  {\mathsf{WF}_{VO}(t)\Downarrow A}
 \end{mathpar}
 
@@ -82,7 +90,9 @@ subatom per atom; Fine: at most one new variable per subatom), semijoin
 reductions, independent exact-join branches, and block placement (hoisted
 derived relation or per-row arms). An independent branch is materialized once
 as the exact join of its member occurrences, projected to the recorded heading.
-It assumes neither uniqueness nor foreign-key coverage.
+It assumes neither uniqueness nor foreign-key coverage. Recorded evidence (row
+counts and asserted keys with their provenance) is the input of the evidence
+ordering O-EvidenceLe; it never changes the meaning of a schedule.
 
 \paragraph{Rewrite check.} Unchanged CQ; the non-reduction step erasures are equal
 recursively; existing reductions are kept and added reductions satisfy the

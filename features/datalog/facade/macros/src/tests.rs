@@ -124,6 +124,39 @@ fn incremental_driver_advice_is_explicit_and_composes_with_invariants() {
 }
 
 #[test]
+fn known_advice_parses_known_only_and_rejects_conflicts() {
+    use cq_datalog_incremental::Known;
+    use syn::parse::Parser;
+    let planned = incremental_arguments
+        .parse2(quote!(
+            plan(Cast, known(admit));
+            plan(Step, delta(T@2), order(T@2, R), known(at(level 2)));
+            plan(Join, order(R, S), smallest(R, S), known(at(level 1)));
+        ))
+        .unwrap();
+    assert!(planned.plans[0].order.is_empty());
+    assert_eq!(planned.plans[0].known, Some(Known::Admit));
+    assert_eq!(planned.plans[1].known, Some(Known::At(2)));
+    assert_eq!(planned.plans[2].known, Some(Known::At(1)));
+    assert_eq!(planned.plans[2].smallest.len(), 1);
+    for (invalid, message) in [
+        (quote!(plan(Cast, known(admit), known(admit));), "duplicate or conflicting known"),
+        (quote!(plan(Cast, known(admit), known(at(level 1)));), "duplicate or conflicting known"),
+        (quote!(plan(Cast, known(at(level 0)));), "counts positive reads from 1"),
+        (quote!(plan(Cast, known(at(2)));), "expected `level`"),
+        (quote!(plan(Cast, known(somewhere));), "expected `at`"),
+        (quote!(plan(Cast, smallest(R, S), known(admit));), "requires order"),
+        (quote!(plan(Cast,);), "needs order(...) or known(...)"),
+    ] {
+        let error = match incremental_arguments.parse2(invalid.clone()) {
+            Ok(_) => panic!("accepted {invalid}"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains(message), "{invalid}: {error}");
+    }
+}
+
+#[test]
 fn invariant_arguments_reach_the_incremental_pass() {
     use syn::parse::Parser;
     assert!(!invariant_arguments.parse2(quote!()).unwrap());

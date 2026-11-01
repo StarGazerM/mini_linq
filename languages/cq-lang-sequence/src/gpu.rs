@@ -12,6 +12,9 @@ pub struct Machine {
     pub block_threads: u32,
     /// Initial row capacity of a `reserve` output without a declared capacity.
     pub reserve_rows: usize,
+    /// GR-RetainPrefix: evidence-bounded rows a stored prefix must reach to
+    /// replace a stream root smaller than one root tile as the distributed root.
+    pub retain_prefix_rows: usize,
     /// Catalog identity predicate, never a type-name suffix test.
     pub contiguous_range: fn(&syn::Type) -> bool,
     /// Target refinement records concrete provider/storage bindings upstream.

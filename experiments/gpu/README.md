@@ -186,6 +186,34 @@ For timing, omit `CQ_EXPANSION_COUNTERS`, set `GPU_DATALOG_PHASES=1`, and use th
 Counter builds are separate; relation counts must match all 40 reference
 relations on every run (the factored program also exposes three helper outputs).
 
+#### P3.3 evidence ordering and grading (2026-10-31)
+
+The automatic TPC-H route records manifest counts and TPC-H primary keys in
+the VO (O-EvidenceLe); a key-functional root replaces the written root only
+when it dominates it (count ≥, filter rank ≥, no neighbour other than the
+written root filtered as strongly). Grading retains a prefix of a sub-tile
+root up to 65,536 rows and segments later fan-out (GR-RetainPrefix,
+GR-SegmentFanout). Against `c1b75718`, generated GPU code changes only for
+H04 automatic (SF1, SF10) and H02/H11 advised at SF10; d85 is identical.
+Same protocol as below (5 AB/BA pairs, 1 warmup + 5 samples, bootstrap
+20,000 resamples, seed 3303), all answers exact; H05 step R uses the
+preserved step-R order as advice.
+
+| Target | `c1b75718` median ms | Current median ms | Current/base [95% CI] |
+|---|---:|---:|---:|
+| H04 SF1 automatic | 0.990 | 0.647 | 0.661 [0.652, 0.676] |
+| H04 SF10 automatic | 11.677 | 5.810 | 0.500 [0.497, 0.503] |
+| d85 SF1 automatic (identical code) | 1.487 | 1.492 | 1.007 [0.996, 1.022] |
+| H02 SF10 advised | 138.259 | 102.115 | 0.733 [0.720, 0.745] |
+| H11 SF10 advised | 12.915 | 5.433 | 0.422 [0.417, 0.427] |
+| H05 SF1 step-R order | 10.097 | 1.216 | 0.121 [0.119, 0.124] |
+| H05 SF10 step-R order | 124.742 | 8.658 | 0.070 [0.069, 0.070] |
+
+Before the neighbour clause, an unfiltered Lineitem root (reduced by
+date-filtered Orders in the baseline) displaced the filtered PartSupp written
+root in d85: 1.363 [1.358, 1.367]. Raw pairs and page faults:
+[`compare/p33-evidence.results.json.gz`](compare/p33-evidence.results.json.gz).
+
 #### P3.3-lite removal acceptance (2026-10-30)
 
 Automatic GPU routes now decompose the planner's recorded order; Sequence

@@ -158,6 +158,7 @@ pub fn machine() -> Machine {
         gpu: Some(cq_lang_sequence::gpu::Machine {
             block_threads: BLOCK_THREADS,
             reserve_rows: 256,
+            retain_prefix_rows: 65536,
             bindings: bindings::select,
             realize: realize::select,
             contiguous_range: |ty| native_abi(ty) == Some(NativeAbi::Range),

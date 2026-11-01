@@ -101,8 +101,10 @@ struct IncrementalArguments {
     plans: Vec<cq_datalog_incremental::RulePlan>,
 }
 
-/// `plan(Label, delta(Relation@clause), order(Relation, Relation@clause, ...))`:
-/// the CQ `plan(order(...))` selectors for one labelled rule version.
+/// `plan(Label, [delta(Relation@clause),] [order(Relation, Relation@clause, ...),]
+/// [smallest(..), ...] [known(admit) | known(at(level k))])`: the CQ
+/// `plan(order(...))` selectors and ADM-InPlan placement for one labelled rule
+/// version. `order` may be omitted when `known` is given; `smallest` needs it.
 fn rule_plan(input: ParseStream<'_>) -> syn::Result<cq_datalog_incremental::RulePlan> {
     let rule = input.parse()?;
     input.parse::<Token![,]>()?;
@@ -119,39 +121,71 @@ fn rule_plan(input: ParseStream<'_>) -> syn::Result<cq_datalog_incremental::Rule
     } else {
         None
     };
-    input.parse::<kw::order>()?;
-    let selectors;
-    syn::parenthesized!(selectors in input);
-    let order = selectors
-        .parse_terminated(cq_datalog_incremental::OrderAtom::parse, Token![,])?
-        .into_iter()
-        .collect::<Vec<_>>();
-    if order.is_empty() {
-        return Err(input.error("plan order(...) names no atom"));
-    }
-    let mut smallest = Vec::new();
-    while !input.is_empty() {
-        input.parse::<Token![,]>()?;
-        let name: syn::Ident = input.parse()?;
-        if name != "smallest" {
-            return Err(syn::Error::new_spanned(
-                name,
-                "expected smallest(Relation@clause, ...)",
-            ));
+    let order = if input.peek(kw::order) {
+        input.parse::<kw::order>()?;
+        let selectors;
+        syn::parenthesized!(selectors in input);
+        let order = selectors
+            .parse_terminated(cq_datalog_incremental::OrderAtom::parse, Token![,])?
+            .into_iter()
+            .collect::<Vec<_>>();
+        if order.is_empty() {
+            return Err(input.error("plan order(...) names no atom"));
         }
+        if !input.is_empty() {
+            input.parse::<Token![,]>()?;
+        }
+        order
+    } else {
+        Vec::new()
+    };
+    let mut smallest = Vec::new();
+    let mut known = None;
+    while !input.is_empty() {
+        let name: syn::Ident = input.parse()?;
         let site;
         syn::parenthesized!(site in input);
-        smallest.push(
-            site.parse_terminated(cq_datalog_incremental::OrderAtom::parse, Token![,])?
-                .into_iter()
-                .collect(),
-        );
+        if name == "smallest" && !order.is_empty() {
+            smallest.push(
+                site.parse_terminated(cq_datalog_incremental::OrderAtom::parse, Token![,])?
+                    .into_iter()
+                    .collect(),
+            );
+        } else if name == "known" {
+            if known.is_some() {
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "duplicate or conflicting known(...) advice for one rule version",
+                ));
+            }
+            known = Some(site.parse::<cq_datalog_incremental::Known>()?);
+            if !site.is_empty() {
+                return Err(site.error("expected known(admit) or known(at(level k))"));
+            }
+        } else if name == "smallest" {
+            return Err(syn::Error::new_spanned(
+                name,
+                "smallest(...) requires order(...) advice",
+            ));
+        } else {
+            return Err(syn::Error::new_spanned(
+                name,
+                "expected order(..), smallest(Relation@clause, ...) or known(admit | at(level k))",
+            ));
+        }
+        if !input.is_empty() {
+            input.parse::<Token![,]>()?;
+        }
+    }
+    if order.is_empty() && known.is_none() {
+        return Err(input.error("plan advice needs order(...) or known(...)"));
     }
     Ok(cq_datalog_incremental::RulePlan {
         rule,
         delta,
         order,
         smallest,
+        known,
     })
 }
 

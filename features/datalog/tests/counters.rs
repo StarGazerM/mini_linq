@@ -344,3 +344,54 @@ fn authored_rule_order_is_the_hole_plan() {
         "authored cross-product order {written_work} vs planned {planned_work}"
     );
 }
+
+#[test]
+fn in_plan_admission_prunes_known_heads_before_the_trailing_expansion() {
+    // `y` binds at Edge (level 2); Fan(y, _) is a trailing expansion. Advised
+    // in plan at level 2, a known `y` is rejected by the committed anti-join
+    // before Fan is read; by default (admit) every candidate reaches Fan and
+    // is rejected at admission.
+    let n = 400_i32;
+    let edges: Vec<(i32, i32)> = (0..n)
+        .flat_map(|x| [1, 2, 3].map(|d| (x, (x + d) % n)))
+        .collect();
+    let fan: Vec<(i32, i32)> = (0..n).flat_map(|y| (0..64).map(move |z| (y, z))).collect();
+    let seed = [(0_i32,)];
+    macro_rules! program {
+        ($($pipeline:tt)*) => {
+            cq_datalog::datalog! {
+                $($pipeline)*
+                struct Pruned;
+                relation Edge(x: i32, y: i32) = (edges);
+                relation Fan(y: i32, z: i32) = (fan);
+                relation Seed(x: i32) = (seed);
+                relation Reach(x: i32);
+                output Reach;
+                Reach(*x) :- Seed(x);
+                Step: Reach(*y) :- Reach(x), Edge(x, y), Fan(y, z);
+            }
+            .collect::<std::collections::BTreeSet<_>>()
+        };
+    }
+    cq_storage::counters::reset();
+    let in_plan = program!(pipeline {
+        incremental = cq_datalog::passes::incremental(plan(Step, order(Reach, Edge, Fan), known(at(level 2))););
+    });
+    let in_plan_cost = cq_storage::counters::snapshot();
+    cq_storage::counters::reset();
+    let admit = program!();
+    let admit_cost = cq_storage::counters::snapshot();
+    assert_eq!(in_plan, admit);
+    assert_eq!(in_plan, (0..n).map(|x| (x,)).collect());
+    let work = |cost: cq_storage::counters::Snapshot| {
+        cost.rows_tested + cost.rows_enumerated + cost.cursor_steps + cost.lookups
+    };
+    let (in_plan_work, admit_work) = (work(in_plan_cost), work(admit_cost));
+    println!("in_plan {in_plan_work} admit {admit_work}");
+    // Of the 3n Edge candidates only n - 1 are new; each known one skips its
+    // 64-row Fan expansion (measured: about 801 * 64 rows saved).
+    assert!(
+        admit_work - in_plan_work > 64 * n as u64,
+        "in-plan admission {in_plan_work} vs admission-time {admit_work}"
+    );
+}

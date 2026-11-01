@@ -7,6 +7,44 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Evidence-driven Lookup/Expand ordering and grading (P3.3 slices A, B).
+  The VO records `valuation evidence from "<source>" { count R = n; key R
+  [cols]; }`; `PlanOptions` gains `evidence …` (exclusive with `order`) and
+  `known(R@i at k)` (O-KnownAt, applied before Masks, re-checked after; the
+  pinned read follows the bindings and filters directly after the k-th read,
+  so it sees `let`-named computed head terms).
+  O-EvidenceLe streams the largest-count key-functional root that dominates
+  the written root (count ≥, filter rank ≥, no neighbour other than the
+  written root filtered as strongly), expands keyed reads by filter rank and
+  looks up other ready filtered keyed reads first; CK-EvidenceLe checks the
+  recorded choice against the recorded evidence. Grading bounds prefixes from
+  recorded counts and keys: a GPU root below one tile retains the first prefix
+  reaching `retain_prefix_rows` (65,536) and tiles over it (GR-RetainPrefix);
+  later keyless expansions are segmented (GR-SegmentFanout); `retain(name,
+  rows)` advice is re-checked. Only the GPU TPC-H automatic route records CQ
+  evidence. Paired GPU vs `c1b75718`: H04 automatic SF1 0.661, SF10 0.500;
+  H02/H11 SF10 advised 0.733/0.422; H05 step-R order SF1 0.121, SF10 0.070;
+  d85 identical code.
+
+- ADM-InPlan for CPU Datalog (P3.3 slice C). Fork records `RuleHole.known =
+  admit | in_plan` (FK-Known). Advice `plan(L, known(at(level k)))` puts a
+  hole in plan: it binds computed head terms with `let` and appends `!C(x̄)`
+  over the head's committed canonical layout after the k-th positive read
+  (CQ `known(C@i at k)`, O-KnownAt), so later fan-out reads expand only
+  unknown heads. Without advice (or with `known(admit)`) holes stay `admit`:
+  the structural default "head binds before the last read" measured DOOP
+  xalan `mini` 2.36x [2.30, 2.42] and batik `mini-par` 2.95x [2.84, 3.06]
+  slower than `c1b75718` (early anti-joins probe every intermediate row where
+  later reads only filter), and CPU Datalog records no fan-out evidence.
+  With the advice-only default, paired CPU DOOP vs `c1b75718`: xalan `mini`
+  0.950 [0.911, 0.976], batik `mini-par` 1.024 [0.980, 1.075].
+  `order(..)` is optional with `known`. Fork correspondence erases exactly
+  that suffix; Round checks DL-AdmitOnce and records the committed head read
+  in the schedule. The serial printer omits the committed probe for in-plan
+  holes; the parallel printer admits covered and checked candidates as two
+  batches (`ShardedLayout::admit_batches`, runs skip subtraction). GPU Datalog
+  records `admit` and rejects in-plan advice (follow-up). Admit holes print
+  unchanged code.
 - P4-GPU slice A (runtime only): `gpu_datalog_runtime::RadixLayout<K, V, W,
   O, C>`, the typed relational view over one immutable `DeviceRadixRun`
   publication (GPU-RadixLayout). The key packing is checked against `K` and

@@ -1,6 +1,8 @@
 //! Record the exact Boolean semi-naive cover without storage decisions.
 use cq_datalog_support::{Fresh, ensure};
 use cq_lang_datalog_incremental::{AdviceStep, Delta, Program, Variant, contract};
+/// ADM-InPlan advice carried by [`RulePlan::known`].
+pub use cq_lang_datalog_incremental::Known;
 use cq_lang_datalog_strata as strata;
 /// CQ `plan(order(...))` atom selectors, shared by rule plan advice.
 pub use cq_order::OrderAtom;
@@ -15,7 +17,8 @@ pub enum DriverPolicy {
     /// Lead with delta, then prefer connected reads in the first positive prefix.
     DeltaFirst,
 }
-/// Authored CQ step order and Physical sites for a labelled rule or one version.
+/// Authored CQ step order, Physical sites and admission placement for a
+/// labelled rule or one version.
 ///
 /// The selectors and ordering meaning are CQ `plan(order(...))` advice:
 /// `Relation` or `Relation@clause` names a positive atom by its source-body
@@ -23,6 +26,7 @@ pub enum DriverPolicy {
 /// written priority after them. `delta` selects the semi-naive version whose
 /// changing occurrence is that atom; without it the advice targets every
 /// version of the rule. A version-specific plan overrides a rule-wide plan.
+/// An empty `order` (known-only advice) keeps the driver-policy order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RulePlan {
     pub rule: syn::Ident,
@@ -30,6 +34,8 @@ pub struct RulePlan {
     pub order: Vec<OrderAtom>,
     /// Exact occurrence sets; each must name an admissible intersection after CQ lowering.
     pub smallest: Vec<Vec<OrderAtom>>,
+    /// `known(admit)` or `known(at(level k))` (ADM-InPlan advice).
+    pub known: Option<Known>,
 }
 pub fn compile(source: &strata::Program) -> syn::Result<Program> {
     compile_with_driver(source, DriverPolicy::WrittenOrder)
@@ -71,9 +77,10 @@ pub fn compile_with_advice(
         let positions = &analysis.changing_positions[rule];
         let identity: Vec<_> = (0..query.body.len()).collect();
         if positions.is_empty() {
-            let authored = plans.get(&(rule, None));
+            let plan = plans.get(&(rule, None));
+            let authored = plan.filter(|plan| plan.order.is_some());
             let order = authored
-                .map(|plan| plan.order.clone())
+                .and_then(|plan| plan.order.clone())
                 .unwrap_or_else(|| identity.clone());
             variants.push(Variant {
                 rule,
@@ -82,6 +89,7 @@ pub fn compile_with_advice(
                 authored: authored.is_some(),
                 steps: authored.map_or_else(Vec::new, |plan| plan.steps.clone()),
                 smallest: authored.map_or_else(Vec::new, |plan| plan.smallest.clone()),
+                known: plan.and_then(|plan| plan.known),
                 order,
             });
         }
@@ -91,11 +99,12 @@ pub fn compile_with_advice(
                 unreachable!("checked changing position")
             };
             atom.relation = names[&symbol_name(&atom.relation)].clone();
-            let authored = plans
+            let plan = plans
                 .get(&(rule, Some(position)))
                 .or_else(|| plans.get(&(rule, None)));
-            let order = match authored {
-                Some(plan) => plan.order.clone(),
+            let authored = plan.filter(|plan| plan.order.is_some());
+            let order = match authored.and_then(|plan| plan.order.clone()) {
+                Some(order) => order,
                 None => match driver_policy {
                     DriverPolicy::WrittenOrder => identity.clone(),
                     DriverPolicy::DeltaFirst => delta_first_order(&query, position),
@@ -109,6 +118,7 @@ pub fn compile_with_advice(
                 authored: authored.is_some(),
                 steps: authored.map_or_else(Vec::new, |plan| plan.steps.clone()),
                 smallest: authored.map_or_else(Vec::new, |plan| plan.smallest.clone()),
+                known: plan.and_then(|plan| plan.known),
                 query,
             });
         }
@@ -156,9 +166,11 @@ fn positive_prefix(query: &Query) -> std::ops::Range<usize> {
 }
 
 struct ResolvedPlan {
-    order: Vec<usize>,
+    /// `None` for known-only advice: the version keeps its driver order.
+    order: Option<Vec<usize>>,
     steps: Vec<AdviceStep>,
     smallest: Vec<Vec<usize>>,
+    known: Option<Known>,
 }
 
 /// Resolve advice to source-occurrence certificates keyed by `(rule, delta
@@ -206,6 +218,16 @@ fn resolve_plans(
             }
             None => None,
         };
+        ensure(
+            !plan.order.is_empty() || plan.known.is_some(),
+            &plan.rule,
+            "plan advice needs order(...) or known(...)",
+        )?;
+        ensure(
+            !plan.order.is_empty() || plan.smallest.is_empty(),
+            &plan.rule,
+            "smallest(...) requires order(...) advice",
+        )?;
         let prefix = positive_prefix(query);
         let mut order = Vec::with_capacity(query.body.len());
         let explicit_steps = plan.order.iter().any(|selector| selector.columns.is_some());
@@ -277,9 +299,10 @@ fn resolve_plans(
                 .insert(
                     (rule, delta),
                     ResolvedPlan {
-                        order: complete,
+                        order: (!plan.order.is_empty()).then_some(complete),
                         steps,
                         smallest,
+                        known: plan.known,
                     },
                 )
                 .is_none(),

@@ -250,3 +250,34 @@ fn symbols_cross_only_host_boundaries_and_keep_logical_types() {
         );
     }
 }
+
+#[test]
+fn gpu_admission_is_recorded_at_admit_and_rejects_in_plan_advice() {
+    let fork = |known: proc_macro2::TokenStream| {
+        let host = cq_datalog_storage::compile(&syn::parse_quote! {
+            struct Flags;
+            relation Edge(x:i32,y:i32) = (edges);
+            relation Flag(x:i32);
+            output Flag;
+            // `x` binds before the last read: in_plan on the CPU route.
+            Flag(*x) :- Edge(x,y), Edge(y,x);
+            strata { component [Flag]; }
+            incremental { scheme seminaive_covering;
+                delta Flag = FlagChanges;
+                variant 0 seed #known { Flag(*x) :- Edge(x,y), Edge(y,x); }
+            }
+        })
+        .unwrap();
+        let device = storage::compile_with(&host, quote!()).unwrap();
+        cq_datalog_fork::compile(&device)
+    };
+    let round = fork(quote!()).unwrap();
+    let rule = &round.context.strata[0].seeds[0];
+    assert_eq!(rule.known, cq_lang_datalog_round::Admission::Admit);
+    let error = fork(quote!(known(at(level 1)))).unwrap_err().to_string();
+    assert!(error.contains("GPU Datalog admission is at admit only (ADM-InPlan GPU follow-up)"));
+    // A forged in-plan record is rejected (by DL-AdmitOnce before printing).
+    let mut forged = program();
+    forged.context.strata[0].steps[0].known = cq_lang_datalog_round::Admission::InPlan;
+    assert!(print::compile(&forged).is_err());
+}

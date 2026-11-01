@@ -492,6 +492,9 @@ pub(crate) fn check_storage_with_analysis(
                         *item = negation(&negative.atom, key);
                     }
                 }
+                if rule.known == Admission::InPlan {
+                    admission_suffix(&mut query, hole, context, rule.head, &mut add_name)?;
+                }
                 let mut expected_declarations = required_inputs(context, &stratum.keys, &query);
                 expected_declarations.extend(scan_declaration);
                 expected_declarations.push(output);
@@ -521,6 +524,86 @@ pub(crate) fn check_storage_with_analysis(
         source,
         "fork omitted a variant or contains an unused hole",
     )
+}
+
+/// The synthetic in-plan admission read `!C(x̄)`: the head relation's committed
+/// canonical layout over the complete head key, in canonical column order.
+pub fn admission_negation(context: &RoundContext, head: usize, args: &[Expr]) -> BodyItem {
+    let canonical = &context.layouts[context.relations[head].providers.canonical];
+    let name = &canonical.name;
+    let args = canonical.columns.iter().map(|&column| &args[column]);
+    syn::parse_quote!(!#name(#(#args),*))
+}
+
+/// Fork correspondence of an FK-Known record: an `in_plan` hole is its variant followed by exactly
+/// one synthetic suffix: optional `let h: T = e;` bindings naming computed head
+/// terms (`T` the declared head column type, `e` the variant's head term), then
+/// `!C(x̄)` over the head's committed canonical layout with the complete head
+/// key in canonical column order. Extend `query` by the checked suffix; exact
+/// equality with the recorded hole then rejects any other change.
+fn admission_suffix(
+    query: &mut cq::Query,
+    hole: &CqProgram,
+    context: &RoundContext,
+    head: usize,
+    add_name: &mut dyn FnMut(&Ident) -> syn::Result<()>,
+) -> syn::Result<()> {
+    let declaration = &context.relations[head].declaration;
+    let recorded: Vec<_> = hole.query.body.iter().collect();
+    let base = query.body.len();
+    ensure(
+        recorded.len() > base && hole.query.head.args.len() == query.head.args.len(),
+        hole,
+        "in-plan hole lacks its committed admission read",
+    )?;
+    let mut bound = BTreeSet::new();
+    for item in &recorded[base..recorded.len() - 1] {
+        let BodyItem::Let(binding) = item else {
+            return Err(syn::Error::new_spanned(
+                item,
+                "in-plan admission suffix admits only computed head bindings",
+            ));
+        };
+        let syn::Pat::Ident(pattern) = &binding.pattern else {
+            return Err(syn::Error::new_spanned(item, "head binding must name one variable"));
+        };
+        let position = hole
+            .query
+            .head
+            .args
+            .iter()
+            .position(|argument| rust::variable(argument) == Some(&pattern.ident));
+        let Some(position) = position.filter(|_| {
+            pattern.by_ref.is_none() && pattern.mutability.is_none() && pattern.subpat.is_none()
+        }) else {
+            return Err(syn::Error::new_spanned(
+                item,
+                "head binding must bind exactly one head variable",
+            ));
+        };
+        ensure(
+            rust::variable(&query.head.args[position]).is_none()
+                && bound.insert(position)
+                && binding.expression == query.head.args[position]
+                && binding
+                    .annotation
+                    .as_ref()
+                    .is_some_and(|annotation| annotation.ty == declaration.columns[position].ty),
+            item,
+            "head binding must carry its variant's computed head term at the declared column type",
+        )?;
+        add_name(&pattern.ident)?;
+        query.head.args[position] = hole.query.head.args[position].clone();
+        query.body.push((*item).clone());
+    }
+    let args: Vec<Expr> = query.head.args.iter().cloned().collect();
+    ensure(
+        args.iter().all(|argument| rust::variable(argument).is_some()),
+        hole,
+        "in-plan admission requires a complete head key of variables",
+    )?;
+    query.body.push(admission_negation(context, head, &args));
+    Ok(())
 }
 
 fn checked_hole<'a>(
