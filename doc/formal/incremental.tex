@@ -205,26 +205,49 @@ CPU Datalog realizes \textsc{ADM-InPlan} per rule hole. Fork records
 $\mathit{known}\in\{\mathsf{admit},\mathsf{in\_plan}\}$; an in-plan hole
 names computed head terms by ordinary bindings and appends $\neg C(\bar x)$
 over the head's committed canonical layout $C$, columns in canonical order.
-A hole is in plan only under advice \code{known(at(level k))}, which pins the
-read after the $k$-th positive read, at or after the level $\ell$ binding the
-last head variable and at most the last positive read $p$, transported as CQ
-\code{known(C@i at k)} (\textsc{O-KnownAt}); otherwise, including
-\code{known(admit)}, it is $\mathsf{admit}$. The early anti-join saves work
-only when later reads fan out and probes every intermediate row where they
-filter; CPU Datalog records no fan-out evidence, and the structural default
-$\ell<p$ measured DOOP xalan \code{mini} 2.36$\times$ and batik
-\code{mini-par} 2.95$\times$ slower, so in-plan is advice-only. Device
-storage records $\mathsf{admit}$ only.
+Advice \code{known(at(level k))} pins the read after the $k$-th positive
+read, at or after the level $\ell$ binding the last head variable and at most
+the last positive read $p$, transported as CQ \code{known(C@i at k)}
+(\textsc{O-KnownAt}); \code{known(admit)} pins admission. Without advice the
+decision follows the recorded fan-out of the variant's reads
+(\textsc{DL-Fanout}): a read \emph{multiplies} when it introduces a variable
+(a wildcard is an enumerated fresh witness) and binds no recorded key of its
+relation, and otherwise only \emph{filters} (a membership test, or at most one
+row). The early anti-join saves the expansion of known heads only when a later
+read multiplies, and probes every intermediate row where later reads filter
+(the unconditional default $\ell<p$ measured DOOP xalan \code{mini}
+2.36$\times$ and batik \code{mini-par} 2.95$\times$ slower), so an unadvised
+hole is in plan at $\max(\ell,1)$ iff some read after it is recorded
+$\mathsf{multiply}$ and its queue records a planning invocation; otherwise it
+is $\mathsf{admit}$. Keys come from source evidence
+\code{evidence from "provenance" \{ key R [c, ...]; \}}
+(\textsc{WF-DL-Evidence}: provenance, declared relation, distinct declared
+columns); evidence has no denotation, so a false key changes speed, never
+answers. Device storage records $\mathsf{admit}$ only.
 \begin{mathpar}
-\Rule{FK-Known}{\ell\le k\le p\ \text{(advice } \mathit{at}(k))}
+\Rule{DL-Fanout}{r_j=R(\bar t)\ \text{the }j\text{-th positive read of the variant}\quad
+ B_j\text{ bound before }r_j}
+ {\mathit{fanout}_j=\mathsf{multiply}\iff \mathit{vars}(\bar t)\not\subseteq B_j
+  \wedge \neg\exists K\in\mathit{keys}(R).\ \bar t|_K\subseteq B_j\cup\mathit{closed}}
+
+\Rule{WF-DL-Evidence}{\mathit{prov}\ne\epsilon\quad R\ \text{declared}\quad
+ K\subseteq\mathit{cols}(R)\ \text{distinct, nonempty}}
+ {\mathsf{key}\ R\ [K]\ \text{well formed}}
+
+\Rule{FK-Known}{\ell\le k\le p\ \text{(advice } \mathit{at}(k))\ \vee\
+ (\text{no advice},\ \mathit{plan}\ \text{recorded},\ k=\max(\ell,1),\
+ \exists j>k.\ \mathit{fanout}_j=\mathsf{multiply})}
  {\mathit{known}(h)=\mathsf{in\_plan}\quad Q_h' = Q_h,\ \mathit{lets},\ \neg C(\bar x)}
 
 \Rule{DL-AdmitOnce}{\mathit{known}(h)=\mathsf{in\_plan}\iff \neg C\in Q_h\ \text{exactly once, last}}
  {\textstyle N_t=\delta\big(\biguplus_{\mathsf{in\_plan}}Q_h \uplus
   \biguplus_{\mathsf{admit}}(Q_h\triangleright C)\big)\triangleright\emptyset}
 \end{mathpar}
-Fork correspondence erases exactly that suffix (complete head key, canonical
-committed layout, declared column types); Round checks \textsc{DL-AdmitOnce}
+Fork records $\mathit{fanout}$ per rule hole; correspondence checks the record
+against the variant's reads and recorded keys and the placement against the
+advice and that record, then erases exactly the suffix (complete head key,
+canonical committed layout, declared column types); Round checks
+\textsc{DL-AdmitOnce}
 and records the committed head read in the schedule before publication
 (\textsc{IX-Stable}). Printers consume the record: the serial printer omits
 the committed probe for in-plan holes; the parallel printer admits covered and

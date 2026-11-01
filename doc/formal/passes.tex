@@ -147,6 +147,10 @@ equality-class map and $s_i=|\kappa(O_i)\cap\kappa(B)|$:
  \forall i\in L.\ f_i<3\quad \mathsf{CK\text{-}Le}(n,t,L)}
  {\mathsf{check}^{\mathcal{E}}(n,t)\Downarrow\ok}
 
+\Rule{R-TpchEvidence}{\text{route}\in\{\mathsf{default},\mathsf{par}\}\quad
+ \mathcal{E}=\{\mathsf{count}\ R=n_{SF1}(T_R),\ \mathsf{key}\ R\ [\mathit{pk}(T_R)]\mid R\ \text{a base relation of }q\}\ne\varnothing}
+ {\mathsf{plan}(q)=\mathsf{order}^{\mathcal{E}}(q)}
+
 \Rule{O-KnownAt}{\neg R(\bar x)\text{ at top-level clause }i\quad
  t'=t\text{ with }\neg R(\bar x)\text{ moved after the }k\text{-th positive read}\\
  \mathsf{WF}_{VO}(t')}

@@ -530,6 +530,102 @@ fn tpch_benchmark_inventory_covers_retail_and_matches_full_query_coverage() {
     );
 }
 
+/// R-TpchEvidence premises (P3.3e). The `default`/`par` driver in
+/// `tpch_runtime.rs` records `count Name = n;` for canonical base relation
+/// names. Every kernel binds such a name to its dbgen table (`Lineitem` to
+/// `data.lineitem`, ...) and to nothing else, and the planner compares counts
+/// only, so the recorded SF1 counts must order the tables as every other
+/// scale does (SF 0.1 counts: DuckDB v1.5.5 `CALL dbgen(sf=0.1)`).
+#[test]
+fn tpch_evidence_names_bind_their_tables_and_count_order_is_scale_free() {
+    use cq_workloads::tpch;
+    use std::collections::BTreeMap;
+
+    let runtime =
+        fs::read_to_string(repository_root().join("workloads/src/tpch_runtime.rs")).unwrap();
+    let mut recorded = BTreeMap::new();
+    for fact in runtime.split("count ").skip(1) {
+        let Some((name, rest)) = fact.split_once(" = ") else {
+            continue;
+        };
+        let Some((rows, _)) = rest.split_once(';') else {
+            continue;
+        };
+        if let (true, Ok(rows)) = (
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric()),
+            rows.parse::<u64>(),
+        ) {
+            let previous = recorded.insert(name.to_owned(), rows);
+            assert!(previous.is_none_or(|previous| previous == rows), "{name} counts disagree");
+        }
+    }
+    let tables: BTreeMap<String, u64> = recorded
+        .iter()
+        .map(|(name, &rows)| (name.to_ascii_lowercase(), rows))
+        .collect();
+    assert_eq!(
+        tables.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"],
+    );
+    let sf01 = BTreeMap::from([
+        ("customer", 15_000u64),
+        ("lineitem", 600_572),
+        ("nation", 25),
+        ("orders", 150_000),
+        ("part", 20_000),
+        ("partsupp", 80_000),
+        ("region", 5),
+        ("supplier", 1_000),
+    ]);
+    fn order(mut counts: Vec<(&str, u64)>) -> Vec<&str> {
+        counts.sort_by_key(|&(table, rows)| (std::cmp::Reverse(rows), table));
+        counts.into_iter().map(|(table, _)| table).collect()
+    }
+    assert_eq!(
+        order(tables.iter().map(|(table, &rows)| (table.as_str(), rows)).collect()),
+        order(sf01.into_iter().collect()),
+        "recorded SF1 counts order the tables differently from SF 0.1",
+    );
+
+    for case in tpch::CASES {
+        let mut source = fs::read_to_string(repository_root().join(case.rust_path)).unwrap();
+        // Loader schemas (`relation_loaders!`, `interned_relation_loaders!`)
+        // declare dbgen tables, not query relations; the driver never reads them.
+        if let Some(start) = source.find("relation_loaders! {") {
+            let end = start + source[start..].find("\n}").expect("loader block closes");
+            source.replace_range(start..end, "");
+        }
+        for (name, _) in &recorded {
+            let table = name.to_ascii_lowercase();
+            let declared = source.contains(&format!("relation {name}("))
+                || source.contains(&format!("relation {name} =>"));
+            if !declared {
+                continue;
+            }
+            let mapped = source.contains(&format!("relation {name} => {table}("));
+            let bound = source.contains(&format!("let {name} = data.{table}.as_slice();"));
+            assert!(
+                mapped || bound,
+                "{}: {name} is declared but not bound to data.{table}",
+                case.name
+            );
+            for (index, _) in source.match_indices(&format!("let {name}")) {
+                let rest = &source[index + 4 + name.len()..];
+                if rest.starts_with([' ', ':', '=']) {
+                    // Zone configurations bind `&zones.<table>`, the ZoneRows
+                    // built from the whole `data.<table>`.
+                    assert!(
+                        rest.starts_with(&format!(" = data.{table}.as_slice();"))
+                            || rest.starts_with(&format!(" = &zones.{table};")),
+                        "{}: {name} is rebound to something other than data.{table}",
+                        case.name
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn checked_in_tiny_scenarios_are_an_exact_fresh_generator_bijection() {
     let repository_root = repository_root();

@@ -44,8 +44,8 @@ macro_rules! configuration {
             use super::*;
             #[allow(unused_macros)]
             macro_rules! query {
-                (positional($d($d host:ident),*); $d($d tokens:tt)*) => { ::mini_linq::compile! {
-                    pipeline {
+                (positional($d($d host:ident),*); $d($d tokens:tt)*) => { crate::tpch_runtime::evidence_query! {
+                    $module; {
                         $($stages)*
                         select = ::mini_linq::passes::select(positional($d($d host),*));
                         structures = [$($extra,)* ];
@@ -53,8 +53,8 @@ macro_rules! configuration {
                     }
                     $d($d tokens)*
                 } };
-                ($d($d tokens:tt)*) => { ::mini_linq::compile! {
-                    pipeline {
+                ($d($d tokens:tt)*) => { crate::tpch_runtime::evidence_query! {
+                    $module; {
                         $($stages)*
                         structures = [$($extra,)* ];
                         surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
@@ -161,14 +161,18 @@ pub(crate) use standalone_configuration;
 
 macro_rules! standalone_query {
     (advised; [$($advice:tt)*]; {$($stages:tt)*}; [$($extra:path),*]; $($tokens:tt)*) => {
-        crate::tpch_runtime::standalone_query! {
-            default; []; { $($stages)* plan = ::mini_linq::passes::plan($($advice)*); }; [$($extra),*];
+        ::mini_linq::compile! {
+            pipeline {
+                $($stages)* plan = ::mini_linq::passes::plan($($advice)*);
+                structures = [$($extra,)* ];
+                surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
+            }
             $($tokens)*
         }
     };
     ($module:ident; [$($advice:tt)*]; {$($stages:tt)*}; [$($extra:path),*]; $($tokens:tt)*) => {
-        ::mini_linq::compile! {
-            pipeline {
+        crate::tpch_runtime::evidence_query! {
+            $module; {
                 $($stages)*
                 structures = [$($extra,)* ];
                 surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
@@ -178,6 +182,174 @@ macro_rules! standalone_query {
     };
 }
 pub(crate) use standalone_query;
+
+/// Formal rule R-TpchEvidence: the `default` and `par` routes plan from
+/// recorded CQ evidence (O-EvidenceLe, P3.3e), as the GPU automatic route does.
+/// The driver reads the query's leading relation declarations; each base
+/// relation (the canonical names below, bound by every kernel to
+/// `data.<table>`, a dbgen projection) records the dbgen SF1 row count of its
+/// table and its TPC-H primary key when every key column is declared. Counts
+/// are recorded once, not per load: workers compile before export and run at
+/// SF 0.1 and SF 1, and the planner compares counts only, whose order is the
+/// same at every scale (`tests/catalog.rs`). Other configurations and queries
+/// without a base relation compile their pipeline unchanged.
+macro_rules! evidence_query {
+    (default; $pipeline:tt $($tokens:tt)*) => {
+        crate::tpch_runtime::evidence_query! { @scan [] $pipeline [$($tokens)*] $($tokens)* }
+    };
+    (par; $pipeline:tt $($tokens:tt)*) => {
+        crate::tpch_runtime::evidence_query! { @scan [] $pipeline [$($tokens)*] $($tokens)* }
+    };
+    ($module:ident; { $($pipeline:tt)* } $($tokens:tt)*) => {
+        ::mini_linq::compile! { pipeline { $($pipeline)* } $($tokens)* }
+    };
+    (@scan $facts:tt $pipeline:tt $tokens:tt struct $name:ident; $($rest:tt)*) => {
+        crate::tpch_runtime::evidence_query! { @scan $facts $pipeline $tokens $($rest)* }
+    };
+    (@scan $facts:tt $pipeline:tt $tokens:tt
+        relation $name:ident($($column:ident: $ty:ty),* $(,)?); $($rest:tt)*) => {
+        crate::tpch_runtime::evidence_query! {
+            @key $name [] [$($column)*] [$facts $pipeline $tokens $($rest)*]
+        }
+    };
+    (@scan [] { $($pipeline:tt)* } [$($tokens:tt)*] $($rest:tt)*) => {
+        ::mini_linq::compile! { pipeline { $($pipeline)* } $($tokens)* }
+    };
+    (@scan [$($facts:tt)+] { $($pipeline:tt)* } [$($tokens:tt)*] $($rest:tt)*) => {
+        ::mini_linq::compile! {
+            pipeline {
+                plan = ::mini_linq::passes::plan(evidence from
+                    "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys"
+                    { $($facts)+ });
+                $($pipeline)*
+            }
+            $($tokens)*
+        }
+    };
+    // The declared TPC-H primary-key columns, in declaration order.
+    (@key $name:ident [$($key:ident)*] [l_orderkey $($column:ident)*] $next:tt) => {
+        crate::tpch_runtime::evidence_query! { @key $name [$($key)* l_orderkey] [$($column)*] $next }
+    };
+    (@key $name:ident [$($key:ident)*] [l_linenumber $($column:ident)*] $next:tt) => {
+        crate::tpch_runtime::evidence_query! { @key $name [$($key)* l_linenumber] [$($column)*] $next }
+    };
+    (@key $name:ident [$($key:ident)*] [o_orderkey $($column:ident)*] $next:tt) => {
+        crate::tpch_runtime::evidence_query! { @key $name [$($key)* o_orderkey] [$($column)*] $next }
+    };
+    (@key $name:ident [$($key:ident)*] [ps_partkey $($column:ident)*] $next:tt) => {
+        crate::tpch_runtime::evidence_query! { @key $name [$($key)* ps_partkey] [$($column)*] $next }
+    };
+    (@key $name:ident [$($key:ident)*] [ps_suppkey $($column:ident)*] $next:tt) => {
+        crate::tpch_runtime::evidence_query! { @key $name [$($key)* ps_suppkey] [$($column)*] $next }
+    };
+    (@key $name:ident [$($key:ident)*] [p_partkey $($column:ident)*] $next:tt) => {
+        crate::tpch_runtime::evidence_query! { @key $name [$($key)* p_partkey] [$($column)*] $next }
+    };
+    (@key $name:ident [$($key:ident)*] [s_suppkey $($column:ident)*] $next:tt) => {
+        crate::tpch_runtime::evidence_query! { @key $name [$($key)* s_suppkey] [$($column)*] $next }
+    };
+    (@key $name:ident [$($key:ident)*] [c_custkey $($column:ident)*] $next:tt) => {
+        crate::tpch_runtime::evidence_query! { @key $name [$($key)* c_custkey] [$($column)*] $next }
+    };
+    (@key $name:ident [$($key:ident)*] [n_nationkey $($column:ident)*] $next:tt) => {
+        crate::tpch_runtime::evidence_query! { @key $name [$($key)* n_nationkey] [$($column)*] $next }
+    };
+    (@key $name:ident [$($key:ident)*] [r_regionkey $($column:ident)*] $next:tt) => {
+        crate::tpch_runtime::evidence_query! { @key $name [$($key)* r_regionkey] [$($column)*] $next }
+    };
+    (@key $name:ident $key:tt [$other:ident $($column:ident)*] $next:tt) => {
+        crate::tpch_runtime::evidence_query! { @key $name $key [$($column)*] $next }
+    };
+    (@key $name:ident $key:tt [] $next:tt) => {
+        crate::tpch_runtime::evidence_query! { @fact $name $key $next }
+    };
+    // The recorded table: base relation, dbgen SF1 rows, primary key.
+    (@fact Lineitem [l_orderkey l_linenumber] [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @fact Lineitem [l_linenumber l_orderkey] [[$($facts)*] $($next)*] }
+    };
+    (@fact Lineitem [l_linenumber l_orderkey] [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! {
+            @scan [$($facts)* count Lineitem = 6001215; key Lineitem [l_orderkey, l_linenumber];] $($next)*
+        }
+    };
+    (@fact Lineitem $key:tt [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @scan [$($facts)* count Lineitem = 6001215;] $($next)* }
+    };
+    (@fact Orders [o_orderkey] [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! {
+            @scan [$($facts)* count Orders = 1500000; key Orders [o_orderkey];] $($next)*
+        }
+    };
+    (@fact Orders $key:tt [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @scan [$($facts)* count Orders = 1500000;] $($next)* }
+    };
+    (@fact Partsupp [ps_suppkey ps_partkey] [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @fact Partsupp [ps_partkey ps_suppkey] [[$($facts)*] $($next)*] }
+    };
+    (@fact Partsupp [ps_partkey ps_suppkey] [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! {
+            @scan [$($facts)* count Partsupp = 800000; key Partsupp [ps_partkey, ps_suppkey];] $($next)*
+        }
+    };
+    (@fact Partsupp $key:tt [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @scan [$($facts)* count Partsupp = 800000;] $($next)* }
+    };
+    (@fact PartSupp [ps_suppkey ps_partkey] [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @fact PartSupp [ps_partkey ps_suppkey] [[$($facts)*] $($next)*] }
+    };
+    (@fact PartSupp [ps_partkey ps_suppkey] [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! {
+            @scan [$($facts)* count PartSupp = 800000; key PartSupp [ps_partkey, ps_suppkey];] $($next)*
+        }
+    };
+    (@fact PartSupp $key:tt [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @scan [$($facts)* count PartSupp = 800000;] $($next)* }
+    };
+    (@fact Part [p_partkey] [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! {
+            @scan [$($facts)* count Part = 200000; key Part [p_partkey];] $($next)*
+        }
+    };
+    (@fact Part $key:tt [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @scan [$($facts)* count Part = 200000;] $($next)* }
+    };
+    (@fact Customer [c_custkey] [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! {
+            @scan [$($facts)* count Customer = 150000; key Customer [c_custkey];] $($next)*
+        }
+    };
+    (@fact Customer $key:tt [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @scan [$($facts)* count Customer = 150000;] $($next)* }
+    };
+    (@fact Supplier [s_suppkey] [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! {
+            @scan [$($facts)* count Supplier = 10000; key Supplier [s_suppkey];] $($next)*
+        }
+    };
+    (@fact Supplier $key:tt [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @scan [$($facts)* count Supplier = 10000;] $($next)* }
+    };
+    (@fact Nation [n_nationkey] [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! {
+            @scan [$($facts)* count Nation = 25; key Nation [n_nationkey];] $($next)*
+        }
+    };
+    (@fact Nation $key:tt [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @scan [$($facts)* count Nation = 25;] $($next)* }
+    };
+    (@fact Region [r_regionkey] [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! {
+            @scan [$($facts)* count Region = 5; key Region [r_regionkey];] $($next)*
+        }
+    };
+    (@fact Region $key:tt [[$($facts:tt)*] $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @scan [$($facts)* count Region = 5;] $($next)* }
+    };
+    (@fact $other:ident $key:tt [$facts:tt $($next:tt)*]) => {
+        crate::tpch_runtime::evidence_query! { @scan $facts $($next)* }
+    };
+}
+pub(crate) use evidence_query;
 
 macro_rules! candidate {
     (hypergraph; $d:tt; positional($($host:ident),*); $($body:tt)*) => {

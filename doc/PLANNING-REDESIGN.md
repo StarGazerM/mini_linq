@@ -290,13 +290,19 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     (1.007 [0.996, 1.022]; without the neighbour clause 1.363 [1.358, 1.367]);
     advised H02 SF10 0.733 [0.720, 0.745] and H11 SF10 0.422 [0.417, 0.427]
     from retained prefixes; H05 step-R order SF1 0.121, SF10 0.070.
-  - **P3.3e CPU evidence (follow-up)** Record manifest counts and keys on
-    the CPU TPC-H and Datalog routes (DOOP fact counts per round) so
-    O-EvidenceLe and GR-RetainPrefix decide there too, and FK-Known can put
-    holes in plan by default where a later read is recorded to fan out
-    (no recorded key covers it); needs a CPU
-    evidence source equivalent to `experiments/gpu/tpch/build.rs`
-    `relation_facts` and paired CPU timing over all 29 kernels.
+  - **P3.3e CPU evidence — done (2026-11-01).** CPU TPC-H `default`/`par`
+    record dbgen SF1 counts and TPC-H primary keys for canonical base
+    relations (R-TpchEvidence, driver in `tpch_runtime.rs`; counts are
+    recorded once because workers compile before export and the planner
+    only compares counts, whose order is scale-invariant). Only `retail_h04`
+    changes plan (expanded gate); `default` 0.565 [0.543, 0.598], `par`
+    0.229 [0.213, 0.248] vs `c395fe83`. Datalog records per-read fan-out
+    (DL-Fanout) from optional source keys (WF-DL-Evidence); FK-Known puts an
+    unadvised hole of a planned queue in plan iff a later read is `multiply`.
+    DOOP sources record keys checked functional on xalan/batik; no DOOP hole
+    is in plan by default (CPU engines expand byte-identical), so DOOP was
+    not re-timed. Not done (open): per-round DOOP fact counts and CPU
+    GR-RetainPrefix grading from recorded counts.
 - **P3b Profile the engine gaps** (`doc/STORAGE.md` §12.4): GPU h06
   reduce/dedup at 16–74× a hand kernel; CPU h01 at ~140× a String-grouping
   microbenchmark. Profiles (perf, nsys/ncu) decide whether these come before
@@ -624,9 +630,13 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   streaming tests stay ignored. (4) `compiler.tex` does not build
   (`backend_ir.tex` `\inferrule*` error). (5) Datalog outputs are sets in
   layout order, no longer insertion order. (6) ADM-InPlan is implemented for
-  CPU Datalog, advice-only (P3.3 slice C: FK-Known, DL-AdmitOnce, `known(admit)` /
-  `known(at(level k))` advice); GPU Datalog records `admit` for every hole and
-  rejects in-plan advice until a follow-up after P6c. (7) The LianJie repo
+  CPU Datalog (P3.3 slice C: FK-Known, DL-AdmitOnce, `known(admit)` /
+  `known(at(level k))` advice). **CPU default decided by recorded evidence
+  (P3.3e):** an unadvised hole of a planned queue is in plan iff a later read
+  is recorded `multiply` (DL-Fanout over source keys); DOOP records keys and
+  no hole is in plan there (identical code). Still open: GPU Datalog records
+  `admit` for every hole and rejects in-plan advice until a follow-up after
+  P6c. (7) The LianJie repo
   split is undecided and out of scope here. (8) CPU TPC-H h10 1.116x and h19
   1.168x of M0 (h14 1.028x) with identical instructions per query: glibc
   heap layout. M0's loader left long-lived allocations that kept the heap top
@@ -875,3 +885,29 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   engines) expand identically before/after; DOOP xalan and batik
   `--check` all six engines ok; GPU `cq-gpu-datalog-core` tests and
   `srd-doop-gpu` exactness pass.
+- P3.3e CPU evidence and Datalog fan-out (R-TpchEvidence, DL-Fanout,
+  WF-DL-Evidence, FK-Known), 2026-11-01. CPU TPC-H `default`/`par` record
+  dbgen SF1 counts and TPC-H primary keys; only `retail_h04` changes plan.
+  Paired timing (5 locked AB/BA pairs vs `c395fe83`, median of 3, bootstrap
+  CI, SF1 exact):
+
+  | Target | Ratio [95% CI] | Minor faults base → new | Counters base → new |
+  |---|---|---|---|
+  | `retail_h04` default | 0.565 [0.543, 0.598] | 67.9K → 38.5K | lookups 57,218 → 3,793,296; distinct insertions 3,793,296 → 57,218 |
+  | `retail_h04` par | 0.229 [0.213, 0.248] | 151.6K → 40.8K | index builds 64 → 1; hashes 3.90M → 145K; same lookup/insert swap |
+
+  Every other TPC-H target: identical counters at SF1 `default,par`.
+  DOOP: keys recorded in the mini and SRD sources; `doop-mini`,
+  `doop-mini-keyed`, `doop-mini-par`, `doop-mini-par-keyed`, `srd-doop-mini`
+  and `srd-doop-mini-par` expand byte-identical to `c395fe83` (no hole in plan
+  by default), so no DOOP timing was needed. Gates: expanded gate vs
+  `c395fe83` 46 targets, 17 identical, 28 differing only in the inert
+  `evidence_query` re-export (`p33e-evidence-export`, refactor), `retail_h04`
+  7 intended `default`/`par` hunks (`p33e-cpu-evidence`) in
+  `tools/expanded_gate_classes_p33e.json`; 0 unexplained, exit 0 with
+  imported exactness/counter evidence. CPU TPC-H SF1 `default,par` 58/58
+  exact on both trees; DOOP xalan `--check` ok for `mini`, `mini-keyed`,
+  `mini-par`, `mini-par-keyed`, `ascent-par` (26 relations); regressions
+  119/119; root 1,217, datalog 304, datalog-parallel 107, workloads 2,272,
+  planners 35 passed. `passes/cq-order` is unchanged, so GPU automatic plans
+  are unchanged.

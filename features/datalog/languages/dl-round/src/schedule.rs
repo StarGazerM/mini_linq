@@ -606,6 +606,7 @@ mod tests {
             hole: 0,
             scan: None,
             known: crate::Admission::Admit,
+            fanout: Vec::new(),
         }
     }
     fn stratum(seed_heads: &[usize], step_heads: &[usize]) -> Stratum {

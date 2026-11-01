@@ -100,6 +100,119 @@ pub struct RuleHole {
     pub scan: Option<ScanBinding>,
     /// Where this producer discharges the committed anti-join `▷R` (ADM-InPlan).
     pub known: Admission,
+    /// Per positive read of the variant, in variant order: whether the read can
+    /// multiply rows (DL-Fanout). FK-Known's default consumes it.
+    pub fanout: Vec<Fanout>,
+}
+
+/// `filter`: the read introduces no variable (a membership test) or binds a
+/// recorded key of its relation, so it keeps or drops each incoming row.
+/// `multiply`: it introduces a variable (a wildcard is an enumerated fresh
+/// witness) through no bound recorded key, so one row may extend to many.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fanout {
+    Filter,
+    Multiply,
+}
+impl Text for Fanout {
+    fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let name: Ident = input.parse()?;
+        match name.to_string().as_str() {
+            "filter" => Ok(Self::Filter),
+            "multiply" => Ok(Self::Multiply),
+            _ => Err(syn::Error::new_spanned(name, "expected filter or multiply")),
+        }
+    }
+    fn text(&self) -> TokenStream {
+        match self {
+            Self::Filter => quote!(filter),
+            Self::Multiply => quote!(multiply),
+        }
+    }
+}
+
+/// Names bound by one body item, in the order the item binds them.
+fn item_bindings(item: &BodyItem, bound: &BTreeSet<String>) -> Vec<String> {
+    match item {
+        BodyItem::Positive { atom } => atom.variables().map(symbol_name).collect(),
+        BodyItem::Let(binding) => rust::bindings(&binding.pattern)
+            .iter()
+            .map(symbol_name)
+            .collect(),
+        BodyItem::For(binding) => rust::bindings(&binding.pattern)
+            .iter()
+            .map(symbol_name)
+            .collect(),
+        BodyItem::Block(block) => block.analyze(bound).interface.into_keys().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The level (count of positive reads, in written order) at which the rule's
+/// last head variable binds, and its positive read count. A computed head term
+/// binds once its free body variables have; `let`/`for`/block bindings bind at
+/// the current level.
+pub fn head_level(query: &cq::Query) -> (usize, usize) {
+    let mut level = std::collections::BTreeMap::new();
+    let mut bound = BTreeSet::new();
+    let mut reads = 0;
+    for item in &query.body {
+        if matches!(item, BodyItem::Positive { .. }) {
+            reads += 1;
+        }
+        for name in item_bindings(item, &bound) {
+            bound.insert(name.clone());
+            level.entry(name).or_insert(reads);
+        }
+    }
+    let last = query
+        .head
+        .args
+        .iter()
+        .flat_map(|argument| match rust::variable(argument) {
+            Some(variable) => std::iter::once(symbol_name(variable)).collect(),
+            None => rust::free_variables(argument).dependencies(&bound),
+        })
+        .filter_map(|name| level.get(&name).copied())
+        .max()
+        .unwrap_or(0);
+    (last, reads)
+}
+
+/// Formal rule DL-Fanout: classify each positive read of a variant query, in
+/// written order. `keys(R)` are R's recorded keys as column positions; a key
+/// is bound when each of its arguments is a bound variable or a closed term.
+pub fn fanout(query: &cq::Query, keys: &dyn Fn(&Ident) -> Vec<Vec<usize>>) -> Vec<Fanout> {
+    let mut bound = BTreeSet::new();
+    let mut reads = Vec::new();
+    for item in &query.body {
+        if let BodyItem::Positive { atom } = item {
+            let given = |argument: &Expr| match argument {
+                Expr::Infer(_) => false,
+                _ => rust::variable(argument).is_none_or(|v| bound.contains(&symbol_name(v))),
+            };
+            let introduces = !atom.args.iter().all(given);
+            let keyed = keys(&atom.relation)
+                .iter()
+                .any(|key| key.iter().all(|&column| given(&atom.args[column])));
+            reads.push(if introduces && !keyed {
+                Fanout::Multiply
+            } else {
+                Fanout::Filter
+            });
+        }
+        let names = item_bindings(item, &bound);
+        bound.extend(names);
+    }
+    reads
+}
+
+/// Whether a read after the head-binding level `last` (pinned at
+/// `last.max(1)`) is recorded `multiply`: the premise of FK-Known's default.
+pub fn fanout_follows(fanout: &[Fanout], last: usize) -> bool {
+    fanout
+        .get(last.max(1)..)
+        .is_some_and(|after| after.contains(&Fanout::Multiply))
 }
 
 /// `admit`: admission probes the committed canonical layout. `in_plan`: the
@@ -504,7 +617,7 @@ record!(ScanBinding {
     source: InputSource,
     binding: Ident
 });
-record!(RuleHole { variant: usize, head: usize, hole: usize, scan: Option<ScanBinding>, known: Admission });
+record!(RuleHole { variant: usize, head: usize, hole: usize, scan: Option<ScanBinding>, known: Admission, fanout: Vec<Fanout> });
 record!(Stratum { members: Vec<usize>, keys: Vec<KeySet>, seeds: Vec<RuleHole>, steps: Vec<RuleHole>, phases: Vec<Ident>, publication: Vec<Publication>, termination: Vec<usize>, termination_test: Ident, observer: Ident, key_scope: Ident, loop_form: Ident });
 record!(Publication { relation: usize, operations: Vec<PublicationOp> });
 record!(PublicationOp { kind: Ident, layouts: Vec<usize> });

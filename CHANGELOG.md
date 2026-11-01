@@ -43,6 +43,25 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   H02/H11 SF10 advised 0.733/0.422; H05 step-R order SF1 0.121, SF10 0.070;
   d85 identical code.
 
+- CPU evidence and Datalog fan-out evidence (P3.3e). CPU TPC-H `default`
+  and `par` record CQ evidence (R-TpchEvidence): the `query!` driver in
+  `features/workloads/src/tpch_runtime.rs` records, for each canonical base
+  relation (`Lineitem`, `Orders`, …, bound by every kernel to
+  `data.<table>`), its dbgen SF1 row count and its TPC-H primary key when
+  every key column is declared, and compiles with `plan(evidence …)`
+  (O-EvidenceLe/CK-EvidenceLe unchanged). Only `retail_h04` changes plan:
+  Lineitem streams and looks up the date-filtered Orders by key. 5 locked
+  AB/BA pairs vs `c395fe83`, SF1 exact: `default` 0.565 [0.543, 0.598]
+  (minor faults 67.9K → 38.5K), `par` 0.229 [0.213, 0.248] (151.6K →
+  40.8K). Datalog: source `evidence from "…" { key R [c…]; }`
+  (WF-DL-Evidence); fork records `RuleHole.fanout` (DL-Fanout: a read is
+  `multiply` iff it introduces a variable and binds no recorded key) and
+  FK-Known puts an unadvised hole of a planned queue in plan iff a later
+  read is recorded `multiply`; correspondence checks the record and the
+  placement. DOOP mini/SRD sources record keys checked functional on the
+  xalan and batik facts; with them no DOOP hole is in plan by default and
+  every DOOP CPU engine (`doop-mini`, `-keyed`, `-par`, `-par-keyed`,
+  `srd-doop-mini`, `-par`) expands byte-identical to `c395fe83`.
 - ADM-InPlan for CPU Datalog (P3.3 slice C). Fork records `RuleHole.known =
   admit | in_plan` (FK-Known). Advice `plan(L, known(at(level k)))` puts a
   hole in plan: it binds computed head terms with `let` and appends `!C(x̄)`

@@ -118,70 +118,25 @@ fn negation(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
     }
 }
 
-/// The level (count of positive reads, in written order) at which the hole's
-/// last head variable binds, and the hole's positive read count. A computed
-/// head term binds once its free body variables have; `let`/`for`/block
-/// bindings bind at the current level.
-fn head_level(query: &round::cq::Query) -> (usize, usize) {
-    use cq_syntax::rust;
-    let mut level = std::collections::BTreeMap::new();
-    let mut reads = 0;
-    for item in &query.body {
-        let names: Vec<String> = match item {
-            BodyItem::Positive { atom } => {
-                reads += 1;
-                atom.variables().map(symbol_name).collect()
-            }
-            BodyItem::Let(binding) => rust::bindings(&binding.pattern)
-                .iter()
-                .map(symbol_name)
-                .collect(),
-            BodyItem::For(binding) => rust::bindings(&binding.pattern)
-                .iter()
-                .map(symbol_name)
-                .collect(),
-            BodyItem::Block(block) => block
-                .analyze(&level.keys().cloned().collect::<std::collections::BTreeSet<_>>())
-                .interface
-                .into_keys()
-                .collect(),
-            _ => continue,
-        };
-        for name in names {
-            level.entry(name).or_insert(reads);
-        }
-    }
-    let bound = level.keys().cloned().collect();
-    let last = query
-        .head
-        .args
-        .iter()
-        .flat_map(|argument| match rust::variable(argument) {
-            Some(variable) => std::iter::once(symbol_name(variable)).collect(),
-            None => rust::free_variables(argument).dependencies(&bound),
-        })
-        .filter_map(|name| level.get(&name).copied())
-        .max()
-        .unwrap_or(0);
-    (last, reads)
-}
-
 /// Formal rule FK-Known: decide where a rule hole discharges its head's
 /// committed anti-join, returning the pinned in-plan level. Advice
 /// `known(at(level k))` places it in plan after the k-th positive read (k must
-/// not precede the read binding the last head variable); otherwise, including
-/// `known(admit)`, the hole is `admit` (unchanged code). An early anti-join
-/// saves work only when later reads fan out, and it probes every intermediate
-/// row where they filter; CPU Datalog records no fan-out evidence, and the
-/// structural default (head bound before the last read) measured DOOP xalan
-/// `mini` 2.36x and batik `mini-par` 2.95x slower, so in-plan is advice-only
-/// until fan-out evidence is recorded. Device storage realizes `admit` only.
+/// not precede the read binding the last head variable); `known(admit)` keeps
+/// admission. Without advice, a hole whose queue records a planning invocation
+/// is in plan at the head-binding level iff a later read is recorded
+/// `multiply` (DL-Fanout): an early anti-join saves the expansion of known
+/// heads there, while before reads that only filter it would probe every
+/// intermediate row (the unconditional structural default measured DOOP xalan
+/// `mini` 2.36x and batik `mini-par` 2.95x slower). Device storage realizes
+/// `admit` only.
 fn known_admission(
     query: &round::cq::Query,
     advice: Option<incremental::Known>,
     device: bool,
+    planned: bool,
+    fanout: &[Fanout],
 ) -> syn::Result<Option<usize>> {
-    let (last, reads) = head_level(query);
+    let (last, reads) = round::head_level(query);
     match advice {
         Some(incremental::Known::At(_)) if device => Err(syn::Error::new_spanned(
             query,
@@ -199,7 +154,8 @@ fn known_admission(
             )?;
             Ok(Some(level))
         }
-        Some(incremental::Known::Admit) | None => Ok(None),
+        Some(incremental::Known::Admit) => Ok(None),
+        None => Ok((planned && round::fanout_follows(fanout, last)).then_some(last.max(1))),
     }
 }
 
@@ -594,13 +550,23 @@ fn construct(
             query.head.relation = name.clone();
             let mut output = source.incremental.strata.source.declarations[head].clone();
             output.name = name.clone();
-            let level = known_admission(&query, variant.known, source.device.is_some())?;
+            // Formal rule DL-Fanout over the variant's source relations and
+            // the program's recorded EDB keys.
+            let strata_source = &source.incremental.strata.source;
+            let fanout = round::fanout(&variant.query, &|relation| strata_source.keys(relation));
+            let level = known_admission(
+                &query,
+                variant.known,
+                source.device.is_some(),
+                plan.is_some(),
+                &fanout,
+            )?;
             let known = if level.is_some() { Admission::InPlan } else { Admission::Admit };
             let mut known_option = None;
             if let Some(level) = level {
                 // Formal rule ADM-InPlan: name computed head terms by ordinary
                 // bindings, then append the committed anti-join `!C(x̄)` over the
-                // head's canonical layout, pinned after the advised level.
+                // head's canonical layout, pinned after the FK-Known level.
                 let declaration = &source.incremental.strata.source.declarations[head];
                 for (position, argument) in query.head.args.iter_mut().enumerate() {
                     if cq_syntax::rust::variable(argument).is_none() {
@@ -713,6 +679,7 @@ fn construct(
                 hole,
                 scan,
                 known,
+                fanout,
             };
             if variant.delta.is_some() {
                 stratum.steps.push(rule);

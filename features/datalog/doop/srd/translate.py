@@ -27,6 +27,15 @@ def tuple_type(arity: int) -> str:
     return "(" + "i32, " * arity + ")"
 
 
+# DL-Fanout keys (P3.3e): input relations whose first column is a key, each
+# checked on the prepared xalan and batik corpora (one row per c0).
+FUNCTIONAL = ("ComponentType", "HeapAllocation_Type", "ThisVar", "Var_Type")
+FUNCTIONAL_PROVENANCE = (
+    "checked on prepared xalan and batik CSVs: one row per c0 in "
+    "ComponentType, HeapAllocation_Type, ThisVar, Var_Type"
+)
+
+
 def generate(repo: Path, field_flow: bool, output: Path, plans: bool = False) -> None:
     source = repo / "examples/doop.py"
     text = source.read_text()
@@ -189,6 +198,11 @@ def generate(repo: Path, field_flow: bool, output: Path, plans: bool = False) ->
         columns = ", ".join(f"c{i}: i32" for i in range(r.arity))
         initializer = f" = (facts.{ident(r.name)})" if r.input_file else ""
         lines.append(f"                relation {ident(r.name)}({columns}){initializer};")
+    keyed = [ident(r.name) for r in relations if r.input_file and r.name in FUNCTIONAL]
+    if keyed:
+        lines.append(f'                evidence from "{FUNCTIONAL_PROVENANCE}" {{')
+        lines += [f"                    key {name} [c0];" for name in keyed]
+        lines.append("                }")
     lines.append("                output " + ", ".join(ident(r.name) for r in outputs) + ";")
     for rule in program.rules:
         try:

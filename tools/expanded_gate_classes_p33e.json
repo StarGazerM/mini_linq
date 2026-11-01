@@ -1,0 +1,267 @@
+{
+ "version": 1,
+ "definitions": {
+  "p33e-evidence-export": {
+   "kind": "refactor",
+   "description": "P3.3e: features/workloads/src/tpch_runtime.rs re-exports the evidence_query! driver macro (pub(crate) use with its R-TpchEvidence doc comment) in every expanded TPC-H target; macro definitions are removed by normalization, so only this inert re-export remains"
+  },
+  "p33e-cpu-evidence": {
+   "kind": "intended",
+   "description": "P3.3e R-TpchEvidence: CPU TPC-H default and par record dbgen SF1 counts and TPC-H primary keys as plan(evidence ...); O-EvidenceLe changes only retail_h04 (Lineitem streamed, filtered Orders looked up by key; CK-EvidenceLe checked). 5 locked AB/BA pairs vs c395fe83: default 0.565 [0.543, 0.598], par 0.229 [0.213, 0.248]; SF1 exact vs DuckDB"
+  }
+ },
+ "rules": [
+  {
+   "target": "retail_d19",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_d27",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_d72_inner",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_d85",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h01",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h02",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h03",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h04",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h04_not_exists",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h05",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h06",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h07",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h08",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h09",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h10",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h11",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h12",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h13",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h14",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h15",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h16",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h18",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h19",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h20",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h22",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "p33e-evidence-export",
+   "hunk_sha256": "f9b42aa9b66199c9bb1f25f47471a2a9250a541a00517a99c7bf46318d717dbb",
+   "reason": "tpch_runtime re-exports the new evidence_query! macro (pub(crate) use plus its R-TpchEvidence doc comment); no executable item changes",
+   "source": "features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h04",
+   "class": "p33e-cpu-evidence",
+   "hunk_sha256": "35de68bf4ef3a65f075275bd46c5280ca8779c1f15544005eed94432a985f6b3",
+   "reason": "retail_h04 `default` module: O-EvidenceLe from recorded dbgen counts/keys streams Lineitem and probes the date-filtered Orders membership through l_orderkey instead of streaming Orders (measured 0.565 [0.543, 0.598] vs c395fe83, SF1 exact)",
+   "source": "passes/cq-order/src/evidence.rs; features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h04",
+   "class": "p33e-cpu-evidence",
+   "hunk_sha256": "56125fe158ab8f70e9dcedd4c8e2543a4dcc9d598a247b90b40d3a30ffd553b0",
+   "reason": "retail_h04 `default` module: O-EvidenceLe from recorded dbgen counts/keys streams Lineitem and probes the date-filtered Orders membership through l_orderkey instead of streaming Orders (measured 0.565 [0.543, 0.598] vs c395fe83, SF1 exact)",
+   "source": "passes/cq-order/src/evidence.rs; features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h04",
+   "class": "p33e-cpu-evidence",
+   "hunk_sha256": "87a2f409808819ff8fbdce785126e9309a624564ecab7ddc7324482ecdc45143",
+   "reason": "retail_h04 `par` module: O-EvidenceLe from recorded dbgen counts/keys streams Lineitem and probes the date-filtered Orders membership through l_orderkey instead of streaming Orders (measured 0.229 [0.213, 0.248] vs c395fe83, SF1 exact)",
+   "source": "passes/cq-order/src/evidence.rs; features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h04",
+   "class": "p33e-cpu-evidence",
+   "hunk_sha256": "7eeeb36cd341c299674061eb74f2db01c250f088ca469543bb78d0da14a93dfe",
+   "reason": "retail_h04 `par` module: O-EvidenceLe from recorded dbgen counts/keys streams Lineitem and probes the date-filtered Orders membership through l_orderkey instead of streaming Orders (measured 0.229 [0.213, 0.248] vs c395fe83, SF1 exact)",
+   "source": "passes/cq-order/src/evidence.rs; features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h04",
+   "class": "p33e-cpu-evidence",
+   "hunk_sha256": "68ceb236a9bd9ec1c5187169ccdaea5655b5887fd4f036c040deb87632607f95",
+   "reason": "retail_h04 `par` module: O-EvidenceLe from recorded dbgen counts/keys streams Lineitem and probes the date-filtered Orders membership through l_orderkey instead of streaming Orders (measured 0.229 [0.213, 0.248] vs c395fe83, SF1 exact)",
+   "source": "passes/cq-order/src/evidence.rs; features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h04",
+   "class": "p33e-cpu-evidence",
+   "hunk_sha256": "b4b5b36a5223aaf71d6408b21c4174daf2a4dbdf73e77b6347409d8354a9d8e5",
+   "reason": "retail_h04 `par` module: O-EvidenceLe from recorded dbgen counts/keys streams Lineitem and probes the date-filtered Orders membership through l_orderkey instead of streaming Orders (measured 0.229 [0.213, 0.248] vs c395fe83, SF1 exact)",
+   "source": "passes/cq-order/src/evidence.rs; features/workloads/src/tpch_runtime.rs:186"
+  },
+  {
+   "target": "retail_h04",
+   "class": "p33e-cpu-evidence",
+   "hunk_sha256": "eee3afc4f140b8bb05b54647316d9613ce78500ef628e921f8f8668a429f91c0",
+   "reason": "retail_h04 `par` module: O-EvidenceLe from recorded dbgen counts/keys streams Lineitem and probes the date-filtered Orders membership through l_orderkey instead of streaming Orders (measured 0.229 [0.213, 0.248] vs c395fe83, SF1 exact)",
+   "source": "passes/cq-order/src/evidence.rs; features/workloads/src/tpch_runtime.rs:186"
+  }
+ ]
+}

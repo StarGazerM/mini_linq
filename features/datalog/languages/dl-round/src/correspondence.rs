@@ -501,6 +501,33 @@ pub(crate) fn check_storage_with_analysis(
                         *item = negation(&negative.atom, key);
                     }
                 }
+                // DL-Fanout: the recorded fact agrees with the variant's reads
+                // and recorded keys. FK-Known: advice decides; otherwise a hole
+                // with a recorded planning invocation is in plan iff a later
+                // read is recorded `multiply`.
+                let strata_source = &source.incremental.strata.source;
+                ensure(
+                    rule.fanout
+                        == crate::fanout(&variant.query, &|relation| strata_source.keys(relation)),
+                    source,
+                    "fork must record the fan-out of every variant read",
+                )?;
+                let expected = match variant.known {
+                    Some(incremental::Known::At(_)) => Admission::InPlan,
+                    Some(incremental::Known::Admit) => Admission::Admit,
+                    None if source.device.is_none()
+                        && target.holes[rule.hole].plan.is_some()
+                        && crate::fanout_follows(&rule.fanout, crate::head_level(&query).0) =>
+                    {
+                        Admission::InPlan
+                    }
+                    None => Admission::Admit,
+                };
+                ensure(
+                    rule.known == expected,
+                    source,
+                    "fork admission placement disagrees with its advice or recorded fan-out",
+                )?;
                 if rule.known == Admission::InPlan {
                     admission_suffix(&mut query, hole, context, rule.head, &mut add_name)?;
                 }

@@ -7,6 +7,12 @@
 //! A rule may carry an optional label, `Label: head :- body;`. Labels are
 //! names for advice only: they are unique, have no denotation, and rewrites
 //! that add rules leave the new rules unlabelled.
+//! Optional `evidence from "provenance" { key R [c, ...]; }` after the models
+//! records asserted keys of declared relations (the CQ evidence `key`
+//! grammar); the provenance names how each was checked (for a derived
+//! relation, on the inputs of its rules). Evidence has no denotation: it only
+//! feeds DL-Fanout, which chooses where a checked plan discharges admission,
+//! so a false key changes speed, never answers.
 use cq_datalog_support::{Fresh, ensure};
 pub use cq_lang_cq::{BodyItem, Query};
 use cq_stage::Language;
@@ -26,6 +32,9 @@ pub mod kw {
     syn::custom_keyword!(invariants);
     syn::custom_keyword!(hoist);
     syn::custom_keyword!(using);
+    syn::custom_keyword!(evidence);
+    syn::custom_keyword!(from);
+    syn::custom_keyword!(key);
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
@@ -38,6 +47,7 @@ pub struct Program {
     pub observer: Option<Expr>,
     pub models: BTreeMap<String, Ident>,
     pub invariants: Vec<Invariant>,
+    pub evidence: Option<Evidence>,
 }
 /// A checked frozen-filter factorization retaining the original rule for erasure.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +55,73 @@ pub struct Invariant {
     pub rule: usize,
     pub helper: Ident,
     pub source: Query,
+}
+/// Asserted keys and where they came from: `R` has at most one row per
+/// value of each key's declared columns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Evidence {
+    pub provenance: syn::LitStr,
+    pub keys: Vec<(Ident, Vec<Ident>)>,
+}
+impl Parse for Evidence {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<kw::evidence>()?;
+        input.parse::<kw::from>()?;
+        let provenance = input.parse()?;
+        let body;
+        syn::braced!(body in input);
+        let mut keys = Vec::new();
+        while !body.is_empty() {
+            body.parse::<kw::key>()?;
+            let relation = body.parse()?;
+            let columns;
+            syn::bracketed!(columns in body);
+            let columns = columns.parse_terminated(Ident::parse, Token![,])?;
+            body.parse::<Token![;]>()?;
+            keys.push((relation, columns.into_iter().collect()));
+        }
+        Ok(Self { provenance, keys })
+    }
+}
+impl ToTokens for Evidence {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let provenance = &self.provenance;
+        let keys = self
+            .keys
+            .iter()
+            .map(|(relation, columns)| quote!(key #relation [#(#columns),*];));
+        tokens.extend(quote!(evidence from #provenance { #(#keys)* }));
+    }
+}
+impl Program {
+    /// The recorded keys of a relation as declared column positions.
+    pub fn keys(&self, relation: &Ident) -> Vec<Vec<usize>> {
+        let Some(evidence) = &self.evidence else {
+            return Vec::new();
+        };
+        let name = symbol_name(relation);
+        let Some(declaration) = self.declarations.iter().find(|d| symbol_name(&d.name) == name)
+        else {
+            return Vec::new();
+        };
+        evidence
+            .keys
+            .iter()
+            .filter(|(subject, _)| symbol_name(subject) == name)
+            .map(|(_, columns)| {
+                columns
+                    .iter()
+                    .map(|column| {
+                        declaration
+                            .columns
+                            .iter()
+                            .position(|declared| declared.name == *column)
+                            .expect("checked evidence key column")
+                    })
+                    .collect()
+            })
+            .collect()
+    }
 }
 impl Parse for Program {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -86,6 +163,11 @@ impl Parse for Program {
             )?;
             models.insert(symbol_name(&relation), model);
         }
+        let evidence = if input.peek(kw::evidence) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
         input.parse::<kw::output>()?;
         let mut outputs = vec![input.parse()?];
         while input.peek(Token![,]) {
@@ -140,6 +222,7 @@ impl Parse for Program {
             observer,
             models,
             invariants,
+            evidence,
         })
     }
 }
@@ -154,6 +237,7 @@ impl ToTokens for Program {
             observer,
             models,
             invariants,
+            evidence,
         } = self;
         if let Some(e) = observer {
             tokens.extend(quote!(observe = #e;));
@@ -165,6 +249,7 @@ impl ToTokens for Program {
                 tokens.extend(quote!(model #relation #model;));
             }
         }
+        tokens.extend(quote!(#evidence));
         let rules = rules.iter().zip(labels).map(|(rule, label)| match label {
             Some(label) => quote!(#label: #rule),
             None => quote!(#rule),
@@ -346,6 +431,9 @@ pub mod contract {
                 "base Datalog supports only the set relation model",
             )?;
         }
+        if let Some(evidence) = &program.evidence {
+            check_evidence(program, evidence)?;
+        }
         let positions = graph
             .names
             .iter()
@@ -358,6 +446,44 @@ pub mod contract {
             graph,
             positions,
         })
+    }
+    /// Formal rule WF-DL-Evidence: evidence names its provenance; each key
+    /// names a declared relation and distinct declared columns, and keys of
+    /// one relation are distinct.
+    fn check_evidence(program: &Program, evidence: &Evidence) -> syn::Result<()> {
+        ensure(
+            !evidence.provenance.value().trim().is_empty(),
+            &evidence.provenance,
+            "evidence must record its provenance",
+        )?;
+        let mut keys = BTreeSet::new();
+        for (relation, columns) in &evidence.keys {
+            let declaration = program
+                .declarations
+                .iter()
+                .find(|declaration| declaration.name == *relation)
+                .ok_or_else(|| {
+                    syn::Error::new_spanned(relation, "evidence names no declared relation")
+                })?;
+            let mut names = BTreeSet::new();
+            for column in columns {
+                ensure(
+                    declaration
+                        .columns
+                        .iter()
+                        .any(|declared| declared.name == *column)
+                        && names.insert(symbol_name(column)),
+                    column,
+                    "evidence key columns must be distinct declared columns",
+                )?;
+            }
+            ensure(
+                !names.is_empty() && keys.insert((symbol_name(relation), names)),
+                relation,
+                "evidence keys must be nonempty and distinct",
+            )?;
+        }
+        Ok(())
     }
 }
 /// Check source well-formedness and preserve its externally visible interface.
@@ -387,9 +513,10 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
             && source.declarations == target.declarations
             && source.outputs == target.outputs
             && source.models == target.models
-            && source.observer == target.observer,
+            && source.observer == target.observer
+            && source.evidence == target.evidence,
         target,
-        "Datalog rewrite changed name, declarations, EDB bindings, outputs, models or observer",
+        "Datalog rewrite changed name, declarations, EDB bindings, outputs, models, observer or evidence",
     )
 }
 /// The rewrite callback assumes `cq_stage::run` checked both contracts.

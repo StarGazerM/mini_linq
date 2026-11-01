@@ -142,6 +142,17 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
         relation callgraphedge(c0: IStr, c1: IStr);
         relation arrayindexpointsto(c0: IStr, c1: IStr);
         relation reachable(c0: IStr);
+        // DL-Fanout keys (P3.3e): each checked functional on the xalan and
+        // batik facts. Derived keys follow from their rules' inputs:
+        // thisvar copies ThisVar; heapallocation_type is NormalHeap plus
+        // StringConstant ids, which are disjoint from NormalHeap ids.
+        evidence from "checked on doop-data xalan and batik facts: one row per c0 in ComponentType, Var-Type, ThisVar, NormalHeap; Method signatures unique (one computed descriptor each); StringConstant ids disjoint from NormalHeap ids" {
+            key componenttype [c0];
+            key var_type [c0];
+            key method_descriptor [c0];
+            key thisvar [c0];
+            key heapallocation_type [c0];
+        }
         output mainclass, method_simplename, method_declaringtype, method_modifier, method_paramtypes, method_returntype, method_descriptor, methodlookup, methodimplemented, directsubclass, subclass, superclass, superinterface, subtypeof, supertypeof, subtypeofdifferent, mainmethoddeclaration, classinitializer, initializedclass, assign, varpointsto, instancefieldpointsto, staticfieldpointsto, callgraphedge, arrayindexpointsto, reachable;
     istype(class) :- _classtype(class);
     isreferencetype(class) :- _classtype(class);

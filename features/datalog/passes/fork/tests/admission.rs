@@ -1,26 +1,39 @@
-//! ADM-InPlan: FK-Known decisions, the synthetic committed read, its fork
-//! correspondence (erasure and mutations), DL-AdmitOnce and the schedule read.
+//! ADM-InPlan: FK-Known decisions from advice and DL-Fanout, the synthetic
+//! committed read, its fork correspondence (erasure and mutations),
+//! DL-AdmitOnce and the schedule read.
 use cq_datalog_fork::{check, compile, compile_with};
-use cq_lang_datalog_round::{self as round, Admission, cq::BodyItem, incremental, storage};
+use cq_lang_datalog_round::{
+    self as round, Admission, Fanout, cq::BodyItem, incremental, incremental::strata::source,
+    storage,
+};
+use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
 fn strata() -> cq_lang_datalog_round::incremental::strata::Program {
-    let source = syn::parse2(quote! {
+    strata_with(quote!())
+}
+
+fn source_with(evidence: TokenStream) -> source::Program {
+    syn::parse2(quote! {
         struct Admission;
         relation E(x:i32,y:i32) = (e);
         relation Flag(x:i32);
         relation Pair(x:i32,y:i32);
         relation Twice(a:i32,b:i32,c:i32);
+        #evidence
         output Flag, Pair, Twice;
-        // Advised known(at(level 1)): `x` binds at the first of two reads.
+        // `x` binds at the first of two reads; `E(y,_)` enumerates a witness.
         Flag: Flag(*x) :- E(x,y), E(y,_);
-        // Unadvised: admit.
+        // `z` binds at the last read.
         Pair: Pair(*x,*z) :- E(x,y), E(y,z);
         // Repeated borrowed and computed head terms bind at the first read.
         Twice: Twice(x, x, (*x + 1)) :- E(x,y), E(y,_);
     })
-    .unwrap();
-    cq_datalog_stratify::compile(&source).unwrap()
+    .unwrap()
+}
+
+fn strata_with(evidence: TokenStream) -> cq_lang_datalog_round::incremental::strata::Program {
+    cq_datalog_stratify::compile(&source_with(evidence)).unwrap()
 }
 
 /// Flag and Twice advised `known(at(level 1))`; Pair left at the default.
@@ -42,17 +55,88 @@ fn program() -> storage::Program {
     cq_datalog_storage::compile(&incremental).unwrap()
 }
 
-#[test]
-fn default_admission_is_admit() {
-    let strata = strata();
-    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+fn unadvised(evidence: TokenStream) -> (storage::Program, round::Program) {
+    let incremental = cq_datalog_incremental::compile(&strata_with(evidence)).unwrap();
     let source = cq_datalog_storage::compile(&incremental).unwrap();
     let target = compile(&source).unwrap();
     check(&source, &target).unwrap();
+    (source, target)
+}
+
+/// Without advice FK-Known follows DL-Fanout: Flag and Twice bind their head
+/// at read 1 and then enumerate `E(y,_)` (`multiply`), so they are in plan at
+/// level 1; Pair binds its head at its last read and stays `admit`.
+#[test]
+fn default_admission_follows_the_recorded_fanout() {
+    let (source, target) = unadvised(quote!());
+    assert_eq!(rule(&target, "Flag").known, Admission::InPlan);
+    assert_eq!(rule(&target, "Twice").known, Admission::InPlan);
+    assert_eq!(rule(&target, "Pair").known, Admission::Admit);
+    for rule in rules(&target) {
+        assert_eq!(rule.fanout, [Fanout::Multiply, Fanout::Multiply]);
+        let arguments = target.holes[rule.hole].pipeline.passes[0].arguments.to_string();
+        let name = &canonical(&target, rule.head).name;
+        let clause = syn::Index::from(target.holes[rule.hole].cq.query.body.len() - 1);
+        match rule.known {
+            Admission::InPlan => {
+                assert_eq!(arguments, quote!(known(#name @ #clause at 1)).to_string())
+            }
+            Admission::Admit => assert!(arguments.is_empty(), "{arguments}"),
+        }
+    }
+    let reparsed: round::Program = syn::parse2(target.to_token_stream()).unwrap();
+    assert_eq!(reparsed, target);
+    // The record is checked: a changed fan-out fact, or an admit record that
+    // contradicts a recorded `multiply` read, is rejected.
+    let flag = rule(&target, "Flag").clone();
+    let mut changed = target.clone();
+    for stratum in &mut changed.context.strata {
+        for rule in stratum.seeds.iter_mut().chain(&mut stratum.steps) {
+            if rule.hole == flag.hole {
+                rule.fanout[1] = Fanout::Filter;
+            }
+        }
+    }
+    assert!(check(&source, &changed).is_err());
+    let mut changed = target.clone();
+    for stratum in &mut changed.context.strata {
+        for rule in stratum.seeds.iter_mut().chain(&mut stratum.steps) {
+            if rule.hole == flag.hole {
+                rule.known = Admission::Admit;
+            }
+        }
+    }
+    let hole = &mut changed.holes[flag.hole];
+    let mut items: Vec<BodyItem> = hole.cq.query.body.iter().cloned().collect();
+    items.pop();
+    hole.cq.query.body = items.into_iter().collect();
+    hole.pipeline.passes[0].arguments = TokenStream::new();
+    let error = check(&source, &changed).unwrap_err().to_string();
+    assert!(error.contains("disagrees with its advice or recorded fan-out"), "{error}");
+}
+
+/// A recorded EDB key bound at a read makes it a filter (at most one row).
+#[test]
+fn recorded_keys_make_keyed_reads_filters() {
+    let (_, target) = unadvised(quote!(evidence from "test: E has one y per x" { key E [x]; }));
     for rule in rules(&target) {
         assert_eq!(rule.known, Admission::Admit);
-        assert!(target.holes[rule.hole].pipeline.passes[0].arguments.is_empty());
+        assert_eq!(rule.fanout, [Fanout::Multiply, Fanout::Filter]);
     }
+    // WF-DL-Evidence: provenance, EDB subjects and distinct declared columns.
+    for bad in [
+        quote!(evidence from "" { key E [x]; }),
+        quote!(evidence from "m" { key Missing [x]; }),
+        quote!(evidence from "m" { key E [w]; }),
+        quote!(evidence from "m" { key E [x, x]; }),
+        quote!(evidence from "m" { key E [x]; key E [x]; }),
+    ] {
+        assert!(source::contract::check(&source_with(bad.clone())).is_err(), "{bad}");
+    }
+    let program = source_with(quote!(evidence from "m" { key E [x, y]; }));
+    source::contract::check(&program).unwrap();
+    let reparsed: source::Program = syn::parse2(program.to_token_stream()).unwrap();
+    assert_eq!(reparsed, program);
 }
 
 fn rules(target: &round::Program) -> Vec<&round::RuleHole> {
@@ -381,12 +465,16 @@ fn known_advice_pins_admission_and_transports_the_level() {
 #[test]
 fn advised_in_plan_requires_a_planning_owner() {
     let queue = quote!(cq = pipeline { custom::lower, ::mini_linq::passes::translate_pull }; lower = 0;);
-    // The default (admit) carries no known option: no planning owner needed.
+    // Without a recorded planning invocation the default is admit even where
+    // a `multiply` read follows the head binding: no known option is placed.
     let incremental = cq_datalog_incremental::compile(&strata()).unwrap();
     let default = cq_datalog_storage::compile(&incremental).unwrap();
     let target = compile_with(&default, queue.clone()).unwrap();
     for hole in &target.holes {
         assert!(hole.plan.is_none());
+    }
+    for rule in rules(&target) {
+        assert_eq!(rule.known, Admission::Admit);
     }
     // Advised in plan, the known placement targets a planning invocation.
     let error = compile_with(&program(), queue).unwrap_err().to_string();

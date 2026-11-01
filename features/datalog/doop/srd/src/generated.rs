@@ -371,6 +371,12 @@ macro_rules! srd_doop_engine {
                 relation r_storeobjfrom(c0: i32, c1: i32, c2: i32);
                 relation r_fieldflow(c0: i32, c1: i32);
                 relation r_instancefieldpointsto(c0: i32, c1: i32, c2: i32);
+                evidence from "checked on prepared xalan and batik CSVs: one row per c0 in ComponentType, HeapAllocation_Type, ThisVar, Var_Type" {
+                    key r_componenttype [c0];
+                    key r_heapallocation_type [c0];
+                    key r_thisvar [c0];
+                    key r_var_type [c0];
+                }
                 output r_istype, r_isreferencetype, r_isclasstype_idb, r_isarraytype_idb, r_isinterfacetype_idb, r_directsubclass, r_superinterface, r_methodimplemented, r_mainmethoddeclaration, r_methodinvocation_base, r_subclass, r_superclass, r_subtypeof, r_supertypeof, r_subtypeofdifferent, r_methodlookup, r_classinitializer, r_castto, r_iscastabletostring, r_isstringheap, r_heaphelper, r_heaphelpernothis, r_virtualmethodinvocation, r_nonstringheapallocsupertype, r_isstringarrayheap, r_eligiblestringarrayheap, r_isobjectarrayheap, r_eligibleobjectarrayheap, r_arraytypecompat, r_initializedclass, r_reachable, r_callgraphedge, r_assign, r_varpointsto, r_reachableloadinstancefield, r_staticfieldpointsto, r_arrayindexpointsto, r_reachableinstruction, r_reachablesortedindex, r_reachablestoreinstancefield, r_storeobjfrom, r_fieldflow, r_instancefieldpointsto;
                 // isType_Class
                 isType_Class: r_istype(*v_class) :- r_classtype(v_class);
