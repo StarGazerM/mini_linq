@@ -56,12 +56,17 @@ pub fn alternate_storage(source: &storage::Program) -> syn::Result<storage::Prog
             .iter()
             .find(|declaration| declaration.name == old.relation)
             .expect("checked layout relation");
-        let types = columns.iter().map(|&i| &declaration.columns[i].ty);
+        let (key, payload) = storage::layout_schema(declaration, &columns, 0);
+        let token = storage::provider::hash_map();
         let layout = storage::Layout {
             relation: old.relation.clone(),
             columns: columns.clone(),
             key: 0,
-            provider: syn::parse_quote!(::std::collections::HashMap<(), ::std::vec::Vec<(#(#types,)*)>, ::cq_storage::HashState>),
+            provider: storage::Provider {
+                ty: storage::provider::spell(&token, &key, &payload, storage::Hasher::Keyed)?,
+                token: token.token,
+            },
+            hasher: storage::Hasher::Keyed,
             maintenance: old.maintenance.clone(),
             protocol: storage::LayoutProtocol::GroupedMap,
         };
@@ -80,9 +85,23 @@ pub fn alternate_storage(source: &storage::Program) -> syn::Result<storage::Prog
     Ok(target)
 }
 
+/// Ordered layouts are authored tokens: verbatim spellings with the declared
+/// set and grouped-map protocols of their hash counterparts (DL-LayoutProtocol).
 pub fn ordered_storage(source: &storage::Program) -> syn::Result<storage::Program> {
     let analysis = storage::contract::check(source)?;
     let mut target = source.clone();
+    let ordered = |name: &str, protocol| {
+        storage::provider::declared(
+            name,
+            storage::provider::Spelling::Verbatim,
+            Some(protocol),
+            storage::provider::Admission::None,
+            false,
+            storage::provider::TaskHasher::Fx,
+        )
+    };
+    let set = ordered("ordered_set", storage::LayoutProtocol::Set);
+    let map = ordered("ordered_map", storage::LayoutProtocol::GroupedMap);
     for layout in target.layouts.iter_mut().chain(&mut target.delta_layouts) {
         let declaration = &source.incremental.strata.source.declarations
             [analysis.positions[&symbol_name(&layout.relation)]];
@@ -92,20 +111,27 @@ pub fn ordered_storage(source: &storage::Program) -> syn::Result<storage::Progra
             .map(|&i| &declaration.columns[i].ty)
             .collect();
         let (keys, values) = types.split_at(layout.key);
-        // DL-LayoutProtocol: ordered sets and grouped maps share the set and
-        // grouped-map operations of their hash counterparts.
-        (layout.provider, layout.protocol) = if values.is_empty() {
+        let (token, ty, protocol) = if values.is_empty() {
             (
+                &set,
                 syn::parse_quote!(::std::collections::BTreeSet<(#(#keys,)*)>),
                 storage::LayoutProtocol::Set,
             )
         } else {
             (
+                &map,
                 syn::parse_quote!(::std::collections::BTreeMap<(#(#keys,)*), ::std::vec::Vec<(#(#values,)*)>>),
                 storage::LayoutProtocol::GroupedMap,
             )
         };
+        layout.provider = storage::Provider {
+            token: token.token.clone(),
+            ty,
+        };
+        layout.hasher = storage::Hasher::None;
+        layout.protocol = protocol;
     }
+    target.tokens.extend([set, map]);
     Ok(target)
 }
 

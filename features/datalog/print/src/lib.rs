@@ -284,7 +284,7 @@ fn render_admitted(
         let keys = stratum.keys.iter().map(|key| {
             let name = &key.name;
             let invocation = &holes[key.hole];
-            let provider = &key.provider;
+            let provider = &key.provider.ty;
             let collection = collect_hole(
                 program.holes[key.hole].interface,
                 invocation,
@@ -319,10 +319,10 @@ fn render_admitted(
             .map(|&i| {
                 let relation = &context.relations[i];
                 let next = &relation.next;
-                let provider = &relation.providers.next;
+                let provider = &relation.providers.next.ty;
                 let init = &relation.providers.next_init;
                 let next_canonical = &relation.next_canonical;
-                let canonical = &context.layouts[relation.providers.canonical].provider;
+                let canonical = &context.layouts[relation.providers.canonical].provider.ty;
                 quote!(
                     let mut #next: #provider = #init;
                     // Sorted-run admission builds NEW as a sorted vector instead.
@@ -453,14 +453,14 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
     let mut bindings = Vec::new();
     for relation in &context.relations {
         if let Some(delta) = &relation.delta_host {
-            let provider = &relation.providers.delta;
+            let provider = &relation.providers.delta.ty;
             let init = &relation.providers.delta_init;
             bindings.push(quote!(let mut #delta: #provider = #init;));
         }
     }
     for layout in context.layouts.iter().chain(&context.delta_layouts) {
         let host = &layout.host;
-        let provider = &layout.provider;
+        let provider = &layout.provider.ty;
         bindings.push(quote!(
             let mut #host: #provider
                 = ::core::default::Default::default();

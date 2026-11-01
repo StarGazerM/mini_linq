@@ -35,22 +35,22 @@ pub(crate) fn input_types(program: &Program) -> syn::Result<BTreeMap<String, Typ
     let context = &program.context;
     let mut inputs = BTreeMap::new();
     for relation in &context.relations {
-        if let Some(delta) = &relation.delta { inputs.insert(delta.to_string(), relation.providers.delta.clone()); }
+        if let Some(delta) = &relation.delta { inputs.insert(delta.to_string(), relation.providers.delta.ty.clone()); }
     }
     for layout in context.layouts.iter().chain(&context.delta_layouts) {
-        inputs.insert(layout.name.to_string(), layout.provider.clone());
+        inputs.insert(layout.name.to_string(), layout.provider.ty.clone());
     }
     for stratum in &context.strata {
         for key in &stratum.keys {
             ensure(!key.columns.is_empty(), program,
                 "GPU Datalog does not support unit-valued existential negation keys")?;
-            inputs.insert(key.name.to_string(), key.provider.clone());
+            inputs.insert(key.name.to_string(), key.provider.ty.clone());
         }
         for rule in stratum.seeds.iter().chain(&stratum.steps) {
             if let Some(scan) = &rule.scan {
                 let ty = match scan.source {
-                    InputSource::Delta(index) => context.relations[index].providers.delta.clone(),
-                    InputSource::Layout(index) => context.layouts[index].provider.clone(),
+                    InputSource::Delta(index) => context.relations[index].providers.delta.ty.clone(),
+                    InputSource::Layout(index) => context.layouts[index].provider.ty.clone(),
                 };
                 inputs.insert(scan.binding.to_string(), ty);
             }
@@ -118,7 +118,7 @@ fn full_layouts(context: &RoundContext, index: usize, fresh: &Ident, layouts: &[
         let layout = &context.layouts[j];
         let state = local("layout", j);
         let packing = local("layout_packing", j);
-        let (host, ty) = (&layout.host, &layout.provider);
+        let (host, ty) = (&layout.host, &layout.provider.ty);
         let run = reordered(context, index, fresh, &layout.columns, &state);
         quote!({
             let run = #run;
@@ -152,7 +152,7 @@ fn admit_publish(program: &Program, index_in_stratum: usize, transaction: &round
             "delta_swap" => {
                 let delta = relation.delta_host.as_ref().expect("checked delta");
                 let next = &relation.next;
-                let ty = &relation.providers.next;
+                let ty = &relation.providers.next.ty;
                 let run = reordered(context, i, &fresh, &(0..relation.declaration.arity()).collect::<Vec<_>>(), &canonical);
                 // Recorded `fresh_run` NEW: the fresh rows in relation order,
                 // built directly; publishing it as the next delta is a move.
@@ -317,17 +317,17 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     // Hosts a hole may read through its CQ declarations, with their providers.
     let mut hosts = BTreeMap::<String, Type>::new();
     for relation in &context.relations {
-        if let Some(delta) = &relation.delta_host { hosts.insert(delta.to_string(), relation.providers.delta.clone()); }
+        if let Some(delta) = &relation.delta_host { hosts.insert(delta.to_string(), relation.providers.delta.ty.clone()); }
     }
     for layout in context.layouts.iter().chain(&context.delta_layouts) {
-        hosts.insert(layout.host.to_string(), layout.provider.clone());
+        hosts.insert(layout.host.to_string(), layout.provider.ty.clone());
     }
     // The relation whose candidate arena each hole's terminal fills.
     let mut owners = vec![0usize; program.holes.len()];
     let mut scans = BTreeMap::new();
     for stratum in &context.strata {
         for key in &stratum.keys {
-            hosts.insert(key.name.to_string(), key.provider.clone());
+            hosts.insert(key.name.to_string(), key.provider.ty.clone());
             owners[key.hole] = key.relation;
         }
         for rule in stratum.seeds.iter().chain(&stratum.steps) {
@@ -400,7 +400,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     for (index, (layout, record)) in context.layouts.iter().zip(&device.layouts).enumerate() {
         let (state, packing, host) = (local("layout", index), local("layout_packing", index), &layout.host);
         let (state_ty, state_init, packing_init, ty, init) =
-            (&record.state, &record.state_init, &record.packing, &layout.provider, &record.init);
+            (&record.state, &record.state_init, &record.packing, &layout.provider.ty, &record.init);
         let runner = program_runner();
         initialize.push(quote!(
             let (#packing, mut #state, mut #host) = #runner(#[inline] || -> ::gpu_datalog_runtime::Result<(_, #state_ty, #ty)> {
@@ -411,7 +411,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     for (index, (layout, record)) in context.delta_layouts.iter().zip(&device.delta_layouts).enumerate() {
         let (state, packing, host) = (local("delta_layout", index), local("delta_packing", index), &layout.host);
         let (state_ty, state_init, packing_init, ty, init) =
-            (&record.state, &record.state_init, &record.packing, &layout.provider, &record.init);
+            (&record.state, &record.state_init, &record.packing, &layout.provider.ty, &record.init);
         let runner = program_runner();
         initialize.push(quote!(
             let (#packing, #state, mut #host) = #runner(#[inline] || -> ::gpu_datalog_runtime::Result<(_, #state_ty, #ty)> {
@@ -429,7 +429,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             })?;
         ));
         if let Some(delta) = &relation.delta_host {
-            let (ty, init) = (&relation.providers.delta, &relation.providers.delta_init);
+            let (ty, init) = (&relation.providers.delta.ty, &relation.providers.delta_init);
             let runner = program_runner();
             initialize.push(quote!(
                 let mut #delta: #ty = #runner(#[inline] || -> ::gpu_datalog_runtime::Result<#ty> { Ok(#init) })?;
@@ -487,7 +487,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let mut keys = Vec::new();
         for key in &stratum.keys {
             let name = &key.name;
-            let ty = &key.provider;
+            let ty = &key.provider.ty;
             let record = &device.negations[negation(program, index, key)?];
             let (word, packing, state_ty, state_init) = (&record.word, &record.packing, &record.state, &record.state_init);
             let relation = &device.relations[key.relation];

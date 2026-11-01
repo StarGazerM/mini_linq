@@ -1,11 +1,12 @@
 //! Device realizations of the existing checked Datalog storage records.
 use cq_datalog_support::ensure;
 use cq_lang_datalog_storage::{
-    self as storage, DeviceRelation, DeviceScratch, DeviceState, DeviceStorage, LayoutProtocol, Program, Providers,
+    self as storage, DeviceRelation, DeviceScratch, DeviceState, DeviceStorage, Hasher, LayoutProtocol, Program,
+    Provider, Providers, provider,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Expr, Type};
+use syn::{Expr, Ident, Type};
 
 /// Explicit, syntactically matched logical-type to host-codec declarations.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -126,8 +127,42 @@ pub fn layout_type(types: &[&Type], key: usize) -> Type {
     syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(#(#keys,)*), (#(#values,)*)>)
 }
 
-fn rows(types: &[&Type]) -> Type {
-    syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>)
+/// Device tokens (verbatim spellings; G2 owns their device facts): packed
+/// bulk layout views and the relation-order delta/NEW views.
+pub const DEVICE_LAYOUT: &str = "device_layout";
+pub const DEVICE_VIEW: &str = "device_view";
+
+fn device_tokens() -> [provider::Token; 2] {
+    [
+        provider::declared(
+            DEVICE_LAYOUT,
+            provider::Spelling::Verbatim,
+            Some(LayoutProtocol::Bulk),
+            provider::Admission::None,
+            false,
+            provider::TaskHasher::Fx,
+        ),
+        provider::declared(
+            DEVICE_VIEW,
+            provider::Spelling::Verbatim,
+            None,
+            provider::Admission::None,
+            false,
+            provider::TaskHasher::Fx,
+        ),
+    ]
+}
+
+fn instance(token: &str, ty: Type) -> Provider {
+    Provider { token: Ident::new(token, proc_macro2::Span::call_site()), ty }
+}
+
+/// The default `rows_vec` buffer of a relation's full rows.
+fn rows(types: &[&Type]) -> Provider {
+    let token = provider::rows_vec();
+    let ty = provider::spell(&token, &syn::parse_quote!((#(#types,)*)), &syn::parse_quote!(()), Hasher::None)
+        .expect("rows_vec spells unhashed rows");
+    Provider { token: token.token, ty }
 }
 
 /// The default Storage relation providers, keeping the source's canonical layout.
@@ -148,28 +183,19 @@ fn device_provider(logical: &[&Type], device: &[&Type], edb: bool, canonical: us
     if edb { return Ok(default_provider(logical, canonical)); }
     let view = layout_type(device, device.len());
     let init = empty_view(&view, &word_type(device.iter().copied())?);
+    let view = instance(DEVICE_VIEW, view);
     Ok(Providers { canonical, delta: view.clone(), next: view, delta_init: init.clone(), next_init: init })
 }
 
-/// The default Storage layout: a layout keyed by every column is a key set.
-fn default_layout(types: &[&Type], key: usize) -> (Type, LayoutProtocol) {
+/// The default Storage layout: a layout keyed by every column is a `hash_set`,
+/// otherwise a `hash_map`, both with the default Fx hasher.
+fn default_layout(types: &[&Type], key: usize) -> (Provider, Hasher, LayoutProtocol) {
     let (keys, values) = types.split_at(key);
-    if values.is_empty() {
-        (syn::parse_quote!(
-            ::std::collections::HashSet<
-                (#(#keys,)*),
-                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-            >
-        ), LayoutProtocol::Set)
-    } else {
-        (syn::parse_quote!(
-            ::std::collections::HashMap<
-                (#(#keys,)*),
-                ::std::vec::Vec<(#(#values,)*)>,
-                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-            >
-        ), LayoutProtocol::GroupedMap)
-    }
+    let token = if values.is_empty() { provider::hash_set() } else { provider::hash_map() };
+    let ty = provider::spell(&token, &syn::parse_quote!((#(#keys,)*)), &syn::parse_quote!((#(#values,)*)), Hasher::Fx)
+        .expect("base tokens spell the Fx hasher");
+    let protocol = token.protocol.expect("base layout tokens declare a protocol");
+    (Provider { token: token.token, ty }, Hasher::Fx, protocol)
 }
 
 fn empty_view(provider: &Type, word: &Type) -> Expr {
@@ -214,6 +240,9 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
         columns.iter().map(|&column| symbols.device_type(&declarations[relation].columns[column].ty)).collect()
     };
     let mut target = source.clone();
+    for token in device_tokens() {
+        provider::declare(&mut target.tokens, token);
+    }
     let mut relations = Vec::new();
     for (index, (provider, declaration)) in target.providers.iter_mut().zip(declarations).enumerate() {
         let logical = declaration.columns.iter().map(|column| &column.ty).collect::<Vec<_>>();
@@ -227,9 +256,10 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
         for layout in layouts.iter_mut() {
             let types = device_types(analysis.positions[&cq_syntax::symbol_name(&layout.relation)], &layout.columns);
             let types = types.iter().collect::<Vec<_>>();
-            layout.provider = layout_type(&types, layout.key);
+            layout.provider = instance(DEVICE_LAYOUT, layout_type(&types, layout.key));
+            layout.hasher = Hasher::None;
             layout.protocol = LayoutProtocol::Bulk;
-            states.push(device_state(layout.provider.clone(), &types, ratio)?);
+            states.push(device_state(layout.provider.ty.clone(), &types, ratio)?);
         }
     }
     let [layouts, delta_layouts] = states;
@@ -256,6 +286,7 @@ fn restore(target: &Program) -> syn::Result<Program> {
     let declarations = &target.incremental.strata.source.declarations;
     let mut source = target.clone();
     source.device = None;
+    source.tokens.retain(|token| token.token != DEVICE_LAYOUT && token.token != DEVICE_VIEW);
     for (provider, declaration) in source.providers.iter_mut().zip(declarations) {
         let types = declaration.columns.iter().map(|column| &column.ty).collect::<Vec<_>>();
         *provider = default_provider(&types, provider.canonical);
@@ -263,7 +294,7 @@ fn restore(target: &Program) -> syn::Result<Program> {
     for layout in source.layouts.iter_mut().chain(&mut source.delta_layouts) {
         let declaration = &declarations[analysis.positions[&cq_syntax::symbol_name(&layout.relation)]];
         let types = layout.columns.iter().map(|&column| &declaration.columns[column].ty).collect::<Vec<_>>();
-        (layout.provider, layout.protocol) = default_layout(&types, layout.key);
+        (layout.provider, layout.hasher, layout.protocol) = default_layout(&types, layout.key);
     }
     Ok(source)
 }
@@ -354,7 +385,7 @@ mod tests {
         assert!(check(&source, &changed).is_err());
         assert!(check_device(&changed).is_err());
         let mut changed = target.clone();
-        changed.layouts[0].provider = syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(), (u32, u32,)>);
+        changed.layouts[0].provider.ty = syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(), (u32, u32,)>);
         assert!(check(&source, &changed).is_err());
     }
 
@@ -441,7 +472,7 @@ mod tests {
         let word = word_type([&ty, &ty]).unwrap();
         // EDB relations keep the defaults of their unused IDB fields.
         assert_eq!(target.providers[0], source.providers[0]);
-        let view: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(i32, i32,), ()>);
+        let view: Provider = syn::parse_quote!(@device_view as ::gpu_datalog_runtime::DeviceLayout<(i32, i32,), ()>);
         let idb = &target.providers[2];
         assert_eq!((&idb.delta, &idb.next, idb.canonical), (&view, &view, source.providers[2].canonical));
         assert_eq!(idb.delta_init, idb.next_init);
@@ -457,6 +488,7 @@ mod tests {
             assert_eq!(after.protocol, LayoutProtocol::Bulk);
             let mut restored = after.clone();
             restored.provider = before.provider.clone();
+            restored.hasher = before.hasher;
             restored.protocol = before.protocol;
             assert_eq!(&restored, before);
         }
@@ -480,25 +512,48 @@ mod tests {
         assert!(check_device(&forged).is_err(), "initializers must consume the recorded ratio");
     }
 
+    /// A `Custom` instance of an authored verbatim token declaring `protocol`.
+    fn custom(program: &mut Program, protocol: Option<LayoutProtocol>) -> Provider {
+        let name = match protocol {
+            None => "custom_rows",
+            Some(LayoutProtocol::Set) => "custom_set",
+            Some(LayoutProtocol::GroupedMap) => "custom_map",
+            Some(LayoutProtocol::Bulk) => "custom_bulk",
+        };
+        provider::declare(&mut program.tokens, provider::declared(
+            name, provider::Spelling::Verbatim, protocol, provider::Admission::None, false, provider::TaskHasher::Fx,
+        ));
+        instance(name, syn::parse_quote!(Custom))
+    }
+
     #[test]
     fn rejects_nondefault_sources_and_incorrect_device_providers() {
         // Layout providers are mirrored by their device records.
         let mutations: &[fn(&mut Program)] = &[
-            |p| { p.providers[2].delta = syn::parse_quote!(Custom); p.providers[2].next = syn::parse_quote!(Custom); },
+            |p| { let rows = custom(p, None); p.providers[2].delta = rows.clone(); p.providers[2].next = rows; },
             |p| p.providers[2].delta_init = syn::parse_quote!(custom()),
             |p| p.providers[2].next_init = syn::parse_quote!(custom()),
             |p| {
-                p.layouts[0].provider = syn::parse_quote!(Custom);
+                p.layouts[0].provider = custom(p, Some(p.layouts[0].protocol));
+                p.layouts[0].hasher = Hasher::None;
                 if let Some(device) = &mut p.device { device.layouts[0].provider = syn::parse_quote!(Custom); }
             },
             |p| {
-                p.delta_layouts[0].provider = syn::parse_quote!(Custom);
+                p.delta_layouts[0].provider = custom(p, Some(p.delta_layouts[0].protocol));
+                p.delta_layouts[0].hasher = Hasher::None;
                 if let Some(device) = &mut p.device { device.delta_layouts[0].provider = syn::parse_quote!(Custom); }
             },
-            |p| p.layouts[0].protocol = if p.layouts[0].protocol == LayoutProtocol::Bulk {
-                LayoutProtocol::GroupedMap
-            } else {
-                LayoutProtocol::Bulk
+            |p| {
+                let protocol = if p.layouts[0].protocol == LayoutProtocol::Bulk {
+                    LayoutProtocol::GroupedMap
+                } else {
+                    LayoutProtocol::Bulk
+                };
+                // An authored token declaring the other protocol, same spelling.
+                let ty = p.layouts[0].provider.ty.clone();
+                p.layouts[0].provider = Provider { ty, ..custom(p, Some(protocol)) };
+                p.layouts[0].hasher = Hasher::None;
+                p.layouts[0].protocol = protocol;
             },
         ];
         let source = source();
@@ -602,7 +657,7 @@ mod tests {
         let device = target.device.as_ref().unwrap();
         assert_eq!(device.layouts[target.providers[0].canonical].state, syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>));
         assert_eq!(device.layouts[target.providers[2].canonical].word, word);
-        assert_eq!(target.layouts[0].provider, syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(), (i64, i64,)>));
+        assert_eq!(target.layouts[0].provider, syn::parse_quote!(@device_layout as ::gpu_datalog_runtime::DeviceLayout<(), (i64, i64,)>));
         check(&source, &target).unwrap();
     }
 
@@ -614,7 +669,7 @@ mod tests {
         extra.columns.reverse();
         extra.key = 0;
         let ty: Type = syn::parse_quote!(i32);
-        (extra.provider, extra.protocol) = default_layout(&[&ty, &ty], 0);
+        (extra.provider, extra.hasher, extra.protocol) = default_layout(&[&ty, &ty], 0);
         source.layouts.push(extra);
         storage::contract::check(&source).unwrap();
         let target = compile(&source).unwrap();

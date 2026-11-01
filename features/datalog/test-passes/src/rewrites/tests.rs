@@ -121,7 +121,8 @@ fn storage_alternative_fixture_and_binding_mutations() {
         relation: syn::parse_quote!(E),
         columns: vec![1, 0],
         key: 0,
-        provider: syn::parse_quote!(::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>),
+        provider: syn::parse_quote!(@hash_map as ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>),
+        hasher: storage::Hasher::Keyed,
         maintenance: syn::parse_quote!(admitted_rows),
         protocol: storage::LayoutProtocol::GroupedMap,
     });

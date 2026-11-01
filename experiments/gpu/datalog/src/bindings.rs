@@ -6,13 +6,17 @@ use quote::quote;
 use std::collections::{BTreeMap, BTreeSet};
 use syn::{Ident, Type};
 
-/// The recorded device provider of each component's negative key set.
-fn key_providers(program: &Program) -> syn::Result<Vec<Vec<Type>>> {
+/// The recorded device provider of each component's negative key set, as a
+/// `device_layout` token instance (declared by device storage).
+fn key_providers(program: &Program) -> syn::Result<Vec<Vec<round::storage::Provider>>> {
     let device = program.storage.device.as_ref().ok_or_else(||
         syn::Error::new_spanned(program, "missing device storage records"))?;
     program.context.strata.iter().enumerate().map(|(component, stratum)| {
         stratum.keys.iter().map(|key| {
-            Ok(device.negations[crate::print::negation(program, component, key)?].provider.clone())
+            Ok(round::storage::Provider {
+                token: Ident::new(crate::storage::DEVICE_LAYOUT, proc_macro2::Span::call_site()),
+                ty: device.negations[crate::print::negation(program, component, key)?].provider.clone(),
+            })
         }).collect()
     }).collect()
 }
@@ -46,6 +50,7 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
     for (stratum, providers) in target.context.strata.iter_mut().zip(key_providers(source)?) {
         for (key, provider) in stratum.keys.iter_mut().zip(providers) {
             key.provider = provider;
+            key.hasher = round::storage::Hasher::None;
         }
     }
     let inputs = crate::print::input_types(&target)?;
@@ -73,7 +78,7 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
 pub fn check(program: &Program) -> syn::Result<()> {
     for (stratum, providers) in program.context.strata.iter().zip(key_providers(program)?) {
         for (key, provider) in stratum.keys.iter().zip(providers) {
-            ensure(key.provider == provider, key, "GPU key set differs from its recorded device provider")?;
+            ensure(key.provider == provider && key.hasher == round::storage::Hasher::None, key, "GPU key set differs from its recorded device provider")?;
         }
     }
     let inputs = crate::print::input_types(program)?;

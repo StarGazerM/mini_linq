@@ -237,22 +237,22 @@ fn default_providers_record_concrete_types_in_declaration_order() {
     let expected: Vec<cq_lang_datalog_storage::Providers> = vec![
         syn::parse_quote! {
             canonical { 1 }
-            delta { ::std::vec::Vec<(i32, u64,)> }
-            next { ::std::vec::Vec<(i32, u64,)> }
+            delta { @rows_vec as ::std::vec::Vec<(i32, u64,)> }
+            next { @rows_vec as ::std::vec::Vec<(i32, u64,)> }
             delta_init { ::std::vec::Vec::new() }
             next_init { ::std::vec::Vec::new() }
         },
         syn::parse_quote! {
             canonical { 2 }
-            delta { ::std::vec::Vec<(u64, i32,)> }
-            next { ::std::vec::Vec<(u64, i32,)> }
+            delta { @rows_vec as ::std::vec::Vec<(u64, i32,)> }
+            next { @rows_vec as ::std::vec::Vec<(u64, i32,)> }
             delta_init { ::std::vec::Vec::new() }
             next_init { ::std::vec::Vec::new() }
         },
     ];
     assert_eq!(target.providers, expected);
-    let scan: syn::Type = syn::parse_quote!(
-        ::std::collections::HashMap<(), ::std::vec::Vec<(i32, u64,)>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+    let scan: cq_lang_datalog_storage::Provider = syn::parse_quote!(
+        @hash_map as ::std::collections::HashMap<(), ::std::vec::Vec<(i32, u64,)>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
     );
     assert_eq!(target.layouts[0].provider, scan);
     assert_eq!(
@@ -260,8 +260,8 @@ fn default_providers_record_concrete_types_in_declaration_order() {
         cq_lang_datalog_storage::LayoutProtocol::GroupedMap
     );
     // A full-key layout has no payload: it is a key set, not a map of `Vec<()>`.
-    let lookup: syn::Type = syn::parse_quote!(
-        ::std::collections::HashSet<(i32, u64,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+    let lookup: cq_lang_datalog_storage::Provider = syn::parse_quote!(
+        @hash_set as ::std::collections::HashSet<(i32, u64,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
     );
     assert_eq!(target.layouts[1].provider, lookup);
     assert_eq!(

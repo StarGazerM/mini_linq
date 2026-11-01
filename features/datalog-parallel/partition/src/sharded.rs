@@ -9,7 +9,7 @@ use cq_datalog_support::ensure;
 use cq_lang_datalog_round::{self as round, Program, storage};
 use proc_macro2::TokenStream;
 use storage::record;
-use syn::{Ident, Type};
+use syn::Ident;
 
 pub const DEFAULT_THRESHOLD: usize = 1024;
 pub const DEFAULT_GRAIN: usize = 64;
@@ -236,15 +236,38 @@ pub fn compile_storage_with(
                     declaration.name == layout.relation && declaration.value.is_none()
                 })
         {
-            let replacement = if arguments.layouts == LayoutChoice::Runs {
-                run_layout(&layout.provider)?
-            } else {
-                sharded_layout(&layout.provider)
-            };
-            if let Some(provider) = replacement {
-                layout.provider = provider;
-                layout.protocol = storage::LayoutProtocol::Bulk;
+            if ![storage::provider::HASH_SET, storage::provider::HASH_MAP]
+                .iter()
+                .any(|token| layout.provider.token == token)
+            {
+                continue;
             }
+            let (token, hasher) = if arguments.layouts == LayoutChoice::Runs {
+                ensure(
+                    layout.hasher == storage::Hasher::Fx,
+                    &layout.provider.token,
+                    "layouts(runs) requires the default storage hasher BuildHasherDefault<FxHasher>",
+                )?;
+                (run_layout(), storage::Hasher::None)
+            } else {
+                (sharded_layout(), layout.hasher)
+            };
+            let declaration = source
+                .incremental
+                .strata
+                .source
+                .declarations
+                .iter()
+                .find(|declaration| declaration.name == layout.relation)
+                .expect("checked IDB layout relation");
+            let (key, payload) = storage::layout_schema(declaration, &layout.columns, layout.key);
+            layout.provider = storage::Provider {
+                ty: storage::provider::spell(&token, &key, &payload, hasher)?,
+                token: token.token.clone(),
+            };
+            layout.hasher = hasher;
+            layout.protocol = storage::LayoutProtocol::Bulk;
+            storage::provider::declare(&mut target.tokens, token);
         }
     }
     check_storage(source, &target)?;
@@ -265,7 +288,22 @@ pub fn check_storage(source: &storage::Program, target: &storage::Program) -> sy
         target,
         "sharded storage changed provider coverage",
     )?;
+    // Partition only appends declarations of its own tokens that it references.
+    ensure(
+        target.tokens.starts_with(&source.tokens)
+            && target.tokens[source.tokens.len()..].iter().all(|token| {
+                (*token == sharded_layout() || *token == run_layout())
+                    && target
+                        .layouts
+                        .iter()
+                        .chain(&target.delta_layouts)
+                        .any(|layout| layout.provider.token == token.token)
+            }),
+        target,
+        "sharded storage changed the provider token table",
+    )?;
     let mut erased = target.clone();
+    erased.tokens.truncate(source.tokens.len());
     for (index, declaration) in source
         .incremental
         .strata
@@ -289,7 +327,7 @@ pub fn check_storage(source: &storage::Program, target: &storage::Program) -> sy
         .chain(&source.delta_layouts)
         .zip(erased.layouts.iter_mut().chain(&mut erased.delta_layouts))
     {
-        if rewritten.provider != original.provider
+        if (rewritten.provider != original.provider || rewritten.hasher != original.hasher)
             && original.key > 0
             && source
                 .incremental
@@ -301,18 +339,24 @@ pub fn check_storage(source: &storage::Program, target: &storage::Program) -> sy
                     declaration.name == original.relation && declaration.value.is_none()
                 })
         {
+            // Token identity: a base key set or grouped map becomes a sharded
+            // layout keeping its hasher, or a run layout from the Fx default.
+            // The target contract checks each token's protocol and spelling.
+            let native = [storage::provider::HASH_SET, storage::provider::HASH_MAP]
+                .iter()
+                .any(|token| original.provider.token == token);
+            let sharded =
+                rewritten.provider.token == SHARDED_LAYOUT && rewritten.hasher == original.hasher;
+            let runs = rewritten.provider.token == RUN_LAYOUT
+                && original.hasher == storage::Hasher::Fx
+                && rewritten.hasher == storage::Hasher::None;
             ensure(
-                matches!(
-                    original.protocol,
-                    storage::LayoutProtocol::GroupedMap | storage::LayoutProtocol::Set
-                ) && rewritten.protocol == storage::LayoutProtocol::Bulk
-                    && (sharded_layout(&original.provider).as_ref() == Some(&rewritten.provider)
-                        || run_layout(&original.provider).ok().flatten().as_ref()
-                            == Some(&rewritten.provider)),
+                native && (sharded || runs) && rewritten.protocol == storage::LayoutProtocol::Bulk,
                 target,
                 "incorrect layout provider",
             )?;
             rewritten.provider = original.provider.clone();
+            rewritten.hasher = original.hasher;
             rewritten.protocol = original.protocol;
         }
     }
@@ -653,11 +697,9 @@ fn certificate(program: &Program, arguments: Arguments) -> ShardCertificate {
 }
 
 fn check_providers(program: &Program) -> syn::Result<()> {
+    let tokens = &program.storage.tokens;
     for relation in &program.context.relations {
         if relation.declaration.value.is_none() {
-            let types = relation.declaration.columns.iter().map(|column| &column.ty);
-            let tuple: Type = syn::parse_quote!((#(#types,)*));
-            let rows: Type = syn::parse_quote!(::std::vec::Vec<#tuple>);
             // Layout providers are checked below; admission needs a bulk canonical.
             ensure(
                 program
@@ -669,12 +711,16 @@ fn check_providers(program: &Program) -> syn::Result<()> {
                 "sharded Round requires a sharded or sorted-run canonical layout for each IDB",
             )?;
             ensure(
-                relation.providers.delta == rows && relation.providers.next == rows,
+                relation.providers.delta.token == storage::provider::ROWS_VEC
+                    && relation.providers.next.token == storage::provider::ROWS_VEC,
                 program,
                 "sharded Round requires vector delta and next providers",
             )?;
         }
     }
+    // Storage's contract checks each layout's protocol and spelling against its
+    // token. Non-bulk layouts need only their declared set or grouped-map
+    // operations; bulk tokens are this extension's own, on keyed IDB layouts.
     for layout in program
         .context
         .layouts
@@ -682,176 +728,51 @@ fn check_providers(program: &Program) -> syn::Result<()> {
         .chain(&program.context.delta_layouts)
     {
         let declaration = &program.context.relations[layout.relation].declaration;
-        let types: Vec<_> = layout
-            .columns
-            .iter()
-            .map(|&i| &declaration.columns[i].ty)
-            .collect();
-        let (keys, values) = types.split_at(layout.key);
-        let sharded = declaration.value.is_none()
-            && layout.key > 0
-            && type_arguments(
-                &layout.provider,
-                &["cq_datalog_parallel_runtime", "ShardedLayout"],
-            )
-            .is_some();
-        let runs = declaration.value.is_none()
-            && layout.key > 0
-            && type_arguments(
-                &layout.provider,
-                &["cq_datalog_parallel_runtime", "RunLayout"],
-            )
-            .is_some();
-        // A native key set: std names its hasher, the keyed alias fixes it.
-        let set_arguments = type_arguments(&layout.provider, &["std", "collections", "HashSet"])
-            .filter(|arguments| arguments.len() == 2)
-            .or_else(|| {
-                type_arguments(&layout.provider, &["cq_storage", "HashSet"])
-                    .filter(|arguments| arguments.len() == 1)
-            });
-        let set = !sharded && !runs && set_arguments.is_some();
-        let arguments = if sharded {
-            type_arguments(
-                &layout.provider,
-                &["cq_datalog_parallel_runtime", "ShardedLayout"],
-            )
-        } else if runs {
-            type_arguments(
-                &layout.provider,
-                &["cq_datalog_parallel_runtime", "RunLayout"],
-            )
-        } else if set {
-            set_arguments
+        let token = &layout.provider.token;
+        let eligible = if layout.protocol == storage::LayoutProtocol::Bulk {
+            (token == SHARDED_LAYOUT || token == RUN_LAYOUT)
+                && declaration.value.is_none()
+                && layout.key > 0
         } else {
-            type_arguments(&layout.provider, &["std", "collections", "HashMap"])
-        };
-        let key: Type = syn::parse_quote!((#(#keys,)*));
-        let value: Type = if sharded || runs {
-            syn::parse_quote!((#(#values,)*))
-        } else {
-            syn::parse_quote!(::std::vec::Vec<(#(#values,)*)>)
+            storage::provider::lookup(tokens, token)?.admission
+                == storage::provider::Admission::None
         };
         ensure(
-            arguments.is_some_and(|arguments| {
-                if set {
-                    values.is_empty()
-                        && argument_type(&arguments[0]) == Some(&key)
-                        && arguments.iter().all(|a| argument_type(a).is_some())
-                } else {
-                    arguments.len() == (if runs { 2 } else { 3 })
-                        && argument_type(&arguments[0]) == Some(&key)
-                        && argument_type(&arguments[1]) == Some(&value)
-                        && (runs || argument_type(&arguments[2]).is_some())
-                }
-            }),
+            eligible,
             program,
-            "sharded Round requires a native HashMap or HashSet or an eligible ShardedLayout or RunLayout",
-        )?;
-        ensure(
-            layout.protocol
-                == if sharded || runs {
-                    storage::LayoutProtocol::Bulk
-                } else if set {
-                    storage::LayoutProtocol::Set
-                } else {
-                    storage::LayoutProtocol::GroupedMap
-                },
-            program,
-            "layout maintenance protocol does not match the certified provider",
+            "sharded Round requires set or grouped-map layouts or an eligible sharded_layout or run_layout",
         )?;
     }
     Ok(())
 }
 
-fn type_arguments<'a>(
-    ty: &'a Type,
-    names: &[&str],
-) -> Option<&'a syn::punctuated::Punctuated<syn::GenericArgument, syn::Token![,]>> {
-    let Type::Path(path) = ty else { return None };
-    if path.qself.is_some()
-        || path.path.leading_colon.is_none()
-        || path.path.segments.len() != names.len()
-    {
-        return None;
-    }
-    for (index, (segment, name)) in path.path.segments.iter().zip(names).enumerate() {
-        if segment.ident != *name {
-            return None;
-        }
-        if index + 1 == names.len() {
-            if let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments {
-                return Some(&arguments.args);
-            }
-        } else if !matches!(segment.arguments, syn::PathArguments::None) {
-            return None;
-        }
-    }
-    None
+/// Parallel runtime tokens, declared by partition (DL-ShardedAdmission).
+pub const SHARDED_LAYOUT: &str = "sharded_layout";
+pub const RUN_LAYOUT: &str = "run_layout";
+
+/// Hash-sharded bulk layout: admission routes candidates by hash and task-local
+/// deduplication reuses the layout's own hasher state.
+pub fn sharded_layout() -> storage::provider::Token {
+    storage::provider::declared(
+        SHARDED_LAYOUT,
+        storage::provider::Spelling::Sharded,
+        Some(storage::LayoutProtocol::Bulk),
+        storage::provider::Admission::ShardedHash,
+        true,
+        storage::provider::TaskHasher::Layout,
+    )
 }
 
-fn argument_type(argument: &syn::GenericArgument) -> Option<&Type> {
-    match argument {
-        syn::GenericArgument::Type(ty) => Some(ty),
-        _ => None,
-    }
-}
-
-/// Recognize exactly the grouped native map or the native/keyed key set,
-/// preserving the key, row payload (`()` for a set) and hasher arguments.
-fn sharded_layout(ty: &Type) -> Option<Type> {
-    if let Some(arguments) = type_arguments(ty, &["std", "collections", "HashSet"]) {
-        if arguments.len() != 2 {
-            return None;
-        }
-        let key = argument_type(&arguments[0])?;
-        let hasher = argument_type(&arguments[1])?;
-        return Some(
-            syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<#key, (), #hasher>),
-        );
-    }
-    if let Some(arguments) = type_arguments(ty, &["cq_storage", "HashSet"]) {
-        if arguments.len() != 1 {
-            return None;
-        }
-        let key = argument_type(&arguments[0])?;
-        return Some(syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::ShardedLayout<#key, (), ::cq_storage::HashState>
-        ));
-    }
-    let arguments = type_arguments(ty, &["std", "collections", "HashMap"])?;
-    if arguments.len() != 3 {
-        return None;
-    }
-    let key = argument_type(&arguments[0])?;
-    let values = argument_type(&arguments[1])?;
-    let hasher = argument_type(&arguments[2])?;
-    let payload = type_arguments(values, &["std", "vec", "Vec"])?;
-    if payload.len() != 1 {
-        return None;
-    }
-    let value = argument_type(&payload[0])?;
-    Some(syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<#key, #value, #hasher>))
-}
-
-/// Run layouts erase only to the exact default native storage representation.
-fn run_layout(ty: &Type) -> syn::Result<Option<Type>> {
-    let Some(sharded) = sharded_layout(ty) else {
-        return Ok(None);
-    };
-    let arguments = type_arguments(&sharded, &["cq_datalog_parallel_runtime", "ShardedLayout"])
-        .expect("constructed sharded layout");
-    let default: Type =
-        syn::parse_quote!(::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>);
-    ensure(
-        argument_type(&arguments[2]) == Some(&default),
-        ty,
-        "layouts(runs) requires the default storage hasher BuildHasherDefault<FxHasher>",
-    )?;
-    let key = &arguments[0];
-    let value = &arguments[1];
-    Ok(Some(
-        syn::parse_quote!(::cq_datalog_parallel_runtime::RunLayout<#key, #value>),
-    ))
+/// Sorted-run bulk layout: admission subtracts sorted candidate runs.
+pub fn run_layout() -> storage::provider::Token {
+    storage::provider::declared(
+        RUN_LAYOUT,
+        storage::provider::Spelling::Runs,
+        Some(storage::LayoutProtocol::Bulk),
+        storage::provider::Admission::SortedSubtract,
+        false,
+        storage::provider::TaskHasher::Fx,
+    )
 }
 
 impl cq_stage::Language for ShardedProgram {

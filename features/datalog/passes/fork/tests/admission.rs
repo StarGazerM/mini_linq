@@ -293,8 +293,9 @@ fn non_identity_canonical_order_permutes_the_committed_key() {
         columns: vec![2, 0, 1],
         key: 3,
         provider: syn::parse_quote!(
-            ::std::collections::HashSet<(i32, i32, i32,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+            @hash_set as ::std::collections::HashSet<(i32, i32, i32,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
         ),
+        hasher: storage::Hasher::Fx,
         maintenance: syn::parse_quote!(admitted_rows),
         protocol: storage::LayoutProtocol::Set,
     });

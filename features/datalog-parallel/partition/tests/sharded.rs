@@ -1,7 +1,8 @@
 //! Storage provider erasure, admission shards, and exclusive layout publication.
 use cq_datalog_partition::{
     DEFAULT_GRAIN, DEFAULT_THRESHOLD, ShardedProgram, check_sharded, check_storage,
-    compile_sharded, compile_sharded_with, compile_storage, compile_storage_with,
+    compile_sharded, compile_sharded_with, compile_storage, compile_storage_with, run_layout,
+    sharded_layout,
 };
 use cq_lang_datalog_round::{self as round, Program, storage};
 use cq_stage::Language;
@@ -282,7 +283,8 @@ fn default_shards_only_idb_canonical_layouts() {
         if idb_canonical.contains(&index) {
             // Every canonical layout is keyed by all columns: a key set.
             assert_eq!(before.protocol, storage::LayoutProtocol::Set);
-            assert_eq!(after.provider, shard_layout_type(&before.provider));
+            assert_eq!(after.provider, converted(&source, before, false));
+            assert_eq!(after.hasher, before.hasher);
             assert_eq!(after.protocol, storage::LayoutProtocol::Bulk);
         } else {
             assert_eq!(before, after);
@@ -290,8 +292,9 @@ fn default_shards_only_idb_canonical_layouts() {
     }
     assert_eq!(
         target.layouts[idb_canonical[0]].provider,
-        syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), (), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
+        syn::parse_quote!(@sharded_layout as ::cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), (), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
     );
+    assert_eq!(&target.tokens[source.tokens.len()..], [sharded_layout()]);
     assert_eq!(
         syn::parse2::<storage::Program>(target.to_token_stream()).unwrap(),
         target
@@ -299,32 +302,38 @@ fn default_shards_only_idb_canonical_layouts() {
     assert!(compile_storage_with(&source, quote!(threshold = 3)).is_err());
 }
 
-/// The sharded counterpart of a grouped map `HashMap<K, Vec<V>, S>` or a key
-/// set `HashSet<K, S>` (payload `()`).
-fn shard_layout_type(provider: &syn::Type) -> syn::Type {
-    let syn::Type::Path(path) = provider else {
-        panic!("map provider")
+/// The expected bulk counterpart of a base layout: the parallel token's
+/// spelling of the layout's recorded schema (sharded keeps the hasher).
+fn converted(source: &storage::Program, layout: &storage::Layout, runs: bool) -> storage::Provider {
+    let declaration = source
+        .incremental
+        .strata
+        .source
+        .declarations
+        .iter()
+        .find(|declaration| declaration.name == layout.relation)
+        .unwrap();
+    let (key, payload) = storage::layout_schema(declaration, &layout.columns, layout.key);
+    let (token, hasher) = if runs {
+        (run_layout(), storage::Hasher::None)
+    } else {
+        (sharded_layout(), layout.hasher)
     };
-    let segment = path.path.segments.last().unwrap();
-    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
-        panic!("map arguments")
-    };
-    let key = &args.args[0];
-    if segment.ident == "HashSet" {
-        let hasher = &args.args[1];
-        return syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<#key, (), #hasher>);
+    storage::Provider {
+        ty: storage::provider::spell(&token, &key, &payload, hasher).unwrap(),
+        token: token.token,
     }
-    let syn::GenericArgument::Type(syn::Type::Path(values)) = &args.args[1] else {
-        panic!("vector payload")
-    };
-    let syn::PathArguments::AngleBracketed(payload) =
-        &values.path.segments.last().unwrap().arguments
-    else {
-        panic!("vector arguments")
-    };
-    let value = &payload.args[0];
-    let hasher = &args.args[2];
-    syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<#key, #value, #hasher>)
+}
+
+fn eligible(source: &storage::Program, layout: &storage::Layout) -> bool {
+    layout.key > 0
+        && source
+            .incremental
+            .strata
+            .source
+            .declarations
+            .iter()
+            .any(|declaration| declaration.name == layout.relation && declaration.value.is_none())
 }
 
 #[test]
@@ -339,18 +348,8 @@ fn sharded_layouts_rewrite_and_erase_exactly() {
         .chain(&source.delta_layouts)
         .zip(target.layouts.iter().chain(&target.delta_layouts))
     {
-        if before.key > 0
-            && source
-                .incremental
-                .strata
-                .source
-                .declarations
-                .iter()
-                .any(|declaration| {
-                    declaration.name == before.relation && declaration.value.is_none()
-                })
-        {
-            assert_eq!(after.provider, shard_layout_type(&before.provider));
+        if eligible(&source, before) {
+            assert_eq!(after.provider, converted(&source, before, false));
             assert_eq!(after.protocol, storage::LayoutProtocol::Bulk);
             changed += 1;
         } else {
@@ -373,7 +372,7 @@ fn sharded_layouts_rewrite_and_erase_exactly() {
 }
 
 #[test]
-fn sharded_layout_checker_rejects_ineligible_and_changed_types() {
+fn sharded_layout_checker_rejects_ineligible_and_changed_records() {
     let source = authored_storage();
     let target = compile_storage_with(&source, quote!(layouts(sharded))).unwrap();
     for delta in [false, true] {
@@ -383,74 +382,33 @@ fn sharded_layout_checker_rejects_ineligible_and_changed_types() {
             &source.layouts
         };
         for (index, layout) in layouts.iter().enumerate() {
-            let eligible = layout.key > 0
-                && source
-                    .incremental
-                    .strata
-                    .source
-                    .declarations
-                    .iter()
-                    .any(|declaration| {
-                        declaration.name == layout.relation && declaration.value.is_none()
-                    });
-            if !eligible {
+            if !eligible(&source, layout) {
                 let mut changed = target.clone();
-                let layouts = if delta {
-                    &mut changed.delta_layouts
-                } else {
-                    &mut changed.layouts
-                };
-                layouts[index].provider = shard_layout_type(&layout.provider);
+                let selected = layout_mut(&mut changed, delta, index);
+                selected.provider = converted(&source, layout, false);
+                selected.protocol = storage::LayoutProtocol::Bulk;
                 assert!(check_storage(&source, &changed).is_err());
                 assert!(compile_sharded(&cq_datalog_fork::compile(&changed).unwrap()).is_err());
             } else {
-                for argument in 0..3 {
-                    let mut changed = target.clone();
-                    let layouts = if delta {
-                        &mut changed.delta_layouts
-                    } else {
-                        &mut changed.layouts
-                    };
-                    let syn::Type::Path(path) = &mut layouts[index].provider else {
-                        unreachable!()
-                    };
-                    let syn::PathArguments::AngleBracketed(args) =
-                        &mut path.path.segments.last_mut().unwrap().arguments
-                    else {
-                        unreachable!()
-                    };
-                    args.args[argument] = syn::parse_quote!(Changed);
-                    assert!(check_storage(&source, &changed).is_err());
-                }
+                // A changed spelling, hasher, or token is rejected.
                 let mut changed = target.clone();
-                let layouts = if delta {
-                    &mut changed.delta_layouts
-                } else {
-                    &mut changed.layouts
-                };
-                let syn::Type::Path(path) = &mut layouts[index].provider else {
-                    unreachable!()
-                };
-                path.path.leading_colon = None;
+                layout_mut(&mut changed, delta, index).provider.ty = syn::parse_quote!(Changed);
                 assert!(check_storage(&source, &changed).is_err());
-                assert!(compile_sharded(&cq_datalog_fork::compile(&changed).unwrap()).is_err());
+                let mut changed = target.clone();
+                let hasher = &mut layout_mut(&mut changed, delta, index).hasher;
+                *hasher = if *hasher == storage::Hasher::Fx {
+                    storage::Hasher::Keyed
+                } else {
+                    storage::Hasher::Fx
+                };
+                assert!(check_storage(&source, &changed).is_err());
+                let mut changed = target.clone();
+                layout_mut(&mut changed, delta, index).provider.token =
+                    syn::parse_quote!(custom_layout);
+                assert!(check_storage(&source, &changed).is_err());
             }
         }
     }
-}
-
-fn run_layout_type(provider: &syn::Type) -> syn::Type {
-    let syn::Type::Path(mut path) = shard_layout_type(provider) else {
-        unreachable!()
-    };
-    let segment = path.path.segments.last_mut().unwrap();
-    segment.ident = syn::parse_quote!(RunLayout);
-    let syn::PathArguments::AngleBracketed(args) = &mut segment.arguments else {
-        unreachable!()
-    };
-    args.args.pop();
-    args.args.pop_punct();
-    syn::Type::Path(path)
 }
 
 #[test]
@@ -458,10 +416,12 @@ fn run_and_sharded_selections_cover_canonical_and_erase_exactly() {
     let source = authored_storage();
     for args in [quote!(), quote!(layouts(runs)), quote!(layouts(sharded),)] {
         let text = args.to_string();
+        let runs = text.contains("layouts (runs)");
         let target = compile_storage_with(&source, args).unwrap();
         check_storage(&source, &target).unwrap();
         assert_eq!(target.providers, source.providers);
         let mut restored = target.clone();
+        restored.tokens.truncate(source.tokens.len());
         let mut changed = 0;
         for (before, after) in source.layouts.iter().chain(&source.delta_layouts).zip(
             restored
@@ -470,15 +430,9 @@ fn run_and_sharded_selections_cover_canonical_and_erase_exactly() {
                 .chain(&mut restored.delta_layouts),
         ) {
             if before.provider != after.provider {
-                assert_eq!(
-                    after.provider,
-                    if text.contains("layouts (runs)") {
-                        run_layout_type(&before.provider)
-                    } else {
-                        shard_layout_type(&before.provider)
-                    }
-                );
+                assert_eq!(after.provider, converted(&source, before, runs));
                 after.provider = before.provider.clone();
+                after.hasher = before.hasher;
                 assert_eq!(after.protocol, storage::LayoutProtocol::Bulk);
                 after.protocol = before.protocol;
                 changed += 1;
@@ -513,8 +467,9 @@ fn run_layouts_make_each_idb_canonical_a_payload_free_run() {
         let canonical = &target.layouts[target.providers[relation].canonical];
         assert_eq!(
             canonical.provider,
-            syn::parse_quote!(::cq_datalog_parallel_runtime::RunLayout<(i32, i32,), ()>)
+            syn::parse_quote!(@run_layout as ::cq_datalog_parallel_runtime::RunLayout<(i32, i32,), ()>)
         );
+        assert_eq!(canonical.hasher, storage::Hasher::None);
         assert_eq!(canonical.protocol, storage::LayoutProtocol::Bulk);
     }
     // EDB canonical layouts stay native key sets.
@@ -541,14 +496,12 @@ fn layout_substitution_checks_recorded_maintenance_protocol() {
                 .unwrap();
             layout.protocol = storage::LayoutProtocol::GroupedMap;
             assert!(check_storage(&source, &changed).is_err());
-            let round = cq_datalog_fork::compile(&changed).unwrap();
-            assert!(compile_sharded(&round).is_err());
         }
     }
 }
 
 #[test]
-fn run_layout_checker_rejects_ineligible_and_changed_types_and_hashers() {
+fn run_layout_checker_rejects_ineligible_records_and_nondefault_hashers() {
     let source = authored_storage();
     let target = compile_storage_with(&source, quote!(layouts(runs))).unwrap();
     for delta in [false, true] {
@@ -558,74 +511,53 @@ fn run_layout_checker_rejects_ineligible_and_changed_types_and_hashers() {
             &source.layouts
         };
         for (index, layout) in layouts.iter().enumerate() {
-            let eligible = layout.key > 0
-                && source
+            if !eligible(&source, layout) {
+                let mut changed = target.clone();
+                let selected = layout_mut(&mut changed, delta, index);
+                selected.provider = converted(&source, layout, true);
+                selected.hasher = storage::Hasher::None;
+                selected.protocol = storage::LayoutProtocol::Bulk;
+                assert!(check_storage(&source, &changed).is_err());
+                assert!(compile_sharded(&cq_datalog_fork::compile(&changed).unwrap()).is_err());
+                continue;
+            }
+            let mut changed = target.clone();
+            layout_mut(&mut changed, delta, index).provider.ty = syn::parse_quote!(Changed);
+            assert!(check_storage(&source, &changed).is_err());
+            let mut changed = target.clone();
+            layout_mut(&mut changed, delta, index).hasher = storage::Hasher::Fx;
+            assert!(check_storage(&source, &changed).is_err());
+            // A keyed source layout has no run counterpart; sharding keeps it.
+            let mut keyed = source.clone();
+            let selected = layout_mut(&mut keyed, delta, index);
+            selected.hasher = storage::Hasher::Keyed;
+            selected.provider = {
+                let declaration = source
                     .incremental
                     .strata
                     .source
                     .declarations
                     .iter()
-                    .any(|d| d.name == layout.relation && d.value.is_none());
-            for argument in 0..3 {
-                let mut changed = target.clone();
-                let layouts = if delta {
-                    &mut changed.delta_layouts
-                } else {
-                    &mut changed.layouts
-                };
-                layouts[index].provider = run_layout_type(&layout.provider);
-                if eligible {
-                    let syn::Type::Path(path) = &mut layouts[index].provider else {
-                        unreachable!()
-                    };
-                    let syn::PathArguments::AngleBracketed(args) =
-                        &mut path.path.segments.last_mut().unwrap().arguments
-                    else {
-                        unreachable!()
-                    };
-                    if argument == 2 {
-                        args.args.push(syn::parse_quote!(ChangedHasher));
-                    } else {
-                        args.args[argument] = syn::parse_quote!(Changed);
-                    }
+                    .find(|declaration| declaration.name == layout.relation)
+                    .unwrap();
+                let (key, payload) =
+                    storage::layout_schema(declaration, &layout.columns, layout.key);
+                let token =
+                    storage::provider::lookup(&source.tokens, &layout.provider.token).unwrap();
+                storage::Provider {
+                    token: token.token.clone(),
+                    ty: storage::provider::spell(token, &key, &payload, storage::Hasher::Keyed)
+                        .unwrap(),
                 }
-                assert!(check_storage(&source, &changed).is_err());
-                if !eligible {
-                    assert!(compile_sharded(&cq_datalog_fork::compile(&changed).unwrap()).is_err());
-                }
-            }
-            if eligible {
-                for hasher in [
-                    syn::parse_quote!(::cq_storage::HashState),
-                    syn::parse_quote!(::std::collections::hash_map::RandomState),
-                    syn::parse_quote!(CustomHasher),
-                ] {
-                    let mut changed = source.clone();
-                    let layouts = if delta {
-                        &mut changed.delta_layouts
-                    } else {
-                        &mut changed.layouts
-                    };
-                    let syn::Type::Path(path) = &mut layouts[index].provider else {
-                        unreachable!()
-                    };
-                    let syn::PathArguments::AngleBracketed(args) =
-                        &mut path.path.segments.last_mut().unwrap().arguments
-                    else {
-                        unreachable!()
-                    };
-                    // The hasher is the last argument of both maps and sets.
-                    *args.args.last_mut().unwrap() = syn::GenericArgument::Type(hasher);
-                    assert!(
-                        compile_storage_with(&changed, quote!(layouts(runs)))
-                            .unwrap_err()
-                            .to_string()
-                            .contains("default storage hasher")
-                    );
-                    assert!(check_storage(&changed, &target).is_err());
-                    compile_storage_with(&changed, quote!(layouts(sharded))).unwrap();
-                }
-            }
+            };
+            assert!(
+                compile_storage_with(&keyed, quote!(layouts(runs)))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("default storage hasher")
+            );
+            assert!(check_storage(&keyed, &target).is_err());
+            compile_storage_with(&keyed, quote!(layouts(sharded))).unwrap();
         }
     }
 }
@@ -642,25 +574,17 @@ fn storage_checker_rejects_unrelated_and_provider_mutations() {
         |p| p.providers[2].canonical = p.providers[3].canonical,
         |p| {
             let canonical = p.providers[2].canonical;
-            p.layouts[canonical].provider =
+            p.layouts[canonical].provider.ty =
                 syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<(i32,), ()>)
         },
+        |p| p.layouts[0].provider.token = syn::parse_quote!(sharded_layout),
+        |p| p.delta_layouts[0].provider.token = syn::parse_quote!(sharded_layout),
+        |p| p.layouts[0].hasher = storage::Hasher::None,
+        |p| p.delta_layouts[0].hasher = storage::Hasher::Keyed,
         |p| {
-            p.layouts[0].provider =
-                syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedIndex<(), (i32, i32,)>)
+            p.tokens.pop();
         },
-        |p| {
-            p.delta_layouts[0].provider =
-                syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedIndex<(), (i32, i32,)>)
-        },
-        |p| {
-            p.layouts[0].provider =
-                syn::parse_quote!(::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>>)
-        },
-        |p| {
-            p.delta_layouts[0].provider =
-                syn::parse_quote!(::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>>)
-        },
+        |p| p.tokens.push(run_layout()),
         |p| {
             p.layouts.pop();
         },
@@ -672,27 +596,51 @@ fn storage_checker_rejects_unrelated_and_provider_mutations() {
     ];
     let source = authored_storage();
     let target = compile_storage(&source).unwrap();
-    for mutate in mutations {
+    for (index, mutate) in mutations.iter().enumerate() {
         let mut changed = target.clone();
         mutate(&mut changed);
-        assert!(check_storage(&source, &changed).is_err());
+        assert!(
+            check_storage(&source, &changed).is_err(),
+            "mutation {index}"
+        );
     }
 }
 
+fn verbatim(name: &str, protocol: storage::LayoutProtocol) -> storage::provider::Token {
+    storage::provider::declared(
+        name,
+        storage::provider::Spelling::Verbatim,
+        Some(protocol),
+        storage::provider::Admission::None,
+        false,
+        storage::provider::TaskHasher::Fx,
+    )
+}
+
 #[test]
-fn storage_preserves_layout_shapes_but_rejects_unsupported_canonical_providers() {
+fn storage_preserves_authored_tokens_but_rejects_unsupported_canonical_providers() {
+    // An authored grouped-map token keeps its layout and admits in parallel
+    // through its declared operations.
     let mut source = authored_storage();
-    source.layouts[0].provider =
-        syn::parse_quote!(::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>);
+    source
+        .tokens
+        .push(verbatim("ordered_map", storage::LayoutProtocol::GroupedMap));
+    source.layouts[0].provider = syn::parse_quote!(
+        @ordered_map as ::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>
+    );
+    source.layouts[0].hasher = storage::Hasher::None;
     let target = compile_storage(&source).unwrap();
     assert_eq!(target.layouts[0], source.layouts[0]);
     check_storage(&source, &target).unwrap();
-    let round = cq_datalog_fork::compile(&target).unwrap();
-    assert!(compile_sharded(&round).is_err());
-    // An opaque canonical provider has no sharded counterpart.
+    compile_sharded(&cq_datalog_fork::compile(&target).unwrap()).unwrap();
+    // An authored canonical token has no sharded counterpart.
     let mut source = authored_storage();
+    source
+        .tokens
+        .push(verbatim("custom_set", storage::LayoutProtocol::Set));
     let canonical = source.providers[2].canonical;
-    source.layouts[canonical].provider = syn::parse_quote!(custom::Set<(i32, i32,)>);
+    source.layouts[canonical].provider = syn::parse_quote!(@custom_set as custom::Set<(i32, i32,)>);
+    source.layouts[canonical].hasher = storage::Hasher::None;
     assert!(
         compile_storage(&source)
             .unwrap_err()
@@ -702,33 +650,43 @@ fn storage_preserves_layout_shapes_but_rejects_unsupported_canonical_providers()
 }
 
 #[test]
-fn sharding_preserves_explicit_hashers_and_checks_their_correspondence() {
-    let mut source = authored_storage();
-    for layout in source.layouts.iter_mut().chain(&mut source.delta_layouts) {
-        let syn::Type::Path(path) = &mut layout.provider else {
-            unreachable!()
-        };
-        let syn::PathArguments::AngleBracketed(arguments) =
-            &mut path.path.segments.last_mut().unwrap().arguments
-        else {
-            unreachable!()
-        };
-        *arguments.args.last_mut().unwrap() =
-            syn::parse_quote!(::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>);
-    }
+fn sharding_preserves_recorded_hashers_and_checks_their_correspondence() {
+    let source = authored_storage();
+    let keyed = |program: &storage::Program| {
+        let mut keyed = program.clone();
+        for layout in keyed.layouts.iter_mut().chain(&mut keyed.delta_layouts) {
+            let declaration = program
+                .incremental
+                .strata
+                .source
+                .declarations
+                .iter()
+                .find(|declaration| declaration.name == layout.relation)
+                .unwrap();
+            let (key, payload) = storage::layout_schema(declaration, &layout.columns, layout.key);
+            let token = storage::provider::lookup(&program.tokens, &layout.provider.token).unwrap();
+            layout.hasher = storage::Hasher::Keyed;
+            layout.provider.ty =
+                storage::provider::spell(token, &key, &payload, storage::Hasher::Keyed).unwrap();
+        }
+        keyed
+    };
+    let source = keyed(&source);
     let target = compile_storage(&source).unwrap();
     let canonical = target.providers[2].canonical;
     assert_eq!(
         target.layouts[canonical].provider,
         syn::parse_quote!(
-            ::cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), (), ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>
+            @sharded_layout as ::cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), (), ::cq_storage::HashState>
         )
     );
+    assert_eq!(target.layouts[canonical].hasher, storage::Hasher::Keyed);
     check_storage(&source, &target).unwrap();
     compile_sharded(&cq_datalog_fork::compile(&target).unwrap()).unwrap();
     let mut changed = target;
-    changed.layouts[canonical].provider = syn::parse_quote!(
-        ::cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), (), ::cq_storage::HashState>
+    changed.layouts[canonical].hasher = storage::Hasher::Fx;
+    changed.layouts[canonical].provider.ty = syn::parse_quote!(
+        ::cq_datalog_parallel_runtime::ShardedLayout<(i32, i32,), (), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
     );
     assert!(check_storage(&source, &changed).is_err());
 }
@@ -1015,4 +973,12 @@ fn output_only_program_has_no_phantom_owners_or_publications() {
     assert!(target.certificate.delta_layouts.is_empty());
     assert!(target.certificate.publication.is_empty());
     Language::check(&target).unwrap();
+}
+
+fn layout_mut(program: &mut storage::Program, delta: bool, index: usize) -> &mut storage::Layout {
+    if delta {
+        &mut program.delta_layouts[index]
+    } else {
+        &mut program.layouts[index]
+    }
 }

@@ -5,13 +5,13 @@
 //! `hasher(fx)` explicitly selects the default Fx providers. Ordered/custom
 //! providers, row buffers, bindings, the canonical choice, maintenance, and all
 //! logical/execution decisions are preserved.
-//! Only qualified `std::collections::HashMap`, `std::collections::HashSet`,
-//! `cq_storage::HashSet`, and `cq_datalog_parallel_runtime::ShardedLayout`
-//! types are recognized (an initial `::` is optional); aliases and nested
-//! types are deliberately opaque.
-//!
-//! `ShardedLayout<K, V>` and `ShardedLayout<K, V, S>` are supported, so Storage
-//! selection may precede or follow sharded Storage selection.
+//! Selection reads recorded provider tokens (A-126): every instance whose
+//! declared token is `hashed` with a spelling function records the chosen
+//! `hasher { fx | keyed }` and is respelled from its key/payload schema by its
+//! token's spelling function; verbatim (authored/device) tokens stay opaque.
+//! No Rust type path or generic argument is inspected. `hash_set`, `hash_map`
+//! and `sharded_layout` are hashed, so Storage selection may precede or follow
+//! sharded Storage selection.
 //!
 //! Negation key sets are recorded only after fork. Pair the Storage rewrite
 //! with `hasher_round(keyed)` in the Round queue to opt those sets out of Fx

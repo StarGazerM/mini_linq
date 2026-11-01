@@ -105,7 +105,7 @@ pub(super) fn step_loop(
         let relation = &context.relations[member];
         let types: Vec<_> = relation.declaration.columns.iter().map(|column| &column.ty).collect();
         let hasher = format_ident!("__cq_rel_hasher_{member}", span = Span::mixed_site());
-        let state = super::task_hasher(&context.layouts[relation.providers.canonical]);
+        let state = super::task_hasher(&program.round.storage.tokens, &context.layouts[relation.providers.canonical]);
         let hasher = program.certificate.self_dedup.is_some().then(|| {
             quote!(let #hasher = <#state as ::core::default::Default>::default();)
         });
@@ -195,7 +195,7 @@ pub(super) fn step_loop(
         let relation = &context.relations[member];
         let next = &relation.next;
         let canonical = &context.layouts[relation.providers.canonical];
-        let provider = &canonical.provider;
+        let provider = &canonical.provider.ty;
         let field = syn::Index::from(
             hosts[m]
                 .iter()
@@ -206,6 +206,7 @@ pub(super) fn step_loop(
         let checked = take(admit);
         let covered = covered[m].as_ref().map(take);
         let admission = super::admit_chunks(
+            &program.round.storage.tokens,
             context,
             member,
             Some(&checked),
@@ -273,7 +274,11 @@ mod tests {
             key: 1,
             name: syn::parse_quote!(layout),
             host: syn::parse_quote!(full),
-            provider,
+            provider: round::storage::Provider {
+                token: syn::parse_quote!(test_layout),
+                ty: provider,
+            },
+            hasher: round::storage::Hasher::None,
             protocol: round::storage::LayoutProtocol::Bulk,
             maintenance: syn::parse_quote!(insert),
         };

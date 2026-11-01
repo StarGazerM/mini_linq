@@ -19,11 +19,15 @@ pub use incremental::strata::source::{BodyItem, Query};
 use std::collections::BTreeSet;
 use syn::{Expr, Ident, Type};
 mod layouts;
+pub mod provider;
 pub mod text;
+pub use provider::{Hasher, Provider};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub incremental: incremental::Program,
+    /// Declared provider tokens (WF-DL-Storage); Round embeds this table.
+    pub tokens: Vec<provider::Token>,
     pub providers: Vec<Providers>,
     pub layouts: Vec<Layout>,
     pub delta_layouts: Vec<Layout>,
@@ -121,8 +125,9 @@ record!(DeviceScratch {
 pub struct Providers {
     /// Index of this relation's canonical member of `Program::layouts`.
     pub canonical: usize,
-    pub delta: Type,
-    pub next: Type,
+    /// Delta/next row buffers (`rows_vec` unless a refinement declares another token).
+    pub delta: Provider,
+    pub next: Provider,
     pub delta_init: Expr,
     pub next_init: Expr,
 }
@@ -162,7 +167,9 @@ pub struct Layout {
     pub relation: Ident,
     pub columns: Vec<usize>,
     pub key: usize,
-    pub provider: Type,
+    pub provider: Provider,
+    /// Recorded hasher state, `none` for unhashed tokens.
+    pub hasher: Hasher,
     pub maintenance: Ident,
     pub protocol: LayoutProtocol,
 }
@@ -196,15 +203,36 @@ pub struct Policy {
     pub insertion: Ident,
     pub negation_keys: Ident,
 }
-record!(Program { incremental: incremental::Program, providers: Vec<Providers>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, reads: Vec<Read>, negations: Vec<Negative>, certificates: Vec<HostCanonical>, policy: Policy, device: Option<DeviceStorage> });
+record!(Program { incremental: incremental::Program, tokens: Vec<provider::Token>, providers: Vec<Providers>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, reads: Vec<Read>, negations: Vec<Negative>, certificates: Vec<HostCanonical>, policy: Policy, device: Option<DeviceStorage> });
 record!(Providers {
     canonical: usize,
-    delta: Type,
-    next: Type,
+    delta: Provider,
+    next: Provider,
     delta_init: Expr,
     next_init: Expr
 });
-record!(Layout { relation: Ident, columns: Vec<usize>, key: usize, provider: Type, maintenance: Ident, protocol: LayoutProtocol });
+record!(Layout { relation: Ident, columns: Vec<usize>, key: usize, provider: Provider, hasher: Hasher, maintenance: Ident, protocol: LayoutProtocol });
+/// Key and payload row types of a layout of `declaration` (its recorded schema).
+pub fn layout_schema(
+    declaration: &cq_syntax::RelationDecl,
+    columns: &[usize],
+    key: usize,
+) -> (Type, Type) {
+    let types: Vec<_> = columns
+        .iter()
+        .map(|&column| &declaration.columns[column].ty)
+        .collect();
+    let (keys, values) = types.split_at(key);
+    (
+        syn::parse_quote!((#(#keys,)*)),
+        syn::parse_quote!((#(#values,)*)),
+    )
+}
+/// The full row type of `declaration`, the schema of its row buffers.
+pub fn row_type(declaration: &cq_syntax::RelationDecl) -> Type {
+    let types = declaration.columns.iter().map(|column| &column.ty);
+    syn::parse_quote!((#(#types,)*))
+}
 record!(Read { variant: usize, position: usize, kind: Ident, index: usize, columns: Vec<usize> });
 record!(Negative { component: usize, relation: usize, columns: Vec<usize>, filters: Vec<(usize, Expr)>, equalities: Vec<(usize, usize)> });
 record!(HostCanonical { kind: Ident, index: usize, source: Ident, columns: Vec<usize> });
@@ -422,7 +450,7 @@ pub mod contract {
                     && states
                         .iter()
                         .zip(layouts)
-                        .all(|(state, layout)| state.provider == layout.provider)
+                        .all(|(state, layout)| state.provider == layout.provider.ty)
             };
             ensure(
                 device.relations.len() == program.incremental.strata.source.declarations.len()
@@ -433,6 +461,7 @@ pub mod contract {
                 "device records must cover every relation, layout and negative key set",
             )?;
         }
+        provider::check_table(&program.tokens)?;
         ensure(
             program.providers.len() == program.incremental.strata.source.declarations.len(),
             program,
@@ -449,6 +478,10 @@ pub mod contract {
                 provider,
                 "delta and next providers must have the same type for move publication",
             )?;
+            // Row buffers are unhashed; the payload schema is empty.
+            let rows = row_type(declaration);
+            let unit: Type = syn::parse_quote!(());
+            provider::check_instance(&program.tokens, &provider.delta, &rows, &unit, Hasher::None)?;
             // Formal rule DL-Canonical: one complete, all-column-keyed member of
             // the relation's own full layouts; no separate membership store.
             let canonical = program.layouts.get(provider.canonical);
@@ -461,16 +494,9 @@ pub mod contract {
                 "canonical must name one of the relation's full layouts keyed by every column",
             )?;
             if declaration.value.is_some() {
-                let types: Vec<_> = declaration
-                    .columns
-                    .iter()
-                    .map(|column| &column.ty)
-                    .collect();
-                let rows: Type = syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>);
                 let empty: Expr = syn::parse_quote!(::std::vec::Vec::new());
                 ensure(
-                    provider.delta == rows
-                        && provider.next == rows
+                    provider.delta.token == provider::ROWS_VEC
                         && provider.delta_init == empty
                         && provider.next_init == empty,
                     provider,

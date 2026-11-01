@@ -1,4 +1,5 @@
 //! Test-only bridge from checked execution certificates to the base Round oracle.
+use cq_lang_datalog_round::storage;
 use quote::quote;
 
 /// Check the extension language, then evaluate its recorded Round meaning.
@@ -99,6 +100,18 @@ pub fn trace_publication(input: proc_macro::TokenStream) -> proc_macro::TokenStr
                 true
             };
             let mut target = program.clone();
+            // Traced maps are authored verbatim tokens with the grouped-map protocol.
+            let traced = |name: &str| {
+                storage::provider::declared(
+                    name,
+                    storage::provider::Spelling::Verbatim,
+                    Some(storage::LayoutProtocol::GroupedMap),
+                    storage::provider::Admission::None,
+                    false,
+                    storage::provider::TaskHasher::Fx,
+                )
+            };
+            storage::provider::declare(&mut target.tokens, traced("traced_map"));
             let mut ordinal = 0usize;
             for layout in &mut target.layouts {
                 let declaration = target
@@ -123,21 +136,43 @@ pub fn trace_publication(input: proc_macro::TokenStream) -> proc_macro::TokenStr
                     .collect();
                 let (keys, values) = types.split_at(layout.key);
                 layout.provider = syn::parse_quote!(
-                    ::std::collections::HashMap<
+                    @traced_map as ::std::collections::HashMap<
                         (#(#keys,)*),
                         ::std::vec::Vec<(#(#values,)*)>,
                         PublicationHasher<#ordinal>
                     >
                 );
+                layout.hasher = storage::Hasher::None;
                 // DL-LayoutProtocol: the replacement declares its operations, not its spelling.
                 layout.protocol = cq_lang_datalog_round::storage::LayoutProtocol::GroupedMap;
                 ordinal += 1;
             }
             if alias {
+                // A misleading spelling under authored tokens: maintenance
+                // follows each token's declared protocol, never the spelling.
+                let set = storage::provider::declared(
+                    "alias_set",
+                    storage::provider::Spelling::Verbatim,
+                    Some(storage::LayoutProtocol::Set),
+                    storage::provider::Admission::None,
+                    false,
+                    storage::provider::TaskHasher::Fx,
+                );
+                let map = traced("alias_map");
                 for layout in target.layouts.iter_mut().chain(&mut target.delta_layouts) {
-                    let provider = &layout.provider;
-                    layout.provider = syn::parse_quote!(RunLayout<#provider>);
+                    let token = match layout.protocol {
+                        storage::LayoutProtocol::Set => &set,
+                        storage::LayoutProtocol::GroupedMap => &map,
+                        storage::LayoutProtocol::Bulk => continue,
+                    };
+                    let provider = &layout.provider.ty;
+                    layout.provider = storage::Provider {
+                        token: token.token.clone(),
+                        ty: syn::parse_quote!(RunLayout<#provider>),
+                    };
+                    layout.hasher = storage::Hasher::None;
                 }
+                target.tokens.extend([set, map]);
             }
             Ok(target)
         },

@@ -6,7 +6,9 @@
 //! grouped hash maps.
 use cq_datalog_support::{ensure, key_columns};
 use cq_lang_datalog_incremental as incremental;
-use cq_lang_datalog_storage::{BodyItem, HostCanonical, Layout, Policy, Program, Providers};
+use cq_lang_datalog_storage::{
+    BodyItem, Hasher, HostCanonical, Layout, Policy, Program, Provider, Providers, provider,
+};
 use cq_syntax::symbol_name;
 use std::collections::BTreeSet;
 
@@ -16,6 +18,12 @@ pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
     let mut target = Program {
         incremental: source.clone(),
         device: None,
+        // Base tokens; `hash_set` also types Round's negation key sets.
+        tokens: vec![
+            provider::hash_set(),
+            provider::hash_map(),
+            provider::rows_vec(),
+        ],
         providers: source
             .strata
             .source
@@ -23,15 +31,11 @@ pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
             .iter()
             .zip(canonical)
             .map(|(declaration, canonical)| {
-                let types: Vec<_> = declaration
-                    .columns
-                    .iter()
-                    .map(|column| &column.ty)
-                    .collect();
+                let rows = rows(declaration);
                 Providers {
                     canonical,
-                    delta: syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>),
-                    next: syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>),
+                    delta: rows.clone(),
+                    next: rows,
                     delta_init: syn::parse_quote!(::std::vec::Vec::new()),
                     next_init: syn::parse_quote!(::std::vec::Vec::new()),
                 }
@@ -108,47 +112,46 @@ pub fn check(source: &incremental::Program, target: &Program) -> syn::Result<()>
         "storage changed its incremental source",
     )
 }
+/// The `rows_vec` buffer of a relation's full rows.
+fn rows(declaration: &cq_syntax::RelationDecl) -> Provider {
+    let token = provider::rows_vec();
+    let row = cq_lang_datalog_storage::row_type(declaration);
+    let ty = provider::spell(&token, &row, &syn::parse_quote!(()), Hasher::None)
+        .expect("rows_vec spells unhashed rows");
+    Provider {
+        token: token.token,
+        ty,
+    }
+}
 /// Default providers (DL-LayoutProtocol): a layout keyed by every column has no
-/// payload, so it is a key set; other layouts group their payload rows by key.
+/// payload, so it is a `hash_set`; other layouts are `hash_map`s grouping their
+/// payload rows by key. Both record the default Fx hasher.
 fn layout(
     declaration: &cq_syntax::RelationDecl,
     columns: Vec<usize>,
     key: usize,
     delta: bool,
 ) -> Layout {
-    let types: Vec<_> = columns
-        .iter()
-        .map(|&column| &declaration.columns[column].ty)
-        .collect();
-    let (key_types, value_types) = types.split_at(key);
-    let (provider, protocol) = if value_types.is_empty() {
-        (
-            syn::parse_quote!(
-                ::std::collections::HashSet<
-                    (#(#key_types,)*),
-                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-                >
-            ),
-            cq_lang_datalog_storage::LayoutProtocol::Set,
-        )
+    let token = if key == columns.len() {
+        provider::hash_set()
     } else {
-        (
-            syn::parse_quote!(
-                ::std::collections::HashMap<
-                    (#(#key_types,)*),
-                    ::std::vec::Vec<(#(#value_types,)*)>,
-                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
-                >
-            ),
-            cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
-        )
+        provider::hash_map()
     };
+    let (key_row, payload) = cq_lang_datalog_storage::layout_schema(declaration, &columns, key);
+    let ty = provider::spell(&token, &key_row, &payload, Hasher::Fx)
+        .expect("base tokens spell the Fx hasher");
     Layout {
         relation: declaration.name.clone(),
         columns,
         key,
-        provider,
-        protocol,
+        protocol: token
+            .protocol
+            .expect("base layout tokens declare a protocol"),
+        provider: Provider {
+            token: token.token,
+            ty,
+        },
+        hasher: Hasher::Fx,
         maintenance: if delta {
             syn::parse_quote!(replace_each_run)
         } else {

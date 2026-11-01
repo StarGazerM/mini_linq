@@ -849,10 +849,29 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   matcher, A-46 catalog rewrites/placement, A-47 `supports[keys]`,
   A-48/49/50 cq-print `Vec`/`HashSet` spellings, A-129 rewrites indexes,
   A-130 rewrites structures, A-131 sequence-tasks levels, A-132 workloads
-  `HashIndex` suffix. Open: C2 Datalog hasher/partition/print (A-126..128);
-  G1/G2 GPU (A-138..140; GPU Sequence core is compile-only against C1).
+  `HashIndex` suffix. C2 closed A-126..128 (below). Open: G1/G2 GPU
+  (A-138..140; GPU Sequence core is compile-only against C1).
   Gates: expanded gate vs `c1b75718` passes 46/46 with identical expansions
   (29 runtime-changed targets verified by TPC-H SF1 29/29 DuckDB-exact,
   default and par, counters unchanged); DOOP xalan `--check` ok; regressions
   119/119; root tests 1,207, sequence-tasks 63, rewrites 197, workloads
   2,308 passed.
+- C7Provider C2 (contract 7, Datalog Storage/Round provider identity),
+  2026-11-01. Storage layouts, delta/next buffers and Round key sets record
+  `@token as Type` instances; layouts and key sets record `hasher { fx |
+  keyed | none }`. Storage `Program.tokens` declares each token once
+  (spelling function, protocol, admission, hashed, task hasher); the
+  contract checks token protocol, hasher/`hashed` agreement and each
+  spelling against its token's spelling of the recorded key/payload schema
+  (WF-DL-Storage, DL-LayoutProtocol). Base tokens `hash_set`, `hash_map`,
+  `rows_vec` (dl-storage); `sharded_layout`, `run_layout` (partition);
+  `device_layout`, `device_view` (GPU device storage, verbatim, compile-only).
+  Closed audit rows: A-126 hasher rewrite (hashed tokens respelled from
+  schema), A-127 partition (token identity conversion, CK-DL-ShardStorage;
+  non-bulk layouts admitted by declared protocol), A-128 parallel print
+  (task hasher and admission from declared token facts,
+  DL-ShardedAdmission). Gates: expanded gate vs `c395fe83` 46/46 identical;
+  DOOP CPU engines (`doop-mini`, `-keyed`, `-par`, `-par-keyed`, oracle
+  engines) expand identically before/after; DOOP xalan and batik
+  `--check` all six engines ok; GPU `cq-gpu-datalog-core` tests and
+  `srd-doop-gpu` exactness pass.

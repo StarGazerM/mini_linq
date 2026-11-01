@@ -168,7 +168,12 @@ mod tests {
             key: 1,
             name: syn::parse_quote!(layout),
             host,
-            provider,
+            // Printers read only the protocol; the token is irrelevant here.
+            provider: cq_lang_datalog_round::storage::Provider {
+                token: syn::parse_quote!(test_layout),
+                ty: provider,
+            },
+            hasher: cq_lang_datalog_round::storage::Hasher::None,
             protocol: cq_lang_datalog_round::storage::LayoutProtocol::GroupedMap,
             maintenance: syn::parse_quote!(insert),
         }

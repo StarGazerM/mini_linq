@@ -59,7 +59,8 @@ pub struct Layout {
     pub key: usize,
     pub name: Ident,
     pub host: Ident,
-    pub provider: syn::Type,
+    pub provider: storage::Provider,
+    pub hasher: storage::Hasher,
     pub maintenance: Ident,
     pub protocol: storage::LayoutProtocol,
 }
@@ -71,7 +72,9 @@ pub struct KeySet {
     pub filters: Vec<(usize, Expr)>,
     pub equalities: Vec<(usize, usize)>,
     pub name: Ident,
-    pub provider: syn::Type,
+    /// A token of `Program.storage.tokens`, spelled over the inferred row `_`.
+    pub provider: storage::Provider,
+    pub hasher: storage::Hasher,
     pub hole: usize,
 }
 
@@ -495,8 +498,8 @@ record!(Execution {
 });
 record!(RoundPolicy { timing: Ident });
 record!(Relation { declaration: RelationDecl, providers: storage::Providers, next_canonical: Ident, next: Ident, delta: Option<Ident>, delta_host: Option<Ident>, admit: Vec<usize> });
-record!(Layout { relation: usize, columns: Vec<usize>, key: usize, name: Ident, host: Ident, provider: syn::Type, maintenance: Ident, protocol: storage::LayoutProtocol });
-record!(KeySet { relation: usize, columns: Vec<usize>, filters: Vec<(usize,Expr)>, equalities: Vec<(usize, usize)>, name: Ident, provider: syn::Type, hole: usize });
+record!(Layout { relation: usize, columns: Vec<usize>, key: usize, name: Ident, host: Ident, provider: storage::Provider, hasher: storage::Hasher, maintenance: Ident, protocol: storage::LayoutProtocol });
+record!(KeySet { relation: usize, columns: Vec<usize>, filters: Vec<(usize,Expr)>, equalities: Vec<(usize, usize)>, name: Ident, provider: storage::Provider, hasher: storage::Hasher, hole: usize });
 record!(ScanBinding {
     source: InputSource,
     binding: Ident
@@ -1058,6 +1061,7 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
         before.loop_form = after.loop_form.clone();
         for (before, after) in before.keys.iter_mut().zip(&after.keys) {
             before.provider = after.provider.clone();
+            before.hasher = after.hasher;
         }
     }
     source.context.outputs = erased.context.outputs.clone();

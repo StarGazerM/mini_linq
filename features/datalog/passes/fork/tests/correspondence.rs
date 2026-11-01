@@ -4,7 +4,7 @@ use cq_datalog_storage::compile as schedule;
 use cq_lang_cq::BodyItem;
 use cq_lang_datalog_round::Program as Fork;
 use cq_lang_datalog_round::cq as cq_lang_cq;
-use cq_lang_datalog_storage::Program;
+use cq_lang_datalog_storage::{self as storage, Program};
 
 use quote::{ToTokens, quote};
 
@@ -830,9 +830,26 @@ fn fork_preserves_generators_and_generated_join_values() {
 #[test]
 fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
     let mut source = authored();
-    source.providers[2].delta = syn::parse_quote!(custom::Rows<(i32, i32)>);
-    source.providers[2].next = syn::parse_quote!(custom::Rows<(i32, i32)>);
-    source.layouts[0].provider = syn::parse_quote!(custom::Index);
+    // Authored providers are declared verbatim tokens.
+    let custom = |name: &str, protocol, hashed| {
+        storage::provider::declared(
+            name,
+            storage::provider::Spelling::Verbatim,
+            protocol,
+            storage::provider::Admission::None,
+            hashed,
+            storage::provider::TaskHasher::Fx,
+        )
+    };
+    let protocol = source.layouts[0].protocol;
+    source.tokens.extend([
+        custom("custom_rows", None, false),
+        custom("custom_index", Some(protocol), true),
+        custom("custom_keys", None, true),
+    ]);
+    source.providers[2].delta = syn::parse_quote!(@custom_rows as custom::Rows<(i32, i32)>);
+    source.providers[2].next = syn::parse_quote!(@custom_rows as custom::Rows<(i32, i32)>);
+    source.layouts[0].provider = syn::parse_quote!(@custom_index as custom::Index);
     let target = compile(&source).unwrap();
     assert_eq!(target.context.relations[2].providers, source.providers[2]);
     assert_eq!(
@@ -844,7 +861,8 @@ fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
         source.layouts[0].maintenance
     );
     let mut alternative = target.clone();
-    alternative.context.strata[0].keys[0].provider = syn::parse_quote!(custom::BorrowedKeys<_>);
+    alternative.context.strata[0].keys[0].provider =
+        syn::parse_quote!(@custom_keys as custom::BorrowedKeys<_>);
     cq_lang_datalog_round::check_rewrite(&target, &alternative).unwrap();
     let replay: Fork = syn::parse2(alternative.to_token_stream()).unwrap();
     assert_eq!(alternative, replay);

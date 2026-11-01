@@ -347,6 +347,7 @@ fn construct(
                 name: fresh.id("layout"),
                 host: fresh.id("host"),
                 provider: layout.provider.clone(),
+                hasher: layout.hasher,
                 maintenance: layout.maintenance.clone(),
                 protocol: layout.protocol,
             })
@@ -361,6 +362,7 @@ fn construct(
                 name: fresh.id("delta_layout"),
                 host: fresh.id("delta_host"),
                 provider: layout.provider.clone(),
+                hasher: layout.hasher,
                 maintenance: layout.maintenance.clone(),
                 protocol: layout.protocol,
             })
@@ -495,7 +497,17 @@ fn construct(
                         filters: selections,
                         equalities: repeated,
                         name: fresh.id("keys"),
-                        provider: syn::parse_quote!(::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>),
+                        provider: {
+                            let token = storage::provider::hash_set();
+                            let ty = storage::provider::spell(
+                                &token,
+                                &syn::parse_quote!(_),
+                                &syn::parse_quote!(()),
+                                storage::Hasher::Fx,
+                            )?;
+                            storage::Provider { token: token.token, ty }
+                        },
+                        hasher: storage::Hasher::Fx,
                         hole: holes.len(),
                     };
                     let name = fresh.id("key_hole");

@@ -227,9 +227,25 @@ other; there is no separate accumulated, membership or wrapper store. Its
 all-column key makes it a key set of complete rows in its column permutation.
 \begin{mathpar}
 \Rule{WF-DL-Storage}{\mathrm{WF}_{\mathrm{Incremental}}(I)\quad
- D\text{ records complete providers, usable reads and maintained layouts}}
+ D\text{ records complete providers, usable reads and maintained layouts}\\
+ \forall p=(\tau,\sigma,h).\ \tau\in D.\mathrm{tokens}\quad
+ \mathrm{hashed}(\tau)\iff h\neq\mathrm{none}\quad
+ \mathrm{spell}_\tau\text{ defined}\Rightarrow\sigma=\mathrm{spell}_\tau(K,V,h)}
  {\mathrm{WF}_{\mathrm{Storage}}(I,D)}
 \end{mathpar}
+\paragraph{Provider tokens.} Every provider-bearing field (layouts, delta and
+next buffers, Round key sets) records an instance \code{@}$\tau$\code{ as }$\sigma$:
+a token $\tau$ declared once in the program's \code{tokens} table and its
+printed Rust spelling $\sigma$; layouts and key sets also record a hasher state
+$h\in\{\mathrm{fx},\mathrm{keyed},\mathrm{none}\}$. A declaration records the
+token's spelling function, maintenance protocol, canonical admission strategy
+(\code{sharded\_hash}, \code{sorted\_subtract} or none), whether it accepts a
+hasher state, and its task-candidate hasher (the layout's own state or Fx).
+Spelling functions build $\sigma$ from the instance's recorded key/payload
+schema $K,V$ (relation column types under the layout's permutation) and $h$;
+verbatim (authored or device) tokens carry $\sigma$ unchanged. No pass inspects
+a spelling: rewrites select tokens and hasher states, and printers read the
+declared facts.
 \paragraph{Meaning and provider premises.} Data refinement by $\alpha$ requires
 each published full layout, the canonical one included, to represent the same
 relation, delta layouts to represent precisely the current fresh delta,
@@ -1286,8 +1302,8 @@ these parallel choices belongs to the base language or default expansion.
 \begin{mathpar}
 \Rule{CK-DL-ShardStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad
- t\text{ changes only nonempty-key IDB grouped-map or set layouts to bulk}\\
- \text{sharded or run layouts with equal }K,V(,S)\text{, every IDB canonical layout among them}}
+ t\text{ changes only nonempty-key IDB }\mathtt{hash\_map}\text{ or }\mathtt{hash\_set}\text{ layouts to bulk}\\
+ \mathtt{sharded\_layout}\text{ (same }h\text{) or }\mathtt{run\_layout}\text{ (from }h=\mathrm{fx}\text{) tokens, every IDB canonical layout among them}}
  {\mathrm{check}_{\mathrm{shardStorage}}(s,t)}
 \end{mathpar}
 A sharded layout holds $S$ disjoint grouped maps; key $k$ lives only in shard
@@ -1447,7 +1463,8 @@ survivors. Output order is unspecified. The termination condition is any
 admitted row.
 \begin{mathpar}
 \Rule{DL-ShardedAdmission}{C'_j=C_j\setminus A\quad
- N=\mathrm{distinct}\Big(\biguplus_j C'_j\Big)}
+ N=\mathrm{distinct}\Big(\biguplus_j C'_j\Big)\quad
+ \text{strategy}=\mathrm{admission}(A.\mathrm{provider}.\tau)}
  {\mathrm{set}(N)=\mathrm{supp}(C)\setminus A\quad N\text{ has no duplicates}}
 \end{mathpar}
 Each native layout has exactly one owner task during publication. The printer
@@ -1512,6 +1529,7 @@ checks that protocol exactly against Storage; printers consume it.
 \begin{mathpar}
 \Rule{DL-LayoutProtocol}
  {\ell.\mathrm{protocol}\in\{\mathrm{grouped\_map},\mathrm{set},\mathrm{bulk}\}\quad
+  \ell.\mathrm{protocol}=\mathrm{protocol}(\ell.\mathrm{provider}.\tau)\quad
   \mathrm{lawful}(\ell.\mathrm{provider},\ell.\mathrm{protocol})}
  {\mathrm{maintain}(\ell)=\mathrm{operations}(\ell.\mathrm{protocol})}
 \end{mathpar}

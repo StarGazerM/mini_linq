@@ -50,6 +50,22 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             &layout.relation,
             "set layouts must be keyed by every column",
         )?;
+        // Formal rule DL-LayoutProtocol: the token declares the protocol the
+        // layout records; the spelling is the token's spelling of its schema.
+        let declaration = &program.incremental.strata.source.declarations[*index];
+        let (key, payload) = crate::layout_schema(declaration, &layout.columns, layout.key);
+        let token = crate::provider::check_instance(
+            &program.tokens,
+            &layout.provider,
+            &key,
+            &payload,
+            layout.hasher,
+        )?;
+        ensure(
+            token.protocol == Some(layout.protocol),
+            &layout.relation,
+            "layout protocol differs from its provider token's declared protocol",
+        )?;
     }
     for layout in &program.delta_layouts {
         let index = analysis.positions[&symbol_name(&layout.relation)];

@@ -7,6 +7,23 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Datalog provider identity (contract 7, C7Provider C2). Storage/Round
+  providers are recorded `@token as Type` instances: `Layout.provider` plus
+  `hasher { fx | keyed | none }`, `Providers.delta/next` (`rows_vec`) and
+  Round `KeySet.provider`/`hasher`. Storage `Program.tokens` declares each
+  token once with its spelling function, `protocol`, `admission`
+  (`sharded_hash` | `sorted_subtract` | none), `hashed` and `task_hasher`;
+  WF-DL-Storage checks every spelling against its token's spelling of the
+  recorded key/payload schema. `hasher(fx|keyed)` records the hasher of hashed
+  tokens and respells them (no Rust path or generic-argument recognition);
+  `shard_storage` converts `hash_set`/`hash_map` to `sharded_layout` or
+  `run_layout` by token identity (A-127); the parallel printer reads admission
+  and task hasher from the canonical token (A-128). Partition admits non-bulk
+  layouts by declared protocol, so authored grouped-map/set tokens partition.
+  GPU Datalog device storage declares verbatim `device_layout`/`device_view`
+  tokens (compile-only). Generated code unchanged: expanded gate 46/46
+  identical vs `c395fe83`; DOOP CPU engine expansions identical.
+
 - Evidence-driven Lookup/Expand ordering and grading (P3.3 slices A, B).
   The VO records `valuation evidence from "<source>" { count R = n; key R
   [cols]; }`; `PlanOptions` gains `evidence …` (exclusive with `order`) and

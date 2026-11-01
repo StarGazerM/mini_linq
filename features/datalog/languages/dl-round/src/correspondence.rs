@@ -244,6 +244,7 @@ pub(crate) fn check_storage_with_analysis(
                 && layout.columns == expected.columns
                 && layout.key == expected.key
                 && layout.provider == expected.provider
+                && layout.hasher == expected.hasher
                 && layout.maintenance == expected.maintenance
                 && layout.protocol == expected.protocol,
             source,
@@ -288,6 +289,14 @@ pub(crate) fn check_storage_with_analysis(
         let mut used_keys = BTreeSet::new();
         for key in &stratum.keys {
             add_name(&key.name)?;
+            // A key set is a declared token over the inferred row `_` (no payload).
+            storage::provider::check_instance(
+                &source.tokens,
+                &key.provider,
+                &syn::parse_quote!(_),
+                &syn::parse_quote!(()),
+                key.hasher,
+            )?;
             let projection = (
                 key.relation,
                 key.columns.clone(),

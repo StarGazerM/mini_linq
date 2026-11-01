@@ -83,8 +83,8 @@ fn default_negation_sets_use_fx_without_a_hole_dedup_override() {
     let incremental = cq_datalog_incremental::compile(&strata).unwrap();
     let storage = cq_datalog_storage::compile(&incremental).unwrap();
     let target = compile(&storage).unwrap();
-    let provider: syn::Type = syn::parse_quote!(
-        ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+    let provider: storage::Provider = syn::parse_quote!(
+        @hash_set as ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
     );
     let keys: Vec<_> = target.context.strata.iter().flat_map(|s| &s.keys).collect();
     assert!(!keys.is_empty());
@@ -709,11 +709,17 @@ fn publication_obligations_reject_incomplete_or_stale_rounds() {
             operation.layouts.push(0);
         },
         |p| p.context.outputs[2].conversion = syn::parse_quote!(borrowed_cloned_into_iter),
-        |p| p.context.relations[1].providers.next = syn::parse_quote!(UnrecordedProvider),
+        |p| {
+            p.context.relations[1].providers.next =
+                syn::parse_quote!(@unrecorded as UnrecordedProvider)
+        },
         |p| p.context.relations[1].providers.canonical = usize::MAX,
-        |p| p.context.layouts[0].provider = syn::parse_quote!(UnrecordedProvider),
+        |p| p.context.layouts[0].provider = syn::parse_quote!(@unrecorded as UnrecordedProvider),
         |p| p.context.layouts[0].maintenance = syn::parse_quote!(never),
-        |p| p.context.delta_layouts[0].provider = syn::parse_quote!(UnrecordedProvider),
+        |p| {
+            p.context.delta_layouts[0].provider =
+                syn::parse_quote!(@unrecorded as UnrecordedProvider)
+        },
         |p| p.context.delta_layouts[0].maintenance = syn::parse_quote!(when_nonempty),
     ];
     for (index, change) in changes.iter().enumerate() {

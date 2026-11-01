@@ -132,13 +132,16 @@ fn authored_constant_keys_are_optional_but_new_variables_and_wildcards_are_not_k
     for index in 0..2 {
         let mut missing_constant = source.clone();
         missing_constant.layouts[index].key -= 1;
+        respell(&mut missing_constant, index);
         check_rewrite(&source, &missing_constant).unwrap();
     }
     let mut repeated = source.clone();
     repeated.layouts[0].key = 2;
+    respell(&mut repeated, 0);
     assert!(contract::check(&repeated).is_err());
     let mut wildcard = source.clone();
     wildcard.layouts[1].key = 3;
+    respell(&mut wildcard, 1);
     assert!(contract::check(&wildcard).is_err());
 }
 
@@ -184,8 +187,9 @@ fn alternate_layouts_and_recorded_reads_are_admissible() {
         columns: vec![1, 0],
         key: 0,
         provider: syn::parse_quote!(
-            ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>
+            @hash_map as ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>
         ),
+        hasher: cq_lang_datalog_storage::Hasher::Keyed,
         maintenance: syn::parse_quote!(admitted_rows),
         protocol: cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
     });
@@ -220,8 +224,9 @@ fn alternate_layouts_and_recorded_reads_are_admissible() {
         columns: vec![1, 0],
         key: 0,
         provider: syn::parse_quote!(
-            ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>
+            @hash_map as ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>
         ),
+        hasher: cq_lang_datalog_storage::Hasher::Keyed,
         maintenance: syn::parse_quote!(replace_each_run),
         protocol: cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
     });
@@ -273,8 +278,9 @@ fn rust_bindings_are_available_only_after_their_written_clause() {
         columns: vec![1, 0],
         key: 2,
         provider: syn::parse_quote!(
-            ::std::collections::HashMap<(i32, i32,), ::std::vec::Vec<()>, ::cq_storage::HashState>
+            @hash_map as ::std::collections::HashMap<(i32, i32,), ::std::vec::Vec<()>, ::cq_storage::HashState>
         ),
+        hasher: cq_lang_datalog_storage::Hasher::Keyed,
         maintenance: syn::parse_quote!(admitted_rows),
         protocol: cq_lang_datalog_storage::LayoutProtocol::GroupedMap,
     });
@@ -314,7 +320,7 @@ fn provider_coverage_and_every_layout_maintenance_are_required() {
         |p| p.layouts[0].maintenance = syn::parse_quote!(replace_each_run),
         |p| p.delta_layouts[0].maintenance = syn::parse_quote!(append),
         |p| p.delta_layouts[0].maintenance = syn::parse_quote!(admitted_rows),
-        |p| p.providers[2].next = syn::parse_quote!(custom::DifferentRows),
+        |p| p.providers[2].next = syn::parse_quote!(@rows_vec as custom::DifferentRows),
         |p| p.providers[2].canonical = usize::MAX,
         |p| p.providers[2].canonical = p.providers[0].canonical,
         |p| {
@@ -322,8 +328,8 @@ fn provider_coverage_and_every_layout_maintenance_are_required() {
             p.layouts[reach].key -= 1;
         },
         |p| {
-            p.providers[0].delta = syn::parse_quote!(custom::UnusedRows);
-            p.providers[0].next = syn::parse_quote!(custom::UnusedRows);
+            p.providers[0].delta = syn::parse_quote!(@rows_vec as custom::UnusedRows);
+            p.providers[0].next = syn::parse_quote!(@rows_vec as custom::UnusedRows);
         },
         |p| p.providers[0].delta_init = syn::parse_quote!(custom::empty()),
         |p| p.providers[0].next_init = syn::parse_quote!(custom::empty()),
@@ -354,18 +360,44 @@ fn provider_coverage_and_every_layout_maintenance_are_required() {
 fn opaque_providers_and_initializers_are_not_whitelisted() {
     let original = authored(INCREMENTAL);
     let mut alternate = original.clone();
+    // Opaque providers are authored verbatim tokens with declared facts.
+    let canonical = alternate.providers[2].canonical;
+    for (name, protocol) in [
+        ("custom_delta", None),
+        ("ordered_set", Some(alternate.layouts[canonical].protocol)),
+        (
+            "ordered_map",
+            Some(cq_lang_datalog_storage::LayoutProtocol::GroupedMap),
+        ),
+    ] {
+        alternate
+            .tokens
+            .push(cq_lang_datalog_storage::provider::declared(
+                name,
+                cq_lang_datalog_storage::provider::Spelling::Verbatim,
+                protocol,
+                cq_lang_datalog_storage::provider::Admission::None,
+                false,
+                cq_lang_datalog_storage::provider::TaskHasher::Fx,
+            ));
+    }
     let provider = &mut alternate.providers[2];
-    provider.delta = syn::parse_quote!(custom::Delta<(i32, i32,)>);
-    provider.next = syn::parse_quote!(custom::Delta<(i32, i32,)>);
+    provider.delta = syn::parse_quote!(@custom_delta as custom::Delta<(i32, i32,)>);
+    provider.next = syn::parse_quote!(@custom_delta as custom::Delta<(i32, i32,)>);
     provider.delta_init = syn::parse_quote!(custom::Delta::empty());
     provider.next_init = syn::parse_quote!(custom::Delta::empty());
-    let canonical = alternate.providers[2].canonical;
-    alternate.layouts[canonical].provider =
-        syn::parse_quote!(::std::collections::BTreeMap<(i32, i32,), ::std::vec::Vec<()>>);
-    alternate.layouts[0].provider =
-        syn::parse_quote!(::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>);
-    alternate.delta_layouts[0].provider =
-        syn::parse_quote!(::std::collections::BTreeMap<(i32,), ::std::vec::Vec<(i32,)>>);
+    alternate.layouts[canonical].provider = syn::parse_quote!(
+        @ordered_set as ::std::collections::BTreeMap<(i32, i32,), ::std::vec::Vec<()>>
+    );
+    alternate.layouts[0].provider = syn::parse_quote!(
+        @ordered_map as ::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>
+    );
+    alternate.delta_layouts[0].provider = syn::parse_quote!(
+        @ordered_map as ::std::collections::BTreeMap<(i32,), ::std::vec::Vec<(i32,)>>
+    );
+    alternate.layouts[canonical].hasher = cq_lang_datalog_storage::Hasher::None;
+    alternate.layouts[0].hasher = cq_lang_datalog_storage::Hasher::None;
+    alternate.delta_layouts[0].hasher = cq_lang_datalog_storage::Hasher::None;
     check_rewrite(&original, &alternate).unwrap();
     cq_datalog_storage::check(&original.incremental, &alternate).unwrap();
     let replay: Program = syn::parse2(alternate.to_token_stream()).unwrap();
@@ -442,4 +474,25 @@ fn canonical_host_certificates_require_structural_provenance() {
     check_rewrite(&original, &uncertified).unwrap();
     let replay: Program = syn::parse2(original.to_token_stream()).unwrap();
     assert_eq!(replay.certificates, original.certificates);
+}
+
+/// Respell a base-token layout after its key changed: the token's spelling of
+/// the new key/payload schema (a full-key set becomes a grouped map).
+fn respell(program: &mut Program, index: usize) {
+    use cq_lang_datalog_storage::provider;
+    let layout = &mut program.layouts[index];
+    let declaration = program
+        .incremental
+        .strata
+        .source
+        .declarations
+        .iter()
+        .find(|declaration| declaration.name == layout.relation)
+        .unwrap();
+    let (key, payload) =
+        cq_lang_datalog_storage::layout_schema(declaration, &layout.columns, layout.key);
+    let token = provider::hash_map();
+    layout.protocol = cq_lang_datalog_storage::LayoutProtocol::GroupedMap;
+    layout.provider.ty = provider::spell(&token, &key, &payload, layout.hasher).unwrap();
+    layout.provider.token = token.token;
 }

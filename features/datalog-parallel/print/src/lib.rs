@@ -17,6 +17,7 @@ use proc_macro2::{Span, TokenStream};
 #[cfg(feature = "hole-timing")]
 use quote::ToTokens;
 use quote::{format_ident, quote};
+use round::storage::{self, provider::Token};
 use syn::Ident;
 mod publication;
 mod relational;
@@ -151,7 +152,7 @@ fn evaluate(
                     format_ident!("__cq_rel_hasher_{}", rule.head, span = Span::mixed_site());
                 declarations.push(quote!(let #hasher = &#owned;));
             } else {
-                let state = task_hasher(&context.layouts[head.providers.canonical]);
+                let state = task_hasher(&program.storage.tokens, &context.layouts[head.providers.canonical]);
                 declarations
                     .push(quote!(let #hasher = &<#state as ::core::default::Default>::default();));
             }
@@ -308,6 +309,7 @@ fn evaluate(
             let canonical = &context.layouts[context.relations[index].providers.canonical];
             let committed = &canonical.host;
             let admit = admit_chunks(
+                &program.storage.tokens,
                 context,
                 index,
                 checked.as_ref(),
@@ -482,39 +484,24 @@ fn collect_task(
     })
 }
 
-/// The canonical layout's outer provider name and type arguments.
-fn provider_parts(layout: &round::Layout) -> (String, Vec<&syn::Type>) {
-    let syn::Type::Path(path) = &layout.provider else {
-        return (String::new(), Vec::new());
-    };
-    let Some(last) = path.path.segments.last() else {
-        return (String::new(), Vec::new());
-    };
-    let arguments = match &last.arguments {
-        syn::PathArguments::AngleBracketed(arguments) => arguments
-            .args
-            .iter()
-            .filter_map(|argument| match argument {
-                syn::GenericArgument::Type(ty) => Some(ty),
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
-    (last.ident.to_string(), arguments)
+/// The checked token declaration of a canonical layout.
+fn canonical_token<'a>(tokens: &'a [Token], canonical: &round::Layout) -> &'a Token {
+    storage::provider::lookup(tokens, &canonical.provider.token)
+        .expect("checked Storage declares every layout token")
 }
 
 /// A hasher type for task-local candidate deduplication, from the canonical
-/// layout's own family: a sharded layout's state, else the default Fx state.
-fn task_hasher(canonical: &round::Layout) -> TokenStream {
-    match provider_parts(canonical) {
-        (name, arguments) if name == "ShardedLayout" && arguments.len() == 3 => {
-            let state = arguments[2];
-            quote!(#state)
-        }
-        (name, _) if name == "ShardedLayout" => quote!(::cq_storage::HashState),
-        _ => quote!(::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>),
-    }
+/// layout token's declared `task_hasher`: the layout's recorded hasher state,
+/// else the default Fx state (A-128).
+fn task_hasher(tokens: &[Token], canonical: &round::Layout) -> TokenStream {
+    let hasher = match canonical_token(tokens, canonical).task_hasher {
+        storage::provider::TaskHasher::Layout => canonical.hasher,
+        storage::provider::TaskHasher::Fx => storage::Hasher::Fx,
+    };
+    let state = hasher
+        .state()
+        .expect("a layout task hasher names a hashed token");
+    quote!(#state)
 }
 
 /// Formal rule DL-ShardedAdmission: subtract the committed canonical layout
@@ -531,6 +518,7 @@ fn task_hasher(canonical: &round::Layout) -> TokenStream {
 /// (`ShardedLayout::admit_batches`; runs skip their subtraction). Without
 /// covered chunks the realization is unchanged.
 fn admit_chunks(
+    tokens: &[Token],
     context: &RoundContext,
     head: usize,
     checked: Option<&TokenStream>,
@@ -574,8 +562,10 @@ fn admit_chunks(
             #total.fetch_add(#covered_count, ::core::sync::atomic::Ordering::Relaxed);
         )
     });
-    let (name, _) = provider_parts(canonical);
-    if name != "RunLayout" {
+    // The canonical token's declared admission strategy (A-128).
+    if canonical_token(tokens, canonical).admission
+        != storage::provider::Admission::SortedSubtract
+    {
         let admitted = Ident::new("__cq_admit_rows", Span::mixed_site());
         let fresh = Ident::new("__cq_admit_new", Span::mixed_site());
         let sharded_count = counted.as_ref().map_or_else(TokenStream::new, |counted| {
