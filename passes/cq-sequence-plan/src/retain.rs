@@ -56,7 +56,7 @@ fn expansion(term: &Term) -> bool {
     matches!(term, Term::Flatten(inner) if matches!(inner.as_ref(), Term::Lookup { .. }))
 }
 
-/// Formal rule GR-RetainPrefix: When a GPU dispatch streams a root whose evidence bound is below one root tile, retain the first expansion whose evidence bound reaches the machine's retain_prefix_rows if another expansion follows it.
+/// Formal rule GR-RetainPrefix: When a GPU dispatch streams a root whose evidence bound is below one root tile, retain the first expansion whose evidence bound reaches the machine's retain_prefix_rows if another expansion follows it; stop searching at the first unknown bound.
 /// Formal rule GR-SegmentFanout: After a retained prefix, segment every expansion whose lookup covers no recorded key of its provider, at the machine's distributing width times its items.
 pub(crate) fn advise(program: &Program, machine: &Machine) -> Vec<Advice> {
     let (Some(gpu), Some(tile)) = (&machine.gpu, decomposition::width(&machine.root)) else {

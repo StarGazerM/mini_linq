@@ -1423,8 +1423,8 @@ fn constant_len(len: &Len) -> Option<usize> {
     }
 }
 
-/// Rewrites preserve final support by construction. A changed Structures prefix
-/// additionally needs the narrow, evidence-independent join reexpression proof.
+/// Rewrites preserve final support by construction and preserve the Physical
+/// plan, except for independently checked catalog retention.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     Checker::default().check_rewrite_in(source, target)
 }
@@ -1476,70 +1476,17 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
     }
     let target_facts = analyze_in(target, context, target_prefix)?;
     let support = &context.support;
-    let preserves_adapters = unchanged
-        || source.structures.structures.entries.iter().all(|entry| {
-            use cq_lang_structures::Structure;
-            // Join filters are optional conservative accelerators. Each endpoint
-            // independently proves its covering operator, so a rewritten graph
-            // need not retain an obsolete scan-filter certificate.
-            if matches!(
-                entry.structure,
-                Structure::Built { .. } | Structure::JoinFilter { .. }
-            ) {
-                return true;
-            }
-            let definitions = &target.structures.physical.program.definitions;
-            if !definitions
-                .iter()
-                .any(|definition| definition.name == entry.name)
-            {
-                return true;
-            }
-            if let Structure::Host { reader, .. } = &entry.structure
-                && !matches!(reader, cq_lang_structures::ReaderRef::Scan)
-                && (target_facts.analysis.structures.physical.modes[&symbol_name(&entry.name)]
-                    != ModeKind::Pipe
-                    || !reader.result().is_some_and(|reader| {
-                        definitions
-                            .iter()
-                            .any(|definition| &definition.name == reader)
-                    }))
-            {
-                return true;
-            }
-            // Catalog retyping and relational reexpression may occur in the
-            // same composed pass. Compare the surviving layout, not the
-            // selected storage implementation, while keeping readers exact.
-            target
-                .structures
-                .structures
-                .entries
-                .iter()
-                .any(|target| cq_lang_structures::storage_layout_eq(entry, target))
-        });
     // Catalog selection may retain host renames and replace their keyed
     // fallbacks, while preserving opaque syntax and the original scans.
     let storage_retyped = !unchanged
         && cq_lang_structures::check_retention_rewrite(&source.structures, &target.structures)
             .is_ok();
-    if !unchanged
-        && !storage_retyped
-        && (source.structures.physical == target.structures.physical
-            || !preserves_adapters
-            || !lookup_semantics::reexpression(
-                &source.structures.physical,
-                &source_facts.analysis.structures.physical,
-                &target.structures.physical,
-                &target_facts.analysis.structures.physical,
-                &source_facts.prefix.queries,
-                &target_facts.prefix.queries,
-                support,
-            ))
-    {
+    // Formal rule BE-PhysicalPreserved: Only checked catalog retention may change the prefix.
+    if !unchanged && !storage_retyped {
         return fail(
             target,
-            "BE-Alpha",
-            "Structures change lacks a checked join reexpression",
+            "BE-PhysicalPreserved",
+            "Structures change is not checked catalog retention; Sequence rewrites must preserve Physical",
         );
     }
     let final_meaning = |program: &Program, facts: &CheckedProof| {

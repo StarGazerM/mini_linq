@@ -4,7 +4,7 @@
 //! Logical Rust placement follows free variables (whole environment when lexically opaque).
 //! DO NOT add Before sets/written-order chains, recognize `if` comparisons, or inspect syn::Type.
 //! Device Rust requires identity read columns and closed captures; otherwise retain host execution.
-//! DO NOT reorder joins here; remaining Lookup/Expand planning relocation is Plan P3.
+//! DO NOT reorder joins here; Sequence placement preserves the recorded Physical plan.
 
 use std::collections::{BTreeMap, BTreeSet};
 

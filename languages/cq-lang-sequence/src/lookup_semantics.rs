@@ -1,6 +1,6 @@
-//! Narrow certificates for Lookup/Expand reexpression. Evidence is never read.
+//! Result-support equality within checked Sequence constructions. Evidence is never read.
 //! Natural joins and semijoins are conjunctive queries; every other operator is
-//! an opaque named relation whose syntax and input support must be preserved.
+//! an opaque named relation. This does not authorize changes to Physical.
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use cq_lang_structures::physical::{self, Operator};
@@ -431,81 +431,6 @@ fn equal(left: &Query, right: &Query, context: &Context) -> bool {
     let row = cache.entry(left.clone()).or_default();
     row.insert(right.clone(), result);
     result
-}
-
-fn opaque<'a>(
-    program: &'a physical::Program,
-    queries: &Queries,
-    context: &Context,
-) -> BTreeMap<u32, &'a physical::Definition> {
-    program
-        .program
-        .definitions
-        .iter()
-        .filter(|definition| {
-            let name = context.intern(&symbol_name(&definition.name));
-            let query = &queries[&name];
-            query.atoms.len() == 1 && query.atoms[0].0 == name
-        })
-        .map(|d| (context.intern(&symbol_name(&d.name)), d))
-        .collect()
-}
-
-/// Preserve Rust syntax and input support without pinning a written-order prefix.
-pub(super) fn reexpression(
-    source: &physical::Program,
-    source_analysis: &physical::Analysis,
-    target: &physical::Program,
-    target_analysis: &physical::Analysis,
-    left: &Queries,
-    right: &Queries,
-    context: &Context,
-) -> bool {
-    let a = &source.program;
-    let b = &target.program;
-    if a.declarations != b.declarations
-        || a.head != b.head
-        || source_analysis.discharged_host_sets != target_analysis.discharged_host_sets
-        || source_analysis.consumer_canonical != target_analysis.consumer_canonical
-    {
-        return false;
-    }
-    let old = opaque(source, left, context);
-    let new = opaque(target, right, context);
-    if old.keys().ne(new.keys()) {
-        return false;
-    }
-    for (name, definition) in old {
-        let other = new[&name];
-        let mut operator = other.operator.clone();
-        let old_inputs = definition.operator.operands();
-        let new_inputs = operator.operands();
-        if old_inputs.len() != new_inputs.len()
-            || old_inputs.iter().zip(&new_inputs).any(|(a, b)| {
-                !equal(
-                    &left[&context.intern(&symbol_name(a))],
-                    &right[&context.intern(&symbol_name(b))],
-                    context,
-                )
-            })
-        {
-            return false;
-        }
-        // Only the input edge of unary, total relational operators may change.
-        match (&definition.operator, &mut operator) {
-            (Operator::Project(a), Operator::Project(b)) => b.input = a.input.clone(),
-            (Operator::Select(a), Operator::Select(b)) => b.input = a.input.clone(),
-            _ => {}
-        }
-        if definition.operator != operator {
-            return false;
-        }
-    }
-    equal(
-        &left[&context.intern(&symbol_name(&a.returned))],
-        &right[&context.intern(&symbol_name(&b.returned))],
-        context,
-    )
 }
 
 #[cfg(test)]

@@ -769,11 +769,14 @@ key layout, not entry position: retention removes fallback entries and
 appends indexes, changing their positions.
 The native Tasks target preserves retained row-buffer types separately:
 replayable rows use the row collection ABI, not a keyed range-provider family.
-Catalog retyping also composes with a subsequent checked join reexpression.
-The endpoint proof compares surviving storage layouts modulo implementation
-types, while separately proving relational support, unchanged Rust payloads
-and exact host-reader syntax. It does not require the composite Physical
-change to fit the narrower mode-only retention certificate.
+Sequence rewrites preserve the Structures prefix unless the complete change
+has the checked catalog-retention certificate above. In particular,
+equivalent relational support does not authorize reordering Physical joins.
+\begin{mathpar}
+\Rule{BE-PhysicalPreserved}
+ {S'=S\ \lor\ \mathsf{checkedRetention}(S,S')}
+ {\mathsf{SequenceRewrite}(S,t;S',t')\text{ may proceed to the final-support check}}
+\end{mathpar}
 Placement propagates unavailable device representations and their unstored
 feeds to host. A Rust expression may read only identity-represented device
 columns, with other inputs supplied by closed captures; encoded columns use
@@ -950,7 +953,8 @@ replanning or optional-filter discovery.
 
 \Rule{GR-RetainPrefix}{M.gpu\quad \beta(\mathsf{root}(d))<w_M\quad
  e_1,\ldots,e_n\text{ the expansions of }d\text{ from its root}\\
- j=\min\{j\mid \beta(e_j).rows\ge M.retain\_prefix\_rows\}\quad j<n}
+ j=\min\{j\mid \beta(e_j).rows\ge M.retain\_prefix\_rows\}\quad
+ \forall i\le j.\ \beta(e_i).rows\ne\bot\quad j<n}
  {\mathsf{plan}\text{ records }\mathsf{retain}(e_j,\beta(e_j).rows);\ \mathsf{partition}(\mathsf{consumer}(d),w_M)}
 
 \Rule{GR-SegmentFanout}{\mathsf{retain}(e_j,\_)\text{ recorded}\quad j<i\le n\quad
@@ -960,8 +964,9 @@ replanning or optional-filter discovery.
 
 A recorded \code{retain(e, n)} is the checked \code{store\_level(e)} rewrite
 whose replay first requires $\beta(e).rows=n$ under the recorded evidence; a
-bound the evidence does not establish is rejected. GR-RetainPrefix and
-GR-SegmentFanout change only execution shape (stores, tiles and offsets
+bound the evidence does not establish is rejected. The GR-RetainPrefix
+search stops at the first unknown bound; it never skips it to retain a later
+bounded expansion. GR-RetainPrefix and GR-SegmentFanout change only execution shape (stores, tiles and offsets
 publication), never the recorded relational plan, and apply before
 placement, so ordinary decomposition, grading and PL-Cost continue from the
 result. They reproduce the authored H05 recipe R from the preserved step-R

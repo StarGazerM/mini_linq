@@ -7,6 +7,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Sequence rewrites now reject non-retention Structures/Physical changes with
+  `BE-PhysicalPreserved`, including support-equivalent join reordering.
+  Removed the unused join-reexpression certificate; result-support equality
+  remains for construction checks. Formal rules and conformance now record
+  this boundary and GR-RetainPrefix's stop at the first unknown bound.
+
 - Datalog provider identity (contract 7, C7Provider C2). Storage/Round
   providers are recorded `@token as Type` instances: `Layout.provider` plus
   `hasher { fx | keyed | none }`, `Providers.delta/next` (`rows_vec`) and

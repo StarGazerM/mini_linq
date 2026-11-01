@@ -638,6 +638,47 @@ fn lookup_program(body: proc_macro2::TokenStream) -> Program {
     .unwrap()
 }
 
+#[test]
+fn rewrite_rejects_equivalent_physical_join_reordering() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32);
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a};
+            j = let canon probe first [a] l,r;
+            return j as answer(a);
+        }
+        structures {
+            providers {
+                reader = Reader { reads [exact, range, membership], build inferred };
+                provider = Provider { reads [exact, range, membership], build inferred };
+                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+            }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r = @provider as Provider [a];
+            j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows;
+        }
+        sequence { out = store canon flatten lookup r [a] rows l; }
+    };
+    let mut target = source.clone();
+    target.structures.physical.program.definitions[0] =
+        syn::parse_quote!(l = let rename L@0 {a -> a};);
+    target.structures.physical.program.definitions[1] =
+        syn::parse_quote!(r = pipe rename R@1 {a -> a};);
+    target.structures.physical.program.definitions[2] =
+        syn::parse_quote!(j = let canon probe first [a] r,l;);
+    target.structures.structures.entries[2] = syn::parse_quote!(l = @provider as Provider [a];);
+    target.sequence.definitions[0].term =
+        syn::parse_quote!(store canon flatten lookup l [a] rows r);
+    contract::check(&source).unwrap();
+    contract::check(&target).unwrap();
+    for (source, target) in [(&source, &target), (&target, &source)] {
+        let error = check_rewrite(source, target).unwrap_err().to_string();
+        assert!(error.contains("BE-PhysicalPreserved"), "{error}");
+    }
+}
+
 fn reject(program: &Program, rule: &str) {
     let error = contract::check(program).unwrap_err().to_string();
     assert!(error.contains(rule), "expected {rule}, got {error}");
