@@ -68,15 +68,15 @@ macro_rules! query {
                 out = let canon project observed keep {x,y};
                 return out as answer(x,y);
             }
-            structures {
-                l host scan = ::core::iter::Map<_,_> [];
-                r host scan = ::core::iter::Map<_,_> [];
-                r host result(s) = SnapshotAlias<_,_> [x] supports [expand];
-                r host result(p) = SnapshotAlias<_,_> [x] supports [expand];
+            structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; snapshot_alias = SnapshotAlias<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                l host scan = @host_scan as ::core::iter::Map<_,_> [];
+                r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                r host result(s) = @snapshot_alias as SnapshotAlias<_,_> [x] supports [expand];
+                r host result(p) = @snapshot_alias as SnapshotAlias<_,_> [x] supports [expand];
                 s share = lookup r [x] first s force p;
                 s repr = tuples witness { r [x] at s as _ };
                 p stage = batch 2 expand;
-                out rows = ::cq_storage::dedup::Sort; out canon = rows;
+                out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
             }
         }
     };

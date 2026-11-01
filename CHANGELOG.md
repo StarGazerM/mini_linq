@@ -104,6 +104,27 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   scalar (GPU H12 `answer(shipmode, 0)`); capture group keys, `if` captures
   and device-placed capture references are rejected as unsupported targets.
   The Datalog reference interpreters evaluate captures before their loops.
+- Provider identity is a recorded token id (contract 7, slice C1). Every
+  provider-bearing Structures entry records `@token as Type` (inner instance
+  for nested/routed tokens) and the program's `providers { .. }` table
+  declares each referenced token's facts once (STR-Provider, STR-Routed,
+  PL-Catalog); passes read `Analysis::facts`, and `CatalogEntry::covers`
+  matches by token (and inner token), never by Rust type. `ProviderToken`,
+  `elements` and `matches_type` are removed. The base `cq_storage`
+  declarations live in `cq_lang_structures::provider::base`. Structure
+  selection no longer recognizes spellings: `supports [keys]` and join-filter
+  eligibility come from the chosen declaration. Sequence catalog matching,
+  catalog rewrites/placement, key partition (`@sharded(..)`, routed rejection)
+  and publication read recorded routing; cq-print's accounting guards, build
+  labels and retained-key guards read declared facts. `features/sequence-tasks`
+  (levels from `shared`), `features/rewrites` (index/structure rewrites by
+  token) and `features/workloads` (HashIndex override by token) follow. The GPU
+  Sequence core only compiles against the new API; its recognizers remain for
+  G1. Gates: expanded gate vs `c1b75718` has identical expansions on all 46
+  targets (29 runtime-changed, verified by TPC-H SF1 29/29 DuckDB-exact for
+  default and par with counters unchanged); DOOP xalan `--check` ok;
+  regressions 119/119; root tests 1,207 passed; sequence-tasks 63, rewrites
+  197, workloads 2,308 passed.
 
 - DOOP heads are relational projections. Since contract 7 every Ascent-style
   head copy `rel(*x, ..)` was opaque Rust reading a Symbol-encoded column, so

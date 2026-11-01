@@ -2,7 +2,8 @@
 #[path = "support/h05_program.rs"]
 mod h05_program;
 
-use cq_lang_sequence::{Capability, Len, OutputProtocol, Term, Tiling};
+use cq_lang_sequence::structures::Capability;
+use cq_lang_sequence::{Len, OutputProtocol, Term, Tiling};
 use quote::ToTokens;
 use syn::visit::{self, Visit};
 
@@ -423,13 +424,13 @@ fn semijoin_device_store_builds_provider_after_publication() {
             answer = let canon semi eager [nation] customer,r2;
             return answer as answer(customer,nation);
         }
-        structures {
-            r1 host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
-            nation_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
-            customer host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
-            r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
-            r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-            answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            r1 host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
+            nation_base host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            customer host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            r1 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [region];
+            r2 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation];
+            answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
             answer canon = rows;
         }
         sequence {

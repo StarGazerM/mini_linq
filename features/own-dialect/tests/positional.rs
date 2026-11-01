@@ -110,12 +110,12 @@ fn borrowed_keysets_preserve_positive_and_negative_membership() {
                     out = let canon $operator eager [x] l,s;
                     return out as answer(x);
                 }
-                structures {
-                    l host scan = ::core::iter::Map<_,_> [];
-                    r host scan = ::core::iter::Map<_,_> [];
-                    s rows = ::std::vec::Vec<_>;
-                    s keyset = ::cq_storage::AdaptiveKeySet<_,::cq_storage::BorrowedI64TupleCodec,$budget> [x] borrowed base R lineage{x -> b};
-                    out rows = ::cq_storage::dedup::Sort; out canon = rows;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build macro, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                    l host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    s rows = @vec as ::std::vec::Vec<_>;
+                    s keyset = @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_,::cq_storage::BorrowedI64TupleCodec,$budget> [x] borrowed base R lineage{x -> b};
+                    out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
                 }
             }.map(|(x,)| *x).collect::<BTreeSet<_>>()
         };
@@ -192,13 +192,13 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
                     last = let range select second if (x < 4);
                     return last as answer(x,y);
                 }
-                structures {
-                    r host scan = ::core::iter::Map<_,_> [];
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; selection = ::cq_storage::Selection<_> { reads [], build macro }; }
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
                     first read = positional base R lineage{x -> a,y -> b} column a marker ::cq_load::ColumnAt<0> predicate physical;
                     second read = positional base R lineage{x -> a,y -> b} column b marker ::cq_load::ColumnAt<1> predicate physical;
                     last read = positional base R lineage{x -> a,y -> b} column a marker ::cq_load::ColumnAt<0> predicate physical;
                     $($extra)*
-                    last selection = ::cq_storage::Selection<_> base R lineage{x -> a,y -> b} summary per_block;
+                    last selection = @selection as ::cq_storage::Selection<_>  base R lineage{x -> a,y -> b} summary per_block;
                 }
             }.inspect(|_| occurrences += 1).map(|(x,y)| (*x,*y)).collect();
             (rows, cq_storage::counters::snapshot(), occurrences)
@@ -221,11 +221,11 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
             let retained = run!(
                 [mini_linq::passes::sequential, mini_linq::passes::translate_pull]
                 mini_linq::passes::sequence, $source, let, {
-                    first selection = ::cq_storage::Selection<_> base R lineage{x -> a,y -> b} summary per_block;
+                    first selection = @selection as ::cq_storage::Selection<_> base R lineage{x -> a,y -> b} summary per_block;
                 }
             );
             let retained_push = run!([] own_push::push, $source, let, {
-                first selection = ::cq_storage::Selection<_> base R lineage{x -> a,y -> b} summary per_block;
+                first selection = @selection as ::cq_storage::Selection<_> base R lineage{x -> a,y -> b} summary per_block;
             });
             assert_eq!(retained, retained_push);
             assert_eq!(retained.0, piped.0);

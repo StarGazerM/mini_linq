@@ -10,7 +10,9 @@
 //! intermediate publications retain their existing semantics.
 
 pub use cq_gpu_sequence_core::runs::record_representation;
-pub use cq_gpu_sequence_core::{bind_structures, catalog, machine, translate, translate_arena};
+pub use cq_gpu_sequence_core::{
+    bind_structures, catalog, machine, providers, translate, translate_arena,
+};
 pub use cq_gpu_sequence_macros::{
     bind_runs, capture_constants, decompose, machine_grade, select_catalog, stage, translate,
     translate_arena,

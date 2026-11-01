@@ -98,7 +98,7 @@ impl Codecs {
                 Structure::Host { keyed, .. } | Structure::Built { keyed, .. } => keyed,
                 _ => continue,
             };
-            if let Some((columns, _)) = layout_types(&keyed.ty)? {
+            if let Some((columns, _)) = layout_types(&keyed.provider.ty)? {
                 for column in columns {
                     if let Some((logical, codec)) = symbol(&column) {
                         codecs.record(logical, codec)?;
@@ -133,7 +133,7 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
         if !matches!(reader, cq_lang_structures::ReaderRef::Scan) {
             continue;
         }
-        let Some((types, key_count)) = layout_types(&keyed.ty)? else {
+        let Some((types, key_count)) = layout_types(&keyed.provider.ty)? else {
             continue;
         };
         let host = &analysis.physical.hosts[&symbol_name(&entry.name)];
@@ -162,7 +162,7 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
                 }
             }
         }
-        hosts.insert(host.clone(), (keyed.ty.clone(), key_count));
+        hosts.insert(host.clone(), (keyed.provider.clone(), key_count));
     }
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
@@ -173,7 +173,7 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
         let Some(origin) = crate::rows::origin(&name, &definitions)? else {
             continue;
         };
-        let Some((ty, _key_count)) = hosts.get(&origin.host) else {
+        let Some((provider, _key_count)) = hosts.get(&origin.host) else {
             continue;
         };
         // A selected source is not the raw run: keep the computed Built index.
@@ -201,8 +201,9 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
                 ),
             ));
         }
-        keyed.ty = ty.clone();
+        keyed.provider = provider.clone();
     }
+    target.structures.declare(&[]);
     cq_lang_structures::contract::check(&target)?;
     Ok(target)
 }
@@ -227,7 +228,7 @@ pub fn record_representation(
         let Some(host) = analysis.physical.hosts.get(&name) else {
             continue;
         };
-        if let Some((columns, _)) = layout_types(&keyed.ty)? {
+        if let Some((columns, _)) = layout_types(&keyed.provider.ty)? {
             let layout = &analysis.host_layouts[host];
             if columns.len() != layout.len() {
                 return Err(syn::Error::new_spanned(
@@ -238,7 +239,7 @@ pub fn record_representation(
             for (column, ty) in layout.iter().zip(columns) {
                 hosts.insert((host.clone(), column.clone()), symbol(&ty).is_some());
             }
-        } else if crate::native_abi(&keyed.ty) == Some(crate::NativeAbi::Columns) {
+        } else if crate::native_abi(&keyed.provider.ty) == Some(crate::NativeAbi::Columns) {
             for column in &analysis.host_layouts[host] {
                 hosts.insert((host.clone(), column.clone()), false);
             }
@@ -285,7 +286,7 @@ pub fn record_representation(
         let Structure::Built { keyed, .. } = &entry.structure else {
             continue;
         };
-        if crate::native_abi(&keyed.ty) != Some(crate::NativeAbi::Range) {
+        if crate::native_abi(&keyed.provider.ty) != Some(crate::NativeAbi::Range) {
             continue;
         }
         // The native range provider publishes Scalar-ABI rows, including
@@ -323,9 +324,9 @@ mod tests {
                 result = let canon project bound keep {value};
                 return result as answer(value);
             }
-            structures {
-                r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
-                result rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
             }
             sequence {
@@ -358,9 +359,9 @@ mod tests {
                 result = let canon project selected keep {x,y};
                 return result as answer(x,y);
             }
-            structures {
-                r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-                result rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
             }
             sequence {

@@ -113,12 +113,12 @@ fn h01_gpu_matches_duckdb(scale: u32) -> Result<()> {
                 grouped=let group filtered by [returnflag,linestatus] {sum_quantity:i64=sum(quantity);sum_price:i64=sum(price);count_order:usize=count();};
                 return grouped as answer(returnflag,linestatus,sum_quantity,sum_price,count_order);
             }
-            structures {
-                l host scan=::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32,u32,i64,i64,i32)> [];
-                filtered rows=::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build macro }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
+                l host scan=@device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32,u32,i64,i64,i32)> [];
+                filtered rows=@packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 filtered canon=rows;
-                grouped rows=::cq_gpu_sequence_runtime::group::GroupedRows<_>;
-                grouped group=::std::collections::HashMap<_, (i64, i64, usize)>;
+                grouped rows=@grouped_rows as ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
+                grouped group=@group_map as ::std::collections::HashMap<_, (i64, i64, usize)>;
             }
             sequence {
                 source=store rows l;

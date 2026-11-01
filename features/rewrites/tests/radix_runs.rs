@@ -27,7 +27,7 @@ fn assert_plan(captured: &str, retained: bool, staged: bool) -> ir::Program {
     assert_eq!(facts.built["r"].len(), 1);
     assert_eq!(
         facts.built["r"][0].1,
-        syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
+        syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
     );
     assert!(!facts.membership.contains(&("r".into(), vec!["x".into()])));
     assert_eq!(facts.shares.contains_key("s"), retained);
@@ -161,7 +161,7 @@ fn owned_computed_wide_probes_execute_without_a_borrowed_codec() {
     let facts = ir::contract::check(&program).unwrap();
     assert_eq!(
         facts.built["r"][0].1,
-        syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
+        syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
     );
     let right = [(0u64, 0i64), (u64::MAX, 10), (u64::MAX, 11), (u64::MAX, 10)];
     for key in [0, 1, i64::MAX as u64 + 1, u64::MAX] {
@@ -204,8 +204,8 @@ fn named_pipeline_composes_and_executes() {
             .built
             .values()
             .flatten()
-            .any(|(_, ty)| *ty
-                == syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>))
+            .any(|(_, provider)| *provider
+                == syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>))
     );
     assert!(!facts.expands.is_empty());
     let left = [(i64::MIN,), (-1,), (2,), (i64::MAX,)];
@@ -252,11 +252,11 @@ fn selection_is_checked_idempotent_and_preserves_defaults() {
         let target = radix_runs(&source, quote!()).unwrap();
         assert_eq!(
             ir::contract::check(&source).unwrap().built["r"][0].1,
-            syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>)
+            syn::parse_quote!(@hash_index as ::cq_storage::HashIndex<'_, _, _>)
         );
         assert_eq!(
             ir::contract::check(&target).unwrap().built["r"][0].1,
-            syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
+            syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
         );
         assert_eq!(source.physical, target.physical);
         assert_eq!(radix_runs(&target, quote!()).unwrap(), target);
@@ -317,11 +317,14 @@ fn composite_membership_trie_and_smallest_providers_are_not_retyped() {
     smallest
         .structures
         .entries
-        .push(syn::parse_quote!(r = ::cq_storage::HashIndex<'_, _, _> [b];));
+        .push(syn::parse_quote!(r = @hash_index as ::cq_storage::HashIndex<'_, _, _> [b];));
     smallest
         .structures
         .entries
-        .push(syn::parse_quote!(r rows = ::std::vec::Vec<_>;));
+        .push(syn::parse_quote!(r rows = @vec as ::std::vec::Vec<_>;));
+    smallest
+        .structures
+        .declare(&cq_lang_structures::provider::base::declarations());
     ir::contract::check(&smallest).unwrap();
     assert_eq!(radix_runs(&smallest, quote!()).unwrap(), smallest);
     assert_eq!(retain_lookups(&smallest, quote!()).unwrap(), smallest);
@@ -374,7 +377,7 @@ fn partial_payload_reader_selects_tuple_columns() {
     let facts = ir::contract::check(&program).unwrap();
     assert_eq!(
         facts.built["r"][0].1,
-        syn::parse_quote!(::cq_storage::RadixRun<_, _, ::cq_storage::TupleColumns<_>>)
+        syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::cq_storage::TupleColumns<_>>)
     );
     assert!(program.structures.entries.iter().any(|entry| matches!(
         &entry.structure,

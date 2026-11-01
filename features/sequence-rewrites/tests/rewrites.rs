@@ -12,7 +12,7 @@ fn program(body: TokenStream) -> Program {
             r = let canon rename R@0 {a -> a};
             return r as answer(a);
         }
-        structures { r host scan = Reader []; r rows = ::cq_storage::dedup::Sort; r canon = rows; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
         sequence { #body }
     })
     .unwrap()
@@ -268,7 +268,7 @@ fn grouped_key_premises_remove_only_proven_valuation_canon() {
             grouped = let group r by [] { total: i64 = sum(value); };
             return grouped as answer(total);
         }
-        structures { r host scan = Reader []; r rows = ::cq_storage::dedup::Sort; r canon = rows; grouped rows = Rows; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; rows = Rows { reads [exact, range, membership], build inferred }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; grouped rows = @rows as Rows; }
         sequence { values = store canon rows r; answer = store group grouped values; }
     };
     assert!(cq_sequence_plan::rewrites::group_without_canon(&source, quote!(answer)).is_err());
@@ -313,9 +313,9 @@ fn grouped_join_requires_keys_for_every_enumerated_atom() {
             grouped = let group j by [] { total:i64=sum(b); };
             return grouped as answer(total);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader [];
-            r = Provider [a]; j rows = ::cq_storage::dedup::Sort; j canon = rows; grouped rows = Rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; rows = Rows { reads [exact, range, membership], build inferred }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            r = @provider as Provider [a]; j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows; grouped rows = @rows as Rows;
         }
         sequence {
             l = rows l; r = store rows r;

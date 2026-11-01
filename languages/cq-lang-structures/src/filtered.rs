@@ -387,10 +387,10 @@ mod tests {
                 projected = let canon project selected keep {a};
                 return projected as answer(a);
             }
-            structures {
-                r host scan = Reader [];
-                selected rows = Rows;
-                projected rows = ::cq_storage::dedup::Sort; projected canon = rows;
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; rows = Rows { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                r host scan = @reader as Reader [];
+                selected rows = @rows as Rows;
+                projected rows = @sort as ::cq_storage::dedup::Sort; projected canon = rows;
             }
         };
         let facts = crate::contract::check(&source).unwrap();

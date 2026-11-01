@@ -12,10 +12,10 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 result = pipe project joined keep {x,z};
                 return result as answer(x,z);
             }
-            structures {
-                d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
-                e host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
-                e = ::cq_gpu_sequence_runtime::RangeProvider [y];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; }
+                d host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
+                e host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
+                e = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [y];
             }
         },
         "native_linear" => syn::parse_quote! {
@@ -32,10 +32,10 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 result = pipe project owned_z keep {out_x,out_z};
                 return result as answer(out_x,out_z);
             }
-            structures {
-                d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
-                e host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
-                e host result(joined) = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [y];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; }
+                d host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
+                e host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
+                e host result(joined) = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [y];
             }
         },
         "nonlinear" => syn::parse_quote! {
@@ -49,10 +49,10 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 result = pipe project joined keep {x,z};
                 return result as answer(x,z);
             }
-            structures {
-                d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
-                e host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
-                e = ::cq_gpu_sequence_runtime::RangeProvider [y];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; }
+                d host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
+                e host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
+                e = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [y];
             }
         },
         "double" => syn::parse_quote! {
@@ -68,12 +68,12 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 result = pipe project second keep {x,y};
                 return result as answer(x,y);
             }
-            structures {
-                d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
-                left host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
-                right host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
-                left = ::cq_gpu_sequence_runtime::RangeProvider [a];
-                right = ::cq_gpu_sequence_runtime::RangeProvider [b];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; }
+                d host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
+                left host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
+                right host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
+                left = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a];
+                right = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [b];
             }
         },
         "anti" => syn::parse_quote! {
@@ -87,10 +87,10 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 result = pipe project allowed keep {x,y};
                 return result as answer(x,y);
             }
-            structures {
-                d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
-                b host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
-                b = ::cq_gpu_sequence_runtime::RangeProvider [x];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; }
+                d host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
+                b host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
+                b = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [x];
             }
         },
         "native_anti" => syn::parse_quote! {
@@ -104,10 +104,10 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 result = pipe project allowed keep {x,y};
                 return result as answer(x,y);
             }
-            structures {
-                d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
-                b host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
-                b host result(allowed) = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [x];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; }
+                d host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
+                b host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
+                b host result(allowed) = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [x];
             }
         },
         "scan" => syn::parse_quote! {
@@ -118,8 +118,8 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 result = pipe project e keep {x,y};
                 return result as answer(x,y);
             }
-            structures {
-                e host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; }
+                e host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
             }
         },
         "wide_scan" => syn::parse_quote! {
@@ -130,8 +130,8 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 result = pipe project e keep {x,y};
                 return result as answer(x,y);
             }
-            structures {
-                e host scan = ::gpu_datalog_runtime::DeviceLayout<(i64,),(i64,)> [];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; }
+                e host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i64,),(i64,)> [];
             }
         },
         "capture" => syn::parse_quote! {
@@ -144,8 +144,8 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 result = pipe project bound keep {x,z};
                 return result as answer(x,z);
             }
-            structures {
-                e host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; }
+                e host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
             }
         },
         "constant_atom" => syn::parse_quote! {
@@ -156,8 +156,8 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 result = pipe project e keep {y};
                 return result as answer(y);
             }
-            structures {
-                e host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; }
+                e host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
             }
         },
         "wide3_scan" => syn::parse_quote! {
@@ -168,8 +168,8 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 result = pipe project e keep {x,y,z};
                 return result as answer(x,y,z);
             }
-            structures {
-                e host scan = ::gpu_datalog_runtime::DeviceLayout<(i64,),(i32,i64)> [];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; }
+                e host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i64,),(i32,i64)> [];
             }
         },
         "wide4_scan" => syn::parse_quote! {
@@ -180,8 +180,8 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 result = pipe project input keep {a,b,c,d,e};
                 return result as answer(a,b,c,d,e);
             }
-            structures {
-                input host scan = ::gpu_datalog_runtime::DeviceLayout<(i64,),(i32,i64,i32,i32)> [];
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; }
+                input host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i64,),(i32,i64,i32,i32)> [];
             }
         },
         _ => panic!("unknown run hole {name}"),

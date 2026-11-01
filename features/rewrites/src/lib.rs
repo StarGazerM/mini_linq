@@ -7,7 +7,8 @@
 //! and correspondence checks.
 //!
 //! `sorted_runs` takes no arguments and retypes only explicitly built
-//! `::cq_storage::HashIndex` payload providers with one nonempty key level.
+//! `hash_index` payload providers with one nonempty key level (token
+//! `sorted_run`).
 //! Shared membership reads keep using the same exact payload provider. Host
 //! fallbacks, membership-only annotations, multi-level tries, and providers
 //! used as smallest-intersection candidates are unchanged. The replacement
@@ -15,12 +16,12 @@
 //! rustc checks Build, IndexRead and ExactMembership at the existing guards.
 //! A single stored column is eligible. AutoDense selects the codec through
 //! trait dispatch at the concrete Rust callsite; unsupported dense codecs use
-//! exact binary search. Multi-column keys remain HashIndex.
+//! exact binary search. Multi-column keys remain `hash_index`.
 //! Eligible rank spans exceeding 1,048,576 bits still fall back to binary
 //! search at runtime. No default selection changes.
 //! Use `pipeline { structures = [cq_rewrites::sorted_runs]; }`.
 //!
-//! `radix_runs` instead selects `::cq_storage::RadixRun<_,_>` for explicit
+//! `radix_runs` instead selects token `radix_run` (`::cq_storage::RadixRun`) for explicit
 //! singleton payload builds, including owned/computed keys. Rust checks the
 //! provider's OrderKey obligations. Its radix12/error32 spline narrows exact
 //! payload search, without a hash or whole-array binary fallback. Dense-domain
@@ -37,7 +38,8 @@
 //! Use `pipeline { structures = [cq_rewrites::radix_runs, cq_rewrites::retain_lookups]; }`.
 //!
 //! `packed_canon` takes no arguments and retypes every canonical rows record
-//! typed `::cq_storage::dedup::Sort` to `::cq_storage::dedup::Packed`, the
+//! of token `sort` (`::cq_storage::dedup::Sort`) to token `packed`
+//! (`::cq_storage::dedup::Packed`), the
 //! sorted run keyed by the packed `OrderKey` of every column. The advice is
 //! the author's premise that every such column has an `OrderKey` (rustc
 //! checks `PackedRow`); answers and their order are unchanged.
@@ -57,8 +59,10 @@
 //! Neither rewrite is enabled by default.
 //! Sorted/radix selection records `supports [retain, expand, keys]`. Native
 //! payload selection records `supports [keys]` where distinct-key enumeration is
-//! implemented. `retype(r => MyProvider<_, _> supports [expand, keys])` replaces
-//! a provider and its declarations together; bare `retype` clears declarations.
+//! implemented. `retype(providers { my_provider = MyProvider<_, _> { reads [exact,
+//! membership], supports [expand, keys], build macro }; } r => @my_provider as
+//! MyProvider<_, _> supports [expand, keys])` replaces a provider token, its
+//! spelling and its declarations together; bare `retype` clears declarations.
 //! Retyping a live retained/staged plan must preserve its required support.
 //!
 //! ```rust
@@ -148,13 +152,16 @@
 //! assert_eq!(answer, vec![(1,10,100)]);
 //! ```
 //!
-//! `retype(selector => RustType)` replaces recorded types and clears their
-//! support declarations. Optional `supports [...]` replaces the declaration
-//! explicitly on keyed providers. It preserves Physical, entry order, reader
+//! `retype([providers { .. }] selector => @token as RustType)` replaces recorded
+//! provider tokens and spellings and clears their support declarations
+//! (STR-Provider). The token is declared by the advice's leading `providers`
+//! table, by the program, or among the base `cq_storage` tokens. Optional
+//! `supports [...]` replaces the declaration explicitly on keyed providers,
+//! within the token's declared support. It preserves Physical, entry order, reader
 //! identities, and index levels. A bare result name
 //! selects that result's built indexes, keysets and keyed host fallbacks, including
 //! supplemental candidate/membership reads. Scan, point, and range adapters keep
-//! their recorded types. `result(name)` disambiguates a result named like a kind.
+//! their recorded providers. `result(name)` disambiguates a result named like a kind.
 //!
 //! | Kind selector | Selected entries |
 //! |---|---|
@@ -170,7 +177,7 @@
 //!
 //! Canonical boundaries use explicit `sort` strategies, not retypable set providers.
 //!
-//! `retype(rN join_filter => T)` selects only that scan's join-filter entry.
+//! `retype(rN join_filter => @token as T)` selects only that scan's join-filter entry.
 //! The type must implement `Build` and `ConservativeMembership`; the printer
 //! emits a rustc capability guard. Exact membership types qualify automatically.
 //! `join_filter(rN)` adds an exact filter when the scan has an admissible covering
@@ -179,9 +186,10 @@
 //! `retype` afterwards to choose another type.
 //! The Structures contract rejects missing covers, anti joins and opaque Rust in
 //! the intervening spine. Neither advice changes the exact covering probe.
-//! Exact build eligibility follows the recorded single-level key layout, not
-//! provider type names (including routed providers and aliases). Key enumeration
-//! is the build provider's `cq_storage::Keys` obligation, checked by rustc.
+//! Exact build eligibility follows the recorded single-level key layout and
+//! declared support, not provider spellings (including routed providers and
+//! aliases). Key enumeration is the build provider's `cq_storage::Keys`
+//! obligation, checked by rustc.
 //!
 //! Keyset budget changes are explicit type rewrites. A read with an exact
 //! interval summary cannot silently lose that trait: rewrite its summary to
@@ -192,9 +200,9 @@
 //!
 //! `kind(name)` explicitly selects a kind. Classification follows recorded reads
 //! and levels, so aliases do not change which entries match. An entry serving
-//! several kinds matches each one. Shared host fallback types must agree; a
+//! several kinds matches each one. Shared host fallback providers must agree; a
 //! partial kind rewrite that violates this constraint is rejected. An unmatched
-//! selector is an error. Named Rust types can contain inference parameters.
+//! selector is an error. Rust spellings can contain inference parameters.
 //! Known incompatible representations fail the Structures check; arbitrary
 //! aliases and custom implementations must satisfy the emitted runtime traits.
 //!
@@ -205,7 +213,10 @@
 //! let left = [(1,)];
 //! let right = [(1, 2)];
 //! let _: Vec<_> = mini_linq::compile! {
-//!     pipeline { structures = [cq_rewrites::retype(payload => NotAnIndex<_>)]; }
+//!     pipeline { structures = [cq_rewrites::retype(
+//!         providers { not_an_index = NotAnIndex<_> { reads [exact, membership], build macro }; }
+//!         payload => @not_an_index as NotAnIndex<_>
+//!     )]; }
 //!     struct MissingBuild;
 //!     relation L(x: i32) = (left);
 //!     relation R(x: i32, y: i32) = (right);

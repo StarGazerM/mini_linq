@@ -154,7 +154,7 @@ impl<'a> Printer<'a> {
                 }
             });
         }
-        let provider = &self.analysis.groups[name];
+        let provider = &self.analysis.groups[name].ty;
         Ok(quote!({
             let mut #table: #provider = ::core::default::Default::default();
             for #pattern in #input {

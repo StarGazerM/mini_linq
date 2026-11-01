@@ -36,13 +36,13 @@
 //! A printer consumes these decisions through the checked pass queue.
 //!
 //! ```text
-//! structures {
-//!   result = ::cq_storage::HashIndex<'_, _, _> [key];
-//!   host_result host result(reader) = ::cq_storage::dispatch::KeySet<_> [key];
-//!   host_result host scan = ::core::iter::Map<_, _> [];
-//!   result rows = ::cq_storage::dedup::Sort; result canon = rows;
-//!   returned head = ::cq_storage::dedup::Sort;
-//!   retained rows = ::std::vec::Vec<_>;
+//! structures { providers { hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build macro }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; }
+//!   result = @hash_index as ::cq_storage::HashIndex<'_, _, _> [key];
+//!   host_result host result(reader) = @keyset as ::cq_storage::dispatch::KeySet<_> [key];
+//!   host_result host scan = @host_scan as ::core::iter::Map<_, _> [];
+//!   result rows = @sort as ::cq_storage::dedup::Sort; result canon = rows;
+//!   returned head = @sort as ::cq_storage::dedup::Sort;
+//!   retained rows = @vec as ::std::vec::Vec<_>;
 //! }
 //! ```
 //! Host fallbacks are recorded per reader/key, including the initial scan of

@@ -127,131 +127,65 @@ pub fn machine_with_width(parts: usize) -> Machine {
 /// as explicit-codec keysets; their concrete dense representation is selected
 /// by `cq_storage::build!`, independently of the planner's key-partition choice.
 pub fn catalog() -> cq_lang_sequence::Catalog {
+    use cq_lang_sequence::CatalogEntry;
+    use cq_lang_sequence::structures::provider::base::declaration;
+
     let mut catalog = cq_sequence_pull::catalog();
     let levels = vec![
         vec!["host".into()],
         vec!["host".into(), "pool".into()],
         vec!["host".into(), "pool".into(), "task".into()],
     ];
-    for token in &mut catalog.providers {
+    for entry in &mut catalog.providers {
         // Lazy Rc/RefCell providers remain legal at host, but cannot be
         // captured by shared task readers. Selection upgrades them when its
         // checked retention/retyping rewrite is applicable.
-        if !matches!(&token.ty, syn::Type::Path(path)
-            if path.path.segments.last().is_some_and(|segment|
-                segment.ident == "HashIndex" || segment.ident == "Trie" || segment.ident == "KeySet"))
-        {
-            token.levels = levels.clone();
+        let shared = catalog
+            .declarations
+            .iter()
+            .find(|declaration| declaration.token == entry.provider.token)
+            .is_some_and(|declaration| declaration.facts.shared);
+        if shared {
+            entry.levels = levels.clone();
         }
     }
+    let sharded_index = declaration("sharded_index");
     catalog.providers.insert(
         0,
-        cq_lang_sequence::ProviderToken {
-            supports: vec![cq_lang_sequence::structures::ProviderCapability::Keys],
-            ty: syn::parse_quote!(::cq_storage::sharded::Index<_, _>),
-            capabilities: vec![
-                cq_lang_sequence::Capability::Exact,
-                cq_lang_sequence::Capability::Membership,
-            ],
+        CatalogEntry {
+            provider: sharded_index.instance(),
             levels: levels.clone(),
-            elements: None,
-            max_packed_bits: None,
         },
     );
-    // Hash sharding retains exact probes, but not a shard's global ordering.
-    // The synchronous pool join publishes native memory to host and task readers.
-    use cq_lang_sequence::structures::ProviderCapability::Keys;
-    use cq_lang_sequence::{Capability, ProviderToken};
-    for (ty, capabilities, supports) in [
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::HashSet<_>>),
-            vec![Capability::Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(
-                ::cq_storage::sharded::Sharded<::cq_storage::AdaptiveKeySet<_, _, _>>
-            ),
-            vec![Capability::Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(
-                ::cq_storage::sharded::Sharded<::cq_storage::AdaptiveMembership<_, _>>
-            ),
-            vec![Capability::Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::std::collections::HashSet<_>>),
-            vec![Capability::Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::std::collections::HashSet<_, _>>),
-            vec![Capability::Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>),
-            vec![Capability::Exact, Capability::Membership],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>>),
-            vec![Capability::Exact, Capability::Membership],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _, _>>),
-            vec![Capability::Exact, Capability::Membership],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::RadixRun<_, _>>),
-            vec![Capability::Exact, Capability::Membership],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::RadixRun<_, _, _>>),
-            vec![Capability::Exact, Capability::Membership],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(
-                ::cq_storage::sharded::Sharded<::std::collections::BTreeMap<_, ::std::vec::Vec<_>>>
-            ),
-            vec![Capability::Exact, Capability::Membership],
-            vec![Keys],
-        ),
+    catalog.declarations.insert(0, sharded_index);
+    // Formal rule STR-Routed: hash sharding retains exact probes, but not a
+    // shard's global ordering. The synchronous pool join publishes native
+    // memory to host and task readers. A routed entry is spelled with the
+    // projection router (`Sharded<Inner, _>`), which changes partition
+    // placement, not facts.
+    let sharded = declaration("sharded");
+    for inner in [
+        "hash_set",
+        "adaptive_keyset",
+        "adaptive_membership",
+        "std_hash_set",
+        "sharded_index",
+        "sorted_run",
+        "radix_run",
+        "btree_map_grouped",
     ] {
-        let ty: syn::Type = ty;
-        // A projection router changes partition placement, not capabilities.
-        let mut routed_ty: syn::Type = ty.clone();
-        if let syn::Type::Path(path) = &mut routed_ty {
-            if let syn::PathArguments::AngleBracketed(args) =
-                &mut path.path.segments.last_mut().unwrap().arguments
-            {
-                args.args.push(syn::parse_quote!(_));
-            }
-        }
-        catalog.providers.push(ProviderToken {
-            ty: routed_ty,
-            capabilities: capabilities.clone(),
-            supports: supports.clone(),
+        let inner = declaration(inner).instance();
+        let ty = &inner.ty;
+        catalog.providers.push(CatalogEntry {
+            provider: cq_lang_sequence::structures::Provider {
+                token: sharded.token.clone(),
+                ty: syn::parse_quote!(::cq_storage::sharded::Sharded<#ty, _>),
+                inner: Some(Box::new(inner)),
+            },
             levels: levels.clone(),
-            elements: None,
-            max_packed_bits: None,
-        });
-        catalog.providers.push(ProviderToken {
-            ty,
-            capabilities,
-            supports,
-            levels: levels.clone(),
-            elements: None,
-            max_packed_bits: None,
         });
     }
+    catalog.declarations.push(sharded);
     for token in &mut catalog.codecs {
         token.levels = levels.clone();
     }
@@ -277,54 +211,28 @@ pub fn select_providers(
         let cq_lang_sequence::Obligation::Provider {
             provider,
             capability,
-            ty,
+            instance,
             ..
         } = obligation
         else {
             continue;
         };
-        if !catalog.providers.iter().any(|token| {
-            cq_sequence_plan::matches_type(&token.ty, ty)
-                && token.capabilities.contains(capability)
-                && !token.levels.is_empty()
-                && token.elements.as_ref().is_none_or(|accepted| {
-                    analysis.structures.layouts[provider].iter().all(|column| {
-                        accepted.iter().any(|pattern| {
-                            cq_sequence_plan::matches_type(
-                                pattern,
-                                &analysis.structures.physical.rows[provider].types[column],
-                            )
-                        })
-                    })
-                })
+        if !catalog.entry(instance).is_some_and(|entry| {
+            !entry.levels.is_empty()
+                && catalog
+                    .facts(&entry.provider)
+                    .is_some_and(|facts| facts.reads(capability))
         }) {
             admitted.remove(provider);
         }
     }
     // Instantiate supported authored families before checked selection. A
     // transient retype can invalidate obligations such as exact join filters.
+    // Selection keeps a recorded instance's spelling for the same tokens.
     let mut native = catalog.clone();
     native
         .providers
-        .retain(|token| token.levels.iter().any(|level| level.len() > 1));
-    for entry in &source.structures.structures.entries {
-        let ty = match &entry.structure {
-            cq_lang_sequence::structures::Structure::Built { keyed, .. }
-            | cq_lang_sequence::structures::Structure::Host { keyed, .. } => &keyed.ty,
-            cq_lang_sequence::structures::Structure::KeySet { ty, .. }
-            | cq_lang_sequence::structures::Structure::Selection { ty, .. } => ty,
-            cq_lang_sequence::structures::Structure::JoinFilter { filter, .. } => &filter.ty,
-            _ => continue,
-        };
-        if let Some(token) = catalog.providers.iter().find(|token| {
-            token.levels.iter().any(|level| level.len() > 1)
-                && cq_sequence_plan::matches_type(&token.ty, ty)
-        }) {
-            let mut token = token.clone();
-            token.ty = ty.clone();
-            native.providers.push(token);
-        }
-    }
+        .retain(|entry| entry.levels.iter().any(|level| level.len() > 1));
     let mut target = source.clone();
     target.structures = cq_sequence_plan::rewrites::select_from_catalog_preserving(
         &source.structures,

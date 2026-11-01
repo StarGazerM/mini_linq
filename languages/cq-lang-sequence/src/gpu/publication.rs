@@ -207,7 +207,9 @@ impl<'a> Facts<'a> {
                 crate::Obligation::Canon {
                     result,
                     canonical: Some(canonical),
-                } if result == publication => canonical.rows_provider(),
+                } if result == publication => {
+                    canonical.rows_provider().map(|provider| &provider.ty)
+                }
                 _ => None,
             })
             .or_else(|| {
@@ -216,6 +218,7 @@ impl<'a> Facts<'a> {
                     .get(publication)
                     .and_then(|result| analysis.structures.canonical.get(result))
                     .and_then(|canonical| canonical.rows_provider())
+                    .map(|provider| &provider.ty)
             })
     }
 }

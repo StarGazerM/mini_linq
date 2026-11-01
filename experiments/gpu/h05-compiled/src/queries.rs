@@ -88,16 +88,16 @@ macro_rules! compiled_le {
                 answer = let canon project matched keep {order,supplier,nation};
                 return answer as answer(order,supplier,nation);
             }
-            structures {
-                region_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
-                nation_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-                customer host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-                orders_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i32),::cq_gpu_runtime::For> [];
-                lineitem host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-                supplier host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-                r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
-                r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-                answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                region_base host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
+                nation_base host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+                customer host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+                orders_base host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i32),::cq_gpu_runtime::For> [];
+                lineitem host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+                supplier host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+                r1 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [region];
+                r2 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation];
+                answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 answer canon = rows;
                 $($structures)*
             }
@@ -123,10 +123,10 @@ macro_rules! le_a {
                 matched = pipe semi eager [nation,supplier] asia,supplier;
             }
             structures {
-                lineitem rows = ::cq_gpu_sequence_runtime::RangeProvider;
-                orders = ::cq_gpu_sequence_runtime::RangeProvider [order];
-                customer = ::cq_gpu_sequence_runtime::RangeProvider [customer];
-                supplier = ::cq_gpu_sequence_runtime::RangeProvider [nation,supplier];
+                lineitem rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+                orders = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];
+                customer = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [customer];
+                supplier = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation,supplier];
             }
             sequence {
                 L = store rows lineitem;
@@ -155,10 +155,10 @@ macro_rules! le_b {
                 matched = pipe semi eager [nation,supplier] col,supplier;
             }
             structures {
-                customer rows = ::cq_gpu_sequence_runtime::RangeProvider;
-                orders = ::cq_gpu_sequence_runtime::RangeProvider [customer];
-                lineitem = ::cq_gpu_sequence_runtime::RangeProvider [order];
-                supplier = ::cq_gpu_sequence_runtime::RangeProvider [supplier][nation];
+                customer rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+                orders = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [customer];
+                lineitem = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];
+                supplier = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [supplier][nation];
             }
             sequence {
                 C = store rows customer;
@@ -217,21 +217,21 @@ macro_rules! reference {
             answer = let canon project matched keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
-        structures {
-            region_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
-            nation_index host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            customer_index host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            orders_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i32),::cq_gpu_runtime::For> [];
-            lineitem_index host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            supplier_index host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            region_asia rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            nation_index = ::cq_gpu_sequence_runtime::RangeProvider [region];
-            customer_index = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-            orders_index = ::cq_gpu_sequence_runtime::RangeProvider [customer];
-            lineitem_index = ::cq_gpu_sequence_runtime::RangeProvider [order];
-            supplier_index = ::cq_gpu_sequence_runtime::RangeProvider [nation][supplier];
-            rnc rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            region_base host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
+            nation_index host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            customer_index host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            orders_base host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i32),::cq_gpu_runtime::For> [];
+            lineitem_index host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            supplier_index host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            region_asia rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+            nation_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [region];
+            customer_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation];
+            orders_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [customer];
+            lineitem_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];
+            supplier_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation][supplier];
+            rnc rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+            answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
             answer canon = rows;
         }
         sequence {
@@ -296,9 +296,9 @@ pub fn chain<'a>(input: &'a DeviceColumns<'_, Answer>) -> DeviceColumns<'a, Answ
             answer = let canon project source keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
-        structures {
-            source host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32)> [];
-            answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            source host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32)> [];
+            answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
             answer canon = rows;
         }
         sequence {

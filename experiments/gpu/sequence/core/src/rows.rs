@@ -446,10 +446,10 @@ impl Rows {
                     if !matches!(reader, cq_lang_structures::ReaderRef::Scan) {
                         continue;
                     }
-                    if let Some((types, keys)) = crate::runs::layout_types(&keyed.ty)? {
+                    if let Some((types, keys)) = crate::runs::layout_types(&keyed.provider.ty)? {
                         run_binding = Some((types, keys));
                         resident = true;
-                    } else if crate::native_abi(&keyed.ty) == Some(crate::NativeAbi::Columns) {
+                    } else if crate::native_abi(&keyed.provider.ty) == Some(crate::NativeAbi::Columns) {
                         resident = true;
                     }
                 }
@@ -1417,7 +1417,7 @@ pub(crate) fn device_source_results(analysis: &Analysis) -> BTreeSet<String> {
             .filter_map(|(name, layouts)| {
                 layouts
                     .iter()
-                    .any(|(_, ty)| crate::native_abi(ty) == Some(crate::NativeAbi::Range))
+                    .any(|(_, provider)| crate::native_abi(&provider.ty) == Some(crate::NativeAbi::Range))
                     .then(|| name.clone())
             }),
     );
@@ -1477,7 +1477,7 @@ fn host_rows(
             if analysis
                 .structures
                 .built_on(&provider, &keys)
-                .is_some_and(|(ty, _)| crate::native_abi(ty) == Some(crate::NativeAbi::Range))
+                .is_some_and(|(provider, _)| crate::native_abi(&provider.ty) == Some(crate::NativeAbi::Range))
             {
                 return Err(error(format!(
                     "T-Gpu: host publication {name} reads device-only provider {provider}; record a device grade or a host-capable provider"
@@ -1488,7 +1488,7 @@ fn host_rows(
     let mut run_host_types = BTreeMap::new();
     for entry in &program.structures.structures.entries {
         if let cq_lang_structures::Structure::Host { keyed, .. } = &entry.structure
-            && let Some((types, _)) = crate::runs::layout_types(&keyed.ty)?
+            && let Some((types, _)) = crate::runs::layout_types(&keyed.provider.ty)?
             && let Some(host) = analysis
                 .structures
                 .physical
@@ -1506,10 +1506,13 @@ fn host_rows(
             .get(&symbol_name(&entry.name))
             && let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure
         {
-            keyed.ty = provider.clone();
+            keyed.provider = cq_lang_structures::provider::base::instance("host_scan", provider.clone());
             keyed.supports = None;
         }
     }
+    host_structures
+        .structures
+        .declare(&[cq_lang_structures::provider::base::declaration("host_scan")]);
     cq_lang_structures::check_rewrite(&program.structures, &host_structures)?;
     let host_analysis = cq_lang_structures::contract::check(&host_structures)?;
     let mut context = cq_print::Context::new(&host_structures, &host_analysis);
@@ -1941,11 +1944,11 @@ mod tests {
                 result = let canon project filtered keep {id};
                 return result as answer(id);
             }
-            structures {
-                r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
-                h host scan = ::core::iter::Map<_,_> [];
-                h = ::cq_storage::SortedRun<_,_> [];
-                result rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+                h host scan = @host_scan as ::core::iter::Map<_,_> [];
+                h = @sorted_run as ::cq_storage::SortedRun<_,_> [];
+                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
             }
             sequence {
@@ -1980,10 +1983,10 @@ mod tests {
                 selected = let canon point select r if (b = 7);
                 return selected as answer(a,b);
             }
-            structures {
-                r host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
-                r host result(selected) = ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
-                selected rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
+                r host result(selected) = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
+                selected rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 selected canon = rows;
             }
             sequence {
@@ -2021,11 +2024,11 @@ mod tests {
                 result = let canon project joined keep {a,b};
                 return result as answer(a,b);
             }
-            structures {
-                d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
-                r host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
-                r = ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
-                result rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                d host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
+                r host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
+                r = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
+                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
             }
             sequence {
@@ -2139,11 +2142,11 @@ mod tests {
                 result = let canon project r keep {x,y};
                 return result as answer(x,y);
             }
-            structures {
-                r host scan = ::gpu_datalog_runtime::DeviceLayout<
+            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<
                     (::gpu_datalog_runtime::Symbol<i32, FirstCodec>,),
                     (::gpu_datalog_runtime::Symbol<i32, SecondCodec>,)> [];
-                result rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
             }
             sequence {
@@ -2186,12 +2189,12 @@ mod tests {
                 result = let canon project joined keep {order_key,part_key,supplier_nation};
                 return result as answer(order_key,part_key,supplier_nation);
             }
-            structures {
-                driver host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64,i64,i64,i64,i64,i64,i64)> [];
-                nation host scan = ::core::iter::Map<_,_> [];
-                nation = ::cq_storage::SortedRun<_,_> [supplier_nation];
-                filtered rows = ::std::vec::Vec<_>;
-                result rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                driver host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64,i64,i64,i64,i64,i64,i64)> [];
+                nation host scan = @host_scan as ::core::iter::Map<_,_> [];
+                nation = @sorted_run as ::cq_storage::SortedRun<_,_> [supplier_nation];
+                filtered rows = @vec as ::std::vec::Vec<_>;
+                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
             }
             sequence {

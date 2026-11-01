@@ -1,17 +1,27 @@
 structures {
-    o = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
-    r = ::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense> [x] supports [retain, expand, keys];
-    s = ::cq_storage::HashSet<_> [x];
-    t = ::cq_storage::Trie<'_, _, ::cq_storage::HashIndex<'_, _, _>> [x][y];
-    l host scan = ::core::iter::Map<_, _> [];
-    l host result(j) = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
-    o rows = ::std::vec::Vec<_>;
-    o host scan = ::core::iter::Map<_, _> [];
-    r rows = ::std::vec::Vec<_>;
-    r host scan = ::core::iter::Map<_, _> [];
-    s rows = ::std::vec::Vec<_>;
-    s host scan = ::core::iter::Map<_, _> [];
-    t rows = ::std::vec::Vec<_>;
-    t host scan = ::core::iter::Map<_, _> [];
-    out rows = ::cq_storage::dedup::Sort; out canon = rows;
+    providers {
+        btree_map_grouped = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> { reads [exact, membership, ordered], supports [keys], build macro, shared };
+        hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter };
+        hash_set = ::cq_storage::HashSet<_> { reads [membership], build macro, accounting keys, shared };
+        trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build macro, nested 2 };
+        host_scan = ::core::iter::Map<_, _> { reads [], build macro };
+        vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows };
+        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared };
+    }
+    o = @btree_map_grouped as ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
+    r = @sorted_run as ::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense> [x] supports [retain, expand, keys];
+    s = @hash_set as ::cq_storage::HashSet<_> [x];
+    t = @trie(@hash_index as ::cq_storage::HashIndex<'_, _, _>) as ::cq_storage::Trie<'_, _, ::cq_storage::HashIndex<'_, _, _>> [x][y];
+    l host scan = @host_scan as ::core::iter::Map<_, _> [];
+    l host result(j) = @btree_map_grouped as ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
+    o rows = @vec as ::std::vec::Vec<_>;
+    o host scan = @host_scan as ::core::iter::Map<_, _> [];
+    r rows = @vec as ::std::vec::Vec<_>;
+    r host scan = @host_scan as ::core::iter::Map<_, _> [];
+    s rows = @vec as ::std::vec::Vec<_>;
+    s host scan = @host_scan as ::core::iter::Map<_, _> [];
+    t rows = @vec as ::std::vec::Vec<_>;
+    t host scan = @host_scan as ::core::iter::Map<_, _> [];
+    out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
 }

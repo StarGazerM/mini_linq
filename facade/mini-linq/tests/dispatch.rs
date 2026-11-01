@@ -933,15 +933,15 @@ fn compiled_retained_column_cursor_expands_once_in_source_chronology() {
             out = let canon project observed keep {x,k,z};
             return out as answer(x,k,z);
         }
-        structures {
-            l host scan = ::core::iter::Map<_,_> [];
-            r host scan = ::core::iter::Map<_,_> [];
-            r host result(s) = ::cq_storage::RadixRun<_,_> [k] supports [expand];
-            r host result(p) = ::cq_storage::RadixRun<_,_> [k] supports [expand];
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; radix_run = ::cq_storage::RadixRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r host result(s) = @radix_run as ::cq_storage::RadixRun<_,_> [k] supports [expand];
+            r host result(p) = @radix_run as ::cq_storage::RadixRun<_,_> [k] supports [expand];
             s share = lookup r [k] first s force p;
             s repr = tuples witness { r [k] at s as _ };
             p stage = batch 2 expand;
-            out rows = ::cq_storage::dedup::Sort; out canon = rows;
+            out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
     }
     .map(|(x, k, z)| (*x, *k, *z))

@@ -1,8 +1,8 @@
 use cq_lang_sequence::{
-    Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken, check_grading,
-    check_rewrite, structures,
+    Catalog, CodecToken, LevelNode, Machine, Program, check_grading, check_rewrite, structures,
 };
 use cq_sequence_plan::{Advice, decompose, select_from_catalog};
+use structures::Capability;
 
 fn machine() -> Machine {
     fn node(name: &str, children: Vec<LevelNode>) -> LevelNode {
@@ -31,40 +31,27 @@ fn catalog() -> Catalog {
     let host = vec!["host".into()];
     let device = vec!["host".into(), "device".into()];
     let block = vec!["host".into(), "device".into(), "block".into()];
-    let capabilities = vec![Capability::Exact, Capability::Range, Capability::Membership];
-    Catalog {
-        providers: vec![
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(RangeProvider),
-                elements: Some(vec![syn::parse_quote!(i32)]),
-                capabilities: capabilities.clone(),
-                levels: vec![device.clone(), block.clone()],
-                max_packed_bits: None,
-            },
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(HostIndex),
-                elements: None,
-                capabilities,
-                levels: vec![host.clone()],
-                max_packed_bits: None,
-            },
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(::cq_storage::dedup::Sort),
-                elements: None,
-                capabilities: vec![Capability::Distinct],
-                levels: vec![host.clone(), device.clone(), block.clone()],
-                max_packed_bits: None,
-            },
-        ],
+    let declared: structures::Providers = syn::parse_quote!(providers {
+        range_provider = RangeProvider { reads [exact, range, membership], build inferred };
+        host_index = HostIndex { reads [exact, range, membership], build inferred };
+        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+    });
+    let mut declarations = declared.declarations.into_iter();
+    let mut catalog = Catalog {
         codecs: vec![CodecToken {
             ty: syn::parse_quote!(Identity),
             ordered: true,
-            levels: vec![host, device, block],
+            levels: vec![host.clone(), device.clone(), block.clone()],
         }],
-    }
+        ..Catalog::default()
+    };
+    catalog.register(
+        declarations.next().unwrap(),
+        vec![device.clone(), block.clone()],
+    );
+    catalog.register(declarations.next().unwrap(), vec![host.clone()]);
+    catalog.register(declarations.next().unwrap(), vec![host, device, block]);
+    catalog
 }
 
 fn string_reader(retained: bool) -> structures::Program {
@@ -76,34 +63,43 @@ fn string_reader(retained: bool) -> structures::Program {
             answer = let canon probe first [a] l,r;
             return answer as answer(a,b,label);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader [];
-            r host result(answer) = Reader [a];
-            answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            r host result(answer) = @reader as Reader [a];
+            answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
         }
     };
     if retained {
         source.physical.program.definitions[1].mode =
             structures::physical::Mode::Let(Default::default());
-        source.structures.entries[2] = syn::parse_quote!(r = Authored [a];);
+        source.structures.entries[2] = syn::parse_quote!(r = @authored as Authored [a];);
+        source.structures.declare(&[syn::parse_quote!(
+            authored = Authored { reads [exact, range, membership], build inferred };
+        )]);
     }
     source
 }
 
+/// Row element types are not catalog facts: a string-carrying reader selects
+/// the first token declaring its reads, and no token declaring them rejects.
 #[test]
-fn numeric_provider_of_string_carrying_reader_selects_host_level() {
+fn string_carrying_reader_selects_the_first_token_declaring_its_reads() {
     for retained in [false, true] {
         let source = string_reader(retained);
         let selected = select_from_catalog(&source, &catalog()).unwrap();
         let facts = structures::contract::check(&selected).unwrap();
         assert_eq!(facts.layouts["r"], ["a", "b"]);
         assert_eq!(
-            facts.built_on("r", &["a".into()]).map(|(ty, _)| ty),
-            Some(&syn::parse_quote!(HostIndex)),
+            facts
+                .built_on("r", &["a".into()])
+                .map(|(provider, _)| provider),
+            Some(&syn::parse_quote!(@range_provider as RangeProvider)),
         );
         structures::physical::check_rewrite(&source.physical, &selected.physical).unwrap();
         let mut unavailable = catalog();
-        unavailable.providers.truncate(1);
+        unavailable
+            .providers
+            .retain(|entry| entry.provider.token == "sort");
         assert!(select_from_catalog(&source, &unavailable).is_err());
     }
 }
@@ -132,10 +128,10 @@ fn numeric_lookup_is_published_before_host_string_expansion() {
             answer = let canon project selected keep {a,b};
             return answer as answer(a,b);
         }
-        structures {
-            r host scan = Reader []; s host scan = Reader []; t host scan = Reader [];
-            s = RangeProvider [a]; t = HostIndex [b];
-            answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; range_provider = RangeProvider { reads [exact, range, membership], build inferred }; host_index = HostIndex { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r host scan = @reader as Reader []; s host scan = @reader as Reader []; t host scan = @reader as Reader [];
+            s = @range_provider as RangeProvider [a]; t = @host_index as HostIndex [b];
+            answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
         }
     };
     let source = cq_sequence_lowering::compile(&structures).unwrap();
@@ -158,8 +154,8 @@ fn numeric_lookup_is_published_before_host_string_expansion() {
         facts
             .structures
             .built_on("s", &["a".into()])
-            .map(|(ty, _)| ty),
-        Some(&syn::parse_quote!(RangeProvider)),
+            .map(|(provider, _)| provider),
+        Some(&syn::parse_quote!(@range_provider as RangeProvider)),
     );
     assert_replay(&source, &planned);
 }
@@ -264,11 +260,14 @@ fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
     let mut selected = select_from_catalog(&source, &catalog()).unwrap();
     for entry in &mut selected.structures.entries {
         if entry.name == "answer"
-            && let structures::Structure::Rows { ty, .. } = &mut entry.structure
+            && let structures::Structure::Rows { provider, .. } = &mut entry.structure
         {
-            *ty = syn::parse_quote!(NativeCanon);
+            *provider = syn::parse_quote!(@native_canon as NativeCanon);
         }
     }
+    selected.structures.declare(&[syn::parse_quote!(
+        native_canon = NativeCanon { reads [distinct], build inferred };
+    )]);
     // The ordinary Structures-only contract remains exact.
     assert!(structures::check_rewrite(&source, &selected).is_err());
     structures::check_retention_rewrite(&source, &selected).unwrap();
@@ -281,8 +280,11 @@ fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
     if let structures::Structure::Host { keyed, .. } =
         &mut changed_reader.structures.entries[0].structure
     {
-        keyed.ty = syn::parse_quote!(DifferentReader);
+        keyed.provider = syn::parse_quote!(@different_reader as DifferentReader);
     }
+    changed_reader.structures.declare(&[syn::parse_quote!(
+        different_reader = DifferentReader { reads [exact, range, membership], build inferred };
+    )]);
     assert!(structures::check_retention_rewrite(&source, &changed_reader).is_err());
     let mut changed_order = selected.clone();
     changed_order.physical.program.definitions.swap(0, 1);
@@ -302,39 +304,34 @@ fn full_key_host_membership() -> structures::Program {
             answer = let canon probe first [a] l,r;
             return answer as answer(a,b);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader [];
-            r host result(answer) = HostMembership [a] membership;
-            answer rows = ::cq_storage::dedup::Sort;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; host_membership = HostMembership { reads [membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            r host result(answer) = @host_membership as HostMembership [a] membership;
+            answer rows = @sort as ::cq_storage::dedup::Sort;
             answer canon = rows;
         }
     }
 }
 
-fn membership_catalog(ty: syn::Type) -> Catalog {
+fn membership_catalog(declaration: structures::Declaration) -> Catalog {
     let mut available = catalog();
     // Only the canonical rows provider survives beside the membership token.
     available
         .providers
-        .retain(|token| token.capabilities.contains(&Capability::Distinct));
-    available.providers.insert(
-        0,
-        ProviderToken {
-            ty,
-            supports: Vec::new(),
-            elements: None,
-            capabilities: vec![Capability::Membership],
-            levels: vec![vec!["host".into()]],
-            max_packed_bits: None,
-        },
-    );
+        .retain(|entry| entry.provider.token == "sort");
+    available
+        .declarations
+        .retain(|declaration| declaration.token == "sort");
+    available.register(declaration, vec![vec!["host".into()]]);
     available
 }
 
 #[test]
 fn catalog_preserves_admitted_raw_host_membership_without_enumeration() {
     let source = full_key_host_membership();
-    let available = membership_catalog(syn::parse_quote!(HostMembership));
+    let available = membership_catalog(syn::parse_quote!(
+        host_membership = HostMembership { reads [membership], build inferred };
+    ));
     let selected = select_from_catalog(&source, &available).unwrap();
     assert_eq!(selected, source);
     let lowered = cq_sequence_lowering::compile(&selected).unwrap();
@@ -348,13 +345,17 @@ fn catalog_preserves_admitted_raw_host_membership_without_enumeration() {
 #[test]
 fn catalog_retention_preserves_raw_membership_certificate_and_compact() {
     let source = full_key_host_membership();
-    let available = membership_catalog(syn::parse_quote!(MembershipIndex));
+    let available = membership_catalog(syn::parse_quote!(
+        membership_index = MembershipIndex { reads [membership], build inferred };
+    ));
     let selected = select_from_catalog(&source, &available).unwrap();
     let facts = structures::contract::check(&selected).unwrap();
     assert!(facts.membership.contains(&("r".into(), vec!["a".into()])));
     assert_eq!(
-        facts.built_on("r", &["a".into()]).map(|(ty, _)| ty),
-        Some(&syn::parse_quote!(MembershipIndex))
+        facts
+            .built_on("r", &["a".into()])
+            .map(|(provider, _)| provider),
+        Some(&syn::parse_quote!(@membership_index as MembershipIndex))
     );
     assert!(selected.structures.entries.iter().any(|entry| {
         entry.name == "r"
@@ -378,7 +379,12 @@ fn catalog_retention_preserves_raw_membership_certificate_and_compact() {
     );
 
     let mut unavailable = available;
-    unavailable.providers[0].capabilities = vec![Capability::Exact, Capability::Range];
+    let index = unavailable
+        .declarations
+        .iter_mut()
+        .find(|declaration| declaration.token == "membership_index")
+        .unwrap();
+    index.facts.reads = vec![Capability::Exact, Capability::Range];
     assert!(select_from_catalog(&source, &unavailable).is_err());
 }
 
@@ -386,8 +392,10 @@ fn catalog_retention_preserves_raw_membership_certificate_and_compact() {
 fn admitted_storage_type_does_not_move_unretained_host_membership_to_workers() {
     let structures = full_key_host_membership();
     let source = cq_sequence_lowering::compile(&structures).unwrap();
-    let mut available = membership_catalog(syn::parse_quote!(HostMembership));
-    available.providers[0].levels = vec![
+    let mut available = membership_catalog(syn::parse_quote!(
+        host_membership = HostMembership { reads [membership], build inferred };
+    ));
+    available.providers.last_mut().unwrap().levels = vec![
         vec!["host".into()],
         vec!["host".into(), "device".into()],
         vec!["host".into(), "device".into(), "block".into()],
@@ -420,30 +428,32 @@ fn resident_host_membership_before_opaque_host_rust_is_read_below_host() {
             projected = pipe project bound keep {c};
             return projected as answer(c);
         }
-        structures {
-            l host scan = Native []; r host scan = Native [];
-            r host result(kept) = Native [a];
+        structures { providers { native = Native { reads [exact, range, membership], build inferred }; }
+            l host scan = @native as Native []; r host scan = @native as Native [];
+            r host result(kept) = @native as Native [a];
         }
     };
     let source = cq_sequence_lowering::compile(&structures).unwrap();
-    let resident = |capabilities: Vec<Capability>| Catalog {
-        providers: vec![ProviderToken {
-            supports: Vec::new(),
-            ty: syn::parse_quote!(Native),
-            elements: None,
-            capabilities,
-            levels: vec![
+    // PL-Catalog: the program declares the token exactly as the target does.
+    let resident = |reads: proc_macro2::TokenStream| {
+        let declaration: structures::Declaration =
+            syn::parse_quote!(native = Native { reads [#reads], build inferred };);
+        let mut available = Catalog {
+            codecs: catalog().codecs,
+            ..Catalog::default()
+        };
+        available.register(
+            declaration.clone(),
+            vec![
                 vec!["host".into(), "device".into()],
                 vec!["host".into(), "device".into(), "block".into()],
             ],
-            max_packed_bits: None,
-        }],
-        codecs: catalog().codecs,
+        );
+        let mut source = source.clone();
+        source.structures.structures.providers.declarations = vec![declaration];
+        (source, available)
     };
-    let native = vec![Capability::Exact, Capability::Range, Capability::Membership];
-    let mut capabilities = native.clone();
-    capabilities.push(Capability::Resident);
-    let available = resident(capabilities);
+    let (source, available) = resident(quote::quote!(exact, range, membership, resident));
     let facts = cq_lang_sequence::contract::check(&source).unwrap();
     assert!(facts.structures.host_read("r"));
     let planned = decompose(&source, &machine(), &available).unwrap();
@@ -462,5 +472,6 @@ fn resident_host_membership_before_opaque_host_rust_is_read_below_host() {
     assert_eq!(facts.levels["bound"], ["host"]);
     check_rewrite(&source, &planned.program).unwrap();
     // Without the explicit resident token the same handle is not admitted below host.
-    assert!(decompose(&source, &machine(), &resident(native)).is_err());
+    let (source, native) = resident(quote::quote!(exact, range, membership));
+    assert!(decompose(&source, &machine(), &native).is_err());
 }

@@ -840,3 +840,19 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   `rows_tested` is unchanged on every target. The `correlated_exists` time is
   dominated by its per-outer-value scan of S (1.74G rows tested). No CI lies
   entirely above 1.0.
+- C7Provider C1 (contract 7, provider identity), 2026-11-01. Providers are
+  recorded `@token as Type` instances declared once in the `providers` table
+  (STR-Provider, STR-Routed, PL-Catalog); base declarations live in
+  `cq_lang_structures::provider::base`. Closed audit rows
+  (`/data/design-notes/c7-audit.md`): A-42 positional supplementary filter,
+  A-43 publication routed, A-44 key_partition `Sharded`, A-45 catalog
+  matcher, A-46 catalog rewrites/placement, A-47 `supports[keys]`,
+  A-48/49/50 cq-print `Vec`/`HashSet` spellings, A-129 rewrites indexes,
+  A-130 rewrites structures, A-131 sequence-tasks levels, A-132 workloads
+  `HashIndex` suffix. Open: C2 Datalog hasher/partition/print (A-126..128);
+  G1/G2 GPU (A-138..140; GPU Sequence core is compile-only against C1).
+  Gates: expanded gate vs `c1b75718` passes 46/46 with identical expansions
+  (29 runtime-changed targets verified by TPC-H SF1 29/29 DuckDB-exact,
+  default and par, counters unchanged); DOOP xalan `--check` ok; regressions
+  119/119; root tests 1,207, sequence-tasks 63, rewrites 197, workloads
+  2,308 passed.

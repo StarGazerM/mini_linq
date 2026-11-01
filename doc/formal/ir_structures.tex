@@ -3,19 +3,25 @@
 
 \paragraph{Grammar.} Structures extends a complete Physical program.
 \begin{lstlisting}
-Structures ::= Physical structures { Entry* }
-Entry ::= r = Type [K]... [supports [Support,...]]
+Structures ::= Physical structures { providers { Decl* } Entry* }
+Decl ::= x = Type { Fact, ... };
+Fact ::= reads [Cap,...] | supports [Support,...] | build (inferred | macro)
+       | accounting (rows | keys) | (nested | routed) N | join_filter
+       | shared | packed_bits N
+Cap ::= exact | range | membership | ordered | distinct | resident
+Provider ::= @x [(Provider)] as Type
+Entry ::= r = Provider [K]... [supports [Support,...]]
               [membership] [payload[P] constants{c = term, ...}];
-        | r host ReaderRef = Type [K]... [supports [Support,...]];
-        | r rows = Type; | r canon = Canon; | r head = Type;
-        | r group = Type;
-        | r selection = Type base H lineage{a -> c, ...}
+        | r host ReaderRef = Provider [K]... [supports [Support,...]];
+        | r rows = Provider; | r canon = Canon; | r head = Provider;
+        | r group = Provider;
+        | r selection = Provider base H lineage{a -> c, ...}
               summary (none | per_block);
-        | r keyset = Type [K] (owned | borrowed)
+        | r keyset = Provider [K] (owned | borrowed)
               base H lineage{a -> c, ...};
         | r read = positional base H lineage{a -> c, ...}
               column c marker Type predicate Predicate;
-        | r join_filter = Type build s [k]
+        | r join_filter = Provider build s [k]
               covering j marker Type;
         | r share = lookup b [K] first s force p;
         | r repr = (tuples | positions {H lineage {a -> c, ...}, ...}
@@ -26,6 +32,32 @@ ReaderRef ::= scan | candidates | membership | result(Ident)
 Support ::= retain | expand | keys
 Canon ::= rows | [K] | host
 \end{lstlisting}
+
+\paragraph{Provider tokens.} A provider is a declared token, never a Rust type.
+The pass that selects a provider, or authored \code{retype} advice, records
+its token id $x$, the inner instance of a nested or routed token, and the Rust
+spelling printers emit verbatim. The \code{providers} table declares each
+referenced token once: its read capabilities, the strongest support an
+instance may declare, its construction (\code{inferred}: a bare path built by
+\code{Build::build}; \code{macro}: \code{cq\_storage::build!}), allocation
+accounting, composition with the inner's generic argument index, supplementary
+join-filter eligibility, sharing with pool and task readers, and a packed-key
+width limit. Every later pass reads these facts; none inspects a spelling.
+Comparing token ids is identity, not recognition.
+\begin{mathpar}
+\Rule{STR-Provider}{\mathsf{tokens}(t)=\mathrm{dom}(\mathsf{decls}(t))\quad
+ \forall p.\ p.\mathsf{inner}\ne\bot\iff\mathsf{decl}(p).\mathsf{composition}\ne\bot\quad
+ \mathsf{supports}(e)\subseteq\mathsf{facts}(e).\mathsf{supports}}
+ {\mathsf{facts}(e)=\mathsf{decl}(e.\mathsf{token})\text{ is the only provider fact of }e}
+
+\Rule{STR-Routed}{\mathsf{decl}(p).\mathsf{composition}=\mathsf{routed}\quad
+ p.\mathsf{inner}=q\quad\mathsf{decl}(q).\mathsf{composition}\ne\mathsf{routed}}
+ {\mathsf{facts}(p).\mathsf{reads}=\mathsf{facts}(q).\mathsf{reads}\cap\{\mathsf{exact},\mathsf{membership}\}\quad
+  \mathsf{facts}(p).\mathsf{supports}=\mathsf{facts}(q).\mathsf{supports}\cap\{\mathsf{keys}\}}
+\end{mathpar}
+Hash routing preserves exact probes and distinct-key enumeration but neither a
+part's global order nor its retained or expandable cursors; a routed instance
+enumerates a supplementary join filter iff its inner does.
 
 \paragraph{Contract.} $\mathsf{Entries}(t,A)$ checks the embedded Physical and:
 (1)~built columns belong to the heading and never repeat across levels; a built
@@ -89,13 +121,17 @@ Authored providers may use a different map or hasher; realization never
 replaces their recorded type. Retyping \code{group} selects these entries.
 
 \paragraph{Provider-authored support.}
-Support is recorded with the selected provider layout, not inferred from a Rust
-type spelling. \code{retain} requires an immutable exact lookup with a Copy
+Support is recorded with the selected provider layout, bounded by its token's
+declared support, and never inferred from a Rust type spelling. \code{retain}
+requires an immutable exact lookup with a Copy
 cursor; \code{expand} additionally requires an exact finite cursor length and
 implies retain. \code{keys} requires exact distinct-key enumeration through
-\code{Keys}. Duplicate declarations, support on scan adapters, and payload-cursor
+\code{Keys}. Duplicate declarations, support on scan adapters, support not
+declared by the token, and payload-cursor
 support on membership-only builds are rejected. A one-level unit key remains a
 lawful keyed read; empty levels in a multi-level layout do not confer support.
+Default selection records \code{keys} on a one-level, non-membership payload
+build exactly when its chosen token declares it.
 Ordinary complete-key reads and Smallest candidate directories select different
 layouts: a capability on a payload index cannot certify a separate candidate
 directory, or conversely.
@@ -107,10 +143,10 @@ membership, interval and ordered accesses retain their own trait obligations.
 Aliases and unrelated provider names receive identical checks. Default selection
 declares support only for implementations and access paths it chooses, without
 imposing unused fallback bounds on a native host read.
-Retyping replaces the support packet; bare retyping clears it. Existing witnesses,
-expansion and filters must remain justified. Target catalogs record the same
-support data and selection preserves live obligations, while replay freezes
-both provider types and support. Neither support nor sorted storage grants
+Retyping replaces token, spelling and support packet together; bare retyping clears the packet. Existing witnesses,
+expansion and filters must remain justified. Target catalogs declare the same
+tokens and selection preserves live obligations, while replay freezes
+both provider records and support. Neither support nor sorted storage grants
 Ordered, contiguous Sequence Range, or device placement.
 \begin{mathpar}
 \Rule{STR-Reader}{\rho\in\{\mathsf{Scan},\mathsf{Candidates},\mathsf{Membership},
@@ -623,7 +659,7 @@ lineage maps $k$ to a host column.
 The selected provider enumerates its exact distinct keys through \code{Keys}
 for filter construction. Any lawful implementation can satisfy this premise;
 retyping must preserve the declaration and its Rust trait obligation.
-A checked \code{Sharded} family preserves exact key enumeration as well: each
+A routed token (STR-Routed) preserves exact key enumeration as well: each
 complete key routes to exactly one native index, and enumerating all its native
 keys gives the same global key support, including the one-index identity
 representation. Its selected provider must still declare and satisfy the

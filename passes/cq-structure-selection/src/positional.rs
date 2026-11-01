@@ -81,7 +81,13 @@ pub(super) fn choose(
                 .clone();
             let column = &facts.physical.rows[name].bindings[&key[0]];
             let origin = origin(name)?;
-            extra.push(syn::parse2(quote!(#ident keyset = ::cq_storage::AdaptiveKeySet<_, ::cq_storage::AutoDense, 67108864> [#column] owned #origin;))?);
+            let keyset = cq_lang_structures::provider::base::instance(
+                "adaptive_keyset",
+                syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::AutoDense, 67108864>),
+            );
+            extra.push(syn::parse2(
+                quote!(#ident keyset = #keyset [#column] owned #origin;),
+            )?);
         }
     }
     let mut reads = BTreeSet::new();
@@ -194,8 +200,9 @@ pub(super) fn choose(
         {
             let ident = &d.name;
             let origin = origin(&name)?;
+            let selection = cq_lang_structures::provider::base::declaration("selection").instance();
             extra.push(syn::parse2(
-                quote!(#ident selection = ::cq_storage::Selection<_> #origin summary per_block;),
+                quote!(#ident selection = #selection #origin summary per_block;),
             )?);
             positional_sources.insert(name.clone());
             selections.insert(name.clone());
@@ -322,6 +329,9 @@ pub(super) fn choose(
             _ => true,
         });
     target.structures.entries.extend(extra);
+    target
+        .structures
+        .declare(&cq_lang_structures::provider::base::declarations());
     choose_join_filters(target, bases)?;
     structures::contract::check(target)?;
     Ok(())
@@ -361,35 +371,6 @@ fn positional_source(
     }
 }
 
-/// Recorded provider families with a payload-directory enumeration policy.
-/// This examines the selected representation, never a query column's Rust type.
-fn supplementary_filter_provider(ty: &syn::Type) -> bool {
-    let syn::Type::Path(path) = ty else {
-        return false;
-    };
-    if path.qself.is_some() {
-        return false;
-    }
-    let segments = &path.path.segments;
-    if segments.len() == 2 && segments[0].ident == "cq_storage" {
-        return segments[1].ident == "HashIndex" || segments[1].ident == "SortedRun";
-    }
-    if segments.len() != 3 || segments[0].ident != "cq_storage" || segments[1].ident != "sharded" {
-        return false;
-    }
-    if segments[2].ident == "Index" {
-        return true;
-    }
-    if segments[2].ident != "Sharded" {
-        return false;
-    }
-    let syn::PathArguments::AngleBracketed(arguments) = &segments[2].arguments else {
-        return false;
-    };
-    matches!(arguments.args.first(), Some(syn::GenericArgument::Type(inner))
-        if supplementary_filter_provider(inner))
-}
-
 /// Formal rule SEL-JoinFilter: Choose an exact key set for each eligible covered scalar key column of a filtered build, at its scan.
 fn choose_join_filters(
     target: &mut structures::Program,
@@ -420,7 +401,7 @@ fn choose_join_filters(
                 || !bases.contains(&origin.base)
                 || facts
                     .built_on(&candidate.build, &columns)
-                    .is_none_or(|(ty, _)| !supplementary_filter_provider(ty))
+                    .is_none_or(|(provider, _)| !facts.facts(provider).join_filter)
                 // A contains-only build already performs this exact test and
                 // need not enumerate keys to build a redundant scan filter.
                 || facts.membership.iter().any(|(build, columns)| {
@@ -441,35 +422,16 @@ fn choose_join_filters(
             let build = named(&candidate.build);
             let key = &facts.physical.rows[&candidate.build].bindings[&candidate.key];
             let covering = &d.name;
-            let ty = quote!(::cq_storage::AdaptiveMembership<_, 67108864>);
+            let ty = cq_lang_structures::provider::base::instance(
+                "adaptive_membership",
+                syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 67108864>),
+            );
             entries.push(syn::parse2(quote!(#scan join_filter = #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;))?);
         }
     }
     target.structures.entries.extend(entries);
+    target
+        .structures
+        .declare(&cq_lang_structures::provider::base::declarations());
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::supplementary_filter_provider;
-
-    #[test]
-    fn supplementary_enumeration_is_a_payload_provider_policy() {
-        for ty in [
-            syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>),
-            syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::NoDense>),
-            syn::parse_quote!(::cq_storage::sharded::Index<_, _>),
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>),
-        ] {
-            assert!(supplementary_filter_provider(&ty));
-        }
-        for ty in [
-            syn::parse_quote!(::cq_storage::HashSet<_>),
-            syn::parse_quote!(::std::collections::HashSet<_>),
-            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::HashSet<_>>),
-        ] {
-            assert!(!supplementary_filter_provider(&ty));
-        }
-    }
 }

@@ -46,20 +46,39 @@ fn membership_plan() -> cq_lang_structures::Program {
 #[test]
 fn explicit_providers_dispatch_build_capabilities_without_type_recognition() {
     use quote::{ToTokens, quote};
-    let providers: [syn::Type; 3] = [
-        syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
-        syn::parse_quote!(::user::SelectedProvider<_>),
-        syn::parse_quote!(::user::ProviderAlias),
+    // The declared `build` fact, not the spelling, selects the construction.
+    let providers: [(cq_lang_structures::Declaration, syn::Type); 3] = [
+        (
+            cq_lang_structures::provider::base::declaration("adaptive_membership"),
+            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
+        ),
+        (
+            syn::parse_quote!(selected_provider = ::user::SelectedProvider<_> {
+                reads [exact, range, membership], build macro
+            };),
+            syn::parse_quote!(::user::SelectedProvider<_>),
+        ),
+        (
+            syn::parse_quote!(provider_alias = ::user::ProviderAlias {
+                reads [exact, range, membership], build inferred
+            };),
+            syn::parse_quote!(::user::ProviderAlias),
+        ),
     ];
-    for provider in providers {
+    for (declaration, provider) in providers {
         let mut program = membership_plan();
         for entry in &mut program.structures.entries {
             if entry.name == "selected"
                 && let cq_lang_structures::Structure::Built { keyed, .. } = &mut entry.structure
             {
-                keyed.ty = provider.clone();
+                keyed.provider = cq_lang_structures::Provider {
+                    token: declaration.token.clone(),
+                    inner: None,
+                    ty: provider.clone(),
+                };
             }
         }
+        program.structures.declare(&[declaration]);
         let facts = cq_lang_structures::contract::check(&program).unwrap();
         assert!(facts.join_filters.is_empty());
         let mut context = cq_print::Context::new(&program, &facts);
@@ -89,9 +108,9 @@ fn raw_membership_fallback_dispatches_build_with_inferred_provider_output() {
         return canon joined as answer(x);
     }};
     let original = cq_structure_selection::compile(&physical).unwrap();
-    let providers: [syn::Type; 2] = [
-        syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
-        syn::parse_quote!(::user::ExactSetAlias),
+    let providers: [cq_lang_structures::Provider; 2] = [
+        syn::parse_quote!(@adaptive_membership as ::cq_storage::AdaptiveMembership<_, 16777216>),
+        syn::parse_quote!(@exact_set_alias as ::user::ExactSetAlias),
     ];
     for provider in providers {
         let mut program = original.clone();
@@ -100,9 +119,15 @@ fn raw_membership_fallback_dispatches_build_with_inferred_provider_output() {
                 && let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure
                 && keyed.membership.is_some()
             {
-                keyed.ty = provider.clone();
+                keyed.provider = provider.clone();
             }
         }
+        program.structures.declare(&[
+            cq_lang_structures::provider::base::declaration("adaptive_membership"),
+            syn::parse_quote!(exact_set_alias = ::user::ExactSetAlias {
+                reads [exact, membership], build inferred
+            };),
+        ]);
         let facts = cq_lang_structures::contract::check(&program).unwrap();
         let mut context = cq_print::Context::new(&program, &facts);
         context.register("r");
@@ -141,9 +166,17 @@ fn join_filters_emit_adaptive_builds_and_provider_independent_identity_predicate
     let mut task_provider = program.clone();
     for entry in &mut task_provider.structures.entries {
         if let cq_lang_structures::Structure::JoinFilter { filter, .. } = &mut entry.structure {
-            filter.ty = syn::parse_quote!(::cq_storage::sharded::Index<_, _>);
+            filter.provider = cq_lang_structures::provider::base::instance(
+                "sharded_index",
+                syn::parse_quote!(::cq_storage::sharded::Index<_, _>),
+            );
         }
     }
+    task_provider
+        .structures
+        .declare(&[cq_lang_structures::provider::base::declaration(
+            "sharded_index",
+        )]);
     let task_facts = cq_lang_structures::contract::check(&task_provider).unwrap();
     let task_context = cq_print::Context::new(&task_provider, &task_facts);
     let task_statements = &task_context.statements;
@@ -165,12 +198,25 @@ fn join_filters_emit_adaptive_builds_and_provider_independent_identity_predicate
 
 #[test]
 fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
+    use cq_lang_structures::provider::base::{declaration, instance};
     use quote::{ToTokens, quote};
-    let providers: [syn::Type; 4] = [
-        syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
-        syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::NoDense>),
-        syn::parse_quote!(::cq_storage::SortedRun<_, _>),
-        syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense>),
+    let providers: [cq_lang_structures::Provider; 4] = [
+        instance(
+            "adaptive_membership",
+            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
+        ),
+        instance(
+            "sorted_run",
+            syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::NoDense>),
+        ),
+        instance(
+            "sorted_run",
+            syn::parse_quote!(::cq_storage::SortedRun<_, _>),
+        ),
+        instance(
+            "sorted_run",
+            syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense>),
+        ),
     ];
     for inner in providers {
         for borrowed_singleton in [false, true] {
@@ -179,9 +225,13 @@ fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
                 if entry.name == "selected"
                     && let cq_lang_structures::Structure::Built { keyed, .. } = &mut entry.structure
                 {
-                    keyed.ty = syn::parse_quote!(::cq_storage::sharded::Sharded<#inner>);
+                    keyed.provider = declaration("sharded").compose(inner.clone()).unwrap();
                 }
             }
+            program.structures.declare(&[
+                declaration("sharded"),
+                declaration(&inner.token.to_string()),
+            ]);
             let facts = cq_lang_structures::contract::check(&program).unwrap();
             let mut context = cq_print::Context::new(&program, &facts);
             context.register("selected");
@@ -202,7 +252,7 @@ fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
             let printed = quote!(#(#statements)*).to_string();
             assert!(printed.contains("Sharded :: < _ , _ > :: build_from_parts_with_router"));
             assert!(printed.contains("route_index"));
-            assert!(printed.contains(&inner.to_token_stream().to_string()));
+            assert!(printed.contains(&inner.ty.to_token_stream().to_string()));
             assert!(printed.contains("cq_storage :: build !"));
             assert!(!printed.contains("as :: cq_storage :: Build < _ >"));
             assert_eq!(

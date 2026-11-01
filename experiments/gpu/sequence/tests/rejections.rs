@@ -9,9 +9,9 @@ fn fold_at_noncollaborative_device_is_rejected() {
             r = let canon rename R@0 {a -> a};
             return r as answer(a);
         }
-        structures {
-            r host scan = Reader [];
-            r rows = ::cq_storage::dedup::Sort;
+        structures { providers { reader = Reader { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r host scan = @reader as Reader [];
+            r rows = @sort as ::cq_storage::dedup::Sort;
             r canon = rows;
         }
         sequence {
@@ -33,9 +33,9 @@ fn rust_below_host_requires_identity_representation() {
             bound = let canon bind r with n:i32 = (opaque(*a));
             return bound as answer(a,n);
         }
-        structures {
-            r host scan = Reader [];
-            bound rows = ::cq_storage::dedup::Sort;
+        structures { providers { reader = Reader { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r host scan = @reader as Reader [];
+            bound rows = @sort as ::cq_storage::dedup::Sort;
             bound canon = rows;
         }
         sequence { result = store map bound rows r; }
@@ -66,13 +66,17 @@ fn rust_below_host_requires_identity_representation() {
     );
     assert!(unknown.representation.encoded.is_empty());
     program.structures.structures.entries[0] = syn::parse_quote!(
-        r host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,), ()> [];
+        r host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,), ()> [];
     );
+    program
+        .structures
+        .structures
+        .declare(&cq_gpu_sequence::providers::declarations());
     let native = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
     assert!(native.representation.identity.contains("a"));
     assert!(!native.representation.encoded.contains("a"));
     program.structures.structures.entries[0] = syn::parse_quote!(
-        r host scan = ::gpu_datalog_runtime::DeviceLayout<
+        r host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<
             (::gpu_datalog_runtime::Symbol<i32, TestCodec>,), ()
         > [];
     );
@@ -94,9 +98,9 @@ fn scalar_fold_host_code_parses() {
                 r = let canon rename R@0 {a -> a};
                 return r as answer(a);
             }
-            structures {
-                r host scan = ::cq_gpu_runtime::DeviceColumns [];
-                r rows = ::cq_storage::dedup::Sort;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns [];
+                r rows = @sort as ::cq_storage::dedup::Sort;
                 r canon = rows;
             }
             sequence {
@@ -133,13 +137,13 @@ fn host_choice_of_expanded_rows_preserves_upstream_range_translation() {
             answer = let canon project expanded keep {a,b,c};
             return answer as output(a,b,c);
         }
-        structures {
-            r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
-            p host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
-            q host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
-            p = ::cq_gpu_sequence_runtime::RangeProvider [a];
-            q = ::cq_gpu_sequence_runtime::RangeProvider [b];
-            answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
+            p host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            q host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            p = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a];
+            q = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [b];
+            answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
             answer canon = rows;
         }
         sequence {

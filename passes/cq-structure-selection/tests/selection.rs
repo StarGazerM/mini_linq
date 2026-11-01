@@ -1,8 +1,28 @@
 use cq_lang_physical as physical;
 use cq_lang_structures as structures;
-use cq_structure_selection::{check, compile};
+use cq_structure_selection::compile;
 use cq_testkit::corpus as scenarios;
 use quote::ToTokens;
+
+/// Entry rewrites in these tests name base tokens and `custom`: declare them
+/// and prune replaced ones before checking (STR-Provider).
+fn declared(program: &structures::Program) -> structures::Program {
+    let mut declarations = cq_lang_structures::provider::base::declarations();
+    declarations.push(syn::parse_quote!(
+        custom = Custom { reads [exact, range, membership], build inferred };
+    ));
+    let mut program = program.clone();
+    program.structures.declare(&declarations);
+    program
+}
+
+fn check(source: &physical::Program, target: &structures::Program) -> syn::Result<()> {
+    cq_structure_selection::check(source, &declared(target))
+}
+
+fn contract(program: &structures::Program) -> syn::Result<structures::Analysis> {
+    structures::contract::check(&declared(program))
+}
 
 #[test]
 fn full_row_positive_probes_record_membership_without_a_filtered_source() {
@@ -17,7 +37,7 @@ fn full_row_positive_probes_record_membership_without_a_filtered_source() {
             return result as answer(id);
         }};
         let target = compile(&source).unwrap();
-        let facts = structures::contract::check(&target).unwrap();
+        let facts = contract(&target).unwrap();
         assert!(facts.membership.contains(&("r".into(), vec!["x".into()])));
         assert!(!facts.filtered.contains_key("r"));
         let provider = facts
@@ -34,7 +54,7 @@ fn full_row_positive_probes_record_membership_without_a_filtered_source() {
             .unwrap();
         assert_eq!(
             provider,
-            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>)
+            syn::parse_quote!(@adaptive_membership as ::cq_storage::AdaptiveMembership<_, 16777216>)
         );
         check(&source, &target).unwrap();
     }
@@ -51,24 +71,24 @@ fn raw_membership_proof_rejects_unbound_payload_columns() {
             result = let canon project joined keep {x,y};
             return result as answer(x,y);
         }
-        structures {
-            r = ::cq_storage::AdaptiveMembership<_, 64> [x] membership;
-            r rows = ::std::vec::Vec<_>;
-            l host scan = ::core::iter::Map<_, _> [];
-            r host scan = ::core::iter::Map<_, _> [];
-            result rows = ::cq_storage::dedup::Sort; result canon = rows;
+        structures { providers { adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> { reads [membership], build macro, shared }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r = @adaptive_membership as ::cq_storage::AdaptiveMembership<_, 64> [x] membership;
+            r rows = @vec as ::std::vec::Vec<_>;
+            l host scan = @host_scan as ::core::iter::Map<_, _> [];
+            r host scan = @host_scan as ::core::iter::Map<_, _> [];
+            result rows = @sort as ::cq_storage::dedup::Sort; result canon = rows;
         }
     };
     assert!(
-        structures::contract::check(&source)
+        contract(&source)
             .unwrap_err()
             .to_string()
             .contains("complete row key")
     );
     source.structures.entries[0] = syn::parse_quote!(
-        r = ::cq_storage::HashIndex<'_, _, _> [x];
+        r = @hash_index as ::cq_storage::HashIndex<'_, _, _> [x];
     );
-    structures::contract::check(&source).unwrap();
+    contract(&source).unwrap();
 }
 #[test]
 fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
@@ -87,7 +107,7 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
     }};
     let target = compile(&source).unwrap();
     check(&source, &target).unwrap();
-    let facts = structures::contract::check(&target).unwrap();
+    let facts = contract(&target).unwrap();
     assert_eq!(facts.unique["valuations"], ["id", "k", "v"]);
     assert_eq!(facts.unique["grouped"], ["k"]);
     assert!(facts.canonical.contains_key("valuations"));
@@ -95,7 +115,7 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
     assert_eq!(
         facts.groups["grouped"],
         syn::parse_quote!(
-            ::std::collections::HashMap<_, (usize, i32, Option<i32>, Option<i32>,), ::cq_storage::HashState>
+            @group_map as ::std::collections::HashMap<_, (usize, i32, Option<i32>, Option<i32>,), ::cq_storage::HashState>
         )
     );
     let group_entry = target
@@ -107,7 +127,7 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
     let mut missing = target.clone();
     missing.structures.entries.remove(group_entry);
     assert!(
-        structures::contract::check(&missing)
+        contract(&missing)
             .unwrap_err()
             .to_string()
             .contains("missing group accumulator")
@@ -118,7 +138,7 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
         .entries
         .push(target.structures.entries[group_entry].clone());
     assert!(
-        structures::contract::check(&duplicate)
+        contract(&duplicate)
             .unwrap_err()
             .to_string()
             .contains("duplicate group accumulator")
@@ -126,7 +146,7 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
     let mut misplaced = target.clone();
     misplaced.structures.entries[group_entry].name = syn::parse_quote!(valuations);
     assert!(
-        structures::contract::check(&misplaced)
+        contract(&misplaced)
             .unwrap_err()
             .to_string()
             .contains("requires a keyed Group")
@@ -168,7 +188,7 @@ fn global_group_is_unique_by_the_empty_key() {
         return grouped as answer(n,total,lo,hi);
     }};
     let target = compile(&source).unwrap();
-    let facts = structures::contract::check(&target).unwrap();
+    let facts = contract(&target).unwrap();
     assert!(facts.unique["grouped"].is_empty());
     assert!(!facts.canonical.contains_key("grouped"));
     assert!(facts.groups.is_empty());
@@ -176,9 +196,12 @@ fn global_group_is_unique_by_the_empty_key() {
     extra
         .structures
         .entries
-        .push(syn::parse_quote!(grouped group = SomeMap<_,_>;));
+        .push(syn::parse_quote!(grouped group = @group_map as SomeMap<_,_>;));
+    extra
+        .structures
+        .declare(&[cq_lang_structures::provider::base::declaration("group_map")]);
     assert!(
-        structures::contract::check(&extra)
+        contract(&extra)
             .unwrap_err()
             .to_string()
             .contains("requires a keyed Group")
@@ -193,7 +216,7 @@ fn literal_occurrences_select_ordinary_rows_or_shared_indices() {
         return r as answer(x);
     }};
     let selected = compile(&scanned).unwrap();
-    let facts = structures::contract::check(&selected).unwrap();
+    let facts = contract(&selected).unwrap();
     assert!(facts.retained.contains_key("r"));
     assert!(!facts.filtered.contains_key("r"));
     assert!(!facts.lineage.contains_key("r"));
@@ -209,7 +232,7 @@ fn literal_occurrences_select_ordinary_rows_or_shared_indices() {
         return j as answer(x);
     }};
     let selected = compile(&probed).unwrap();
-    let facts = structures::contract::check(&selected).unwrap();
+    let facts = contract(&selected).unwrap();
     assert_eq!(facts.built["r"].len(), 1);
     assert!(!facts.filtered.contains_key("r"));
     assert!(!facts.retained.contains_key("r"));
@@ -217,10 +240,10 @@ fn literal_occurrences_select_ordinary_rows_or_shared_indices() {
     let mut membership = probed;
     membership.program.definitions[2] = syn::parse_quote!(j = let canon semi eager [x] l,r;);
     let selected = compile(&membership).unwrap();
-    let facts = structures::contract::check(&selected).unwrap();
+    let facts = contract(&selected).unwrap();
     assert_eq!(
         facts.built["r"][0].1,
-        syn::parse_quote!(::cq_storage::HashSet<_>)
+        syn::parse_quote!(@hash_set as ::cq_storage::HashSet<_>)
     );
     assert!(!facts.filtered.contains_key("r"));
     assert!(!facts.retained.contains_key("r"));
@@ -238,7 +261,7 @@ fn literal_occurrences_retain_ordinary_rows_for_multiple_indices() {
         return j as answer(x,y);
     }};
     let selected = compile(&source).unwrap();
-    let facts = structures::contract::check(&selected).unwrap();
+    let facts = contract(&selected).unwrap();
     assert_eq!(facts.built["r"].len(), 2);
     assert!(facts.retained.contains_key("r"));
     assert!(!facts.filtered.contains_key("r"));
@@ -259,7 +282,7 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
         result = let canon project joined keep {x}; return result as answer(x);
     }};
     let target = compile(&source).unwrap();
-    let facts = structures::contract::check(&target).unwrap();
+    let facts = contract(&target).unwrap();
     assert!(
         facts
             .membership
@@ -267,7 +290,7 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
     );
     assert_eq!(
         facts.built["selected"][0].1,
-        syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>)
+        syn::parse_quote!(@adaptive_membership as ::cq_storage::AdaptiveMembership<_, 16777216>)
     );
     let mut changed = target.clone();
     let entry = changed
@@ -303,7 +326,13 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
     let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
         unreachable!()
     };
-    keyed.ty = syn::parse_quote!(::cq_storage::Selection<_>);
+    keyed.provider = cq_lang_structures::provider::base::instance(
+        "selection",
+        syn::parse_quote!(::cq_storage::Selection<_>),
+    );
+    alternate_provider
+        .structures
+        .declare(&[cq_lang_structures::provider::base::declaration("selection")]);
     // Provider capabilities are Rust obligations, not inferred from its name.
     check(&source, &alternate_provider).unwrap();
     let mut changed = target;
@@ -334,7 +363,7 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
     }
     let grouped = compile(&grouped_types).unwrap();
     assert!(
-        structures::contract::check(&grouped)
+        contract(&grouped)
             .unwrap()
             .membership
             .contains(&("selected".into(), vec!["x".into()]))
@@ -355,17 +384,17 @@ fn composite_filtered_keys_retain_their_original_provider() {
     for (reader, provider) in [
         (
             syn::parse_quote!(probe first [x,y] l,selected),
-            syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>),
+            syn::parse_quote!(@hash_index as ::cq_storage::HashIndex<'_, _, _>),
         ),
         (
             syn::parse_quote!(semi eager [x,y] l,selected),
-            syn::parse_quote!(::cq_storage::HashSet<_>),
+            syn::parse_quote!(@hash_set as ::cq_storage::HashSet<_>),
         ),
     ] {
         let mut source = source.clone();
         source.program.definitions[3].operator = reader;
         let target = compile(&source).unwrap();
-        let facts = structures::contract::check(&target).unwrap();
+        let facts = contract(&target).unwrap();
         assert!(facts.filtered.contains_key("selected"));
         assert!(
             !facts
@@ -389,7 +418,7 @@ fn reconstructed_key_constants_do_not_disable_singleton_membership() {
         return result as answer(x,y);
     }};
     let target = compile(&source).unwrap();
-    let facts = structures::contract::check(&target).unwrap();
+    let facts = contract(&target).unwrap();
     assert!(
         facts
             .membership
@@ -397,7 +426,7 @@ fn reconstructed_key_constants_do_not_disable_singleton_membership() {
     );
     assert_eq!(
         facts.built["selected"][0].1,
-        syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>)
+        syn::parse_quote!(@adaptive_membership as ::cq_storage::AdaptiveMembership<_, 16777216>)
     );
     check(&source, &target).unwrap();
 }
@@ -434,11 +463,11 @@ fn independent_union_indices_share_canonical_rows() {
         j = pipe probe first [x] l,d; q = pipe project j keep {y}; out = let canon semi eager [y] q,d; return out as answer(y);
     }};
     let target = compile(&source).unwrap();
-    let facts = structures::contract::check(&target).unwrap();
+    let facts = contract(&target).unwrap();
     assert_eq!(facts.built["d"].len(), 2);
     assert_eq!(
         facts.retained["d"],
-        syn::parse_quote!(::cq_storage::dedup::Sort)
+        syn::parse_quote!(@sort as ::cq_storage::dedup::Sort)
     );
     assert!(facts.filtered.contains_key("d"));
     let mut missing = target.clone();
@@ -458,7 +487,7 @@ fn union_curried_indices_and_an_explicit_scan_keep_both_decisions() {
         aux = let project d keep {x,y}; out = let canon semi eager [x,y] j,aux; result = let canon project out keep {x,z}; return result as answer(x,z);
     }};
     let target = compile(&source).unwrap();
-    let facts = structures::contract::check(&target).unwrap();
+    let facts = contract(&target).unwrap();
     assert!(facts.retained.contains_key("d"));
     assert!(facts.filtered.contains_key("d"));
     assert_eq!(facts.built["d"][0].0.len(), 2);
@@ -512,8 +541,8 @@ fn concrete_types_and_preservation_are_checked_independently() {
     reordered.structures.entries.reverse();
     check(&source, &reordered).unwrap();
     for replacement in [
-        syn::parse_quote!(l = ::cq_storage::HashIndex<'_, _, _> [a];),
-        syn::parse_quote!(l = Custom [a];),
+        syn::parse_quote!(l = @hash_index as ::cq_storage::HashIndex<'_, _, _> [a];),
+        syn::parse_quote!(l = @custom as Custom [a];),
     ] {
         let mut q = target.clone();
         q.structures.entries[0] = replacement;
@@ -525,7 +554,7 @@ fn concrete_types_and_preservation_are_checked_independently() {
     let mut q = target.clone();
     q.structures
         .entries
-        .push(syn::parse_quote!(s = ::std::collections::HashSet<_> [b];));
+        .push(syn::parse_quote!(s = @std_hash_set as ::std::collections::HashSet<_> [b];));
     assert!(check(&source, &q).is_err());
     let mut q = target;
     q.physical.program.declarations[0].value = Some(syn::parse_quote!(= (rows())));
@@ -576,7 +605,7 @@ fn const_supplies_on_host_and_materialized_inputs_never_build() {
         unnecessary
             .structures
             .entries
-            .push(syn::parse_quote!(r = ::cq_storage::HashIndex<'_, _, _> [x];));
+            .push(syn::parse_quote!(r = @hash_index as ::cq_storage::HashIndex<'_, _, _> [x];));
         assert!(check(&p, &unnecessary).is_err());
     }
 }
@@ -591,14 +620,15 @@ fn ordered_read_provider_capabilities_are_rustc_obligations() {
     let target = compile(&p).unwrap();
     assert_eq!(
         built_entries(&target),
-        syn::parse_quote!(structures { r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x] supports [keys]; })
+        syn::parse_quote!(structures { providers { btree_map_grouped = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> { reads [exact, membership, ordered], supports [keys], build macro, shared }; } r = @btree_map_grouped as ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x] supports [keys]; })
     );
     let mut q = target.clone();
-    q.structures.entries[0] = syn::parse_quote!(r = ::cq_storage::HashIndex<'_, _, _> [x];);
+    q.structures.entries[0] =
+        syn::parse_quote!(r = @hash_index as ::cq_storage::HashIndex<'_, _, _> [x];);
     check(&p, &q).unwrap();
     // The recorded key remains a structural obligation regardless of provider.
     let mut changed_key = target;
-    changed_key.structures.entries[0] = syn::parse_quote!(r = Custom [];);
+    changed_key.structures.entries[0] = syn::parse_quote!(r = @custom as Custom [];);
     assert!(check(&p, &changed_key).is_err());
 }
 
@@ -624,10 +654,11 @@ fn compatible_membership_chains_use_recorded_trie_levels() {
         .unwrap();
     assert_eq!(
         target.structures.entries[entry],
-        syn::parse_quote!(r = ::cq_storage::Trie<'_, _, ::cq_storage::HashIndex<'_, _, _>> [a][b];)
+        syn::parse_quote!(r = @trie(@hash_index as ::cq_storage::HashIndex<'_, _, _>) as ::cq_storage::Trie<'_, _, ::cq_storage::HashIndex<'_, _, _>> [a][b];)
     );
     let mut q = target;
-    q.structures.entries[entry] = syn::parse_quote!(r = ::cq_storage::HashIndex<'_, _, _> [a,b];);
+    q.structures.entries[entry] =
+        syn::parse_quote!(r = @hash_index as ::cq_storage::HashIndex<'_, _, _> [a,b];);
     assert!(check(&p, &q).is_err());
 }
 
@@ -643,7 +674,7 @@ fn smallest_shared_full_key_adapters_retain_one_seek_representation() {
         return result as answer(a,b,c);
     }};
     let target = compile(&source).unwrap();
-    let facts = structures::contract::check(&target).unwrap();
+    let facts = contract(&target).unwrap();
     assert!(
         !facts
             .membership
@@ -659,7 +690,7 @@ fn smallest_shared_full_key_adapters_retain_one_seek_representation() {
     assert!(
         adapters
             .iter()
-            .all(|ty| **ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>))
+            .all(|ty| **ty == syn::parse_quote!(@hash_index as ::cq_storage::HashIndex<'_, _, _>))
     );
 }
 
@@ -701,7 +732,15 @@ fn smallest_candidate_let_levels_keep_independent_mutation_checks() {
     else {
         panic!()
     };
-    keyed.ty = syn::parse_quote!(::std::collections::HashSet<_>);
+    keyed.provider = cq_lang_structures::provider::base::instance(
+        "std_hash_set",
+        syn::parse_quote!(::std::collections::HashSet<_>),
+    );
+    changed
+        .structures
+        .declare(&[cq_lang_structures::provider::base::declaration(
+            "std_hash_set",
+        )]);
     // The two recorded levels are authoritative; Rust checks the provider's
     // implementation of the required candidate access.
     check(&source, &changed).unwrap();
@@ -737,7 +776,12 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
         assert_eq!(
             built_entries(&target),
             syn::parse_str::<structures::Structures>(&format!(
-                "structures {{ {retained} = ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [{prefix}][c]; }}"
+                "structures {{ providers {{
+                    trie = ::cq_storage::Trie<'_, _, _> {{ reads [exact, membership], build macro, nested 2 }};
+                    hash_set = ::cq_storage::HashSet<_> {{ reads [membership], build macro, accounting keys, shared }};
+                }}
+                {retained} = @trie(@hash_set as ::cq_storage::HashSet<_>)
+                    as ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [{prefix}][c]; }}"
             ))
             .unwrap()
         );
@@ -754,28 +798,23 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
             .unwrap();
         let mut missing = target.clone();
         missing.structures.entries.remove(entry);
-        let diagnostic = structures::contract::check(&missing)
-            .unwrap_err()
-            .to_string();
+        let diagnostic = contract(&missing).unwrap_err().to_string();
         assert!(diagnostic.contains("two-level candidate"), "{diagnostic}");
         assert!(check(&source, &missing).is_err());
         for replacement in [
-            format!("{retained} = ::cq_storage::HashIndex<'_, _, _> [{prefix},c];"),
+            format!("{retained} = @hash_index as ::cq_storage::HashIndex<'_, _, _> [{prefix},c];"),
             format!(
-                "{retained} = ::cq_storage::Trie<'_, _, ::std::collections::HashSet<_>> [c][{prefix}];"
+                "{retained} = @trie(@std_hash_set as ::std::collections::HashSet<_>) as ::cq_storage::Trie<'_, _, ::std::collections::HashSet<_>> [c][{prefix}];"
             ),
         ] {
             let mut changed = target.clone();
             changed.structures.entries[entry] = syn::parse_str(&replacement).unwrap();
-            assert!(
-                structures::contract::check(&changed).is_err(),
-                "{replacement}"
-            );
+            assert!(contract(&changed).is_err(), "{replacement}");
             assert!(check(&source, &changed).is_err(), "{replacement}");
         }
         let mut alternate_provider = target.clone();
         alternate_provider.structures.entries[entry] = syn::parse_str(&format!(
-            "{retained} = ::std::collections::HashSet<_> [{prefix}][c];"
+            "{retained} = @std_hash_set as ::std::collections::HashSet<_> [{prefix}][c];"
         ))
         .unwrap();
         // Provider names do not prove or disprove candidate access.
@@ -789,10 +828,7 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
                 !(e.name == host
                     && matches!(&e.structure, structures::Structure::Host { reader: r, .. } if r == &reader))
             });
-            assert!(
-                structures::contract::check(&missing).is_err(),
-                "{host}/{reader:?}"
-            );
+            assert!(contract(&missing).is_err(), "{host}/{reader:?}");
             assert!(check(&source, &missing).is_err(), "{host}/{reader:?}");
         }
     }
@@ -820,7 +856,7 @@ fn candidate_levels_coexist_with_payload_membership_and_ordered_reads() {
     reordered.structures.entries.reverse();
     for target in [&target, &reordered] {
         check(&source, target).unwrap();
-        let analysis = structures::contract::check(target).unwrap();
+        let analysis = contract(target).unwrap();
         assert!(analysis.candidate_on("r", &["b".into()], "c").is_some());
         assert_eq!(
             analysis.built_on("r", &["b".into(), "c".into()]).unwrap().1,
@@ -876,8 +912,8 @@ fn nonemptiness_and_keyed_membership_share_a_trie_with_an_empty_first_level() {
     let target = compile(&p).unwrap();
     assert_eq!(
         built_entries(&target),
-        syn::parse_quote!(structures {
-            r = ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [][x];
+        syn::parse_quote!(structures { providers { trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build macro, nested 2 }; hash_set = ::cq_storage::HashSet<_> { reads [membership], build macro, accounting keys, shared }; }
+            r = @trie(@hash_set as ::cq_storage::HashSet<_>) as ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [][x];
         })
     );
     check(&p, &target).unwrap();
@@ -888,6 +924,7 @@ fn built_entries(target: &structures::Program) -> structures::Structures {
     entries
         .entries
         .retain(|e| matches!(e.structure, structures::Structure::Built { .. }));
+    entries.declare(&[]);
     entries
 }
 
@@ -910,7 +947,7 @@ fn filtered_source() -> physical::Program {
 fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
     let source = filtered_source();
     let target = compile(&source).unwrap();
-    let analysis = structures::contract::check(&target).unwrap();
+    let analysis = contract(&target).unwrap();
     assert!(!analysis.retained.contains_key("selected"));
     assert_eq!(analysis.built["selected"].len(), 1);
     let entry = target
@@ -932,10 +969,10 @@ fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
         target
     );
     for replacement in [
-        syn::parse_quote!(selected = ::cq_storage::HashIndex<'_, _, _> [k] payload [k] constants {tag = "a"};),
-        syn::parse_quote!(selected = ::cq_storage::HashIndex<'_, _, _> [value] payload [k,value] constants {tag = "a"};),
-        syn::parse_quote!(selected = ::cq_storage::HashIndex<'_, _, _> [k] payload [k,value] constants {tag = "b"};),
-        syn::parse_quote!(selected = ::cq_storage::HashIndex<'_, _, _> [k] payload [k,value,tag] constants {tag = "a"};),
+        syn::parse_quote!(selected = @hash_index as ::cq_storage::HashIndex<'_, _, _> [k] payload [k] constants {tag = "a"};),
+        syn::parse_quote!(selected = @hash_index as ::cq_storage::HashIndex<'_, _, _> [value] payload [k,value] constants {tag = "a"};),
+        syn::parse_quote!(selected = @hash_index as ::cq_storage::HashIndex<'_, _, _> [k] payload [k,value] constants {tag = "b"};),
+        syn::parse_quote!(selected = @hash_index as ::cq_storage::HashIndex<'_, _, _> [k] payload [k,value,tag] constants {tag = "a"};),
     ] {
         let mut bad = target.clone();
         bad.structures.entries[entry] = replacement;
@@ -945,7 +982,7 @@ fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
     let mut bad = target.clone();
     bad.structures
         .entries
-        .push(syn::parse_quote!(selected rows = ::std::vec::Vec<_>;));
+        .push(syn::parse_quote!(selected rows = @vec as ::std::vec::Vec<_>;));
     assert!(check(&source, &bad).is_err());
     let mut changed_occurrence = target.clone();
     let physical::Operator::Rename(rename) =
@@ -956,7 +993,7 @@ fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
     rename.occurrence = syn::parse_quote!(2);
     // The filtered layout still covers every read; correspondence must also
     // preserve the identity of the source occurrence supplying those rows.
-    structures::contract::check(&changed_occurrence).unwrap();
+    contract(&changed_occurrence).unwrap();
     assert!(check(&source, &changed_occurrence).is_err());
     assert!(structures::check_rewrite(&target, &changed_occurrence).is_err());
     let mut reordered = target.clone();
@@ -976,7 +1013,7 @@ fn scanned_selections_keep_rows_and_reject_a_missing_rows_decision() {
     // The selection supplies outer rows too, so it needs a reusable row scan.
     source.program.definitions[3].operator = syn::parse_quote!(probe first [k] selected,l);
     let target = compile(&source).unwrap();
-    let analysis = structures::contract::check(&target).unwrap();
+    let analysis = contract(&target).unwrap();
     assert!(analysis.retained.contains_key("selected"));
     assert!(!analysis.filtered.contains_key("selected"));
     let mut bad = target;
@@ -993,7 +1030,7 @@ fn range_filters_project_only_columns_demanded_downstream() {
     source.program.definitions[7].operator = syn::parse_quote!(project again keep {k});
     source.program.head = syn::parse_quote!(answer(k));
     let target = compile(&source).unwrap();
-    let analysis = structures::contract::check(&target).unwrap();
+    let analysis = contract(&target).unwrap();
     assert!(!analysis.retained.contains_key("selected"));
     assert_eq!(
         analysis.filtered["selected"],
@@ -1015,7 +1052,7 @@ fn filtered_payload_covers_rust_uses_and_keeps_opaque_environments() {
         );
         source.program.definitions[5].operator = syn::parse_quote!(project guarded keep {k});
         let target = compile(&source).unwrap();
-        let analysis = structures::contract::check(&target).unwrap();
+        let analysis = contract(&target).unwrap();
         let payload: Vec<_> = analysis.filtered["selected"]
             .payload
             .columns
@@ -1036,7 +1073,7 @@ fn a_later_merge_does_not_remove_an_earlier_scan_requirement() {
         out = let canon project joined keep {a}; return out as answer(a);
     });
     let target = compile(&source).unwrap();
-    let analysis = structures::contract::check(&target).unwrap();
+    let analysis = contract(&target).unwrap();
     assert!(analysis.physical.scanned.contains("r"));
     assert!(analysis.retained.contains_key("r"));
     let mut bad = target;
@@ -1058,7 +1095,7 @@ fn selection_records_context_before_choosing_dedup_types() {
         quote::quote!(consumer = canonical, host_set R discharged,),
     )
     .unwrap();
-    let facts = structures::contract::check(&selected).unwrap();
+    let facts = contract(&selected).unwrap();
     assert!(facts.physical.consumer_canonical);
     assert!(facts.physical.discharged_host_sets.contains("R"));
     assert!(facts.canonical.is_empty());
@@ -1101,7 +1138,7 @@ fn redundant_context_packets_preserve_explicit_canon() {
             selected.to_token_stream().to_string(),
             ordinary.to_token_stream().to_string()
         );
-        let facts = structures::contract::check(&selected).unwrap();
+        let facts = contract(&selected).unwrap();
         assert!(facts.canonical.contains_key("r"));
         assert!(facts.head_dedup.is_empty());
     }
@@ -1119,7 +1156,7 @@ fn named_host_consumers_do_not_alias_reader_roles() {
             return #result as answer(x,y);
         }};
         let selected = compile(&source).unwrap();
-        let facts = structures::contract::check(&selected).unwrap();
+        let facts = contract(&selected).unwrap();
         assert!(
             facts
                 .fallbacks
@@ -1140,9 +1177,13 @@ fn named_host_consumers_do_not_alias_reader_roles() {
         assert_eq!(selected, reparsed);
         check(&source, &reparsed).unwrap();
     }
-    assert!(syn::parse_str::<structures::Entry>("r host arbitrary = Reader [x];").is_err());
     assert!(
-        syn::parse_str::<structures::Entry>("r host result(scan, candidates) = Reader [x];")
-            .is_err()
+        syn::parse_str::<structures::Entry>("r host arbitrary = @reader as Reader [x];").is_err()
+    );
+    assert!(
+        syn::parse_str::<structures::Entry>(
+            "r host result(scan, candidates) = @reader as Reader [x];"
+        )
+        .is_err()
     );
 }

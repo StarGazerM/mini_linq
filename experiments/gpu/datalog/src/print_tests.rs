@@ -194,17 +194,17 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
             result = pipe project joined keep {x,z};
             return result as answer(x,z);
         }
-        structures {
-            d host scan = ::core::iter::Map<_,_> [];
-            e host scan = ::core::iter::Map<_,_> [];
-            e host result(joined) = ::cq_storage::HashIndex<'_,_,_> [y];
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; }
+            d host scan = @host_scan as ::core::iter::Map<_,_> [];
+            e host scan = @host_scan as ::core::iter::Map<_,_> [];
+            e host result(joined) = @hash_index as ::cq_storage::HashIndex<'_,_,_> [y];
         }
     };
     let target = crate::bind_inputs(
         &source,
         quote! {
-            Delta => ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> ;
-            Edge => ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> ;
+            Delta => @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> ;
+            Edge => @device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> ;
         },
     )
     .unwrap();

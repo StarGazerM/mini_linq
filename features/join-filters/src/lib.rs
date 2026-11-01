@@ -1,5 +1,7 @@
 //! Optional conservative structures, selected explicitly with
-//! `cq_rewrites::retype(rN join_filter => cq_join_filters::BloomFilter<16384>)`.
+//! `cq_rewrites::retype(providers { bloom_filter = cq_join_filters::BloomFilter<16384>
+//! { reads [membership], build macro }; } rN join_filter => @bloom_filter as
+//! cq_join_filters::BloomFilter<16384>)`.
 //! Construction uses the public `Build` protocol. A hit is never an exact
 //! membership answer: the recorded covering probe remains mandatory.
 //!
@@ -18,7 +20,11 @@
 //! let right = [(1_i64, 3_i64)];
 //! let _ = mini_linq::passes::select! {
 //!     pipeline { cq_rewrites::join_filter(l),
-//!         cq_rewrites::retype(l join_filter => PredicateOnly), mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
+//!         cq_rewrites::retype(
+//!             providers { predicate_only = PredicateOnly { reads [membership], build inferred }; }
+//!             l join_filter => @predicate_only as PredicateOnly
+//!         ),
+//!         mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
 //!     physical {
 //!         relation L(a:i64,b:i64) = (left); relation R(c:i64,d:i64) = (right);
 //!         l = pipe rename L@0 {a -> x,b -> y};

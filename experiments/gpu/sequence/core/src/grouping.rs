@@ -5,8 +5,11 @@ use cq_lang_structures::{
     physical::{Operator, symbol_name},
 };
 
-pub(crate) fn provider() -> syn::Type {
-    syn::parse_quote!(::cq_gpu_sequence_runtime::group::SegmentedGroup)
+pub(crate) fn provider() -> cq_lang_structures::Provider {
+    cq_lang_structures::provider::base::instance(
+        "group_map",
+        syn::parse_quote!(::cq_gpu_sequence_runtime::group::SegmentedGroup),
+    )
 }
 
 /// Select the GPU segmented accumulator before Sequence scheduling/printing.
@@ -16,10 +19,13 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
     cq_lang_structures::contract::check(source)?;
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
-        if let Structure::Group { ty, .. } = &mut entry.structure {
-            *ty = provider();
+        if let Structure::Group { provider: recorded, .. } = &mut entry.structure {
+            *recorded = provider();
         }
     }
+    target
+        .structures
+        .declare(&[cq_lang_structures::provider::base::declaration("group_map")]);
     let analysis = cq_lang_structures::contract::check(&target)?;
     check(&target, &analysis)?;
     Ok(target)
@@ -64,8 +70,11 @@ mod tests {
         let output_key = keyed.then(|| quote::quote!(key,));
         let accumulator = keyed.then(|| {
             quote::quote!(
-                grouped group = ::std::collections::HashMap<_, (i64, usize)>;
+                grouped group = @group_map as ::std::collections::HashMap<_, (i64, usize)>;
             )
+        });
+        let group_map = keyed.then(|| {
+            quote::quote!(group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro };)
         });
         syn::parse2(quote::quote! {
             physical {
@@ -77,9 +86,9 @@ mod tests {
                 };
                 return grouped as answer(#output_key total,rows);
             }
-            structures {
-                r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
-                valuation rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; #group_map }
+                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
+                valuation rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 valuation canon = rows;
                 #accumulator
             }
@@ -128,8 +137,8 @@ mod tests {
         for ty in providers {
             let mut target = bind(&source(true)).unwrap();
             for entry in &mut target.structures.entries {
-                if let Structure::Group { ty: recorded, .. } = &mut entry.structure {
-                    *recorded = ty.clone();
+                if let Structure::Group { provider: recorded, .. } = &mut entry.structure {
+                    recorded.ty = ty.clone();
                 }
             }
             let analysis = cq_lang_structures::contract::check(&target).unwrap();

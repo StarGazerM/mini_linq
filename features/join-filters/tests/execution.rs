@@ -17,10 +17,15 @@ impl cq_storage::ConservativeMembership<i64> for ConservativeOnly {
 }
 
 macro_rules! run {
-    ($left:ident, $right:ident, $filter:ty, $($passes:path),+) => {
+    ($left:ident, $right:ident, $token:ident = $filter:ty, $build:ident, $($passes:path),+) => {
         mini_linq::passes::select! {
             pipeline {
-                cq_rewrites::join_filter(l), cq_rewrites::retype(l join_filter => $filter), $($passes),+
+                cq_rewrites::join_filter(l),
+                cq_rewrites::retype(
+                    providers { $token = $filter { reads [membership], build $build }; }
+                    l join_filter => @$token as $filter
+                ),
+                $($passes),+
             };
             physical {
                 relation L(a:i64,b:i64) = (&$left);
@@ -68,7 +73,8 @@ fn filter_corpus_agrees_with_independent_exact_join() {
             run!(
                 left,
                 right,
-                AlwaysTrue,
+                always_true = AlwaysTrue,
+                inferred,
                 mini_linq::passes::sequence,
                 mini_linq::passes::sequential,
                 mini_linq::passes::translate_pull
@@ -79,19 +85,24 @@ fn filter_corpus_agrees_with_independent_exact_join() {
             run!(
                 left,
                 right,
-                FilterAlias,
+                filter_alias = FilterAlias,
+                inferred,
                 mini_linq::passes::sequence,
                 mini_linq::passes::sequential,
                 mini_linq::passes::translate_pull
             ),
             expected
         );
-        assert_eq!(run!(left, right, AlwaysTrue, own_push::push), expected);
+        assert_eq!(
+            run!(left, right, always_true = AlwaysTrue, inferred, own_push::push),
+            expected
+        );
         assert_eq!(
             run!(
                 left,
                 right,
-                ConservativeOnly,
+                conservative_only = ConservativeOnly,
+                inferred,
                 mini_linq::passes::sequence,
                 mini_linq::passes::sequential,
                 mini_linq::passes::translate_pull
@@ -104,14 +115,18 @@ fn filter_corpus_agrees_with_independent_exact_join() {
             run!(
                 left,
                 right,
-                BloomFilter<2>,
+                bloom_filter = BloomFilter<2>,
+                macro,
                 mini_linq::passes::sequence,
                 mini_linq::passes::sequential,
                 mini_linq::passes::translate_pull
             ),
             expected
         );
-        assert_eq!(run!(left, right, AlwaysTrue, own_push::push), expected);
+        assert_eq!(
+            run!(left, right, always_true = AlwaysTrue, inferred, own_push::push),
+            expected
+        );
     }
 }
 
@@ -149,7 +164,10 @@ macro_rules! counted_plan {
         let rows = mini_linq::passes::select! {
             pipeline {
                 $(cq_rewrites::join_filter($scan),)+
-                cq_rewrites::retype(join_filter => CountedFilter),
+                cq_rewrites::retype(
+                    providers { counted_filter = CountedFilter { reads [membership], build inferred }; }
+                    join_filter => @counted_filter as CountedFilter
+                ),
                 mini_linq::passes::sequence,
                 mini_linq::passes::sequential,
                 mini_linq::passes::translate_pull

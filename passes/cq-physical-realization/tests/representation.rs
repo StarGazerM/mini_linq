@@ -62,7 +62,7 @@ fn grouped_adapter_emits_one_typed_hash_fold_over_complete_valuations() {
     syn::parse2::<syn::Expr>(quote!({ #complete })).unwrap();
     let authored = cq_structure_selection::retype(
         &selected,
-        quote!(group => ::std::collections::BTreeMap<_, (usize,i32,Option<i32>,Option<i32>)>),
+        quote!(group => @group_map as ::std::collections::BTreeMap<_, (usize,i32,Option<i32>,Option<i32>)>),
     )
     .unwrap();
     let printed = source_tokens(&authored).unwrap().to_string();
@@ -71,7 +71,7 @@ fn grouped_adapter_emits_one_typed_hash_fold_over_complete_valuations() {
     assert!(printed.contains("Default :: default"), "{printed}");
     let standard = cq_structure_selection::retype(
         &selected,
-        quote!(group => ::std::collections::HashMap<_, (usize,i32,Option<i32>,Option<i32>)>),
+        quote!(group => @group_map as ::std::collections::HashMap<_, (usize,i32,Option<i32>,Option<i32>)>),
     )
     .unwrap();
     let printed = source_tokens(&standard).unwrap().to_string();
@@ -159,14 +159,14 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
             out = let canon project p keep {k,v};
             return out as answer(k,v);
         }
-        structures {
-            l host scan = ::core::iter::Map<_,_> [];
-            r host scan = ::core::iter::Map<_,_> [];
-            r = ForeignIndex<_,_> [k] supports [expand, keys];
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; foreign_index = ForeignIndex<_,_> { reads [exact, range, membership], supports [expand, keys], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r = @foreign_index as ForeignIndex<_,_> [k] supports [expand, keys];
             s share = lookup r [k] first s force p;
             s repr = tuples witness { r [k] at s as AuthoredBookmark<'_, _> };
             p stage = batch 4 expand;
-            out rows = ::cq_storage::dedup::Sort; out canon = rows;
+            out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
     };
     let analysis = cq_lang_structures::contract::check(&program).unwrap();
@@ -236,15 +236,15 @@ fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected()
             candidate = pipe probe smallest [b] pre_s,r;
             checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
-        } structures {
-            l host scan = ::core::iter::Map<_, _> [];
-            r host scan = ::core::iter::Map<_, _> [];
-            s host scan = ::core::iter::Map<_, _> [];
-            r = ForeignDirectory [b][c] supports [retain, expand];
-            s = ForeignDirectory [a][c] supports [retain, expand];
-            r rows = ::std::vec::Vec<_>;
-            s rows = ::std::vec::Vec<_>;
-            checked rows = ::cq_storage::dedup::Sort; checked canon = rows;
+        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; foreign_directory = ForeignDirectory { reads [exact, range, membership], supports [retain, expand], build inferred }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @host_scan as ::core::iter::Map<_, _> [];
+            r host scan = @host_scan as ::core::iter::Map<_, _> [];
+            s host scan = @host_scan as ::core::iter::Map<_, _> [];
+            r = @foreign_directory as ForeignDirectory [b][c] supports [retain, expand];
+            s = @foreign_directory as ForeignDirectory [a][c] supports [retain, expand];
+            r rows = @vec as ::std::vec::Vec<_>;
+            s rows = @vec as ::std::vec::Vec<_>;
+            checked rows = @sort as ::cq_storage::dedup::Sort; checked canon = rows;
             pre_r share = lookup r [b] first pre_r force candidate;
             pre_s share = lookup s [a] first pre_s force candidate;
             pre_r repr = tuples witness { r [b] at pre_r as ::cq_storage::RunCursor<'_, _> };
@@ -309,15 +309,15 @@ fn retained_host_uses_borrowed_dispatch_and_consumes_the_same_cursor() {
             s = pipe semi eager [x] l,r;
             p = let canon probe first [x] s,r;
             return p as answer(x,y);
-        } structures {
-            l host scan = ::core::iter::Map<_,_> [];
-            r host scan = ::core::iter::Map<_,_> [];
-            r host result(s) = SnapshotAlias<_,_> [x] supports [expand, keys];
-            r host result(p) = SnapshotAlias<_,_> [x] supports [expand, keys];
+        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; snapshot_alias = SnapshotAlias<_,_> { reads [exact, range, membership], supports [expand, keys], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r host result(s) = @snapshot_alias as SnapshotAlias<_,_> [x] supports [expand, keys];
+            r host result(p) = @snapshot_alias as SnapshotAlias<_,_> [x] supports [expand, keys];
             s share = lookup r [x] first s force p;
             s repr = tuples witness { r [x] at s as _ };
             p stage = batch 4 expand;
-            p rows = ::cq_storage::dedup::Sort; p canon = rows;
+            p rows = @sort as ::cq_storage::dedup::Sort; p canon = rows;
         }
     };
     let printed = source_tokens(&program).unwrap().to_string();

@@ -1,11 +1,10 @@
-use cq_lang_sequence::{
-    Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken, Term,
-};
+use cq_lang_sequence::{Catalog, CodecToken, LevelNode, Machine, Program, Term, structures};
 use cq_sequence_plan::rewrites::key_partition;
 use cq_sequence_plan::{
     Advice, KeyPartitionPolicy, cost, decompose, decompose_with_key_partitions,
 };
 use quote::{ToTokens, quote};
+use structures::Capability;
 
 fn machine(parts: Option<usize>) -> Machine {
     Machine {
@@ -49,38 +48,49 @@ fn catalog() -> Catalog {
         vec!["host".into(), "pool".into()],
         vec!["host".into(), "pool".into(), "task".into()],
     ];
-    Catalog {
-        providers: vec![
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(Index),
-                elements: None,
-                capabilities: vec![Capability::Exact],
-                levels: levels.clone(),
-                max_packed_bits: None,
-            },
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(::cq_storage::sharded::Sharded<Index>),
-                elements: None,
-                capabilities: vec![Capability::Exact],
-                levels: levels.clone(),
-                max_packed_bits: None,
-            },
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(::cq_storage::dedup::Sort),
-                elements: None,
-                capabilities: vec![Capability::Distinct],
-                levels: levels.clone(),
-                max_packed_bits: None,
-            },
-        ],
+    let declared: structures::Providers = syn::parse_quote!(providers {
+        index = Index { reads [exact], build inferred };
+        sharded = ::cq_storage::sharded::Sharded<_> { reads [], build macro, routed 0, shared };
+        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+    });
+    let [index, sharded, sort] = <[_; 3]>::try_from(declared.declarations).unwrap();
+    let mut catalog = Catalog {
         codecs: vec![CodecToken {
             ty: syn::parse_quote!(::cq_storage::sequence::Identity),
             ordered: true,
-            levels,
+            levels: levels.clone(),
         }],
+        ..Catalog::default()
+    };
+    let routed = sharded.compose(index.instance()).unwrap();
+    catalog.register(index, levels.clone());
+    catalog.declarations.push(sharded);
+    catalog.providers.push(cq_lang_sequence::CatalogEntry {
+        provider: routed,
+        levels: levels.clone(),
+    });
+    catalog.register(sort, levels);
+    catalog
+}
+
+/// The `index` declaration a test widens; programs re-declare it with
+/// [`declare_as`] (PL-Catalog).
+fn index(catalog: &mut Catalog) -> &mut Vec<Capability> {
+    &mut catalog
+        .declarations
+        .iter_mut()
+        .find(|declaration| declaration.token == "index")
+        .unwrap()
+        .facts
+        .reads
+}
+
+/// PL-Catalog: declare every token the catalog declares exactly as it does.
+fn declare_as(structures: &mut structures::Structures, catalog: &Catalog) {
+    for declaration in &mut structures.providers.declarations {
+        if let Some(declared) = catalog.declaration(&declaration.token) {
+            *declaration = declared.clone();
+        }
     }
 }
 
@@ -100,9 +110,9 @@ fn grouped(global: bool) -> Program {
     let accumulator = if global {
         quote!()
     } else {
-        quote!(totals group = ::std::collections::HashMap<_, (i64, i64, usize,)>;)
+        quote!(totals group = @group_map as ::std::collections::HashMap<_, (i64, i64, usize,)>;)
     };
-    syn::parse_quote! {
+    let mut program: Program = syn::parse_quote! {
         physical {
             relation Lineitem(orderkey:i64, linenumber:i32, returnflag:i32, linestatus:i32, quantity:i64, extendedprice:i64);
             lineitem = let canon rename Lineitem@0 {
@@ -117,9 +127,9 @@ fn grouped(global: bool) -> Program {
             };
             return totals as answer(#head sum_qty, sum_base_price, count_order);
         }
-        structures {
-            lineitem host scan = Reader [];
-            lineitem rows = ::cq_storage::dedup::Sort;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
+            lineitem host scan = @reader as Reader [];
+            lineitem rows = @sort as ::cq_storage::dedup::Sort;
             lineitem canon = rows;
             #accumulator
         }
@@ -127,7 +137,9 @@ fn grouped(global: bool) -> Program {
             input = store rows lineitem;
             result = store group totals canon input;
         }
-    }
+    };
+    program.structures.structures.declare(&[]);
+    program
 }
 
 fn named_grouped(global: bool) -> Program {
@@ -362,9 +374,9 @@ fn canon_partition_and_machine_width_are_explicit() {
             r = let canon rename R@0 {a -> a,b -> b};
             return r as answer(a,b);
         }
-        structures {
-            r host scan = Reader [];
-            r rows = ::cq_storage::dedup::Sort; r canon = rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r host scan = @reader as Reader [];
+            r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
         }
         sequence { input = store rows r; result = store canon input; }
     };
@@ -416,9 +428,9 @@ fn provider_program() -> Program {
             joined = let canon probe first [a] l,r;
             return joined as answer(a,b);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader []; r = Index [a];
-            joined rows = ::cq_storage::dedup::Sort; joined canon = rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader []; r = @index as Index [a];
+            joined rows = @sort as ::cq_storage::dedup::Sort; joined canon = rows;
         }
         sequence {
             provider = store rows r;
@@ -933,10 +945,10 @@ fn exact_membership_provider_supports_runtime_partition_choice() {
             j = let canon semi eager [a] l,r;
             return j as answer(a);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader [];
-            r = Index [a];
-            j rows = ::cq_storage::dedup::Sort; j canon = rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            r = @index as Index [a];
+            j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows;
         }
         sequence {
             provider = store rows r;
@@ -945,11 +957,9 @@ fn exact_membership_provider_supports_runtime_partition_choice() {
         }
     };
     let mut membership_catalog = catalog();
-    for provider in &mut membership_catalog.providers {
-        if !provider.capabilities.contains(&Capability::Distinct) {
-            provider.capabilities = vec![Capability::Membership];
-        }
-    }
+    *index(&mut membership_catalog) = vec![Capability::Membership];
+    let mut source = source;
+    declare_as(&mut source.structures.structures, &membership_catalog);
     let planned = decompose(&source, &machine(Some(4)), &membership_catalog).unwrap();
     assert!(
         planned
@@ -969,8 +979,9 @@ fn scheduled_range_obligation_keeps_native_provider() {
         syn::parse_quote!(store tile 2 canon flatten lookup r [a] input);
     let mut catalog = catalog();
     // Native cursors support the authored distributed lookup. The routed
-    // wrapper deliberately remains exact-only: hash routing grants no Range.
-    catalog.providers[0].capabilities.push(Capability::Range);
+    // wrapper remains exact-only: STR-Routed grants no Range.
+    index(&mut catalog).push(Capability::Range);
+    declare_as(&mut source.structures.structures, &catalog);
     let machine = machine(Some(4));
     let planned = decompose(&source, &machine, &catalog).unwrap();
     let facts = cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
@@ -1011,17 +1022,17 @@ fn smallest_candidate_directories_keep_their_native_two_level_providers() {
             checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
-            r = Index [b][c]; s = Index [a][c];
-            checked rows = ::cq_storage::dedup::Sort; checked canon = rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader []; s host scan = @reader as Reader [];
+            r = @index as Index [b][c]; s = @index as Index [a][c];
+            checked rows = @sort as ::cq_storage::dedup::Sort; checked canon = rows;
         }
     };
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
     let mut available = catalog();
-    for token in &mut available.providers {
-        token.capabilities.push(Capability::Membership);
-    }
+    index(&mut available).push(Capability::Membership);
+    let mut structures = structures;
+    declare_as(&mut structures.structures, &available);
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
     let selected = cq_sequence_plan::rewrites::select_from_catalog_preserving(
         &structures,
         &available,
@@ -1058,10 +1069,10 @@ fn filtered_provider_retains_valid_single_level_routing() {
             answer = let canon project joined keep {a,b};
             return answer as answer(a,b);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader [];
-            r = Index [a] payload [a,b] constants {};
-            answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            r = @index as Index [a] payload [a,b] constants {};
+            answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
         }
         sequence {
             provider = store rows r;
@@ -1103,16 +1114,19 @@ fn provider_routing_requires_flat_carried_valuations() {
 }
 
 #[test]
-fn routed_catalog_requires_capability_elements_and_scheduled_read_levels() {
+fn routed_catalog_requires_a_routed_entry_and_scheduled_read_levels() {
     let mut source = provider_program();
     source.graded = Some(syn::parse_quote!(graded tasks { result at host; }));
-    for restriction in 0..3 {
+    for restriction in 0..2 {
         let mut catalog = catalog();
-        let routed = &mut catalog.providers[1];
         match restriction {
-            0 => routed.capabilities = vec![Capability::Membership],
-            1 => routed.elements = Some(vec![syn::parse_quote!(String)]),
-            _ => routed.levels = vec![vec!["host".into(), "pool".into(), "task".into()]],
+            0 => {
+                catalog.providers.remove(1);
+            }
+            _ => {
+                catalog.providers[1].levels =
+                    vec![vec!["host".into(), "pool".into(), "task".into()]]
+            }
         }
         let planned = decompose(&source, &machine(Some(4)), &catalog).unwrap();
         assert!(
@@ -1138,7 +1152,8 @@ fn task_flatten_decomposition_does_not_introduce_unnamed_separated_stores() {
     );
     source.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(store canon expanded);
     let mut catalog = catalog();
-    catalog.providers[0].capabilities.push(Capability::Range);
+    index(&mut catalog).push(Capability::Range);
+    declare_as(&mut source.structures.structures, &catalog);
     let machine = machine(Some(4));
     let planned =
         decompose_with_key_partitions(&source, &machine, &catalog, &[policy("result", false)])
@@ -1165,11 +1180,11 @@ fn provider_rewrite_preserves_shared_flat_rows_and_published_length_guards() {
             final_rows = let canon semi eager [a] joined,selected;
             return final_rows as answer(a,b);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader [];
-            r = Index [a]; selected = Index [a];
-            final_rows rows = ::cq_storage::dedup::Sort; final_rows canon = rows;
-            r rows = ::std::vec::Vec<_>;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            r = @index as Index [a]; selected = @index as Index [a];
+            final_rows rows = @sort as ::cq_storage::dedup::Sort; final_rows canon = rows;
+            r rows = @vec as ::std::vec::Vec<_>;
         }
         sequence {
             provider = store rows r;
@@ -1221,9 +1236,9 @@ fn provider_rewrite_preserves_shared_flat_rows_and_published_length_guards() {
     assert_eq!(twice, syn::parse2(twice.to_token_stream()).unwrap());
 
     let mut catalog = catalog();
-    for token in &mut catalog.providers {
-        token.capabilities.push(Capability::Membership);
-    }
+    index(&mut catalog).push(Capability::Membership);
+    let mut source = source;
+    declare_as(&mut source.structures.structures, &catalog);
     let machine = machine(Some(4));
     let planned = decompose(&source, &machine, &catalog).unwrap();
     assert!(
@@ -1280,7 +1295,7 @@ fn physical_provider_is_partitioned_once_across_publication_aliases() {
                 .program
                 .to_token_stream()
                 .to_string()
-                .matches("Sharded")
+                .matches("Sharded < Index >")
                 .count(),
             1
         );
@@ -1655,10 +1670,10 @@ fn adaptive_provider_publication_preserves_task_owned_pipe_execution() {
             joined = let canon probe first [a] l,selected;
             return joined as answer(a,b);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader [];
-            selected = Index [a];
-            joined rows = ::cq_storage::dedup::Sort; joined canon = rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            selected = @index as Index [a];
+            joined rows = @sort as ::cq_storage::dedup::Sort; joined canon = rows;
         }
         sequence {
             raw = store rows r;
@@ -1753,10 +1768,10 @@ fn filtered_provider_uses_host_layout_bound_before_demanding_input_count() {
             joined = let canon probe first [a] l,selected;
             return joined as answer(a,b);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader [];
-            selected = Index [a];
-            joined rows = ::cq_storage::dedup::Sort; joined canon = rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            selected = @index as Index [a];
+            joined rows = @sort as ::cq_storage::dedup::Sort; joined canon = rows;
         }
         sequence {
             r = store rows r;
@@ -1808,10 +1823,10 @@ fn expanding_provider_join_requires_exact_count_without_a_host_shortcut() {
             final_rows = let canon probe first [a] l,joined;
             return final_rows as answer(a,b);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader [];
-            r = Index [a]; joined = Index [a];
-            final_rows rows = ::cq_storage::dedup::Sort; final_rows canon = rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            r = @index as Index [a]; joined = @index as Index [a];
+            final_rows rows = @sort as ::cq_storage::dedup::Sort; final_rows canon = rows;
         }
         sequence {
             right = store rows r;
@@ -1828,7 +1843,10 @@ fn expanding_provider_join_requires_exact_count_without_a_host_shortcut() {
         .structures
         .structures
         .entries
-        .push(syn::parse_quote!(l host result(joined) = Ordered [a];));
+        .push(syn::parse_quote!(l host result(joined) = @ordered as Ordered [a];));
+    merged.structures.structures.declare(&[syn::parse_quote!(
+        ordered = Ordered { reads [exact, range, membership, ordered], build inferred };
+    )]);
     for source in [source, mapped, merged] {
         let routed = key_partition(
             &source,
@@ -1890,12 +1908,15 @@ fn support_equal_duplicate_rows_never_supply_a_host_cardinality_bound() {
         .structures
         .structures
         .entries
-        .push(syn::parse_quote!(r rows = Rows;));
+        .push(syn::parse_quote!(r rows = @rows as Rows;));
     source
         .structures
         .structures
         .entries
-        .push(syn::parse_quote!(duplicates = Index [a,b];));
+        .push(syn::parse_quote!(duplicates = @index as Index [a,b];));
+    source.structures.structures.declare(&[syn::parse_quote!(
+        rows = Rows { reads [], build inferred, accounting rows };
+    )]);
     source.sequence.definitions[0].term = syn::parse_quote!(store r);
     source
         .sequence
@@ -1947,24 +1968,21 @@ fn automatic_probe_chain_preserves_filtered_shared_index_contracts() {
             r11 = let canon project r10 keep {o,a,b};
             return r11 as answer(o,a,b);
         }
-        structures {
-            r0 host scan = Reader []; r1 host scan = Reader []; r3 host scan = Reader [];
-            r5 host scan = Reader []; r7 host scan = Reader []; r9 host scan = Reader [];
-            r1 = Index [a]; r3 = Index [b];
-            r5 = Index [c] payload [c] constants {};
-            r7 = Index [a,b] payload [o,a,b] constants {};
-            r9 = Index [o] payload [o] constants {};
-            r11 rows = ::cq_storage::dedup::Sort; r11 canon = rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r0 host scan = @reader as Reader []; r1 host scan = @reader as Reader []; r3 host scan = @reader as Reader [];
+            r5 host scan = @reader as Reader []; r7 host scan = @reader as Reader []; r9 host scan = @reader as Reader [];
+            r1 = @index as Index [a]; r3 = @index as Index [b];
+            r5 = @index as Index [c] payload [c] constants {};
+            r7 = @index as Index [a,b] payload [o,a,b] constants {};
+            r9 = @index as Index [o] payload [o] constants {};
+            r11 rows = @sort as ::cq_storage::dedup::Sort; r11 canon = rows;
         }
     };
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
     let mut available = catalog();
-    available.providers[0]
-        .capabilities
-        .extend([Capability::Range, Capability::Membership]);
-    available.providers[1]
-        .capabilities
-        .push(Capability::Membership);
+    index(&mut available).extend([Capability::Range, Capability::Membership]);
+    let mut structures = structures;
+    declare_as(&mut structures.structures, &available);
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
     let planned = decompose(&source, &machine(Some(4)), &available).unwrap();
     assert_eq!(
         planned.program.structures.physical,

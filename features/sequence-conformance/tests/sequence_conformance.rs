@@ -8,8 +8,8 @@ fn program() -> cq_lang_sequence::Program {
             r = pipe rename R@0 {a -> a,b -> b};
             return r as answer(b,a);
         }
-        structures {
-            r host scan = ::core::iter::Map<_,_> [];
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; }
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
         }
         sequence {
             input = store rows r;

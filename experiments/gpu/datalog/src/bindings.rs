@@ -17,12 +17,13 @@ fn key_providers(program: &Program) -> syn::Result<Vec<Vec<Type>>> {
     }).collect()
 }
 
+/// Every packet input is a `DeviceLayout` view recorded by device storage.
 fn packet(hole: &Hole, inputs: &BTreeMap<String, Type>) -> TokenStream {
     let declared = hole.cq.declarations.iter().map(|declaration| declaration.name.to_string())
         .collect::<BTreeSet<_>>();
     inputs.iter().filter(|(name, _)| declared.contains(*name)).map(|(name, ty)| {
         let name = Ident::new(name, proc_macro2::Span::call_site());
-        quote!(#name => #ty;)
+        quote!(#name => @device_layout as #ty;)
     }).collect()
 }
 

@@ -2,6 +2,14 @@ use cq_lang_structures::{self as ir, Structure};
 use cq_rewrite_passes::{retain_lookups, sorted_runs};
 use quote::{ToTokens, quote};
 
+fn custom_payload() -> ir::Declaration {
+    syn::parse_quote!(
+        custom_payload = CustomPayload<_, _> {
+            reads [exact, range, membership], supports [retain, expand, keys], build macro
+        };
+    )
+}
+
 fn triangle_source() -> ir::Program {
     syn::parse_quote! { physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
@@ -13,15 +21,15 @@ fn triangle_source() -> ir::Program {
         candidate = pipe probe smallest [b] pre_s,r;
         checked = let canon semi eager [a,c] candidate,s;
         return checked as answer(a,b,c);
-    } structures {
-        r = CustomDirectory [b][c] supports [retain, expand];
-        s = CustomDirectory [a][c] supports [retain, expand];
-        l host scan = ::core::iter::Map<_, _> [];
-        r host scan = ::core::iter::Map<_, _> [];
-        s host scan = ::core::iter::Map<_, _> [];
-        r rows = ::std::vec::Vec<_>;
-        s rows = ::std::vec::Vec<_>;
-        checked rows = ::cq_storage::dedup::Sort; checked canon = rows;
+    } structures { providers { custom_directory = CustomDirectory { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        r = @custom_directory as CustomDirectory [b][c] supports [retain, expand];
+        s = @custom_directory as CustomDirectory [a][c] supports [retain, expand];
+        l host scan = @host_scan as ::core::iter::Map<_, _> [];
+        r host scan = @host_scan as ::core::iter::Map<_, _> [];
+        s host scan = @host_scan as ::core::iter::Map<_, _> [];
+        r rows = @vec as ::std::vec::Vec<_>;
+        s rows = @vec as ::std::vec::Vec<_>;
+        checked rows = @sort as ::cq_storage::dedup::Sort; checked canon = rows;
     } }
 }
 
@@ -51,8 +59,9 @@ fn triangle_records_both_prefix_witnesses_at_first_probe() {
 fn candidate_retention_uses_directory_support_not_complete_payload_support() {
     let mut source = triangle_source();
     source.structures.entries.push(syn::parse_quote!(
-        r = CustomPayload [b];
+        r = @custom_payload as CustomPayload [b];
     ));
+    source.structures.declare(&[custom_payload()]);
     let target = retain_lookups(&source, quote!()).unwrap();
     let facts = ir::contract::check(&target).unwrap();
     assert!(facts.witnesses.contains_key("pre_r"));
@@ -60,10 +69,10 @@ fn candidate_retention_uses_directory_support_not_complete_payload_support() {
     assert_eq!(source.physical, target.physical);
 
     source.structures.entries[0] = syn::parse_quote!(
-        r = CustomDirectory [b][c];
+        r = @custom_directory as CustomDirectory [b][c];
     );
     *source.structures.entries.last_mut().unwrap() = syn::parse_quote!(
-        r = CustomPayload [b] supports [expand];
+        r = @custom_payload as CustomPayload [b] supports [expand];
     );
     let target = retain_lookups(&source, quote!()).unwrap();
     let facts = ir::contract::check(&target).unwrap();
@@ -81,12 +90,12 @@ fn declared_host_lookup_retains_exact_snapshot_ranges() {
         s = pipe semi eager [x] l,r;
         p = let canon probe first [x] s,r;
         return p as answer(x,y);
-    } structures {
-        l host scan = ::core::iter::Map<_,_> [];
-        r host scan = ::core::iter::Map<_,_> [];
-        r host result(s) = Snapshot<0> [x] supports [retain];
-        r host result(p) = Snapshot<0> [x] supports [retain];
-        p rows = ::cq_storage::dedup::Sort; p canon = rows;
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; snapshot = Snapshot<0> { reads [exact, range, membership], supports [retain, expand, keys], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        l host scan = @host_scan as ::core::iter::Map<_,_> [];
+        r host scan = @host_scan as ::core::iter::Map<_,_> [];
+        r host result(s) = @snapshot as Snapshot<0> [x] supports [retain];
+        r host result(p) = @snapshot as Snapshot<0> [x] supports [retain];
+        p rows = @sort as ::cq_storage::dedup::Sort; p canon = rows;
     } };
     let target = retain_lookups(&source, quote!()).unwrap();
     let facts = ir::contract::check(&target).unwrap();
@@ -95,7 +104,7 @@ fn declared_host_lookup_retains_exact_snapshot_ranges() {
     assert_eq!(target.physical, source.physical);
     assert_eq!(retain_lookups(&target, quote!()).unwrap(), target);
     source.structures.entries[3] = syn::parse_quote! {
-        r host result(p) = Snapshot<1> [x] supports [retain];
+        r host result(p) = @snapshot as Snapshot<1> [x] supports [retain];
     };
     assert!(retain_lookups(&source, quote!()).is_err());
 }
@@ -153,7 +162,7 @@ fn triangle_prefix_witnesses_do_not_escape() {
     escaping.physical.program.definitions[4].canon = Some(Default::default());
     escaping.physical.program.definitions[4].mode = syn::parse_quote!(let);
     escaping.structures.entries.extend([
-        syn::parse_quote!(pre_s rows = ::cq_storage::dedup::Sort;),
+        syn::parse_quote!(pre_s rows = @sort as ::cq_storage::dedup::Sort;),
         syn::parse_quote!(pre_s canon = rows;),
     ]);
     assert_eq!(retain_lookups(&escaping, quote!()).unwrap(), escaping);
@@ -224,9 +233,10 @@ fn a_custom_provider_with_declared_support_is_eligible() {
     let mut source = source();
     for entry in &mut source.structures.entries {
         if let Structure::Built { keyed, .. } = &mut entry.structure {
-            keyed.ty = syn::parse_quote!(CustomPayload<_, _>);
+            keyed.provider = custom_payload().instance();
         }
     }
+    source.structures.declare(&[custom_payload()]);
     let target = retain_lookups(&source, quote!()).unwrap();
     assert_eq!(ir::contract::check(&target).unwrap().witnesses.len(), 1);
 }
@@ -252,8 +262,10 @@ fn a_probe_before_the_semi_does_not_share() {
     }};
     let source = cq_structure_selection::compile(&physical).unwrap();
     let source = sorted_runs(&source, quote!()).unwrap();
+    let built = &ir::contract::check(&source).unwrap().built["r"][0].1;
+    assert_eq!(built.token, "sorted_run");
     assert_eq!(
-        ir::contract::check(&source).unwrap().built["r"][0].1,
+        built.ty,
         syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense>)
     );
     assert_eq!(retain_lookups(&source, quote!()).unwrap(), source);
@@ -271,8 +283,11 @@ fn retained_rows_and_canon_are_not_witness_escape_paths() {
         .unwrap()
         .mode = syn::parse_quote!(let);
     retained.structures.entries.push(syn::parse_quote! {
-        s rows = ::std::vec::Vec<_>;
+        s rows = @vec as ::std::vec::Vec<_>;
     });
+    retained
+        .structures
+        .declare(&cq_lang_structures::provider::base::declarations());
     ir::contract::check(&retained).unwrap();
     assert_eq!(retain_lookups(&retained, quote!()).unwrap(), retained);
 
@@ -287,9 +302,12 @@ fn retained_rows_and_canon_are_not_witness_escape_paths() {
     definition.canon = Some(Default::default());
     definition.mode = syn::parse_quote!(let);
     canonical.structures.entries.extend([
-        syn::parse_quote!(s rows = ::cq_storage::dedup::Sort;),
+        syn::parse_quote!(s rows = @sort as ::cq_storage::dedup::Sort;),
         syn::parse_quote!(s canon = rows;),
     ]);
+    canonical
+        .structures
+        .declare(&cq_lang_structures::provider::base::declarations());
     ir::contract::check(&canonical).unwrap();
     assert_eq!(retain_lookups(&canonical, quote!()).unwrap(), canonical);
 }

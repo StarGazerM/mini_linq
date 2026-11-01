@@ -577,8 +577,8 @@ does not eliminate that completion boundary.
 
 | Concern | Existing contract |
 |---|---|
-| Physical layout and payload | `Structure::Built`, `Structure::Host`, and `Keyed { ty, levels, supports, membership, filtered }` in `cq-lang-structures`. These `levels` are key levels, not machines. |
-| Legal reads on a machine | Sequence `ProviderToken { capabilities, supports, levels, elements }`. Its `levels` explicitly govern consumption, not construction (`cq-lang-sequence/src/lib.rs`). |
+| Physical layout and payload | `Structure::Built`, `Structure::Host`, and `Keyed { provider, levels, supports, membership, filtered }` in `cq-lang-structures`; `provider` is a declared token instance (STR-Provider). These `levels` are key levels, not machines. |
+| Legal reads on a machine | Sequence `Catalog { declarations, providers: CatalogEntry { provider, levels } }`, keyed by token id (PL-Catalog); capabilities and supports are the token's declared facts. Entry `levels` explicitly govern consumption, not construction (`cq-lang-sequence/src/lib.rs`). |
 | Execution and publication | Sequence `Grade`, `Store` and derived `Dispatch { level, producer_level, failure_channel, ... }`. Existing grading proves scope/publication obligations, not a general pending-index readiness protocol. |
 | Native construction ABI | `cq-print::Context::materialize` emits `Build::build`; native fallback uses `Lazy<T,F>`. Both are context-free/infallible at that interface. Mac construction needs an explicit context and error policy. |
 | Advice | Sequence `Advice::apply` replays checked rewrites. Recorded grades/rewrites are decisions, while catalog ordering and machine geometry guide candidate selection. “Advice” does not universally mean a soft hint. |

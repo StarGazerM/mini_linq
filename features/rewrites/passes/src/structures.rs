@@ -1,6 +1,7 @@
 use cq_lang_structures::{self as ir, Structure, symbol_name};
+use cq_lang_structures::provider::base as providers;
 use proc_macro2::TokenStream;
-use syn::{Ident, Type};
+use syn::Ident;
 
 mod retain_lookups;
 pub use retain_lookups::retain_lookups;
@@ -47,8 +48,8 @@ pub fn membership(source: &ir::Program, arguments: TokenStream) -> syn::Result<i
 }
 
 /// Add every admissible covered scalar filter to the named scan occurrence
-/// that is not already recorded. The default type is exact; a later
-/// `retype(scan join_filter => T)` chooses its representation. This is
+/// that is not already recorded. The default token is `adaptive_membership`;
+/// a later `retype(scan join_filter => @token as T)` chooses its representation. This is
 /// explicit positional-host advice, including when selection was not given
 /// positional hosts. The same Structures contract checks the result.
 pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
@@ -112,16 +113,17 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
             .map(|d| &d.name)
             .expect("checked build");
         target.structures.entries.push(syn::parse_quote! {
-            #scan join_filter = ::cq_storage::AdaptiveMembership<_, 67108864>
+            #scan join_filter = @adaptive_membership as ::cq_storage::AdaptiveMembership<_, 67108864>
                 build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
         });
     }
+    target.structures.declare(&providers::declarations());
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }
 
 /// Formal rule EXT-SortedRuns:
-/// Retype one-level HashIndex payload builds with one generic ordered key.
+/// Retype one-level `hash_index` payload builds with one generic ordered key.
 /// Host fallbacks and smallest-intersection candidates retain their providers.
 pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     select_runs(source, arguments, RunKind::Sorted)
@@ -135,10 +137,11 @@ pub fn radix_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<i
 }
 
 /// Formal rule EXT-PackedCanon:
-/// Retype every canonical rows record typed by the default sorted array to the
-/// sorted run keyed by the packed OrderKey. The advice is the authored premise
-/// that every column of those results has an OrderKey; rustc checks it at the
-/// build. Other records and canonical references are unchanged.
+/// Retype every canonical rows record of token `sort` (the default sorted
+/// array) to token `packed`, the sorted run keyed by the packed OrderKey. The
+/// advice is the authored premise that every column of those results has an
+/// OrderKey; rustc checks it at the build. Other records and canonical
+/// references are unchanged.
 pub fn packed_canon(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -149,7 +152,7 @@ pub fn packed_canon(source: &ir::Program, arguments: TokenStream) -> syn::Result
     let analysis = ir::contract::check(source)?;
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
-        let Structure::Rows { ty, .. } = &mut entry.structure else {
+        let Structure::Rows { provider, .. } = &mut entry.structure else {
             continue;
         };
         let rows_record = analysis
@@ -157,13 +160,11 @@ pub fn packed_canon(source: &ir::Program, arguments: TokenStream) -> syn::Result
             .get(&symbol_name(&entry.name))
             .and_then(ir::CanonSource::rows_provider)
             .is_some();
-        if rows_record
-            && matches!(&*ty, Type::Path(p) if p.qself.is_none()
-                && p.path.segments.iter().map(|s| s.ident.to_string()).eq(["cq_storage", "dedup", "Sort"]))
-        {
-            *ty = syn::parse_quote!(::cq_storage::dedup::Packed);
+        if rows_record && provider.token == "sort" {
+            *provider = providers::declaration("packed").instance();
         }
     }
+    target.structures.declare(&providers::declarations());
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }
@@ -197,8 +198,7 @@ fn select_runs(
         if keyed.levels.len() != 1
             || keyed.levels[0].columns.is_empty()
             || keyed.membership.is_some()
-            || !matches!(&keyed.ty, Type::Path(p) if p.qself.is_none()
-                && p.path.segments.iter().map(|s| s.ident.to_string()).eq(["cq_storage", "HashIndex"]))
+            || keyed.provider.token != "hash_index"
         {
             continue;
         }
@@ -228,12 +228,18 @@ fn select_runs(
                 // The type argument prints the recorded `items` fact
                 // (SEL-ItemLayout).
                 if split_payload(source, &analysis, &name, &columns) {
-                    keyed.ty = syn::parse_quote!(
-                        ::cq_storage::RadixRun<_, _, ::cq_storage::TupleColumns<_>>
+                    keyed.provider = providers::instance(
+                        "radix_run",
+                        syn::parse_quote!(
+                            ::cq_storage::RadixRun<_, _, ::cq_storage::TupleColumns<_>>
+                        ),
                     );
                     keyed.items = Some(syn::parse_quote!(items columns));
                 } else {
-                    keyed.ty = syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>);
+                    keyed.provider = providers::instance(
+                        "radix_run",
+                        syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>),
+                    );
                     keyed.items = Some(syn::parse_quote!(items rows));
                 }
                 keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
@@ -243,10 +249,14 @@ fn select_runs(
         // Request codec selection at the concrete Rust build callsite without
         // inspecting column types. Unsupported keys retain NoDense storage.
         if stored.len() == 1 {
-            keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense>);
+            keyed.provider = providers::instance(
+                "sorted_run",
+                syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense>),
+            );
             keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
         }
     }
+    target.structures.declare(&providers::declarations());
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }
@@ -295,7 +305,15 @@ fn split_payload(
         })
 }
 
-/// Record an exact hashed-bucket run for one-level composite scalar keys.
+/// The exact hashed-bucket run token `hashed_runs` records.
+fn hashed_run() -> ir::Declaration {
+    syn::parse_quote!(
+        hashed_run = ::cq_gpu_runtime::HashedRun<_, _> { reads [exact, membership], build macro };
+    )
+}
+
+/// Record an exact hashed-bucket run (token `hashed_run`) for one-level
+/// composite scalar keys of token `hash_index`.
 /// Bucket collisions are resolved by comparing every recorded key column.
 pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
@@ -314,8 +332,7 @@ pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
         if keyed.levels.len() != 1
             || keyed.levels[0].columns.len() < 2
             || keyed.membership.is_some()
-            || !matches!(&keyed.ty, Type::Path(p) if p.qself.is_none()
-                && p.path.segments.iter().map(|s| s.ident.to_string()).eq(["cq_storage", "HashIndex"]))
+            || keyed.provider.token != "hash_index"
         {
             continue;
         }
@@ -330,10 +347,11 @@ pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
         }
         // Scalar-key encoding is a Rust trait obligation, not a type-name test.
         if keyed.filtered.is_none() {
-            keyed.ty = syn::parse_quote!(::cq_gpu_runtime::HashedRun<_, _>);
+            keyed.provider = hashed_run().instance();
             keyed.supports = None;
         }
     }
+    target.structures.declare(&[hashed_run()]);
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

@@ -1,17 +1,25 @@
 structures {
-    o = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
-    r = ::cq_storage::HashIndex<'_, _, _> [x];
-    s = ::cq_storage::HashSet<_> [x];
-    t = ::cq_storage::Trie<'_, _, ::cq_storage::HashIndex<'_, _, _>> [x][y];
-    l host scan = ::core::iter::Map<_, _> [];
-    l host result(j) = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
-    o rows = ::std::collections::VecDeque<_>;
-    o host scan = ::core::iter::Map<_, _> [];
-    r rows = ::std::collections::VecDeque<_>;
-    r host scan = ::core::iter::Map<_, _> [];
-    s rows = ::std::collections::VecDeque<_>;
-    s host scan = ::core::iter::Map<_, _> [];
-    t rows = ::std::collections::VecDeque<_>;
-    t host scan = ::core::iter::Map<_, _> [];
-    out rows = ::std::collections::VecDeque<_>; out canon = rows;
+    providers {
+        btree_map_grouped = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> { reads [exact, membership, ordered], supports [keys], build macro, shared };
+        hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter };
+        hash_set = ::cq_storage::HashSet<_> { reads [membership], build macro, accounting keys, shared };
+        trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build macro, nested 2 };
+        host_scan = ::core::iter::Map<_, _> { reads [], build macro };
+        vec_deque = ::std::collections::VecDeque<_> { reads [], build macro };
+    }
+    o = @btree_map_grouped as ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
+    r = @hash_index as ::cq_storage::HashIndex<'_, _, _> [x];
+    s = @hash_set as ::cq_storage::HashSet<_> [x];
+    t = @trie(@hash_index as ::cq_storage::HashIndex<'_, _, _>) as ::cq_storage::Trie<'_, _, ::cq_storage::HashIndex<'_, _, _>> [x][y];
+    l host scan = @host_scan as ::core::iter::Map<_, _> [];
+    l host result(j) = @btree_map_grouped as ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
+    o rows = @vec_deque as ::std::collections::VecDeque<_>;
+    o host scan = @host_scan as ::core::iter::Map<_, _> [];
+    r rows = @vec_deque as ::std::collections::VecDeque<_>;
+    r host scan = @host_scan as ::core::iter::Map<_, _> [];
+    s rows = @vec_deque as ::std::collections::VecDeque<_>;
+    s host scan = @host_scan as ::core::iter::Map<_, _> [];
+    t rows = @vec_deque as ::std::collections::VecDeque<_>;
+    t host scan = @host_scan as ::core::iter::Map<_, _> [];
+    out rows = @vec_deque as ::std::collections::VecDeque<_>; out canon = rows;
 }

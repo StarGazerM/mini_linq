@@ -13,15 +13,15 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
             checked = let canon probe first [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
-        structures {
-            l host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-            r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-            s host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-            r = ::cq_gpu_sequence_runtime::RangeProvider [b];
-            s = ::cq_gpu_sequence_runtime::RangeProvider [a][c];
-            r rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            s rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            checked rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            l host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+            r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+            s host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+            r = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [b];
+            s = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a][c];
+            r rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+            s rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+            checked rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
             checked canon = rows;
         }
         sequence {
@@ -68,7 +68,11 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
                 )
         })
         .unwrap();
-    *provider = syn::parse_quote!(r = ::cq_gpu_sequence_runtime::RangeProvider [b][c];);
+    *provider = syn::parse_quote!(r = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [b][c];);
+    smallest
+        .structures
+        .structures
+        .declare(&cq_gpu_sequence::providers::declarations());
     let analysis = check_grading(&smallest, &cq_gpu_sequence::machine()).unwrap();
     let error = cq_gpu_sequence::translate(&smallest, &analysis).unwrap_err();
     assert!(error.to_string().contains("probe smallest is not realized"));

@@ -48,7 +48,7 @@ macro_rules! sequence_rewrite {
             "        r = let canon rename R@0 {a -> a};\n",
             "        return r as answer(a);\n",
             "    }\n",
-            "    structures { r host scan = Reader []; r rows = ::cq_storage::dedup::Sort; r canon = rows; }\n",
+            "    structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }\n",
             "    sequence { a = rows r; b = flatten tile 8 a; d = store a; }\n",
             "}\n",
             "```"

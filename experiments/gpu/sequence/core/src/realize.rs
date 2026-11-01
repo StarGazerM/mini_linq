@@ -11,7 +11,8 @@ use cq_lang_sequence::gpu::realization::{
     UnionArm,
 };
 use cq_lang_sequence::gpu::{Grid, Publication};
-use cq_lang_sequence::{Analysis, Capability, Program, Term};
+use cq_lang_sequence::{Analysis, Program, Term};
+use cq_lang_structures::Capability;
 use cq_lang_structures::physical::{Definition, Operator, symbol_name};
 use cq_lang_structures::syntax as cq_syntax;
 use quote::format_ident;
@@ -136,10 +137,10 @@ impl<'a> Facts<'a> {
                     if !matches!(reader, cq_lang_structures::ReaderRef::Scan) {
                         continue;
                     }
-                    if crate::runs::layout_types(&keyed.ty)?.is_some() {
+                    if crate::runs::layout_types(&keyed.provider.ty)?.is_some() {
                         runs.insert(name.clone());
                         resident.insert(name.clone());
-                    } else if crate::native_abi(&keyed.ty) == Some(crate::NativeAbi::Columns) {
+                    } else if crate::native_abi(&keyed.provider.ty) == Some(crate::NativeAbi::Columns) {
                         resident.insert(name.clone());
                     }
                 }
@@ -396,7 +397,7 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                 }
                 let mut providers = Vec::new();
                 if let Some(layouts) = analysis.structures.built.get(name) {
-                    if layouts.len() != 1 || crate::runs::layout_types(&layouts[0].1)?.is_some() {
+                    if layouts.len() != 1 || crate::runs::layout_types(&layouts[0].1.ty)?.is_some() {
                         providers.push(name.clone());
                     }
                 } else {
@@ -409,7 +410,7 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                         if !demands.contains(&(result.clone(), sorted.clone())) {
                             continue;
                         }
-                        if crate::runs::layout_types(ty)?.is_none() {
+                        if crate::runs::layout_types(&ty.ty)?.is_none() {
                             return Err(error(
                                 "GPU-Runs: native lookup requires a declared run layout",
                             ));

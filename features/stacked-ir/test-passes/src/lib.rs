@@ -103,13 +103,17 @@ pub fn smallest(input: TokenStream) -> TokenStream {
 pub fn custom_indexes(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, args| {
         no_arguments(args)?;
+        let sorted_index: cq_lang_structures::Declaration = syn::parse_quote!(
+            sorted_index = SortedIndex<_, _> { reads [exact, membership], build macro };
+        );
         let mut target = source.clone();
         for entry in &mut target.structures.entries {
             if let Structure::Built { keyed, .. } = &mut entry.structure {
-                keyed.ty = syn::parse_quote!(SortedIndex<_, _>);
+                keyed.provider = sorted_index.instance();
                 keyed.supports = None;
             }
         }
+        target.structures.declare(&[sorted_index]);
         Ok(target)
     })
     .into()

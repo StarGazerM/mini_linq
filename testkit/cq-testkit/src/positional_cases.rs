@@ -112,18 +112,18 @@ fn custom_aliases_and_bare_build_provider_keep_selected_source_contracts() {
             u = pipe semi eager [x] s,t; j = pipe probe first [x] u,t;
             out = let canon project j keep {x,y}; return out as answer(x,y);
         }
-        structures {
-            l host scan = ::core::iter::Map<_,_> [];
-            r host scan = ::core::iter::Map<_,_> [];
-            s selection = Mask<_> base R lineage{x -> c,z -> d} summary none;
-            s keyset = Keys<_> [x] owned base R lineage{x -> c,z -> d};
-            t selection = Mask<_> base L lineage{x -> a,y -> b} summary per_block;
-            t = Payload [x];
-            t keyset = Keys<_> [x] owned base L lineage{x -> a,y -> b};
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; mask = Mask<_> { reads [exact, range, membership], build macro }; keys = Keys<_> { reads [exact, range, membership], build macro }; payload = Payload { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            s selection = @mask as Mask<_>  base R lineage{x -> c,z -> d} summary none;
+            s keyset = @keys as Keys<_> [x] owned base R lineage{x -> c,z -> d};
+            t selection = @mask as Mask<_>  base L lineage{x -> a,y -> b} summary per_block;
+            t = @payload as Payload [x];
+            t keyset = @keys as Keys<_> [x] owned base L lineage{x -> a,y -> b};
             s read = positional base R lineage{x -> c,z -> d} column d marker ::cq_load::ColumnAt<1> predicate physical;
             t read = positional base L lineage{x -> a,y -> b} column a marker ::cq_load::ColumnAt<0> predicate membership s[x] summary exact;
             u read = positional base R lineage{x -> c,z -> d} column c marker ::cq_load::ColumnAt<0> predicate membership t[x] summary exact;
-            out rows = ::cq_storage::dedup::Sort; out canon = rows;
+            out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
     }.map(|(x,y)| (*x,*y)).collect();
     assert_eq!(actual, BTreeSet::from([(1, 10), (1, 20)]));

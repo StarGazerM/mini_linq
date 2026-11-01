@@ -72,10 +72,10 @@ fn staged_selection_chain_pushes_only_survivors_into_partial_suffix() {
             out = let canon project b keep {y,z};
             return out as answer(y,z);
         }
-        structures {
-            r host scan = ::core::iter::Map<_,_> [];
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
             p stage = batch 2;
-            out rows = ::cq_storage::dedup::Sort; out canon = rows;
+            out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
     }
     .map(|(y, z)| (*y, z))
@@ -139,12 +139,12 @@ fn filtered_storage_reconstructs_constants_in_both_printers() {
                     joined = pipe probe first [k] l,filtered;
                     out = let canon project joined keep {a,k}; return out as answer(a,k);
                 }
-                structures {
-                    l host scan = ::core::iter::Map<_,_> [];
-                    r host scan = ::core::iter::Map<_,_> [];
-                    r host result(filtered) = ::core::iter::Map<_,_> [a];
-                    filtered = ::cq_storage::HashIndex<'_,_,_> [k] payload [k] constants {a = 7};
-                    out rows = ::cq_storage::dedup::Sort; out canon = rows;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                    l host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    r host result(filtered) = @host_scan as ::core::iter::Map<_,_> [a];
+                    filtered = @hash_index as ::cq_storage::HashIndex<'_,_,_> [k] payload [k] constants {a = 7};
+                    out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
                 }
             }
         };
@@ -238,11 +238,11 @@ fn authored_structures_control_build_retention_and_nested_canonical_states() {
                     o = let canon project j keep { a,b };
                     return o as answer(b,a);
                 }
-                structures {
-                    r host scan = ::core::iter::Map<_,_> [];
-                    r = ::std::collections::BTreeMap<_,::std::vec::Vec<_>> [a];
-                    r rows = ::cq_storage::dedup::Sort; r canon = rows;
-                    o rows = ::cq_storage::dedup::Sort; o canon = rows;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; btree_map_grouped = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> { reads [exact, membership, ordered], supports [keys], build macro, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    r = @btree_map_grouped as ::std::collections::BTreeMap<_,::std::vec::Vec<_>> [a];
+                    r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
+                    o rows = @sort as ::cq_storage::dedup::Sort; o canon = rows;
                 }
             }
         };
@@ -287,10 +287,10 @@ fn computed_head_deduplicates_its_image_with_the_recorded_type() {
                     o = let canon project r keep { x };
                     return o as answer(*x % 2);
                 }
-                structures {
-                    r host scan = ::core::iter::Map<_,_> [];
-                    o rows = ::cq_storage::dedup::Sort; o canon = rows;
-                    o head = ::cq_storage::dedup::Sort;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    o rows = @sort as ::cq_storage::dedup::Sort; o canon = rows;
+                    o head = @sort as ::cq_storage::dedup::Sort;
                 }
             }
         };
@@ -326,10 +326,10 @@ fn exists_retains_only_nonemptiness_under_total_rust() {
                     e = exists canon project g keep {};
                     return e as answer();
                 }
-                structures {
-                    r host scan = ::core::iter::Map<_,_> [];
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; exists = ::cq_storage::Exists { reads [distinct], build inferred, shared }; }
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
                     e canon = rows;
-                    e rows = ::cq_storage::Exists;
+                    e rows = @exists as ::cq_storage::Exists;
                 }
             }
             .collect::<BTreeSet<_>>()
@@ -455,13 +455,13 @@ fn full_depth_curried_probes_and_prefix_membership_use_written_levels() {
                     o = let canon project j keep { a,b,c };
                     return o as answer(a,b,c);
                 }
-                structures {
-                    r host scan = ::core::iter::Map<_,_> [];
-                    l host scan = ::core::iter::Map<_,_> [];
-                    l host result(n) = ::cq_storage::HashIndex<'_,_,_> [a];
-                    r = ::cq_storage::Trie<'_,_,::cq_storage::HashIndex<'_,_,_>> [a][b];
-                    r rows = ::std::vec::Vec<_>;
-                    o rows = ::cq_storage::dedup::Sort; o canon = rows;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build macro, nested 2 }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    l host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    l host result(n) = @hash_index as ::cq_storage::HashIndex<'_,_,_> [a];
+                    r = @trie(@hash_index as ::cq_storage::HashIndex<'_,_,_>) as ::cq_storage::Trie<'_,_,::cq_storage::HashIndex<'_,_,_>> [a][b];
+                    r rows = @vec as ::std::vec::Vec<_>;
+                    o rows = @sort as ::cq_storage::dedup::Sort; o canon = rows;
                 }
             }
         };
@@ -497,11 +497,11 @@ fn written_lazy_host_membership_and_fallback_type_are_preserved() {
                     o = let canon project m keep { x };
                     return o as answer(x);
                 }
-                structures {
-                    r host scan = ::core::iter::Map<_,_> [];
-                    s host scan = ::core::iter::Map<_,_> [];
-                    s host result(m) = ::cq_storage::dispatch::KeySet<_,false> [x];
-                    o rows = ::cq_storage::dedup::Sort; o canon = rows;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    s host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    s host result(m) = @keyset as ::cq_storage::dispatch::KeySet<_,false> [x];
+                    o rows = @sort as ::cq_storage::dedup::Sort; o canon = rows;
                 }
             }
         };
@@ -524,10 +524,10 @@ fn nested_stream_canonical_boundaries_have_separate_state() {
             o = let canon project r keep { a };
             return o as answer(a);
         }
-        structures {
-            r host scan = ::core::iter::Map<_,_> [];
-            r rows = ::cq_storage::dedup::Sort; r canon = rows;
-            o rows = ::cq_storage::dedup::Sort; o canon = rows;
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
+            o rows = @sort as ::cq_storage::dedup::Sort; o canon = rows;
         }
     }
     .collect();
@@ -574,13 +574,13 @@ fn unit_has_one_empty_answer() {
     let push: Vec<()> = own_push::push! {
         pipeline {};
         physical { u = pipe unit; return u as answer(); }
-        structures {}
+        structures { providers {  }}
     }
     .collect();
     let pull: Vec<()> = mini_linq::passes::sequence! {
         pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical { u = pipe unit; return u as answer(); }
-        structures {}
+        structures { providers {  }}
     }
     .collect();
     assert_eq!(push, [()]);
@@ -602,9 +602,9 @@ fn nested_stage_boundaries_run_within_their_bound() {
             out = let canon project s keep {x,y};
             return out as answer(x,y);
         }
-        structures {
-            r host scan = ::core::iter::Map<_,_> [];
-            out rows = ::cq_storage::dedup::Sort; out canon = rows;
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
             r stage = batch 2;
             s stage = batch 4;
         }
@@ -884,9 +884,9 @@ fn canonical_consumer_delegates_duplicate_answers_and_keeps_internal_canon() {
             r = let canon rename R@0 {a -> a,b -> b};
             return r as answer(*a % 2);
         }
-        structures {
-            r host scan = ::core::iter::Map<_,_> [];
-            r rows = ::cq_storage::dedup::Sort; r canon = rows;
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
         }
     };
     assert_eq!(witnesses, vec![1, 1, 1]);
@@ -911,7 +911,7 @@ fn discharged_host_fact_needs_no_hashable_columns_in_either_printer() {
                     r = pipe rename R@0 {a -> a};
                     return r as answer(a);
                 }
-                structures { r host scan = ::core::iter::Map<_,_> []; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
             }
         };
     }
@@ -942,12 +942,12 @@ fn authored_group_provider_and_role_named_readers_execute() {
                     grouped = pipe group $reader by [k] { n:usize=count(); total:i32=sum(v); };
                     return grouped as answer(k,n,total);
                 }
-                structures {
-                    l host scan = ::core::iter::Map<_,_> [];
-                    r host scan = ::core::iter::Map<_,_> [];
-                    r host result($reader) = ::cq_storage::HashIndex<'_,_,_> [k];
-                    $reader rows = ::cq_storage::dedup::Sort; $reader canon = rows;
-                    grouped group = ::std::collections::BTreeMap<_, (usize,i32)>;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
+                    l host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    r host result($reader) = @hash_index as ::cq_storage::HashIndex<'_,_,_> [k];
+                    $reader rows = @sort as ::cq_storage::dedup::Sort; $reader canon = rows;
+                    grouped group = @group_map as ::std::collections::BTreeMap<_, (usize,i32)>;
                 }
             }
             .map(|(k, n, total)| (*k, n, total))

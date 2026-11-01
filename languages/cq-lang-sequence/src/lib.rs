@@ -40,6 +40,7 @@ pub use contract::check_rewrite;
 pub use cq_lang_structures as structures;
 pub use evidence::{Evidence, EvidenceFact, Selectivity};
 pub use grading::check_grading;
+use structures::Capability;
 
 mod kw {
     syn::custom_keyword!(sequence);
@@ -310,51 +311,74 @@ pub struct ResourceUsage {
     pub capacity_bytes: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Capability {
-    Exact,
-    Range,
-    Membership,
-    Ordered,
-    /// The native input handle already denotes immutable target-resident storage.
-    /// Its recorded read levels need no generated host-adapter retention.
-    Resident,
-    /// Formal rule PL-Distinct: the provider's build from any row stream
-    /// yields exactly that stream's distinct complete rows, and its scan reads
-    /// each stored row once. Such a provider may type a canonical rows record
-    /// (a canon result's identity index, SRDatalog's sorted array).
-    Distinct,
-}
-
-/// Ordered target tokens used to discharge planner obligations.
+/// Ordered target catalog: token declarations and the read levels at which
+/// this target supports each declared token (PL-Catalog).
 ///
-/// Catalogs contain syntax and capabilities only, never target implementations.
-/// Candidate order breaks ties. Levels are explicit absolute machine paths;
+/// Catalogs contain declarations and levels only, never target implementations.
+/// Entries are keyed by token id (and, for a routed token, its inner token);
+/// entry order breaks ties. Levels are explicit absolute machine paths;
 /// an empty level list permits no read. Provider levels govern consumption,
 /// not construction: building from host rows does not license host reads.
+/// A program declaration of a token the catalog declares must equal it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Catalog {
-    pub providers: Vec<ProviderToken>,
+    pub declarations: Vec<structures::Declaration>,
+    pub providers: Vec<CatalogEntry>,
     pub codecs: Vec<CodecToken>,
 }
 
-/// An authored provider type whose reads are supported at the listed levels.
-///
-/// In token patterns, `_` matches any type or const argument and `'_` any lifetime.
-/// Matching never replaces the author's provider type.
+/// A supported provider instance shape (token and inner tokens) with its
+/// default spelling, readable at the listed levels. An entry that lists no
+/// inner instance covers its token over any inner instance (a nested trie);
+/// an entry that lists one covers only that inner token (a routed pair).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProviderToken {
-    pub ty: syn::Type,
-    pub capabilities: Vec<Capability>,
-    /// Provider-authored Structures optimizations, independent of execution
-    /// levels and contiguous-range read capabilities.
-    pub supports: Vec<structures::ProviderCapability>,
+pub struct CatalogEntry {
+    pub provider: structures::Provider,
     pub levels: Vec<Vec<String>>,
-    /// Accepted scalar row elements; `None` leaves the element type unrestricted.
-    pub elements: Option<Vec<syn::Type>>,
-    /// Packed equality-key capability, checked against codec bounds at setup.
-    /// `None` denotes a provider without a fixed packed-width limit.
-    pub max_packed_bits: Option<u32>,
+}
+
+impl CatalogEntry {
+    /// Whether this entry supports a recorded instance (PL-Catalog), by token id only.
+    pub fn covers(&self, instance: &structures::Provider) -> bool {
+        fn covers(entry: &structures::Provider, instance: &structures::Provider) -> bool {
+            entry.token == instance.token
+                && match (&entry.inner, &instance.inner) {
+                    (None, _) => true,
+                    (Some(entry), Some(instance)) => covers(entry, instance),
+                    (Some(_), None) => false,
+                }
+        }
+        covers(&self.provider, instance)
+    }
+}
+
+impl Catalog {
+    pub fn declaration(&self, token: &Ident) -> Option<&structures::Declaration> {
+        self.declarations
+            .iter()
+            .find(|declaration| declaration.token == *token)
+    }
+
+    /// Declared facts of a catalog instance shape, applying STR-Routed.
+    pub fn facts(&self, provider: &structures::Provider) -> Option<structures::Facts> {
+        structures::provider::facts(|token| self.declaration(token), provider)
+    }
+
+    /// The first entry supporting this recorded instance.
+    pub fn entry(&self, provider: &structures::Provider) -> Option<&CatalogEntry> {
+        self.providers.iter().find(|entry| entry.covers(provider))
+    }
+
+    /// Add a declaration and an entry of its default instance at `levels`.
+    pub fn register(&mut self, declaration: structures::Declaration, levels: Vec<Vec<String>>) {
+        self.providers.push(CatalogEntry {
+            provider: declaration.instance(),
+            levels,
+        });
+        if self.declaration(&declaration.token).is_none() {
+            self.declarations.push(declaration);
+        }
+    }
 }
 
 /// A value-refinement token; `ordered` certifies monotone encoding.
@@ -410,7 +434,7 @@ pub enum Obligation {
         provider: String,
         keys: Vec<String>,
         capability: Capability,
-        ty: syn::Type,
+        instance: structures::Provider,
     },
     /// The canon boundary owned by Sequence definition `result` reads this
     /// checked canonical reference; `None` is the returned answer boundary.
@@ -477,9 +501,9 @@ pub struct Analysis {
     pub host_sources: BTreeMap<String, String>,
     /// Borrowable base provenance of Tile inputs, in constructor preorder.
     pub host_tiles: BTreeMap<String, Vec<Option<String>>>,
-    /// Native routed-provider representation: result -> provider ordinal -> inner type.
-    /// Only the canonical cq_storage sharded ABI is admitted here.
-    pub routed_providers: BTreeMap<String, BTreeMap<usize, syn::Type>>,
+    /// Native routed-provider representation: result -> provider ordinal -> the
+    /// recorded inner instance of its routed token (STR-Routed).
+    pub routed_providers: BTreeMap<String, BTreeMap<usize, structures::Provider>>,
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>,
     /// Providers evaluated directly by each named definition, excluding Ref
     /// dependencies and support-equal Map reheadings.

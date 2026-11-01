@@ -37,7 +37,7 @@ fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream)
             relation R(a:i32);
             r = let canon rename R@0 {a -> a};
             return r as answer(a);
-        } structures { r host scan = ::core::iter::Map<_, _> []; r rows = ::cq_storage::dedup::Sort; r canon = rows; }
+        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_, _> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
         sequence { #sequence }
         graded tasks { #grades }
     })
@@ -476,7 +476,7 @@ fn segment_program() -> Program {
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
     let provider: Program = syn::parse_quote! {
         #physical
-        structures { r = ::cq_storage::SortedRun<_, _> [a]; }
+        structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; } r = @sorted_run as ::cq_storage::SortedRun<_, _> [a]; }
         sequence { input = store rows l; result = store input; }
     };
     // Keep the same provider override convention as the conformance fixtures.
@@ -488,6 +488,9 @@ fn segment_program() -> Program {
         });
         structures.structures.entries.push(provider);
     }
+    structures
+        .structures
+        .declare(&provider.structures.structures.providers.declarations);
     syn::parse_quote! {
         #structures
         sequence {
@@ -916,8 +919,8 @@ fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Pr
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
     let authored: Program = syn::parse_quote! {
         #physical
-        structures {
-            r = ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
+        structures { providers { sharded = ::cq_storage::sharded::Sharded<_> { reads [], build macro, routed 0, shared }; sharded_index = ::cq_storage::sharded::Index<_, _> { reads [exact, membership], supports [keys], build macro, join_filter, shared }; }
+            r = @sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
         }
         sequence { result = rows l; }
     };
@@ -929,6 +932,9 @@ fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Pr
         });
         structures.structures.entries.push(provider);
     }
+    structures
+        .structures
+        .declare(&authored.structures.structures.providers.declarations);
     let (provider, grade) = if named {
         (
             quote::quote! {
@@ -983,7 +989,7 @@ fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
                 let facts = check_grading(&program, &machine()).unwrap();
                 assert_eq!(
                     facts.capabilities[&("r".into(), vec!["a".into(), "b".into()])],
-                    cq_lang_sequence::Capability::Exact,
+                    cq_lang_sequence::structures::Capability::Exact,
                 );
                 let expression = translate(&program, &facts).unwrap();
                 let description = format!("routing [{routing}], named={named}, width={width}");
@@ -1031,14 +1037,14 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             result = let canon probe first [b] joined,s;
             return result as answer(a,b,c);
         }
-        structures {
-            l host scan = Reader [];
-            r host scan = Reader [];
-            r host result(joined) = Reader [a];
-            s host scan = Reader [];
-            s = ::cq_storage::SortedRun<_, _, _> [b];
-            s rows = ::std::vec::Vec<_>;
-            result rows = ::cq_storage::dedup::Sort; result canon = rows;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r host result(joined) = @reader as Reader [a];
+            s host scan = @reader as Reader [];
+            s = @sorted_run as ::cq_storage::SortedRun<_, _, _> [b];
+            s rows = @vec as ::std::vec::Vec<_>;
+            result rows = @sort as ::cq_storage::dedup::Sort; result canon = rows;
         }
         sequence {
             l = rows l;
@@ -1072,7 +1078,8 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             .iter()
             .any(|entry| entry.name == "s"
                 && matches!(&entry.structure,
-            cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native))
+            cq_lang_sequence::structures::Structure::Built { keyed, .. }
+                if keyed.provider.token == "sorted_run" && keyed.provider.ty == native))
     );
     assert!(
         target
@@ -1082,8 +1089,8 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             .iter()
             .any(|entry| entry.name == "s"
                 && matches!(&entry.structure,
-            cq_lang_sequence::structures::Structure::Rows { ty, .. }
-                if *ty == syn::parse_quote!(::std::vec::Vec<_>)))
+            cq_lang_sequence::structures::Structure::Rows { provider, .. }
+                if provider.ty == syn::parse_quote!(::std::vec::Vec<_>)))
     );
     cq_lang_sequence::check_rewrite(&source, &target).unwrap();
     let facts = check_grading(&target, &machine()).unwrap();
@@ -1168,10 +1175,10 @@ fn task_catalog_retains_membership_fallbacks_before_shared_reads() {
             result = pipe anti eager [a] l,r;
             return result as answer(a);
         }
-        structures {
-            l host scan = Reader [];
-            r host scan = Reader [];
-            r host result(result) = ::cq_storage::dispatch::KeySet<_> [a];
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build macro }; }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r host result(result) = @keyset as ::cq_storage::dispatch::KeySet<_> [a];
         }
         sequence {
             l = rows l; r = rows r;
@@ -1236,7 +1243,8 @@ fn raw_full_key_host_membership_is_published_before_shared_task_reads() {
         entry.name == "r"
             && matches!(&entry.structure,
                 cq_lang_sequence::structures::Structure::Built { keyed, .. }
-                if keyed.ty == native && keyed.membership.is_some() && keyed.filtered.is_none())
+                if keyed.provider.token == "adaptive_membership" && keyed.provider.ty == native
+                    && keyed.membership.is_some() && keyed.filtered.is_none())
     }));
     assert!(!target.structures.structures.entries.iter().any(|entry| {
         entry.name == "r"
@@ -1300,10 +1308,9 @@ fn membership_projected_probes_keep_native_keysets() {
             result = pipe probe first [a] l,r;
             return result as answer(a);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader [];
-            r = ::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 16777216>
-                [a] membership payload [a] constants {};
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build macro, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            r = @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 16777216> [a] membership payload [a] constants {};
         }
         sequence {
             l = rows l; r = store rows r;
@@ -1322,7 +1329,8 @@ fn membership_projected_probes_keep_native_keysets() {
             .iter()
             .any(|entry| entry.name == "r"
                 && matches!(&entry.structure,
-            cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native))
+            cq_lang_sequence::structures::Structure::Built { keyed, .. }
+                if keyed.provider.token == "adaptive_keyset" && keyed.provider.ty == native))
     );
 }
 
@@ -1337,10 +1345,9 @@ fn type_directed_membership_keeps_routed_provider_construction() {
             result = pipe probe first [a] l,r;
             return result as answer(a);
         }
-        structures {
-            l host scan = Reader []; r host scan = Reader [];
-            r = ::cq_storage::AdaptiveMembership<_, 16777216>
-                [a] membership payload [a] constants {};
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> { reads [membership], build macro, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            r = @adaptive_membership as ::cq_storage::AdaptiveMembership<_, 16777216> [a] membership payload [a] constants {};
         }
         sequence {
             l = rows l; r = store rows r;
@@ -1362,7 +1369,9 @@ fn type_directed_membership_keeps_routed_provider_construction() {
     .unwrap();
     let facts = check_grading(&planned.program, &machine()).unwrap();
     let native: syn::Type = syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>);
-    assert_eq!(facts.routed_providers["r"][&0], native);
+    let inner = &facts.routed_providers["r"][&0];
+    assert_eq!(inner.token, "adaptive_membership");
+    assert_eq!(inner.ty, native);
     let rendered = translate(&planned.program, &facts)
         .unwrap()
         .to_token_stream()
@@ -1559,8 +1568,8 @@ fn deferred_provider_program(tiled: bool, host_bound: bool) -> Program {
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
     let authored: Program = syn::parse_quote! {
         #physical
-        structures {
-            r = ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
+        structures { providers { sharded = ::cq_storage::sharded::Sharded<_> { reads [], build macro, routed 0, shared }; sharded_index = ::cq_storage::sharded::Index<_, _> { reads [exact, membership], supports [keys], build macro, join_filter, shared }; }
+            r = @sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
         }
         sequence { result = rows l; }
     };
@@ -1572,6 +1581,9 @@ fn deferred_provider_program(tiled: bool, host_bound: bool) -> Program {
         });
         structures.structures.entries.push(provider);
     }
+    structures
+        .structures
+        .declare(&authored.structures.structures.providers.declarations);
     let (source, source_grade) = if tiled {
         (
             quote::quote! {
@@ -2079,6 +2091,11 @@ fn covering_filters_leave_provider_capabilities_to_the_rust_boundary() {
     let mut source = late_covering_program(quote::quote!(rows l));
     source.graded = None;
     cq_lang_sequence::contract::check(&source).unwrap();
+    use cq_lang_sequence::structures::provider::base::{declaration, declarations};
+    // One declared token with several opaque spellings: no check reads them.
+    let opaque: cq_lang_sequence::structures::Declaration = syn::parse_quote!(
+        opaque_index = Opaque<_, _> { reads [exact, membership], supports [keys], build macro };
+    );
     let families: [syn::Type; 3] = [
         syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
         syn::parse_quote!(::cq_storage::HashSet<_>),
@@ -2092,15 +2109,23 @@ fn covering_filters_leave_provider_capabilities_to_the_rust_boundary() {
                     && let cq_lang_sequence::structures::Structure::Built { keyed, .. } =
                         &mut entry.structure
                 {
-                    keyed.ty = if routed {
-                        syn::parse_quote!(::cq_storage::sharded::Sharded<#ty>)
+                    let provider = cq_lang_sequence::structures::Provider {
+                        ty: ty.clone(),
+                        ..opaque.instance()
+                    };
+                    keyed.provider = if routed {
+                        declaration("sharded").compose(provider).unwrap()
                     } else {
-                        ty.clone()
+                        provider
                     };
                 }
             }
-            // Structure checks validate the covering relation and key, not the
-            // opaque provider type. Emitted Keys/lookup obligations are Rust's.
+            let mut declared = vec![opaque.clone()];
+            declared.extend(declarations());
+            candidate.structures.structures.declare(&declared);
+            // Structure checks validate the covering relation, key and declared
+            // support, not the opaque provider spelling. Emitted Keys/lookup
+            // obligations are Rust's.
             cq_lang_sequence::contract::check(&candidate).unwrap();
         }
     }
@@ -2194,11 +2219,21 @@ fn routed_provider_projects_the_stored_key_after_constant_elision() {
             && let cq_lang_sequence::structures::Structure::Built { keyed, .. } =
                 &mut entry.structure
         {
-            keyed.ty = syn::parse_quote!(
-                ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _>
-            );
+            keyed.provider = cq_lang_sequence::structures::Provider {
+                token: syn::parse_quote!(sharded),
+                inner: Some(Box::new(
+                    cq_lang_sequence::structures::provider::base::declaration("sharded_index").instance(),
+                )),
+                ty: syn::parse_quote!(
+                    ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _>
+                ),
+            };
         }
     }
+    program
+        .structures
+        .structures
+        .declare(&cq_lang_sequence::structures::provider::base::declarations());
     program.sequence = syn::parse_quote! {
         sequence {
             provider_input = store map r rows raw;
@@ -2536,9 +2571,12 @@ fn expansion_counters_preserve_profile_handles_in_nested_tasks() {
     // Shared task probes need a Sync provider, as in segment_program.
     for entry in &mut structures.structures.entries {
         if let cq_lang_sequence::structures::Structure::Built { keyed, .. } = &mut entry.structure {
-            keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_, _>);
+            keyed.provider = cq_lang_sequence::structures::provider::base::declaration("sorted_run").instance();
         }
     }
+    structures
+        .structures
+        .declare(&cq_lang_sequence::structures::provider::base::declarations());
     let program: Program = syn::parse_quote! {
         #structures
         sequence {

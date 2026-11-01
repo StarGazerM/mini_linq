@@ -1068,7 +1068,9 @@ ordering policy.
 total single-level build, one per scalar column of its key, at the scan its
 exclusive spine reaches; this is the bitmap a build side pushes to the deepest
 probe-side scan. A scan may therefore carry filters from several builds.
-Every eligible payload-index build selects an exact
+Every eligible payload-index build whose selected token declares
+\code{join\_filter} (payload-directory key enumeration; a routed token
+inherits its inner's fact) selects an exact
 \code{AdaptiveMembership<K,67108864>}. A membership-only build already answers
 the same exact key test and receives no redundant supplementary filter.
 Rust's \code{OrderKey} capability selects the dense representation under
@@ -1106,6 +1108,7 @@ exact operators decide membership either way.
 \Rule{SEL-JoinFilter}{
  \mathsf{eligibleCoveredScan}(s,b,k,j)\quad
  \mathsf{filteredBuild}(b)\quad\neg\mathsf{membershipOnly}(b)\quad
+ \mathsf{facts}(b).\mathsf{join\_filter}\quad
  \mathsf{positionalHost}(s)\\
  T=\code{AdaptiveMembership<K,67108864>}
 }{

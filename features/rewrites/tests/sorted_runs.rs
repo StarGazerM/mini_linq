@@ -33,8 +33,7 @@ fn public_pipeline_records_sorted_runs_and_executes_default_answers() {
     assert!(
         rewritten.structures.entries.iter().any(|entry| {
             matches!(&entry.structure, Structure::Built { keyed, .. }
-            if matches!(&keyed.ty, syn::Type::Path(p)
-                if p.path.segments.last().unwrap().ident == "SortedRun"))
+            if keyed.provider.token == "sorted_run")
         }),
         "{:#?}",
         rewritten.structures

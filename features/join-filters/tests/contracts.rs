@@ -3,6 +3,18 @@ use cq_rewrite_passes::join_filter;
 use cq_structure_selection::retype;
 use quote::{ToTokens, quote};
 
+/// The advice table declaring the test's conservative filter token.
+fn filter_alias() -> ir::Providers {
+    syn::parse_quote!(providers { filter_alias = FilterAlias { reads [membership], build inferred }; })
+}
+
+/// The test's opaque exact provider token; its spelling establishes nothing.
+fn provider_alias() -> ir::Declaration {
+    syn::parse_quote!(
+        provider_alias = ProviderAlias { reads [exact, membership], supports [keys], build inferred };
+    )
+}
+
 fn source() -> ir::Program {
     let p: physical::Program = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(c:i64,d:i64);
@@ -28,17 +40,18 @@ fn advisory_insertion_and_retyping_preserve_every_other_decision() {
     let added = join_filter(&before, quote!(l)).unwrap();
     assert_eq!(added.physical, before.physical);
     assert_eq!(join_filter(&added, quote!(l)).unwrap(), added);
+    let declared = filter_alias();
     for args in [
-        quote!(l join_filter => FilterAlias),
-        quote!(join_filter => FilterAlias),
+        quote!(#declared l join_filter => @filter_alias as FilterAlias),
+        quote!(#declared join_filter => @filter_alias as FilterAlias),
     ] {
         let changed = retype(&added, args).unwrap();
         assert_eq!(changed.physical, before.physical);
         let facts = ir::contract::check(&changed).unwrap();
         assert_eq!(facts.join_filters["l"].len(), 1);
         assert_eq!(
-            facts.join_filters["l"][0].ty,
-            syn::parse_quote!(FilterAlias)
+            facts.join_filters["l"][0].provider,
+            syn::parse_quote!(@filter_alias as FilterAlias)
         );
         assert_eq!(facts.join_filters["l"][0].covering, "j");
         assert_eq!(
@@ -50,8 +63,20 @@ fn advisory_insertion_and_retyping_preserve_every_other_decision() {
             &before.structures.entries[..]
         );
     }
-    assert!(retype(&before, quote!(l join_filter => FilterAlias)).is_err());
-    assert!(retype(&added, quote!(b join_filter => FilterAlias)).is_err());
+    assert!(
+        retype(
+            &before,
+            quote!(#declared l join_filter => @filter_alias as FilterAlias)
+        )
+        .is_err()
+    );
+    assert!(
+        retype(
+            &added,
+            quote!(#declared b join_filter => @filter_alias as FilterAlias)
+        )
+        .is_err()
+    );
     assert!(join_filter(&before, quote!(r)).is_err());
 }
 
@@ -140,13 +165,13 @@ fn explicit_advice_can_cover_a_total_unfiltered_build() {
 fn routed_exact_provider_retyping_preserves_join_filter_obligations() {
     let before = join_filter(&source(), quote!(l)).unwrap();
     let expected = ir::contract::check(&before).unwrap().join_filters;
-    for ty in [
-        quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>),
-        quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>>),
-        quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>, _>),
-        quote!(::cq_storage::sharded::Sharded<::cq_storage::RadixRun<_, _>>),
+    for provider in [
+        quote!(@sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>),
+        quote!(@sharded(@sorted_run as ::cq_storage::SortedRun<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>>),
+        quote!(@sharded(@sorted_run as ::cq_storage::SortedRun<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>, _>),
+        quote!(@sharded(@radix_run as ::cq_storage::RadixRun<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::RadixRun<_, _>>),
     ] {
-        let changed = retype(&before, quote!(b => #ty supports [keys])).unwrap();
+        let changed = retype(&before, quote!(b => #provider supports [keys])).unwrap();
         assert_eq!(changed.physical, before.physical);
         let facts = ir::contract::check(&changed).unwrap();
         assert_eq!(facts.join_filters, expected);
@@ -159,34 +184,50 @@ fn routed_exact_provider_retyping_preserves_join_filter_obligations() {
 fn routed_filter_eligibility_uses_declared_support_not_type_names() {
     let before = join_filter(&source(), quote!(l)).unwrap();
     let expected = ir::contract::check(&before).unwrap().join_filters;
-    for ty in [
-        quote!(ProviderAlias),
-        quote!(::cq_storage::sharded::Sharded<MembershipOnly>),
-        quote!(::cq_storage::sharded::Sharded<::cq_storage::HashIndex<'_, _, _>>),
-        quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, UnknownRouter>),
+    let declared = quote!(providers {
+        provider_alias = ProviderAlias { reads [exact, membership], supports [keys], build inferred };
+        membership_only = MembershipOnly { reads [membership], supports [keys], build inferred };
+        nested_router = ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>> {
+            reads [exact, membership], supports [keys], build macro
+        };
+    });
+    for provider in [
+        quote!(@provider_alias as ProviderAlias),
+        quote!(@sharded(@membership_only as MembershipOnly) as ::cq_storage::sharded::Sharded<MembershipOnly>),
+        quote!(@sharded(@hash_index as ::cq_storage::HashIndex<'_, _, _>) as ::cq_storage::sharded::Sharded<::cq_storage::HashIndex<'_, _, _>>),
+        quote!(@sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, UnknownRouter>),
+        // A spelling naming a router is opaque; only a recorded `sharded`
+        // token routes, and a routed instance is never routed again.
         quote!(
-            ::cq_storage::sharded::Sharded<
+            @sharded(
+                @nested_router as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>
+            ) as ::cq_storage::sharded::Sharded<
                 ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>,
             >
         ),
     ] {
         // Opaque Rust types do not establish capabilities. Recorded layout
-        // and support establish eligibility; rustc checks the declared traits.
-        assert!(retype(&before, quote!(b => #ty)).is_err());
-        let changed = retype(&before, quote!(b => #ty supports [keys])).unwrap();
+        // and declared support establish eligibility; rustc checks the traits.
+        assert!(retype(&before, quote!(#declared b => #provider)).is_err());
+        let changed = retype(&before, quote!(#declared b => #provider supports [keys])).unwrap();
         let facts = ir::contract::check(&changed).unwrap();
         assert_eq!(changed.physical, before.physical);
         assert_eq!(facts.join_filters, expected);
         assert_eq!(ir::join_filter_candidates(&changed, &facts, "j").len(), 1);
     }
+    let routed_twice = quote!(
+        @sharded(@sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>)
+            as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>>
+    );
+    assert!(retype(&before, quote!(b => #routed_twice supports [keys])).is_err());
 }
 
 #[test]
 fn join_filter_requires_a_recorded_single_level_exact_layout() {
     let before = join_filter(&source(), quote!(l)).unwrap();
     for replacement in [
-        syn::parse_quote!(b = ProviderAlias [x][z];),
-        syn::parse_quote!(b = ProviderAlias [x] membership;),
+        syn::parse_quote!(b = @provider_alias as ProviderAlias [x][z];),
+        syn::parse_quote!(b = @provider_alias as ProviderAlias [x] membership;),
     ] {
         let mut changed = before.clone();
         let slot = changed
@@ -196,6 +237,7 @@ fn join_filter_requires_a_recorded_single_level_exact_layout() {
             .find(|entry| entry.name == "b" && matches!(entry.structure, Structure::Built { .. }))
             .unwrap();
         *slot = replacement;
+        changed.structures.declare(&[provider_alias()]);
         assert!(ir::contract::check(&changed).is_err());
     }
 }
@@ -229,7 +271,12 @@ fn advice_keeps_all_witnesses_and_is_idempotent_after_coalescing() {
         1
     );
     assert_eq!(join_filter(&advised, quote!(l)).unwrap(), advised);
-    let retyped = retype(&advised, quote!(l join_filter => FilterAlias)).unwrap();
+    let declared = filter_alias();
+    let retyped = retype(
+        &advised,
+        quote!(#declared l join_filter => @filter_alias as FilterAlias),
+    )
+    .unwrap();
     assert_eq!(
         ir::contract::check(&retyped).unwrap().join_filters["l"].len(),
         1

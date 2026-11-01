@@ -196,7 +196,7 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
     let head_state = canonical_head.map(|_| quote!(let mut #head_rows = ::std::vec::Vec::new();));
     let head_publish = canonical_head.map(|provider| {
         let rows = cq_physical_realization::RowEmitter::canon(
-            provider,
+            &provider.ty,
             quote!(#head_rows),
             module.physical.program.head.args.len(),
         );
@@ -431,7 +431,7 @@ impl Push<'_> {
             let buffer = temporary("canon_rows", result);
             let row = self.carrier(result, |column| self.access(result, column));
             let rows = cq_physical_realization::RowEmitter::canon(
-                &provider,
+                &provider.ty,
                 quote!(#buffer),
                 self.carried(result).len(),
             );
@@ -747,7 +747,7 @@ mod tests {
                     r = pipe rename R@0 {a -> a};
                     return r as answer(a);
                 }
-                structures { r host scan = ::core::iter::Map<_,_> []; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
             })
             .unwrap();
             let printed = compile(&module, None)
@@ -776,7 +776,7 @@ mod tests {
                     #projection
                     return #returned as answer(#head);
                 }
-                structures { r host scan = ::core::iter::Map<_,_> []; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
             })
             .unwrap();
             let callback = syn::parse_quote!(consume);

@@ -17,7 +17,7 @@
 //! `cq_stage::pass`. It preserves the Physical graph and uses its recorded
 //! build, host read, retained row, canonical boundary and computed-head types.
 //! Authored Structures can also start directly at
-//! `own_push::push! { pipeline {}; physical { ... } structures { ... } }`.
+//! `own_push::push! { pipeline {}; physical { ... } structures { providers { ... } ... } }`.
 //! The pass accepts no arguments and ends the queue.
 //!
 //! Nested loops push answers into a Vec endpoint. Shared source preparation

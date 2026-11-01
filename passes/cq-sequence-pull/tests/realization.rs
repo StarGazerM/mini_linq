@@ -212,9 +212,17 @@ fn projected_membership_probes_keep_flat_rows_inside_outer_tiles() {
                     if entry.name == "t"
                         && let structures::Structure::Built { keyed, .. } = &mut entry.structure
                     {
-                        keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_, _>);
+                        keyed.provider = cq_lang_structures::provider::base::instance(
+                            "sorted_run",
+                            syn::parse_quote!(::cq_storage::SortedRun<_, _>),
+                        );
                     }
                 }
+                structures
+                    .structures
+                    .declare(&[cq_lang_structures::provider::base::declaration(
+                        "sorted_run",
+                    )]);
             }
             let mut program = cq_sequence_lowering::compile(&structures).unwrap();
             if tiled {
@@ -270,16 +278,24 @@ fn projected_membership_probes_keep_flat_rows_inside_outer_tiles() {
 #[test]
 fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
     use structures::Structure;
-    use syn::visit_mut::VisitMut;
-    struct ReplaceSets(syn::Type);
-    impl VisitMut for ReplaceSets {
-        fn visit_type_mut(&mut self, ty: &mut syn::Type) {
-            if *ty == syn::parse_quote!(::cq_storage::HashSet<_>) {
-                *ty = self.0.clone();
-            } else {
-                syn::visit_mut::visit_type_mut(self, ty);
-            }
+    // Spellings are opaque: the recorded `hash_set` tokens stay, only their
+    // Rust text changes, and composites re-spell around the new inner text.
+    fn respell(provider: &mut structures::Provider, ty: &syn::Type) -> bool {
+        if provider.token == "hash_set" {
+            provider.ty = ty.clone();
+            return true;
         }
+        let Some(inner) = &mut provider.inner else {
+            return false;
+        };
+        if respell(inner, ty) {
+            *provider =
+                cq_lang_structures::provider::base::declaration(&provider.token.to_string())
+                    .compose((**inner).clone())
+                    .unwrap();
+            return true;
+        }
+        false
     }
     let fast: syn::Type = syn::parse_quote!(::cq_storage::HashSet<_>);
     let standard: syn::Type = syn::parse_quote!(::std::collections::HashSet<_>);
@@ -292,14 +308,15 @@ fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
         assert!(!text(&selected.structures).contains(&text(&standard)));
         for ty in [&fast, &standard, &explicit] {
             let mut recorded = selected.clone();
-            let mut replace = ReplaceSets(ty.clone());
             for entry in &mut recorded.structures.entries {
                 let provider = match &mut entry.structure {
-                    Structure::Built { keyed, .. } | Structure::Host { keyed, .. } => &mut keyed.ty,
-                    Structure::Rows { ty, .. }
-                    | Structure::Group { ty, .. }
-                    | Structure::Selection { ty, .. }
-                    | Structure::KeySet { ty, .. } => ty,
+                    Structure::Built { keyed, .. } | Structure::Host { keyed, .. } => {
+                        &mut keyed.provider
+                    }
+                    Structure::Rows { provider, .. }
+                    | Structure::Group { provider, .. }
+                    | Structure::Selection { provider, .. }
+                    | Structure::KeySet { provider, .. } => provider,
                     Structure::Read { .. }
                     | Structure::Dedup { .. }
                     | Structure::HeadDedup { .. }
@@ -308,7 +325,7 @@ fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
                     | Structure::Stage { .. }
                     | Structure::Share { .. } => continue,
                 };
-                replace.visit_type_mut(provider);
+                respell(provider, ty);
             }
             structures::check_rewrite(&selected, &recorded).unwrap();
             let printed = text(sequence_rows(&recorded).unwrap());
@@ -538,10 +555,18 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
                         if entry.name == "f" {
                             if let structures::Structure::Built { keyed, .. } = &mut entry.structure
                             {
-                                keyed.ty = syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>);
+                                keyed.provider = cq_lang_structures::provider::base::instance(
+                                    "btree_map_grouped",
+                                    syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
+                                );
                             }
                         }
                     }
+                    target
+                        .structures
+                        .declare(&[cq_lang_structures::provider::base::declaration(
+                            "btree_map_grouped",
+                        )]);
                 }
                 let expression = sequence_rows(&target).unwrap();
                 assert!(!text(&expression).contains("__cq_f_rows"));
@@ -670,11 +695,11 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         p = pipe probe first [x] l,r;
         j = let canon project p keep {x,y};
         return j as answer(x,y);
-    } structures {
-        l host scan = ::core::iter::Map<_,_> [];
-        r host scan = ::core::iter::Map<_,_> [];
-        r = ::cq_storage::HashIndex<'_,_,_> [x];
-        j rows = ::cq_storage::dedup::Sort; j canon = rows;
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        l host scan = @host_scan as ::core::iter::Map<_,_> [];
+        r host scan = @host_scan as ::core::iter::Map<_,_> [];
+        r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];
+        j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows;
     }};
     let expression = sequence_rows(&authored).unwrap();
     checks.push(quote!({
@@ -805,7 +830,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
         relation L(a:i32); relation R(a:i32);
         l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a};
         j = let canon merge[a] l,r; return j as answer(a);
-    } structures {});
+    } structures { providers {  }});
     let complete = cq_structure_selection::compile(&unordered.physical).unwrap();
     let expression = sequence_rows(&complete).unwrap();
     let invalid = quote!(#source
@@ -829,7 +854,7 @@ fn point_prints_build_free_dispatch_and_canonical_lets_use_sort() {
         relation R(a:i32,b:i32); r = pipe rename R@0 {a -> x,b -> y};
         w = let canon point select r if (x = 2);
         p = pipe project w keep {x,y}; return p as answer(y,x);
-    } structures {});
+    } structures { providers {  }});
     let text = program(&p);
     assert_eq!(text.matches("Lazy :: new").count(), 0);
     assert!(text.contains("dispatch :: PointHost"));
@@ -871,7 +896,7 @@ fn host_certificates_only_emit_for_locally_checked_facts() {
                 r = pipe rename R@0 {a -> a};
                 return r as answer(a);
             }
-            structures {}
+            structures { providers {  }}
         })
         .unwrap();
         let printed = program(&module);
@@ -897,7 +922,7 @@ fn canonical_consumer_omits_local_answer_state_for_every_head_shape() {
                 #projection
                 return #returned as answer(#head);
             }
-            structures {}
+            structures { providers {  }}
         })
         .unwrap();
         let printed = program(&module);

@@ -120,7 +120,7 @@ fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
         let mut changed = structures.clone();
         let input = &ra.plan.definitions[0].result;
         changed.structures = syn::parse2(
-            quote::quote!(structures { #input = ::std::collections::BTreeMap<_, Vec<_>> [x]; }),
+            quote::quote!(structures { providers { btree_map_grouped = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> { reads [exact, membership, ordered], supports [keys], build macro, shared }; } #input = @btree_map_grouped as ::std::collections::BTreeMap<_, Vec<_>> [x]; }),
         )
         .unwrap();
         assert!(cq_structure_selection::check(&physical, &changed).is_err());

@@ -232,8 +232,12 @@ pub(crate) fn apply(
                     if keyed.levels.len() != 1 {
                         return false;
                     }
-                    let ty = &keyed.ty;
-                    let routed: syn::Type = syn::parse_quote!(::cq_storage::sharded::Sharded<#ty>);
+                    let Ok(routed) =
+                        cq_lang_sequence::structures::provider::base::declaration("sharded")
+                            .compose(keyed.provider.clone())
+                    else {
+                        return false;
+                    };
                     facts.obligations.iter().all(|obligation| match obligation {
                         cq_lang_sequence::Obligation::Provider {
                             provider,
@@ -602,8 +606,8 @@ fn keys(program: &Program, facts: &Analysis, name: &Ident, term: &Term) -> Optio
                 *keys != first
                     || !matches!(
                         capability,
-                        cq_lang_sequence::Capability::Exact
-                            | cq_lang_sequence::Capability::Membership
+                        cq_lang_sequence::structures::Capability::Exact
+                            | cq_lang_sequence::structures::Capability::Membership
                     )
             }) {
                 return None;

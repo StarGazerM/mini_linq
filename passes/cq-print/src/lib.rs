@@ -85,7 +85,7 @@ pub enum Repr {
 type PartitionedSource<'p> = (
     TokenStream,
     &'p [String],
-    &'p BTreeMap<usize, syn::Type>,
+    &'p BTreeMap<usize, structures::Provider>,
     bool,
 );
 
@@ -633,7 +633,7 @@ impl<'a> Context<'a> {
         match self.analysis.canonical.get(name) {
             Some(structures::CanonSource::Rows(_)) => rows,
             _ => {
-                let ty = &self.analysis.retained[name];
+                let ty = &self.analysis.retained[name].ty;
                 quote!(::core::iter::IntoIterator::into_iter(
                     ::core::iter::Iterator::collect::<#ty>(#rows)
                 ))
@@ -648,14 +648,14 @@ impl<'a> Context<'a> {
 
     /// Publish providers from the key-disjoint parts recorded by Sequence.
     /// The caller owns the parts binding for the lifetime of every provider.
-    /// `routed` contains provider ordinals and inner types validated by Sequence;
+    /// `routed` contains provider ordinals and inner instances validated by Sequence;
     /// routing-key coverage is an upstream BE-Publication obligation.
     pub fn materialize_partitioned(
         &mut self,
         name: &str,
         parts: TokenStream,
         routing: &[String],
-        routed: &BTreeMap<usize, syn::Type>,
+        routed: &BTreeMap<usize, structures::Provider>,
     ) -> syn::Result<Repr> {
         let rows = quote!((#parts).iter().flatten().cloned());
         Ok(self.materialize_from(name, rows, Some((parts, routing, routed, false))))
@@ -669,7 +669,7 @@ impl<'a> Context<'a> {
         name: &str,
         parts: TokenStream,
         routing: &[String],
-        routed: &BTreeMap<usize, syn::Type>,
+        routed: &BTreeMap<usize, structures::Provider>,
     ) -> Repr {
         let rows = quote!((#parts).rows());
         self.materialize_from(name, rows, Some((parts, routing, routed, true)))
@@ -681,7 +681,7 @@ impl<'a> Context<'a> {
         source: TokenStream,
         parts: Option<PartitionedSource<'_>>,
     ) -> Repr {
-        let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
+        let structures: Vec<(Vec<Vec<String>>, structures::Provider)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
         // STR-RowsByValue: a rows record with a single consumer is not held;
         // its build streams into the one Built entry constructed below.
@@ -696,7 +696,7 @@ impl<'a> Context<'a> {
             )
         });
         let source = if let Some(id) = &selection {
-            let ty = &self.analysis.selections[name].ty;
+            let ty = &self.analysis.selections[name].provider.ty;
             statements.push(syn::parse_quote!(let #id: &#ty = &#source;));
             self.selection_rows(name, id)
         } else {
@@ -708,14 +708,22 @@ impl<'a> Context<'a> {
         let source = match &rows {
             Some(rows) => {
                 // A canonical rows record stores the distinct rows its provider's
-                // build yields (a sorted array) as an ordinary row vector.
-                let ty = match self.analysis.canonical.get(name) {
+                // build yields (a sorted array) as an ordinary row vector, which
+                // is accounted as rows; another rows record follows its token.
+                let (ty, accounted) = match self.analysis.canonical.get(name) {
                     Some(structures::CanonSource::Rows(_))
                         if self.physical_analysis.modes[name] == physical::ModeKind::Let =>
                     {
-                        syn::parse_quote!(::std::vec::Vec<_>)
+                        (syn::parse_quote!(::std::vec::Vec<_>), true)
                     }
-                    _ => self.analysis.retained[name].clone(),
+                    _ => {
+                        let provider = &self.analysis.retained[name];
+                        (
+                            provider.ty.clone(),
+                            self.analysis.facts(provider).accounting
+                                == structures::provider::Accounting::Rows,
+                        )
+                    }
                 };
                 let retained = format!("{name}.rows");
                 self.profile_label(&retained, "ROWS_BUILD", "", vec![name.into()]);
@@ -725,7 +733,7 @@ impl<'a> Context<'a> {
                     quote!(::core::iter::Iterator::collect(#counted_source)),
                 );
                 statements.push(syn::parse_quote! { let #rows: &#ty = &#collect; });
-                if ty == syn::parse_quote!(::std::vec::Vec<_>) {
+                if accounted {
                     let allocation = format_ident!(
                         "__cq_{}_rows_allocation",
                         name,
@@ -745,7 +753,9 @@ impl<'a> Context<'a> {
         };
         let source = if replay { direct_source } else { source };
         let mut built = Vec::new();
-        for (ordinal, (levels, ty)) in structures.iter().enumerate() {
+        for (ordinal, (levels, provider)) in structures.iter().enumerate() {
+            let ty = &provider.ty;
+            let facts = self.analysis.facts(provider);
             let columns: Vec<String> = levels.concat();
             let payload_columns = self.built_payload(name, levels);
             let stored_columns: Vec<_> = levels
@@ -787,8 +797,7 @@ impl<'a> Context<'a> {
                 .analysis
                 .membership
                 .contains(&(name.into(), columns.clone()))
-                || *ty == syn::parse_quote!(::std::collections::HashSet<_>)
-                || *ty == syn::parse_quote!(::cq_storage::HashSet<_>)
+                || facts.accounting == structures::provider::Accounting::Keys
             {
                 "KEYSET_BUILD"
             } else {
@@ -806,12 +815,13 @@ impl<'a> Context<'a> {
             let pairs = self.profile_inserting(&build_name, pairs);
             // A bare path lets Rust infer the type's generics from the pairs;
             // explicit providers dispatch Rust capabilities at this concrete site.
-            let bare = matches!(ty, syn::Type::Path(path)
-                if path.qself.is_none() && path.path.segments.iter().all(|s| s.arguments.is_none()));
+            // The token declares which construction it uses.
+            let bare = facts.build == structures::provider::Build::Inferred;
             let routed = parts
                 .as_ref()
                 .and_then(|(_, _, providers, _)| providers.get(&ordinal));
             let build = if let Some(inner) = routed {
+                let inner = &inner.ty;
                 // Each shard selects the same capabilities as a serial build.
                 // Infer the outer provider from that concrete output, while
                 // retaining the recorded routing and parallel build protocol.
@@ -895,7 +905,13 @@ impl<'a> Context<'a> {
             };
             let build = self.profile_build(&build_name, build);
             statements.push(syn::parse_quote! { let #structure = &#build; });
-            statements.extend(self.provider_guards(name, levels, ty, None, quote!(#structure)));
+            statements.extend(self.provider_guards(
+                name,
+                levels,
+                provider,
+                None,
+                quote!(#structure),
+            ));
             let join_filters = self.analysis.join_filters.clone();
             for (scan, index, filter) in join_filters.iter().flat_map(|(scan, filters)| {
                 filters
@@ -935,9 +951,9 @@ impl<'a> Context<'a> {
                     vec![build_name.clone()],
                 );
                 let pairs = self.profile_inserting(&filter_name, pairs);
-                let ty = &filter.ty;
-                let bare = matches!(ty, syn::Type::Path(path)
-                    if path.qself.is_none() && path.path.segments.iter().all(|s| s.arguments.is_none()));
+                let ty = &filter.provider.ty;
+                let bare = self.analysis.facts(&filter.provider).build
+                    == structures::provider::Build::Inferred;
                 let value = if bare {
                     quote!({ use ::cq_storage::Build as _; #ty::build(#pairs) })
                 } else {
@@ -1020,9 +1036,7 @@ impl<'a> Context<'a> {
                     syn::parse_quote!(let #id = &::cq_storage::JoinFilterPredicate(#id.as_ref());),
                 );
             }
-            if *ty == syn::parse_quote!(::std::collections::HashSet<_>)
-                || *ty == syn::parse_quote!(::cq_storage::HashSet<_>)
-            {
+            if facts.accounting == structures::provider::Accounting::Keys {
                 let allocation = format_ident!(
                     "__cq_{}_keys_allocation",
                     structure,
@@ -1039,7 +1053,7 @@ impl<'a> Context<'a> {
             if self
                 .analysis
                 .built_on(name, &columns)
-                .is_some_and(|(selected, _)| selected == ty)
+                .is_some_and(|(selected, _)| selected == provider)
             {
                 for guard in self.guards(name, &columns) {
                     statements
@@ -1075,7 +1089,7 @@ impl<'a> Context<'a> {
                 continue;
             }
             let id = self.keyset_ident(name, key);
-            let ty = &set.ty;
+            let ty = &set.provider.ty;
             let values = key.iter().map(|c| self.ident(name, c)).collect::<Vec<_>>();
             let key_value = if matches!(set.ownership, structures::KeyOwnership::Owned(_)) {
                 let value = values[0];
@@ -1127,7 +1141,7 @@ impl<'a> Context<'a> {
         &self,
         name: &str,
         levels: &[Vec<String>],
-        ty: &syn::Type,
+        selected: &structures::Provider,
         reader: Option<&structures::ReaderRef<String>>,
         provider: TokenStream,
     ) -> Vec<Stmt> {
@@ -1148,7 +1162,7 @@ impl<'a> Context<'a> {
                 ) if selected.key() == *reader => keyed,
                 _ => continue,
             };
-            if keyed.ty != *ty
+            if keyed.provider != *selected
                 || keyed
                     .levels
                     .iter()

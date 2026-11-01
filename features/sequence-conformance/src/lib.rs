@@ -36,6 +36,9 @@ pub fn plan_with_catalog(
         Target::Tasks => (cq_sequence_tasks::machine(), cq_sequence_tasks::catalog()),
     };
     catalog
+        .declarations
+        .extend(additions.declarations.iter().cloned());
+    catalog
         .providers
         .extend(additions.providers.iter().cloned());
     catalog.codecs.extend(additions.codecs.iter().cloned());

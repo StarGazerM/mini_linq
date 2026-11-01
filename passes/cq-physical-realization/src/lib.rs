@@ -583,7 +583,7 @@ impl Printer<'_> {
             structures::CanonSource::Rows(provider)
                 if self.physical_analysis.modes[&name] == physical::ModeKind::Let =>
             {
-                self.distinct_width(&name, &provider, rows, self.carried(&name).len())
+                self.distinct_width(&name, &provider.ty, rows, self.carried(&name).len())
             }
             structures::CanonSource::Rows(_) | structures::CanonSource::Index(_) => rows,
             structures::CanonSource::Host => {
@@ -642,7 +642,7 @@ impl Printer<'_> {
             return if let Some(ty) = self.analysis.head_dedup.get(result) {
                 self.distinct_width(
                     &format!("{result}.head"),
-                    &ty.clone(),
+                    &ty.ty.clone(),
                     rows,
                     head.args.len(),
                 )
@@ -674,7 +674,7 @@ impl Printer<'_> {
             return if let Some(ty) = self.analysis.head_dedup.get(result) {
                 self.distinct_width(
                     &format!("{result}.head"),
-                    &ty.clone(),
+                    &ty.ty.clone(),
                     rows,
                     head.args.len(),
                 )
@@ -721,7 +721,7 @@ impl Printer<'_> {
         } else {
             self.distinct_width(
                 &format!("{result}.head"),
-                &self.analysis.head_dedup[result].clone(),
+                &self.analysis.head_dedup[result].ty.clone(),
                 mapped,
                 head.args.len(),
             )

@@ -76,11 +76,13 @@ pub enum Term { Rows(Ident), Map(Ident, Box<Term>), Flatten(Box<Term>), Compact(
 pub struct Machine { pub name: Ident, pub items: usize, pub key_partition_threshold: usize, pub key_partition_cache_threshold: usize, pub root: LevelNode }
 pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bool, pub host_rust: bool, pub width: Option<usize>, pub children: Vec<LevelNode> }
 
-/// Target catalogs are ordered syntax/capability data, with no target dependency here.
-pub struct Catalog { pub providers: Vec<ProviderToken>, pub codecs: Vec<CodecToken> }
-pub struct ProviderToken { pub ty: syn::Type, pub capabilities: Vec<Capability>, pub supports: Vec<cq_lang_structures::ProviderCapability>, pub levels: Vec<Vec<String>>, pub elements: Option<Vec<syn::Type>>, pub max_packed_bits: Option<u32> }
+/// Target catalogs are ordered declaration/level data, with no target dependency here (PL-Catalog).
+/// Entries are keyed by provider token id (and inner token); a program declaration of a
+/// catalog-declared token must equal it. No catalog fact is read from a Rust spelling.
+pub struct Catalog { pub declarations: Vec<cq_lang_structures::Declaration>, pub providers: Vec<CatalogEntry>, pub codecs: Vec<CodecToken> }
+pub struct CatalogEntry { pub provider: cq_lang_structures::Provider, pub levels: Vec<Vec<String>> }
 pub struct CodecToken { pub ty: syn::Type, pub ordered: bool, pub levels: Vec<Vec<String>> }
-/// Canonical rows records are typed by providers with `Capability::Distinct` (PL-Distinct).
+/// Canonical rows records are typed by tokens declaring `distinct` (PL-Distinct).
 
 /// Lengths as symbolic expressions (size types).
 pub enum Len { Input(String), Scan(String), Lit(usize), Add(Box<Len>, Box<Len>), CeilDiv(Box<Len>, usize), Unknown(/*capacity*/ Option<usize>) }
@@ -94,7 +96,7 @@ pub struct Analysis {
     pub publications: BTreeMap<String, Publication>,    // checked BorrowHost | Alias | OwnRows { staged } | DeferredRows { consumer } | Parts
     pub host_sources: BTreeMap<String, String>,         // pure base provenance before reheading
     pub host_tiles: BTreeMap<String, Vec<Option<String>>>, // Tile input provenance in preorder
-    pub routed_providers: BTreeMap<String, BTreeMap<usize, syn::Type>>, // checked native ABI inner types
+    pub routed_providers: BTreeMap<String, BTreeMap<usize, cq_lang_structures::Provider>>, // recorded inner instances of routed tokens (STR-Routed)
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>, // provider reads: Exact | Range | Membership | Ordered
     pub levels: BTreeMap<String, Vec<String>>,          // grade of every Def (empty when ungraded)
     pub dispatches: Vec<Dispatch>,                      // derived (BE-Boundary): outer store, members, inner stores
@@ -127,10 +129,11 @@ Borrowed host stores and aliases do not allocate rows. Owned flat staging and
 key-part publication do; their lengths contribute a retained-row traffic
 tie-breaker after compute span, without equating a copy with row-expression
 evaluation. Provider insertion still pays work and span. Alias reheading
-does not license raw-buffer reuse unless the carrier is unchanged. Native
-`cq_storage::sharded::Sharded` representation arguments and routing coverage of
-the stored outer key (after constant elision) are checked before emission;
-the printer consumes the checked inner types, never a last-path-name heuristic.
+does not license raw-buffer reuse unless the carrier is unchanged. A routed
+provider is the recorded inner instance of a token declaring `routed`
+(STR-Routed); routing coverage of the stored outer key (after constant
+elision) is checked before emission, and the printer consumes the recorded
+inner instances, never a type path.
 `DeferredRows { consumer }` is a checked Store-consumer fusion, not general lazy
 Store semantics. Only an owned flat staging input can receive it: every row or
 written length demand must belong to one `Parts` publication whose leading

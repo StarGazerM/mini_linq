@@ -173,7 +173,23 @@ impl<K: Ord, V> cq_storage::ExactMembership<K> for Provider<K,V> {{
     )
 }
 
-fn query(ty: &str, support: &str, advice: &str, ordered: bool) -> String {
+/// Custom test tokens. Their facts admit every read, so rustc alone checks
+/// the spelled types' traits.
+const CUSTOM: &str = "
+    custom = Provider<_, _> {
+        reads [exact, range, membership, ordered], supports [retain, expand, keys], build macro
+    };
+    set_alias = SetAlias<_> { reads [membership], build macro };
+    keyset_alias = KeySetAlias<_> { reads [membership], build macro };
+";
+
+/// Retype advice installing `provider` (`@token as Type ...`) at `selector`.
+fn retype(selector: &str, provider: &str) -> String {
+    format!("cq_rewrites::retype(providers {{ {CUSTOM} }} {selector} => {provider})")
+}
+
+fn query(provider: &str, support: &str, advice: &str, ordered: bool) -> String {
+    let retype = retype("r", &format!("{provider} {support}"));
     let operator = if ordered { "merge" } else { "probe first" };
     let semi = if ordered {
         ""
@@ -185,7 +201,7 @@ fn query(ty: &str, support: &str, advice: &str, ordered: bool) -> String {
         r#"
 mini_linq::passes::select! {{
     pipeline {{
-        cq_rewrites::retype(r => {ty} {support}),
+        {retype},
         {advice}
         mini_linq::passes::sequence, mini_linq::passes::sequential,
         mini_linq::passes::translate_pull
@@ -207,14 +223,14 @@ mini_linq::passes::select! {{
 #[test]
 fn declared_support_is_checked_even_without_an_optimization_consumer() {
     let compiler = Compiler::new();
-    let plain = query("Alias<_,_>", "", "", false);
+    let plain = query("@custom as Alias<_,_>", "", "", false);
     // Ordinary exact lookup does not require Copy, exact-size, or key enumeration.
     success(compiler.compile("ordinary", &provider(false, false, false), &plain));
     success(compiler.compile(
         "valid",
         &provider(true, true, true),
         &query(
-            "Alias<_,_>",
+            "@custom as Alias<_,_>",
             "supports [expand, keys]",
             "cq_rewrites::retain_lookups, cq_rewrites::expand_lookups(2),",
             false,
@@ -244,7 +260,7 @@ fn declared_support_is_checked_even_without_an_optimization_consumer() {
             compiler.compile(
                 name,
                 &declarations,
-                &query("Alias<_,_>", support, "", false),
+                &query("@custom as Alias<_,_>", support, "", false),
             ),
             obligation,
         );
@@ -256,9 +272,9 @@ fn ordinary_read_obligations_reject_builtins_and_aliases_uniformly() {
     let compiler = Compiler::new();
     let aliases = "type SetAlias<T> = std::collections::HashSet<T>; type KeySetAlias<K> = cq_storage::AdaptiveKeySet<K, cq_storage::BorrowedI64TupleCodec, 64>;";
     for (name, ty) in [
-        ("set_payload", "::std::collections::HashSet<_>"),
-        ("alias_payload", "SetAlias<_>"),
-        ("keyset_payload", "KeySetAlias<_>"),
+        ("set_payload", "@std_hash_set as ::std::collections::HashSet<_>"),
+        ("alias_payload", "@set_alias as SetAlias<_>"),
+        ("keyset_payload", "@keyset_alias as KeySetAlias<_>"),
     ] {
         rejected(
             compiler.compile(name, aliases, &query(ty, "", "", false)),
@@ -266,8 +282,8 @@ fn ordinary_read_obligations_reject_builtins_and_aliases_uniformly() {
         );
     }
     for (name, ty) in [
-        ("unordered", "Provider<_,_>"),
-        ("unordered_alias", "Alias<_,_>"),
+        ("unordered", "@custom as Provider<_,_>"),
+        ("unordered_alias", "@custom as Alias<_,_>"),
     ] {
         rejected(
             compiler.compile(name, &provider(true, true, true), &query(ty, "", "", true)),
@@ -281,6 +297,7 @@ fn host_ordering_and_interval_summaries_require_real_runtime_traits() {
     let compiler = Compiler::new();
     let aliases = "type SetAlias<T> = std::collections::HashSet<T>;";
     let ordered = |ty: &str, native: bool| {
+        let retype = retype("ordered", ty);
         let hosts = if native {
             r#"
             let left = std::collections::BTreeMap::from([((1_i64,), vec![()])]);
@@ -292,7 +309,7 @@ fn host_ordering_and_interval_summaries_require_real_runtime_traits() {
         format!(
             r#"{{ {hosts}
 mini_linq::passes::select! {{
-    pipeline {{ cq_rewrites::retype(ordered => {ty}),
+    pipeline {{ {retype},
         mini_linq::passes::sequence, mini_linq::passes::sequential,
         mini_linq::passes::translate_pull }};
     physical {{
@@ -309,31 +326,35 @@ mini_linq::passes::select! {{
     success(compiler.compile(
         "host_ordered",
         aliases,
-        &ordered("::std::collections::BTreeMap<_, ::std::vec::Vec<_>>", true),
+        &ordered(
+            "@btree_map_grouped as ::std::collections::BTreeMap<_, ::std::vec::Vec<_>>",
+            true,
+        ),
     ));
     // An unused fallback type must not impose bounds on a direct native read.
     success(compiler.compile(
         "host_native_with_alias",
         aliases,
-        &ordered("SetAlias<_>", true),
+        &ordered("@set_alias as SetAlias<_>", true),
     ));
     rejected(
         compiler.compile(
             "host_unordered_array",
             aliases,
-            &ordered("SetAlias<_>", false),
+            &ordered("@set_alias as SetAlias<_>", false),
         ),
         "OrderedRead",
     );
 
     let interval = |ty: &str| {
+        let retype = retype("kind(membership)", ty);
         format!(
             r#"{{
         let left = [(1_i64, 10_i64), (2, 20)];
         let right = [(1_i64, 1_i64), (2, 2)];
         mini_linq::passes::select! {{
             arguments {{ positional(L,R) }};
-            pipeline {{ cq_rewrites::retype(kind(membership) => {ty}),
+            pipeline {{ {retype},
                 mini_linq::passes::sequence, mini_linq::passes::sequential,
                 mini_linq::passes::translate_pull }};
             physical {{
@@ -354,13 +375,13 @@ mini_linq::passes::select! {{
     success(compiler.compile(
         "exact_interval",
         aliases,
-        &interval("::cq_storage::AdaptiveKeySet<_, ::cq_storage::I64Codec, 64>"),
+        &interval("@adaptive_keyset as ::cq_storage::AdaptiveKeySet<_, ::cq_storage::I64Codec, 64>"),
     ));
     rejected(
         compiler.compile(
             "point_only_interval_alias",
             aliases,
-            &interval("SetAlias<_>"),
+            &interval("@set_alias as SetAlias<_>"),
         ),
         "ExactIntervalMembership",
     );
@@ -371,7 +392,7 @@ mini_linq::passes::select! {{
         compiler.compile(
             "wrong_key_codec_alias",
             codec_alias,
-            &interval("::cq_storage::AdaptiveKeySet<_, WrongCodec, 64>"),
+            &interval("@adaptive_keyset as ::cq_storage::AdaptiveKeySet<_, WrongCodec, 64>"),
         ),
         "BuildProvider",
     );
@@ -381,13 +402,14 @@ mini_linq::passes::select! {{
 fn candidate_directory_requires_candidates_not_just_matching_level_syntax() {
     let compiler = Compiler::new();
     let expression = |ty: &str| {
+        let retype = retype("r", ty);
         format!(
             r#"{{
         let lrows = [(1_i64, 2_i64)];
         let rrows = [(2_i64, 3_i64)];
         let srows = [(1_i64, 3_i64)];
         mini_linq::passes::select! {{
-            pipeline {{ cq_rewrites::retype(r => {ty}),
+            pipeline {{ {retype},
                 mini_linq::passes::sequence, mini_linq::passes::sequential,
                 mini_linq::passes::translate_pull }};
             physical {{
@@ -408,13 +430,15 @@ fn candidate_directory_requires_candidates_not_just_matching_level_syntax() {
     success(compiler.compile(
         "valid_directory",
         "",
-        &expression("::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>>"),
+        &expression(
+            "@trie(@hash_set as ::cq_storage::HashSet<_>) as ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>>",
+        ),
     ));
     rejected(
         compiler.compile(
             "invalid_directory_alias",
             "type SetAlias<K> = std::collections::HashSet<K>;",
-            &expression("SetAlias<_>"),
+            &expression("@set_alias as SetAlias<_>"),
         ),
         "Candidates",
     );
@@ -433,11 +457,11 @@ mini_linq::passes::sequence! {
         out = let canon project selected keep {a,b};
         return out as answer(a,b);
     }
-    structures {
-        r host scan = ::core::iter::Map<_,_> [];
+    structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        r host scan = @host_scan as ::core::iter::Map<_,_> [];
         selected read = positional base R lineage {a -> a,b -> b}
             column a marker MarkerAlias predicate physical;
-        out rows = ::cq_storage::dedup::Sort; out canon = rows;
+        out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
     }
 }"#;
     let filtered = r#"{
@@ -453,13 +477,12 @@ mini_linq::passes::sequence! {
                 out = let canon project joined keep {k,p,v};
                 return out as answer(k,p,v);
             }
-            structures {
-                l host scan = ::core::iter::Map<_,_> [];
-                r host scan = ::core::iter::Map<_,_> [];
-                r = ::cq_storage::RadixRun<_,_> [k] supports [keys];
-                l join_filter = ::cq_storage::AdaptiveKeySet<i64,::cq_storage::I64Codec,64>
-                    build r [k] covering joined marker MarkerAlias;
-                out rows = ::cq_storage::dedup::Sort; out canon = rows;
+            structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; radix_run = ::cq_storage::RadixRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, shared }; adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build macro, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                l host scan = @host_scan as ::core::iter::Map<_,_> [];
+                r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                r = @radix_run as ::cq_storage::RadixRun<_,_> [k] supports [keys];
+                l join_filter = @adaptive_keyset as ::cq_storage::AdaptiveKeySet<i64,::cq_storage::I64Codec,64>  build r [k] covering joined marker MarkerAlias;
+                out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
             }
         }.map(|(k,p,v)| (*k,*p,*v)).collect::<Vec<_>>().into_iter()
     }"#;

@@ -74,7 +74,7 @@ pub(crate) fn select(
                 keyed,
                 ..
             } = &entry.structure
-                && crate::native_abi(&keyed.ty) == Some(crate::NativeAbi::Columns)
+                && crate::native_abi(&keyed.provider.ty) == Some(crate::NativeAbi::Columns)
             {
                 analysis
                     .structures
@@ -213,7 +213,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                         let declared = program.structures.structures.entries.iter().any(|entry|
                             analysis.structures.physical.hosts.get(&symbol_name(&entry.name)) == Some(&host)
                                 && matches!(&entry.structure, Structure::Host { reader: ReaderRef::Scan, keyed, .. }
-                                    if crate::native_abi(&keyed.ty) == Some(crate::NativeAbi::Columns)));
+                                    if crate::native_abi(&keyed.provider.ty) == Some(crate::NativeAbi::Columns)));
                         if !declared {
                             return Err(error(
                                 "GPU-Bounds: resident bounds omit a nonresident origin",
@@ -281,9 +281,9 @@ mod tests {
                 result = let canon project r keep {a};
                 return result as answer(a);
             }
-            structures {
-                r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
-                result rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
             }
             sequence {

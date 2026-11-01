@@ -699,8 +699,8 @@ pub fn key_partition_in(
                 **lookup != keys
                     || !matches!(
                         capability,
-                        cq_lang_sequence::Capability::Exact
-                            | cq_lang_sequence::Capability::Membership
+                        cq_lang_sequence::structures::Capability::Exact
+                            | cq_lang_sequence::structures::Capability::Membership
                     )
             })
         {
@@ -767,13 +767,17 @@ pub fn key_partition_in(
                     "BE-KeyPartProvider: routing keys must equal the complete outer provider key",
                 ));
             }
-            let ty = &keyed.ty;
-            if matches!(ty, syn::Type::Path(path) if path.qself.is_none()
-                && path.path.segments.len() == 3
-                && path.path.segments[0].ident == "cq_storage"
-                && path.path.segments[1].ident == "sharded"
-                && path.path.segments[2].ident == "Sharded")
-            {
+            if matches!(
+                source
+                    .structures
+                    .structures
+                    .providers
+                    .get(&keyed.provider.token)
+                    .and_then(|declaration| declaration.facts.composition),
+                Some(cq_lang_sequence::structures::provider::Composition::Routed(
+                    _
+                ))
+            ) {
                 return Err(syn::Error::new_spanned(
                     &advice.name,
                     "BE-KeyPartProvider: physical provider is already routed",
@@ -785,9 +789,11 @@ pub fn key_partition_in(
             let supports = keyed
                 .supports(cq_lang_sequence::structures::ProviderCapability::Keys)
                 .then(|| quote!(supports[keys]));
+            let routed = cq_lang_sequence::structures::provider::base::declaration("sharded")
+                .compose(keyed.provider.clone())?;
             target.structures = cq_structure_selection::retype(
                 &target.structures,
-                quote!(entry(#entry_index) => ::cq_storage::sharded::Sharded<#ty> #supports),
+                quote!(entry(#entry_index) => #routed #supports),
             )?;
             found = true;
         }

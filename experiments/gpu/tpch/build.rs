@@ -610,11 +610,11 @@ fn compile_stage(
                 else {
                     unreachable!("catalog selection preserves provider entries");
                 };
-                let ty = &keyed.ty;
+                let provider = &keyed.provider;
                 structures = checked(
                     "nullable host provider",
                     &structures,
-                    cq_structure_selection::retype(&structures, quote!(entry(#index) => #ty)),
+                    cq_structure_selection::retype(&structures, quote!(entry(#index) => #provider)),
                 )?;
             }
         }
@@ -645,6 +645,7 @@ fn compile_stage(
                 continue;
             }
             let types = relation.columns.iter().map(|c| &c.ty);
+            let device_columns = cq_gpu_sequence::providers::declaration("device_columns");
             structures = checked(
                 "loader host adapter",
                 &structures,
@@ -655,9 +656,9 @@ fn compile_stage(
                         .iter()
                         .any(|input| input.name == relation.name)
                     {
-                        quote!(entry(#index) => ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*)>)
+                        quote!(providers { #device_columns } entry(#index) => @device_columns as ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*)>)
                     } else {
-                        quote!(entry(#index) => ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*), ::cq_gpu_runtime::For>)
+                        quote!(providers { #device_columns } entry(#index) => @device_columns as ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*), ::cq_gpu_runtime::For>)
                     },
                 ),
             )?;

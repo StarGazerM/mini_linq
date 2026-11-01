@@ -2,7 +2,9 @@
 //! Ordinary host reads keep their recorded native/lazy fallback path. Explicit
 //! positional decisions name a base, total column lineage, marker and summary;
 //! generated Rust checks the asserted host and provider capabilities.
-//! Provider and codec names carry no Rust type meaning here: trait capabilities,
+//! Every provider is a declared token (STR-Provider, `provider.rs`): entries
+//! record `@token as Type`, the `providers` table declares each token's facts.
+//! Provider Rust spellings carry no meaning here: trait capabilities,
 //! including equality and ordered access, remain generated Rust obligations.
 //! Structural checks still enforce key coverage, lineage and read ownership.
 //! Host key levels retain their recorded order; their flattened, sorted key set
@@ -10,8 +12,8 @@
 //! impose stricter representation-specific level requirements.
 //! Providers may declare `supports [retain, expand, keys]` on a keyed build or
 //! host fallback. Expansion implies retention, but neither implies ordered or
-//! contiguous access. Checks use the selected layout, never the provider's
-//! type name; generated Rust must discharge every declared capability and
+//! contiguous access. Checks use the selected layout and the token's declared
+//! facts, never the provider's spelling; generated Rust must discharge every declared capability and
 //! ordinary read trait obligation. Missing metadata grants no optimization.
 //! Smallest intersections require two candidate levels on every retained side,
 //! alongside any structures needed by other reads of the same result.
@@ -20,12 +22,13 @@
 //! Rust expressions are opaque and total by premise, placed by free variables.
 //! Const supplies use one point read and never justify a build.
 //! ```text
-//! Entry ::= Ident ("=" RustType ("[" Ident,* "]")+ [Support] [Items]
-//!                | "host" ReaderRef "=" RustType ("[" Ident,* "]")+ [Support]
-//!                | ("rows" | "head" | "group") "=" RustType
+//! Structures ::= "structures" "{" Providers Entry* "}"
+//! Entry ::= Ident ("=" Provider ("[" Ident,* "]")+ [Support] [Items]
+//!                | "host" ReaderRef "=" Provider ("[" Ident,* "]")+ [Support]
+//!                | ("rows" | "head" | "group") "=" Provider
 //!                | "canon" "=" ("rows" | "[" Ident,* "]" | "host")
-//!                | "selection" "=" RustType Origin "summary" Summary
-//!                | "keyset" "=" RustType "[" Ident,* "]" Ownership Origin
+//!                | "selection" "=" Provider Origin "summary" Summary
+//!                | "keyset" "=" Provider "[" Ident,* "]" Ownership Origin
 //!                | "read" "=" "positional" Origin "column" Ident
 //!                    "marker" RustType "predicate" ReadPredicate
 //!                | "repr" "=" ("tuples" | "positions" "{"
@@ -55,6 +58,9 @@
 //! Only explicit relational predicates introduce comparisons and constraints.
 //!
 pub use cq_lang_physical as physical;
+
+pub mod provider;
+pub use provider::{Capability, Declaration, Facts, Provider, Providers};
 
 use quote::ToTokens;
 use std::collections::{BTreeMap, BTreeSet};
@@ -121,6 +127,8 @@ pub struct Structures {
     #[syn(braced)]
     pub brace: token::Brace,
     #[syn(in = brace)]
+    pub providers: Providers,
+    #[syn(in = brace)]
     #[parse(parse_entries)]
     #[to_tokens(|tokens, entries| quote::TokenStreamExt::append_all(tokens, entries))]
     pub entries: Vec<Entry>,
@@ -162,8 +170,8 @@ pub enum CanonIndex {
 /// Checked canonical reference.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CanonSource {
-    /// The stored rows record, of this provider type.
-    Rows(syn::Type),
+    /// The stored rows record, of this provider.
+    Rows(Provider),
     /// The one-level Built entry on these (sorted) complete-row columns.
     Index(Vec<String>),
     /// The load-verified host carrier.
@@ -171,10 +179,10 @@ pub enum CanonSource {
 }
 
 impl CanonSource {
-    /// The provider type of a canonical rows record.
-    pub fn rows_provider(&self) -> Option<&syn::Type> {
+    /// The provider of a canonical rows record.
+    pub fn rows_provider(&self) -> Option<&Provider> {
         match self {
-            Self::Rows(ty) => Some(ty),
+            Self::Rows(provider) => Some(provider),
             Self::Index(_) | Self::Host => None,
         }
     }
@@ -285,7 +293,7 @@ pub enum Structure {
     Selection {
         selection_token: kw::selection,
         eq_token: Token![=],
-        ty: syn::Type,
+        provider: Provider,
         origin: Origin,
         summary_token: kw::summary,
         summary: Summary,
@@ -294,7 +302,7 @@ pub enum Structure {
     KeySet {
         keyset_token: kw::keyset,
         eq_token: Token![=],
-        ty: syn::Type,
+        provider: Provider,
         key: Level,
         ownership: KeyOwnership,
         origin: Origin,
@@ -329,19 +337,19 @@ pub enum Structure {
     HeadDedup {
         head_token: kw::head,
         eq_token: Token![=],
-        ty: syn::Type,
+        provider: Provider,
     },
     #[parse(peek = kw::rows)]
     Rows {
         rows_token: kw::rows,
         eq_token: Token![=],
-        ty: syn::Type,
+        provider: Provider,
     },
     #[parse(peek = kw::group)]
     Group {
         group_token: kw::group,
         eq_token: Token![=],
-        ty: syn::Type,
+        provider: Provider,
     },
     #[parse(peek = Token![=])]
     Built {
@@ -350,11 +358,11 @@ pub enum Structure {
     },
 }
 
-/// `Type [a, b]` or `Type [a][b]`: a Rust type built over the result, keyed
-/// on these columns, one bracket per level.
+/// `@token as Type [a, b]` or `[a][b]`: a provider built over the result,
+/// keyed on these columns, one bracket per level.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Keyed {
-    pub ty: syn::Type,
+    pub provider: Provider,
     #[parse(parse_levels)]
     #[to_tokens(|tokens, levels| quote::TokenStreamExt::append_all(tokens, levels))]
     pub levels: Vec<Level>,
@@ -548,6 +556,67 @@ fn names(columns: &CommaList<Ident>) -> Vec<String> {
     names
 }
 
+impl Structure {
+    /// The recorded provider of a provider-bearing entry and its instance support.
+    pub fn provider(&self) -> Option<(&Provider, Option<&ProviderSupport>)> {
+        match self {
+            Structure::Built { keyed, .. } | Structure::Host { keyed, .. } => {
+                Some((&keyed.provider, keyed.supports.as_ref()))
+            }
+            Structure::Selection { provider, .. }
+            | Structure::KeySet { provider, .. }
+            | Structure::HeadDedup { provider, .. }
+            | Structure::Rows { provider, .. }
+            | Structure::Group { provider, .. } => Some((provider, None)),
+            Structure::JoinFilter { filter, .. } => Some((&filter.provider, None)),
+            Structure::Share { .. }
+            | Structure::Repr { .. }
+            | Structure::Stage { .. }
+            | Structure::Read { .. }
+            | Structure::Dedup { .. } => None,
+        }
+    }
+
+    /// Mutable access to the recorded provider of a provider-bearing entry.
+    pub fn provider_mut(&mut self) -> Option<&mut Provider> {
+        match self {
+            Structure::Built { keyed, .. } | Structure::Host { keyed, .. } => {
+                Some(&mut keyed.provider)
+            }
+            Structure::Selection { provider, .. }
+            | Structure::KeySet { provider, .. }
+            | Structure::HeadDedup { provider, .. }
+            | Structure::Rows { provider, .. }
+            | Structure::Group { provider, .. } => Some(provider),
+            Structure::JoinFilter { filter, .. } => Some(&mut filter.provider),
+            Structure::Share { .. }
+            | Structure::Repr { .. }
+            | Structure::Stage { .. }
+            | Structure::Read { .. }
+            | Structure::Dedup { .. } => None,
+        }
+    }
+}
+
+impl Structures {
+    /// Declare `declared` tokens that entries reference and drop every
+    /// unreferenced declaration, keeping table order (STR-Provider).
+    pub fn declare(&mut self, declared: &[Declaration]) {
+        for declaration in declared {
+            self.providers.declare(declaration);
+        }
+        let referenced: BTreeSet<String> = self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.structure.provider())
+            .flat_map(|(provider, _)| provider.tokens().map(ToString::to_string))
+            .collect();
+        self.providers
+            .declarations
+            .retain(|declaration| referenced.contains(&declaration.token.to_string()));
+    }
+}
+
 /// Physical execution paired with all required storage choices.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Program {
@@ -563,8 +632,8 @@ pub mod contract {
 
 use physical::{ModeKind, Operator, syntax::SupplyKind};
 
-/// A built structure: the sorted columns of each level, and its type.
-pub type Built = (Vec<Vec<String>>, syn::Type);
+/// A built structure: the sorted columns of each level, and its provider.
+pub type Built = (Vec<Vec<String>>, Provider);
 
 /// What the contract establishes for later stages.
 #[derive(Clone, Debug)]
@@ -591,21 +660,23 @@ pub struct Analysis {
     /// Every raw decision's exact covering witness is checked before coalescing.
     pub join_filters: BTreeMap<String, Vec<JoinFilter>>,
     pub physical: physical::Analysis,
+    /// The program's checked token declarations (STR-Provider).
+    pub providers: Providers,
     /// Declared column order of every host relation.
     pub host_layouts: BTreeMap<String, Vec<String>>,
-    /// Built structures per result: (sorted columns of each level, type).
+    /// Built structures per result: (sorted columns of each level, provider).
     pub built: BTreeMap<String, Vec<Built>>,
     /// Exact fallback per host rename, typed reader role/identity, and key.
-    pub fallbacks: BTreeMap<(String, ReaderRef<String>, Vec<String>), syn::Type>,
+    pub fallbacks: BTreeMap<(String, ReaderRef<String>, Vec<String>), Provider>,
     /// Concrete accumulator tables for keyed Group results.
-    pub groups: BTreeMap<String, syn::Type>,
+    pub groups: BTreeMap<String, Provider>,
     built_support: BTreeMap<(String, Vec<Vec<String>>), ProviderSupport>,
     host_support: BTreeMap<(String, ReaderRef<String>, Vec<String>), ProviderSupport>,
     /// The canonical reference of every `canon` result (index selection).
     pub canonical: BTreeMap<String, CanonSource>,
     /// Provider of the answer relation's identity index for a computed head.
-    pub head_dedup: BTreeMap<String, syn::Type>,
-    pub retained: BTreeMap<String, syn::Type>,
+    pub head_dedup: BTreeMap<String, Provider>,
+    pub retained: BTreeMap<String, Provider>,
     /// Explicit projections and constant bindings of index-only selections.
     pub filtered: BTreeMap<String, Filtered>,
     /// Full-key probes certified to observe existence only, not witness payloads.
@@ -618,6 +689,13 @@ pub struct Analysis {
 }
 
 impl Analysis {
+    /// Declared facts of a recorded instance (STR-Provider, STR-Routed).
+    pub fn facts(&self, provider: &Provider) -> Facts {
+        self.providers
+            .facts(provider)
+            .expect("STR-Provider: every recorded token is declared")
+    }
+
     /// Reusable host reads are selected by runtime type dispatch.
     pub fn host_read(&self, result: &str) -> bool {
         self.physical.hosts.contains_key(result) && self.physical.modes[result] == ModeKind::Pipe
@@ -625,9 +703,9 @@ impl Analysis {
 
     /// The structure answering a read of `result` on `columns`, and how
     /// many of its levels the read applies.
-    pub fn built_on(&self, result: &str, columns: &[String]) -> Option<(&syn::Type, usize)> {
+    pub fn built_on(&self, result: &str, columns: &[String]) -> Option<(&Provider, usize)> {
         self.selected_built(result, columns)
-            .map(|((_, ty), depth)| (ty, depth))
+            .map(|((_, provider), depth)| (provider, depth))
     }
 
     fn selected_built(&self, result: &str, columns: &[String]) -> Option<(&Built, usize)> {
@@ -695,14 +773,9 @@ impl Analysis {
 
     /// Candidate enumeration selects its exact two-level directory, not the
     /// complete payload layout that ordinary `built_on` prefers on the prefix.
-    pub fn candidate_on(
-        &self,
-        result: &str,
-        prefix: &[String],
-        column: &str,
-    ) -> Option<&syn::Type> {
+    pub fn candidate_on(&self, result: &str, prefix: &[String], column: &str) -> Option<&Provider> {
         self.selected_candidate(result, prefix, column)
-            .map(|(_, ty)| ty)
+            .map(|(_, provider)| provider)
     }
 
     /// Declared support of the directory selected by a Smallest candidate read.
@@ -770,8 +843,10 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
 /// Formal rule CK-Return: A canonical consumer may own the returned set boundary.
 fn analyze(program: &Program) -> syn::Result<Analysis> {
     let module = &program.structures;
+    provider::check(module)?;
     let mut analysis = Analysis {
         physical: physical::contract::check(&program.physical)?,
+        providers: module.providers.clone(),
         host_layouts: program
             .physical
             .inputs()
@@ -845,7 +920,6 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                         "fallback requires a reusable host rename or initial host scan",
                     );
                 }
-                concrete_type(&keyed.ty)?;
                 keyed.check_support()?;
                 if let Some(items) = &keyed.items {
                     return error(items, "an item layout belongs to a built payload provider");
@@ -926,16 +1000,19 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
                 if analysis
                     .fallbacks
-                    .insert((name.clone(), reader_name, read_columns), keyed.ty.clone())
+                    .insert(
+                        (name.clone(), reader_name, read_columns),
+                        keyed.provider.clone(),
+                    )
                     .is_some()
                 {
                     return error(entry, "duplicate host fallback");
                 }
                 continue;
             }
-            Structure::Group { ty, .. } => {
-                check_group(program, entry, ty)?;
-                if analysis.groups.insert(name, ty.clone()).is_some() {
+            Structure::Group { provider, .. } => {
+                check_group(program, entry)?;
+                if analysis.groups.insert(name, provider.clone()).is_some() {
                     return error(entry, "duplicate group accumulator type");
                 }
                 continue;
@@ -949,8 +1026,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
                 continue;
             }
-            Structure::HeadDedup { ty, .. } => {
-                concrete_type(ty)?;
+            Structure::HeadDedup { provider, .. } => {
                 if name != symbol_name(&program.physical.program.returned)
                     || !head_needs_dedup(&program.physical, &analysis.physical)
                 {
@@ -959,26 +1035,24 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                         "head dedup requires a noninjective computed head without a canonical consumer",
                     );
                 }
-                if analysis.head_dedup.insert(name, ty.clone()).is_some() {
+                if analysis.head_dedup.insert(name, provider.clone()).is_some() {
                     return error(entry, "duplicate answer identity index");
                 }
                 continue;
             }
-            Structure::Rows { ty, .. } => {
-                concrete_type(ty)?;
+            Structure::Rows { provider, .. } => {
                 if analysis.physical.modes[&name] == ModeKind::Pipe {
                     return error(
                         entry,
                         "retained rows require an enumerated let or exists result",
                     );
                 }
-                if analysis.retained.insert(name, ty.clone()).is_some() {
+                if analysis.retained.insert(name, provider.clone()).is_some() {
                     return error(entry, "duplicate storage decision");
                 }
                 continue;
             }
         };
-        concrete_type(&keyed.ty)?;
         {
             if analysis.host_layouts.contains_key(&name) {
                 return error(
@@ -1033,7 +1107,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 .built
                 .entry(name.clone())
                 .or_default()
-                .push((columns, keyed.ty.clone()));
+                .push((columns, keyed.provider.clone()));
             if keyed.membership.is_some() {
                 if keyed.levels.len() != 1 {
                     return error(keyed, "membership storage requires one complete key");
@@ -1104,8 +1178,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         .collect();
     filtered::check(program, &analysis)?;
     analysis.layouts = filtered::layouts(program, &analysis);
-    let mut shared: BTreeMap<(String, Vec<String>, bool), &syn::Type> = BTreeMap::new();
-    for ((name, reader, columns), ty) in &analysis.fallbacks {
+    let mut shared: BTreeMap<(String, Vec<String>, bool), &Provider> = BTreeMap::new();
+    for ((name, reader, columns), provider) in &analysis.fallbacks {
         if matches!(reader, ReaderRef::Scan)
             || program.physical.program.definitions.iter().any(|d| {
                 matches!(reader, ReaderRef::Result(result) if symbol_name(&d.name) == *result)
@@ -1118,9 +1192,12 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             matches!(reader, ReaderRef::Result(result) if symbol_name(&d.name) == *result)
                 && matches!(d.operator, Operator::Merge(..))
         });
-        if let Some(other) = shared.insert((name.clone(), columns.clone(), ordered), ty) {
-            if other != ty {
-                return error(ty, "shared host fallback types on one key must agree");
+        if let Some(other) = shared.insert((name.clone(), columns.clone(), ordered), provider) {
+            if other != provider {
+                return error(
+                    provider,
+                    "shared host fallback providers on one key must agree",
+                );
             }
         }
     }
@@ -1252,7 +1329,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             let mode = analysis.physical.modes[&name];
             let source = match index {
                 CanonIndex::Rows(_) => match analysis.retained.get(&name) {
-                    Some(ty) if mode != ModeKind::Pipe => CanonSource::Rows(ty.clone()),
+                    Some(provider) if mode != ModeKind::Pipe => CanonSource::Rows(provider.clone()),
                     _ => {
                         return error(
                             entry,
@@ -1466,8 +1543,7 @@ fn check_items(program: &Program, analysis: &Analysis) -> syn::Result<()> {
 }
 
 /// Formal rule STR-Group: Exactly keyed Group results record a concrete accumulator table.
-fn check_group(program: &Program, entry: &Entry, ty: &syn::Type) -> syn::Result<()> {
-    concrete_type(ty)?;
+fn check_group(program: &Program, entry: &Entry) -> syn::Result<()> {
     if !program
         .physical
         .program
@@ -1553,22 +1629,16 @@ pub fn storage_layout_eq(left: &Entry, right: &Entry) -> bool {
     let mut normalized = left.clone();
     match (&mut normalized.structure, &right.structure) {
         (Structure::Built { keyed: left, .. }, Structure::Built { keyed: right, .. }) => {
-            left.ty = right.ty.clone();
+            left.provider = right.provider.clone();
             left.supports = right.supports.clone();
             left.items = right.items.clone();
         }
-        (Structure::Rows { ty: left, .. }, Structure::Rows { ty: right, .. })
-        | (Structure::HeadDedup { ty: left, .. }, Structure::HeadDedup { ty: right, .. })
-        | (Structure::Group { ty: left, .. }, Structure::Group { ty: right, .. })
-        | (Structure::Selection { ty: left, .. }, Structure::Selection { ty: right, .. })
-        | (Structure::KeySet { ty: left, .. }, Structure::KeySet { ty: right, .. }) => {
-            *left = right.clone()
+        (Structure::Host { .. }, _) => {}
+        (left, right) => {
+            if let (Some(left), Some((right, _))) = (left.provider_mut(), right.provider()) {
+                *left = right.clone();
+            }
         }
-        (
-            Structure::JoinFilter { filter: left, .. },
-            Structure::JoinFilter { filter: right, .. },
-        ) => left.ty = right.ty.clone(),
-        _ => {}
     }
     normalized == *right
         && normalized.to_token_stream().to_string() == right.to_token_stream().to_string()

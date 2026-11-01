@@ -14,10 +14,10 @@ fn host_union_concatenates_published_dispatches_before_optional_canon() {
                 answer = let canon union r,s;
                 return answer as answer(a);
             }
-            structures {
-                r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
-                s host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
-                answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
+                s host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
+                answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 answer canon = rows;
             }
             sequence {

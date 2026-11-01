@@ -55,13 +55,13 @@ pub enum MembershipSummary {
 }
 #[derive(Clone, Debug)]
 pub struct Selection {
-    pub ty: syn::Type,
+    pub provider: Provider,
     pub origin: Origin,
     pub summary: Summary,
 }
 #[derive(Clone, Debug)]
 pub struct KeySet {
-    pub ty: syn::Type,
+    pub provider: Provider,
     pub key: Vec<String>,
     pub ownership: KeyOwnership,
     pub origin: Origin,
@@ -173,12 +173,11 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
             filters.push(filter.clone());
         }
         Structure::Selection {
-            ty,
+            provider,
             origin,
             summary,
             ..
         } => {
-            concrete_type(ty)?;
             check_origin(origin, &name, program, facts)?;
             if facts.physical.modes[&name] != ModeKind::Let {
                 return error(entry, "selection requires a let occurrence bag");
@@ -188,7 +187,7 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
                 .insert(
                     name,
                     Selection {
-                        ty: ty.clone(),
+                        provider: provider.clone(),
                         origin: origin.clone(),
                         summary: summary.clone(),
                     },
@@ -199,13 +198,12 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
             }
         }
         Structure::KeySet {
-            ty,
+            provider,
             key,
             ownership,
             origin,
             ..
         } => {
-            concrete_type(ty)?;
             check_origin(origin, &name, program, facts)?;
             let columns = names(&key.columns);
             if facts.physical.modes[&name] != ModeKind::Let
@@ -228,7 +226,7 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
                 .insert(
                     (name, columns.clone()),
                     KeySet {
-                        ty: ty.clone(),
+                        provider: provider.clone(),
                         key: columns,
                         ownership: ownership.clone(),
                         origin: origin.clone(),
@@ -299,13 +297,13 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
             Operator::Point(..) | Operator::Range(..) | Operator::Semi(..)
         ) {
             return error(
-                &s.ty,
+                &s.provider,
                 "selection constructor requires a physical condition or semi reduction",
             );
         }
         if facts.retained.contains_key(name) || facts.filtered.contains_key(name) {
             return error(
-                &s.ty,
+                &s.provider,
                 "selection cannot coexist with a tuple buffer or filtered projection",
             );
         }
@@ -362,7 +360,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
             });
         if !demanded || !facts.selections.contains_key(name) && !facts.retained.contains_key(name) {
             return error(
-                &set.ty,
+                &set.provider,
                 "keyset requires a membership demand and recorded reusable source rows",
             );
         }
@@ -452,7 +450,10 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
                         return error(&d.name, "exact summary requires a recorded earlier keyset");
                     };
                     if !matches!(set.ownership, KeyOwnership::Owned(_)) {
-                        return error(&set.ty, "scalar marker summary requires owned scalar keys");
+                        return error(
+                            &set.provider,
+                            "scalar marker summary requires owned scalar keys",
+                        );
                     }
                 } else if !facts
                     .keysets

@@ -490,11 +490,11 @@ retained-row traffic $B$, not another row-expression evaluation or a unit of
 compute span. Provider insertions continue to contribute work and span.
 Borrow and alias publication add no traffic. Thus being consumed by a key
 partition is not a free-store rule.
-The native routed-provider representation records the inner provider of the
-canonical \code{cq\_storage::sharded::Sharded} ABI. Before emission, checking
-validates its type arguments and proves every routing column belongs to the
-stored outer key, after constant elision. An unrelated type with the same
-last identifier has no routed interpretation.
+The native routed-provider representation is the recorded inner instance of a
+provider whose token declares \code{routed} (STR-Routed). Before emission,
+checking proves every routing column belongs to the
+stored outer key, after constant elision. No type spelling, path or last
+identifier gives a provider a routed interpretation.
 
 The \(\mathsf{DeferredRows}(c)\) refinement is checked Store-consumer fusion,
 not a global lazy interpretation of \code{store}. It applies only to a staged
@@ -525,9 +525,11 @@ publication record, and the interpreter may not infer a new scheduling guard.
 \subsection{Decomposition}
 A planner is an advice generator, not another interpretation of Sequence.
 Its inputs are a Sequence program $t$, a machine $M$, and an ordered catalog
-$K$ of target-supplied providers (including \code{Distinct} canonical rows providers) and codecs with capabilities
-and admissible levels. The catalog is data: shared planning and checking
-do not depend on a target implementation. A successful result is a graded
+$K$ of target-supplied provider token declarations (including \code{Distinct} canonical rows providers),
+entries keyed by token id with admissible levels, and codecs.
+The catalog is data: shared planning and checking
+do not depend on a target implementation, and no rule reads a provider's Rust
+spelling. A successful result is a graded
 program together with a replayable trace of the existing Sequence rewrites.
 Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
 \begin{mathpar}
@@ -543,23 +545,26 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
   \text{candidate and catalog order fixed}}
  {\mathsf{plan}(t,M,K)\text{ has one result (or one rejection)}}
 
-\Rule{PL-Select}{s'=\mathsf{retainUnsupportedHostReads}(s,K)\quad
- e\in\mathsf{Structures}(s')\quad K_e=\mathsf{stablePartition}(K,\mathsf{matchesRecordedType}(e))\quad
- k=\mathsf{first}\{k\in K_e\mid \mathsf{needs}(e)\subseteq\mathsf{caps}(k),
- \ \mathsf{levels}(k)\ne\varnothing,\
- \mathsf{elements}(e)\subseteq\mathsf{acceptedElements}(k)\}}
- {\mathsf{select}(s,K):\
- e.\mathsf{type}\gets k.\mathsf{type}\quad\text{by checked retention, index construction and retype}}
+\Rule{PL-Catalog}{\mathsf{decl}_t(x)\text{ and }\mathsf{decl}_K(x)\text{ defined}}
+ {\mathsf{decl}_t(x)=\mathsf{decl}_K(x)\quad
+  \mathsf{levels}_K(p)=\mathsf{levels}(k)\text{ for an entry }k\in K\text{ covering }p\text{ (same token; listed inner tokens equal, an unlisted inner any)}}
 
-\Rule{PL-Distinct}{\mathsf{Distinct}\in\mathsf{caps}(P)\quad t\text{ any row stream}}
+\Rule{PL-Select}{s'=\mathsf{retainUnsupportedHostReads}(s,K)\quad
+ e\in\mathsf{Structures}(s')\quad K_e=\mathsf{stablePartition}(K,\mathsf{tokens}(k)=\mathsf{tokens}(e))\quad
+ k=\mathsf{first}\{k\in K_e\mid \mathsf{needs}(e)\subseteq\mathsf{facts}(k).\mathsf{reads},
+ \ \mathsf{levels}(k)\ne\varnothing\}}
+ {\mathsf{select}(s,K):\
+ e.\mathsf{provider}\gets k\ (\text{recorded spelling kept iff }\mathsf{tokens}(k)=\mathsf{tokens}(e))\quad\text{by checked retention, index construction and retype}}
+
+\Rule{PL-Distinct}{\mathsf{Distinct}\in\mathsf{facts}(P).\mathsf{reads}\quad t\text{ any row stream}}
  {\alpha(\mathsf{build}_P\,t)=\iota(\mathrm{supp}\,\alpha t)\quad
   \mathsf{scan}_P\text{ reads each stored row once}}
 
 \Rule{PL-Resident}{\mathsf{hostRead}(p)\quad \exists\ell\in\mathsf{reads}(p).\ |\ell|>1}
  {\mathsf{admit}(p,k)\Longrightarrow
-  \mathsf{Resident}\in\mathsf{caps}(k)\ \land\
-  \mathsf{matches}(p,k)\ \land\
-  \mathsf{needs}(p)\subseteq\mathsf{caps}(k)\ \land\
+  \mathsf{Resident}\in\mathsf{facts}(k).\mathsf{reads}\ \land\
+  \mathsf{tokens}(p)=\mathsf{tokens}(k)\ \land\
+  \mathsf{needs}(p)\subseteq\mathsf{facts}(k).\mathsf{reads}\ \land\
   \mathsf{reads}(p)\subseteq\mathsf{levels}(k)}
 
 \Rule{PL-Cost}{C=(c_1,\ldots,c_k)\text{ admissible, preserving }A(t)\quad

@@ -43,21 +43,21 @@ pub fn b() -> Program {
             answer = let canon project matched keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
-        structures {
-            region_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
-            nation_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            customer host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            orders_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i32),::cq_gpu_runtime::For> [];
-            lineitem host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            supplier host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
-            r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
-            r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
-            answer rows = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            region_base host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
+            nation_base host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            customer host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            orders_base host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i32),::cq_gpu_runtime::For> [];
+            lineitem host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            supplier host scan = @device_columns as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
+            r1 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [region];
+            r2 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation];
+            answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
             answer canon = rows;
-            customer rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            orders = ::cq_gpu_sequence_runtime::RangeProvider [customer];
-            lineitem = ::cq_gpu_sequence_runtime::RangeProvider [order];
-            supplier = ::cq_gpu_sequence_runtime::RangeProvider [supplier][nation];
+            customer rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+            orders = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [customer];
+            lineitem = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];
+            supplier = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [supplier][nation];
         }
         sequence {
             R1 = store map r1 compact region_selected rows region_base;
@@ -105,13 +105,17 @@ pub fn a() -> Program {
         !["customer", "orders", "lineitem", "supplier"].contains(&entry.name.to_string().as_str())
             || matches!(entry.structure, cq_lang_structures::Structure::Host { .. })
     });
-    entries.push(syn::parse_quote!(lineitem rows = ::cq_gpu_sequence_runtime::RangeProvider;));
-    entries.push(syn::parse_quote!(orders = ::cq_gpu_sequence_runtime::RangeProvider [order];));
+    entries.push(syn::parse_quote!(lineitem rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;));
+    entries.push(syn::parse_quote!(orders = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];));
     entries
-        .push(syn::parse_quote!(customer = ::cq_gpu_sequence_runtime::RangeProvider [customer];));
+        .push(syn::parse_quote!(customer = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [customer];));
     entries.push(
-        syn::parse_quote!(supplier = ::cq_gpu_sequence_runtime::RangeProvider [nation,supplier];),
+        syn::parse_quote!(supplier = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation,supplier];),
     );
+    program
+        .structures
+        .structures
+        .declare(&cq_gpu_sequence::providers::declarations());
     program.sequence = syn::parse_quote! {
         sequence {
             R1 = store map r1 compact region_selected rows region_base;

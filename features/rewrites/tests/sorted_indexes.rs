@@ -31,7 +31,7 @@ fn layouts(program: &ir::Program, result: &str) -> Vec<(Vec<Vec<String>>, String
                     .iter()
                     .map(|l| l.columns.iter().map(symbol_name).collect())
                     .collect(),
-                quote::ToTokens::to_token_stream(&keyed.ty)
+                quote::ToTokens::to_token_stream(&keyed.provider.ty)
                     .to_string()
                     .replace(' ', ""),
             )),

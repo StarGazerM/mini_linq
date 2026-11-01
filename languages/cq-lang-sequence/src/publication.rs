@@ -33,49 +33,24 @@ pub(super) fn derive(
     for definition in &program.sequence.definitions {
         partition_inputs(&definition.term, &mut inputs);
     }
-    // This is a representation contract for the native runtime ABI, not a
-    // suffix-name policy: unrelated user types named Sharded remain ordinary
-    // Build providers. Validate the constructor before emission sees it.
+    // A routed provider is a recorded token fact (STR-Routed), never a
+    // recognized constructor spelling.
     for (result, providers) in &analysis.structures.built {
-        for (ordinal, (_, ty)) in providers.iter().enumerate() {
-            let syn::Type::Path(path) = ty else { continue };
-            if path.qself.is_some()
-                || path.path.segments.len() != 3
-                || path.path.segments[0].ident != "cq_storage"
-                || path.path.segments[1].ident != "sharded"
-                || path.path.segments[2].ident != "Sharded"
-            {
+        for (ordinal, (_, provider)) in providers.iter().enumerate() {
+            if !matches!(
+                analysis
+                    .structures
+                    .providers
+                    .get(&provider.token)
+                    .and_then(|declaration| declaration.facts.composition),
+                Some(cq_lang_structures::provider::Composition::Routed(_))
+            ) {
                 continue;
             }
-            let segment = path.path.segments.last().expect("canonical path");
-            let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-                return fail(
-                    ty,
-                    "BE-Publication",
-                    "routed provider requires its inner provider type",
-                );
-            };
-            if !(1..=2).contains(&arguments.args.len())
-                || !arguments
-                    .args
-                    .iter()
-                    .all(|arg| matches!(arg, syn::GenericArgument::Type(_)))
-                || path
-                    .path
-                    .segments
-                    .iter()
-                    .take(2)
-                    .any(|segment| !segment.arguments.is_none())
-            {
-                return fail(
-                    ty,
-                    "BE-Publication",
-                    "invalid native routed-provider representation",
-                );
-            }
-            let syn::GenericArgument::Type(inner) = &arguments.args[0] else {
-                unreachable!()
-            };
+            let inner = provider
+                .inner
+                .as_deref()
+                .expect("STR-Provider: routed instance records its inner");
             analysis
                 .routed_providers
                 .entry(result.clone())

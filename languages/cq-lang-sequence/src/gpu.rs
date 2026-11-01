@@ -293,8 +293,8 @@ pub(crate) fn derive(
                             };
                             if analysis.obligations.iter().any(|o| {
                                 matches!(o,
-                                Obligation::Provider { provider: p, keys: k, ty, .. }
-                                if p == provider && k == keys && (machine.contiguous_range)(ty))
+                                Obligation::Provider { provider: p, keys: k, instance, .. }
+                                if p == provider && k == keys && (machine.contiguous_range)(&instance.ty))
                             }) {
                                 execution.publication = Publication::DeferredRange {
                                     provider: provider.clone(),

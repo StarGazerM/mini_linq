@@ -1322,7 +1322,7 @@ impl Checked<'_> {
                     .structures
                     .keysets
                     .get(&key)
-                    .map(|keyset| keyset.ty.clone())
+                    .map(|keyset| keyset.provider.clone())
             });
         let Some(ty) = ty else {
             return fail(provider, "BE-Bind", "lookup has no provider for these keys");
@@ -1343,7 +1343,7 @@ impl Checked<'_> {
             provider: name,
             keys: keys.to_vec(),
             capability,
-            ty,
+            instance: ty,
         });
         // Codec injectivity and monotonicity are deliberately not claimed statically.
         self.analysis.obligations.push(Obligation::Codec {
@@ -1585,11 +1585,11 @@ mod tests {
                 grouped = let group r by [k] { n: usize = count(); };
                 return grouped as answer(k,n);
             }
-            structures {
-                r host scan = Reader [];
-                r rows = ::cq_storage::dedup::Sort; r canon = rows;
-                grouped rows = Rows;
-                grouped group = ::std::collections::HashMap<_, (usize,)>;
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; rows = Rows { reads [exact, range, membership], build inferred }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
+                r host scan = @reader as Reader [];
+                r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
+                grouped rows = @rows as Rows;
+                grouped group = @group_map as ::std::collections::HashMap<_, (usize,)>;
             }
             sequence {
                 source = canon rows r;
@@ -1617,7 +1617,7 @@ mod tests {
                 output = let canon project r keep {a};
                 return output as answer(a);
             }
-            structures { r host scan = Reader []; output rows = ::cq_storage::dedup::Sort; output canon = rows; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; output rows = @sort as ::cq_storage::dedup::Sort; output canon = rows; }
             sequence {
                 a_view = canon rows r;
                 before = rows r;

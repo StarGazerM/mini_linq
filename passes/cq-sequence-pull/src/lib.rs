@@ -4,7 +4,8 @@
 //! Physical adapters supply row functions, never a second program translation.
 use std::collections::BTreeMap;
 
-use cq_lang_sequence::{Analysis, Capability, Guard, Monoid, Program, Term};
+use cq_lang_sequence::structures::Capability;
+use cq_lang_sequence::{Analysis, Guard, Monoid, Program, Term};
 use cq_lang_structures::physical::{Operator, symbol_name};
 pub use cq_physical_realization::CanonTarget;
 use cq_physical_realization::RowEmitter;
@@ -37,158 +38,54 @@ pub fn machine() -> cq_lang_sequence::Machine {
 /// Native provider and value-refinement tokens, including the distinct-row
 /// providers that type canonical rows records.
 ///
-/// Generic holes describe families of authored types, not a replacement for
-/// their arguments. Rust trait checking retains each token's row-type bounds.
+/// Every base provider token is readable at host; the catalog repeats the
+/// structure-selection declarations, so a selected program's table agrees
+/// with it (PL-Catalog). Spellings are opaque: Rust trait checking retains
+/// each token's row-type bounds.
 pub fn catalog() -> cq_lang_sequence::Catalog {
-    use Capability::{Distinct, Exact, Membership, Ordered, Range};
-    use cq_lang_sequence::{Catalog, CodecToken, ProviderToken};
-    use cq_lang_structures::ProviderCapability::{Expand, Keys, Retain};
+    use cq_lang_sequence::{Catalog, CodecToken};
 
     let levels = vec![vec!["host".into()]];
-    let providers = [
-        (
-            syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>),
-            vec![Exact, Membership],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::Trie<'_, _, _>),
-            vec![Exact, Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::SortedRun<_, _>),
-            vec![Exact, Range, Membership],
-            vec![Retain, Expand, Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::SortedRun<_, _, _>),
-            vec![Exact, Range, Membership],
-            vec![Retain, Expand, Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::RadixRun<_, _>),
-            vec![Exact, Range, Membership],
-            vec![Retain, Expand, Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::RadixRun<_, _, _>),
-            vec![Exact, Range, Membership],
-            vec![Retain, Expand, Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::HashSet<_>),
-            vec![Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::std::collections::HashSet<_>),
-            vec![Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::std::collections::HashSet<_, _>),
-            vec![Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::std::collections::BTreeSet<_>),
-            vec![Membership, Ordered],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::std::collections::HashMap<_, ::std::vec::Vec<_>>),
-            vec![Exact, Membership],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(::std::collections::HashMap<_, ::std::vec::Vec<_>, _>),
-            vec![Exact, Membership],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
-            vec![Exact, Membership, Ordered],
-            vec![Keys],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::GroupedAnswers<_, _>),
-            vec![Exact, Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::SingleGroup<_, _>),
-            vec![Exact, Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::dispatch::KeySet<_>),
-            vec![Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::dispatch::KeySet<_, false>),
-            vec![Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::dispatch::KeySet<_, true>),
-            vec![Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, _, _>),
-            vec![Membership],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, _>),
-            vec![Membership],
-            vec![],
-        ),
+    let mut catalog = Catalog::default();
+    for token in [
+        "hash_index",
+        "trie",
+        "sorted_run",
+        "radix_run",
+        "hash_set",
+        "std_hash_set",
+        "btree_set",
+        "hash_map_grouped",
+        "btree_map_grouped",
+        "grouped_answers",
+        "single_group",
+        "keyset",
+        "adaptive_keyset",
+        "adaptive_membership",
         // Formal rule PL-Distinct: canonical rows records. Exists is the
         // 0-ary set, whose build already yields the distinct rows.
-        (
-            syn::parse_quote!(::cq_storage::dedup::Sort),
-            vec![Distinct],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::dedup::Packed),
-            vec![Distinct],
-            vec![],
-        ),
-        (
-            syn::parse_quote!(::cq_storage::Exists),
-            vec![Distinct],
-            vec![],
-        ),
+        "sort",
+        "packed",
+        "exists",
+    ] {
+        catalog.register(
+            cq_lang_structures::provider::base::declaration(token),
+            levels.clone(),
+        );
+    }
+    // Codec registration only: these tokens authorize representations; this catalog does not execute logical decoding.
+    catalog.codecs = [
+        syn::parse_quote!(::cq_storage::sequence::Identity),
+        syn::parse_quote!(::cq_storage::sequence::Dense<_>),
     ]
     .into_iter()
-    .map(|(ty, capabilities, supports)| ProviderToken {
+    .map(|ty| CodecToken {
         ty,
-        capabilities,
-        supports,
+        ordered: true,
         levels: levels.clone(),
-        elements: None,
-        max_packed_bits: None,
     })
     .collect();
-    Catalog {
-        providers,
-        // Codec registration only: these tokens authorize representations; this catalog does not execute logical decoding.
-        codecs: [
-            syn::parse_quote!(::cq_storage::sequence::Identity),
-            syn::parse_quote!(::cq_storage::sequence::Dense<_>),
-        ]
-        .into_iter()
-        .map(|ty| CodecToken {
-            ty,
-            ordered: true,
-            levels: levels.clone(),
-        })
-        .collect(),
-    }
+    catalog
 }
 
 /// A constructor's emitted iterator and its checked row-layout provenance.
@@ -1058,7 +955,7 @@ impl<'a> Emitter<'a> {
                 let rows = self.context().profile_inserting(&label, input.rows);
                 let rows = RowEmitter::canon_with_target(
                     self.adapters.canon_target(),
-                    &provider,
+                    &provider.ty,
                     rows,
                     width,
                 );

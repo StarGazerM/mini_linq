@@ -20,15 +20,15 @@ fn main() {
             checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
-        structures {
-            l host scan = ::core::iter::Map<_, _> [];
-            r0 host scan = ::core::iter::Map<_, _> [];
-            r rows = ::std::vec::Vec<_>;
-            s host scan = ::core::iter::Map<_, _> [];
-            s host result(checked) = ::cq_storage::dispatch::KeySet<_> [a,c];
-            s host candidates = ::cq_storage::HashIndex<'_, _, _> [a];
-            s host membership = ::cq_storage::dispatch::KeySet<_> [a,c];
-            checked rows = ::cq_storage::dedup::Sort; checked canon = rows;
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @host_scan as ::core::iter::Map<_, _> [];
+            r0 host scan = @host_scan as ::core::iter::Map<_, _> [];
+            r rows = @vec as ::std::vec::Vec<_>;
+            s host scan = @host_scan as ::core::iter::Map<_, _> [];
+            s host result(checked) = @keyset as ::cq_storage::dispatch::KeySet<_> [a,c];
+            s host candidates = @hash_index as ::cq_storage::HashIndex<'_, _, _> [a];
+            s host membership = @keyset as ::cq_storage::dispatch::KeySet<_> [a,c];
+            checked rows = @sort as ::cq_storage::dedup::Sort; checked canon = rows;
         }
     };
 }

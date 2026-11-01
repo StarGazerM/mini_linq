@@ -29,8 +29,8 @@ pub fn retained_host_read<'a>(
     build: &str,
     reader: &str,
     keys: &[String],
-) -> Option<&'a syn::Type> {
-    retained_host_keyed(program, build, reader, keys).map(|keyed| &keyed.ty)
+) -> Option<&'a Provider> {
+    retained_host_keyed(program, build, reader, keys).map(|keyed| &keyed.provider)
 }
 
 fn retained_host_keyed<'a>(
@@ -119,7 +119,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
                 &share.keys,
             ))
             .is_some_and(|(first, force)| {
-                first.ty == force.ty
+                first.provider == force.provider
                     && first
                         .levels
                         .iter()

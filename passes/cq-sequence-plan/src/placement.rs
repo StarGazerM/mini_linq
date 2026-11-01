@@ -574,11 +574,13 @@ fn rebuilds_native_provider(
                             .hosts
                             .get(&symbol_name(&entry.name))
                             == Some(&host)
-                        && catalog.providers.iter().any(|token| {
-                            crate::catalog::matches_type(&token.ty, &keyed.ty)
-                                && !token.levels.iter().any(|level| level.len() == 1)
+                        && catalog.providers.iter().any(|candidate| {
+                            candidate.covers(&keyed.provider)
+                                && !candidate.levels.iter().any(|level| level.len() == 1)
                         })
-                        && builds.iter().any(|(_, ty)| *ty != keyed.ty)
+                        && builds
+                            .iter()
+                            .any(|(_, provider)| *provider != keyed.provider)
                 });
             }
             Operator::Project(project) => source = symbol_name(&project.input),
@@ -641,7 +643,7 @@ fn reads_at(
                 let Obligation::Provider {
                     provider: name,
                     capability,
-                    ty,
+                    instance,
                     ..
                 } = obligation
                 else {
@@ -653,7 +655,7 @@ fn reads_at(
                         catalog,
                         &provider,
                         capability,
-                        ty,
+                        instance,
                         level.len() > 1,
                         |registered| registered.iter().any(|registered| at(registered, level)),
                     )
@@ -850,7 +852,8 @@ fn host_operations(program: &Program, facts: &cq_lang_sequence::Analysis) -> BTr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cq_lang_sequence::{Capability, Catalog, LevelNode, ProviderToken};
+    use cq_lang_sequence::structures::Providers;
+    use cq_lang_sequence::{Catalog, LevelNode};
 
     fn machine() -> Machine {
         fn node(name: &str, children: Vec<LevelNode>) -> LevelNode {
@@ -884,40 +887,31 @@ mod tests {
                 answer = let canon semi eager [a] l,r;
                 return answer as answer(a);
             }
-            structures {
-                l host scan = Reader []; r host scan = Reader [];
-                r = Index [a]; answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+                r = @index as Index [a]; answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
             }
         };
         cq_sequence_lowering::compile(&structures).unwrap()
     }
 
     fn catalog(levels: Vec<Vec<String>>) -> Catalog {
-        Catalog {
-            providers: vec![
-                ProviderToken {
-                    supports: Vec::new(),
-                    ty: syn::parse_quote!(Index),
-                    capabilities: vec![Capability::Exact, Capability::Membership],
-                    levels,
-                    elements: None,
-                    max_packed_bits: None,
-                },
-                ProviderToken {
-                    supports: Vec::new(),
-                    ty: syn::parse_quote!(::cq_storage::dedup::Sort),
-                    capabilities: vec![Capability::Distinct],
-                    levels: vec![
-                        vec!["host".into()],
-                        vec!["host".into(), "device".into()],
-                        vec!["host".into(), "device".into(), "block".into()],
-                    ],
-                    elements: None,
-                    max_packed_bits: None,
-                },
+        let declared: Providers = syn::parse_quote!(providers {
+            index = Index { reads [exact, membership], build inferred };
+            sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        });
+        let mut declarations = declared.declarations.into_iter();
+        let mut catalog = Catalog::default();
+        catalog.register(declarations.next().unwrap(), levels);
+        catalog.register(
+            declarations.next().unwrap(),
+            vec![
+                vec!["host".into()],
+                vec!["host".into(), "device".into()],
+                vec!["host".into(), "device".into(), "block".into()],
             ],
-            codecs: Vec::new(),
-        }
+        );
+        catalog
     }
 
     fn filtered_codes(
@@ -932,9 +926,9 @@ mod tests {
                 answer = let canon project selected keep {a};
                 return answer as answer(a);
             }
-            structures {
-                r host scan = Reader [];
-                answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                r host scan = @reader as Reader [];
+                answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
             }
             sequence {
                 input = store rows r;
@@ -958,9 +952,9 @@ mod tests {
                     answer = let canon project selected keep {a};
                     return answer as answer(a);
                 }
-                structures {
-                    r host scan = Reader [];
-                    answer rows = ::cq_storage::dedup::Sort; answer canon = rows;
+                structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                    r host scan = @reader as Reader [];
+                    answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
                 }
                 sequence {
                     input = store rows r;
@@ -1144,11 +1138,11 @@ mod tests {
     fn rebuilding_a_native_descendant_provider_publishes_device_rows() {
         for native in [false, true] {
             let ty = if native {
-                quote::quote!(Native)
+                quote::quote!(@native as Native)
             } else {
-                quote::quote!(Index)
+                quote::quote!(@index as Index)
             };
-            let source: Program = syn::parse_quote! {
+            let mut source: Program = syn::parse_quote! {
                 physical {
                     relation R(a:i32); relation L(a:i32);
                     consumer canonical;
@@ -1157,7 +1151,7 @@ mod tests {
                     answer = pipe probe first [a] l,r;
                     return answer as answer(a);
                 }
-                structures { l host scan = Reader []; r host scan = Native []; r = #ty [a]; }
+                structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; native = Native { reads [exact, range, membership], build inferred }; index = Index { reads [exact, membership], build inferred }; } l host scan = @reader as Reader []; r host scan = @native as Native []; r = #ty [a]; }
                 sequence {
                     input = store rows l;
                     r = store rows r;
@@ -1165,20 +1159,17 @@ mod tests {
                     result = store answer;
                 }
             };
+            source.structures.structures.declare(&[]);
             let facts = cq_lang_sequence::contract::check(&source).unwrap();
             let levels = vec![
                 vec!["host".into(), "device".into()],
                 vec!["host".into(), "device".into(), "block".into()],
             ];
             let mut available = catalog(levels.clone());
-            available.providers.push(ProviderToken {
-                ty: syn::parse_quote!(Native),
-                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-                supports: vec![],
+            available.register(
+                syn::parse_quote!(native = Native { reads [exact, range, membership], build inferred };),
                 levels,
-                elements: None,
-                max_packed_bits: None,
-            });
+            );
             assert_eq!(
                 rebuilds_native_provider(&source, &facts, &available, "r"),
                 !native

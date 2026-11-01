@@ -352,9 +352,17 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
     for entry in &mut structures.structures.entries {
         if let cq_lang_structures::Structure::Built { keyed, .. } = &mut entry.structure {
-            keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_, _>);
+            keyed.provider = cq_lang_structures::provider::base::instance(
+                "sorted_run",
+                syn::parse_quote!(::cq_storage::SortedRun<_, _>),
+            );
         }
     }
+    structures
+        .structures
+        .declare(&[cq_lang_structures::provider::base::declaration(
+            "sorted_run",
+        )]);
     let program = Program {
         structures,
         sequence: syn::parse_quote!(sequence {
@@ -369,7 +377,7 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
     let analysis = contract::check(&program).unwrap();
     assert_eq!(
         analysis.capabilities[&("r".into(), vec!["a".into()])],
-        cq_lang_sequence::Capability::Exact
+        cq_lang_sequence::structures::Capability::Exact
     );
     let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
     assert!(!output.to_token_stream().to_string().contains("RangeCursor"));
@@ -549,8 +557,8 @@ fn ordered_canon_consumes_verified_source_without_hashing() {
             r = pipe canon rename R@0 {a -> x,b -> y};
             return r as answer(x,y);
         }
-        structures {
-            r host scan = ::core::iter::Map<_,_> [];
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; }
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
             r canon = host;
         }
     };

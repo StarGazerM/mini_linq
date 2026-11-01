@@ -27,6 +27,7 @@ mod retype;
 
 pub use host_reads::build_host_reads;
 pub use retype::retype;
+use structures::provider::base as providers;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,7 +38,7 @@ use cq_lang_structures as structures;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-/// What a read needs on a key: the strongest need picks the default type.
+/// What a read needs on a key: the strongest need picks the default token.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Need {
     Contains,
@@ -46,18 +47,31 @@ enum Need {
 }
 
 impl Need {
-    fn default_type(self) -> syn::Type {
+    fn provider(self) -> structures::Provider {
         match self {
             // Semi/anti/full-key probes must answer membership for each outer
             // row before that outer stream ends. This is a keyed read index,
             // not whole-stream self-canonicalization (which records Sort).
-            Need::Contains => syn::parse_quote!(::cq_storage::HashSet<_>),
-            Need::Seek => syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>),
-            Need::Ordered => {
-                syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>)
-            }
+            Need::Contains => providers::declaration("hash_set").instance(),
+            Need::Seek => providers::declaration("hash_index").instance(),
+            Need::Ordered => providers::declaration("btree_map_grouped").instance(),
         }
     }
+}
+
+/// Nest `inner` under `depth - 1` trie levels.
+fn trie(mut provider: structures::Provider, depth: usize) -> structures::Provider {
+    for _ in 1..depth {
+        provider = providers::declaration("trie")
+            .compose(provider)
+            .expect("trie declares its nested argument");
+    }
+    provider
+}
+
+/// The base instance of `token` spelled `ty`.
+fn instance(token: &str, ty: syn::Type) -> structures::Provider {
+    providers::instance(token, ty)
 }
 
 fn sorted(columns: &[String]) -> Vec<String> {
@@ -216,10 +230,8 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                 .max()
                 .copied()
                 .unwrap_or(Need::Contains);
-            let inner = need.default_type();
-            entries.extend(
-                quote! { #ident = ::cq_storage::Trie<'_, _, #inner> [#(#columns),*][#(#tail),*]; },
-            );
+            let inner = trie(need.provider(), 2);
+            entries.extend(quote! { #ident = #inner [#(#columns),*][#(#tail),*]; });
         }
         let remaining: Vec<_> = needs
             .iter()
@@ -248,7 +260,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                     .iter()
                     .max_by_key(|(c, _)| c.len())
                     .expect("a chain has a longest key");
-                let mut ty = needs.iter().max().expect("nonempty").default_type();
+                let ty = needs.iter().max().expect("nonempty").provider();
                 let mut levels = TokenStream::new();
                 for level in chain.iter().rev() {
                     let columns = level
@@ -256,9 +268,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                         .map(|c| analysis.rows[&name].bindings[c].clone());
                     levels = quote! { [#(#columns),*] #levels };
                 }
-                for _ in 1..chain.len() {
-                    ty = syn::parse_quote!(::cq_storage::Trie<'_, _, #ty>);
-                }
+                let ty = trie(ty, chain.len());
                 entries.extend(quote! { #ident = #ty #levels; });
                 continue;
             }
@@ -268,10 +278,13 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             // existence witness; preserve that decision for every consumer.
             let membership = needs.iter().max() == Some(&Need::Contains)
                 && full_key_probes.contains(&(name.clone(), columns.to_vec()));
-            let ty: syn::Type = if membership {
-                syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>)
+            let ty = if membership {
+                instance(
+                    "adaptive_membership",
+                    syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
+                )
             } else {
-                needs.iter().max().expect("nonempty").default_type()
+                needs.iter().max().expect("nonempty").provider()
             };
             let marker = membership.then(|| quote!(membership));
             let columns = columns
@@ -300,17 +313,18 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             }
         }
         if analysis.modes[&name] != ModeKind::Pipe {
-            let ty: syn::Type = if analysis.modes[&name] == ModeKind::Exists {
-                syn::parse_quote!(::cq_storage::Exists)
+            let ty = if analysis.modes[&name] == ModeKind::Exists {
+                providers::declaration("exists").instance()
             } else if definition.canon.is_some() {
-                syn::parse_quote!(::cq_storage::dedup::Sort)
+                providers::declaration("sort").instance()
             } else {
-                syn::parse_quote!(::std::vec::Vec<_>)
+                providers::declaration("vec").instance()
             };
             entries.extend(quote!(#ident rows = #ty;));
         }
         if analysis.hosts.contains_key(&name) {
-            entries.extend(quote!(#ident host scan = ::core::iter::Map<_, _> [];));
+            let scan = providers::declaration("host_scan").instance();
+            entries.extend(quote!(#ident host scan = #scan [];));
         }
         if analysis.hosts.contains_key(&name) && analysis.modes[&name] == ModeKind::Pipe {
             for (reader, columns, supply) in analysis.keyed_reads.get(&name).into_iter().flatten() {
@@ -321,15 +335,16 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                     .expect("checked reader")
                     .name;
                 let membership = full_key_probes.contains(&(name.clone(), columns.clone()));
-                let ty: syn::Type = match supply {
+                let ty = match supply {
                     SupplyKind::Const | SupplyKind::Range => {
-                        syn::parse_quote!(::core::iter::Map<_, _>)
+                        providers::declaration("host_scan").instance()
                     }
-                    SupplyKind::Stream if membership => {
-                        syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>)
-                    }
+                    SupplyKind::Stream if membership => instance(
+                        "adaptive_membership",
+                        syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
+                    ),
                     SupplyKind::Stream if matches!(operators[reader], Operator::Merge(..)) => {
-                        Need::Ordered.default_type()
+                        Need::Ordered.provider()
                     }
                     SupplyKind::Stream => {
                         let payload = candidate_keys.contains(&(name.clone(), columns.clone()))
@@ -337,12 +352,15 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                                 c == columns && matches!(operators[r], Operator::Probe(..))
                             });
                         if payload {
-                            Need::Seek.default_type()
+                            Need::Seek.provider()
                         } else if matches!(operators[reader], Operator::Semi(_, k) | Operator::Anti(_, k) if matches!(k.choice, Some(physical::Choice::Lazy(_))))
                         {
-                            syn::parse_quote!(::cq_storage::dispatch::KeySet<_, false>)
+                            instance(
+                                "keyset",
+                                syn::parse_quote!(::cq_storage::dispatch::KeySet<_, false>),
+                            )
                         } else {
-                            syn::parse_quote!(::cq_storage::dispatch::KeySet<_>)
+                            providers::declaration("keyset").instance()
                         }
                     }
                 };
@@ -382,10 +400,10 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                         .into_iter()
                         .flatten()
                         .any(|(r, c)| *c == cols && matches!(operators[r], Operator::Probe(..)));
-                let ty: syn::Type = if payload {
-                    Need::Seek.default_type()
+                let ty = if payload {
+                    Need::Seek.provider()
                 } else {
-                    syn::parse_quote!(::cq_storage::dispatch::KeySet<_>)
+                    providers::declaration("keyset").instance()
                 };
                 entries.extend(quote!(#ident host #reader = #ty [#(#columns),*];));
             }
@@ -393,11 +411,14 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     }
     if structures::head_needs_dedup(source, &analysis) {
         let returned = &program.returned;
-        entries.extend(quote!(#returned head = ::cq_storage::dedup::Sort;));
+        let head = providers::declaration("sort").instance();
+        entries.extend(quote!(#returned head = #head;));
     }
     // Record the storage decision, including its row projection, before any
     // realization. Readers on one key share a single filtered build.
-    let mut selected: structures::Structures = syn::parse2(quote!(structures { #entries }))?;
+    let mut selected: structures::Structures =
+        syn::parse2(quote!(structures { providers {} #entries }))?;
+    selected.declare(&providers::declarations());
     let required = structures::required_columns(source, &analysis);
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
@@ -523,12 +544,8 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                     {
                         // This generated provider must reconstruct rows, not just
                         // answer membership. Rebuild its recorded trie levels
-                        // without interpreting the provider's Rust type.
-                        let mut ty = Need::Seek.default_type();
-                        for _ in 1..key.len() {
-                            ty = syn::parse_quote!(::cq_storage::Trie<'_, _, #ty>);
-                        }
-                        keyed.ty = ty;
+                        // from the payload token's declaration.
+                        keyed.provider = trie(Need::Seek.provider(), key.len());
                     }
                     keyed.filtered = Some(projection.clone());
                     // Preserve the singleton stored-key policy without inspecting
@@ -550,7 +567,10 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                             .all(|(_, columns, _)| columns == &key[0])
                     {
                         keyed.membership = Some(Default::default());
-                        keyed.ty = syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>);
+                        keyed.provider = instance(
+                            "adaptive_membership",
+                            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
+                        );
                     }
                 }
             }
@@ -566,8 +586,10 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                 || !matches!(entry.structure, structures::Structure::Rows { .. })
         });
     }
+    selected.declare(&providers::declarations());
     // Built providers are actually constructed. Do not impose unused fallback
     // bounds on native host reads (for example Ord-only keys need not be Hash).
+    // A one-level keyed payload build records the key enumeration its token declares.
     for entry in &mut selected.entries {
         let keyed = match &mut entry.structure {
             structures::Structure::Built { keyed, .. } => keyed,
@@ -576,10 +598,10 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         if keyed.membership.is_none()
             && keyed.levels.len() == 1
             && !keyed.levels[0].columns.is_empty()
-            && (keyed.ty == Need::Seek.default_type()
-                || keyed.ty == Need::Ordered.default_type()
-                || keyed.ty
-                    == syn::parse_quote!(::std::collections::HashMap<_, ::std::vec::Vec<_>>))
+            && selected
+                .providers
+                .facts(&keyed.provider)
+                .is_some_and(|facts| facts.supports(structures::ProviderCapability::Keys))
         {
             keyed.supports = Some(syn::parse_quote!(supports[keys]));
         }
@@ -595,7 +617,11 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
 /// Formal rule SEL-Group: Record the keyed aggregate table and accumulator tuple types.
 fn group_accumulator(name: &syn::Ident, group: &physical::syntax::algebra::Group) -> TokenStream {
     let types = group.aggregates.iter().map(|aggregate| &aggregate.ty);
-    quote!(#name group = ::std::collections::HashMap<_, (#(#types,)*), ::cq_storage::HashState>;)
+    let provider = instance(
+        "group_map",
+        syn::parse_quote!(::std::collections::HashMap<_, (#(#types,)*), ::cq_storage::HashState>),
+    );
+    quote!(#name group = #provider;)
 }
 
 mod correspondence;

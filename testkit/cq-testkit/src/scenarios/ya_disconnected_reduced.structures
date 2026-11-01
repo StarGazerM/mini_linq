@@ -1,6 +1,6 @@
-structures { r2 = :: cq_storage :: HashIndex < '_ , _ , _ > [];
- r0 host scan = :: core :: iter :: Map < _ , _ > [];
- r1 host scan = :: core :: iter :: Map < _ , _ > [];
- r1 host result(r2) = :: cq_storage :: dispatch :: KeySet < _ > [];
- r5 rows = ::cq_storage::dedup::Sort; r5 canon = rows;
+structures { providers { hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r2 = @hash_index as :: cq_storage :: HashIndex < '_ , _ , _ > [];
+ r0 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
+ r1 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
+ r1 host result(r2) = @keyset as :: cq_storage :: dispatch :: KeySet < _ > [];
+ r5 rows = @sort as ::cq_storage::dedup::Sort; r5 canon = rows;
  }

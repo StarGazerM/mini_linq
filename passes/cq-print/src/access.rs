@@ -43,15 +43,26 @@ pub enum Side {
 }
 
 impl<'a> Context<'a> {
+    /// The recorded host fallback provider of this reader and key.
+    pub fn fallback_provider(
+        &self,
+        result: &str,
+        reader: cq_lang_structures::ReaderRef<String>,
+        columns: &[String],
+    ) -> &cq_lang_structures::Provider {
+        let mut columns = columns.to_vec();
+        columns.sort();
+        &self.analysis.fallbacks[&(result.to_owned(), reader, columns)]
+    }
+
+    /// The printed spelling of the recorded host fallback provider.
     pub fn fallback_type(
         &self,
         result: &str,
         reader: cq_lang_structures::ReaderRef<String>,
         columns: &[String],
     ) -> &syn::Type {
-        let mut columns = columns.to_vec();
-        columns.sort();
-        &self.analysis.fallbacks[&(result.to_owned(), reader, columns)]
+        &self.fallback_provider(result, reader, columns).ty
     }
 
     /// The host behind a rename, with its key and payload in the rename's
@@ -317,7 +328,7 @@ impl<'a> Context<'a> {
                 .expect("checked fallback");
             let capture = self.carries_positions(result).then(|| quote!(move));
             let pairs = quote!(::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*), (#(#payload,)*))));
-            let ty = ty.clone();
+            let ty = ty.ty.clone();
             let build_name = format!("{result}.fallback.{}", columns.join("_"));
             self.profile_label(
                 &build_name,
@@ -341,12 +352,12 @@ impl<'a> Context<'a> {
             };
             let build = self.profile_build(&build_name, construct);
             let mut guards = Vec::new();
-            for ((name, selected, key), selected_ty) in &self.analysis.fallbacks {
+            for ((name, selected, key), selected_provider) in &self.analysis.fallbacks {
                 if name == result && key == &columns {
                     guards.extend(self.provider_guards(
                         result,
                         std::slice::from_ref(&columns),
-                        selected_ty,
+                        selected_provider,
                         Some(selected),
                         quote!(&__cq_provider),
                     ));
@@ -386,11 +397,11 @@ impl<'a> Context<'a> {
             let access = self.host_access(result, columns);
             let value = &access.value;
             let selected = cq_lang_structures::ReaderRef::Result(reader.clone());
-            let ty = self.fallback_type(result, selected.clone(), columns);
+            let provider = self.fallback_provider(result, selected.clone(), columns);
             let native_guards = self.provider_guards(
                 result,
                 std::slice::from_ref(columns),
-                ty,
+                provider,
                 Some(&selected),
                 quote!(#value),
             );
@@ -402,11 +413,12 @@ impl<'a> Context<'a> {
                 self.statements.extend(native_guards);
             } else {
                 let name = format_ident!("__cq_{}_merge_{}", result, columns.join("_"));
-                let ty = self.fallback_type(
+                let provider = self.fallback_provider(
                     result,
                     cq_lang_structures::ReaderRef::Result(reader.into()),
                     columns,
                 );
+                let ty = &provider.ty;
                 let rows = self.profile_stream(result, self.host_scan(result));
                 let pattern = self.bind_columns(result, self.carried(result), false);
                 let key = columns.iter().map(|c| self.access(result, c));
@@ -419,7 +431,7 @@ impl<'a> Context<'a> {
                 let guards = self.provider_guards(
                     result,
                     std::slice::from_ref(columns),
-                    ty,
+                    provider,
                     Some(&selected),
                     quote!(#name),
                 );

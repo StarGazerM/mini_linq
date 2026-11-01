@@ -1,7 +1,7 @@
 use cq_lang_structures::{self as ir, Structure, physical::Operator, symbol_name};
 use proc_macro2::TokenStream;
 use syn::parse::{Parse, ParseStream};
-use syn::{Ident, Token, Type};
+use syn::{Ident, Token};
 
 #[derive(Clone, Copy)]
 enum Kind {
@@ -50,14 +50,20 @@ enum Selector {
 }
 
 struct Retype {
+    declared: ir::Providers,
     selector: Selector,
     at: Ident,
-    ty: Type,
+    provider: ir::Provider,
     supports: Option<ir::ProviderSupport>,
 }
 
 impl Parse for Retype {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let declared = if input.peek(ir::provider::kw::providers) {
+            input.parse()?
+        } else {
+            ir::Providers::default()
+        };
         let at: Ident = input.parse()?;
         let selector =
             if at == "entry" && input.peek(syn::token::Paren) {
@@ -100,16 +106,17 @@ impl Parse for Retype {
             selector
         };
         input.parse::<Token![=>]>()?;
-        let ty = input.parse()?;
+        let provider = input.parse()?;
         let supports = if input.is_empty() {
             None
         } else {
             Some(input.parse()?)
         };
         Ok(Self {
+            declared,
             selector,
             at,
-            ty,
+            provider,
             supports,
         })
     }
@@ -117,16 +124,32 @@ impl Parse for Retype {
 
 /// Retype keyed representations on a named result, or entries serving the
 /// selected read kind. Scan/point/range adapters are not keyed representations.
-/// Levels, reader names and Physical are preserved, even for custom types.
+/// Levels, reader names and Physical are preserved, even for custom tokens.
 /// Rows selects retained buffers; canonicalization has a strategy, not a provider.
 /// `entry(N)` selects exactly one provider-bearing entry by its zero-based
 /// Structures order, including host adapters, without touching sibling entries.
-/// Retyping replaces support metadata: append `supports [...]` to declare the
+/// The replacement is a recorded provider instance `@token as Type`
+/// (STR-Provider): its token is declared by a leading `providers { .. }`
+/// block of the advice, by the program, or among the base tokens
+/// ([`crate::providers`]); a redeclaration must agree. Retyping replaces token,
+/// spelling and support together: append `supports [...]` to declare the
 /// replacement's contracts; omitting it clears the previous provider's support.
 pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let analysis = ir::contract::check(source)?;
     let request: Retype = syn::parse2(arguments)?;
-    ir::concrete_type(&request.ty)?;
+    for declaration in &request.declared.declarations {
+        if source
+            .structures
+            .providers
+            .get(&declaration.token)
+            .is_some_and(|recorded| recorded != declaration)
+        {
+            return Err(syn::Error::new_spanned(
+                &declaration.token,
+                "STR-Provider: advice redeclares a recorded provider token differently",
+            ));
+        }
+    }
     let mut target = source.clone();
     let mut changed = false;
     for (index, entry) in target.structures.entries.iter_mut().enumerate() {
@@ -209,14 +232,14 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
             }
             match &mut entry.structure {
                 Structure::Built { keyed, .. } | Structure::Host { keyed, .. } => {
-                    keyed.ty = request.ty.clone();
+                    keyed.provider = request.provider.clone();
                     keyed.supports = request.supports.clone();
                 }
-                Structure::Rows { ty, .. }
-                | Structure::Group { ty, .. }
-                | Structure::Selection { ty, .. }
-                | Structure::KeySet { ty, .. } => *ty = request.ty.clone(),
-                Structure::JoinFilter { filter, .. } => filter.ty = request.ty.clone(),
+                Structure::Rows { provider, .. }
+                | Structure::Group { provider, .. }
+                | Structure::Selection { provider, .. }
+                | Structure::KeySet { provider, .. } => *provider = request.provider.clone(),
+                Structure::JoinFilter { filter, .. } => filter.provider = request.provider.clone(),
                 Structure::Read { .. }
                 | Structure::Repr { .. }
                 | Structure::Stage { .. }
@@ -235,6 +258,9 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
             "selector matches no recorded representation",
         ));
     }
+    let mut declared = request.declared.declarations;
+    declared.extend(cq_lang_structures::provider::base::declarations());
+    target.structures.declare(&declared);
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

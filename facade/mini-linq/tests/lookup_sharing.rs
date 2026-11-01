@@ -19,14 +19,14 @@ fn shared_lookup_expands_ranges_in_scalar_order() {
             out = let canon project p keep {k,v};
             return out as answer(k,v);
         }
-        structures {
-            l host scan = ::core::iter::Map<_,_> [];
-            r host scan = ::core::iter::Map<_,_> [];
-            r = ::cq_storage::SortedRun<_,_> [k] supports [expand];
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r = @sorted_run as ::cq_storage::SortedRun<_,_> [k] supports [expand];
             s share = lookup r [k] first s force p;
             s repr = tuples witness { r [k] at s as ::cq_storage::RunCursor<'_, _> };
             p stage = batch 2 expand;
-            out rows = ::cq_storage::dedup::Sort; out canon = rows;
+            out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
     }
     .map(|(k, v)| (*k, *v))
@@ -52,15 +52,15 @@ fn positional_witness_is_consumed_by_scalar_probe() {
             out = let canon project p keep {k,v};
             return out as answer(k,v);
         }
-        structures {
-            l host scan = ::core::iter::Map<_,_> [];
-            r host scan = ::core::iter::Map<_,_> [];
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
             l repr = positions { L lineage {k -> k} } owned [];
-            r = ::cq_storage::SortedRun<_,_> [k] supports [retain];
+            r = @sorted_run as ::cq_storage::SortedRun<_,_> [k] supports [retain];
             s share = lookup r [k] first s force p;
             s repr = positions { L lineage {k -> k} } owned [] witness { r [k] at s as ::cq_storage::RunCursor<'_, _> };
             kept repr = positions { L lineage {k -> k} } owned [];
-            out rows = ::cq_storage::dedup::Sort; out canon = rows;
+            out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
     }.map(|(k,v)| (*k,*v)).collect();
     assert_eq!(result, [(1, 11), (2, 20), (2, 21)]);

@@ -108,9 +108,15 @@ fn positional_marker_capabilities_are_rustc_obligations() {
 
 #[test]
 fn keyset_provider_and_codec_capabilities_are_rustc_obligations() {
-    for ty in [
-        syn::parse_quote!(::std::collections::HashSet<_>),
-        syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 64>),
+    for (token, ty) in [
+        (
+            "std_hash_set",
+            syn::parse_quote!(::std::collections::HashSet<_>),
+        ),
+        (
+            "adaptive_keyset",
+            syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 64>),
+        ),
     ] {
         let mut target = selected();
         let entry = target
@@ -119,10 +125,13 @@ fn keyset_provider_and_codec_capabilities_are_rustc_obligations() {
             .iter_mut()
             .find(|entry| matches!(entry.structure, Structure::KeySet { .. }))
             .unwrap();
-        let Structure::KeySet { ty: provider, .. } = &mut entry.structure else {
+        let Structure::KeySet { provider, .. } = &mut entry.structure else {
             unreachable!()
         };
-        *provider = ty;
+        *provider = cq_lang_structures::provider::base::instance(token, ty);
+        target
+            .structures
+            .declare(&[cq_lang_structures::provider::base::declaration(token)]);
         // Lineage, ownership and demand are checked here; provider/codec
         // implementations for those recorded keys are checked by Rust.
         ir::contract::check(&target).unwrap();
@@ -190,13 +199,17 @@ fn eager_semi_with_joined_support_admits_left_positional_keyset() {
     }};
     let mut target = cq_structure_selection::compile(&source).unwrap();
     target.structures.entries.push(syn::parse_quote!(
-        filtered rows = ::std::vec::Vec<_>;
+        filtered rows = @vec as ::std::vec::Vec<_>;
     ));
     target.structures.entries.push(syn::parse_quote!(
         filtered keyset =
-            ::cq_storage::AdaptiveKeySet<_, ::cq_storage::NoDense, 67108864>
+            @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_, ::cq_storage::NoDense, 67108864>
             [x] owned base L lineage { x -> a };
     ));
+    target.structures.declare(&[
+        cq_lang_structures::provider::base::declaration("vec"),
+        cq_lang_structures::provider::base::declaration("adaptive_keyset"),
+    ]);
     ir::contract::check(&target).unwrap();
 }
 
@@ -230,8 +243,8 @@ fn join_filters_preserve_coverage_and_lineage() {
         assert_eq!(facts.join_filters["l"].len(), 1);
         let filter = &facts.join_filters["l"][0];
         assert_eq!(
-            filter.ty,
-            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 67108864>)
+            filter.provider,
+            syn::parse_quote!(@adaptive_membership as ::cq_storage::AdaptiveMembership<_, 67108864>)
         );
         assert_eq!(filter.covering, "j");
         assert_eq!(
@@ -285,7 +298,7 @@ fn membership_provider_selection_is_type_blind_and_has_no_redundant_filter() {
         );
         assert_eq!(
             facts.built["selected"][0].1,
-            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>)
+            syn::parse_quote!(@adaptive_membership as ::cq_storage::AdaptiveMembership<_, 16777216>)
         );
         assert!(facts.join_filters.is_empty());
     }
@@ -437,10 +450,14 @@ fn equivalent_filter_witnesses_share_checked_runtime_work() {
     for entry in &mut different_type.structures.entries {
         if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
             if filter.covering == "j" {
-                filter.ty = syn::parse_quote!(OtherConservativeFilter);
+                filter.provider =
+                    syn::parse_quote!(@other_conservative_filter as OtherConservativeFilter);
             }
         }
     }
+    different_type.structures.declare(&[syn::parse_quote!(
+        other_conservative_filter = OtherConservativeFilter { reads [membership], build inferred };
+    )]);
     assert_eq!(
         ir::contract::check(&different_type).unwrap().join_filters["l"].len(),
         2

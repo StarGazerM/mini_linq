@@ -1,6 +1,38 @@
-//! Corpus-owned Structures rewrite: replace HashIndex leaves while preserving
-//! every written curried level and all other representation decisions.
-use syn::visit_mut::VisitMut;
+//! Corpus-owned Structures rewrite: replace `hash_index` instances, including
+//! inner instances of composite tokens, by `sorted_index`, preserving every
+//! written curried level and all other representation decisions.
+
+/// The workload-owned sorted bucket index token (Rc-backed, host only). It
+/// enumerates distinct keys, so replaced entries keep their `keys` support.
+fn sorted_index() -> cq_lang_structures::Declaration {
+    syn::parse_quote!(
+        sorted_index = ::cq_workloads::SortedIndex<_, _> {
+            reads [exact, membership], supports [keys], build macro
+        };
+    )
+}
+
+/// `provider` with every `hash_index` instance replaced by `sorted_index`.
+/// A composite token is re-spelled from its declaration over the new inner.
+fn sorted(
+    providers: &cq_lang_structures::Providers,
+    provider: &cq_lang_structures::Provider,
+) -> syn::Result<cq_lang_structures::Provider> {
+    if provider.token == "hash_index" {
+        return Ok(sorted_index().instance());
+    }
+    let Some(inner) = &provider.inner else {
+        return Ok(provider.clone());
+    };
+    let replaced = sorted(providers, inner)?;
+    if replaced == **inner {
+        return Ok(provider.clone());
+    }
+    providers
+        .get(&provider.token)
+        .ok_or_else(|| syn::Error::new_spanned(&provider.token, "undeclared provider token"))?
+        .compose(replaced)
+}
 
 #[proc_macro]
 pub fn sorted_payload(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -11,32 +43,17 @@ pub fn sorted_payload(input: proc_macro::TokenStream) -> proc_macro::TokenStream
                 "sorted_payload takes no arguments",
             ));
         }
-        struct Sorted;
-        impl VisitMut for Sorted {
-            fn visit_type_mut(&mut self, ty: &mut syn::Type) {
-                syn::visit_mut::visit_type_mut(self, ty);
-                if let syn::Type::Path(path) = ty {
-                    if path
-                        .path
-                        .segments
-                        .last()
-                        .is_some_and(|s| s.ident == "HashIndex")
-                    {
-                        *ty = syn::parse_quote!(::cq_workloads::SortedIndex<_, _>);
-                    }
-                }
-            }
-        }
         let mut target = source.clone();
         for entry in &mut target.structures.entries {
             match &mut entry.structure {
                 cq_lang_structures::Structure::Built { keyed, .. }
                 | cq_lang_structures::Structure::Host { keyed, .. } => {
-                    Sorted.visit_type_mut(&mut keyed.ty)
+                    keyed.provider = sorted(&source.structures.providers, &keyed.provider)?;
                 }
                 _ => {}
             }
         }
+        target.structures.declare(&[sorted_index()]);
         Ok(target)
     })
     .into()
@@ -118,21 +135,9 @@ pub fn sequence_targets(input: proc_macro::TokenStream) -> proc_macro::TokenStre
         let sequence = cq_sequence_lowering::compile(source)?;
         cq_sequence_lowering::check(source, &sequence)?;
         // This provider belongs to the workload, not to either target crate.
-        let catalog = cq_lang_sequence::Catalog {
-            providers: vec![cq_lang_sequence::ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(::cq_workloads::SortedIndex<_, _>),
-                elements: None,
-                capabilities: vec![
-                    cq_lang_sequence::Capability::Exact,
-                    cq_lang_sequence::Capability::Membership,
-                ],
-                // SortedIndex uses Rc-backed buckets and is a host-only provider.
-                levels: vec![vec!["host".into()]],
-                max_packed_bits: None,
-            }],
-            ..Default::default()
-        };
+        // SortedIndex uses Rc-backed buckets and is a host-only provider.
+        let mut catalog = cq_lang_sequence::Catalog::default();
+        catalog.register(sorted_index(), vec![vec!["host".into()]]);
         let (sequential, _) = translate_with_catalog(&sequence, Target::Sequential, &catalog)?;
         let (tasks, canonical) = translate_with_catalog(&sequence, Target::Tasks, &catalog)?;
         let bindings: Vec<_> = sequence

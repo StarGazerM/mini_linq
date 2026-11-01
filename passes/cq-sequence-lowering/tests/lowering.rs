@@ -1,4 +1,5 @@
-use cq_lang_sequence::{Capability, LevelNode, Machine, OutputProtocol, Program, Term};
+use cq_lang_sequence::structures::Capability;
+use cq_lang_sequence::{LevelNode, Machine, OutputProtocol, Program, Term};
 use cq_sequence_lowering::{check, compile};
 
 fn accept(source: &cq_lang_structures::Program) -> Program {
@@ -48,9 +49,9 @@ fn probe_shape_and_structural_checker_reject_mutations() {
             j = pipe probe first [a] l,r;
             out = let canon project j keep {b};
             return out as answer(b);
-        } structures {
-            l host scan = Reader []; r host scan = Reader [];
-            r = Provider [a]; out rows = ::cq_storage::dedup::Sort; out canon = rows;
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @reader as Reader []; r host scan = @reader as Reader [];
+            r = @provider as Provider [a]; out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
     };
     let target = accept(&source);
@@ -84,9 +85,9 @@ fn correspondence_accepts_authored_output_names_but_not_another_result() {
             s = let canon rename S@1 {a -> a};
             u = let canon union r,s;
             return u as answer(a);
-        } structures {
-            r host scan = Reader []; s host scan = Reader [];
-            r rows = ::cq_storage::dedup::Sort; r canon = rows; s rows = ::cq_storage::dedup::Sort; s canon = rows; u rows = ::cq_storage::dedup::Sort; u canon = rows;
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r host scan = @reader as Reader []; s host scan = @reader as Reader [];
+            r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; s rows = @sort as ::cq_storage::dedup::Sort; s canon = rows; u rows = @sort as ::cq_storage::dedup::Sort; u canon = rows;
         }
     };
     let target: Program = syn::parse_quote! {
@@ -112,9 +113,9 @@ fn output_name_is_fresh_and_return_canon_is_preserved() {
             relation R(a:i32);
             __sequence_output = pipe rename R@0 {a -> a};
             return canon __sequence_output as answer(a);
-        } structures {
-            __sequence_output host scan = Reader [];
-            __sequence_output head = ::cq_storage::dedup::Sort;
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            __sequence_output host scan = @reader as Reader [];
+            __sequence_output head = @sort as ::cq_storage::dedup::Sort;
         }
     };
     let target = accept(&source);

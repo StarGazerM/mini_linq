@@ -3,6 +3,18 @@ use cq_structure_selection::retype;
 use cq_testkit::PassCase;
 use quote::{ToTokens, quote};
 
+/// Declares a custom test token whose spelling no pass inspects.
+fn custom(token: &str, ty: proc_macro2::TokenStream, build: &str) -> ir::Declaration {
+    let token = syn::Ident::new(token, proc_macro2::Span::call_site());
+    let build = syn::Ident::new(build, proc_macro2::Span::call_site());
+    syn::parse_quote!(#token = #ty { reads [exact, membership], build #build };)
+}
+
+/// Advice declaring the `replacement` token spelled `ty`.
+fn replacement(ty: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    quote!(providers { replacement = #ty { reads [exact, range, membership], build macro }; })
+}
+
 #[test]
 fn membership_advice_preserves_a_fully_bound_physical_probe() {
     let source: ir::Program = syn::parse_quote! { physical {
@@ -11,11 +23,11 @@ fn membership_advice_preserves_a_fully_bound_physical_probe() {
         r = let rename R@1 {a -> x,b -> y};
         joined = let canon probe first [x,y] l,r;
         return joined as answer(x,y);
-    } structures {
-        l host scan = ::core::iter::Map<_,_> [];
-        r host scan = ::core::iter::Map<_,_> [];
-        r = ::cq_storage::HashIndex<'_,_,_> [x,y] supports [keys];
-        joined rows = ::cq_storage::dedup::Sort; joined canon = rows;
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        l host scan = @host_scan as ::core::iter::Map<_,_> [];
+        r host scan = @host_scan as ::core::iter::Map<_,_> [];
+        r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x,y] supports [keys];
+        joined rows = @sort as ::cq_storage::dedup::Sort; joined canon = rows;
     }};
     let target = cq_rewrite_passes::membership(&source, quote!(r)).unwrap();
     assert_eq!(target.physical, source.physical);
@@ -44,11 +56,11 @@ fn membership_advice_cannot_discard_a_demanded_payload() {
         r = let rename R@1 {a -> x,b -> y};
         joined = let canon probe first [x] l,r;
         return joined as answer(x,y);
-    } structures {
-        l host scan = ::core::iter::Map<_,_> [];
-        r host scan = ::core::iter::Map<_,_> [];
-        r = ::cq_storage::HashIndex<'_,_,_> [x];
-        joined rows = ::cq_storage::dedup::Sort; joined canon = rows;
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        l host scan = @host_scan as ::core::iter::Map<_,_> [];
+        r host scan = @host_scan as ::core::iter::Map<_,_> [];
+        r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];
+        joined rows = @sort as ::cq_storage::dedup::Sort; joined canon = rows;
     }};
     assert!(cq_rewrite_passes::membership(&source, quote!(r)).is_err());
 }
@@ -62,28 +74,42 @@ fn smallest_expand_source() -> ir::Program {
         candidate = pipe probe smallest [b] l,r;
         checked = let canon probe first [a,c] candidate,s;
         return checked as answer(a,b,c);
-    } structures {
-        r = CustomDirectory [b][c] supports [expand];
-        s = CustomDirectory [a][c] supports [expand];
-        l host scan = ::core::iter::Map<_, _> [];
-        r host scan = ::core::iter::Map<_, _> [];
-        s host scan = ::core::iter::Map<_, _> [];
-        r rows = ::std::vec::Vec<_>;
-        s rows = ::std::vec::Vec<_>;
-        checked rows = ::cq_storage::dedup::Sort; checked canon = rows;
+    } structures { providers { custom_directory = CustomDirectory { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        r = @custom_directory as CustomDirectory [b][c] supports [expand];
+        s = @custom_directory as CustomDirectory [a][c] supports [expand];
+        l host scan = @host_scan as ::core::iter::Map<_, _> [];
+        r host scan = @host_scan as ::core::iter::Map<_, _> [];
+        s host scan = @host_scan as ::core::iter::Map<_, _> [];
+        r rows = @vec as ::std::vec::Vec<_>;
+        s rows = @vec as ::std::vec::Vec<_>;
+        checked rows = @sort as ::cq_storage::dedup::Sort; checked canon = rows;
     } }
 }
 
 #[test]
 fn entry_retype_changes_only_one_provider_and_checks_the_result() {
     let source = smallest_expand_source();
-    let target = retype(&source, quote!(entry(4) => DeviceColumns)).unwrap();
+    let device_columns = custom("device_columns", quote!(DeviceColumns), "inferred");
+    let target = retype(
+        &source,
+        quote!(providers { #device_columns } entry(4) => @device_columns as DeviceColumns),
+    )
+    .unwrap();
     let mut expected = source.clone();
-    expected.structures.entries[4] = syn::parse_quote!(s host scan = DeviceColumns [];);
+    expected.structures.entries[4] =
+        syn::parse_quote!(s host scan = @device_columns as DeviceColumns [];);
+    expected.structures.declare(&[device_columns.clone()]);
     assert_eq!(target, expected);
     ir::check_rewrite(&source, &target).unwrap();
-    assert!(retype(&source, quote!(entry(100) => DeviceColumns)).is_err());
-    assert!(retype(&source, quote!(entry(4, 5) => DeviceColumns)).is_err());
+    for selector in [quote!(entry(100)), quote!(entry(4, 5))] {
+        assert!(
+            retype(
+                &source,
+                quote!(providers { #device_columns } #selector => @device_columns as DeviceColumns)
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -113,16 +139,21 @@ fn expand_lookups_records_only_the_first_supported_smallest_probe() {
 
 #[test]
 fn expand_lookups_skips_unrecorded_range_capabilities_without_retyping() {
+    let declared = [
+        custom("other_trie", quote!(OtherTrie), "inferred"),
+        cq_lang_structures::provider::base::declaration("sorted_run"),
+    ];
     for (index, entry) in [
-        (0, syn::parse_quote!(r = OtherTrie [b][c];)),
-        (1, syn::parse_quote!(s = OtherTrie [a][c];)),
+        (0, syn::parse_quote!(r = @other_trie as OtherTrie [b][c];)),
+        (1, syn::parse_quote!(s = @other_trie as OtherTrie [a][c];)),
         (
             0,
-            syn::parse_quote!(r = ::cq_storage::SortedRun<_, _> [b][c];),
+            syn::parse_quote!(r = @sorted_run as ::cq_storage::SortedRun<_, _> [b][c];),
         ),
     ] {
         let mut source = smallest_expand_source();
         source.structures.entries[index] = entry;
+        source.structures.declare(&declared);
         ir::contract::check(&source).unwrap();
         assert_eq!(
             cq_rewrite_passes::expand_lookups(&source, quote!(256)).unwrap(),
@@ -130,11 +161,12 @@ fn expand_lookups_skips_unrecorded_range_capabilities_without_retyping() {
         );
     }
     let mut mixed = smallest_expand_source();
-    mixed.structures.entries[1] = syn::parse_quote!(s = OtherTrie [a][c];);
+    mixed.structures.entries[1] = syn::parse_quote!(s = @other_trie as OtherTrie [a][c];);
     mixed
         .structures
         .entries
-        .push(syn::parse_quote!(r = ::cq_storage::SortedRun<_, _> [b];));
+        .push(syn::parse_quote!(r = @sorted_run as ::cq_storage::SortedRun<_, _> [b];));
+    mixed.structures.declare(&declared);
     ir::contract::check(&mixed).unwrap();
     assert_eq!(
         cq_rewrite_passes::expand_lookups(&mixed, quote!(256)).unwrap(),
@@ -162,19 +194,18 @@ fn membership_bridge_source() -> ir::Program {
         last = pipe probe first [c] after,t;
         out = let canon project last keep {a,b,c,d,tag};
         return out as answer(a,b,c,d,tag);
-    } structures {
-        selected = ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>
-            [b] membership payload [b] constants {tag = 7};
-        r = ::cq_storage::SortedRun<_,_> [a] supports [expand];
-        s = ::cq_storage::SortedRun<_,_> [b] supports [expand];
-        t = ::cq_storage::SortedRun<_,_> [c] supports [expand];
-        l host scan = ::core::iter::Map<_,_> [];
-        r host scan = ::core::iter::Map<_,_> [];
-        m host scan = ::core::iter::Map<_,_> [];
-        m host result(selected) = ::core::iter::Map<_,_> [tag];
-        s host scan = ::core::iter::Map<_,_> [];
-        t host scan = ::core::iter::Map<_,_> [];
-        out rows = ::cq_storage::dedup::Sort; out canon = rows;
+    } structures { providers { adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build macro, shared }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        selected = @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64> [b] membership payload [b] constants {tag = 7};
+        r = @sorted_run as ::cq_storage::SortedRun<_,_> [a] supports [expand];
+        s = @sorted_run as ::cq_storage::SortedRun<_,_> [b] supports [expand];
+        t = @sorted_run as ::cq_storage::SortedRun<_,_> [c] supports [expand];
+        l host scan = @host_scan as ::core::iter::Map<_,_> [];
+        r host scan = @host_scan as ::core::iter::Map<_,_> [];
+        m host scan = @host_scan as ::core::iter::Map<_,_> [];
+        m host result(selected) = @host_scan as ::core::iter::Map<_,_> [tag];
+        s host scan = @host_scan as ::core::iter::Map<_,_> [];
+        t host scan = @host_scan as ::core::iter::Map<_,_> [];
+        out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
     } }
 }
 
@@ -234,8 +265,11 @@ fn expand_lookups_limits_nested_frames_without_retyping_deeper_probes() {
 fn expand_lookups_stops_at_uncertified_payload_probe_bridges() {
     let mut source = membership_bridge_source();
     source.structures.entries[0] = syn::parse_quote!(
-        selected = ::cq_storage::HashIndex<'_,_,_> [b] payload [b] constants {tag = 7};
+        selected = @hash_index as ::cq_storage::HashIndex<'_,_,_> [b] payload [b] constants {tag = 7};
     );
+    source
+        .structures
+        .declare(&cq_lang_structures::provider::base::declarations());
     ir::contract::check(&source).unwrap();
     let target = cq_rewrite_passes::expand_lookups(&source, quote!(256)).unwrap();
     let mut expected = source.clone();
@@ -286,27 +320,45 @@ fn changed_physical(target: &ir::Program) -> ir::Program {
 fn every_selector_has_a_pinned_ir_and_independent_mutation_checks() {
     for (arguments, expected) in [
         (
-            quote!(r => Replacement<'_, _, _>),
+            {
+                let declared = replacement(quote!(Replacement<'_, _, _>));
+                quote!(#declared r => @replacement as Replacement<'_, _, _>)
+            },
             include_str!("fixtures/retype_result.structures"),
         ),
         (
-            quote!(payload => Replacement<'_, _, _>),
+            {
+                let declared = replacement(quote!(Replacement<'_, _, _>));
+                quote!(#declared payload => @replacement as Replacement<'_, _, _>)
+            },
             include_str!("fixtures/retype_payload.structures"),
         ),
         (
-            quote!(membership => Replacement<_>),
+            {
+                let declared = replacement(quote!(Replacement<_>));
+                quote!(#declared membership => @replacement as Replacement<_>)
+            },
             include_str!("fixtures/retype_membership.structures"),
         ),
         (
-            quote!(ordered => Replacement<_, Vec<_>>),
+            {
+                let declared = replacement(quote!(Replacement<_, Vec<_>>));
+                quote!(#declared ordered => @replacement as Replacement<_, Vec<_>>)
+            },
             include_str!("fixtures/retype_ordered.structures"),
         ),
         (
-            quote!(trie => Replacement<'_, _, Inner<_>>),
+            {
+                let declared = replacement(quote!(Replacement<'_, _, Inner<_>>));
+                quote!(#declared trie => @replacement as Replacement<'_, _, Inner<_>>)
+            },
             include_str!("fixtures/retype_trie.structures"),
         ),
         (
-            quote!(rows => ::std::collections::VecDeque<_>),
+            quote!(
+                providers { vec_deque = ::std::collections::VecDeque<_> { reads [], build macro }; }
+                rows => @vec_deque as ::std::collections::VecDeque<_>
+            ),
             include_str!("fixtures/retype_rows.structures"),
         ),
     ] {
@@ -351,24 +403,42 @@ fn sorted_runs_preserves_the_observation_contract_and_records_only_eligible_type
 #[test]
 fn selectors_are_by_recorded_reads_and_levels_not_old_type_spelling() {
     let original = source();
+    let result = replacement(quote!(Replacement<'_, _, _>));
     assert_eq!(
-        retype(&original, quote!(r#r => Replacement<'_, _, _>)).unwrap(),
+        retype(&original, quote!(#result r#r => @replacement as Replacement<'_, _, _>)).unwrap(),
         fixture(include_str!("fixtures/retype_result.structures"))
     );
-    let renamed = retype(&original, quote!(trie => Alias<'_, _, _>)).unwrap();
-    let target = retype(&renamed, quote!(trie => Replacement<'_, _, Inner<_>>)).unwrap();
+    let alias = custom("alias", quote!(Alias<'_, _, _>), "macro");
+    let renamed = retype(
+        &original,
+        quote!(providers { #alias } trie => @alias as Alias<'_, _, _>),
+    )
+    .unwrap();
+    let trie = replacement(quote!(Replacement<'_, _, Inner<_>>));
+    let target = retype(
+        &renamed,
+        quote!(#trie trie => @replacement as Replacement<'_, _, Inner<_>>),
+    )
+    .unwrap();
     assert_eq!(
         target,
         fixture(include_str!("fixtures/retype_trie.structures"))
     );
     assert_eq!(
-        retype(&original, quote!(result(r) => Replacement<'_, _, _>)).unwrap(),
+        retype(
+            &original,
+            quote!(#result result(r) => @replacement as Replacement<'_, _, _>)
+        )
+        .unwrap(),
         fixture(include_str!("fixtures/retype_result.structures"))
     );
     assert_eq!(
         retype(
             &original,
-            quote!(kind(rows) => ::std::collections::VecDeque<_>)
+            quote!(
+                providers { vec_deque = ::std::collections::VecDeque<_> { reads [], build macro }; }
+                kind(rows) => @vec_deque as ::std::collections::VecDeque<_>
+            )
         )
         .unwrap(),
         fixture(include_str!("fixtures/retype_rows.structures"))
@@ -379,15 +449,18 @@ fn selectors_are_by_recorded_reads_and_levels_not_old_type_spelling() {
 fn unmatched_or_malformed_selectors_are_errors() {
     let source = source();
     for arguments in [
-        quote!(dedup => _),
-        quote!(dedup => some_macro!()),
-        quote!(trie => Generic<some_macro!()>),
-        quote!(missing => Valid<_>),
-        quote!(kind(scan) => Valid<_>),
-        quote!(result(out) => Valid<_>),
-        quote!(result(r, s) => Valid<_>),
+        quote!(dedup => @hash_index as _),
+        quote!(dedup => @hash_index as some_macro!()),
+        quote!(trie => @hash_index as Generic<some_macro!()>),
+        quote!(missing => @hash_index as Valid<_>),
+        quote!(kind(scan) => @hash_index as Valid<_>),
+        quote!(result(out) => @hash_index as Valid<_>),
+        quote!(result(r, s) => @hash_index as Valid<_>),
+        // STR-Provider: a replacement is a declared token, never a bare type.
+        quote!(payload => Valid<_>),
+        quote!(payload => @undeclared as Valid<_>),
         quote!(payload),
-        quote!(payload => Valid<_>;),
+        quote!(payload => @hash_index as Valid<_>;),
         quote!(),
     ] {
         assert!(retype(&source, arguments.clone()).is_err(), "{arguments}");
@@ -398,8 +471,8 @@ fn unmatched_or_malformed_selectors_are_errors() {
 fn provider_trait_compatibility_is_not_inferred_from_type_spelling() {
     let source = source();
     for arguments in [
-        quote!(payload => ::std::collections::HashSet<_>),
-        quote!(ordered => ::cq_storage::HashIndex<'_, _, _>),
+        quote!(payload => @std_hash_set as ::std::collections::HashSet<_>),
+        quote!(ordered => @hash_index as ::cq_storage::HashIndex<'_, _, _>),
     ] {
         // Retyping preserves the recorded layout. Rust trait checking, not
         // matching a provider's name, decides whether it can serve the reads.
@@ -421,10 +494,10 @@ fn computed_head_uses_sort_without_touching_physical() {
             relation R(a:i32); r = let canon rename R@0 {a -> x};
             return r as answer(*x % 2);
         }
-        structures {
-            r canon = rows; r rows = ::cq_storage::dedup::Sort;
-            r host scan = ::core::iter::Map<_, _> [];
-            r head = ::cq_storage::dedup::Sort;
+        structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; }
+            r canon = rows; r rows = @sort as ::cq_storage::dedup::Sort;
+            r host scan = @host_scan as ::core::iter::Map<_, _> [];
+            r head = @sort as ::cq_storage::dedup::Sort;
         }
     };
     assert_eq!(source, expected);
@@ -440,8 +513,19 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
         p = let canon probe first [x] s,r; return p as answer(x);
     });
     let source = cq_structure_selection::compile(&source).unwrap();
-    assert!(retype(&source, quote!(payload => Shared<'_, _, _>)).is_err());
-    let target = retype(&source, quote!(r => Shared<'_, _, _>)).unwrap();
+    let shared_index = custom("shared_index", quote!(Shared<'_, _, _>), "macro");
+    assert!(
+        retype(
+            &source,
+            quote!(providers { #shared_index } payload => @shared_index as Shared<'_, _, _>)
+        )
+        .is_err()
+    );
+    let target = retype(
+        &source,
+        quote!(providers { #shared_index } r => @shared_index as Shared<'_, _, _>),
+    )
+    .unwrap();
     let expected: ir::Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32);
@@ -450,11 +534,16 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
             p = let canon probe first [x] s,r; return p as answer(x);
         }
         structures {
-            l host scan = ::core::iter::Map<_, _> [];
-            r host scan = ::core::iter::Map<_, _> [];
-            r host result(s) = Shared<'_, _, _> [x] membership;
-            r host result(p) = Shared<'_, _, _> [x] membership;
-            p canon = rows; p rows = ::cq_storage::dedup::Sort;
+            providers {
+                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+                host_scan = ::core::iter::Map<_, _> { reads [], build macro };
+                shared_index = Shared<'_, _, _> { reads [exact, membership], build macro };
+            }
+            l host scan = @host_scan as ::core::iter::Map<_, _> [];
+            r host scan = @host_scan as ::core::iter::Map<_, _> [];
+            r host result(s) = @shared_index as Shared<'_, _, _> [x] membership;
+            r host result(p) = @shared_index as Shared<'_, _, _> [x] membership;
+            p canon = rows; p rows = @sort as ::cq_storage::dedup::Sort;
         }
     };
     assert_eq!(target, expected);
@@ -479,7 +568,7 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
     let source = cq_structure_selection::compile_with(&physical, quote!(positional(L, R))).unwrap();
     let membership = retype(
         &source,
-        quote!(kind(membership) => ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>),
+        quote!(kind(membership) => @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>),
     )
     .unwrap();
     assert_eq!(
@@ -487,17 +576,21 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
         ir::contract::check(&membership).unwrap().built,
         "supplementary keysets serve membership without retyping payload indices"
     );
-    let target = retype(&source, quote!(kind(selection) => Mask<_>)).unwrap();
-    assert_eq!(source.physical, target.physical);
     let target = retype(
         &source,
-        quote!(kind(keyset) => ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>),
+        quote!(providers { mask = Mask<_> { reads [], build macro }; } kind(selection) => @mask as Mask<_>),
     )
     .unwrap();
     assert_eq!(source.physical, target.physical);
     let target = retype(
         &source,
-        quote!(kind(membership) => ::std::collections::HashSet<_>),
+        quote!(kind(keyset) => @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>),
+    )
+    .unwrap();
+    assert_eq!(source.physical, target.physical);
+    let target = retype(
+        &source,
+        quote!(kind(membership) => @std_hash_set as ::std::collections::HashSet<_>),
     )
     .unwrap();
     assert_eq!(source.physical, target.physical);
@@ -511,11 +604,18 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
         .map(|entry| entry.name.to_string())
         .collect();
     assert_eq!(rows, ["out"]);
-    let canonical = retype(&source, quote!(kind(rows) => CanonicalRows)).unwrap();
+    let canonical = retype(
+        &source,
+        quote!(
+            providers { canonical_rows = CanonicalRows { reads [distinct], build inferred }; }
+            kind(rows) => @canonical_rows as CanonicalRows
+        ),
+    )
+    .unwrap();
     assert_eq!(canonical.physical, source.physical);
     assert_eq!(
         ir::contract::check(&canonical).unwrap().canonical["out"],
-        ir::CanonSource::Rows(syn::parse_quote!(CanonicalRows)),
+        ir::CanonSource::Rows(syn::parse_quote!(@canonical_rows as CanonicalRows)),
     );
     let mut row_only = source.clone();
     for e in &mut row_only.structures.entries {
@@ -529,7 +629,7 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
     }
     let row_only = retype(
         &row_only,
-        quote!(kind(keyset) => ::std::collections::HashSet<_>),
+        quote!(kind(keyset) => @std_hash_set as ::std::collections::HashSet<_>),
     )
     .unwrap();
     ir::check_rewrite(&source, &row_only).unwrap();
@@ -549,7 +649,8 @@ fn sorted_runs_keeps_two_column_payload_keys_hashed() {
         entry.name == "r"
             && matches!(&entry.structure, Structure::Built { keyed, .. }
                 if keyed.level_names() == [vec!["x".to_owned(), "y".to_owned()]]
-                    && keyed.ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>))
+                    && keyed.provider.token == "hash_index"
+                    && keyed.provider.ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>))
     }));
     let target = cq_rewrite_passes::sorted_runs(&source, quote!()).unwrap();
     assert_eq!(target, source);

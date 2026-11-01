@@ -337,6 +337,7 @@ dependencies = [
  "cq-datalog-print",
  "cq-datalog-storage",
  "cq-datalog-support",
+ "cq-gpu-sequence-core",
  "cq-lang-datalog-round",
  "cq-lang-datalog-storage",
  "cq-lang-structures",

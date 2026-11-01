@@ -66,6 +66,15 @@ impl<K, V> cq_storage::Keys for CustomProvider<K, V> {
     }
 }
 
+/// Advice declaring the test's custom exact provider token.
+fn declared() -> proc_macro2::TokenStream {
+    quote!(providers {
+        custom_provider = CustomProvider<_, _> {
+            reads [exact, membership], supports [retain, expand, keys], build macro
+        };
+    })
+}
+
 fn source() -> ir::Program {
     cq_structure_selection::compile(&syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
@@ -85,9 +94,10 @@ fn explicit_support_composes_and_retyping_cannot_leave_stale_promises() {
     let native = ir::contract::check(&source).unwrap();
     assert!(native.provider_support("r", &["x".into()], None, ProviderCapability::Keys));
     assert!(!native.provider_support("r", &["x".into()], None, ProviderCapability::Retain));
+    let declared = declared();
     let custom = retype(
         &source,
-        quote!(r => ProviderAlias<_, _> supports [expand, keys]),
+        quote!(#declared r => @custom_provider as ProviderAlias<_, _> supports [expand, keys]),
     )
     .unwrap();
     let facts = ir::contract::check(&custom).unwrap();
@@ -103,22 +113,25 @@ fn explicit_support_composes_and_retyping_cannot_leave_stale_promises() {
     assert_eq!(combined_facts.witnesses, reordered_facts.witnesses);
     assert_eq!(combined_facts.expands, reordered_facts.expands);
     for plan in [&retained, &staged, &combined] {
-        assert!(retype(plan, quote!(r => CustomProvider<_, _>)).is_err());
+        assert!(retype(plan, quote!(r => @custom_provider as CustomProvider<_, _>)).is_err());
         retype(
             plan,
-            quote!(r => CustomProvider<_, _> supports [expand, keys]),
+            quote!(r => @custom_provider as CustomProvider<_, _> supports [expand, keys]),
         )
         .unwrap();
     }
-    let cleared = retype(&custom, quote!(r => CustomProvider<_, _>)).unwrap();
+    let cleared = retype(&custom, quote!(r => @custom_provider as CustomProvider<_, _>)).unwrap();
     assert_eq!(retain_lookups(&cleared, quote!()).unwrap(), cleared);
     assert_eq!(expand_lookups(&cleared, quote!(2)).unwrap(), cleared);
     assert!(cleared.structures.entries.iter().all(|entry| !matches!(
         &entry.structure, Structure::Built { keyed, .. } if keyed.supports.is_some()
     )));
-    assert!(retype(&source, quote!(dedup => BTreeSet<_> supports [keys])).is_err());
-    let retained_only =
-        retype(&source, quote!(r => CustomProvider<_, _> supports [retain])).unwrap();
+    assert!(retype(&source, quote!(dedup => @btree_set as BTreeSet<_> supports [keys])).is_err());
+    let retained_only = retype(
+        &source,
+        quote!(#declared r => @custom_provider as CustomProvider<_, _> supports [retain]),
+    )
+    .unwrap();
     assert_eq!(
         expand_lookups(&retained_only, quote!(2)).unwrap(),
         retained_only
@@ -149,10 +162,18 @@ fn implementation_selection_replaces_support_for_its_actual_layout() {
         assert_eq!(selected.physical, source.physical);
     }
     // Rebuilding a hash layout replaces the old packet, even when its original
-    // spelling still matches the selector's implementation catalog.
+    // spelling still matches the selector's implementation catalog. Support
+    // beyond the token's declaration is rejected (STR-Provider).
+    assert!(
+        retype(
+            &source,
+            quote!(r => @hash_index as ::cq_storage::HashIndex<'_, _, _> supports [expand, keys]),
+        )
+        .is_err()
+    );
     let declared = retype(
         &source,
-        quote!(r => ::cq_storage::HashIndex<'_, _, _> supports [expand, keys]),
+        quote!(r => @hash_index as ::cq_storage::HashIndex<'_, _, _> supports [keys]),
     )
     .unwrap();
     let rebuilt = cq_rewrite_passes::sorted_indexes(&declared, quote!()).unwrap();
@@ -164,23 +185,42 @@ fn implementation_selection_replaces_support_for_its_actual_layout() {
 #[test]
 fn keys_advice_uses_declarations_instead_of_names() {
     let source = source();
+    let declared = declared();
     for plan in [
         source.clone(),
         sorted_runs(&source, quote!()).unwrap(),
-        retype(&source, quote!(r => ProviderAlias<_, _> supports [keys])).unwrap(),
+        retype(
+            &source,
+            quote!(#declared r => @custom_provider as ProviderAlias<_, _> supports [keys]),
+        )
+        .unwrap(),
     ] {
         let filtered = join_filter(&plan, quote!(l)).unwrap();
         assert!(!ir::contract::check(&filtered).unwrap().join_filters["l"].is_empty());
-        assert!(retype(&filtered, quote!(r => ProviderAlias<_, _>)).is_err());
+        assert!(
+            retype(
+                &filtered,
+                quote!(#declared r => @custom_provider as ProviderAlias<_, _>)
+            )
+            .is_err()
+        );
     }
-    let undeclared = retype(&source, quote!(r => ProviderAlias<_, _>)).unwrap();
+    let undeclared = retype(
+        &source,
+        quote!(#declared r => @custom_provider as ProviderAlias<_, _>),
+    )
+    .unwrap();
     assert!(join_filter(&undeclared, quote!(l)).is_err());
 }
 
 #[test]
 fn builtin_spelling_without_support_does_not_enable_advice() {
     let sorted = sorted_runs(&source(), quote!()).unwrap();
-    let unrecorded = retype(&sorted, quote!(r => ::cq_storage::SortedRun<_, _>)).unwrap();
+    let unrecorded = retype(
+        &sorted,
+        quote!(r => @sorted_run as ::cq_storage::SortedRun<_, _>),
+    )
+    .unwrap();
     assert_eq!(retain_lookups(&unrecorded, quote!()).unwrap(), unrecorded);
     assert_eq!(expand_lookups(&unrecorded, quote!(2)).unwrap(), unrecorded);
     assert!(join_filter(&unrecorded, quote!(l)).is_err());
@@ -190,7 +230,14 @@ macro_rules! query {
     ($provider:ident, $left:expr, $right:expr, $visits:ident; $($pipeline:tt)*) => {
         mini_linq::passes::select! {
             pipeline {
-                cq_rewrites::retype(r => $provider<_, _> supports [expand, keys]),
+                cq_rewrites::retype(
+                    providers {
+                        custom_provider = CustomProvider<_, _> {
+                            reads [exact, membership], supports [retain, expand, keys], build macro
+                        };
+                    }
+                    r => @custom_provider as $provider<_, _> supports [expand, keys]
+                ),
                 $($pipeline)*
             };
             physical {
@@ -231,7 +278,16 @@ macro_rules! execution_case {
                 let default: BTreeSet<_> = mini_linq::compile! {
                     pipeline {
                         structures = [
-                            cq_rewrites::retype(payload => $provider<_, _> supports [expand, keys]),
+                            cq_rewrites::retype(
+                                providers {
+                                    custom_provider = CustomProvider<_, _> {
+                                        reads [exact, membership],
+                                        supports [retain, expand, keys],
+                                        build macro
+                                    };
+                                }
+                                payload => @custom_provider as $provider<_, _> supports [expand, keys]
+                            ),
                             $($advice)*
                         ];
                     }
@@ -272,14 +328,14 @@ fn unit_key_support_preserves_cartesian_occurrences() {
             out = let canon project observed keep {x,y};
             return out as answer(x,y);
         }
-        structures {
-            l host scan = ::core::iter::Map<_,_> [];
-            r host scan = ::core::iter::Map<_,_> [];
-            r = ProviderAlias<_,_> [] supports [expand];
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; custom_provider = CustomProvider<_, _> { reads [exact, membership], supports [retain, expand, keys], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r = @custom_provider as ProviderAlias<_,_> [] supports [expand];
             s share = lookup r [] first s force p;
             s repr = tuples witness { r [] at s as _ };
             p stage = batch 2 expand;
-            out rows = ::cq_storage::dedup::Sort; out canon = rows;
+            out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
     }
     .map(|(x, y)| (*x, *y))

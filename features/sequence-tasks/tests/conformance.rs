@@ -5,9 +5,9 @@ const TARGETS: &[Target] = &[Target::Sequential, Target::Tasks];
 
 // Complete the authored provider packet before target-specific planning.
 fn program(mut program: Program) -> Program {
-    let providers = program.structures.structures.entries.clone();
+    let authored = program.structures.structures.clone();
     program.structures = cq_structure_selection::compile(&program.structures.physical).unwrap();
-    for provider in providers {
+    for provider in authored.entries {
         program.structures.structures.entries.retain(|entry| {
             entry.name != provider.name
                 || std::mem::discriminant(&entry.structure)
@@ -15,6 +15,10 @@ fn program(mut program: Program) -> Program {
         });
         program.structures.structures.entries.push(provider);
     }
+    program
+        .structures
+        .structures
+        .declare(&authored.providers.declarations);
     program
 }
 
@@ -27,7 +31,7 @@ fn named_tile_pipeline_preserves_rows_across_join() {
             out = let canon project r keep {a};
             return out as answer(a);
         }
-        structures {}
+        structures { providers {  }}
         sequence {
             renamed_input = rows r;
             renamed_cover = tile 2 renamed_input;
@@ -49,7 +53,7 @@ fn host_hash_lookup_store_keeps_exact_capability_on_tasks_machine() {
             j = pipe probe first [a] l,r;
             return j as answer(a,b);
         }
-        structures {}
+        structures { providers {  }}
         sequence {
             r = store rows r;
             input = rows l;
@@ -60,7 +64,7 @@ fn host_hash_lookup_store_keeps_exact_capability_on_tasks_machine() {
     let (_, analysis) = cq_sequence_conformance::plan(&program, Target::Tasks).unwrap();
     assert_eq!(
         analysis.capabilities[&("r".into(), vec!["a".into()])],
-        cq_lang_sequence::Capability::Exact,
+        cq_lang_sequence::structures::Capability::Exact,
     );
     assert_conformant(&program, TARGETS);
     assert_conformant_with_inputs(
@@ -82,7 +86,7 @@ fn join() {
             r = let rename R@1 {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             return j as answer(a,b);
-        } structures { r = ::cq_storage::SortedRun<_, _> [a]; }
+        } structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; } r = @sorted_run as ::cq_storage::SortedRun<_, _> [a]; }
         sequence {
             r = store rows r;
             input = store rows l;
@@ -111,9 +115,9 @@ fn chain() {
             j = pipe probe first [a] l,r;
             k = let canon probe first [b] j,s;
             return k as answer(a,b,c);
-        } structures {
-            r = ::cq_storage::SortedRun<_, _> [a];
-            s = ::cq_storage::SortedRun<_, _> [b];
+        } structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; }
+            r = @sorted_run as ::cq_storage::SortedRun<_, _> [a];
+            s = @sorted_run as ::cq_storage::SortedRun<_, _> [b];
         }
         sequence {
             r = store rows r;
@@ -142,7 +146,7 @@ fn semi() {
             r = let rename R@1 {a -> a};
             j = let canon semi eager [a] l,r;
             return j as answer(a);
-        } structures {}
+        } structures { providers {  }}
         sequence {
             r = store rows r;
             input = store rows l;
@@ -163,7 +167,7 @@ fn canon_sorts_the_whole_stream_across_task_boundaries() {
             relation R(a:i32);
             r = let canon rename R@0 {a -> a};
             return r as answer(a);
-        } structures {}
+        } structures { providers {  }}
         sequence {
             input = rows r;
             parts = tile 64 input;
@@ -184,7 +188,7 @@ fn empty_and_partial_tiles_have_equal_answers() {
             relation R(a:i32);
             r = let canon rename R@0 {a -> a};
             return r as answer(a);
-        } structures {}
+        } structures { providers {  }}
         sequence { input = store rows r; result = store tile 2 canon input; }
     });
     for rows in [

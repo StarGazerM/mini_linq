@@ -17,8 +17,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_structures::{self as ir, Structure, physical::Operator, symbol_name};
+use cq_lang_structures::provider::base as providers;
 use proc_macro2::TokenStream;
-use syn::{Ident, Token, Type};
+use syn::{Ident, Token};
 
 /// Minimum chain cover of `demands` (Dilworth via bipartite matching): a
 /// fewest set of chains `K1 ⊂ K2 ⊂ …`, each returned as its successive
@@ -129,11 +130,11 @@ impl syn::parse::Parse for Choice {
     }
 }
 
-fn default_type(ty: &Type) -> bool {
-    matches!(ty, Type::Path(p) if p.qself.is_none() && {
-        let path: Vec<_> = p.path.segments.iter().map(|s| s.ident.to_string()).collect();
-        path == ["cq_storage", "HashIndex"] || path == ["cq_storage", "HashSet"] || path == ["cq_storage", "Trie"]
-    })
+/// Base tokens whose default layout this rewrite may replace.
+fn default_token(provider: &ir::Provider) -> bool {
+    ["hash_index", "hash_set", "trie"]
+        .iter()
+        .any(|token| provider.token == *token)
 }
 
 /// Index of the definition at which `column` of `result` is first bound,
@@ -203,7 +204,7 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             .iter()
             .all(|&i| match &target.structures.entries[i].structure {
                 Structure::Built { keyed, .. } => {
-                    keyed.membership.is_none() && default_type(&keyed.ty)
+                    keyed.membership.is_none() && default_token(&keyed.provider)
                 }
                 _ => false,
             });
@@ -350,15 +351,14 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                     syn::parse_quote!([#column])
                 })
                 .collect();
-            let mut ty: Type = if payload {
-                syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>)
-            } else {
-                syn::parse_quote!(::cq_storage::HashSet<_>)
-            };
+            let mut provider =
+                providers::declaration(if payload { "hash_index" } else { "hash_set" }).instance();
             for _ in 1..layout.len() {
-                ty = syn::parse_quote!(::cq_storage::Trie<'_, _, #ty>);
+                provider = providers::declaration("trie")
+                    .compose(provider)
+                    .expect("STR-Provider: `trie` is nested");
             }
-            keyed.ty = ty;
+            keyed.provider = provider;
             keyed.supports = if payload && layout.len() == 1 {
                 Some(syn::parse_quote!(supports[keys]))
             } else {
@@ -380,6 +380,7 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             "sorted_indexes choice matched no built result",
         ));
     }
+    target.structures.declare(&providers::declarations());
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

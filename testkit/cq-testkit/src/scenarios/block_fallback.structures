@@ -1,4 +1,4 @@
-structures {p host scan=::core::iter::Map<_,_>[]; r0 host scan=::core::iter::Map<_,_>[]; s0 host scan=::core::iter::Map<_,_>[];
-r1=::cq_storage::HashSet<_>[x]; r1 rows=::std::vec::Vec<_>;
-u=::cq_storage::HashIndex<'_,_,_>[x]payload[x,y]constants{};
-out rows = ::cq_storage::dedup::Sort; out canon = rows;}
+structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; hash_set = ::cq_storage::HashSet<_> { reads [membership], build macro, accounting keys, shared }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }p host scan=@host_scan as ::core::iter::Map<_,_>[]; r0 host scan=@host_scan as ::core::iter::Map<_,_>[]; s0 host scan=@host_scan as ::core::iter::Map<_,_>[];
+r1=@hash_set as ::cq_storage::HashSet<_>[x]; r1 rows=@vec as ::std::vec::Vec<_>;
+u=@hash_index as ::cq_storage::HashIndex<'_,_,_>[x]payload[x,y]constants{};
+out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;}

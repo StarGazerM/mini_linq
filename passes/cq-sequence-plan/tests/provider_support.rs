@@ -1,9 +1,9 @@
-use cq_lang_sequence::{Capability, Catalog, ProviderToken, structures};
+use cq_lang_sequence::{Catalog, structures};
 use structures::{ProviderCapability as Support, Structure};
 
 fn source(decision: &str) -> structures::Program {
     let decision: proc_macro2::TokenStream = decision.parse().unwrap();
-    syn::parse_quote! {
+    let mut program: structures::Program = syn::parse_quote! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
             l = pipe rename L@0 {a -> x};
@@ -12,47 +12,45 @@ fn source(decision: &str) -> structures::Program {
             p = let canon probe first [x] s,r;
             return p as answer(x,y);
         }
-        structures {
-            l host scan = Reader [];
-            r host scan = Reader [];
-            r = Original [x] supports [expand, keys];
-            p rows = ::cq_storage::dedup::Sort;
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; original = Original { reads [exact, range, membership], supports [expand, keys], build inferred, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; filter = Filter { reads [membership], build inferred }; }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r = @original as Original [x] supports [expand, keys];
+            p rows = @sort as ::cq_storage::dedup::Sort;
             p canon = rows;
             #decision
         }
-    }
+    };
+    program.structures.declare(&[]);
+    program
 }
 fn catalog(supports: Vec<Support>) -> Catalog {
-    let token = |ty, supports, capabilities| ProviderToken {
-        ty,
-        supports,
-        capabilities,
-        levels: vec![vec!["host".into()]],
-        elements: None,
-        max_packed_bits: None,
-    };
-    let read = || vec![Capability::Exact, Capability::Range, Capability::Membership];
-    Catalog {
-        // Read capabilities alone must not license retained/expanded/filter decisions.
-        providers: vec![
-            token(syn::parse_quote!(ReadOnly), Vec::new(), read()),
-            token(syn::parse_quote!(SelectedAlias), supports, read()),
-            token(
-                syn::parse_quote!(::cq_storage::dedup::Sort),
-                Vec::new(),
-                vec![Capability::Distinct],
-            ),
-        ],
-        codecs: Vec::new(),
+    let supports = supports.iter().map(|support| match support {
+        Support::Retain => quote::quote!(retain),
+        Support::Expand => quote::quote!(expand),
+        Support::Keys => quote::quote!(keys),
+    });
+    // Read capabilities alone must not license retained/expanded/filter decisions.
+    let declared: structures::Providers = syn::parse_quote!(providers {
+        read_only = ReadOnly { reads [exact, range, membership], build inferred, join_filter };
+        selected_alias = SelectedAlias {
+            reads [exact, range, membership], supports [#(#supports),*], build inferred, join_filter
+        };
+        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+    });
+    let mut catalog = Catalog::default();
+    for declaration in declared.declarations {
+        catalog.register(declaration, vec![vec!["host".into()]]);
     }
+    catalog
 }
-fn selected_type(program: &structures::Program) -> &syn::Type {
+fn selected_provider(program: &structures::Program) -> &structures::Provider {
     program
         .structures
         .entries
         .iter()
         .find_map(|entry| match &entry.structure {
-            Structure::Built { keyed, .. } if entry.name == "r" => Some(&keyed.ty),
+            Structure::Built { keyed, .. } if entry.name == "r" => Some(&keyed.provider),
             _ => None,
         })
         .unwrap()
@@ -67,7 +65,7 @@ fn catalog_retyping_preserves_live_support_obligations() {
         ),
         ("p stage = batch 4 expand;", Support::Expand),
         (
-            "l join_filter = Filter build r [x] covering s marker ::cq_load::ColumnAt<0>;",
+            "l join_filter = @filter as Filter build r [x] covering s marker ::cq_load::ColumnAt<0>;",
             Support::Keys,
         ),
     ] {
@@ -75,7 +73,10 @@ fn catalog_retyping_preserves_live_support_obligations() {
         structures::contract::check(&source).unwrap();
         let selected =
             cq_sequence_plan::select_from_catalog(&source, &catalog(vec![capability])).unwrap();
-        assert_eq!(selected_type(&selected), &syn::parse_quote!(SelectedAlias));
+        assert_eq!(
+            selected_provider(&selected),
+            &syn::parse_quote!(@selected_alias as SelectedAlias)
+        );
         assert_eq!(selected.physical, source.physical);
         let facts = structures::contract::check(&selected).unwrap();
         assert!(facts.provider_support("r", &["x".into()], None, capability));
@@ -99,7 +100,10 @@ fn expansion_support_implies_retention_but_not_the_reverse() {
 fn unused_promises_are_replaced_instead_of_leaking_to_new_provider() {
     let selected =
         cq_sequence_plan::select_from_catalog(&source(""), &catalog(Vec::new())).unwrap();
-    assert_eq!(selected_type(&selected), &syn::parse_quote!(ReadOnly));
+    assert_eq!(
+        selected_provider(&selected),
+        &syn::parse_quote!(@read_only as ReadOnly)
+    );
     let facts = structures::contract::check(&selected).unwrap();
     for capability in [Support::Retain, Support::Expand, Support::Keys] {
         assert!(!facts.provider_support("r", &["x".into()], None, capability));

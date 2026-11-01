@@ -416,23 +416,32 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
         "the seed must exercise a real positional join filter"
     );
 
-    // As in sorted_payload, change only provider types, not recorded layouts.
+    // As in sorted_payload, change only provider tokens, not recorded layouts.
     // The replacement deliberately has neither inherent keys() nor len().
-    struct CustomProvider;
-    impl syn::visit_mut::VisitMut for CustomProvider {
-        fn visit_type_mut(&mut self, ty: &mut syn::Type) {
-            syn::visit_mut::visit_type_mut(self, ty);
-            if let syn::Type::Path(path) = ty {
-                if path
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|s| s.ident == "HashIndex")
-                {
-                    *ty = syn::parse_quote!(CustomIndex<'_, _, _>);
-                }
-            }
+    let custom_index: cq_lang_structures::Declaration = syn::parse_quote!(
+        custom_index = CustomIndex<'_, _, _> {
+            reads [exact, membership], supports [keys], build macro, join_filter
+        };
+    );
+    fn retype(
+        provider: &mut cq_lang_structures::Provider,
+        custom: &cq_lang_structures::Declaration,
+    ) -> bool {
+        if provider.token == "hash_index" {
+            *provider = custom.instance();
+            return true;
         }
+        let Some(inner) = &mut provider.inner else {
+            return false;
+        };
+        if retype(inner, custom) {
+            *provider =
+                cq_lang_structures::provider::base::declaration(&provider.token.to_string())
+                    .compose((**inner).clone())
+                    .unwrap();
+            return true;
+        }
+        false
     }
     let mut custom = selected.clone();
     let mut single_level_builds = std::collections::BTreeSet::new();
@@ -440,9 +449,9 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
         match &mut entry.structure {
             cq_lang_structures::Structure::Built { keyed, .. }
             | cq_lang_structures::Structure::Host { keyed, .. } => {
-                let old = keyed.ty.clone();
-                syn::visit_mut::VisitMut::visit_type_mut(&mut CustomProvider, &mut keyed.ty);
-                if old != keyed.ty && keyed.levels.len() == 1 {
+                let old = keyed.provider.clone();
+                retype(&mut keyed.provider, &custom_index);
+                if old != keyed.provider && keyed.levels.len() == 1 {
                     single_level_builds.insert(entry.name.to_string());
                 }
             }
@@ -457,6 +466,7 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
             .any(|filter| { single_level_builds.contains(&filter.build.to_string()) }),
         "a join filter must enumerate a retyped single-level provider"
     );
+    custom.structures.declare(&[custom_index]);
     cq_lang_structures::check_rewrite(&selected, &custom).unwrap();
     cq_structure_selection::check(&smallest, &custom).unwrap();
     let sequence = cq_sequence_lowering::compile(&custom).unwrap();

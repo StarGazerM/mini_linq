@@ -11,9 +11,9 @@ fn chain() -> structures::Program {
             c = let canon project p keep {v};
             return c as answer(v);
         }
-        structures {
-            l host scan = ::core::iter::Map<_, _> [];
-            c rows = ::cq_storage::dedup::Sort; c canon = rows;
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @host_scan as ::core::iter::Map<_, _> [];
+            c rows = @sort as ::cq_storage::dedup::Sort; c canon = rows;
         }
     }
 }
@@ -48,11 +48,11 @@ fn joins_and_opaque_binds_end_the_positional_chain() {
             c = let canon project b keep {k,v,n};
             return c as answer(k,v,n);
         }
-        structures {
-            l host scan = ::core::iter::Map<_, _> [];
-            r host scan = ::core::iter::Map<_, _> [];
-            r = UserIndex [k]; r rows = ::std::vec::Vec<_>;
-            c rows = ::cq_storage::dedup::Sort; c canon = rows;
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; user_index = UserIndex { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            l host scan = @host_scan as ::core::iter::Map<_, _> [];
+            r host scan = @host_scan as ::core::iter::Map<_, _> [];
+            r = @user_index as UserIndex [k]; r rows = @vec as ::std::vec::Vec<_>;
+            c rows = @sort as ::cq_storage::dedup::Sort; c canon = rows;
         }
     };
     let target = cq_represent::compile_with(&source, quote!(positions)).unwrap();
@@ -82,6 +82,6 @@ fn checker_rejects_tampered_entries_and_unrelated_changes() {
     target.structures.entries.remove(1);
     assert!(cq_represent::check(&source, &target).is_err());
     let mut target = source.clone();
-    target.structures.entries[0] = syn::parse_quote!(l host scan = Other [] ;);
+    target.structures.entries[0] = syn::parse_quote!(l host scan = @other as Other [] ;);
     assert!(cq_represent::check(&source, &target).is_err());
 }

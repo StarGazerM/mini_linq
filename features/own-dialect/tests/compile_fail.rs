@@ -261,9 +261,9 @@ fn positions_representation_is_explicitly_refused() {
                     out = let canon project r keep {x,y};
                     return out as answer(x,y);
                 }
-                structures {
-                    r host scan = ::core::iter::Map<_,_> [];
-                    out rows = ::cq_storage::dedup::Sort; out canon = rows;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
                     r repr = positions { R lineage {x -> a,y -> b} } owned [];
                 }
             }"#,
@@ -300,10 +300,18 @@ fn lookup_witness_and_expansion_are_refused_by_name() {
                 return out as answer(k,v);
             }}
             structures {{
-                l host scan = ::core::iter::Map<_,_> [];
-                r host scan = ::core::iter::Map<_,_> [];
-                r = ::cq_storage::SortedRun<_,_> [k] supports [expand];
-                out rows = ::cq_storage::dedup::Sort; out canon = rows;
+                providers {{
+                    host_scan = ::core::iter::Map<_, _> {{ reads [], build macro }};
+                    sorted_run = ::cq_storage::SortedRun<_, _> {{
+                        reads [exact, range, membership], supports [retain, expand, keys],
+                        build macro, join_filter, shared
+                    }};
+                    sort = ::cq_storage::dedup::Sort {{ reads [distinct], build inferred, shared }};
+                }}
+                l host scan = @host_scan as ::core::iter::Map<_,_> [];
+                r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                r = @sorted_run as ::cq_storage::SortedRun<_,_> [k] supports [expand];
+                out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
                 {decision}
             }}
         }}"#

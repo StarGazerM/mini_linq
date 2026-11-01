@@ -127,13 +127,22 @@ pub fn lazy_anti(input: TokenStream) -> TokenStream {
 pub fn ordered_indexes(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| {
         let mut target = source.clone();
+        let provider = cq_lang_structures::provider::base::instance(
+            "btree_map_grouped",
+            syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
+        );
         for entry in &mut target.structures.entries {
             if let Structure::Built { keyed, .. } = &mut entry.structure {
-                keyed.ty = syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>);
+                keyed.provider = provider.clone();
                 keyed.supports =
                     (keyed.levels.len() == 1).then(|| syn::parse_quote!(supports[keys]));
             }
         }
+        target
+            .structures
+            .declare(&[cq_lang_structures::provider::base::declaration(
+                "btree_map_grouped",
+            )]);
         Ok(target)
     })
     .into()
@@ -177,12 +186,17 @@ pub fn expand_identity(input: TokenStream) -> TokenStream {
 pub fn custom_indexes(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| {
         let mut target = source.clone();
+        let declarations: cq_lang_structures::Providers = syn::parse_quote!(providers {
+            sorted_index = SortedIndex<_, _> { reads [exact, membership], build macro };
+        });
+        let provider = declarations.declarations[0].instance();
         for entry in &mut target.structures.entries {
             if let Structure::Built { keyed, .. } = &mut entry.structure {
-                keyed.ty = syn::parse_quote!(SortedIndex<_, _>);
+                keyed.provider = provider.clone();
                 keyed.supports = None;
             }
         }
+        target.structures.declare(&declarations.declarations);
         Ok(target)
     })
     .into()

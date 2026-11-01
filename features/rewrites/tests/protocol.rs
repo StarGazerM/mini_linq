@@ -38,7 +38,9 @@ fn rewritten_corpus_physical_flows_into_the_default_selector() {
     for canonical in facts.canonical.values() {
         assert_eq!(
             *canonical,
-            cq_testkit::structures::CanonSource::Rows(syn::parse_quote!(::cq_storage::dedup::Sort))
+            cq_testkit::structures::CanonSource::Rows(syn::parse_quote!(
+                @sort as ::cq_storage::dedup::Sort
+            ))
         );
     }
 }

@@ -186,8 +186,16 @@ fn ordered_host_fallback_capabilities_are_rustc_obligations() {
     let mut alternate_provider = structured.clone();
     let entry = alternate_provider.structures.entries.iter_mut().find(|e| matches!(&e.structure, cq_lang_structures::Structure::Host { reader, .. } if reader.result().is_some_and(|name| name == "out"))).unwrap();
     if let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure {
-        keyed.ty = syn::parse_quote!(::std::collections::HashSet<_>);
+        keyed.provider = cq_lang_structures::provider::base::instance(
+            "std_hash_set",
+            syn::parse_quote!(::std::collections::HashSet<_>),
+        );
     }
+    alternate_provider
+        .structures
+        .declare(&[cq_lang_structures::provider::base::declaration(
+            "std_hash_set",
+        )]);
     // The record preserves the ordered read and key. Rust, not syn::Type
     // inspection, checks whether the chosen provider implements that access.
     cq_lang_structures::check_rewrite(&structured, &alternate_provider).unwrap();
@@ -642,9 +650,9 @@ fn named_sequence_decomposition_preserves_authored_advice_and_target_delegation(
                     r = let canon rename rows@0 {x -> x};
                     return r as answer(x);
                 }
-                structures {
-                    r host scan = ::core::iter::Map<_, _> [];
-                    r rows = ::cq_storage::dedup::Sort; r canon = rows;
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                    r host scan = @host_scan as ::core::iter::Map<_, _> [];
+                    r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
                 }
                 sequence { result = store rows r; $($output)* }
             }
@@ -693,9 +701,9 @@ fn named_sequence_decomposition_preserves_authored_advice_and_target_delegation(
             r = let canon rename rows@0 {x -> x};
             return r as answer(x);
         }
-        structures {
-            r host scan = ::core::iter::Map<_, _> [];
-            r rows = ::cq_storage::dedup::Sort; r canon = rows;
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            r host scan = @host_scan as ::core::iter::Map<_, _> [];
+            r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
         }
         sequence { result = store canon rows r; }
     }

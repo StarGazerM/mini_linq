@@ -1,18 +1,32 @@
-use cq_lang_sequence::structures::CanonSource;
-use cq_lang_sequence::{Analysis, Capability, Catalog, Obligation, Program};
+use cq_lang_sequence::structures::{CanonSource, Capability, Provider};
+use cq_lang_sequence::{Analysis, Catalog, Obligation, Program};
 use cq_syntax::symbol_name;
-use quote::ToTokens;
-use syn::{GenericArgument, PathArguments, Type};
 
 pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -> syn::Result<()> {
+    // Formal rule PL-Catalog: a program declaration of a token the target
+    // declares is that declaration; the catalog is keyed by token id.
+    for declaration in &analysis.structures.providers.declarations {
+        if catalog
+            .declaration(&declaration.token)
+            .is_some_and(|declared| declared != declaration)
+        {
+            return Err(syn::Error::new_spanned(
+                &declaration.token,
+                format!(
+                    "PL-Catalog: declaration of provider token `{}` differs from the target catalog",
+                    declaration.token
+                ),
+            ));
+        }
+    }
     for obligation in &analysis.obligations {
         let available = match obligation {
             Obligation::Provider {
                 provider,
                 capability,
-                ty,
+                instance,
                 ..
-            } => provider_available(analysis, catalog, provider, capability, ty),
+            } => provider_available(analysis, catalog, provider, capability, instance),
             Obligation::Canon { result, canonical } => {
                 let levels = result_levels(program, analysis, result, true);
                 canon_available(analysis, catalog, canonical.as_ref(), |registered| {
@@ -53,38 +67,39 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
 /// reading `canonical` (`None`: the returned answer boundary). `admits` tells
 /// whether a registered level set covers the boundary's execution levels.
 ///
-/// A canonical rows record, or the answer's identity index, needs a Distinct
-/// provider of its recorded type; an unrecorded answer index any Distinct
-/// provider. A Built reference is discharged by its own Provider obligations;
-/// a host carrier is read only at host.
+/// A canonical rows record, or the answer's identity index, needs a catalog
+/// entry of its recorded token declaring Distinct; an unrecorded answer index
+/// any Distinct entry. A Built reference is discharged by its own Provider
+/// obligations; a host carrier is read only at host.
 pub(crate) fn canon_available(
     analysis: &Analysis,
     catalog: &Catalog,
     canonical: Option<&CanonSource>,
     admits: impl Fn(&[Vec<String>]) -> bool,
 ) -> bool {
-    let ty = match canonical {
-        Some(CanonSource::Rows(ty)) => Some(ty),
+    let provider = match canonical {
+        Some(CanonSource::Rows(provider)) => Some(provider),
         Some(CanonSource::Index(_)) => return true,
         Some(CanonSource::Host) => return admits(&[vec!["host".to_owned()]]),
         // Structures records at most the returned result's identity index.
         None => analysis.structures.head_dedup.values().next(),
     };
-    catalog.providers.iter().any(|token| {
-        ty.is_none_or(|ty| matches_type(&token.ty, ty))
-            && token.capabilities.contains(&Capability::Distinct)
-            && admits(&token.levels)
+    catalog.providers.iter().any(|entry| {
+        provider.is_none_or(|provider| entry.covers(provider))
+            && catalog
+                .facts(&entry.provider)
+                .is_some_and(|facts| facts.reads(&Capability::Distinct))
+            && admits(&entry.levels)
     })
 }
 
-/// Check the complete target promise, including scheduled read levels and row
-/// element types. A matching family name alone does not authorize retyping.
+/// Check the complete target promise, including scheduled read levels.
 pub(crate) fn provider_available(
     analysis: &Analysis,
     catalog: &Catalog,
     provider: &str,
-    capability: &cq_lang_sequence::Capability,
-    ty: &Type,
+    capability: &Capability,
+    instance: &Provider,
 ) -> bool {
     let levels = provider_levels(analysis, provider);
     provider_admitted(
@@ -92,7 +107,7 @@ pub(crate) fn provider_available(
         catalog,
         provider,
         capability,
-        ty,
+        instance,
         levels.iter().any(|level| level.len() > 1),
         |registered| levels.iter().all(|level| registered.contains(level)),
     )
@@ -101,37 +116,26 @@ pub(crate) fn provider_available(
 /// The single provider admission predicate shared by the final catalog check
 /// and placement's prediction of a read level. `below_host` tells whether a
 /// read executes below host; `admits` whether a registered level set covers
-/// the read levels.
+/// the read levels. The catalog entry of the recorded instance's tokens
+/// supplies the levels; its declared facts the capabilities.
 pub(crate) fn provider_admitted(
     analysis: &Analysis,
     catalog: &Catalog,
     provider: &str,
-    capability: &cq_lang_sequence::Capability,
-    ty: &Type,
+    capability: &Capability,
+    instance: &Provider,
     below_host: bool,
     admits: impl Fn(&[Vec<String>]) -> bool,
 ) -> bool {
     // Formal rule PL-Resident: Only an explicit resident token admits an
-    // unretained host handle below host; all read/type/level facts still apply.
+    // unretained host handle below host; all read/level facts still apply.
     let needs_resident = analysis.structures.host_read(provider) && below_host;
-    catalog.providers.iter().any(|token| {
-        matches_type(&token.ty, ty)
-            && (!needs_resident
-                || token
-                    .capabilities
-                    .contains(&cq_lang_sequence::Capability::Resident))
-            && token.elements.as_ref().is_none_or(|accepted| {
-                analysis.structures.layouts[provider].iter().all(|column| {
-                    accepted.iter().any(|ty| {
-                        matches_type(
-                            ty,
-                            &analysis.structures.physical.rows[provider].types[column],
-                        )
-                    })
-                })
+    catalog.providers.iter().any(|entry| {
+        entry.covers(instance)
+            && catalog.facts(&entry.provider).is_some_and(|facts| {
+                (!needs_resident || facts.reads(&Capability::Resident)) && facts.reads(capability)
             })
-            && token.capabilities.contains(capability)
-            && admits(&token.levels)
+            && admits(&entry.levels)
     })
 }
 
@@ -186,63 +190,10 @@ fn provider_levels(analysis: &Analysis, provider: &str) -> Vec<Vec<String>> {
     }
     levels
 }
-
-/// Match a concrete runtime type against a catalog family with generic holes.
-pub fn matches_type(pattern: &Type, actual: &Type) -> bool {
-    match (pattern, actual) {
-        (Type::Infer(_), _) => true,
-        (Type::Path(pattern), Type::Path(actual)) if pattern.qself == actual.qself => {
-            // Provider paths are tokens, not resolved Rust names. Leading `::`
-            // is immaterial; every named path segment remains significant.
-            pattern.path.segments.len() == actual.path.segments.len()
-                && pattern
-                    .path
-                    .segments
-                    .iter()
-                    .zip(&actual.path.segments)
-                    .all(|(p, a)| {
-                        p.ident == a.ident && matches_arguments(&p.arguments, &a.arguments)
-                    })
-        }
-        (Type::Tuple(p), Type::Tuple(a)) => {
-            p.elems.len() == a.elems.len()
-                && p.elems
-                    .iter()
-                    .zip(&a.elems)
-                    .all(|(p, a)| matches_type(p, a))
-        }
-        (Type::Reference(p), Type::Reference(a)) => {
-            p.mutability == a.mutability
-                && p.lifetime
-                    .as_ref()
-                    .is_none_or(|l| l.ident == "_" || Some(l) == a.lifetime.as_ref())
-                && matches_type(&p.elem, &a.elem)
-        }
-        _ => pattern.to_token_stream().to_string() == actual.to_token_stream().to_string(),
-    }
-}
-
-fn matches_arguments(pattern: &PathArguments, actual: &PathArguments) -> bool {
-    match (pattern, actual) {
-        (PathArguments::AngleBracketed(p), PathArguments::AngleBracketed(a)) => {
-            p.args.len() == a.args.len()
-                && p.args.iter().zip(&a.args).all(|(p, a)| match (p, a) {
-                    (GenericArgument::Type(Type::Infer(_)), _) => true,
-                    (GenericArgument::Type(p), GenericArgument::Type(a)) => matches_type(p, a),
-                    (GenericArgument::Lifetime(p), GenericArgument::Lifetime(a)) => {
-                        p.ident == "_" || p == a
-                    }
-                    _ => p == a,
-                })
-        }
-        _ => pattern == actual,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cq_lang_sequence::{Capability, ProviderToken};
+    use cq_lang_sequence::structures::Declaration;
 
     #[test]
     fn resident_host_reads_require_explicit_complete_catalog_facts() {
@@ -254,11 +205,11 @@ mod tests {
                 answer = let canon probe first [a] l,r;
                 return answer as answer(a,b);
             }
-            structures {
-                l host scan = Reader [];
-                r host scan = OpaqueNative<i32> [];
-                r host result(answer) = OpaqueNative<i32> [a];
-                answer rows = ::cq_storage::dedup::Sort;
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; opaque_native = OpaqueNative<i32> { reads [exact, range, membership], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                l host scan = @reader as Reader [];
+                r host scan = @opaque_native as OpaqueNative<i32> [];
+                r host result(answer) = @opaque_native as OpaqueNative<i32> [a];
+                answer rows = @sort as ::cq_storage::dedup::Sort;
                 answer canon = rows;
             }
         };
@@ -270,47 +221,45 @@ mod tests {
                 analysis.levels.insert(reader.clone(), level.clone());
             }
         }
-        let ty = syn::parse_quote!(OpaqueNative<i32>);
-        let mut catalog = Catalog {
-            providers: vec![ProviderToken {
-                ty: syn::parse_quote!(OpaqueNative<_>),
-                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-                supports: Vec::new(),
-                levels: vec![level],
-                elements: Some(vec![syn::parse_quote!(i32)]),
-                max_packed_bits: None,
-            }],
-            ..Catalog::default()
-        };
+        let instance = syn::parse_quote!(@opaque_native as OpaqueNative<i32>);
+        let declaration: Declaration = syn::parse_quote!(
+            opaque_native = OpaqueNative<_> { reads [exact, range, membership], build macro };
+        );
+        let mut catalog = Catalog::default();
+        catalog.register(declaration, vec![level]);
         for capability in [Capability::Exact, Capability::Range, Capability::Membership] {
             assert!(!provider_available(
                 &analysis,
                 &catalog,
                 "r",
                 &capability,
-                &ty
+                &instance
             ));
         }
-        catalog.providers[0].capabilities.push(Capability::Resident);
+        catalog.declarations[0]
+            .facts
+            .reads
+            .push(Capability::Resident);
         for capability in [Capability::Exact, Capability::Range, Capability::Membership] {
             assert!(provider_available(
                 &analysis,
                 &catalog,
                 "r",
                 &capability,
-                &ty
+                &instance
             ));
         }
         let mut missing = catalog.clone();
-        missing.providers[0]
-            .capabilities
+        missing.declarations[0]
+            .facts
+            .reads
             .retain(|c| *c != Capability::Membership);
         assert!(!provider_available(
             &analysis,
             &missing,
             "r",
             &Capability::Membership,
-            &ty
+            &instance
         ));
         let mut wrong_level = catalog.clone();
         wrong_level.providers[0].levels = vec![vec!["host".into()]];
@@ -319,23 +268,14 @@ mod tests {
             &wrong_level,
             "r",
             &Capability::Range,
-            &ty
-        ));
-        let mut wrong_elements = catalog.clone();
-        wrong_elements.providers[0].elements = Some(vec![syn::parse_quote!(String)]);
-        assert!(!provider_available(
-            &analysis,
-            &wrong_elements,
-            "r",
-            &Capability::Range,
-            &ty
+            &instance
         ));
         assert!(!provider_available(
             &analysis,
             &catalog,
             "r",
             &Capability::Range,
-            &syn::parse_quote!(Unrelated<i32>)
+            &syn::parse_quote!(@unrelated as OpaqueNative<i32>)
         ));
     }
 }

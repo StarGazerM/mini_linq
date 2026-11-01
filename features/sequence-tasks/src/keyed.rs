@@ -188,7 +188,7 @@ pub(crate) fn partial(
             "Tasks partial map lacks Group provenance",
         ));
     };
-    let provider = emitter.analysis.structures.groups[&result].clone();
+    let provider = emitter.analysis.structures.groups[&result].ty.clone();
     let identities = group
         .aggregates
         .iter()

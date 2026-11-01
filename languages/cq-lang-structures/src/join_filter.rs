@@ -7,7 +7,7 @@ use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct JoinFilter {
-    pub ty: syn::Type,
+    pub provider: Provider,
     pub build_token: kw::build,
     pub build: Ident,
     pub key: Level,
@@ -197,7 +197,6 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
                     "join filter requires an exact covering probe or semijoin on its key, a total build and an exclusive pipe spine to its scan",
                 );
             }
-            concrete_type(&filter.ty)?;
             concrete_type(&filter.marker)?;
         }
     }
@@ -230,7 +229,8 @@ pub(crate) fn coalesce_join_filters(program: &Program, facts: &mut Analysis) {
             if filters.iter().any(|previous| {
                 symbol_name(&previous.build) == symbol_name(&filter.build)
                     && names(&previous.key.columns) == names(&filter.key.columns)
-                    && ungroup_type(&previous.ty) == ungroup_type(&filter.ty)
+                    && previous.provider.same_token(&filter.provider)
+                    && ungroup_type(&previous.provider.ty) == ungroup_type(&filter.provider.ty)
                     && ungroup_type(&previous.marker) == ungroup_type(&filter.marker)
                     && layouts[&symbol_name(&previous.covering)]
                         == layouts[&symbol_name(&filter.covering)]

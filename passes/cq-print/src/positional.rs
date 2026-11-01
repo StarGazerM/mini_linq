@@ -346,7 +346,7 @@ impl Context<'_> {
     /// Pipe inputs remain lazy position streams, not intermediate snapshots.
     pub fn selection_source(&mut self, name: &str) -> syn::Result<TokenStream> {
         let selection = self.analysis.selections[name].clone();
-        let ty = &selection.ty;
+        let ty = &selection.provider.ty;
         let summary = match &selection.summary {
             Summary::None(_) => quote!(::cq_storage::SelectionSummary::None),
             Summary::PerBlock(_) => quote!(::cq_storage::SelectionSummary::PerBlock),

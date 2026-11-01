@@ -16,6 +16,7 @@ pub mod layout;
 mod realize;
 mod reduce;
 mod rows;
+pub mod providers;
 pub mod runs;
 
 pub use arena::translate_arena;
@@ -211,10 +212,8 @@ pub fn machine() -> Machine {
 /// record; their build (sort/unique) runs at a separated publication, not
 /// inside a collaborative block or lane.
 pub fn catalog() -> cq_lang_sequence::Catalog {
-    use cq_lang_sequence::{Capability, Catalog, CodecToken, ProviderToken};
+    use cq_lang_sequence::{Catalog, CodecToken};
 
-    let range = NativeAbi::Range.identity();
-    let runs = NativeAbi::Runs.identity();
     let levels = vec![
         vec!["host".into(), "device".into()],
         vec!["host".into(), "device".into(), "block".into()],
@@ -225,73 +224,38 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             "lane".into(),
         ],
     ];
-    Catalog {
-        providers: vec![
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(#range),
-                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-                // Range providers consume the recorded scalar/code carrier,
-                // not logical type spellings. Native Scalar bounds and explicit
-                // codec declarations establish the publication representation.
-                elements: None,
-                levels: levels.clone(),
-                max_packed_bits: None,
-            },
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(#runs<_, _>),
-                capabilities: vec![
-                    Capability::Exact,
-                    Capability::Range,
-                    Capability::Membership,
-                    Capability::Resident,
-                ],
-                // The declared layout checks primitives and Symbol<T, Codec>
-                // columns; logical symbol types do not appear in device rows.
-                elements: None,
-                levels: levels.clone(),
-                max_packed_bits: None,
-            },
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(::cq_storage::SortedRun<_, _>),
-                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-                elements: None,
-                levels: vec![vec!["host".into()]],
-                max_packed_bits: None,
-            },
-            // Formal rule PL-Distinct: the device sort/unique build of a
-            // canonical rows record. Its scan is the publication itself.
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
-                capabilities: vec![Capability::Distinct],
-                elements: None,
-                levels: levels.clone(),
-                max_packed_bits: Some(128),
-            },
-            ProviderToken {
-                supports: Vec::new(),
-                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
-                capabilities: vec![Capability::Distinct],
-                elements: None,
-                levels: levels.clone(),
-                max_packed_bits: None,
-            },
-        ],
-        codecs: [
-            syn::parse_quote!(::cq_storage::sequence::Identity),
-            syn::parse_quote!(::cq_gpu_sequence_runtime::DenseDictionary<'_>),
-        ]
-        .into_iter()
-        .map(|ty| CodecToken {
-            ty,
-            ordered: true,
-            levels: std::iter::once(vec!["host".into()])
-                .chain(levels.iter().cloned())
-                .collect(),
-        })
-        .collect(),
-    }
+    let mut catalog = Catalog {
+        declarations: Vec::new(),
+        providers: Vec::new(),
+        codecs: Vec::new(),
+    };
+    // Range providers consume the recorded scalar/code carrier, not logical
+    // type spellings. Native Scalar bounds and explicit codec declarations
+    // establish the publication representation.
+    catalog.register(providers::declaration("range_provider"), levels.clone());
+    // The declared layout checks primitives and Symbol<T, Codec> columns;
+    // logical symbol types do not appear in device rows.
+    catalog.register(providers::declaration("device_layout"), levels.clone());
+    catalog.register(
+        cq_lang_structures::provider::base::declaration("sorted_run"),
+        vec![vec!["host".into()]],
+    );
+    // Formal rule PL-Distinct: the device sort/unique build of a canonical
+    // rows record. Its scan is the publication itself.
+    catalog.register(providers::declaration("packed_canon"), levels.clone());
+    catalog.register(providers::declaration("wide_canon"), levels.clone());
+    catalog.codecs = [
+        syn::parse_quote!(::cq_storage::sequence::Identity),
+        syn::parse_quote!(::cq_gpu_sequence_runtime::DenseDictionary<'_>),
+    ]
+    .into_iter()
+    .map(|ty| CodecToken {
+        ty,
+        ordered: true,
+        levels: std::iter::once(vec!["host".into()])
+            .chain(levels.iter().cloned())
+            .collect(),
+    })
+    .collect();
+    catalog
 }

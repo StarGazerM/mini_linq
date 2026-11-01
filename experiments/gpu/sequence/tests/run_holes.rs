@@ -341,7 +341,8 @@ mod fixtures;
 fn run_binding_rejects_nonleading_lookup_key() {
     let mut source = fixtures::fixture("linear");
     source.structures.entries[2] =
-        syn::parse_quote!(e = ::cq_gpu_sequence_runtime::RangeProvider [z][y];);
+        syn::parse_quote!(e = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [z][y];);
+    source.structures.declare(&cq_gpu_sequence::providers::declarations());
     assert!(cq_gpu_sequence_core::runs::bind(&source).is_err());
 }
 
@@ -349,7 +350,8 @@ fn run_binding_rejects_nonleading_lookup_key() {
 fn run_binding_rejects_lookup_key_outside_recorded_layout() {
     let mut source = fixtures::fixture("linear");
     source.structures.entries[2] =
-        syn::parse_quote!(e = ::cq_gpu_sequence_runtime::RangeProvider [missing][z];);
+        syn::parse_quote!(e = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [missing][z];);
+    source.structures.declare(&cq_gpu_sequence::providers::declarations());
     assert!(cq_gpu_sequence_core::runs::bind(&source).is_err());
 }
 
@@ -383,8 +385,9 @@ fn native_host_lookup_uses_supplied_runs_without_building() -> Result {
 fn native_host_lookup_accepts_a_leading_value_column() {
     let mut source = fixtures::fixture("native_linear");
     source.structures.entries[1] =
-        syn::parse_quote!(e host scan = ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [];);
-    source.structures.entries[2] = syn::parse_quote!(e host result(joined) = ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [y];);
+        syn::parse_quote!(e host scan = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [];);
+    source.structures.entries[2] = syn::parse_quote!(e host result(joined) = @device_layout as ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [y];);
+    source.structures.declare(&cq_gpu_sequence::providers::declarations());
     let bound = cq_gpu_sequence_core::runs::bind(&source).unwrap();
     let sequence = cq_sequence_lowering::compile(&bound).unwrap();
     let machine = cq_gpu_sequence::machine();

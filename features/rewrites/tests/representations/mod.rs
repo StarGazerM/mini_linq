@@ -51,7 +51,7 @@ fn merge_native_hosts_executes_corpus_ix_with_ordered_retype() {
             mini_linq::passes::lower,
             cq_rewrites::merge_joins(all),
             mini_linq::passes::select,
-            cq_rewrites::retype(ordered => Ordered<_, Vec<_>>),
+            cq_rewrites::retype(ordered => @btree_map_grouped as Ordered<_, Vec<_>>),
             mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         }
     }
@@ -88,7 +88,7 @@ fn named_payload_retype_executes_corpus_physical() {
     let actual: Rows = cq_rewrite_test_driver::corpus_physical! {
         intersection; pipeline {
             mini_linq::passes::select,
-            cq_rewrites::retype(r1 => Payload<'_, _, _>),
+            cq_rewrites::retype(r1 => @hash_index as Payload<'_, _, _>),
             mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         }
     }
@@ -121,12 +121,17 @@ fn membership_trie_and_rows_retypes_execute_their_trait_obligations() {
     let T = [(1, 10), (2, 20), (3, 30)];
     let actual: Rows = mini_linq::passes::select! {
         pipeline {
-            cq_rewrites::retype(ordered => Ordered<_, Vec<_>>),
-            cq_rewrites::retype(r => Payload<'_, _, _>),
-            cq_rewrites::retype(s => Membership<_>),
-            cq_rewrites::retype(trie => Curried<'_, _, Payload<'_, _, _>>),
+            cq_rewrites::retype(ordered => @btree_map_grouped as Ordered<_, Vec<_>>),
+            cq_rewrites::retype(r => @hash_index as Payload<'_, _, _>),
+            cq_rewrites::retype(
+                providers { membership = Membership<_> { reads [membership], build macro }; }
+                s => @membership as Membership<_>
+            ),
+            cq_rewrites::retype(
+                trie => @trie(@hash_index as Payload<'_, _, _>) as Curried<'_, _, Payload<'_, _, _>>
+            ),
             // Entry 10 is p's ordinary rows; out's canonical rows remain Sort.
-            cq_rewrites::retype(entry(10) => Buffer<_>),
+            cq_rewrites::retype(providers { buffer = Buffer<_> { reads [], build macro }; } entry(10) => @buffer as Buffer<_>),
             mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         };
         physical {

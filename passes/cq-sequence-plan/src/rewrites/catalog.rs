@@ -1,15 +1,15 @@
-use cq_lang_sequence::{Capability, Catalog, structures};
+use cq_lang_sequence::{Catalog, CatalogEntry, structures};
 use cq_syntax::symbol_name;
 use quote::quote;
-use structures::{Structure, physical::Operator};
+use structures::{Capability, Facts, Provider, Structure, physical::Operator};
 
-/// Freeze target-owned support in the recorded provider, not in a type-name rule.
+/// Freeze target-owned support in the recorded provider from its declared facts.
 pub(crate) fn provider_support(
-    token: &cq_lang_sequence::ProviderToken,
+    facts: &Facts,
     membership_only: bool,
 ) -> Option<structures::ProviderSupport> {
     use structures::ProviderCapability::{Expand, Keys, Retain};
-    let capabilities: Vec<_> = token
+    let capabilities: Vec<_> = facts
         .supports
         .iter()
         .filter(|capability| !membership_only || **capability == Keys)
@@ -22,17 +22,34 @@ pub(crate) fn provider_support(
     (!capabilities.is_empty()).then(|| syn::parse_quote!(supports [#(#capabilities),*]))
 }
 
-fn supplies_support(
-    token: &cq_lang_sequence::ProviderToken,
-    required: &[structures::ProviderCapability],
-) -> bool {
+fn supplies_support(facts: &Facts, required: &[structures::ProviderCapability]) -> bool {
     required.iter().all(|capability| {
-        token.supports.contains(capability)
+        facts.supports(*capability)
             || *capability == structures::ProviderCapability::Retain
-                && token
-                    .supports
-                    .contains(&structures::ProviderCapability::Expand)
+                && facts.supports(structures::ProviderCapability::Expand)
     })
+}
+
+/// The declared facts of a catalog entry (PL-Catalog: declared by the catalog).
+fn entry_facts(catalog: &Catalog, entry: &CatalogEntry) -> Facts {
+    catalog
+        .facts(&entry.provider)
+        .expect("PL-Catalog: every catalog entry token is declared by its catalog")
+}
+
+/// Retype advice installing `provider` with its catalog declarations.
+fn retype_advice(
+    catalog: &Catalog,
+    index: usize,
+    span: proc_macro2::Span,
+    provider: &Provider,
+    supports: Option<structures::ProviderSupport>,
+) -> proc_macro2::TokenStream {
+    let declarations = provider
+        .tokens()
+        .filter_map(|token| catalog.declaration(token));
+    let index = syn::LitInt::new(&index.to_string(), span);
+    quote!(providers { #(#declarations)* } entry(#index) => #provider #supports)
 }
 
 /// Only live decisions constrain replacement. Unused support may change with
@@ -61,7 +78,7 @@ fn required_support(
                 structures::prefix_depth(&built.0, keys).map(|depth| (built, depth))
             })
             .min_by_key(|((layout, _), depth)| (layout.len() != *depth, layout.len()))
-            .is_some_and(|((layout, ty), _)| *layout == levels && *ty == keyed.ty)
+            .is_some_and(|((layout, provider), _)| *layout == levels && *provider == keyed.provider)
     };
     let selected_candidate = |prefix: &[String], column: &str| {
         !host
@@ -70,7 +87,7 @@ fn required_support(
             && levels[1] == [column]
             && analysis
                 .candidate_on(name, prefix, column)
-                .is_some_and(|ty| *ty == keyed.ty)
+                .is_some_and(|provider| *provider == keyed.provider)
     };
     let candidates = structures::physical::candidate_prefixes(&source.physical, &analysis.physical);
     let mut required = Vec::new();
@@ -143,17 +160,15 @@ fn required_support(
     required
 }
 
-/// Replace built provider types with a catalog token satisfying all of their
-/// read obligations, preferring the authored type and then catalog order.
+/// Replace built providers with a catalog entry satisfying all of their
+/// read obligations, preferring the recorded token and then catalog order.
 ///
 /// Catalog levels constrain reads, not construction. Structures has no machine
-/// grading; Sequence planning checks each selected type at its actual read levels.
-/// Keyed readers whose carried columns lack a matching catalog element capability
-/// need a host read level, independently of the provider's retained layout.
+/// grading; Sequence planning checks each selected token at its actual read levels.
 /// Host scan adapters are preserved. Unsupported keyed host reads are retained
 /// through `build_host_reads`; built indexes preserve their membership certificates.
-/// Unlike `plan`, this operation explicitly replaces recorded provider types.
-/// Formal rule PL-Select: Stable-partition catalog order by recorded representation, then select its first eligible token.
+/// Unlike `plan`, this operation explicitly replaces recorded providers.
+/// Formal rule PL-Select: Stable-partition catalog order by recorded token, then select its first eligible entry.
 pub fn select_from_catalog(
     source: &structures::Program,
     catalog: &Catalog,
@@ -182,7 +197,6 @@ fn select(
     admitted: Option<&std::collections::BTreeSet<String>>,
 ) -> syn::Result<structures::Program> {
     let analysis = structures::contract::check(source)?;
-    let needed = structures::required_columns(&source.physical, &analysis.physical);
     let candidates = structures::physical::candidate_prefixes(&source.physical, &analysis.physical);
     let mut target = source.clone();
     for (index, entry) in source.structures.entries.iter().enumerate() {
@@ -316,87 +330,53 @@ fn select(
             }
             _ => Vec::new(),
         };
-        let selected = if kind == "canon" {
-            let provider = match &entry.structure {
-                Structure::Rows { ty, .. } | Structure::HeadDedup { ty, .. } => ty,
-                _ => unreachable!(),
-            };
-            let recorded = |token: &&cq_lang_sequence::ProviderToken| {
-                crate::catalog::matches_type(&token.ty, provider)
-            };
-            // Packed bounds are runtime codec facts, never inferred from Rust types.
-            catalog
-                .providers
-                .iter()
-                .filter(recorded)
-                .chain(catalog.providers.iter().filter(|token| !recorded(token)))
-                .find(|token| {
-                    !token.levels.is_empty()
-                        && token.max_packed_bits.is_none()
-                        && token.capabilities.contains(&Capability::Distinct)
-                })
-                .map(|token| {
-                    let ty = if recorded(&token) {
-                        provider
-                    } else {
-                        &token.ty
-                    };
-                    (ty, None)
-                })
-        } else {
-            let recorded = |token: &&cq_lang_sequence::ProviderToken| match &entry.structure {
-                Structure::Built { keyed, .. } => {
-                    crate::catalog::matches_type(&token.ty, &keyed.ty)
-                }
-                Structure::Selection { ty, .. } | Structure::KeySet { ty, .. } => token.ty == *ty,
-                Structure::JoinFilter { filter, .. } => token.ty == filter.ty,
-                _ => false,
-            };
-            catalog
-                .providers
-                .iter()
-                .filter(recorded)
-                .chain(catalog.providers.iter().filter(|token| !recorded(token)))
-                .find(|token| {
-                    !token.levels.is_empty()
-                        && supplies_support(token, &support_required)
-                        && accepts_elements(token, &analysis, &name)
-                        && match &entry.structure {
-                            Structure::Built { keyed, .. } => accepts_read_levels(
-                                token,
-                                source,
-                                &analysis,
-                                &name,
-                                &keyed.level_names(),
-                                &needed,
-                            ),
-                            _ => true,
-                        }
-                        && required
-                            .iter()
-                            .all(|capability| token.capabilities.contains(capability))
-                })
-                .map(|token| {
-                    // Catalog patterns admit concrete native providers; they
-                    // are not replacement Rust types with inferred arguments.
-                    let ty = match &entry.structure {
-                        Structure::Built { keyed, .. }
-                            if crate::catalog::matches_type(&token.ty, &keyed.ty) =>
-                        {
-                            &keyed.ty
-                        }
-                        _ => &token.ty,
-                    };
-                    let supports = match &entry.structure {
-                        Structure::Built { keyed, .. } => {
-                            provider_support(token, keyed.membership.is_some())
-                        }
-                        _ => None,
-                    };
-                    (ty, supports)
-                })
+        // An ordinary rows buffer prefers no recorded token (catalog order).
+        let recorded_provider = match &entry.structure {
+            Structure::Built { keyed, .. } => Some(&keyed.provider),
+            Structure::Rows { provider, .. } if kind == "canon" => Some(provider),
+            Structure::HeadDedup { provider, .. }
+            | Structure::Selection { provider, .. }
+            | Structure::KeySet { provider, .. } => Some(provider),
+            Structure::JoinFilter { filter, .. } => Some(&filter.provider),
+            _ => None,
         };
-        let Some((ty, supports)) = selected else {
+        let recorded = |entry: &&CatalogEntry| {
+            recorded_provider.is_some_and(|provider| entry.covers(provider))
+        };
+        let selected = catalog
+            .providers
+            .iter()
+            .filter(recorded)
+            .chain(catalog.providers.iter().filter(|entry| !recorded(entry)))
+            .find(|candidate| {
+                let facts = entry_facts(catalog, candidate);
+                !candidate.levels.is_empty()
+                    && if kind == "canon" {
+                        // Packed bounds are runtime codec facts, never inferred from Rust types.
+                        facts.packed_bits.is_none() && facts.reads(&Capability::Distinct)
+                    } else {
+                        supplies_support(&facts, &support_required)
+                            && required.iter().all(|capability| facts.reads(capability))
+                    }
+            })
+            .map(|candidate| {
+                // A recorded instance keeps its concrete spelling; a new
+                // token is spelled by its catalog entry.
+                let provider = if recorded(&candidate) {
+                    recorded_provider.expect("recorded").clone()
+                } else {
+                    candidate.provider.clone()
+                };
+                let supports = match &entry.structure {
+                    Structure::Built { keyed, .. } => provider_support(
+                        &entry_facts(catalog, candidate),
+                        keyed.membership.is_some(),
+                    ),
+                    _ => None,
+                };
+                (provider, supports)
+            });
+        let Some((provider, supports)) = selected else {
             if admitted.is_some_and(|names| names.contains(&name)) {
                 continue;
             }
@@ -408,15 +388,19 @@ fn select(
             ));
         };
         if kind == "canon" {
-            if let Structure::Rows { ty: slot, .. } | Structure::HeadDedup { ty: slot, .. } =
+            if let Structure::Rows { provider: slot, .. }
+            | Structure::HeadDedup { provider: slot, .. } =
                 &mut target.structures.entries[index].structure
             {
-                *slot = ty.clone();
+                *slot = provider;
             }
+            target.structures.declare(&catalog.declarations);
             continue;
         }
-        let index = syn::LitInt::new(&index.to_string(), entry.name.span());
-        match cq_structure_selection::retype(&target, quote!(entry(#index) => #ty #supports)) {
+        match cq_structure_selection::retype(
+            &target,
+            retype_advice(catalog, index, entry.name.span(), &provider, supports),
+        ) {
             Ok(selected) => target = selected,
             Err(_) if admitted.is_some_and(|names| names.contains(&name)) => {}
             Err(error) => {
@@ -552,32 +536,21 @@ fn retain_host_index(
                                         if matches!(read.choice, Some(structures::physical::Choice::First(_))))
                     })
             })).then(|| needed[&name].iter().cloned().collect::<Vec<_>>());
-        let native = catalog.providers.iter().find(|token| {
-            crate::catalog::matches_type(&token.ty, &keyed.ty)
-                && supplies_support(token, &support_required)
-                && !token.levels.is_empty()
-                && accepts_elements(token, &analysis, &name)
-                && accepts_read_levels(
-                    token,
-                    source,
-                    &analysis,
-                    &name,
-                    &keyed.level_names(),
-                    &needed,
-                )
-                && required
-                    .iter()
-                    .all(|capability| token.capabilities.contains(capability))
+        let native = catalog.providers.iter().find(|candidate| {
+            let facts = entry_facts(catalog, candidate);
+            candidate.covers(&keyed.provider)
+                && supplies_support(&facts, &support_required)
+                && !candidate.levels.is_empty()
+                && required.iter().all(|capability| facts.reads(capability))
         });
         if selected.is_none() && native.is_some() {
             continue;
         }
-        let token = native.or_else(|| catalog.providers.iter().find(|token| {
-            !token.levels.is_empty()
-                && supplies_support(token, &support_required)
-                && accepts_columns(token, &analysis, &name, projected.as_deref().unwrap_or(&analysis.layouts[&name]))
-                && accepts_read_levels(token, source, &analysis, &name, &keyed.level_names(), &needed)
-                && required.iter().all(|capability| token.capabilities.contains(capability))
+        let candidate = native.or_else(|| catalog.providers.iter().find(|candidate| {
+            let facts = entry_facts(catalog, candidate);
+            !candidate.levels.is_empty()
+                && supplies_support(&facts, &support_required)
+                && required.iter().all(|capability| facts.reads(capability))
         })).ok_or_else(|| syn::Error::new(
             entry.name.span(),
             format!("PL-Select: structure `{name}` host adapter `{reader_name:?}` has unmet catalog read obligation {required:?}"),
@@ -593,12 +566,12 @@ fn retain_host_index(
         if indexes.insert((name.clone(), keys.clone())) {
             // A retained native representation keeps its original row ABI.
             let projected = if native.is_some() { None } else { projected };
-            let ty = if native.is_some() {
-                &keyed.ty
+            let provider = if native.is_some() {
+                &keyed.provider
             } else {
-                &token.ty
+                &candidate.provider
             };
-            let supports = provider_support(token, membership);
+            let supports = provider_support(&entry_facts(catalog, candidate), membership);
             let columns: Vec<_> = keys
                 .iter()
                 .map(|key| syn::Ident::new(key, entry.name.span()))
@@ -613,7 +586,7 @@ fn retain_host_index(
             // Retention changes the provider's ownership, not its read protocol.
             let membership = membership.then(|| quote!(membership));
             target.structures.entries.push(syn::parse_quote!(
-                #build = #ty [#(#columns),*] #membership #supports #projection;
+                #build = #provider [#(#columns),*] #membership #supports #projection;
             ));
         }
     }
@@ -622,89 +595,9 @@ fn retain_host_index(
         !retained.contains(&symbol_name(&entry.name))
             || !matches!(&entry.structure, Structure::Host { reader, .. } if !matches!(reader, structures::ReaderRef::Scan))
     });
+    target.structures.declare(&catalog.declarations);
     structures::contract::check(&target)?;
     Ok(target)
-}
-
-fn accepts_elements(
-    token: &cq_lang_sequence::ProviderToken,
-    analysis: &structures::Analysis,
-    name: &str,
-) -> bool {
-    accepts_columns(token, analysis, name, &analysis.layouts[name])
-}
-
-fn accepts_columns(
-    token: &cq_lang_sequence::ProviderToken,
-    analysis: &structures::Analysis,
-    name: &str,
-    columns: &[String],
-) -> bool {
-    token.elements.as_ref().is_none_or(|accepted| {
-        columns.iter().all(|column| {
-            let actual = &analysis.physical.rows[name].types[column];
-            accepted
-                .iter()
-                .any(|ty| matches!(ty, syn::Type::Infer(_)) || ty == actual)
-        })
-    })
-}
-
-// PL-Catalog: element compatibility belongs to the retained provider layout;
-// read-level compatibility also includes the row carried by each keyed reader.
-// A membership index consumes its keys, not an unused right-hand payload.
-pub(crate) fn accepts_read_levels(
-    token: &cq_lang_sequence::ProviderToken,
-    source: &structures::Program,
-    analysis: &structures::Analysis,
-    name: &str,
-    levels: &[Vec<String>],
-    needed: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
-) -> bool {
-    let accepted_row = |name: &str| {
-        accepts_columns(
-            token,
-            analysis,
-            name,
-            &needed[name].iter().cloned().collect::<Vec<_>>(),
-        )
-    };
-    let host_read = analysis
-        .physical
-        .keyed_reads
-        .get(name)
-        .into_iter()
-        .flatten()
-        .any(|(reader, columns, _)| {
-            if structures::prefix_depth(levels, columns).is_none() {
-                return false;
-            }
-            let Some(definition) = source
-                .physical
-                .program
-                .definitions
-                .iter()
-                .find(|definition| symbol_name(&definition.name) == *reader)
-            else {
-                return false;
-            };
-            !accepted_row(reader)
-                || match &definition.operator {
-                    Operator::Probe(_, keyed)
-                    | Operator::Merge(_, keyed)
-                    | Operator::Semi(_, keyed)
-                    | Operator::Anti(_, keyed) => {
-                        !accepted_row(&symbol_name(&keyed.left))
-                            || !accepts_columns(token, analysis, name, columns)
-                    }
-                    _ => false,
-                }
-        });
-    !host_read
-        || token
-            .levels
-            .iter()
-            .any(|level| level.len() == 1 && level[0] == "host")
 }
 
 #[cfg(test)]
@@ -716,9 +609,12 @@ mod tests {
         for (mode, entry) in [
             (
                 quote!(pipe),
-                quote!(r host result(answer) = Native<(i32,), (i32,)> [a];),
+                quote!(r host result(answer) = @native as Native<(i32,), (i32,)> [a];),
             ),
-            (quote!(let), quote!(r = Native<(i32,), (i32,)> [a];)),
+            (
+                quote!(let),
+                quote!(r = @native as Native<(i32,), (i32,)> [a];),
+            ),
         ] {
             let source: structures::Program = syn::parse_quote! {
                 physical {
@@ -729,27 +625,20 @@ mod tests {
                     answer = pipe probe first [a] l,r;
                     return answer as answer(a,b);
                 }
-                structures {
-                    l host scan = HostColumns [];
-                    r host scan = Native<(i32,), (i32,)> [];
+                structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; native = Native<_, _> { reads [exact, range, membership], build macro }; }
+                    l host scan = @host_columns as HostColumns [];
+                    r host scan = @native as Native<(i32,), (i32,)> [];
                     #entry
                 }
             };
-            let token = |ty| cq_lang_sequence::ProviderToken {
-                ty,
-                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-                supports: vec![],
-                levels: vec![vec!["host".into(), "device".into()]],
-                elements: None,
-                max_packed_bits: None,
-            };
-            let catalog = Catalog {
-                providers: vec![
-                    token(syn::parse_quote!(Index)),
-                    token(syn::parse_quote!(Native<_, _>)),
-                ],
-                codecs: Vec::new(),
-            };
+            let declared: structures::Providers = syn::parse_quote!(providers {
+                index = Index { reads [exact, range, membership], build inferred };
+                native = Native<_, _> { reads [exact, range, membership], build macro };
+            });
+            let mut catalog = Catalog::default();
+            for declaration in declared.declarations {
+                catalog.register(declaration, vec![vec!["host".into(), "device".into()]]);
+            }
             let selected = select_from_catalog(&source, &catalog).unwrap();
             structures::check_rewrite(&source, &selected).unwrap();
             assert_eq!(selected, source);
