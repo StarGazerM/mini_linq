@@ -38,6 +38,20 @@ fn params(ratio: usize, radix_bits: u32, merge_tile_rows: u32) -> RadixRunParams
         ratio,
         radix_bits,
         merge_tile_rows,
+        block_threads: 256,
+    }
+}
+
+#[test]
+fn auxiliary_geometry_matches_the_compiled_contract() {
+    let mut parameters = params(4, 4, 32);
+    assert!(parameters.validate().is_ok());
+    for block_threads in [0, 1, 32, 128, 255, 257, 512, 1024, u32::MAX] {
+        parameters.block_threads = block_threads;
+        assert_eq!(
+            parameters.validate().unwrap_err().to_string(),
+            "radix kernels require exactly 256 block threads"
+        );
     }
 }
 
@@ -668,6 +682,11 @@ fn snapshots_retain_runs_across_later_merges() -> Result {
 fn invalid_parameters_and_inputs_are_rejected() -> Result {
     let pool = pool()?;
     for bad in [params(1, 4, 32), params(4, 33, 32), params(4, 4, 0)] {
+        assert!(DeviceRadixRun::<u64, u32, ()>::new(pool.clone(), bad).is_err());
+    }
+    for block_threads in [0, 128, 255, 257, 512, u32::MAX] {
+        let mut bad = params(4, 4, 32);
+        bad.block_threads = block_threads;
         assert!(DeviceRadixRun::<u64, u32, ()>::new(pool.clone(), bad).is_err());
     }
     let mut device = DeviceRadixRun::<u64, u32, Items>::new(pool.clone(), params(4, 4, 32))?;

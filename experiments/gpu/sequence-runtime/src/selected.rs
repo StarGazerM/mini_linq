@@ -1,6 +1,8 @@
 //! Stable row-ID selection for resident scans without an index build.
-use crate::{build_module, pointer, release, temporary, Pool, RangeSelection, Result};
-use cuda_core::{DeviceBuffer, LaunchConfig1D};
+use crate::{
+    build_module, pointer, release, temporary, Auxiliary, Geometry, Pool, RangeSelection, Result,
+};
+use cuda_core::DeviceBuffer;
 use rccl_thrust::{arithmetic_range, select_flagged, DeviceBufferExt};
 use std::sync::Arc;
 
@@ -44,7 +46,13 @@ impl Drop for SelectedRows {
 /// Select original row IDs by `start <= decoded_value < end`, without sorting
 /// or building a directory. RCCL flagged selection preserves source order.
 /// One selected-count readback establishes the returned logical length.
-pub fn select(pool: Arc<Pool>, selection: &RangeSelection) -> Result<SelectedRows> {
+/// `geometry` is the recorded `selection` family geometry.
+pub fn select(
+    pool: Arc<Pool>,
+    selection: &RangeSelection,
+    geometry: Geometry,
+) -> Result<SelectedRows> {
+    geometry.check("selection", Auxiliary::SUPPORTED.selection)?;
     if !Arc::ptr_eq(selection.column.pool(), &pool) {
         return Err("selection column must share the execution pool".into());
     }
@@ -61,17 +69,12 @@ pub fn select(pool: Arc<Pool>, selection: &RangeSelection) -> Result<SelectedRow
         let thrust = rccl_thrust::cuda::Program::load(pool.context())?;
         let exec = thrust.par_in(stream, pool.resource())?;
         let flags = temporary::<u32>(stream, base_rows)?;
-        let shape = module.prepare_range_flags(LaunchConfig1D::new(1, 256, 0))?;
-        let blocks = cq_gpu_runtime::launch_grid_for_kernel(
-            shape.function(),
-            base_rows.div_ceil(256),
-            256,
-            0,
-        )?;
+        let shape = module.prepare_range_flags(geometry.config(1))?;
+        let blocks = geometry.grid(shape.function(), base_rows)?;
         // DECODE V: selection launches value reconstruction before range comparison; P6 evaluate translated encoded predicates.
         module.range_flags(
             stream,
-            &module.prepare_range_flags(LaunchConfig1D::new(blocks, 256, 0))?,
+            &module.prepare_range_flags(geometry.config(blocks))?,
             selection.column.view(),
             base_rows as u32,
             selection.start,

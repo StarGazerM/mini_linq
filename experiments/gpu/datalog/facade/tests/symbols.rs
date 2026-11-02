@@ -59,7 +59,13 @@ engine!(gpu, {
         structures = [resident_inputs, ::cq_gpu_sequence::bind_runs];
         sequence = ::mini_linq::passes::sequence;
         stage = ::cq_gpu_sequence::stage;
-        decompose = [::cq_gpu_sequence::decompose];
+        decompose = [::cq_gpu_sequence::decompose(codecs [
+            CodecToken {
+                codec: Some(TestCodec),
+                ordered: true,
+                levels: [[host], [host, device], [host, device, block], [host, device, block, lane]],
+            }
+        ])];
         grade = ::cq_gpu_sequence::machine_grade;
         print = ::cq_gpu_sequence::translate_arena;
     };

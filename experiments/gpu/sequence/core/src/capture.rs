@@ -22,11 +22,15 @@ use syn::{Expr, Ident, Type, visit_mut::VisitMut};
 
 /// Capture extraction state: recorded captures in parameter order, the
 /// deduplicated closed values, and the indices read by the current definition.
+/// A frozen state resolves closed values against supplied records only and
+/// flags any value they lack; the checker uses it to validate records.
 #[derive(Default)]
 pub(crate) struct Captures {
     pub records: Vec<Capture>,
     values: BTreeMap<String, usize>,
     pub used: BTreeSet<usize>,
+    frozen: bool,
+    missing: bool,
 }
 
 /// Printed capture support: setup statements, kernel parameters with their
@@ -146,20 +150,40 @@ pub(crate) fn print(records: &[Capture]) -> Printed {
     printed
 }
 
+fn value_key(expression: &Expr, logical: &Type) -> String {
+    format!(
+        "{}:{}",
+        logical.to_token_stream(),
+        expression.to_token_stream()
+    )
+}
+
 /// GPU-Capture checker: validate recorded captures without re-extracting
 /// them. Closed values have no row reads and use their column's codec
-/// identity; uses name recorded captures.
+/// identity. Each row function's device expression is either one closed
+/// value of its expression or a callable that, with its closed
+/// subexpressions restored, is that expression over its recorded reads. Each
+/// selection's device and host forms resolve every closed operand to an
+/// existing Value capture at the compared column's type, and its uses are
+/// exactly the captures those forms read.
 pub(crate) fn check(
     records: &cq_lang_sequence::gpu::realization::Captures,
-    columns: &BTreeSet<String>,
+    definitions: &BTreeMap<String, cq_lang_structures::physical::Definition>,
+    analysis: &cq_lang_sequence::Analysis,
     codecs: &crate::runs::Codecs,
 ) -> syn::Result<()> {
+    use cq_lang_structures::physical::{Operator, symbol_name};
     let error = |message: &str| {
         syn::Error::new(
             proc_macro2::Span::call_site(),
             format!("GPU-Capture: {message}"),
         )
     };
+    let rows = &analysis.structures.physical.rows;
+    let columns: BTreeSet<_> = rows
+        .values()
+        .flat_map(|row| row.types.keys().cloned())
+        .collect();
     for capture in &records.captures {
         match capture {
             Capture::Value {
@@ -168,7 +192,7 @@ pub(crate) fn check(
                 codec,
             } => {
                 if !rust::free_variables(expression)
-                    .dependencies(columns)
+                    .dependencies(&columns)
                     .is_empty()
                 {
                     return Err(error("closed value reads a row column"));
@@ -182,13 +206,87 @@ pub(crate) fn check(
             Capture::Callable { closed, .. } => {
                 if closed.iter().any(|expression| {
                     !rust::free_variables(expression)
-                        .dependencies(columns)
+                        .dependencies(&columns)
                         .is_empty()
                 }) {
                     return Err(error("callable host subexpression reads a row column"));
                 }
             }
         }
+    }
+    let mut expected_device = BTreeSet::new();
+    let mut expected_host = BTreeSet::new();
+    for (name, definition) in definitions {
+        let Some(device) = records.device.get(name) else {
+            continue;
+        };
+        let uses = records.uses.get(name);
+        match &definition.operator {
+            Operator::Guard(_) | Operator::Bind(_)
+                if !analysis.rust_requires_host(&definition.operator) =>
+            {
+                let (expression, input, output): (&Expr, _, Type) = match &definition.operator {
+                    Operator::Guard(guard) => {
+                        (&guard.condition, &guard.input, syn::parse_quote!(bool))
+                    }
+                    Operator::Bind(bind) => {
+                        let names = rust::bindings(&bind.pattern);
+                        let output = rows[name].types[&symbol_name(&names[0])].clone();
+                        (&bind.expression, &bind.input, output)
+                    }
+                    _ => unreachable!(),
+                };
+                let row = &rows[&symbol_name(input)];
+                check_row_function(records, device, expression, row, &output)
+                    .map_err(|message| error(message))?;
+                let index =
+                    capture_reference(device).ok_or_else(|| error("unrecorded row function"))?;
+                if uses != Some(&BTreeSet::from([index])) {
+                    return Err(error("row function uses differ from its device expression"));
+                }
+                expected_device.insert(name.clone());
+            }
+            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+                let types = &rows[&symbol_name(&select.input)].types;
+                let mut frozen = Captures::frozen(&records.captures);
+                let rendered = frozen.relational(&select.condition, types, codecs)?;
+                // Uses are the device form's captures; the host form reads caches.
+                let used = std::mem::take(&mut frozen.used);
+                let mut host = select.condition.clone();
+                frozen.host_relational(&mut host, types, codecs);
+                if frozen.missing
+                    || rendered != *device
+                    || records.host.get(name) != Some(&host)
+                    || uses.unwrap_or(&BTreeSet::new()) != &used
+                {
+                    return Err(error(
+                        "selection forms do not resolve to recorded closed values",
+                    ));
+                }
+                expected_device.insert(name.clone());
+                expected_host.insert(name.clone());
+            }
+            _ => return Err(error("device expression of a definition without one")),
+        }
+    }
+    for (name, definition) in definitions {
+        if let Operator::Select(_) | Operator::Point(..) | Operator::Range(..) =
+            &definition.operator
+        {
+            expected_host.insert(name.clone());
+        }
+    }
+    if records
+        .device
+        .keys()
+        .any(|name| !expected_device.contains(name))
+        || records.host.keys().cloned().collect::<BTreeSet<_>>() != expected_host
+        || records
+            .uses
+            .keys()
+            .any(|name| !records.device.contains_key(name))
+    {
+        return Err(error("capture records name other definitions"));
     }
     if records
         .uses
@@ -201,22 +299,153 @@ pub(crate) fn check(
     Ok(())
 }
 
+/// The capture index a device row expression names.
+fn capture_reference(device: &Expr) -> Option<usize> {
+    let path = match device {
+        Expr::Path(path) => path,
+        Expr::Call(call) => match &*call.func {
+            Expr::Path(path) => path,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let name = path.path.get_ident()?.to_string();
+    name.strip_prefix(if matches!(device, Expr::Call(_)) {
+        "__cq_rust_"
+    } else {
+        "__cq_capture_"
+    })?
+    .parse()
+    .ok()
+}
+
+/// A device row expression computes `expression`: a closed value of it at
+/// `output`, or a callable over exactly its row reads whose body, with the
+/// closed subexpressions restored, is `expression`.
+fn check_row_function(
+    records: &cq_lang_sequence::gpu::realization::Captures,
+    device: &Expr,
+    expression: &Expr,
+    row: &cq_lang_structures::physical::Row,
+    output: &Type,
+) -> Result<(), &'static str> {
+    let index = capture_reference(device).ok_or("row function names no capture")?;
+    let scope: BTreeSet<_> = row.types.keys().cloned().collect();
+    let reads = rust::free_variables(expression).dependencies(&scope);
+    match (records.captures.get(index), device) {
+        (
+            Some(Capture::Value {
+                expression: value,
+                logical,
+                ..
+            }),
+            Expr::Path(_),
+        ) => {
+            if !reads.is_empty() || value != expression || logical != output {
+                return Err("closed row function is not its expression's value");
+            }
+        }
+        (
+            Some(Capture::Callable {
+                reads: recorded,
+                output: recorded_output,
+                closed,
+                body,
+            }),
+            Expr::Call(call),
+        ) => {
+            let expected: Vec<_> = reads
+                .iter()
+                .map(|name| Some((row.bindings.get(name)?.clone(), row.types[name].clone())))
+                .collect::<Option<_>>()
+                .ok_or("callable read lacks a row binding")?;
+            let arguments: Vec<Expr> = recorded
+                .iter()
+                .map(|(name, _)| syn::parse_quote!(#name))
+                .collect();
+            if *recorded != expected
+                || recorded_output != output
+                || call.args.iter().ne(arguments.iter())
+            {
+                return Err("callable reads differ from its expression's row reads");
+            }
+            struct Restore<'a>(&'a [Expr], bool);
+            impl VisitMut for Restore<'_> {
+                fn visit_expr_mut(&mut self, expression: &mut Expr) {
+                    if let Expr::Unsafe(block) = expression
+                        && let [syn::Stmt::Expr(Expr::MethodCall(call), None)] =
+                            block.block.stmts.as_slice()
+                        && call.method == "assume_init"
+                        && let Expr::Path(path) = &*call.receiver
+                        && let Some(index) = path.path.get_ident().and_then(|name| {
+                            name.to_string()
+                                .strip_prefix("__cq_closed_")?
+                                .parse::<usize>()
+                                .ok()
+                        })
+                    {
+                        match self.0.get(index) {
+                            Some(closed) => *expression = closed.clone(),
+                            None => self.1 = false,
+                        }
+                        return;
+                    }
+                    syn::visit_mut::visit_expr_mut(self, expression);
+                }
+            }
+            let mut restored = body.clone();
+            let mut restore = Restore(closed, true);
+            restore.visit_expr_mut(&mut restored);
+            if !restore.1
+                || restored.to_token_stream().to_string()
+                    != expression.to_token_stream().to_string()
+            {
+                return Err("callable body is not its row function with closed values restored");
+            }
+        }
+        _ => return Err("row function names a capture of another kind"),
+    }
+    Ok(())
+}
+
 impl Captures {
-    /// Formal rule GPU-Capture: closed relational operands are evaluated once on
-    /// the host and encoded with the compared column's recorded codec.
-    pub fn value(
+    /// Lookup-only resolution over supplied records (never records new captures).
+    fn frozen(records: &[Capture]) -> Self {
+        let values = records
+            .iter()
+            .enumerate()
+            .filter_map(|(index, capture)| match capture {
+                Capture::Value {
+                    expression,
+                    logical,
+                    ..
+                } => Some((value_key(expression, logical), index)),
+                Capture::Callable { .. } => None,
+            })
+            .collect();
+        Self {
+            records: records.to_vec(),
+            values,
+            used: BTreeSet::new(),
+            frozen: true,
+            missing: false,
+        }
+    }
+
+    /// The recorded Value capture of a closed operand at `logical`.
+    fn value_index(
         &mut self,
         expression: &Expr,
         logical: &Type,
         codecs: &crate::runs::Codecs,
-    ) -> Expr {
-        let key = format!(
-            "{}:{}",
-            logical.to_token_stream(),
-            expression.to_token_stream()
-        );
+    ) -> usize {
+        let key = value_key(expression, logical);
         let index = match self.values.get(&key) {
             Some(&index) => index,
+            None if self.frozen => {
+                self.missing = true;
+                self.records.len()
+            }
             None => {
                 self.records.push(Capture::Value {
                     expression: expression.clone(),
@@ -229,6 +458,18 @@ impl Captures {
             }
         };
         self.used.insert(index);
+        index
+    }
+
+    /// Formal rule GPU-Capture: closed relational operands are evaluated once on
+    /// the host and encoded with the compared column's recorded codec.
+    pub fn value(
+        &mut self,
+        expression: &Expr,
+        logical: &Type,
+        codecs: &crate::runs::Codecs,
+    ) -> Expr {
+        let index = self.value_index(expression, logical, codecs);
         let name = format_ident!("__cq_capture_{index}");
         syn::parse_quote!(#name)
     }
@@ -244,26 +485,14 @@ impl Captures {
             ty: &Type,
             codecs: &crate::runs::Codecs,
         ) {
-            let argument = captures.value(value, ty, codecs);
-            let Expr::Path(path) = argument else {
-                unreachable!()
-            };
-            let name = path
-                .path
-                .get_ident()
-                .expect("capture parameter")
-                .to_string();
-            let index: usize = name
-                .strip_prefix("__cq_capture_")
-                .and_then(|index| index.parse().ok())
-                .expect("recorded capture");
-            let Capture::Value {
+            let index = captures.value_index(value, ty, codecs);
+            let Some(Capture::Value {
                 expression,
                 logical,
                 codec,
-            } = &captures.records[index]
+            }) = captures.records.get(index)
             else {
-                unreachable!()
+                return;
             };
             let host = host_value(index, expression, logical, codec.as_ref());
             *value = syn::parse_quote!(#host);

@@ -87,11 +87,32 @@ impl PublicationStorage {
     }
 }
 
+/// One caller-owned arena field: a head column at its recorded device carrier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArenaColumn {
+    pub column: String,
+    /// Copied from `Bindings::carriers`; its `Scalar::COLUMN` fixes the width
+    /// and signedness of the field.
+    pub carrier: syn::Type,
+}
+
+/// The caller-owned arena encoding of a raw-candidate device terminal
+/// (`gpu_datalog_runtime::Packing`): fields in recorded order, high-first;
+/// signed fields sign-flipped; keys of at most two u64 lanes store their low
+/// lane first, wider keys their high lane first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArenaRows {
+    pub columns: Vec<ArenaColumn>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicationRecord {
     pub storage: PublicationStorage,
     /// Host unions concatenate into this carrier before any recorded packing.
     pub union_staging: Option<FlatRows>,
+    /// Present exactly for a raw-candidate terminal dispatch publication: the
+    /// encoding a caller-owned arena translation publishes instead of `storage`.
+    pub arena: Option<ArenaRows>,
 }
 
 /// Recorded Sequence facts shared by selection and checking. No storage
@@ -195,6 +216,16 @@ impl<'a> Facts<'a> {
             columns: self.carrier.clone(),
             width: self.carrier.len().max(1),
         }
+    }
+
+    /// GPU-Arena: the terminal dispatch publication of raw candidate rows (no
+    /// group, scalar fold or canonical granularity) may publish into an arena.
+    fn raw_terminal(&self, name: &str, term: &'a Term, storage: &PublicationStorage) -> bool {
+        name == self.terminal
+            && self.dispatches.contains(name)
+            && !matches!(root(self, term), Term::Group(..))
+            && root_fold(self, term).is_none()
+            && storage.canonical_provider().is_none()
     }
 
     /// The provider of the canonical rows record of this publication's result.
@@ -420,11 +451,31 @@ pub fn derive(
         } else {
             PublicationStorage::FlatRows(facts.flat())
         };
+        let arena = facts
+            .raw_terminal(&name, term, &storage)
+            .then(|| -> syn::Result<ArenaRows> {
+                let columns = facts
+                    .output
+                    .iter()
+                    .map(|column| {
+                        let carrier = analysis.gpu_bindings.carriers.get(column).cloned();
+                        Ok(ArenaColumn {
+                            column: column.clone(),
+                            carrier: carrier.ok_or_else(|| {
+                                error("arena field requires its recorded device carrier")
+                            })?,
+                        })
+                    })
+                    .collect::<syn::Result<_>>()?;
+                Ok(ArenaRows { columns })
+            })
+            .transpose()?;
         records.insert(
             name.clone(),
             PublicationRecord {
                 storage,
                 union_staging: context.host_union(&name, term).map(|_| facts.flat()),
+                arena,
             },
         );
     }
@@ -529,6 +580,27 @@ pub fn check(
             Some(staging) if host_union && staging == &flat => {}
             None if !host_union => {}
             _ => return Err(error("union staging contradicts publication provenance")),
+        }
+        // GPU-Arena: exactly a raw-candidate terminal dispatch records the
+        // arena encoding: the output heading in order at recorded carriers.
+        let raw_terminal = facts.raw_terminal(name, term, &record.storage);
+        match &record.arena {
+            None if !raw_terminal => {}
+            Some(arena)
+                if raw_terminal
+                    && arena
+                        .columns
+                        .iter()
+                        .map(|field| &field.column)
+                        .eq(facts.output.iter())
+                    && arena.columns.iter().all(|field| {
+                        analysis.gpu_bindings.carriers.get(&field.column) == Some(&field.carrier)
+                    }) => {}
+            _ => {
+                return Err(error(
+                    "arena encoding contradicts the raw-candidate terminal",
+                ));
+            }
         }
         // A device-realized boundary owns any Canon on its own root paths.
         let device = terminal || host_union || facts.dispatches.contains(name);

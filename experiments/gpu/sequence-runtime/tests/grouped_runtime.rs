@@ -1,7 +1,10 @@
+mod support;
+
 use cq_gpu_sequence_runtime::{
     group::{self, Aggregate, SegmentedGroup},
-    Buffer, Pool, Result,
+    Buffer, Geometry, Pool, Result,
 };
+use support::AUX;
 
 fn aggregate(kind: u32) -> Aggregate {
     Aggregate {
@@ -20,11 +23,10 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
         &[2i64, 1, -7, -7, -7, 1, 1, 5, 5, 5, 1, 1, 5, 5, 5],
     )?;
     let aggregates = [aggregate(0), aggregate(1), aggregate(2), aggregate(3)];
-    let result =
-        unsafe { SegmentedGroup::fold(pool.clone(), &data, None, 3, 1, &aggregates, vec![])? }
-            .with_decoder(|v: &[i64], valid: &[u8]| -> Result<_> {
-                Ok((v.to_vec(), valid.to_vec()))
-            });
+    let result = unsafe {
+        SegmentedGroup::fold(pool.clone(), &data, None, 3, 1, &aggregates, vec![], &AUX)?
+    }
+    .with_decoder(|v: &[i64], valid: &[u8]| -> Result<_> { Ok((v.to_vec(), valid.to_vec())) });
     assert_eq!(
         // DECODE P: diagnostic grouped monoids publish host values and validity for exact assertions.
         result.to_host()?,
@@ -35,22 +37,35 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
     );
     let live = cuda_core::DeviceBuffer::from_host(pool.stream(), &[0u32, 1, 0])?;
     let selected = unsafe {
-        SegmentedGroup::fold(pool.clone(), &data, Some(&live), 3, 1, &aggregates, vec![])?
+        SegmentedGroup::fold(
+            pool.clone(),
+            &data,
+            Some(&live),
+            3,
+            1,
+            &aggregates,
+            vec![],
+            &AUX,
+        )?
     }
     .with_decoder(|v: &[i64], _: &[u8]| -> Result<_> { Ok(v.to_vec()) });
     // DECODE P: diagnostic selected aggregate publishes its final host answer.
     assert_eq!(selected.to_host()?, vec![vec![1, 1, 5, 5, 5]]);
     let empty = Buffer::<i64>::zeroed(pool.clone(), 0)?;
-    let result = unsafe { group::fold(pool.clone(), &empty, None, 0, 0, &aggregates, vec![])? }
-        .with_decoder(|v: &[i64], valid: &[u8]| -> Result<_> { Ok((v.to_vec(), valid.to_vec())) });
+    let result =
+        unsafe { group::fold(pool.clone(), &empty, None, 0, 0, &aggregates, vec![], &AUX)? }
+            .with_decoder(|v: &[i64], valid: &[u8]| -> Result<_> {
+                Ok((v.to_vec(), valid.to_vec()))
+            });
     assert_eq!(
         // DECODE P: diagnostic empty global aggregate publishes identity values and validity.
         result.to_host()?,
         vec![(vec![0, 0, 0, 0], vec![1, 1, 0, 0])]
     );
-    let result =
-        unsafe { SegmentedGroup::fold(pool.clone(), &empty, None, 0, 1, &aggregates, vec![])? }
-            .with_decoder(|v: &[i64], _: &[u8]| -> Result<_> { Ok(v.to_vec()) });
+    let result = unsafe {
+        SegmentedGroup::fold(pool.clone(), &empty, None, 0, 1, &aggregates, vec![], &AUX)?
+    }
+    .with_decoder(|v: &[i64], _: &[u8]| -> Result<_> { Ok(v.to_vec()) });
     // DECODE P: diagnostic empty keyed aggregate exposes its empty host answer.
     assert!(result.to_host()?.is_empty());
     let data = Buffer::from_host(pool.clone(), &[u32::MAX as i64, 1])?;
@@ -67,15 +82,37 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
                 max: u32::MAX as i64,
             }],
             vec![],
+            &AUX,
         )?
     }
     .with_decoder(|v: &[i64], _: &[u8]| -> Result<_> { Ok(v.to_vec()) });
     // DECODE P: diagnostic u32 aggregate overflow checks logical answer publication rejection.
     assert!(result.to_host().is_err());
     let data = Buffer::from_host(pool.clone(), &[i64::MAX, 1])?;
-    let result = unsafe { group::fold(pool, &data, None, 2, 0, &[aggregate(1)], vec![])? }
-        .with_decoder(|v: &[i64], _: &[u8]| -> Result<_> { Ok(v.to_vec()) });
+    let result = unsafe {
+        group::fold(
+            pool.clone(),
+            &data,
+            None,
+            2,
+            0,
+            &[aggregate(1)],
+            vec![],
+            &AUX,
+        )?
+    }
+    .with_decoder(|v: &[i64], _: &[u8]| -> Result<_> { Ok(v.to_vec()) });
     // DECODE P: diagnostic i64 aggregate overflow checks logical answer publication rejection.
     assert!(result.to_host().is_err());
+    // The reduce kernel stages 256 lanes in 4096 shared bytes; other records are rejected.
+    let mut narrow = AUX;
+    narrow.group_reduce = Geometry {
+        block_threads: 256,
+        shared_bytes: 2048,
+    };
+    assert!(narrow.validate().is_err());
+    assert!(
+        unsafe { group::fold(pool, &data, None, 2, 0, &[aggregate(1)], vec![], &narrow) }.is_err()
+    );
     Ok(())
 }

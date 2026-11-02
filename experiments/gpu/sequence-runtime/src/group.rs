@@ -1,7 +1,7 @@
 //! GPU machine instance of segmented grouped monoid folds.
 //! Kernel programs are retained per context for the active query scope; each
 //! fold binds them to its caller's current stream and allocator.
-use crate::{pointer, release, temporary, Result};
+use crate::{pointer, release, temporary, Auxiliary, Geometry, Result};
 use cq_gpu_runtime::{Buffer, Pool};
 use gpu_device_columns::OutputCount;
 use rccl_thrust::{arithmetic_range, select_flagged, DeviceBufferExt};
@@ -268,6 +268,7 @@ impl SegmentedGroup {
     /// # Safety
     /// The input and flags must satisfy [`fold`]'s canonical-valuation,
     /// initialization, device and stream requirements.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn fold(
         pool: Arc<Pool>,
         input: &Buffer<i64>,
@@ -276,18 +277,22 @@ impl SegmentedGroup {
         keys: usize,
         aggregates: &[Aggregate],
         statuses: Vec<Arc<Buffer<OutputCount>>>,
+        aux: &Auxiliary,
     ) -> Result<GroupedOutput> {
-        unsafe { fold(pool, input, live, rows, keys, aggregates, statuses) }
+        unsafe { fold(pool, input, live, rows, keys, aggregates, statuses, aux) }
     }
 }
 
 /// Reduce canonical valuation arguments. Each input row contains the key fields
 /// followed by one evaluated argument per aggregate (count uses one).
+/// Element kernels launch with the recorded `group` geometry; `reduce`
+/// launches one `group_reduce` block per group for every output column.
 ///
 /// # Safety
 /// The initialized row-major input must be canonical over complete valuations,
 /// not merely over aggregate arguments. Optional 0/1 flags and all live rows
 /// must be initialized on the same device and ready on `pool`'s stream.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn fold(
     pool: Arc<Pool>,
     input: &Buffer<i64>,
@@ -296,7 +301,10 @@ pub unsafe fn fold(
     keys: usize,
     aggregates: &[Aggregate],
     statuses: Vec<Arc<Buffer<OutputCount>>>,
+    aux: &Auxiliary,
 ) -> Result<GroupedOutput> {
+    aux.validate()?;
+    let element = aux.group;
     let width = keys
         .checked_add(aggregates.len())
         .ok_or("group width overflow")?;
@@ -364,29 +372,19 @@ pub unsafe fn fold(
             >(&launch, rows)?)
         };
         if live.is_none() {
-            let shape = module.prepare_identity(cuda_core::LaunchConfig1D::new(1, 256, 0))?;
-            let blocks = cq_gpu_runtime::launch_grid_for_kernel(
-                shape.function(),
-                rows.div_ceil(256),
-                256,
-                0,
-            )?;
+            let shape = module.prepare_identity(element.config(1))?;
+            let blocks = element.grid(shape.function(), rows)?;
             module.identity(
                 stream,
-                &module.prepare_identity(cuda_core::LaunchConfig1D::new(blocks, 256, 0))?,
+                &module.prepare_identity(element.config(blocks))?,
                 pointer(&order),
                 rows as u32,
             )?;
         }
         let gather_prepared = if keys != 0 {
-            let shape = module.prepare_gather_key(cuda_core::LaunchConfig1D::new(1, 256, 0))?;
-            let blocks = cq_gpu_runtime::launch_grid_for_kernel(
-                shape.function(),
-                rows.div_ceil(256),
-                256,
-                0,
-            )?;
-            Some(module.prepare_gather_key(cuda_core::LaunchConfig1D::new(blocks, 256, 0))?)
+            let shape = module.prepare_gather_key(element.config(1))?;
+            let blocks = element.grid(shape.function(), rows)?;
+            Some(module.prepare_gather_key(element.config(blocks))?)
         } else {
             None
         };
@@ -420,12 +418,11 @@ pub unsafe fn fold(
                 std::mem::swap(&mut sort_keys, &mut alternate_keys);
             }
         }
-        let shape = module.prepare_boundaries(cuda_core::LaunchConfig1D::new(1, 256, 0))?;
-        let blocks =
-            cq_gpu_runtime::launch_grid_for_kernel(shape.function(), rows.div_ceil(256), 256, 0)?;
+        let shape = module.prepare_boundaries(element.config(1))?;
+        let blocks = element.grid(shape.function(), rows)?;
         module.boundaries(
             stream,
-            &module.prepare_boundaries(cuda_core::LaunchConfig1D::new(blocks, 256, 0))?,
+            &module.prepare_boundaries(element.config(blocks))?,
             input.ptr(),
             pointer(&order),
             pointer(&flags),
@@ -457,7 +454,7 @@ pub unsafe fn fold(
         }],
     )?);
     if groups != 0 {
-        let config = cuda_core::LaunchConfig1D::new(groups as u32, 256, 4096);
+        let config = aux.group_reduce.config(groups as u32);
         for column in 0..width {
             let aggregate = if column < keys {
                 Aggregate {
@@ -504,7 +501,9 @@ pub unsafe fn fold(
 /// Formal rule GPU-GroupGridFold: grid partials of a keyless group. The
 /// generated fused kernel writes one typed partial (and extremum presence)
 /// per aggregate and block; [`GlobalFold::finish`] combines them on the same
-/// stream into the single global row, retaining the empty-input identity.
+/// stream into the single global row with one combine launch per aggregate,
+/// each a single block of the recorded combine geometry, retaining the
+/// empty-input identity.
 pub struct GlobalFold {
     pool: Arc<Pool>,
     partials: Buffer<i64>,
@@ -519,13 +518,19 @@ impl GlobalFold {
         if blocks == 0 || blocks > u32::MAX as usize || aggregates.is_empty() {
             return Err("invalid global fold grid or aggregate list".into());
         }
-        let cells = blocks.checked_mul(aggregates.len()).ok_or("global fold size overflow")?;
+        let cells = blocks
+            .checked_mul(aggregates.len())
+            .ok_or("global fold size overflow")?;
         Ok(Self {
             partials: Buffer::zeroed(pool.clone(), cells)?,
             present: Buffer::zeroed(pool.clone(), cells)?,
             metadata: Arc::new(Buffer::from_host(
                 pool.clone(),
-                &[OutputCount { rows: 1, error: 0, padding: 0 }],
+                &[OutputCount {
+                    rows: 1,
+                    error: 0,
+                    padding: 0,
+                }],
             )?),
             pool,
             blocks,
@@ -540,20 +545,31 @@ impl GlobalFold {
     }
     /// Sticky arithmetic failure word of the published row's metadata.
     pub fn error(&self) -> *mut u32 {
-        self.metadata.ptr().cast::<u64>().cast::<u32>().wrapping_add(2)
+        self.metadata
+            .ptr()
+            .cast::<u64>()
+            .cast::<u32>()
+            .wrapping_add(2)
     }
-    /// Combine every block's partials into the one global row.
+    /// Combine every block's partials into the one global row: one
+    /// `global_combine` launch per aggregate, each a single block of the
+    /// recorded `combine` geometry.
     ///
     /// # Safety
     /// Exactly `blocks` blocks of the fused partial kernel must have been
     /// launched on this pool's stream, each writing every aggregate's partial.
-    pub unsafe fn finish(self, statuses: Vec<Arc<Buffer<OutputCount>>>) -> Result<GroupedOutput> {
+    pub unsafe fn finish(
+        self,
+        statuses: Vec<Arc<Buffer<OutputCount>>>,
+        combine: Geometry,
+    ) -> Result<GroupedOutput> {
+        combine.check("group combine", Auxiliary::SUPPORTED_COMBINE)?;
         let width = self.aggregates.len();
         let values = Buffer::<i64>::zeroed(self.pool.clone(), width)?;
         let valid = Buffer::<u8>::zeroed(self.pool.clone(), width)?;
         let programs = programs(&self.pool)?;
         let module = &programs.module;
-        let config = cuda_core::LaunchConfig1D::new(1, 256, 3072);
+        let config = combine.config(1);
         for (column, aggregate) in self.aggregates.iter().enumerate() {
             module.global_combine(
                 self.pool.stream(),
@@ -571,7 +587,13 @@ impl GlobalFold {
                 self.error(),
             )?;
         }
-        Ok(GroupedOutput { values, valid, metadata: self.metadata, statuses, width })
+        Ok(GroupedOutput {
+            values,
+            valid,
+            metadata: self.metadata,
+            statuses,
+            width,
+        })
     }
 }
 
@@ -859,24 +881,47 @@ mod publication_tests {
     #[test]
     fn global_fold_combines_typed_partials_and_keeps_the_empty_identity() -> Result<()> {
         let pool = Pool::new(0, 0, 0)?;
-        let count = Aggregate { kind: 0, min: 0, max: i64::MAX };
-        let sum = Aggregate { kind: 1, min: i64::MIN, max: i64::MAX };
-        let min = Aggregate { kind: 2, min: i64::MIN, max: i64::MAX };
+        let count = Aggregate {
+            kind: 0,
+            min: 0,
+            max: i64::MAX,
+        };
+        let sum = Aggregate {
+            kind: 1,
+            min: i64::MIN,
+            max: i64::MAX,
+        };
+        let min = Aggregate {
+            kind: 2,
+            min: i64::MIN,
+            max: i64::MAX,
+        };
         let mut fold = GlobalFold::new(pool.clone(), 3, &[count, sum, min])?;
         // Block-major partials; only the last block saw an extremum.
         fold.partials = Buffer::from_host(pool.clone(), &[2i64, 10, 0, 0, 0, 0, 1, -4, 7])?;
         fold.present = Buffer::from_host(pool.clone(), &[0u32, 0, 0, 0, 0, 0, 0, 0, 1])?;
-        let rows = unsafe { fold.finish(Vec::new())? }
-            .with_decoder(|values: &[i64], valid: &[u8]| -> Result<_> { Ok((values.to_vec(), valid.to_vec())) });
+        let combine = Auxiliary::SUPPORTED_COMBINE;
+        let rows = unsafe { fold.finish(Vec::new(), combine)? }.with_decoder(
+            |values: &[i64], valid: &[u8]| -> Result<_> { Ok((values.to_vec(), valid.to_vec())) },
+        );
         assert_eq!(rows.to_host()?, vec![(vec![3, 6, 7], vec![1, 1, 1])]);
         let empty = GlobalFold::new(pool.clone(), 1, &[count, min])?;
-        let rows = unsafe { empty.finish(Vec::new())? }
-            .with_decoder(|values: &[i64], valid: &[u8]| -> Result<_> { Ok((values.to_vec(), valid.to_vec())) });
+        let rows = unsafe { empty.finish(Vec::new(), combine)? }.with_decoder(
+            |values: &[i64], valid: &[u8]| -> Result<_> { Ok((values.to_vec(), valid.to_vec())) },
+        );
         assert_eq!(rows.to_host()?, vec![(vec![0, 0], vec![1, 0])]);
         let mut overflow = GlobalFold::new(pool.clone(), 2, &[sum])?;
         overflow.partials = Buffer::from_host(pool.clone(), &[i64::MAX, 1])?;
-        let rows = unsafe { overflow.finish(Vec::new())? }.with_decoder(|values: &[i64], _: &[u8]| -> Result<_> { Ok(values[0]) });
+        let rows = unsafe { overflow.finish(Vec::new(), combine)? }
+            .with_decoder(|values: &[i64], _: &[u8]| -> Result<_> { Ok(values[0]) });
         assert!(rows.to_host().is_err());
+        // The kernel's static shared layout supports only the recorded table value.
+        let narrow = Geometry {
+            block_threads: 128,
+            ..combine
+        };
+        let rejected = GlobalFold::new(pool.clone(), 1, &[count])?;
+        assert!(unsafe { rejected.finish(Vec::new(), narrow) }.is_err());
         Ok(())
     }
 
@@ -898,8 +943,18 @@ mod publication_tests {
                     padding: 0,
                 }],
             )?);
-            let grouped =
-                unsafe { fold(pool.clone(), &input, None, 3, 1, &[aggregate], vec![status])? };
+            let grouped = unsafe {
+                fold(
+                    pool.clone(),
+                    &input,
+                    None,
+                    3,
+                    1,
+                    &[aggregate],
+                    vec![status],
+                    &Auxiliary::SUPPORTED,
+                )?
+            };
             let published = unsafe {
                 grouped.with_decoder(()).into_columns::<(i64, i64)>(
                     &[1, 0],

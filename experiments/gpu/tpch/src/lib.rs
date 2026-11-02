@@ -249,11 +249,12 @@ mod tests {
                     .any(|value| value.as_bool().unwrap());
                 // A one-stage terminal retains its explicit host publication;
                 // inter-stage automatic placement follows target and validity.
-                let expected = if stages.len() > 1 && stage["pipeline"]["target"] == "device" && !nullable {
-                    "device"
-                } else {
-                    "host"
-                };
+                let expected =
+                    if stages.len() > 1 && stage["pipeline"]["target"] == "device" && !nullable {
+                        "device"
+                    } else {
+                        "host"
+                    };
                 assert_eq!(
                     stage["publication"], expected,
                     "{} stage {}: publication must follow target and validity facts",

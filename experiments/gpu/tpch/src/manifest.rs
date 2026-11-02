@@ -48,7 +48,9 @@ impl cq_storage::CodeDomain for DictionaryDomain<'_> {
     type Code = u32;
 
     fn exact(&self, value: &str) -> u32 {
-        self.0.binary_search(&value).ok()
+        self.0
+            .binary_search(&value)
+            .ok()
             .map(|index| u32::try_from(index).expect("validated dictionary size"))
             .unwrap_or(u32::MAX)
     }
@@ -74,13 +76,21 @@ pub trait DictionaryCode: Sized {
 }
 
 impl DictionaryCode for cq_load::StringCode {
-    fn from_code(code: u32) -> Self { Self(code) }
-    fn into_code(self) -> u32 { self.0 }
+    fn from_code(code: u32) -> Self {
+        Self(code)
+    }
+    fn into_code(self) -> u32 {
+        self.0
+    }
 }
 
 impl DictionaryCode for u32 {
-    fn from_code(code: u32) -> Self { code }
-    fn into_code(self) -> u32 { self }
+    fn from_code(code: u32) -> Self {
+        code
+    }
+    fn into_code(self) -> u32 {
+        self
+    }
 }
 
 /// Host values follow the query declaration, not the on-disk representation.
@@ -306,6 +316,9 @@ mod dictionary_domain_tests {
         assert_eq!(cq_storage::domain::exact(&dictionary, &"red".to_owned()), 1);
         assert_eq!(cq_storage::domain::exact(&dictionary, &{ "red" }), 1);
         assert_eq!(cq_load::StringCode::from_code(1).into_code(), 1);
-        assert_eq!(cq_load::StringCode::from_code(u32::MAX).into_code(), u32::MAX);
+        assert_eq!(
+            cq_load::StringCode::from_code(u32::MAX).into_code(),
+            u32::MAX
+        );
     }
 }

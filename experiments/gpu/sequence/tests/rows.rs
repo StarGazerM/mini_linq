@@ -289,7 +289,10 @@ fn segmented_arithmetic_bindings_are_lane_local() {
     assert!(generated.contains("__child_position"), "{generated}");
     assert!(generated.contains("let mut __map_code_"), "{generated}");
     // GPU-Capture: the literal is a closed value read from its host witness.
-    assert!(generated.contains(":: MaybeUninit :: new (2)"), "{generated}");
+    assert!(
+        generated.contains(":: MaybeUninit :: new (2)"),
+        "{generated}"
+    );
     assert!(
         generated.contains("* value * unsafe { __cq_closed_0 . assume_init () }"),
         "{generated}"

@@ -155,17 +155,19 @@ fn memory_snapshot(
 /// absent from the committed canonical layout, in canonical column order.
 /// The canonical state is read, not changed: publication appends separately.
 fn admission(
+    program: &Program,
     context: &RoundContext,
     index: usize,
     candidates: &Ident,
     fresh: &Ident,
 ) -> TokenStream {
     let canonical = context.relations[index].providers.canonical;
+    let threads = device(program).layouts[canonical].permutation_threads;
     let state = local("layout", canonical);
     let packing = local("packing", index);
     let order = &context.layouts[canonical].columns;
     let ordered = (!identity(order)).then(|| quote!(
-        let #candidates = #packing.permute_device(&#candidates, #candidates.len(), &[#(#order),*])?;
+        let #candidates = #packing.permute_device(&#candidates, #candidates.len(), &[#(#order),*], #threads)?;
     ));
     quote!(#ordered let #fresh = #state.fresh(&#candidates, #candidates.len())?;)
 }
@@ -173,6 +175,7 @@ fn admission(
 /// The fresh canonical-order run in another column order: shared when the
 /// order is the canonical one, otherwise permuted and sorted by `sorter`.
 fn reordered(
+    program: &Program,
     context: &RoundContext,
     index: usize,
     fresh: &Ident,
@@ -180,13 +183,14 @@ fn reordered(
     sorter: &Ident,
 ) -> TokenStream {
     let canonical = context.relations[index].providers.canonical;
+    let threads = device(program).layouts[canonical].permutation_threads;
     let order = reorder(&context.layouts[canonical].columns, columns);
     if identity(&order) {
         return quote!(#fresh.clone());
     }
     let packing = local("layout_packing", canonical);
     quote!({
-        let permuted = #packing.permute_device(#fresh.buffer(), #fresh.len(), &[#(#order),*])?;
+        let permuted = #packing.permute_device(#fresh.buffer(), #fresh.len(), &[#(#order),*], #threads)?;
         // SAFETY: a column permutation of the unique fresh run is unique.
         unsafe { #sorter.sort_known_unique(&permuted, #fresh.len())? }
     })
@@ -196,6 +200,7 @@ fn reordered(
 /// recorded state in its own order, then republish its view from those runs
 /// (unchanged runs republish the same view; field descriptors are shared).
 fn full_layouts(
+    program: &Program,
     context: &RoundContext,
     index: usize,
     fresh: &Ident,
@@ -206,7 +211,7 @@ fn full_layouts(
         let state = local("layout", j);
         let packing = local("layout_packing", j);
         let host = &layout.host;
-        let run = reordered(context, index, fresh, &layout.columns, &state);
+        let run = reordered(program, context, index, fresh, &layout.columns, &state);
         quote!({
             let run = #run;
             // SAFETY: fresh rows are absent from the canonical layout, and every
@@ -234,18 +239,18 @@ fn admit_publish(
     let candidates = local("candidates", i);
     let fresh = local("fresh", i);
     let buffer = format_ident!("__cq_gpu_candidate_rows");
-    let admit = admission(context, i, &buffer, &fresh);
+    let admit = admission(program, context, i, &buffer, &fresh);
     let relation_name = relation.declaration.name.to_string();
     let canonical = local("layout", relation.providers.canonical);
     let mut operations = Vec::new();
     for operation in &transaction.operations {
         operations.push(match operation.kind.to_string().as_str() {
-            "full_layouts" => full_layouts(context, i, &fresh, &operation.layouts),
+            "full_layouts" => full_layouts(program, context, i, &fresh, &operation.layouts),
             "delta_swap" => {
                 let delta = relation.delta_host.as_ref().expect("checked delta");
                 let next = &relation.next;
                 let ty = &relation.providers.next.ty;
-                let run = reordered(context, i, &fresh, &(0..relation.declaration.arity()).collect::<Vec<_>>(), &canonical);
+                let run = reordered(program, context, i, &fresh, &(0..relation.declaration.arity()).collect::<Vec<_>>(), &canonical);
                 // Recorded `fresh_run` NEW: the fresh rows in relation order,
                 // built directly; publishing it as the next delta is a move.
                 quote!(
@@ -259,7 +264,7 @@ fn admit_publish(
                     let state = local("delta_layout", j);
                     let schema = local("delta_packing", j);
                     let host = &layout.host;
-                    let run = reordered(context, i, &fresh, &layout.columns, &state);
+                    let run = reordered(program, context, i, &fresh, &layout.columns, &state);
                     quote!(#host = #host.republish(__cq_gpu_pool.clone(), #schema.clone(), ::std::vec![#run])?;)
                 });
                 quote!(#(#rebuilds)*)
@@ -405,6 +410,8 @@ struct HoleCall {
 /// publication placement and transactions over the recorded device states on
 /// one device stream. Admission is fresh = unique(candidates) minus the
 /// committed canonical layout; publication appends fresh rows to every layout.
+/// Constructors consume recorded merge tiles and auxiliary geometry; worker
+/// arenas use the same recorded initializers and scratch release as the caller.
 pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     crate::storage::check_device(&program.storage)?;
     round::contract::check(program)?;
@@ -656,7 +663,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         });
         let upload = format_ident!("__cq_gpu_upload");
         let fresh = local("fresh", index);
-        let admit = admission(context, index, &upload, &fresh);
+        let admit = admission(program, context, index, &upload, &fresh);
         let layouts = context
             .layouts
             .iter()
@@ -664,7 +671,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             .filter(|(_, layout)| layout.relation == index)
             .map(|(j, _)| j)
             .collect::<Vec<_>>();
-        let publish = full_layouts(context, index, &fresh, &layouts);
+        let publish = full_layouts(program, context, index, &fresh, &layouts);
         let runner = program_runner();
         initialize.push(quote!(
             #runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> {
@@ -683,8 +690,23 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     // lane workers; their arenas are component-scoped like the main arenas.
     let streams = program.schedule.streams;
     let (create_lanes, release_lanes) = if streams > 1 {
+        let initializers = device
+            .relations
+            .iter()
+            .enumerate()
+            .map(|(relation, record)| {
+                let (ty, init) = (&record.arena, &record.arena_init);
+                quote!(#relation => { let arena: #ty = #init; arena })
+            });
         (
-            quote!(let __cq_gpu_lanes = ::gpu_datalog_runtime::Lanes::new(&__cq_gpu_pool, #streams)?;),
+            quote!(let __cq_gpu_lanes = ::gpu_datalog_runtime::Lanes::new(
+                &__cq_gpu_pool, #streams,
+                |relation, __cq_gpu_pool| match relation {
+                    #(#initializers,)*
+                    _ => unreachable!("checked lane head relation"),
+                },
+                ::cq_gpu_sequence_runtime::release_cached_scratch,
+            )?;),
             quote!(__cq_gpu_lanes.release()?;),
         )
     } else {
@@ -935,7 +957,7 @@ fn phase(
                     .unwrap_or_else(|| format!("{}/{}", head_name, program.holes[hole].cq.name));
                 let rows = format_ident!("__cq_expansion_candidates");
                 let fresh = format_ident!("__cq_expansion_fresh");
-                let admit = admission(context, rule.head, &rows, &fresh);
+                let admit = admission(program, context, rule.head, &rows, &fresh);
                 Some(quote! {
                     if ::gpu_datalog_runtime::trace_kernels() {
                         if let Some(timing) = ::cq_gpu_runtime::take_last_timings() {

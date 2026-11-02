@@ -16,7 +16,8 @@ fn cartesian_let_operands_use_whole_relation_reads() {
         relation r0(c0: i32); relation r1(c0: i32, c1: i32);
         relation answer(c0: i32, c1: i32);
         answer(v0, v2) :- r0(v0), r1(v1, v2);
-    }.collect();
+    }
+    .collect();
     assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
     let fine: HashSet<_> = ::mini_linq::compile! {
         pipeline { plan = ::cq_planners::order(written, fine); }
@@ -24,7 +25,8 @@ fn cartesian_let_operands_use_whole_relation_reads() {
         relation r0(c0: i32); relation r1(c0: i32, c1: i32);
         relation answer(c0: i32, c1: i32);
         answer(v0, v2) :- r0(v0), r1(v1, v2);
-    }.collect();
+    }
+    .collect();
     let expected = HashSet::from([(&1, &4), (&1, &6), (&2, &4), (&2, &6)]);
     assert_eq!(built, expected);
     assert_eq!(fine, expected);

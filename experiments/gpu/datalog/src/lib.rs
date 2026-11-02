@@ -35,7 +35,10 @@ pub fn bind_inputs(
                     ));
                 }
             }
-            Ok(Self { providers, inputs: bindings })
+            Ok(Self {
+                providers,
+                inputs: bindings,
+            })
         }
     }
     let bindings = syn::parse2::<Bindings>(args)?;

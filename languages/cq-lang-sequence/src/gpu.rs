@@ -605,26 +605,50 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 "synchronization contradicts the recorded publication",
             ));
         }
-        // GPU-RootSpread: the recorded partition follows the program's root
-        // policy exactly; a fold-bearing dispatch never spreads.
-        match (
-            spread_rows(program, execution, dispatch.parts),
-            &execution.partition,
-        ) {
-            (Some(expected), Partition::Spread { max_rows }) if expected == *max_rows => {}
-            (None, Partition::One | Partition::Tiles { .. }) => {}
-            _ => {
+        // GPU-RootSpread: the partition kind follows the program's declared
+        // roots policy; a fold-bearing dispatch never spreads. Any positive
+        // spread bound is sound; a declared distributed tile is a fact.
+        let fold_free = execution.fold == FoldCompletion::Local
+            && execution
+                .chains
+                .iter()
+                .flat_map(|chain| &chain.strips)
+                .all(|strip| strip.fold.is_none());
+        let spreads = program.sequence.roots == crate::Roots::Spread
+            && !execution.chains.is_empty()
+            && fold_free;
+        let partition = match &execution.partition {
+            Partition::Spread { max_rows } => {
+                spreads && *max_rows > 0 && dispatch.parts.is_none_or(|parts| parts == *max_rows)
+            }
+            Partition::One | Partition::Tiles { .. } => !spreads,
+        };
+        if !partition {
+            return Err(error(
+                "root partition contradicts the recorded roots policy",
+            ));
+        }
+        // GPU-RootShare: sharing is optional; when recorded, the dispatch is a
+        // spread single chain whose source level has one local tile and that
+        // expands at least once, and the claimed tile cap is a positive u32.
+        if let Share::FirstExpansion { tiles } = execution.share {
+            let shareable = matches!(
+                (&execution.partition, execution.chains.as_slice()),
+                (Partition::Spread { .. }, [chain])
+                    if chain.strips.len() >= 2 && chain.strips[0].nested.is_empty()
+            );
+            if !shareable || tiles == 0 || u32::try_from(tiles).is_err() {
                 return Err(error(
-                    "root partition contradicts the recorded roots policy",
+                    "first-expansion sharing requires a spread single-chain dispatch that expands",
                 ));
             }
         }
-        if execution.share != shared_first(execution) {
-            return Err(error(
-                "first-expansion sharing contradicts the spread single-chain dispatch",
-            ));
-        }
-        if execution.meta != resident_meta(execution) {
+        // GPU-ResidentMeta: fresh words are always sound; resident words need
+        // the arena terminal protocol without a block-partial combine.
+        if execution.meta == Meta::Resident
+            && !(execution.capacity == InitialCapacity::PreviousCount
+                && execution.fold == FoldCompletion::Local)
+        {
             return Err(error(
                 "resident metadata contradicts the arena terminal protocol",
             ));

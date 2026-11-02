@@ -5,10 +5,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::gpu::bindings::ProviderAbi;
 use cq_lang_sequence::gpu::realization::{
-    BaseBounds, BoundSource, CandidateCount, Captures, ChoiceCarrier, DescriptorBounds,
-    Granularity, GroupCompletion, GroupInput, HostEvaluation, HostOutput, HostUnion, Interval,
-    Phase, ProviderBuild, Realization, SmallestRealization, SmallestSide, SourceAccess,
-    SourceOrigin, SourceRealization, Step, TerminalGroup, Ties, Transfer, TransferSource, UnionArm,
+    Auxiliary, BaseBounds, BlockGeometry, BoundSource, CandidateCount, Captures, ChoiceCarrier,
+    DescriptorBounds, Granularity, GroupCompletion, GroupInput, HostEvaluation, HostOutput,
+    HostUnion, Interval, Phase, ProviderBuild, Realization, Side, SmallestRealization,
+    SmallestSide, SourceAccess, SourceOrigin, SourceRealization, Step, TerminalGroup, Ties,
+    Transfer, TransferSource, UnionArm,
 };
 use cq_lang_sequence::gpu::{Grid, Publication};
 use cq_lang_sequence::{Analysis, Program, Term};
@@ -32,6 +33,64 @@ fn elements() -> Grid {
     }
 }
 
+/// Grid-partial blocks (and their combine block) hold one i64 value and one
+/// u32 presence word per lane in dynamic shared memory.
+const PARTIAL_LANE_BYTES: u32 = 12;
+
+fn partials_geometry() -> BlockGeometry {
+    BlockGeometry {
+        block_threads: crate::BLOCK_THREADS,
+        shared_bytes: crate::BLOCK_THREADS * PARTIAL_LANE_BYTES,
+    }
+}
+
+/// Shared bytes of one keyed-group reduction block (one block per group).
+const GROUP_REDUCE_SHARED_BYTES: u32 = 4096;
+
+/// The geometry each runtime auxiliary family is compiled for: element
+/// kernels in blocks of the collective width, the keyed reduction with its
+/// per-group shared buffer.
+fn auxiliary() -> Auxiliary {
+    let elements = BlockGeometry {
+        block_threads: crate::BLOCK_THREADS,
+        shared_bytes: 0,
+    };
+    Auxiliary {
+        selection: elements,
+        offsets: elements,
+        range: elements,
+        canon: elements,
+        group: elements,
+        group_reduce: BlockGeometry {
+            block_threads: crate::BLOCK_THREADS,
+            shared_bytes: GROUP_REDUCE_SHARED_BYTES,
+        },
+        bounds: elements,
+    }
+}
+
+/// Whether the runtime's auxiliary kernels can launch with the recorded
+/// geometry: their templates are compiled for blocks of the collective width;
+/// element kernels use no dynamic shared memory and the keyed reduction its
+/// per-group buffer.
+fn supported_auxiliary(record: &Auxiliary) -> bool {
+    let elements = |geometry: &BlockGeometry| {
+        geometry.block_threads == crate::BLOCK_THREADS && geometry.shared_bytes == 0
+    };
+    [
+        &record.selection,
+        &record.offsets,
+        &record.range,
+        &record.canon,
+        &record.group,
+        &record.bounds,
+    ]
+    .into_iter()
+    .all(elements)
+        && record.group_reduce.block_threads == crate::BLOCK_THREADS
+        && record.group_reduce.shared_bytes == GROUP_REDUCE_SHARED_BYTES
+}
+
 /// Formal rule GPU-Realization: select source access, publication steps,
 /// terminal grouping, transfers, auxiliary geometry, descriptor bounds and
 /// captures once, before printing.
@@ -39,16 +98,33 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Real
     let selected: syn::Result<Realization> = (|| {
         let facts = Facts::new(program, analysis)?;
         let captures = captures(&facts)?;
-        let sources = sources(&facts, &captures)?;
+        let mut sources = sources(&facts, &captures)?;
         let (steps, output) = Steps::new(&facts, &sources).run()?;
+        // One provider owner: a publication step that builds a result's
+        // providers leaves its source the scan or interval read.
+        for (name, source) in &mut sources {
+            if let SourceAccess::Provider { selection } = &source.access
+                && step_builds(&steps, analysis, name)
+            {
+                source.access = match selection {
+                    Some(interval) => SourceAccess::Positions(interval.clone()),
+                    None => SourceAccess::Scan,
+                };
+            }
+        }
         let smallest = smallest(&facts)?;
         Ok(Realization {
             rejection: None,
             sources,
+            whole_lookups: crate::rows::lookup_demands(program)
+                .into_iter()
+                .filter_map(|(name, keys)| keys.is_empty().then_some(name))
+                .collect(),
             steps,
             output,
             captures,
             smallest,
+            auxiliary: Some(auxiliary()),
         })
     })();
     let realization = match selected {
@@ -224,8 +300,8 @@ struct Facts<'a> {
     analysis: &'a Analysis,
     definitions: BTreeMap<String, Definition>,
     sequence: BTreeMap<String, &'a Term>,
-    /// Physical row types with codec-encoded columns as u32 carriers.
-    carriers: BTreeMap<String, BTreeMap<String, syn::Type>>,
+    /// Recorded device carrier of every column.
+    carriers: &'a BTreeMap<String, syn::Type>,
     resident: BTreeSet<String>,
     runs: BTreeSet<String>,
     device_results: BTreeSet<String>,
@@ -252,27 +328,7 @@ impl<'a> Facts<'a> {
             .map(|d| (symbol_name(&d.name), &d.term))
             .collect();
         let codecs = crate::runs::Codecs::check(&program.structures)?;
-        let carriers = analysis
-            .structures
-            .physical
-            .rows
-            .iter()
-            .map(|(name, row)| {
-                let types = row
-                    .types
-                    .iter()
-                    .map(|(column, ty)| {
-                        let ty = if codecs.get(ty).is_some() {
-                            syn::parse_quote!(u32)
-                        } else {
-                            ty.clone()
-                        };
-                        (column.clone(), ty)
-                    })
-                    .collect();
-                (name.clone(), types)
-            })
-            .collect();
+        let carriers = &analysis.gpu_bindings.carriers;
         let mut resident = BTreeSet::new();
         let mut runs = BTreeSet::new();
         for input in program.structures.physical.inputs() {
@@ -378,6 +434,31 @@ impl<'a> Facts<'a> {
             .levels
             .get(name)
             .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
+    }
+
+    /// Position of the Sequence definition `name`.
+    fn position(&self, name: &str) -> Option<usize> {
+        self.program
+            .sequence
+            .definitions
+            .iter()
+            .position(|definition| symbol_name(&definition.name) == name)
+    }
+
+    /// Position of the first Sequence definition that looks up a provider of
+    /// the Physical result `result` (directly or through its store).
+    fn first_reader(&self, result: &str) -> Option<usize> {
+        self.program
+            .sequence
+            .definitions
+            .iter()
+            .position(|definition| {
+                crate::rows::lookup_providers(&definition.term)
+                    .iter()
+                    .any(|provider| {
+                        self.analysis.results.get(provider).unwrap_or(provider) == result
+                    })
+            })
     }
 
     fn is_host_store(&self, name: &str) -> bool {
@@ -506,16 +587,6 @@ pub(crate) fn host_bound(
     bound
 }
 
-fn interval(interval: &crate::rows::Interval) -> syn::Result<Interval> {
-    let start = &interval.start;
-    let end = &interval.end;
-    Ok(Interval {
-        column: interval.column.clone(),
-        start: syn::parse2(quote::quote!(#start))?,
-        end: syn::parse2(quote::quote!(#end))?,
-    })
-}
-
 /// Host evaluation transfers: resident inputs read by host Rust that are not
 /// bound to completed publications download complete rows.
 fn resident_transfers(
@@ -641,7 +712,7 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                 );
                 continue;
             }
-            let selection = origin.selection.as_ref().map(interval).transpose()?;
+            let selection = origin.selection.clone();
             (
                 SourceOrigin::Resident {
                     host: origin.host.clone(),
@@ -743,7 +814,7 @@ impl<'f, 'a> Steps<'f, 'a> {
     fn new(facts: &'f Facts<'a>, sources: &'f BTreeMap<String, SourceRealization>) -> Self {
         let mut bounds = BoundsState::default();
         // Run reads carry Scalar ranges; a provider key over them is measured.
-        for (name, source) in sources {
+        for source in sources.values() {
             let SourceOrigin::Runs { host, .. } = &source.origin else {
                 continue;
             };
@@ -751,7 +822,7 @@ impl<'f, 'a> Steps<'f, 'a> {
                 let Some((column, _)) = source.columns.iter().find(|(_, o)| *o == original) else {
                     continue;
                 };
-                let ty = facts.carriers[name][column].clone();
+                let ty = facts.carriers[column].clone();
                 bounds.measured.insert(column.clone());
                 bounds
                     .columns
@@ -799,11 +870,11 @@ impl<'f, 'a> Steps<'f, 'a> {
                 .columns
                 .insert(column, (BaseBounds::Union(union), Vec::new()));
         }
-        for (name, row) in &facts.analysis.structures.physical.rows {
+        for row in facts.analysis.structures.physical.rows.values() {
             for column in &row.computed {
                 bounds.columns.entry(column.clone()).or_insert_with(|| {
                     (
-                        BaseBounds::Scalar(facts.carriers[name][column].clone()),
+                        BaseBounds::Scalar(facts.carriers[column].clone()),
                         Vec::new(),
                     )
                 });
@@ -1025,11 +1096,48 @@ impl<'f, 'a> Steps<'f, 'a> {
         }
     }
 
+    /// GPU-Realization: a provider has one owner. A nonterminal publication
+    /// builds its result's providers when it precedes every reader; a reader
+    /// before it is served by the source-built provider, and the publication
+    /// builds none.
+    fn owned_provider(
+        &self,
+        publication: &str,
+        result: &str,
+        terminal: bool,
+    ) -> syn::Result<Option<ProviderBuild>> {
+        if terminal {
+            return Ok(None);
+        }
+        let provider = self.provider(result);
+        let read_before = self
+            .facts
+            .first_reader(result)
+            .is_some_and(|reader| Some(reader) < self.facts.position(publication));
+        if !read_before || provider.is_none() {
+            return Ok(provider);
+        }
+        if source_builds(self.sources, result) {
+            Ok(None)
+        } else {
+            Err(error("a provider is read before any owner builds it"))
+        }
+    }
+
     fn provider(&self, result: &str) -> Option<ProviderBuild> {
         self.facts.analysis.structures.built.get(result)?;
         let layouts = self.facts.analysis.gpu_bindings.providers.get(result)?;
+        let selected: Vec<_> = layouts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, layout)| (layout.abi != ProviderAbi::Host).then_some(index))
+            .collect();
+        if selected.is_empty() {
+            return None;
+        }
         let mut columns = BTreeMap::new();
-        for layout in layouts {
+        for &index in &selected {
+            let layout = &layouts[index];
             for column in layout.keys.iter().chain(&layout.payload) {
                 let Some((base, merges)) = self.bounds.columns.get(column) else {
                     continue;
@@ -1045,7 +1153,10 @@ impl<'f, 'a> Steps<'f, 'a> {
                 );
             }
         }
-        Some(ProviderBuild { columns })
+        Some(ProviderBuild {
+            layouts: selected,
+            columns,
+        })
     }
 
     fn push(&mut self, name: &str, result: String, range: bool) {
@@ -1115,10 +1226,16 @@ impl<'f, 'a> Steps<'f, 'a> {
         let completion = if group.keys.is_empty() {
             GroupCompletion::GridPartials {
                 partials: Grid::KernelOccupancy,
+                geometry: partials_geometry(),
+                combine: partials_geometry(),
             }
         } else {
             GroupCompletion::Segmented {
                 arguments: Grid::KernelOccupancy,
+                geometry: BlockGeometry {
+                    block_threads: crate::BLOCK_THREADS,
+                    shared_bytes: 0,
+                },
             }
         };
         Ok(TerminalGroup {
@@ -1188,13 +1305,9 @@ impl<'f, 'a> Steps<'f, 'a> {
                     Some(Publication::DeferredRange { .. })
                 );
                 output |= terminal;
-                let provider = if terminal {
-                    None
-                } else {
-                    self.provider(&result)
-                };
-                self.push(&publication, result, range);
-                Step::Dispatch { provider }
+                let provider = self.owned_provider(&publication, &result, terminal)?;
+                self.push(&publication, result.clone(), range);
+                Step::Dispatch { result, provider }
             } else if host_level
                 && matches!(definition.term, Term::Store { .. })
                 && let Some(arms) = host_union(&definition.term, &facts.sequence)
@@ -1232,11 +1345,7 @@ impl<'f, 'a> Steps<'f, 'a> {
                     .get(&publication)
                     .is_some_and(|record| record.storage.codec().is_some());
                 output |= terminal && codec;
-                let provider = if terminal {
-                    None
-                } else {
-                    self.provider(&result)
-                };
+                let provider = self.owned_provider(&publication, &result, terminal)?;
                 self.push(&publication, result, false);
                 Step::HostUnion(HostUnion {
                     arms: records,
@@ -1288,8 +1397,8 @@ impl<'f, 'a> Steps<'f, 'a> {
 }
 
 /// Validate supplied realization records against checked facts and their
-/// stated invariants. The checker never calls `select`; it accepts any
-/// sound record, and re-derives only uniquely determined syntax (intervals).
+/// stated invariants. The checker never calls `select` or its helpers; it
+/// accepts any sound record.
 pub(crate) fn check(
     program: &Program,
     analysis: &Analysis,
@@ -1298,20 +1407,40 @@ pub(crate) fn check(
     if records.rejection.is_some() {
         return Ok(());
     }
+    let demands = crate::rows::lookup_demands(program);
+    if demands
+        .iter()
+        .any(|(name, keys)| keys.is_empty() && !records.whole_lookups.contains(name))
+        || records
+            .whole_lookups
+            .iter()
+            .any(|name| !demands.contains(&(name.clone(), Vec::new())))
+    {
+        return Err(error(
+            "whole-relation lookup records must cover exactly zero-key reads",
+        ));
+    }
+    if !records.auxiliary.as_ref().is_some_and(supported_auxiliary) {
+        return Err(error(
+            "auxiliary kernel geometry is missing or unsupported by the runtime families",
+        ));
+    }
     let facts = Facts::new(program, analysis)?;
-    let columns: BTreeSet<_> = analysis
-        .structures
-        .physical
-        .rows
-        .values()
-        .flat_map(|row| row.types.keys().cloned())
-        .collect();
-    crate::capture::check(&records.captures, &columns, &facts.codecs)?;
+    crate::capture::check(
+        &records.captures,
+        &facts.definitions,
+        analysis,
+        &facts.codecs,
+    )?;
     check_smallest(&facts, &records.smallest)?;
     let host_bound = host_bound(&facts.definitions, &records.captures);
-    let grid = |grid: &Grid| match grid {
-        Grid::KernelOccupancy => true,
-        Grid::Elements { block_threads } => *block_threads > 0,
+    // Element templates (union decode/pack, host-output pack) are compiled
+    // for blocks of the collective width.
+    let elements = |grid: &Grid| {
+        *grid
+            == Grid::Elements {
+                block_threads: crate::BLOCK_THREADS,
+            }
     };
     for (name, source) in &records.sources {
         if !facts.definitions.contains_key(name) {
@@ -1350,7 +1479,7 @@ pub(crate) fn check(
                         "upload requires a nonresident host dependency at build",
                     ));
                 }
-                check_transfers(&facts, evaluation, &BTreeSet::new())?;
+                CheckState::default().evaluation(&facts, evaluation, name)?;
                 &analysis.structures.layouts[name]
             }
         };
@@ -1387,13 +1516,7 @@ pub(crate) fn check(
                 }
                 // One owner per provider: a publication step building the
                 // same result's providers excludes a source-built provider.
-                if records.steps.iter().any(|(publication, step)| match step {
-                    Step::Dispatch { provider: Some(_) }
-                    | Step::HostUnion(HostUnion {
-                        provider: Some(_), ..
-                    }) => analysis.results.get(publication) == Some(name),
-                    _ => false,
-                }) {
+                if step_builds(&records.steps, analysis, name) {
                     return Err(error(
                         "provider access duplicates a publication's provider build",
                     ));
@@ -1401,18 +1524,8 @@ pub(crate) fn check(
                 selection.as_ref()
             }
         };
-        if let SourceOrigin::Resident { .. } = &source.origin {
-            let origin = crate::rows::origin(name, &host_bound)?
-                .ok_or_else(|| error("resident source lacks a rename origin"))?;
-            let expected = origin.selection.as_ref().map(interval).transpose()?;
-            if origin.predicate
-                || expected.as_ref() != selection
-                || origin.columns != source.columns
-            {
-                return Err(error(
-                    "source interval differs from its recorded contiguous selections",
-                ));
-            }
+        if let SourceOrigin::Resident { host } = &source.origin {
+            check_resident_chain(&host_bound, name, host, &source.columns, selection)?;
         } else if selection.is_some() {
             return Err(error("only resident sources fold interval selections"));
         }
@@ -1436,10 +1549,11 @@ pub(crate) fn check(
         .sequence
         .get(&final_name)
         .and_then(|term| grouped_boundary(term, &facts.sequence));
-    let mut published: Vec<&String> = Vec::new();
+    let mut state = CheckState::default();
     for (name, step) in &records.steps {
         let term = facts.sequence[name];
-        let dispatch = analysis.dispatches.iter().any(|dispatch| {
+        let terminal = *name == final_name;
+        let dispatch = analysis.dispatches.iter().find(|dispatch| {
             dispatch.inner_stores.iter().rev().find(|store| {
                 facts
                     .sequence
@@ -1452,13 +1566,12 @@ pub(crate) fn check(
                 let same = final_group.is_some_and(|(group, _)| {
                     grouped_boundary(term, &facts.sequence).is_some_and(|(other, _)| other == group)
                 });
-                if !same || *name == final_name {
+                if !same || terminal {
                     return Err(error("group alias does not name the terminal group"));
                 }
             }
             Step::Group(group) => {
-                let Some((ident, _)) =
-                    grouped_boundary(term, &facts.sequence).filter(|_| *name == final_name)
+                let Some((ident, _)) = grouped_boundary(term, &facts.sequence).filter(|_| terminal)
                 else {
                     return Err(error(
                         "terminal group step is not the terminal grouped publication",
@@ -1472,12 +1585,34 @@ pub(crate) fn check(
                 if symbol_name(ident) != group.group {
                     return Err(error("terminal group names another Physical group"));
                 }
+                // The group templates are compiled for occupancy grids of
+                // collective-width blocks; grid partials hold one value and
+                // one presence word per lane, as does each combine block.
+                let collective =
+                    |geometry: &BlockGeometry| geometry.block_threads == crate::BLOCK_THREADS;
+                let partial = |geometry: &BlockGeometry| {
+                    collective(geometry)
+                        && geometry.shared_bytes == geometry.block_threads * PARTIAL_LANE_BYTES
+                };
                 match (&group.completion, physical.keys.is_empty()) {
-                    (GroupCompletion::GridPartials { partials }, true) if grid(partials) => {}
-                    (GroupCompletion::Segmented { arguments }, false) if grid(arguments) => {}
+                    (
+                        GroupCompletion::GridPartials {
+                            partials: Grid::KernelOccupancy,
+                            geometry,
+                            combine,
+                        },
+                        true,
+                    ) if partial(geometry) && partial(combine) => {}
+                    (
+                        GroupCompletion::Segmented {
+                            arguments: Grid::KernelOccupancy,
+                            geometry,
+                        },
+                        false,
+                    ) if collective(geometry) && geometry.shared_bytes == 0 => {}
                     _ => {
                         return Err(error(
-                            "keyless groups combine grid partials; keyed groups use the accumulator",
+                            "keyless groups combine grid partials and keyed groups use the accumulator, over their template geometry",
                         ));
                     }
                 }
@@ -1487,14 +1622,14 @@ pub(crate) fn check(
                             .gpu_publications
                             .get(publication)
                             .is_some_and(|record| record.storage.canonical_provider().is_some());
-                        if !published.contains(&publication) || !canonical {
+                        if state.publication(publication).is_none() || !canonical {
                             return Err(error(
                                 "canonical group input is not a completed canonical publication",
                             ));
                         }
                     }
                     GroupInput::Stored { publication } => {
-                        if !published.contains(&publication) {
+                        if state.publication(publication).is_none() {
                             return Err(error("group input publication has not completed"));
                         }
                     }
@@ -1510,11 +1645,8 @@ pub(crate) fn check(
                             return Err(error("host group input is not the Physical group input"));
                         }
                         if let Some(evaluation) = upload {
-                            check_transfers(
-                                &facts,
-                                evaluation,
-                                &published.iter().map(|n| (*n).clone()).collect(),
-                            )?;
+                            state.evaluation(&facts, evaluation, input)?;
+                            state.uploads.push(input.clone());
                         } else if !records.sources.contains_key(input)
                             && !uploaded(records, analysis, input)
                         {
@@ -1525,35 +1657,67 @@ pub(crate) fn check(
                     }
                 }
             }
-            Step::Dispatch { provider } => {
-                if !dispatch {
+            Step::Dispatch { result, provider } => {
+                let Some(dispatch) = dispatch else {
                     return Err(error("dispatch step without a checked dispatch"));
+                };
+                if analysis
+                    .results
+                    .get(name)
+                    .is_some_and(|known| known != result)
+                    || !facts.definitions.contains_key(result)
+                {
+                    return Err(error("dispatch publishes another Physical result"));
                 }
-                check_provider(&facts, provider.as_ref())?;
-                published.push(name);
+                state.provider(&facts, records, name, result, provider.as_ref(), terminal)?;
+                let range = matches!(
+                    dispatch
+                        .gpu
+                        .as_ref()
+                        .map(|execution| &execution.publication),
+                    Some(Publication::DeferredRange { .. })
+                );
+                state.publish(name, result, range);
             }
             Step::HostUnion(union) => {
-                if dispatch
-                    || host_union(term, &facts.sequence).is_none()
+                if dispatch.is_some()
                     || !facts.host_store_term(name)
+                    || !analysis.results.contains_key(name)
                 {
                     return Err(error("host union step without a host union store"));
                 }
-                for arm in &union.arms {
+                let Some(arms) = host_union(term, &facts.sequence) else {
+                    return Err(error("host union step without a host union store"));
+                };
+                // Arms are the union's operand publications, in order and
+                // with multiplicity; each copies or decodes per its storage.
+                let mut operands = Vec::new();
+                for arm in arms {
+                    union_operands(arm, &facts, &state, &mut operands)?;
+                }
+                if operands.len() != union.arms.len() {
+                    return Err(error("union arms differ from the union's operands"));
+                }
+                for (arm, operand) in union.arms.iter().zip(&operands) {
                     let (publication, packed) = match arm {
                         UnionArm::Copy { publication } => (publication, false),
-                        UnionArm::Decode {
-                            publication,
-                            grid: g,
-                        } => (publication, grid(g)),
+                        UnionArm::Decode { publication, grid } => {
+                            if !elements(grid) {
+                                return Err(error("union decode uses its element template"));
+                            }
+                            (publication, true)
+                        }
                     };
                     let codec = analysis
                         .gpu_publications
                         .get(publication)
                         .is_some_and(|record| record.storage.codec().is_some());
-                    if !published.contains(&publication) || codec != packed {
+                    let materialized = state
+                        .publication(publication)
+                        .is_some_and(|published| !published.range);
+                    if publication != operand || !materialized || codec != packed {
                         return Err(error(
-                            "union arm realization contradicts its publication storage",
+                            "union arm realization contradicts its operand publication",
                         ));
                     }
                 }
@@ -1561,40 +1725,390 @@ pub(crate) fn check(
                     .gpu_publications
                     .get(name)
                     .is_some_and(|record| record.storage.codec().is_some());
-                if codec != union.pack.as_ref().is_some_and(grid) {
+                if codec != union.pack.is_some()
+                    || union.pack.as_ref().is_some_and(|grid| !elements(grid))
+                {
                     return Err(error("union packing contradicts its recorded codec"));
                 }
-                check_provider(&facts, union.provider.as_ref())?;
-                published.push(name);
+                let result = &analysis.results[name];
+                state.provider(
+                    &facts,
+                    records,
+                    name,
+                    result,
+                    union.provider.as_ref(),
+                    terminal,
+                )?;
+                state.publish(name, result, false);
             }
             Step::Upload {
                 evaluation,
                 provider,
             } => {
-                if dispatch || !facts.host_store_term(name) || !analysis.results.contains_key(name)
-                {
+                if dispatch.is_some() || !facts.host_store_term(name) {
                     return Err(error("upload step without a host store"));
                 }
-                check_transfers(
-                    &facts,
-                    evaluation,
-                    &published.iter().map(|n| (*n).clone()).collect(),
-                )?;
-                check_provider(&facts, provider.as_ref())?;
+                let Some(result) = analysis.results.get(name) else {
+                    return Err(error("upload step without a host store"));
+                };
+                state.evaluation(&facts, evaluation, result)?;
+                state.uploads.push(result.clone());
+                if let Some(provider) = provider {
+                    state.provider_bounds(&facts, records, result, provider)?;
+                }
             }
             Step::Host => {
-                if dispatch {
+                if dispatch.is_some() {
                     return Err(error("checked dispatch has no realization step"));
                 }
             }
         }
     }
     if let Some(output) = &records.output {
-        if !grid(&output.pack) || !facts.definitions.contains_key(&output.source) {
+        if !elements(&output.pack) || !facts.definitions.contains_key(&output.source) {
             return Err(error("host output names no Physical source"));
         }
     }
     Ok(())
+}
+
+struct Published {
+    name: String,
+    result: String,
+    range: bool,
+}
+
+/// Completed publications, downloads and uploads as the checked steps run.
+#[derive(Default)]
+struct CheckState {
+    published: Vec<Published>,
+    downloaded: BTreeSet<String>,
+    /// Uploaded Physical results, in order.
+    uploads: Vec<String>,
+}
+
+impl CheckState {
+    fn publication(&self, name: &str) -> Option<&Published> {
+        self.published
+            .iter()
+            .find(|published| published.name == name)
+    }
+
+    fn publish(&mut self, name: &str, result: &str, range: bool) {
+        self.published.push(Published {
+            name: name.to_owned(),
+            result: result.to_owned(),
+            range,
+        });
+    }
+
+    /// GPU-Transfer: a host evaluation of `result` binds only the latest
+    /// completed publication of each result and binds every one it depends
+    /// on; it downloads exactly the bound publications it reads that no
+    /// earlier evaluation downloaded (complete rows, materialized only), and
+    /// exactly the resident inputs its unbound dependencies read.
+    fn evaluation(
+        &mut self,
+        facts: &Facts,
+        evaluation: &HostEvaluation,
+        result: &str,
+    ) -> syn::Result<()> {
+        let latest = |published: &Published| {
+            self.published
+                .iter()
+                .rev()
+                .find(|other| other.result == published.result)
+                .is_some_and(|other| other.name == published.name)
+        };
+        let mut bound = BTreeMap::new();
+        for name in &evaluation.bound {
+            let Some(published) = self.publication(name).filter(|p| latest(p)) else {
+                return Err(error(
+                    "host evaluation binds an incomplete or superseded publication",
+                ));
+            };
+            if bound
+                .insert(published.result.clone(), name.clone())
+                .is_some()
+            {
+                return Err(error("host evaluation binds one result twice"));
+            }
+        }
+        let bindings: BTreeMap<_, _> = bound
+            .keys()
+            .map(|result| (result.clone(), format_ident!("__cq_bound")))
+            .collect();
+        let dependencies =
+            crate::rows::host_dependencies_from(result, &facts.definitions, &bindings);
+        if self.published.iter().any(|published| {
+            dependencies.contains(&published.result) && !bound.contains_key(&published.result)
+        }) {
+            return Err(error(
+                "host evaluation re-evaluates a completed publication instead of binding it",
+            ));
+        }
+        let mut residents = BTreeSet::new();
+        for transfer in &evaluation.transfers {
+            let Granularity::CompleteRows = transfer.granularity;
+            match &transfer.source {
+                TransferSource::Publication(name) => {
+                    let read = self.publication(name).is_some_and(|published| {
+                        !published.range
+                            && bound.get(&published.result) == Some(name)
+                            && dependencies.contains(&published.result)
+                    });
+                    if !read || !self.downloaded.insert(name.clone()) {
+                        return Err(error(
+                            "transfer downloads an unread, range or already downloaded publication",
+                        ));
+                    }
+                }
+                TransferSource::Resident(host) => {
+                    if !facts.resident.contains(host) || !residents.insert(host.clone()) {
+                        return Err(error("transfer names a nonresident or repeated input"));
+                    }
+                }
+            }
+        }
+        for (result, name) in &bound {
+            if dependencies.contains(result) && !self.downloaded.contains(name) {
+                return Err(error(
+                    "host evaluation reads a publication it never downloads",
+                ));
+            }
+        }
+        let read: BTreeSet<_> = dependencies
+            .iter()
+            .filter(|dependency| !bound.contains_key(*dependency))
+            .filter_map(|dependency| facts.analysis.structures.physical.hosts.get(dependency))
+            .filter(|host| facts.resident.contains(*host))
+            .cloned()
+            .collect();
+        if read != residents {
+            return Err(error(
+                "resident transfers differ from the resident inputs the evaluation reads",
+            ));
+        }
+        Ok(())
+    }
+
+    /// A nonterminal publication of a result with recorded GPU provider
+    /// layouts builds them unless its source owns them; a terminal one builds
+    /// none. The owner precedes every reader: a publication-built provider is
+    /// never looked up by an earlier definition.
+    fn provider(
+        &self,
+        facts: &Facts,
+        records: &Realization,
+        publication: &str,
+        result: &str,
+        provider: Option<&ProviderBuild>,
+        terminal: bool,
+    ) -> syn::Result<()> {
+        let required = !terminal
+            && facts.analysis.structures.built.contains_key(result)
+            && facts
+                .analysis
+                .gpu_bindings
+                .providers
+                .get(result)
+                .is_some_and(|layouts| {
+                    layouts.iter().any(|layout| layout.abi != ProviderAbi::Host)
+                })
+            && !source_builds(&records.sources, result);
+        match provider {
+            Some(provider) if required => {
+                if facts
+                    .first_reader(result)
+                    .is_some_and(|reader| Some(reader) < facts.position(publication))
+                {
+                    return Err(error(
+                        "a provider is looked up before its publication builds it",
+                    ));
+                }
+                self.provider_bounds(facts, records, result, provider)
+            }
+            None if !required => Ok(()),
+            _ => Err(error(
+                "provider build recorded exactly for nonterminal publications with provider layouts and no source-built owner",
+            )),
+        }
+    }
+
+    /// GPU-ProviderDomain: descriptor bounds enclose each column. Every named
+    /// domain publishes the column (resident origins rename an input column
+    /// into it, uploads publish it, Scalar is its carrier); a Union names
+    /// every resident or uploaded source origin of the column; the merges are
+    /// exactly the earlier uploads publishing it, in order; only key columns
+    /// are measured.
+    fn provider_bounds(
+        &self,
+        facts: &Facts,
+        records: &Realization,
+        result: &str,
+        provider: &ProviderBuild,
+    ) -> syn::Result<()> {
+        let layouts = facts
+            .analysis
+            .gpu_bindings
+            .providers
+            .get(result)
+            .ok_or_else(|| error("provider build of a result without provider layouts"))?;
+        if layouts.iter().enumerate().any(|(index, layout)| {
+            provider.layouts.contains(&index) != (layout.abi != ProviderAbi::Host)
+        }) || provider.layouts.windows(2).any(|pair| pair[0] >= pair[1])
+            || provider.layouts.iter().any(|&index| index >= layouts.len())
+        {
+            return Err(error(
+                "provider build must name exactly its device layouts in order",
+            ));
+        }
+        let keys: BTreeSet<_> = layouts.iter().flat_map(|layout| &layout.keys).collect();
+        let columns: BTreeSet<_> = layouts
+            .iter()
+            .flat_map(|layout| layout.keys.iter().chain(&layout.payload))
+            .collect();
+        for (column, bounds) in &provider.columns {
+            if !columns.contains(column) || (bounds.measure && !keys.contains(column)) {
+                return Err(error(
+                    "descriptor bounds name a non-layout column or measure a payload",
+                ));
+            }
+            let mut origins = Vec::new();
+            for (name, source) in &records.sources {
+                let (publication, layout, upload) = match &source.origin {
+                    SourceOrigin::Resident { host } => {
+                        (host, &facts.analysis.structures.host_layouts[host], false)
+                    }
+                    SourceOrigin::Uploaded { .. } => {
+                        (name, &facts.analysis.structures.layouts[name], true)
+                    }
+                    SourceOrigin::Runs { .. } => continue,
+                };
+                let Some(original) = source.columns.get(column) else {
+                    continue;
+                };
+                let index = layout
+                    .iter()
+                    .position(|c| c == original)
+                    .ok_or_else(|| error("source column is absent from its origin layout"))?;
+                origins.push(if upload {
+                    BoundSource::Upload {
+                        publication: publication.clone(),
+                        index,
+                    }
+                } else {
+                    BoundSource::Resident {
+                        host: publication.clone(),
+                        index,
+                    }
+                });
+            }
+            let sources: Vec<&BoundSource> = match &bounds.base {
+                BaseBounds::Union(sources) => {
+                    if origins.iter().any(|origin| !sources.contains(origin)) {
+                        return Err(error(
+                            "descriptor Union omits a source origin of the column",
+                        ));
+                    }
+                    sources.iter().collect()
+                }
+                BaseBounds::Scalar(ty) => {
+                    let carrier = facts.carriers.get(column);
+                    if carrier != Some(ty) {
+                        return Err(error("descriptor Scalar bounds use another carrier"));
+                    }
+                    Vec::new()
+                }
+                BaseBounds::None => {
+                    if !origins.is_empty() || bounds.merges.is_empty() {
+                        return Err(error("descriptor bounds without a domain"));
+                    }
+                    Vec::new()
+                }
+            };
+            let merges: Vec<_> = self
+                .uploads
+                .iter()
+                .filter_map(|upload| {
+                    let index = facts.analysis.structures.layouts[upload]
+                        .iter()
+                        .position(|c| c == column)?;
+                    Some(BoundSource::Upload {
+                        publication: upload.clone(),
+                        index,
+                    })
+                })
+                .collect();
+            if bounds.merges != merges {
+                return Err(error(
+                    "descriptor merges are not exactly the earlier uploads of the column",
+                ));
+            }
+            for source in sources.into_iter().chain(&bounds.merges) {
+                if !publishes(facts, source, column) {
+                    return Err(error(
+                        "descriptor bounds name a domain that does not publish the column",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The completed publications a host-union arm denotes, in order.
+fn union_operands(
+    term: &Term,
+    facts: &Facts,
+    state: &CheckState,
+    operands: &mut Vec<String>,
+) -> syn::Result<()> {
+    match term {
+        Term::Ref(name) => {
+            let name = symbol_name(name);
+            if state.publication(&name).is_some() {
+                operands.push(name);
+                return Ok(());
+            }
+            let inner = facts
+                .sequence
+                .get(&name)
+                .ok_or_else(|| error("host union operand has not published"))?;
+            union_operands(inner, facts, state, operands)
+        }
+        Term::Union(arms) => {
+            for arm in arms {
+                union_operands(arm, facts, state, operands)?;
+            }
+            Ok(())
+        }
+        _ => Err(error("host union operands must be published stores")),
+    }
+}
+
+/// Whether a publication step builds the providers of the Physical result `name`.
+fn step_builds(steps: &[(String, Step)], analysis: &Analysis, name: &str) -> bool {
+    steps.iter().any(|(publication, step)| match step {
+        Step::Dispatch {
+            result,
+            provider: Some(_),
+        } => result == name,
+        Step::HostUnion(HostUnion {
+            provider: Some(_), ..
+        }) => analysis
+            .results
+            .get(publication)
+            .is_some_and(|result| result == name),
+        _ => false,
+    })
+}
+
+/// Whether the source of the Physical result `name` builds its provider.
+fn source_builds(sources: &BTreeMap<String, SourceRealization>, name: &str) -> bool {
+    sources
+        .get(name)
+        .is_some_and(|source| matches!(source.access, SourceAccess::Provider { .. }))
 }
 
 /// Whether an earlier step uploads the Physical result `name`.
@@ -1616,97 +2130,220 @@ fn uploaded(records: &Realization, analysis: &Analysis, name: &str) -> bool {
     })
 }
 
-fn check_transfers(
-    facts: &Facts,
-    evaluation: &HostEvaluation,
-    published: &BTreeSet<String>,
+/// GPU-SourceAccess checker of a resident source, without replaying the
+/// origin fold: the chain from `name` is selections and projections over one
+/// rename of `host` whose mapping is the recorded `columns`. Every recorded
+/// bound is stated by a constraint of that chain (the interval never drops a
+/// kept row) and every chain constraint states recorded bounds on the
+/// interval column (the folded selections no longer run as row work), so the
+/// bounds are the chain's constraints as a multiset; their order is free.
+fn check_resident_chain(
+    definitions: &BTreeMap<String, Definition>,
+    name: &str,
+    host: &str,
+    columns: &BTreeMap<String, String>,
+    selection: Option<&Interval>,
 ) -> syn::Result<()> {
-    for name in &evaluation.bound {
-        if !published.contains(name) {
-            return Err(error("host evaluation binds an incomplete publication"));
+    use cq_syntax::EqualityValue;
+    use cq_syntax::constraint::{Comparison, Constraint, Term as Operand};
+    let encoded = |value: &dyn quote::ToTokens| -> syn::Result<syn::Expr> {
+        syn::parse2(quote::quote!(::gpu_datalog_runtime::encode_scalar(&(#value))))
+    };
+    let closed = |term: &Operand| -> syn::Result<syn::Expr> {
+        match term {
+            Operand::Literal(value) => encoded(value),
+            Operand::Closed(value) => encoded(value),
+            _ => Err(error("a folded selection compares against a row value")),
+        }
+    };
+    // (definition, origin column, side, inclusive, encoded value)
+    let mut stated: Vec<(String, String, Side, bool, syn::Expr)> = Vec::new();
+    let mut state = |definition: &str, column: String, op: &str, value: syn::Expr| {
+        let mut push = |side, inclusive| {
+            stated.push((
+                definition.to_owned(),
+                column.clone(),
+                side,
+                inclusive,
+                value.clone(),
+            ));
+        };
+        match op {
+            "eq" => {
+                push(Side::Lower, true);
+                push(Side::Upper, true);
+            }
+            "ge" => push(Side::Lower, true),
+            "gt" => push(Side::Lower, false),
+            "lt" => push(Side::Upper, false),
+            _ => push(Side::Upper, true),
+        }
+    };
+    let mut current = name.to_owned();
+    let mut selections = Vec::new();
+    let rename = loop {
+        let definition = definitions
+            .get(&current)
+            .ok_or_else(|| error("resident source chain names an unknown definition"))?;
+        match &definition.operator {
+            Operator::Rename(rename) => break rename,
+            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+                selections.push((current.clone(), &select.condition));
+                current = symbol_name(&select.input);
+            }
+            Operator::Project(project) => current = symbol_name(&project.input),
+            _ => return Err(error("resident source is not a selection of a rename")),
+        }
+    };
+    let mapping: BTreeMap<_, _> = rename
+        .mapping
+        .iter()
+        .map(|m| (symbol_name(&m.target), symbol_name(&m.source)))
+        .collect();
+    if symbol_name(&rename.relation) != host || mapping != *columns {
+        return Err(error("resident source columns are not its rename mapping"));
+    }
+    if let Some(constants) = &rename.constants {
+        for equality in &constants.equalities {
+            let EqualityValue::Literal(value) = &equality.right else {
+                return Err(error("a folded constant is not a literal"));
+            };
+            state(&current, symbol_name(&equality.left), "eq", encoded(value)?);
         }
     }
-    for transfer in &evaluation.transfers {
-        let Granularity::CompleteRows = transfer.granularity;
-        let known = match &transfer.source {
-            TransferSource::Publication(name) => evaluation.bound.contains(name),
-            TransferSource::Resident(host) => facts.resident.contains(host),
+    for (definition, theta) in selections {
+        let origin = |column: &syn::Ident| {
+            columns
+                .get(&symbol_name(column))
+                .cloned()
+                .ok_or_else(|| error("a folded selection reads an unrenamed column"))
         };
-        if !known {
-            return Err(error(
-                "transfer names neither a bound publication nor a resident input",
-            ));
+        for equality in &theta.equalities {
+            let EqualityValue::Literal(value) = &equality.right else {
+                return Err(error("a folded equality is not a literal"));
+            };
+            state(&definition, origin(&equality.left)?, "eq", encoded(value)?);
         }
+        for constraint in &theta.constraints {
+            match constraint {
+                Constraint::Compare {
+                    left: Operand::Variable(column),
+                    comparison,
+                    right,
+                } => {
+                    let op = match comparison {
+                        Comparison::Eq(_) => "eq",
+                        Comparison::Ge(_) => "ge",
+                        Comparison::Gt(_) => "gt",
+                        Comparison::Lt(_) => "lt",
+                        Comparison::Le(_) => "le",
+                        _ => return Err(error("a noncontiguous selection is folded")),
+                    };
+                    state(&definition, origin(column)?, op, closed(right)?);
+                }
+                Constraint::Between {
+                    term: Operand::Variable(column),
+                    low,
+                    high,
+                } => {
+                    state(&definition, origin(column)?, "ge", closed(low)?);
+                    state(&definition, origin(column)?, "le", closed(high)?);
+                }
+                _ => return Err(error("a noncontiguous selection is folded")),
+            }
+        }
+    }
+    let key = |definition: &str, side: Side, inclusive: bool, value: &syn::Expr| {
+        use quote::ToTokens;
+        (
+            definition.to_owned(),
+            side == Side::Upper,
+            inclusive,
+            value.to_token_stream().to_string(),
+        )
+    };
+    let Some(interval) = selection else {
+        return if stated.is_empty() {
+            Ok(())
+        } else {
+            Err(error("resident source drops its contiguous selections"))
+        };
+    };
+    if interval.bounds.is_empty()
+        || stated
+            .iter()
+            .any(|(_, column, ..)| *column != interval.column)
+    {
+        return Err(error("source interval is not one column's stated bounds"));
+    }
+    let mut expected: Vec<_> = stated
+        .iter()
+        .map(|(definition, _, side, inclusive, value)| key(definition, *side, *inclusive, value))
+        .collect();
+    let mut recorded: Vec<_> = interval
+        .bounds
+        .iter()
+        .map(|bound| key(&bound.definition, bound.side, bound.inclusive, &bound.value))
+        .collect();
+    expected.sort();
+    recorded.sort();
+    if expected != recorded {
+        return Err(error(
+            "source interval bounds are not exactly its chain's contiguous constraints",
+        ));
     }
     Ok(())
 }
 
-/// Descriptor bounds enclose the column: resident origins rename an input
-/// column into it, uploads publish the column, Scalar is its carrier.
-fn check_provider(facts: &Facts, provider: Option<&ProviderBuild>) -> syn::Result<()> {
-    let Some(provider) = provider else {
-        return Ok(());
-    };
-    for (column, bounds) in &provider.columns {
-        let sources = match &bounds.base {
-            BaseBounds::Union(sources) => sources.iter().collect(),
-            BaseBounds::Scalar(ty) => {
-                let carrier = facts.carriers.values().find_map(|types| types.get(column));
-                if carrier != Some(ty) {
-                    return Err(error("descriptor Scalar bounds use another carrier"));
-                }
-                Vec::new()
-            }
-            BaseBounds::None => Vec::new(),
-        };
-        for source in sources.into_iter().chain(&bounds.merges) {
-            let sound = match source {
-                BoundSource::Resident { host, index } => {
-                    facts.resident.contains(host)
-                        && facts
-                            .program
-                            .structures
-                            .physical
-                            .program
-                            .definitions
-                            .iter()
-                            .any(|definition| {
-                                let Operator::Rename(rename) = &definition.operator else {
-                                    return false;
-                                };
-                                symbol_name(&rename.relation) == *host
-                                    && rename.mapping.iter().any(|mapping| {
-                                        symbol_name(&mapping.target) == *column
-                                            && facts.analysis.structures.host_layouts[host]
-                                                .get(*index)
-                                                == Some(&symbol_name(&mapping.source))
-                                    })
-                            })
-                }
-                BoundSource::Upload { publication, index } => facts
-                    .analysis
+/// Whether a bounds domain publishes `column`: a resident input renamed into
+/// it, or an uploaded publication's layout column.
+fn publishes(facts: &Facts, source: &BoundSource, column: &str) -> bool {
+    match source {
+        BoundSource::Resident { host, index } => {
+            facts.resident.contains(host)
+                && facts
+                    .program
                     .structures
-                    .layouts
-                    .get(publication)
-                    .is_some_and(|layout| layout.get(*index) == Some(column)),
-            };
-            if !sound {
-                return Err(error(
-                    "descriptor bounds name a domain that does not publish the column",
-                ));
-            }
+                    .physical
+                    .program
+                    .definitions
+                    .iter()
+                    .any(|definition| {
+                        let Operator::Rename(rename) = &definition.operator else {
+                            return false;
+                        };
+                        symbol_name(&rename.relation) == *host
+                            && rename.mapping.iter().any(|mapping| {
+                                symbol_name(&mapping.target) == column
+                                    && facts.analysis.structures.host_layouts[host].get(*index)
+                                        == Some(&symbol_name(&mapping.source))
+                            })
+                    })
         }
+        BoundSource::Upload { publication, index } => facts
+            .analysis
+            .structures
+            .layouts
+            .get(publication)
+            .is_some_and(|layout| layout.get(*index).is_some_and(|c| c == column)),
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cq_lang_sequence::gpu::realization::IntervalBound;
 
     /// The store `r` publishes the resident rename `r` below host (its inner
     /// store result equals its outer source), and `r` records a Range provider.
     fn republished() -> (Program, Analysis) {
+        republished_after(false)
+    }
+
+    /// With `late`, the lookup of `r` precedes its republication.
+    fn republished_after(late: bool) -> (Program, Analysis) {
+        let early = (!late).then(|| quote::quote!(r = store rows r;));
+        let late = late.then(|| quote::quote!(r = store rows r;));
         let program: Program = syn::parse_quote! {
             physical {
                 relation R(a:i64,b:i64) = (&data);
@@ -1728,9 +2365,10 @@ mod tests {
                 joined canon = rows;
             }
             sequence {
-                r = store rows r;
+                #early
                 input = store rows driver;
                 output_rows = store canon map joined flatten lookup r [a] flatten tile 256 input;
+                #late
                 output count;
             }
             graded gpu { r at host.device; input at host; output_rows at device; }
@@ -1759,9 +2397,308 @@ mod tests {
             realization.sources["r"].access,
             SourceAccess::Provider { .. }
         ));
+        let mut missing_layout = realization.clone();
+        let (
+            _,
+            Step::Dispatch {
+                provider: Some(provider),
+                ..
+            },
+        ) = missing_layout
+            .steps
+            .iter_mut()
+            .find(|(name, _)| name == "r")
+            .unwrap()
+        else {
+            panic!("recorded provider owner");
+        };
+        provider.layouts.clear();
+        assert!(check(&program, &analysis, &missing_layout).is_err());
         let mut duplicated = realization;
         duplicated.sources.get_mut("r").unwrap().access =
             SourceAccess::Provider { selection: None };
         assert!(check(&program, &analysis, &duplicated).is_err());
+    }
+
+    #[test]
+    fn a_reader_before_the_publication_keeps_the_source_owner() {
+        let (program, analysis) = republished_after(true);
+        let realization = select(&program, &analysis).unwrap();
+        assert_eq!(realization.rejection, None);
+        assert!(matches!(
+            realization.sources["r"].access,
+            SourceAccess::Provider { .. }
+        ));
+        let (_, Step::Dispatch { provider, .. }) = realization
+            .steps
+            .iter()
+            .find(|(name, _)| name == "r")
+            .unwrap()
+        else {
+            unreachable!("r republishes below host")
+        };
+        assert_eq!(*provider, None);
+        // Moving ownership to the later publication leaves the reader unserved.
+        let built = Steps::new(
+            &Facts::new(&program, &analysis).unwrap(),
+            &realization.sources,
+        )
+        .provider("r")
+        .unwrap();
+        let mut late_owner = realization.clone();
+        late_owner.sources.get_mut("r").unwrap().access = SourceAccess::Scan;
+        for (name, step) in &mut late_owner.steps {
+            if let (true, Step::Dispatch { provider, .. }) = (name == "r", step) {
+                *provider = Some(built.clone());
+            }
+        }
+        assert!(check(&program, &analysis, &late_owner).is_err());
+    }
+
+    fn graded(program: Program) -> (Program, Analysis) {
+        let program = crate::runs::record_representation(&program).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        (program, analysis)
+    }
+
+    /// Two published dispatches concatenated by a host union.
+    fn union() -> (Program, Analysis) {
+        graded(syn::parse_quote! {
+            physical {
+                relation R(a:u32) = (&data.r);
+                relation S(a:u32) = (&data.s);
+                r = pipe rename R@0 {a -> a};
+                s = pipe rename S@1 {a -> a};
+                answer = let canon union r,s;
+                return answer as answer(a);
+            }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                r host scan = @device_columns input { keys 0; columns [u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
+                s host scan = @device_columns input { keys 0; columns [u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
+                answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                answer canon = rows;
+            }
+            sequence {
+                R = store rows r;
+                S = store rows s;
+                left_feed = flatten tile 256 R;
+                left = store left_feed;
+                right_feed = flatten tile 256 S;
+                right = store right_feed;
+                result = store union [left,right];
+                output count;
+            }
+            graded gpu {
+                R at host; S at host;
+                left_feed at device.block; left at host;
+                right_feed at device.block; right at host;
+                result at host;
+            }
+        })
+    }
+
+    /// A probe of a provider uploaded from a host scan, or with `selected` of
+    /// a contiguous key selection over a resident input.
+    fn probe(selected: bool) -> (Program, Analysis) {
+        let (reader, target, index) = if selected {
+            (
+                quote::quote!(provider host scan = @device_columns input { keys 0; columns [i32 => i32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns [];),
+                quote::quote!(filtered),
+                quote::quote!(compact filtered rows provider),
+            )
+        } else {
+            (
+                quote::quote!(provider host scan = @host_scan as ::core::iter::Map<_, _> []; provider = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a];),
+                quote::quote!(provider),
+                quote::quote!(rows provider),
+            )
+        };
+        let filtered = selected.then(|| {
+            quote::quote!(filtered = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a];)
+        });
+        let selection = selected
+            .then(|| quote::quote!(filtered = let select provider if (a >= 3i32, a < 9i32);));
+        let host_scan = (!selected)
+            .then(|| quote::quote!(host_scan = ::core::iter::Map<_, _> { reads [], build typed };));
+        let retained = if selected {
+            quote::quote!(pipe)
+        } else {
+            quote::quote!(let)
+        };
+        graded(syn::parse_quote! {
+            physical {
+                relation Driver(a:i32, value:i32) = (&data.driver);
+                relation Provider(a:i32, payload:i32) = (&data.provider);
+                driver = pipe rename Driver@0 {a -> a, value -> value};
+                provider = #retained rename Provider@1 {a -> a, payload -> payload};
+                #selection
+                joined = pipe probe first [a] driver, #target;
+                result = let canon project joined keep {a, value, payload};
+                return result as answer(a, value, payload);
+            }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; #host_scan range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                driver host scan = @device_columns input { keys 0; columns [i32 => i32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns [];
+                #reader
+                #filtered
+                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result canon = rows;
+            }
+            sequence {
+                input = store rows driver;
+                index = store #index;
+                joined_rows = flatten lookup #target [a] flatten tile 256 input;
+                output_rows = store canon map result joined_rows;
+                output count;
+            }
+            graded gpu {
+                input at host; index at host;
+                joined_rows at host.device.block;
+                output_rows at host.device;
+            }
+        })
+    }
+
+    /// Every mutation of a selected realization is rejected by the checker,
+    /// which accepts the unmutated record.
+    fn rejects(fixture: (Program, Analysis), mutations: &[&dyn Fn(&mut Realization)]) {
+        let (program, analysis) = fixture;
+        let realization = select(&program, &analysis).unwrap();
+        assert_eq!(realization.rejection, None);
+        check(&program, &analysis, &realization).unwrap();
+        for (index, mutate) in mutations.iter().enumerate() {
+            let mut mutated = realization.clone();
+            mutate(&mut mutated);
+            assert_ne!(mutated, realization, "mutation {index} is a no-op");
+            assert!(
+                check(&program, &analysis, &mutated).is_err(),
+                "mutation {index} was accepted"
+            );
+        }
+    }
+
+    fn union_arms(realization: &mut Realization) -> &mut Vec<UnionArm> {
+        realization
+            .steps
+            .iter_mut()
+            .find_map(|(_, step)| match step {
+                Step::HostUnion(union) => Some(&mut union.arms),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn checker_rejects_union_arms_that_differ_from_the_operands() {
+        rejects(
+            union(),
+            &[
+                &|realization| {
+                    union_arms(realization).pop();
+                },
+                &|realization| {
+                    let arms = union_arms(realization);
+                    arms.push(arms[0].clone());
+                },
+                &|realization| union_arms(realization).reverse(),
+                &|realization| {
+                    union_arms(realization)[0] = UnionArm::Copy {
+                        publication: "R".into(),
+                    };
+                },
+            ],
+        );
+    }
+
+    fn evaluation(realization: &mut Realization) -> &mut HostEvaluation {
+        match &mut realization.sources.get_mut("provider").unwrap().origin {
+            SourceOrigin::Uploaded { evaluation } => evaluation,
+            _ => unreachable!("the host-scanned provider is uploaded"),
+        }
+    }
+
+    #[test]
+    fn checker_rejects_unread_transfers_and_misphased_uploads() {
+        rejects(
+            probe(false),
+            &[
+                &|realization| {
+                    evaluation(realization).transfers.push(Transfer {
+                        source: TransferSource::Resident("Driver".into()),
+                        granularity: cq_lang_sequence::gpu::realization::Granularity::CompleteRows,
+                    });
+                },
+                &|realization| evaluation(realization).bound.push("input".into()),
+                &|realization| {
+                    realization.sources.get_mut("provider").unwrap().phase = Phase::Setup
+                },
+            ],
+        );
+    }
+
+    fn bounds(realization: &mut Realization) -> &mut Vec<IntervalBound> {
+        match &mut realization.sources.get_mut("filtered").unwrap().access {
+            SourceAccess::Provider {
+                selection: Some(interval),
+            } => &mut interval.bounds,
+            _ => unreachable!("the key selection folds into the provider build"),
+        }
+    }
+
+    #[test]
+    fn checker_rejects_interval_bounds_that_differ_from_the_selection() {
+        rejects(
+            probe(true),
+            &[
+                &|realization| {
+                    bounds(realization).pop();
+                },
+                &|realization| bounds(realization)[0].side = Side::Upper,
+                &|realization| bounds(realization)[0].inclusive = false,
+                &|realization| bounds(realization)[0].definition = "driver".into(),
+                &|realization| bounds(realization)[0].value = syn::parse_quote!(0i64),
+                &|realization| {
+                    let SourceAccess::Provider { selection } =
+                        &mut realization.sources.get_mut("filtered").unwrap().access
+                    else {
+                        unreachable!()
+                    };
+                    *selection = None;
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn checker_rejects_unsupported_auxiliary_geometry() {
+        rejects(
+            probe(false),
+            &[
+                &|realization| realization.auxiliary = None,
+                &|realization| {
+                    realization
+                        .auxiliary
+                        .as_mut()
+                        .unwrap()
+                        .selection
+                        .block_threads = 0
+                },
+                &|realization| {
+                    realization
+                        .auxiliary
+                        .as_mut()
+                        .unwrap()
+                        .group_reduce
+                        .shared_bytes += 4
+                },
+                &|realization| {
+                    realization
+                        .auxiliary
+                        .as_mut()
+                        .unwrap()
+                        .group_reduce
+                        .block_threads = 128
+                },
+            ],
+        );
     }
 }

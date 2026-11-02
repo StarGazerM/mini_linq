@@ -1,8 +1,63 @@
 use gpu_datalog_runtime::{
     concatenate_batches, Buffer, CandidateArena, Column, DeviceLayout, DeviceRuns, Packing, Pool,
-    Result, Run, Word,
+    Result, Run, RunParams, Word,
 };
 use std::{any::Any, sync::Arc};
+
+const PARAMS: RunParams = RunParams {
+    ratio: 4,
+    merge_tile_rows: 32,
+    block_threads: 256,
+};
+
+#[test]
+fn lane_workers_consume_recorded_initializer_and_release_thread_scratch() -> Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static INITIALIZED: AtomicUsize = AtomicUsize::new(0);
+    static RELEASED: AtomicUsize = AtomicUsize::new(0);
+    thread_local! {
+        static SCRATCH_LIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    fn initialize(relation: usize, pool: Arc<Pool>) -> CandidateArena {
+        INITIALIZED.fetch_add(1, Ordering::SeqCst);
+        SCRATCH_LIVE.with(|live| {
+            assert!(!live.replace(true));
+        });
+        let mut arena = CandidateArena::new(pool);
+        arena.hole(3).record_count(100 + relation);
+        arena
+    }
+    fn release(_: &Arc<Pool>) {
+        SCRATCH_LIVE.with(|live| assert!(live.replace(false)));
+        RELEASED.fetch_add(1, Ordering::SeqCst);
+    }
+    let pool = Pool::new(0, 0, 0)?;
+    let lanes = gpu_datalog_runtime::Lanes::new(&pool, 2, initialize, release)?;
+    for component in 0..2 {
+        lanes.fork()?;
+        for position in 0..2 {
+            lanes.submit(
+                1,
+                position,
+                Box::new(move |lane| {
+                    let arena = lane.arena(9, 3);
+                    assert_eq!(arena.previous_count(), 109 + position);
+                    arena.record_count(110 + position);
+                    let lease = arena.reserve(Packing::new(&[32]).unwrap(), 0).unwrap();
+                    // SAFETY: the empty prefix is initialized vacuously.
+                    unsafe { lease.finish(0, Vec::new()).unwrap() }
+                }),
+            )?;
+        }
+        let batches = lanes.join()?;
+        assert_eq!(batches.len(), 2);
+        drop(batches);
+        lanes.release()?;
+        assert_eq!(INITIALIZED.load(Ordering::SeqCst), component + 1);
+        assert_eq!(RELEASED.load(Ordering::SeqCst), component + 1);
+    }
+    Ok(())
+}
 
 #[test]
 fn layouts_retain_runs_and_validate_native_schema() -> Result<()> {
@@ -208,7 +263,7 @@ fn concatenate_case<W: Word>(packing: Packing) -> Result<()> {
     } else {
         assert!(concatenate_batches::<u64>(pool.clone(), &packing, &batches).is_err());
     }
-    let mut accepted = DeviceRuns::<W>::new(pool, 4)?;
+    let mut accepted = DeviceRuns::<W>::new(pool, PARAMS)?;
     let fresh = accepted.fresh(&output, output.len())?;
     // SAFETY: fresh is sorted, unique and absent from the empty accepted state.
     unsafe { accepted.append_sorted(fresh)? };
@@ -334,16 +389,21 @@ fn permuted_provider_preserves_rows_and_searches_new_leading_key() -> Result<()>
     let layout = Layout::from_runs(pool.clone(), packing, vec![run.clone(), empty, run])?;
     // DECODE P: diagnostic original layout unpack exposes the pre-permutation host answer.
     let before = layout.to_host_codes()?;
-    let provider = layout.permuted_provider(&pool, &[1, 0])?;
+    let provider = layout.permuted_provider(&pool, &[1, 0], PARAMS, 256)?;
+    assert!(layout
+        .permuted_provider(&pool, &[1, 0], PARAMS, 128)
+        .is_err());
     // DECODE P: diagnostic retained layout unpack exposes the unchanged post-permutation answer.
     assert_eq!(
         layout.to_host_codes()?,
         before,
         "permutation leaves source storage unchanged"
     );
-    assert!(layout.permuted_provider(&pool, &[0, 0]).is_err());
     assert!(layout
-        .permuted_provider(&Pool::new(0, 0, 0)?, &[1, 0])
+        .permuted_provider(&pool, &[0, 0], PARAMS, 256)
+        .is_err());
+    assert!(layout
+        .permuted_provider(&Pool::new(0, 0, 0)?, &[1, 0], PARAMS, 256)
         .is_err());
     assert_eq!(provider.view().run_count, 3);
     let output = Buffer::<i64>::zeroed(pool.clone(), 12)?;

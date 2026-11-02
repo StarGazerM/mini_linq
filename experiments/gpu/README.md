@@ -368,9 +368,12 @@ maximum word without overflow.
 on-device without changing them, returning a cheap immutable `Run`; publishing
 it is a separate unsafe `append_sorted` into each layout, canonical included.
 It reads back only the unique count and fresh count (empty batches and an empty
-accepted state omit unnecessary readbacks). `DeviceRuns::new(pool, ratio)`
-stores the supplied maintenance ratio (at least two); merges retain sorted,
-unique, pairwise-disjoint runs. For another layout, permute the delta with
+accepted state omit unnecessary readbacks). `DeviceRuns::new(pool, params)`
+consumes explicit `RunParams { ratio, merge_tile_rows, block_threads }`: ratio
+is at least two, merge tiles contain at least one row, and the compiled kernels
+require 256 threads. `Packing::permute_device` separately receives its recorded
+256-thread width. Unsupported geometry is rejected rather than adjusted.
+Merges retain sorted, unique, pairwise-disjoint runs. For another layout, permute the delta with
 `Packing::permute_device`, sort with unsafe `DeviceRuns::sort_known_unique`
 (the column permutation preserves uniqueness and cardinality), and use unsafe
 `append_sorted` after proving disjointness. This path needs no unique-count

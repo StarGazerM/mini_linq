@@ -1,7 +1,7 @@
 //! Catalog-backed GPU provider realization; printers only consume these facts.
 use cq_lang_sequence::gpu::bindings::{
-    Bindings, DirectoryPolicy, NativeLookup, ProviderAbi, ProviderLayout, RadixParams, RadixRead,
-    RadixRealization,
+    Bindings, DirectoryPolicy, Materialization, NativeLookup, ProviderAbi, ProviderLayout,
+    RadixParams, RadixRead, RadixRealization, RunParams,
 };
 use cq_lang_sequence::{Analysis, Program};
 use cq_lang_structures::provider::NativeAbi;
@@ -12,25 +12,23 @@ fn error(message: &str) -> syn::Error {
     syn::Error::new(proc_macro2::Span::call_site(), message)
 }
 
-/// The device carrier of a recorded Physical column: codec columns are u32 codes.
-fn carrier(
-    analysis: &Analysis,
-    codecs: &crate::runs::Codecs,
-    name: &str,
-    column: &str,
-) -> syn::Result<syn::Type> {
-    let ty = analysis
-        .structures
-        .physical
-        .rows
-        .get(name)
-        .and_then(|row| row.types.get(column))
-        .ok_or_else(|| error("GPU-RadixProvider: column lacks a recorded Physical type"))?;
-    Ok(if codecs.get(ty).is_some() {
-        syn::parse_quote!(u32)
-    } else {
-        ty.clone()
-    })
+/// The recorded device carrier of a column.
+fn carrier(carriers: &BTreeMap<String, syn::Type>, column: &str) -> syn::Result<syn::Type> {
+    carriers
+        .get(column)
+        .cloned()
+        .ok_or_else(|| error("GPU-RadixProvider: column lacks a recorded device carrier"))
+}
+
+/// Run parameters of a materialized permutation. It is built once by a
+/// complete sort and never appended to, so ratio and merge tile only meet the
+/// run constructor's contract; its kernels use the collective block width.
+fn materialized_params() -> RunParams {
+    RunParams {
+        ratio: 4,
+        merge_tile_rows: 32,
+        block_threads: crate::BLOCK_THREADS,
+    }
 }
 
 /// Whether the Sequence lookup `(name, keys)` is the bound-prefix read of a
@@ -106,7 +104,7 @@ fn radix_reads(
 fn radix_realization(
     program: &Program,
     analysis: &Analysis,
-    codecs: &crate::runs::Codecs,
+    carriers: &BTreeMap<String, syn::Type>,
     name: &str,
     provider: &cq_lang_structures::Provider,
     keys: &[String],
@@ -119,11 +117,11 @@ fn radix_realization(
     Ok(RadixRealization {
         key_types: keys
             .iter()
-            .map(|column| carrier(analysis, codecs, name, column))
+            .map(|column| carrier(carriers, column))
             .collect::<syn::Result<_>>()?,
         lanes: payload
             .iter()
-            .map(|column| carrier(analysis, codecs, name, column))
+            .map(|column| carrier(carriers, column))
             .collect::<syn::Result<_>>()?,
         word: advice.word.clone(),
         offset: advice.offset.clone(),
@@ -131,17 +129,24 @@ fn radix_realization(
             ratio: advice.ratio,
             radix_bits: advice.radix_bits,
             merge_tile_rows: advice.merge_tile,
+            block_threads: crate::BLOCK_THREADS,
         },
         reads: radix_reads(program, analysis, name, keys),
     })
 }
 
-/// GPU-RadixProvider checker: the recorded carriers, advice and read forms
-/// agree with their sources; the key word is never chosen here.
+/// GPU-RadixProvider checker, independent of the read selection: carriers
+/// are the recorded column carriers, `W`/`O`/params the instance's advice
+/// at the collective block width. Every recorded read is legal: a Group or
+/// Prefix read is a recorded capability lookup (not a PH-Smallest bound-prefix
+/// read) whose sorted keys are the layout's leading keys, Group exactly when
+/// all of them; a Candidates read is a PH-Smallest side of this provider whose
+/// prefix is every key but the last, which is the candidate column. Every
+/// such lookup and side of the layout is read exactly once.
 fn check_radix(
     program: &Program,
     analysis: &Analysis,
-    codecs: &crate::runs::Codecs,
+    carriers: &BTreeMap<String, syn::Type>,
     name: &str,
     provider: &cq_lang_structures::Provider,
     layout: &ProviderLayout,
@@ -150,18 +155,79 @@ fn check_radix(
     let Some(advice) = &provider.radix else {
         return false;
     };
-    let carriers = |columns: &[String], types: &[syn::Type]| {
+    let keys = &layout.keys;
+    if keys.is_empty() {
+        return false;
+    }
+    let typed = |columns: &[String], types: &[syn::Type]| {
         columns.len() == types.len()
-            && columns.iter().zip(types).all(|(column, ty)| {
-                carrier(analysis, codecs, name, column).is_ok_and(|expected| expected == *ty)
-            })
+            && columns
+                .iter()
+                .zip(types)
+                .all(|(column, ty)| carrier(carriers, column).is_ok_and(|expected| expected == *ty))
     };
-    let mut reads = radix.reads.clone();
-    reads.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
-    reads.dedup();
-    !layout.keys.is_empty()
-        && carriers(&layout.keys, &radix.key_types)
-        && carriers(&layout.payload, &radix.lanes)
+    let leading = |lookup: &[String]| {
+        lookup.len() <= keys.len()
+            && keys[..lookup.len()].iter().collect::<BTreeSet<_>>()
+                == lookup.iter().collect::<BTreeSet<_>>()
+    };
+    let mut prefix = keys[..keys.len() - 1].to_vec();
+    prefix.sort();
+    let candidates = cq_lang_structures::physical::candidate_prefixes(
+        &program.structures.physical,
+        &analysis.structures.physical,
+    );
+    let mut seen = BTreeSet::new();
+    for (lookup, form) in &radix.reads {
+        let sorted = lookup.windows(2).all(|pair| pair[0] < pair[1]);
+        let legal = sorted
+            && match form {
+                RadixRead::Group | RadixRead::Prefix => {
+                    leading(lookup)
+                        && matches!(form, RadixRead::Group) == (lookup.len() == keys.len())
+                        && analysis
+                            .capabilities
+                            .contains_key(&(name.to_owned(), lookup.clone()))
+                        && !smallest_reader(program, name, lookup)
+                }
+                RadixRead::Candidates { column } => {
+                    keys.last() == Some(column)
+                        && prefix == *lookup
+                        && candidates.iter().any(|candidate| {
+                            candidate.column == *column
+                                && candidate.sides.iter().any(|(side, side_prefix)| {
+                                    side == name && side_prefix == lookup
+                                })
+                        })
+                }
+            };
+        if !legal || !seen.insert(format!("{lookup:?}{form:?}")) {
+            return false;
+        }
+    }
+    let read = |lookup: &Vec<String>| {
+        radix.reads.iter().any(|(recorded, form)| {
+            recorded == lookup && matches!(form, RadixRead::Group | RadixRead::Prefix)
+        })
+    };
+    let lookups_covered = analysis.capabilities.keys().all(|(owner, lookup)| {
+        owner != name || !leading(lookup) || smallest_reader(program, name, lookup) || read(lookup)
+    });
+    let sides_covered = candidates.iter().all(|candidate| {
+        candidate.sides.iter().all(|(side, side_prefix)| {
+            side != name
+                || keys.last() != Some(&candidate.column)
+                || prefix != *side_prefix
+                || radix.reads.contains(&(
+                    side_prefix.clone(),
+                    RadixRead::Candidates {
+                        column: candidate.column.clone(),
+                    },
+                ))
+        })
+    });
+    typed(keys, &radix.key_types)
+        && typed(&layout.payload, &radix.lanes)
         && radix.word == advice.word
         && radix.offset == advice.offset
         && radix.params
@@ -169,9 +235,10 @@ fn check_radix(
                 ratio: advice.ratio,
                 radix_bits: advice.radix_bits,
                 merge_tile_rows: advice.merge_tile,
+                block_threads: crate::BLOCK_THREADS,
             }
-        && reads.len() == radix.reads.len()
-        && reads == radix_reads(program, analysis, name, &layout.keys)
+        && lookups_covered
+        && sides_covered
 }
 
 /// Formal rule GPU-ProviderLayout: catalog selection records construction ABI,
@@ -191,11 +258,10 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         })
         .collect();
     let context = cq_print::Context::new(&program.structures, &analysis.structures);
-    let codecs = crate::runs::Codecs::check(&program.structures)?;
+    result.carriers = crate::domains::carriers(program, analysis)?;
     for (name, layouts) in &analysis.structures.built {
         let mut recorded = Vec::new();
         for (levels, provider) in layouts {
-            let ty = &provider.ty;
             let keys: Vec<_> = levels.iter().flatten().cloned().collect();
             let (abi, directory) = match analysis.structures.facts(provider).abi {
                 Some(native @ (NativeAbi::Range | NativeAbi::Runs)) => {
@@ -241,11 +307,19 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
             };
             let radix = (abi == ProviderAbi::Radix)
                 .then(|| {
-                    radix_realization(program, analysis, &codecs, name, provider, &keys, &payload)
+                    radix_realization(
+                        program,
+                        analysis,
+                        &result.carriers,
+                        name,
+                        provider,
+                        &keys,
+                        &payload,
+                    )
                 })
                 .transpose()?;
             recorded.push(ProviderLayout {
-                ty: ty.clone(),
+                provider: provider.clone(),
                 abi,
                 keys,
                 payload,
@@ -279,9 +353,10 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                     Some(NativeAbi::Runs | NativeAbi::Columns)
                 )
             {
-                result
-                    .downloads
-                    .insert(name, syn::parse_quote!(::core::iter::Map<_, _>));
+                result.downloads.insert(
+                    name,
+                    cq_lang_structures::provider::base::declaration("host_scan").instance(),
+                );
             }
         }
     }
@@ -335,14 +410,15 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                     )
                     .collect()
             };
-            let permutation = (!leading).then(|| {
-                payload
+            let materialization = (!leading).then(|| Materialization {
+                permutation: payload
                     .iter()
                     .map(|column| source.iter().position(|c| c == column).unwrap())
-                    .collect()
+                    .collect(),
+                provider: crate::providers::packed_provider().instance(),
+                params: materialized_params(),
+                permutation_threads: crate::BLOCK_THREADS,
             });
-            let materialized_provider =
-                (!leading).then(|| syn::parse_quote!(::gpu_datalog_runtime::PackedProvider));
             result.native.insert(
                 id,
                 NativeLookup {
@@ -350,8 +426,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                     source: source.clone(),
                     keys,
                     payload,
-                    permutation,
-                    materialized_provider,
+                    materialization,
                 },
             );
             Ok(())
@@ -388,7 +463,6 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
     let catalog = crate::catalog();
     crate::domains::check(program, analysis, records)?;
     let context = cq_print::Context::new(&program.structures, &analysis.structures);
-    let codecs = crate::runs::Codecs::check(&program.structures)?;
     if records.providers.len() != analysis.structures.built.len() {
         return Err(error("GPU-ProviderLayout: incomplete provider records"));
     }
@@ -402,8 +476,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
             return Err(error("GPU-ProviderLayout: missing layout"));
         }
         for (layout, (levels, provider)) in layouts.iter().zip(source) {
-            let ty = &provider.ty;
-            if &layout.ty != ty
+            if !layout.provider.same_token(provider)
                 || layout.keys != levels.concat()
                 || layout
                     .payload
@@ -466,7 +539,15 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                             .any(|token| token.provider.same_token(provider))
                         && layout.directory.is_none()
                         && layout.radix.as_ref().is_some_and(|radix| {
-                            check_radix(program, analysis, &codecs, name, provider, layout, radix)
+                            check_radix(
+                                program,
+                                analysis,
+                                &records.carriers,
+                                name,
+                                provider,
+                                layout,
+                                radix,
+                            )
                         })
                 }
                 ProviderAbi::Host => {
@@ -496,11 +577,24 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
         {
             return Err(error("GPU-NativeAbi: invalid lookup schema"));
         }
-        if let Some(order) = &lookup.permutation {
-            if lookup.materialized_provider
-                != Some(syn::parse_quote!(::gpu_datalog_runtime::PackedProvider))
+        if let Some(materialization) = &lookup.materialization {
+            let order = &materialization.permutation;
+            let RunParams {
+                ratio,
+                merge_tile_rows,
+                block_threads,
+            } = materialization.params;
+            if !materialization
+                .provider
+                .same_token(&crate::providers::packed_provider().instance())
+                || ratio < 2
+                || merge_tile_rows == 0
+                || block_threads != crate::BLOCK_THREADS
+                || materialization.permutation_threads != crate::BLOCK_THREADS
             {
-                return Err(error("GPU-NativeAbi: unrecorded materialization provider"));
+                return Err(error(
+                    "GPU-NativeAbi: materialization names an undeclared provider or unsupported run parameters",
+                ));
             }
             let unique: BTreeSet<_> = order.iter().copied().collect();
             if unique != (0..lookup.source.len()).collect()
@@ -512,54 +606,42 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
             {
                 return Err(error("GPU-NativeAbi: incomplete provider permutation"));
             }
-        } else if lookup.source != lookup.payload || lookup.materialized_provider.is_some() {
+        } else if lookup.source != lookup.payload {
             return Err(error(
                 "GPU-NativeAbi: borrowed lookup changed provider or order",
             ));
         }
     }
-    let required_downloads: BTreeSet<_> = program
-        .structures
-        .structures
-        .entries
-        .iter()
-        .filter_map(|entry| {
-            if let Structure::Host {
-                reader: ReaderRef::Scan,
-                keyed,
-                ..
-            } = &entry.structure
-                && matches!(
+    // GPU-NativeAbi downloads: a recorded download is the declared host scan
+    // provider over a host scan of a device-resident input (runs or columns
+    // ABI); every such scan has one, since host Rust cannot iterate device
+    // memory.
+    let host_scan = cq_lang_structures::provider::base::declaration("host_scan").instance();
+    let device_scan = |name: &str| {
+        program.structures.structures.entries.iter().any(|entry| {
+            symbol_name(&entry.name) == name
+                && matches!(&entry.structure, Structure::Host {
+                    reader: ReaderRef::Scan,
+                    keyed,
+                    ..
+                } if matches!(
                     analysis.structures.facts(&keyed.provider).abi,
                     Some(NativeAbi::Runs | NativeAbi::Columns)
-                )
-            {
-                Some(symbol_name(&entry.name))
-            } else {
-                None
-            }
+                ))
         })
-        .collect();
-    if records.downloads.keys().cloned().collect::<BTreeSet<_>>() != required_downloads {
+    };
+    for (name, provider) in &records.downloads {
+        if !provider.same_token(&host_scan) || !device_scan(name) {
+            return Err(error("GPU-NativeAbi: invalid download adapter"));
+        }
+    }
+    if program.structures.structures.entries.iter().any(|entry| {
+        let name = symbol_name(&entry.name);
+        device_scan(&name) && !records.downloads.contains_key(&name)
+    }) {
         return Err(error(
             "GPU-NativeAbi: download adapter records are incomplete",
         ));
-    }
-    for (name, ty) in &records.downloads {
-        if *ty != syn::parse_quote!(::core::iter::Map<_, _>)
-            || !program.structures.structures.entries.iter().any(|entry| {
-                symbol_name(&entry.name) == *name
-                    && matches!(
-                        &entry.structure,
-                        Structure::Host {
-                            reader: ReaderRef::Scan,
-                            ..
-                        }
-                    )
-            })
-        {
-            return Err(error("GPU-NativeAbi: invalid download adapter"));
-        }
     }
     Ok(())
 }

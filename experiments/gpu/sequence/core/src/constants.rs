@@ -117,6 +117,25 @@ mod tests {
         let mut changed = target.clone();
         changed.program.definitions.remove(1);
         assert!(check(&source, &changed).is_err());
+        let rename_raw = |target: &Program, name: syn::Ident| {
+            let mut changed = target.clone();
+            changed.program.definitions[0].name = name.clone();
+            let Operator::Select(select) = &mut changed.program.definitions[1].operator else {
+                panic!()
+            };
+            select.input = name;
+            changed
+        };
+        // Any fresh name is legal; the checker does not replay name choice.
+        check(
+            &source,
+            &rename_raw(&target, syn::parse_quote!(another_fresh_name)),
+        )
+        .unwrap();
+        // Relation definitions and heading columns occupy separate namespaces.
+        check(&source, &rename_raw(&target, syn::parse_quote!(y))).unwrap();
+        // Reusing the original result definition is not fresh.
+        assert!(check(&source, &rename_raw(&target, syn::parse_quote!(r))).is_err());
         let mut changed = target;
         changed.program.definitions[0].name = syn::parse_quote!(not_the_fresh_name);
         assert!(check(&source, &changed).is_err());

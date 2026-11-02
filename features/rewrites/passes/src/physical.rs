@@ -568,7 +568,9 @@ pub fn host_sets(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir
             keys.insert(name, key);
         }
     }
-    if keys.contains_key(&symbol_name(&target.program.returned)) && target.program.return_canon.is_some() {
+    if keys.contains_key(&symbol_name(&target.program.returned))
+        && target.program.return_canon.is_some()
+    {
         target.program.return_canon = None;
         // PH-HeadDedup: the answer dedup the dropped canon recorded remains
         // an obligation exactly when computed answers may still collapse.

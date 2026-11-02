@@ -36,10 +36,12 @@ fn packed_canon_retypes_canonical_rows_and_preserves_answers() {
     );
     let program: ir::Program = syn::parse_str(captured).unwrap();
     let facts = ir::contract::check(&program).unwrap();
-    assert!(facts.canonical.values().any(|source| source.rows_provider().is_some_and(
-        |provider| provider.token == "packed"
-            && provider.ty == syn::parse_quote!(::cq_storage::dedup::Packed)
-    )));
+    assert!(facts.canonical.values().any(|source| {
+        source.rows_provider().is_some_and(|provider| {
+            provider.token == "packed"
+                && provider.ty == syn::parse_quote!(::cq_storage::dedup::Packed)
+        })
+    }));
     assert!(!rows_records(&program).contains(&"sort".to_owned()));
     assert_eq!(packed_canon(&program, quote!()).unwrap(), program);
     assert!(packed_canon(&program, quote!(all)).is_err());

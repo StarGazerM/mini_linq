@@ -17,6 +17,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   canonical `AdaptiveMembership<_, 16777216>` declaration; catalog equality
   checking remains strict.
 
+- GPU integration: explicit `decompose(codecs [CodecToken { ... }])`
+  declarations admit custom codecs by exact identity; the symbols fixture
+  declares `TestCodec`. Publication builds record device-layout indices,
+  excluding host-only indexes. Whole-relation lookups are recorded and
+  checked before emission, and scan resident or published rows without
+  constructing empty-key indexes (TPC-H h07, h07_block, h11 and h15).
+
 - Elaboration redesign slice 3b: H-Local is order-independent. A relational
   predicate restricts every covering positive atom of its scope, written
   before or after it; the only positional premise left is the domain cut (a
@@ -55,6 +62,27 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   Its historical exact hashes do not approve the owned-clone/typed-domain
   cutover. Unrelated reviewed rules remain; removing obsolete approvals is
   fail-closed, so new capture hunks require their own reviewed hashes.
+- Independently validate GPU Datalog storage facts instead of replaying
+  realization. Record merge tiles and auxiliary launch widths, remove the
+  temporary sorter's hidden ratio, and make worker lanes consume recorded
+  arena initializers and release thread-local scratch at component boundaries.
+
+- GPU Sequence checkers validate recorded facts by legality instead of
+  replaying their producers: constant guards, source intervals, device
+  carriers, downloads, radix reads, launch partition/share/metadata, and the
+  realization (union arms, transfer coverage, provider origins, captures,
+  auxiliary geometry). A provider now has one owner that precedes every
+  reader, so a resident rename republished below host is no longer built twice. Publication storage records
+  the arena encoding of a raw-candidate terminal; the printer reads it, the
+  recorded BE-Resource payload parents, terminal-group and combine geometry,
+  per-family auxiliary kernel geometry and numeric upload bounds provenance,
+  which the runtime takes as explicit `Geometry`/`Auxiliary`/`UploadColumn`
+  arguments. Bindings name declared provider tokens (`packed_provider`,
+  `host_scan`) and the GPU grouping check compares tokens, not spellings.
+
+- Check TPC-H grouped publication slots against their head arguments and bounds
+  residency against recorded table-loader or staged-input placement; reject
+  missing placement records instead of silently assuming device residency.
 
 - Fix automatic Datalog in-plan admission after CQ reorders positive reads:
   only explicit `known(at(...))` advice records a numeric `Planning.known` pin;

@@ -3,11 +3,17 @@ use std::{collections::BTreeSet, sync::Arc};
 use cuda_core::LaunchConfig1D;
 use gpu_datalog_runtime::{
     pack::{Packing, Word},
-    runs::{DeviceRuns, Run},
+    runs::{DeviceRuns, Run, RunParams},
 };
 use gpu_device_columns::{Buffer, Pool};
 
 type Result<T = (), E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
+
+const PARAMS: RunParams = RunParams {
+    ratio: 4,
+    merge_tile_rows: 32,
+    block_threads: 256,
+};
 
 struct Random(u64);
 
@@ -108,7 +114,7 @@ fn admit_against_cpu<W: Word>(
 
 fn random_batches<W: Word>() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRuns::<W>::new(pool.clone(), 4)?;
+    let mut state = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
     let mut accepted = BTreeSet::new();
     let mut random = Random(0xa523_4b19_c018_762d);
     let mut retained = Vec::new();
@@ -147,7 +153,7 @@ fn random_batches<W: Word>() -> Result {
 
 fn known_unique_sort<W: Word>() -> Result {
     let pool = pool()?;
-    let state = DeviceRuns::<W>::new(pool.clone(), 4)?;
+    let state = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
     for rows in [0, 1, 17, 257, 4097] {
         let mut values: Vec<_> = (0..rows).rev().map(|row| word::<W>(row as u64)).collect();
         if rows > 1 {
@@ -205,7 +211,7 @@ fn random_duplicate_batches_four_lanes() -> Result {
 
 fn empty_single_and_extremes<W: Word>() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRuns::<W>::new(pool.clone(), 4)?;
+    let mut state = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
     let mut accepted = BTreeSet::new();
     assert_eq!(state.len(), 0);
     assert!(state.to_host()?.is_empty());
@@ -258,7 +264,7 @@ fn empty_single_and_extremes_wide_lanes() -> Result {
 
 fn million_rows<W: Word>() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRuns::<W>::new(pool.clone(), 4)?;
+    let mut state = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
     let mut random = Random(0x6b73_d147_590a_821f);
     let values: Vec<_> = (0..1_000_000)
         .map(|_| word::<W>(random.next() % 600_001))
@@ -292,7 +298,7 @@ fn million_rows_u128() -> Result {
 
 fn append_disjoint_runs<W: Word>() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRuns::<W>::new(pool.clone(), 4)?;
+    let mut state = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
     let mut accepted = BTreeSet::new();
     for batch in 0..128 {
         // Runs interleave numerically; they are not adjacent sorted chunks.
@@ -317,9 +323,29 @@ fn append_disjoint_runs<W: Word>() -> Result {
 #[test]
 fn recorded_ratio_changes_compaction_without_changing_rows() -> Result {
     let pool = pool()?;
-    assert!(DeviceRuns::<u64>::new(pool.clone(), 1).is_err());
+    assert!(DeviceRuns::<u64>::new(pool.clone(), RunParams { ratio: 1, ..PARAMS }).is_err());
+    for bad in [
+        RunParams {
+            merge_tile_rows: 0,
+            ..PARAMS
+        },
+        RunParams {
+            block_threads: 0,
+            ..PARAMS
+        },
+        RunParams {
+            block_threads: 128,
+            ..PARAMS
+        },
+        RunParams {
+            block_threads: 512,
+            ..PARAMS
+        },
+    ] {
+        assert!(DeviceRuns::<u64>::new(pool.clone(), bad).is_err());
+    }
     for (ratio, expected_runs) in [(2, 2), (4, 2), (8, 1)] {
-        let mut state = DeviceRuns::<u64>::new(pool.clone(), ratio)?;
+        let mut state = DeviceRuns::<u64>::new(pool.clone(), RunParams { ratio, ..PARAMS })?;
         let first = Buffer::from_host(pool.clone(), &[0u64, 1, 2, 3, 4, 5])?;
         let second = Buffer::from_host(pool.clone(), &[6u64])?;
         admit(&mut state, &first, 6)?;
@@ -329,6 +355,33 @@ fn recorded_ratio_changes_compaction_without_changing_rows() -> Result {
         let duplicate = admit(&mut state, &second, 1)?;
         assert!(duplicate.is_empty());
         assert_eq!(state.to_host()?, (0u64..7).collect::<Vec<_>>());
+    }
+    Ok(())
+}
+
+#[test]
+fn recorded_merge_tile_preserves_wide_union() -> Result {
+    let pool = pool()?;
+    for merge_tile_rows in [1, 7, 32, 129] {
+        let mut state = DeviceRuns::<[u64; 3]>::new(
+            pool.clone(),
+            RunParams {
+                merge_tile_rows,
+                ..PARAMS
+            },
+        )?;
+        for parity in [0, 1] {
+            let rows = (0..137)
+                .map(|i| word::<[u64; 3]>(i * 2 + parity))
+                .collect::<Vec<_>>();
+            let input = Buffer::from_host(pool.clone(), &rows)?;
+            admit(&mut state, &input, rows.len())?;
+        }
+        assert_eq!(state.retained_buffers(), 1);
+        assert_eq!(
+            state.to_host()?,
+            (0..274).map(word::<[u64; 3]>).collect::<Vec<_>>()
+        );
     }
     Ok(())
 }
@@ -394,7 +447,7 @@ fn merge_wide_tile_boundaries<W: Word>() -> Result {
                 let mut expected = first.clone();
                 expected.extend_from_slice(&second);
                 expected.sort_unstable();
-                let mut state = DeviceRuns::<W>::new(pool.clone(), 4)?;
+                let mut state = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
                 let first_buffer = Buffer::from_host(pool.clone(), &first)?;
                 let second_buffer = Buffer::from_host(pool.clone(), &second)?;
                 // SAFETY: both sequences increase in the selected lane; their
@@ -527,7 +580,7 @@ fn permutation_against_cpu<W: Word>(packing: Packing) -> Result {
         // Include a short initialized prefix, so capacity is not mistaken for
         // the row count, plus an empty launch and a partial final thread block.
         for rows in [0, 1, source.len() - 1, source.len()] {
-            let shuffled = packing.permute_device(&input, rows, &order)?;
+            let shuffled = packing.permute_device(&input, rows, &order, 256)?;
             assert_eq!(shuffled.len(), rows);
             assert_eq!(
                 shuffled.to_host()?,
@@ -535,7 +588,7 @@ fn permutation_against_cpu<W: Word>(packing: Packing) -> Result {
                 "{}-bit permutation {order:?}, {rows} rows",
                 W::BITS
             );
-            let restored = layout.permute_device(&shuffled, rows, &inverse)?;
+            let restored = layout.permute_device(&shuffled, rows, &inverse, 256)?;
             assert_eq!(restored.to_host()?, source[..rows]);
         }
     }
@@ -584,8 +637,8 @@ fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
     let packing = Packing::new(widths)?;
     let order = [2, 0, 1];
     let layout = packing.permute(&order)?;
-    let mut canonical = DeviceRuns::<W>::new(pool.clone(), 4)?;
-    let mut permuted = DeviceRuns::<W>::new(pool.clone(), 4)?;
+    let mut canonical = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
+    let mut permuted = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
     let mut rows = BTreeSet::new();
     let mut random = Random(0xd9e2_051b_c76a_438f);
     for batch in 0..12 {
@@ -607,7 +660,7 @@ fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
         }
         let input = Buffer::from_host(pool.clone(), &values)?;
         let fresh = admit(&mut canonical, &input, values.len())?;
-        let shuffled = packing.permute_device(fresh.buffer(), fresh.len(), &order)?;
+        let shuffled = packing.permute_device(fresh.buffer(), fresh.len(), &order, 256)?;
         let source = fresh.buffer().to_host_prefix(fresh.len())?;
         let expected = source
             .iter()
@@ -720,7 +773,7 @@ fn throughput_10m_candidates_against_50m_accepted() -> Result {
     const ACCEPTED: usize = 50_000_000;
     const CANDIDATES: usize = 10_000_000;
     let pool = pool()?;
-    let mut state = DeviceRuns::<u64>::new(pool.clone(), 4)?;
+    let mut state = DeviceRuns::<u64>::new(pool.clone(), PARAMS)?;
     let seed: Vec<_> = (0..ACCEPTED as u64).map(|row| row * 2).collect();
     let buffer = Buffer::from_host(pool.clone(), &seed)?;
     drop(seed);

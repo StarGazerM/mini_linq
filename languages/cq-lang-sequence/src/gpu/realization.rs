@@ -22,13 +22,33 @@ pub enum SourceOrigin {
     Uploaded { evaluation: HostEvaluation },
 }
 
-/// A contiguous half-open interval on one resident column, folded from the
-/// source's relational selections with encoded host bounds.
+/// A contiguous half-open interval on one resident column: the intersection
+/// of its bounds, each stated by one constraint of a relational selection
+/// (or constant rename) on the source's chain. Printing folds the bounds in
+/// order: `start = max(i64::MIN, lower...)`, `end = min(i64::MAX, upper...)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Interval {
+    /// Origin (resident input) column.
     pub column: String,
-    pub start: syn::Expr,
-    pub end: syn::Expr,
+    pub bounds: Vec<IntervalBound>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Lower,
+    Upper,
+}
+
+/// One bound of an [`Interval`]; an equality states an inclusive lower and an
+/// inclusive upper bound on the same value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntervalBound {
+    /// The Physical selection or constant rename stating this bound.
+    pub definition: String,
+    pub side: Side,
+    pub inclusive: bool,
+    /// The encoded host value compared against the column.
+    pub value: syn::Expr,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,6 +141,9 @@ pub struct DescriptorBounds {
 /// Range providers built over one completed device publication.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderBuild {
+    /// Indices of device layouts built by this publication; host layouts have
+    /// their own host construction and are never rebuilt from device rows.
+    pub layouts: Vec<usize>,
     /// Every key and payload column of the publication's provider layouts.
     pub columns: BTreeMap<String, DescriptorBounds>,
 }
@@ -158,13 +181,31 @@ pub enum GroupInput {
     },
 }
 
+/// Launch geometry of one generated or runtime kernel: one-dimensional
+/// blocks of `block_threads` lanes with `shared_bytes` of dynamic shared memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockGeometry {
+    pub block_threads: u32,
+    pub shared_bytes: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GroupCompletion {
-    /// Keyed: an argument-extraction kernel, then the recorded accumulator.
-    Segmented { arguments: Grid },
-    /// Keyless: fused argument evaluation into per-block typed partials over
-    /// an occupancy grid, then one stream-ordered combine block.
-    GridPartials { partials: Grid },
+    /// Keyed: an argument-extraction kernel (`arguments` grid, `geometry`
+    /// blocks), then the recorded accumulator.
+    Segmented {
+        arguments: Grid,
+        geometry: BlockGeometry,
+    },
+    /// Keyless: fused argument evaluation into per-block typed partials
+    /// (`partials` grid, `geometry` blocks holding one i64 value and one u32
+    /// presence word per lane), then one stream-ordered combine block per
+    /// aggregate with `combine` geometry.
+    GridPartials {
+        partials: Grid,
+        geometry: BlockGeometry,
+        combine: BlockGeometry,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -182,8 +223,10 @@ pub enum Step {
     /// the terminal fold realizes it.
     GroupAlias,
     Group(TerminalGroup),
-    /// The recorded dispatch; nonterminal publications build their providers.
+    /// The recorded dispatch publishing Physical `result`; nonterminal
+    /// publications build their providers.
     Dispatch {
+        result: String,
         provider: Option<ProviderBuild>,
     },
     HostUnion(HostUnion),
@@ -234,6 +277,27 @@ pub struct Captures {
     pub host: BTreeMap<String, Theta>,
 }
 
+/// Launch geometry of each runtime auxiliary kernel family, printed into the
+/// runtime's `Auxiliary` argument; the runtime rejects geometry its kernels
+/// cannot run, never adjusting it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Auxiliary {
+    /// Interval selection flags (positions access).
+    pub selection: BlockGeometry,
+    /// Deferred-range offset scan check.
+    pub offsets: BlockGeometry,
+    /// Range-provider build element kernels.
+    pub range: BlockGeometry,
+    /// Canonical (distinct) build element kernels.
+    pub canon: BlockGeometry,
+    /// Keyed group element kernels (order, key gather, boundaries).
+    pub group: BlockGeometry,
+    /// Keyed group reduction: one block per group.
+    pub group_reduce: BlockGeometry,
+    /// Bounds reduction of measured columns (uploads, provider descriptors).
+    pub bounds: BlockGeometry,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Realization {
     /// The target cannot realize this graded program; printing rejects it
@@ -241,11 +305,15 @@ pub struct Realization {
     /// does not require a realization.
     pub rejection: Option<String>,
     pub sources: BTreeMap<String, SourceRealization>,
+    /// Lookup operands read as complete relations rather than keyed layouts.
+    pub whole_lookups: BTreeSet<String>,
     pub steps: Vec<(String, Step)>,
     pub output: Option<HostOutput>,
     pub captures: Captures,
     /// PH-Smallest probes realized by exact candidate counts, by Physical probe.
     pub smallest: BTreeMap<String, SmallestRealization>,
+    /// Present exactly when the realization is not rejected.
+    pub auxiliary: Option<Auxiliary>,
 }
 
 /// One PH-Smallest side: a radix provider (rows-provider name) read under

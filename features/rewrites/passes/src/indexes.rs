@@ -16,8 +16,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cq_lang_structures::{self as ir, Structure, physical::Operator, symbol_name};
 use cq_lang_structures::provider::base as providers;
+use cq_lang_structures::{self as ir, Structure, physical::Operator, symbol_name};
 use proc_macro2::TokenStream;
 use syn::{Ident, Token};
 

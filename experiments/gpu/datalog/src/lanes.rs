@@ -20,18 +20,31 @@ pub fn compile_with(source: &Program, arguments: proc_macro2::TokenStream) -> sy
         }
     }
     let Streams(streams) = syn::parse2(arguments)?;
-    ensure(streams >= 1, &source.schedule, "lanes need at least one stream")?;
+    ensure(
+        streams >= 1,
+        &source.schedule,
+        "lanes need at least one stream",
+    )?;
     round::contract::check(source)?;
     let mut target = source.clone();
     target.schedule.streams = streams;
-    for (entry, stratum) in target.schedule.strata.iter_mut().zip(&source.context.strata) {
+    for (entry, stratum) in target
+        .schedule
+        .strata
+        .iter_mut()
+        .zip(&source.context.strata)
+    {
         entry.lanes = entry
             .waves
             .iter()
             .enumerate()
             .filter(|(_, wave)| streams > 1 && wave.holes.len() > 1)
             .map(|(index, wave)| {
-                let rules = if wave.phase == round::schedule::SEED { &stratum.seeds } else { &stratum.steps };
+                let rules = if wave.phase == round::schedule::SEED {
+                    &stratum.seeds
+                } else {
+                    &stratum.steps
+                };
                 let count = streams.min(wave.holes.len());
                 let mut lanes = vec![Vec::new(); count];
                 let mut next = 0usize;
@@ -61,7 +74,11 @@ pub fn check(program: &Program) -> syn::Result<()> {
     for (entry, stratum) in program.schedule.strata.iter().zip(&program.context.strata) {
         for lanes in &entry.lanes {
             let wave = &entry.waves[lanes.wave];
-            let rules = if wave.phase == round::schedule::SEED { &stratum.seeds } else { &stratum.steps };
+            let rules = if wave.phase == round::schedule::SEED {
+                &stratum.seeds
+            } else {
+                &stratum.steps
+            };
             for &hole in lanes.lanes.iter().skip(1).flatten() {
                 ensure(
                     !crate::print::reads_environment(&program.holes[rules[hole].hole].cq),

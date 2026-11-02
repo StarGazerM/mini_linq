@@ -37,8 +37,9 @@ struct Publication {
 }
 
 /// Formal rule DR-GroupedPublication: a resident grouped answer converts the
-/// grouped machine rows into answer columns by recorded slots; each key column
-/// takes the recorded bounds source, aggregates the full i64 domain.
+/// grouped machine rows into answer columns by slots checked against each head
+/// argument; input bounds bind the key and match recorded input placement.
+/// Aggregates and keys without an input binding take the full i64 domain.
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 struct GroupedPublication {
     slots: Vec<usize>,
@@ -59,13 +60,25 @@ enum KeyBounds {
 
 /// Select the grouped conversion at DR-Publication: slots follow the
 /// normalized head over keys then aggregates; a key's bounds come from the
-/// first positive atom binding it.
+/// first positive atom binding it; every input must have recorded placement.
 fn grouped_publication(
     source: &cq_lang_cq::Program,
     normal: &cq_lang_cq::Program,
-    inputs: Option<&std::collections::BTreeMap<String, Publication>>,
-) -> Option<GroupedPublication> {
-    let group = normal.query.group.as_ref()?;
+    inputs: &std::collections::BTreeMap<String, advice::Placement>,
+) -> syn::Result<Option<GroupedPublication>> {
+    let Some(group) = normal.query.group.as_ref() else {
+        return Ok(None);
+    };
+    for item in &source.query.body {
+        if let cq_lang_cq::BodyItem::Positive { atom } = item
+            && !inputs.contains_key(&atom.relation.to_string())
+        {
+            return Err(syn::Error::new_spanned(
+                &atom.relation,
+                "DR-GroupedPublication: missing recorded input placement",
+            ));
+        }
+    }
     let columns: Vec<_> = group
         .keys
         .iter()
@@ -106,10 +119,7 @@ fn grouped_publication(
                         syn::Expr::Path(path) if path.path.is_ident(key))
                     })?;
                     let relation = atom.relation.to_string();
-                    let resident = inputs
-                        .and_then(|inputs| inputs.get(&relation))
-                        .map(Publication::resident)
-                        .unwrap_or(true);
+                    let resident = inputs[&relation] == advice::Placement::Device;
                     Some(KeyBounds::Input {
                         relation,
                         field,
@@ -119,7 +129,7 @@ fn grouped_publication(
                 .unwrap_or(KeyBounds::Full)
         })
         .collect();
-    Some(GroupedPublication { slots, bounds })
+    Ok(Some(GroupedPublication { slots, bounds }))
 }
 
 /// Validate a recorded grouped conversion against the checked programs.
@@ -127,6 +137,7 @@ fn check_grouped(
     source: &cq_lang_cq::Program,
     normal: &cq_lang_cq::Program,
     grouped: &GroupedPublication,
+    inputs: &std::collections::BTreeMap<String, advice::Placement>,
 ) -> syn::Result<()> {
     let fail = |message: &str| {
         Err(syn::Error::new_spanned(
@@ -144,9 +155,24 @@ fn check_grouped(
     {
         return fail("slots do not cover the grouped head");
     }
-    for (slot, bounds) in grouped.slots.iter().zip(&grouped.bounds) {
+    for ((slot, bounds), argument) in grouped
+        .slots
+        .iter()
+        .zip(&grouped.bounds)
+        .zip(&normal.query.head.args)
+    {
+        let name = if let Some(key) = group.keys.get(*slot) {
+            key
+        } else {
+            &group.aggregates[*slot - group.keys.len()].name
+        };
+        if !matches!(argument, syn::Expr::Path(path) if path.path.is_ident(name)) {
+            return fail("slot does not denote its grouped head argument");
+        }
         let KeyBounds::Input {
-            relation, field, ..
+            relation,
+            field,
+            resident,
         } = bounds
         else {
             continue;
@@ -154,6 +180,12 @@ fn check_grouped(
         let Some(key) = group.keys.get(*slot) else {
             return fail("aggregate column takes input bounds");
         };
+        let Some(placement) = inputs.get(relation) else {
+            return fail("input bounds require a recorded input placement");
+        };
+        if *resident != (*placement == advice::Placement::Device) {
+            return fail("key bounds residency differs from recorded input placement");
+        }
         let bound = source.query.body.iter().any(|item| {
             matches!(item,
             cq_lang_cq::BodyItem::Positive { atom } if atom.relation == relation.as_str()
@@ -386,7 +418,8 @@ fn compile_stage(
     let cq: cq_lang_cq::Program = checked("CQ parse", &encoded, syn::parse2(encoded.clone()))?;
     let normal = checked("CQ normalize", &cq, cq_lang_cq::normal::normalize(&cq))?;
     let captures = &normal.query.captures;
-    let setup_bindings = kernel.setup_bindings(manifest, &quote!(#captures))
+    let setup_bindings = kernel
+        .setup_bindings(manifest, &quote!(#captures))
         .map_err(|error| Rejected {
             phase: "loader captures",
             error: error.to_string(),
@@ -398,12 +431,37 @@ fn compile_stage(
         publication(&normal, pipeline, Some(publications)),
     )?;
     if publication.resident() {
-        publication.grouped = grouped_publication(&cq, &normal, Some(publications));
+        // Table loaders use the selected target; staged inputs carry their
+        // producer's publication placement. Record both before selecting bounds.
+        let input_placements: std::collections::BTreeMap<_, _> = kernel
+            .relations
+            .iter()
+            .map(|relation| {
+                (
+                    relation.name.to_string(),
+                    if host {
+                        advice::Placement::Host
+                    } else {
+                        advice::Placement::Device
+                    },
+                )
+            })
+            .chain(
+                publications
+                    .iter()
+                    .map(|(name, input)| (name.clone(), input.placement)),
+            )
+            .collect();
+        publication.grouped = checked(
+            "grouped publication",
+            &normal,
+            grouped_publication(&cq, &normal, &input_placements),
+        )?;
         if let Some(grouped) = &publication.grouped {
             checked(
                 "grouped publication",
                 &normal,
-                check_grouped(&cq, &normal, grouped),
+                check_grouped(&cq, &normal, grouped, &input_placements),
             )?;
         }
     }
@@ -455,11 +513,7 @@ fn compile_stage(
     } else {
         pipeline.plan.clone()
     };
-    let reduced = checked(
-        "CQ plan advice",
-        &normal,
-        advice::valuation(&cq, &plan),
-    )?;
+    let reduced = checked("CQ plan advice", &normal, advice::valuation(&cq, &plan))?;
     let ra = checked("CQ elaborate", &reduced, cq_elaborate::compile(&reduced))?;
     checked(
         "CQ elaborate check",
@@ -547,7 +601,11 @@ fn compile_stage(
     // Nullable publication payloads have no device scalar ABI. A join carrying
     // one from either side needs a host-readable index, until a later projection
     // removes that column. Use checked layouts, never Rust type spellings.
-    if !host && publications.values().any(|input| input.nullable.iter().any(|value| *value)) {
+    if !host
+        && publications
+            .values()
+            .any(|input| input.nullable.iter().any(|value| *value))
+    {
         let nullable = nullable_inputs(&normal, Some(publications));
         let host_structures = checked(
             "nullable host provider selection",
@@ -588,9 +646,7 @@ fn compile_stage(
             if matches!(entry.structure, cq_lang_structures::Structure::Built { .. })
                 && (nullable_reader
                     || advice::relation_of(&structures.physical, &entry.name)
-                        .and_then(|relation| {
-                            publications.get(&relation.to_string())
-                        })
+                        .and_then(|relation| publications.get(&relation.to_string()))
                         .is_some_and(|input| input.nullable.iter().any(|value| *value)))
             {
                 let cq_lang_structures::Structure::Built { keyed, .. } =
@@ -619,20 +675,24 @@ fn compile_stage(
                 .iter()
                 .find(|r| r.name == host.as_str())
                 .unwrap();
-            if publications.get(&relation.name.to_string()).is_some_and(|input| !input.resident())
+            if publications
+                .get(&relation.name.to_string())
+                .is_some_and(|input| !input.resident())
             {
                 continue;
             }
             let types = relation.columns.iter().map(|c| &c.ty);
             let input = cq_lang_structures::provider::InputSchema {
                 key_count: 0,
-                columns: relation.columns.iter().map(|column| {
-                    cq_lang_structures::provider::InputColumn {
+                columns: relation
+                    .columns
+                    .iter()
+                    .map(|column| cq_lang_structures::provider::InputColumn {
                         logical: column.ty.clone(),
                         storage: column.ty.clone(),
                         codec: None,
-                    }
-                }).collect(),
+                    })
+                    .collect(),
             };
             let device_columns = cq_gpu_sequence::providers::declaration("device_columns");
             structures = checked(
@@ -730,7 +790,9 @@ fn compile_stage(
                         subject: subject.clone(),
                         rows,
                     })
-                    .chain(key.map(|columns| cq_lang_sequence::EvidenceFact::Key { subject, columns }))
+                    .chain(
+                        key.map(|columns| cq_lang_sequence::EvidenceFact::Key { subject, columns }),
+                    )
                 })
                 .collect(),
         };
@@ -846,11 +908,7 @@ fn compile_stage(
         cq_sequence_pull::translate(&cpu_plan.program, &cpu_analysis),
     )?;
 
-    let fields: Vec<_> = kernel
-        .relations
-        .iter()
-        .map(|r| &r.name)
-        .collect();
+    let fields: Vec<_> = kernel.relations.iter().map(|r| &r.name).collect();
     let tables: Vec<_> = kernel
         .relations
         .iter()
@@ -1155,7 +1213,8 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
         }))?,
     )?;
     let manifest = Manifest::load(&directory)?;
-    let program = stages::Program::import(r#"
+    let program = stages::Program::import(
+        r#"
         program string_guard {
             domain Names = dictionary(part.p_name);
             input Keys(key: i32) = table(keys);
@@ -1178,11 +1237,18 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
             }
             terminal { from s0 project [column(0), column(1)] dictionaries [1 = Names]; }
         }
-    "#)?;
+    "#,
+    )?;
     let mut pipeline = advice::Pipeline::baseline();
     pipeline.publication = advice::Placement::Host;
-    let (code, _) = build_stages::compile(&program, "string_guard", &manifest, "advised", Some(&pipeline))
-        .map_err(|error| format!("String guard regression {}: {}", error.phase, error.error))?;
+    let (code, _) = build_stages::compile(
+        &program,
+        "string_guard",
+        &manifest,
+        "advised",
+        Some(&pipeline),
+    )
+    .map_err(|error| format!("String guard regression {}: {}", error.phase, error.error))?;
     let preprocessing = program.preprocessing_tokens()?;
     let directory = directory.to_string_lossy();
     Ok(quote! {
@@ -1312,12 +1378,17 @@ fn main() -> Result<()> {
                     "stage_source": staged.to_token_stream().to_string(), "pipeline": pipeline});
                 let generation_started = std::time::Instant::now();
                 let compiled = build_stages::compile(
-                    &staged, name, &manifest, mode,
+                    &staged,
+                    name,
+                    &manifest,
+                    mode,
                     if staged.stages.len() == 1 {
                         Some(&pipeline)
                     } else if mode == "advised" {
                         overrides.get(name)
-                    } else { None },
+                    } else {
+                        None
+                    },
                 );
                 match compiled {
                     Ok((code, artifact)) => {

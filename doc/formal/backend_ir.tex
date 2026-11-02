@@ -422,6 +422,8 @@ and alignment belong to the target-supplied machine, not to the language.
 Payload carriers consume the shared Structures carried-column demand, including
 canonical valuations, built keys, filtered payloads, native keyed-read layouts
 and backward consumer demand; Sequence does not repeat that DAG analysis.
+A printer carries exactly the recorded live parent columns across each payload
+lookup; it does not recompute their liveness from generated code.
 BE-Publication's ordinary owned-row publication stores expanded rows.
 A terminal lookup does not by itself denote a deferred range: that
 representation requires the explicit GPU-Launch refinement and a supported
@@ -559,6 +561,21 @@ exact codec (or identity). The catalog discharges a codec obligation only by
 the token of its recorded codec, and a canon obligation only at its recorded
 level through its recorded token; an obligation without a recorded token or
 level is unmet.
+The GPU \code{decompose} adapter optionally accepts
+\code{codecs [CodecToken \{ codec: Some(Type), ordered: true, levels: [[host], [host, device]] \}]}.
+Each declaration has exactly the Sequence \code{CodecToken} fields:
+\code{codec} is \code{Some(Type)} or \code{None} (identity),
+\code{ordered} is a Boolean, and \code{levels} lists explicit level paths.
+These tokens extend the target catalog; omitted arguments add no tokens.
+No codec capability is inferred from an input schema or a Rust type spelling.
+GPU publication provider-build records also name the exact device-layout
+indices they construct. The checker requires every non-host layout exactly
+once in order; host-only layouts retain their host construction. Printers
+consume the recorded indices and never rebuild a host provider from device rows.
+GPU realization records \code{whole\_lookups} for complete-relation lookup
+operands. Checking requires exactly the zero-key reads of the Sequence term;
+printing resolves the recorded whole-relation access to its source or completed
+publication, without requiring or constructing an empty-key index.
 The catalog is data: shared planning and checking
 do not depend on a target implementation, and no rule reads a provider's Rust
 spelling. A successful result is a graded
@@ -1164,8 +1181,12 @@ exhausts the descendants of the roots it claims, but root tiles shrink at
 launch so a small driver occupies every resident block (GPU-RootSpread). A
 dispatch with a fold keeps its declared partition, because block-local fold
 scopes depend on the root tile. Only the assignment of roots to blocks
-changes; the multiset of published rows is the declared partition's. An arena
-terminal (\code{reserve\_previous}) with a local fold keeps its count,
+changes; the multiset of published rows is the declared partition's. The
+checker accepts any positive $m$ (the declared distributed tile when there is
+one), an optional first-expansion share on a spread single-chain dispatch
+that expands, with any positive tile cap, and fresh metadata anywhere; it
+never recomputes the producer's bound, cap or metadata choice. An arena
+terminal (\code{reserve\_previous}) with a local fold may keep its count,
 failure and claim-cursor words in its arena's resident words
 (GPU-ResidentMeta): they are zero on entry, the last block to finish
 publishes count and failure and re-zeroes them, so a launch attempt neither
@@ -1180,7 +1201,7 @@ allocates nor clears metadata.
  S=\text{device SM count}\quad R=\mathsf{residentBlocks}(K,\mathsf{threads},\mathsf{shared})>0}
  {\mathsf{grid}(K,P)=\min(\max(1,P),S R)}
 \Rule{GPU-RootSpread}{\mathsf{roots}=\mathsf{spread}\quad d\text{ fold-free}\quad
- m=\text{declared tile, else }\mathsf{threads}\cdot\text{source items}\quad
+ m>0\text{, the declared tile when present}\quad
  R'=S R\text{ (GPU-LAUNCH-OCCUPANCY)}}
  {d.\mathsf{partition}=\mathsf{Spread}(m)\quad
   \mathsf{tile}_i=\min(m,\max(1,\lceil|D_i|/R'\rceil))\quad
@@ -1276,11 +1297,11 @@ segmented-flatten lemma. Membership is the disjunction over runs.
  {\mathsf{lookup}(k)=\biguplus_j\mathrm{unpack}_p(\rho_j[\mathrm{range}_p(k)])\quad
   \mathsf{member}(k)=\bigvee_j\rho_j[\mathrm{range}_p(k)]\neq\emptyset}
 \end{mathpar}
-An arena terminal publishes the hole's head rows packed in the head's
-canonical column order into a caller-owned device buffer and returns it with
-its length. It is a candidate bag: canonicalization belongs to admission
-(\textsc{DL-DeviceRuns}). Sizing follows the dispatch's recorded output
-protocol, so a batch is never truncated.
+An arena terminal publishes the hole's head rows, packed by the arena encoding
+its publication storage records (\textsc{GPU-PublicationStorage}), into a
+caller-owned device buffer and returns it with its length. It is a candidate
+bag: canonicalization belongs to admission (\textsc{DL-DeviceRuns}). Sizing
+follows the dispatch's recorded output protocol, so a batch is never truncated.
 \begin{mathpar}
 \Rule{GPU-Arena}{\mathsf{run}_{\rm gpu}(t)\text{ as T-Gpu}\quad
  \text{output protocol discharges BE-Length}}
@@ -1431,10 +1452,13 @@ of their immutable original resident input domains, or their declared Scalar
 carrier metadata; scalar folds record their monoid's fixed bounds.
 An uploaded host publication does not mutate a recorded packing domain, so
 early and late emission use the same source. Host unions separately record
-their flat staging carrier. The checker traverses Sequence constructors and
-checks coverage, canonical obligations, field provenance, stride and staging
-without calling the producer's context/selection helpers. A codec does not
-select a canonicalization provider.
+their flat staging carrier. A raw-candidate terminal dispatch (no group,
+scalar fold or canonical granularity) also records its arena encoding: the
+head columns in order at their recorded device carriers; an arena translation
+prints that record and rejects any terminal without one. The checker traverses
+Sequence constructors and checks coverage, canonical obligations, field
+provenance, stride, staging and arena encoding without calling the producer's
+context/selection helpers. A codec does not select a canonicalization provider.
 
 \paragraph{GPU realization selection.}
 After publication storage, the target selects one realization of the graded
@@ -1446,11 +1470,19 @@ candidate is printed: planner candidates are graded, not printed.
 (resident columns, packed runs with their native lookups, or a host
 evaluation uploaded during the build), its column map, its access (scan, an
 interval's materialized positions, or the recorded Range provider restricted
-to an optional interval) and its construction phase. Intervals intersect all
-explicit relational selection bounds on one column, including equality;
-contradictory bounds therefore retain an empty interval. The checker re-derives
-that uniquely determined interval from the selection syntax and requires
-equality, as in \textsc{PH-ConstantGuard}. Runs never take an interval. \emph{Steps} record,
+to an optional interval) and its construction phase. An interval records
+every explicit relational selection bound on one column, including equality;
+contradictory bounds therefore retain an empty interval. The checker verifies
+the recorded bounds as a set against the constraints of the source's
+selection chain without rerunning origin selection. Runs never take an
+interval. A provider has one owner, and the owner precedes every reader: a
+nonterminal dispatch or host-union publication builds its result's providers
+unless an earlier definition looks them up, in which case the source builds
+them and the publication does not; the exclusion is derived from the produced
+steps.
+The checker also validates union arms against the union's operands in order,
+transfer coverage, provider origins, capture records and the runtime-supported
+auxiliary geometry. \emph{Steps} record,
 per Sequence definition in order, whether it is a terminal-group alias, the
 terminal group, a dispatch, a host union, a host upload, or host-only.
 Host evaluations record the completed publications bound to their results and
@@ -1484,7 +1516,7 @@ each row function and the host-bound selection conditions.
 \Rule{GPU-GroupGridFold}{G\text{ keyless}\quad
  B=\biguplus_b B_b\text{ over an occupancy grid}\quad
  p_b=(\mathsf{fold}_a(B_b),\mathsf{present}_a(B_b))_a}
- {\mathsf{group}_{\rm gpu}(G)=\bigoplus_b p_b\text{ in one stream-ordered combine}}
+ {\mathsf{group}_{\rm gpu}(G)_a=\bigoplus_b (p_b)_a\text{ in one stream-ordered combine block per aggregate }a}
 \end{mathpar}
 The terminal group record names the Physical group, its input realization and
 its completion. The input is the packed canonical publication (whose recorded
@@ -1495,8 +1527,9 @@ wrap the same group are realized by its fold rather than published. Keyed
 groups extract arguments on the occupancy grid and call the recorded
 accumulator. Keyless groups fold in one fused pass: each block accumulates its
 grid-stride live rows into typed per-aggregate partials (count and checked sum,
-extrema with presence), and one block combines the partials on the producing
-stream. The empty input keeps one row with zero counts and sums and absent
+extrema with presence) at its recorded block geometry, and one block per
+aggregate combines the partials on the producing stream at the recorded
+combine geometry. The empty input keeps one row with zero counts and sums and absent
 extrema; overflow and representation-range failures set the published row's
 sticky failure word.
 
@@ -1504,8 +1537,9 @@ A literal atom argument such as \code{method\_modifier(sym("abstract"), m)}
 reaches the translator as a constant inside a rename. The checked Physical
 rewrite \code{capture\_constants} turns each such argument into a fresh column,
 an equality guard against the literal (a closed capture), and a projection
-that drops the fresh column; its checker re-derives that triple from the
-source and requires exact equality. Operands at code-domain columns arrive
+that drops the fresh column; its checker verifies that triple's structure
+against the source and that each guard column is fresh, accepting any fresh
+name. Operands at code-domain columns arrive
 already translated by A-Domain into capture references; no string literal
 reaches this rewrite.
 \begin{mathpar}

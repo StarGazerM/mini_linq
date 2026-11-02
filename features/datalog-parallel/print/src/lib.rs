@@ -152,7 +152,10 @@ fn evaluate(
                     format_ident!("__cq_rel_hasher_{}", rule.head, span = Span::mixed_site());
                 declarations.push(quote!(let #hasher = &#owned;));
             } else {
-                let state = task_hasher(&program.storage.tokens, &context.layouts[head.providers.canonical]);
+                let state = task_hasher(
+                    &program.storage.tokens,
+                    &context.layouts[head.providers.canonical],
+                );
                 declarations
                     .push(quote!(let #hasher = &<#state as ::core::default::Default>::default();));
             }
@@ -554,8 +557,8 @@ fn admit_chunks(
     let covered_rows = Ident::new("__cq_admit_covered", Span::mixed_site());
     let covered_count = Ident::new("__cq_admit_covered_count", Span::mixed_site());
     let total = cq_datalog_print::candidate_count();
-    let counted = timing
-        .then(|| quote!(#total.fetch_add(#count, ::core::sync::atomic::Ordering::Relaxed);));
+    let counted =
+        timing.then(|| quote!(#total.fetch_add(#count, ::core::sync::atomic::Ordering::Relaxed);));
     let covered_counted = timing.then(|| {
         quote!(
             let #covered_count = #covered_rows.iter().map(::std::vec::Vec::len).sum::<usize>();
@@ -563,8 +566,7 @@ fn admit_chunks(
         )
     });
     // The canonical token's declared admission strategy (A-128).
-    if canonical_token(tokens, canonical).admission
-        != storage::provider::Admission::SortedSubtract
+    if canonical_token(tokens, canonical).admission != storage::provider::Admission::SortedSubtract
     {
         let admitted = Ident::new("__cq_admit_rows", Span::mixed_site());
         let fresh = Ident::new("__cq_admit_new", Span::mixed_site());

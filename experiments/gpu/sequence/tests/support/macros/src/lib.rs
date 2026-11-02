@@ -148,13 +148,17 @@ fn arena_hole(
             if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &mut entry.structure
             {
                 if matches!(reader, cq_lang_structures::ReaderRef::Scan) {
-                    if let Some(provider) = inputs.get(&after.physical.hosts[&entry.name.to_string()]) {
+                    if let Some(provider) =
+                        inputs.get(&after.physical.hosts[&entry.name.to_string()])
+                    {
                         keyed.provider = provider.clone();
                     }
                 }
             }
         }
-        structures.structures.declare(&cq_gpu_sequence_core::providers::declarations());
+        structures
+            .structures
+            .declare(&cq_gpu_sequence_core::providers::declarations());
     }
     let structures = cq_gpu_sequence_core::runs::bind(&structures)?;
     let source = cq_sequence_lowering::compile(&structures)?;

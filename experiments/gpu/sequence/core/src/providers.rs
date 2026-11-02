@@ -36,3 +36,20 @@ pub fn declaration(token: &str) -> Declaration {
         .find(|declaration| declaration.token == token)
         .unwrap_or_else(|| panic!("STR-Provider: `{token}` is a GPU provider token"))
 }
+
+/// The provider a run input's complete key permutation materializes into
+/// (GPU-NativeAbi). Declared here, never registered in the catalog or
+/// placed in Structures: only a native lookup's recorded materialization
+/// names it.
+pub fn packed_provider() -> Declaration {
+    let providers: Providers = syn::parse_quote!(providers {
+        packed_provider = ::gpu_datalog_runtime::PackedProvider {
+            reads [exact, range, membership], build typed, abi runs
+        };
+    });
+    providers
+        .declarations
+        .into_iter()
+        .next()
+        .expect("one materialized provider declaration")
+}

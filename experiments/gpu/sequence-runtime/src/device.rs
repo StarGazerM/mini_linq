@@ -63,4 +63,3 @@ pub unsafe fn range(offsets: ColumnView, key: u32) -> (u32, u32) {
         )
     }
 }
-

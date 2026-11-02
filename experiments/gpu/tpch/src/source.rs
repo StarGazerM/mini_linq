@@ -1,7 +1,10 @@
 //! Lower checked authored stage records to CQ input and representation facts.
 //! Rust payloads are preserved; only relational syntax and declared codecs
 //! participate in representation adaptation.
-use crate::{manifest::{Manifest, Result}, stages};
+use crate::{
+    manifest::{Manifest, Result},
+    stages,
+};
 use proc_macro2::{TokenStream, TokenTree};
 use quote::{ToTokens, quote};
 use std::collections::BTreeMap;
@@ -13,10 +16,32 @@ macro_rules! sources {
     )*]; };
 }
 sources!(
-    "h01", "h02", "h06", "h11", "h13", "h15", "h18", "h20", "h10",
-    "h12", "h19", "h03", "h04", "h04_not_exists", "h05", "h07",
-    "h07_block", "h08", "h09", "h16", "h22", "h21_positive",
-    "d19", "d27", "d72_inner", "d85"
+    "h01",
+    "h02",
+    "h06",
+    "h11",
+    "h13",
+    "h15",
+    "h18",
+    "h20",
+    "h10",
+    "h12",
+    "h19",
+    "h03",
+    "h04",
+    "h04_not_exists",
+    "h05",
+    "h07",
+    "h07_block",
+    "h08",
+    "h09",
+    "h16",
+    "h22",
+    "h21_positive",
+    "d19",
+    "d27",
+    "d72_inner",
+    "d85"
 );
 
 pub type Origin = (String, String);
@@ -45,53 +70,104 @@ impl Kernel {
         index: usize,
         types: &BTreeMap<String, Vec<(Ident, syn::Type)>>,
     ) -> Result<Self> {
-        let stage = source.stages.get(index).ok_or("stage index out of bounds")?;
+        let stage = source
+            .stages
+            .get(index)
+            .ok_or("stage index out of bounds")?;
         let mut relations = Vec::new();
         let mut published = Vec::new();
         let mut published_origins = BTreeMap::new();
         for declaration in stage.program.inputs() {
-            let (_, producer) = stage.inputs.iter().find(|(name, _)| *name == declaration.name)
+            let (_, producer) = stage
+                .inputs
+                .iter()
+                .find(|(name, _)| *name == declaration.name)
                 .ok_or("checked stage input binding missing")?;
             if let Some(input) = source.inputs.iter().find(|input| input.name == *producer) {
-                let columns = input.columns.as_ref().ok_or("host value is not a relation")?;
+                let columns = input
+                    .columns
+                    .as_ref()
+                    .ok_or("host value is not a relation")?;
                 if let stages::Producer::Table(table) = &input.producer {
                     relations.push(Relation {
-                        name: declaration.name.clone(), table: table.clone(),
-                        columns: columns.iter().map(|column| (column.name.clone(), column.ty.clone())).collect(),
+                        name: declaration.name.clone(),
+                        table: table.clone(),
+                        columns: columns
+                            .iter()
+                            .map(|column| (column.name.clone(), column.ty.clone()))
+                            .collect(),
                     });
                     continue;
                 }
-                let origins = columns.iter().map(|column| column.domain.as_ref().map(|name| {
-                    source.domain(name).map(|domain| (domain.table.to_string(), domain.column.to_string()))
-                }).transpose()).collect::<Result<Vec<_>>>()?;
+                let origins = columns
+                    .iter()
+                    .map(|column| {
+                        column
+                            .domain
+                            .as_ref()
+                            .map(|name| {
+                                source.domain(name).map(|domain| {
+                                    (domain.table.to_string(), domain.column.to_string())
+                                })
+                            })
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 published_origins.insert(declaration.name.to_string(), origins);
             }
             published.push(Relation {
-                name: declaration.name.clone(), table: declaration.name.clone(),
-                columns: types.get(&declaration.name.to_string()).cloned()
+                name: declaration.name.clone(),
+                table: declaration.name.clone(),
+                columns: types
+                    .get(&declaration.name.to_string())
+                    .cloned()
                     .ok_or_else(|| format!("missing publication schema {}", declaration.name))?,
             });
         }
-        let answer = stage.program.output().ok_or("stage requires an output schema")?.columns.iter()
-            .map(|column| (column.name.clone(), column.ty.clone())).collect();
-        let operands = stage.captures.iter().map(|name| source.operands.iter()
-            .find(|operand| operand.name == *name).cloned()
-            .ok_or_else(|| format!("missing operand {name}").into())).collect::<Result<Vec<_>>>()?;
+        let answer = stage
+            .program
+            .output()
+            .ok_or("stage requires an output schema")?
+            .columns
+            .iter()
+            .map(|column| (column.name.clone(), column.ty.clone()))
+            .collect();
+        let operands = stage
+            .captures
+            .iter()
+            .map(|name| {
+                source
+                    .operands
+                    .iter()
+                    .find(|operand| operand.name == *name)
+                    .cloned()
+                    .ok_or_else(|| format!("missing operand {name}").into())
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self {
-            evidence: stage.evidence.clone(), relations, answer, published,
-            published_origins, domains: source.domains.clone(), operands,
+            evidence: stage.evidence.clone(),
+            relations,
+            answer,
+            published,
+            published_origins,
+            domains: source.domains.clone(),
+            operands,
             program: stage.program.clone(),
         })
     }
 
-    pub fn cpu_query(&self) -> TokenStream { self.program.to_token_stream() }
+    pub fn cpu_query(&self) -> TokenStream {
+        self.program.to_token_stream()
+    }
 
     pub fn dictionary_types(&self, manifest: &Manifest) -> Result<BTreeMap<Origin, syn::Type>> {
         let mut storage = BTreeMap::new();
         for domain in &self.domains {
             let origin = (domain.table.to_string(), domain.column.to_string());
             if manifest.column(&origin.0, &origin.1)?.encoding != "dictionary" {
-                return Err(format!("declared domain {} is not a dictionary column", domain.name).into());
+                return Err(
+                    format!("declared domain {} is not a dictionary column", domain.name).into(),
+                );
             }
             storage.insert(origin, syn::parse_quote!(u32));
         }
@@ -124,38 +200,63 @@ impl Kernel {
     pub fn variable_origins(&self) -> Result<BTreeMap<String, Origin>> {
         let mut inputs = self.published_origins.clone();
         for relation in &self.relations {
-            inputs.insert(relation.name.to_string(), relation.columns.iter().map(|(column, _)|
-                Some((relation.table.to_string(), column.to_string()))).collect());
+            inputs.insert(
+                relation.name.to_string(),
+                relation
+                    .columns
+                    .iter()
+                    .map(|(column, _)| Some((relation.table.to_string(), column.to_string())))
+                    .collect(),
+            );
         }
         let mut variables = BTreeMap::new();
         collect_variables(&self.program.query.body, &inputs, &mut variables)?;
         Ok(variables)
     }
 
-    pub fn setup_bindings(&self, manifest: &Manifest, captures: &TokenStream) -> Result<TokenStream> {
+    pub fn setup_bindings(
+        &self,
+        manifest: &Manifest,
+        captures: &TokenStream,
+    ) -> Result<TokenStream> {
         let mut bindings = TokenStream::new();
         for domain in &self.domains {
             let name = &domain.name;
             // The shared capture IR records demand. Output-only domain
             // declarations must not embed or evaluate their dictionaries.
             if !mentions(captures.clone(), name)
-                && !self.operands.iter().any(|operand| mentions(operand.expression.clone(), name))
-            { continue; }
-            let values = manifest.dictionary(manifest.column(&domain.table.to_string(), &domain.column.to_string())?)?;
+                && !self
+                    .operands
+                    .iter()
+                    .any(|operand| mentions(operand.expression.clone(), name))
+            {
+                continue;
+            }
+            let values = manifest.dictionary(
+                manifest.column(&domain.table.to_string(), &domain.column.to_string())?,
+            )?;
             if !values.windows(2).all(|pair| pair[0] < pair[1]) {
                 return Err(format!("dictionary domain {name} must be sorted and unique").into());
             }
-            bindings.extend(quote!(let #name = crate::manifest::DictionaryDomain(&[#(#values),*]);));
+            bindings
+                .extend(quote!(let #name = crate::manifest::DictionaryDomain(&[#(#values),*]);));
         }
         for operand in &self.operands {
-            let stages::Operand { name, ty, expression, .. } = operand;
+            let stages::Operand {
+                name,
+                ty,
+                expression,
+                ..
+            } = operand;
             bindings.extend(quote!(let #name: #ty = { #expression };));
         }
         Ok(bindings)
     }
 
     pub fn encoded_query_with_types(
-        &self, manifest: &Manifest, storage: &BTreeMap<Origin, syn::Type>,
+        &self,
+        manifest: &Manifest,
+        storage: &BTreeMap<Origin, syn::Type>,
     ) -> Result<TokenStream> {
         let mut program = self.program.clone();
         let origins = self.variable_origins()?;
@@ -166,27 +267,48 @@ impl Kernel {
         // explicit publications. The relational body is never reordered.
         let mut declarations = Vec::new();
         for relation in self.relations.iter().chain(&self.published) {
-            let original = self.program.inputs().find(|input| input.name == relation.name)
+            let original = self
+                .program
+                .inputs()
+                .find(|input| input.name == relation.name)
                 .ok_or("missing authored input schema")?;
             let mut declaration = original.clone();
             for (index, column) in declaration.columns.iter_mut().enumerate() {
-                let origin = if self.relations.iter().any(|input| input.name == relation.name) {
-                    Some((relation.table.to_string(), relation.columns[index].0.to_string()))
-                } else {
-                    self.published_origins.get(&relation.name.to_string()).and_then(|columns| columns[index].clone())
-                };
-                column.ty = origin.as_ref().and_then(|origin| storage.get(origin))
-                    .unwrap_or(&relation.columns[index].1).clone();
-                if let Some(domain) = origin.as_ref().and_then(|origin| self.domains.iter().find(|domain|
-                    domain.table == origin.0.as_str() && domain.column == origin.1.as_str()))
+                let origin = if self
+                    .relations
+                    .iter()
+                    .any(|input| input.name == relation.name)
                 {
+                    Some((
+                        relation.table.to_string(),
+                        relation.columns[index].0.to_string(),
+                    ))
+                } else {
+                    self.published_origins
+                        .get(&relation.name.to_string())
+                        .and_then(|columns| columns[index].clone())
+                };
+                column.ty = origin
+                    .as_ref()
+                    .and_then(|origin| storage.get(origin))
+                    .unwrap_or(&relation.columns[index].1)
+                    .clone();
+                if let Some(domain) = origin.as_ref().and_then(|origin| {
+                    self.domains.iter().find(|domain| {
+                        domain.table == origin.0.as_str() && domain.column == origin.1.as_str()
+                    })
+                }) {
                     let name = &domain.name;
                     column.domain = Some(syn::parse2(quote!(in (#name)))?);
                 }
             }
             declarations.push(declaration);
         }
-        let mut output = self.program.output().ok_or("missing authored output schema")?.clone();
+        let mut output = self
+            .program
+            .output()
+            .ok_or("missing authored output schema")?
+            .clone();
         for (column, origin) in output.columns.iter_mut().zip(output_origins) {
             if let Some(ty) = origin.as_ref().and_then(|origin| storage.get(origin)) {
                 column.ty = ty.clone();
@@ -194,7 +316,9 @@ impl Kernel {
             // Output domains are recorded in Publication, not new input-domain captures.
             column.domain = None;
         }
-        if output.name != output_name { return Err("output schema differs from query head".into()); }
+        if output.name != output_name {
+            return Err("output schema differs from query head".into());
+        }
         declarations.push(output);
         program.declarations = declarations;
         Ok(program.to_token_stream())
@@ -202,11 +326,23 @@ impl Kernel {
 
     pub fn answer_columns(&self) -> Result<Vec<Option<Origin>>> {
         let variables = self.variable_origins()?;
-        Ok(self.program.query.head.args.iter().map(|argument| {
-            if let syn::Expr::Path(path) = argument {
-                path.path.get_ident().and_then(|name| variables.get(&name.to_string())).cloned()
-            } else { None }
-        }).collect())
+        Ok(self
+            .program
+            .query
+            .head
+            .args
+            .iter()
+            .map(|argument| {
+                if let syn::Expr::Path(path) = argument {
+                    path.path
+                        .get_ident()
+                        .and_then(|name| variables.get(&name.to_string()))
+                        .cloned()
+                } else {
+                    None
+                }
+            })
+            .collect())
     }
 }
 
@@ -228,8 +364,14 @@ fn scalar_codec_body(body: &cq_lang_cq::CommaList<cq_lang_cq::BodyItem>, variabl
     body.iter().all(|item| match item {
         _ if item.rust_step().is_some_and(|step| {
             step.free_variables.opaque || step.free_variables.names.contains(variable)
-        }) => false,
-        BodyItem::Block(block) => block.branches.iter().all(|branch| scalar_codec_body(&branch.body, variable)),
+        }) =>
+        {
+            false
+        }
+        BodyItem::Block(block) => block
+            .branches
+            .iter()
+            .all(|branch| scalar_codec_body(&branch.body, variable)),
         BodyItem::Equality(_) | BodyItem::Constraint(_) | BodyItem::Positive { .. } => true,
         _ => !mentions(item.to_token_stream(), &quote::format_ident!("{variable}")),
     })
@@ -256,7 +398,9 @@ fn collect_variables(
                 }
             }
             cq_lang_cq::BodyItem::Block(block) => {
-                for branch in &block.branches { collect_variables(&branch.body, inputs, variables)?; }
+                for branch in &block.branches {
+                    collect_variables(&branch.body, inputs, variables)?;
+                }
             }
             _ => {}
         }
@@ -268,7 +412,8 @@ fn collect_variables(
 /// operands belong exclusively to shared CQ A-Domain normalization.
 fn encode_scalar_body(
     body: &mut cq_lang_cq::CommaList<cq_lang_cq::BodyItem>,
-    manifest: &Manifest, storage: &BTreeMap<Origin, syn::Type>,
+    manifest: &Manifest,
+    storage: &BTreeMap<Origin, syn::Type>,
     variables: &BTreeMap<String, Origin>,
 ) -> Result<()> {
     use cq_lang_cq::syntax::constraint::Term;
@@ -280,10 +425,18 @@ fn encode_scalar_body(
             Term::Variable(_) => None,
         }
     }
-    fn encode(term: &Term, value: &mut syn::Expr, manifest: &Manifest,
-        storage: &BTreeMap<Origin, syn::Type>, variables: &BTreeMap<String, Origin>) -> Result<()> {
+    fn encode(
+        term: &Term,
+        value: &mut syn::Expr,
+        manifest: &Manifest,
+        storage: &BTreeMap<Origin, syn::Type>,
+        variables: &BTreeMap<String, Origin>,
+    ) -> Result<()> {
         if let Term::Variable(name) = term {
-            if let Some(origin) = variables.get(&name.to_string()).filter(|origin| storage.contains_key(*origin)) {
+            if let Some(origin) = variables
+                .get(&name.to_string())
+                .filter(|origin| storage.contains_key(*origin))
+            {
                 match manifest.column(&origin.0, &origin.1)?.encoding.as_str() {
                     "days_since_epoch" => *value = syn::parse_quote!((#value).days_since_epoch()),
                     "scaled_integer" => *value = syn::parse_quote!((#value).scaled()),
@@ -293,23 +446,37 @@ fn encode_scalar_body(
         }
         Ok(())
     }
-    fn constraint(predicate: &mut Constraint, manifest: &Manifest,
-        storage: &BTreeMap<Origin, syn::Type>, variables: &BTreeMap<String, Origin>) -> Result<()> {
+    fn constraint(
+        predicate: &mut Constraint,
+        manifest: &Manifest,
+        storage: &BTreeMap<Origin, syn::Type>,
+        variables: &BTreeMap<String, Origin>,
+    ) -> Result<()> {
         match predicate {
             Constraint::Compare { left, right, .. } => {
-                if let Some(value) = operand(right) { encode(left, value, manifest, storage, variables)?; }
-                if let Some(value) = operand(left) { encode(right, value, manifest, storage, variables)?; }
+                if let Some(value) = operand(right) {
+                    encode(left, value, manifest, storage, variables)?;
+                }
+                if let Some(value) = operand(left) {
+                    encode(right, value, manifest, storage, variables)?;
+                }
             }
             Constraint::In { term, literals } => {
-                for value in literals { encode(term, value, manifest, storage, variables)?; }
+                for value in literals {
+                    encode(term, value, manifest, storage, variables)?;
+                }
             }
             Constraint::Between { term, low, high } => {
                 for bound in [low, high] {
-                    if let Some(value) = operand(bound) { encode(term, value, manifest, storage, variables)?; }
+                    if let Some(value) = operand(bound) {
+                        encode(term, value, manifest, storage, variables)?;
+                    }
                 }
             }
             Constraint::Or(arms) => {
-                for predicate in arms.iter_mut().flatten() { constraint(predicate, manifest, storage, variables)?; }
+                for predicate in arms.iter_mut().flatten() {
+                    constraint(predicate, manifest, storage, variables)?;
+                }
             }
         }
         Ok(())
@@ -317,12 +484,16 @@ fn encode_scalar_body(
     for item in body {
         match item {
             BodyItem::Block(block) => {
-                for branch in &mut block.branches { encode_scalar_body(&mut branch.body, manifest, storage, variables)?; }
+                for branch in &mut block.branches {
+                    encode_scalar_body(&mut branch.body, manifest, storage, variables)?;
+                }
             }
             BodyItem::Equality(equality) => {
                 let mut predicate = Constraint::from_equality(equality);
                 constraint(&mut predicate, manifest, storage, variables)?;
-                *equality = predicate.equality().expect("scalar operand adaptation preserves equality");
+                *equality = predicate
+                    .equality()
+                    .expect("scalar operand adaptation preserves equality");
             }
             BodyItem::Constraint(predicate) => constraint(predicate, manifest, storage, variables)?,
             _ => {}
@@ -336,7 +507,8 @@ mod tests {
     use super::*;
 
     fn authored(name: &str) -> stages::Program {
-        stages::Program::import(SOURCES.iter().find(|(query, _)| *query == name).unwrap().1).unwrap()
+        stages::Program::import(SOURCES.iter().find(|(query, _)| *query == name).unwrap().1)
+            .unwrap()
     }
 
     fn kernels(program: &stages::Program, manifest: &Manifest) -> Vec<Kernel> {
@@ -347,29 +519,57 @@ mod tests {
             let mut types = BTreeMap::new();
             let mut origins = BTreeMap::new();
             for input in stage.program.inputs() {
-                let producer = &stage.inputs.iter().find(|(name, _)| *name == input.name).unwrap().1;
+                let producer = &stage
+                    .inputs
+                    .iter()
+                    .find(|(name, _)| *name == input.name)
+                    .unwrap()
+                    .1;
                 if let Some(producer) = program.publication_index(producer).unwrap() {
-                    types.insert(input.name.to_string(), input.columns.iter().zip(&outputs[producer])
-                        .map(|(column, (_, ty))| (column.name.clone(), ty.clone())).collect());
+                    types.insert(
+                        input.name.to_string(),
+                        input
+                            .columns
+                            .iter()
+                            .zip(&outputs[producer])
+                            .map(|(column, (_, ty))| (column.name.clone(), ty.clone()))
+                            .collect(),
+                    );
                     origins.insert(input.name.to_string(), domains[producer].clone());
                 } else {
                     let source = program.input(producer).unwrap();
                     if !matches!(source.producer, stages::Producer::Table(_)) {
-                        types.insert(input.name.to_string(), program.input_columns(source).unwrap());
-                        origins.insert(input.name.to_string(), program.input_origins(source).unwrap());
+                        types.insert(
+                            input.name.to_string(),
+                            program.input_columns(source).unwrap(),
+                        );
+                        origins.insert(
+                            input.name.to_string(),
+                            program.input_origins(source).unwrap(),
+                        );
                     }
                 }
             }
             let mut kernel = program.kernel(index, &types).unwrap();
             assert_eq!(kernel.evidence, stage.evidence);
-            assert_eq!(kernel.cpu_query().to_string(), stage.program.to_token_stream().to_string());
+            assert_eq!(
+                kernel.cpu_query().to_string(),
+                stage.program.to_token_stream().to_string()
+            );
             kernel.published_origins = origins;
             let mut storage = kernel.scalar_codec_types(manifest).unwrap();
             storage.extend(kernel.dictionary_types(manifest).unwrap());
             let encoded: cq_lang_cq::Program =
                 syn::parse2(kernel.encoded_query_with_types(manifest, &storage).unwrap()).unwrap();
-            outputs.push(encoded.output().unwrap().columns.iter()
-                .map(|column| (column.name.clone(), column.ty.clone())).collect());
+            outputs.push(
+                encoded
+                    .output()
+                    .unwrap()
+                    .columns
+                    .iter()
+                    .map(|column| (column.name.clone(), column.ty.clone()))
+                    .collect(),
+            );
             domains.push(kernel.answer_columns().unwrap());
             kernels.push(kernel);
         }
@@ -385,16 +585,35 @@ mod tests {
                 for kernel in kernels(&program, &manifest) {
                     let mut storage = kernel.scalar_codec_types(&manifest).unwrap();
                     storage.extend(kernel.dictionary_types(&manifest).unwrap());
-                    let encoded: cq_lang_cq::Program =
-                        syn::parse2(kernel.encoded_query_with_types(&manifest, &storage).unwrap()).unwrap();
-                    assert_eq!(encoded.inputs().count(), kernel.relations.len() + kernel.published.len(), "{name}");
-                    assert_eq!(encoded.output().unwrap().columns.len(), kernel.answer.len(), "{name}");
+                    let encoded: cq_lang_cq::Program = syn::parse2(
+                        kernel
+                            .encoded_query_with_types(&manifest, &storage)
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        encoded.inputs().count(),
+                        kernel.relations.len() + kernel.published.len(),
+                        "{name}"
+                    );
+                    assert_eq!(
+                        encoded.output().unwrap().columns.len(),
+                        kernel.answer.len(),
+                        "{name}"
+                    );
                     assert_eq!(encoded.query.head, kernel.program.query.head, "{name}");
-                    fn rust_steps(body: &cq_lang_cq::CommaList<cq_lang_cq::BodyItem>, result: &mut Vec<String>) {
+                    fn rust_steps(
+                        body: &cq_lang_cq::CommaList<cq_lang_cq::BodyItem>,
+                        result: &mut Vec<String>,
+                    ) {
                         for item in body {
-                            if item.rust_step().is_some() { result.push(item.to_token_stream().to_string()); }
+                            if item.rust_step().is_some() {
+                                result.push(item.to_token_stream().to_string());
+                            }
                             if let cq_lang_cq::BodyItem::Block(block) = item {
-                                for branch in &block.branches { rust_steps(&branch.body, result); }
+                                for branch in &block.branches {
+                                    rust_steps(&branch.body, result);
+                                }
                             }
                         }
                     }
@@ -404,10 +623,15 @@ mod tests {
                     rust_steps(&kernel.program.query.body, &mut expected);
                     assert_eq!(actual, expected, "{name}");
                     for relation in &kernel.relations {
-                        let actual = encoded.inputs().find(|input| input.name == relation.name).unwrap();
+                        let actual = encoded
+                            .inputs()
+                            .find(|input| input.name == relation.name)
+                            .unwrap();
                         for ((column, _), encoded) in relation.columns.iter().zip(&actual.columns) {
                             let origin = (relation.table.to_string(), column.to_string());
-                            if manifest.column(&origin.0, &origin.1).unwrap().encoding == "dictionary" {
+                            if manifest.column(&origin.0, &origin.1).unwrap().encoding
+                                == "dictionary"
+                            {
                                 assert_eq!(encoded.ty, syn::parse_quote!(u32));
                                 assert!(encoded.domain.is_some(), "{name}: {column}");
                             }
@@ -423,8 +647,10 @@ mod tests {
         let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
         for (index, kernel) in kernels(&authored("h12"), &manifest).iter().enumerate() {
             let mode = if index == 0 { 2 } else { 0 };
-            assert_eq!(kernel.answer_columns().unwrap()[mode],
-                Some(("lineitem".into(), "l_shipmode".into())));
+            assert_eq!(
+                kernel.answer_columns().unwrap()[mode],
+                Some(("lineitem".into(), "l_shipmode".into()))
+            );
         }
     }
 
@@ -440,17 +666,28 @@ mod tests {
         let h05 = authored("h05").kernel(0, &BTreeMap::new()).unwrap();
         let storage = h05.scalar_codec_types(&manifest).unwrap();
         assert!(storage.contains_key(&("orders".into(), "o_orderdate".into())));
-        assert!(h05.encoded_query_with_types(&manifest, &storage).unwrap().to_string().contains("days_since_epoch"));
+        assert!(
+            h05.encoded_query_with_types(&manifest, &storage)
+                .unwrap()
+                .to_string()
+                .contains("days_since_epoch")
+        );
     }
 
     #[test]
     fn output_only_domains_are_not_loaded_and_date_payloads_remain_host_expressions() {
         let kernel = authored("h01").kernel(0, &BTreeMap::new()).unwrap();
         let manifest = Manifest {
-            schema_version: 2, sf: 1, byte_order: "little".into(),
-            relations: BTreeMap::new(), root: Default::default(),
+            schema_version: 2,
+            sf: 1,
+            byte_order: "little".into(),
+            relations: BTreeMap::new(),
+            root: Default::default(),
         };
-        let bindings = kernel.setup_bindings(&manifest, &TokenStream::new()).unwrap().to_string();
+        let bindings = kernel
+            .setup_bindings(&manifest, &TokenStream::new())
+            .unwrap()
+            .to_string();
         assert!(!bindings.contains("DictionaryDomain"));
         for operand in &kernel.operands {
             assert_eq!(bindings.matches(&operand.expression.to_string()).count(), 1);
@@ -465,7 +702,13 @@ mod tests {
         for sf in [1, 10] {
             let manifest = Manifest::load(&crate::data_root().join(format!("sf{sf}"))).unwrap();
             for domain in &program.domains {
-                let values = manifest.dictionary(manifest.column(&domain.table.to_string(), &domain.column.to_string()).unwrap()).unwrap();
+                let values = manifest
+                    .dictionary(
+                        manifest
+                            .column(&domain.table.to_string(), &domain.column.to_string())
+                            .unwrap(),
+                    )
+                    .unwrap();
                 assert!(values.windows(2).all(|pair| pair[0] < pair[1]));
                 let authored = cq_load::StringDictionary::new(values.iter().map(String::as_str));
                 let entries: Vec<_> = values.iter().map(String::as_str).collect();
@@ -474,7 +717,10 @@ mod tests {
                     assert_eq!(authored.lookup(value), Some(code as u32));
                     assert_eq!(cq_storage::domain::exact(&exported, value), code as u32);
                 }
-                assert_eq!(cq_storage::domain::exact(&exported, &"__absent__"), u32::MAX);
+                assert_eq!(
+                    cq_storage::domain::exact(&exported, &"__absent__"),
+                    u32::MAX
+                );
             }
         }
     }

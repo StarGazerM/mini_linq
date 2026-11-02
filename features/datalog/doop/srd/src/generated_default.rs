@@ -24,22 +24,48 @@ pub struct SrdConstants {
 impl SrdConstants {
     fn load(meta: &std::collections::BTreeMap<String, i32>) -> crate::Result<Self> {
         Ok(Self {
-            c_abstract: *meta.get("abstract").ok_or("Missing metadata key: abstract")?,
-            c_class_init_method: *meta.get("class_init_method").ok_or("Missing metadata key: class_init_method")?,
+            c_abstract: *meta
+                .get("abstract")
+                .ok_or("Missing metadata key: abstract")?,
+            c_class_init_method: *meta
+                .get("class_init_method")
+                .ok_or("Missing metadata key: class_init_method")?,
             c_clinit: *meta.get("clinit").ok_or("Missing metadata key: clinit")?,
-            c_clinit_descriptor: *meta.get("clinit_descriptor").ok_or("Missing metadata key: clinit_descriptor")?,
-            c_desiredassertionstatus_method: *meta.get("desiredAssertionStatus_method").ok_or("Missing metadata key: desiredAssertionStatus_method")?,
-            c_java_io_serializable: *meta.get("java_io_Serializable").ok_or("Missing metadata key: java_io_Serializable")?,
-            c_java_lang_class_type: *meta.get("java_lang_Class_type").ok_or("Missing metadata key: java_lang_Class_type")?,
-            c_java_lang_cloneable: *meta.get("java_lang_Cloneable").ok_or("Missing metadata key: java_lang_Cloneable")?,
-            c_java_lang_object: *meta.get("java_lang_Object").ok_or("Missing metadata key: java_lang_Object")?,
-            c_java_lang_object_array: *meta.get("java_lang_Object_array").ok_or("Missing metadata key: java_lang_Object_array")?,
-            c_java_lang_string_array: *meta.get("java_lang_String_array").ok_or("Missing metadata key: java_lang_String_array")?,
-            c_java_lang_string_type: *meta.get("java_lang_String_type").ok_or("Missing metadata key: java_lang_String_type")?,
+            c_clinit_descriptor: *meta
+                .get("clinit_descriptor")
+                .ok_or("Missing metadata key: clinit_descriptor")?,
+            c_desiredassertionstatus_method: *meta
+                .get("desiredAssertionStatus_method")
+                .ok_or("Missing metadata key: desiredAssertionStatus_method")?,
+            c_java_io_serializable: *meta
+                .get("java_io_Serializable")
+                .ok_or("Missing metadata key: java_io_Serializable")?,
+            c_java_lang_class_type: *meta
+                .get("java_lang_Class_type")
+                .ok_or("Missing metadata key: java_lang_Class_type")?,
+            c_java_lang_cloneable: *meta
+                .get("java_lang_Cloneable")
+                .ok_or("Missing metadata key: java_lang_Cloneable")?,
+            c_java_lang_object: *meta
+                .get("java_lang_Object")
+                .ok_or("Missing metadata key: java_lang_Object")?,
+            c_java_lang_object_array: *meta
+                .get("java_lang_Object_array")
+                .ok_or("Missing metadata key: java_lang_Object_array")?,
+            c_java_lang_string_array: *meta
+                .get("java_lang_String_array")
+                .ok_or("Missing metadata key: java_lang_String_array")?,
+            c_java_lang_string_type: *meta
+                .get("java_lang_String_type")
+                .ok_or("Missing metadata key: java_lang_String_type")?,
             c_main: *meta.get("main").ok_or("Missing metadata key: main")?,
-            c_main_descriptor: *meta.get("main_descriptor").ok_or("Missing metadata key: main_descriptor")?,
+            c_main_descriptor: *meta
+                .get("main_descriptor")
+                .ok_or("Missing metadata key: main_descriptor")?,
             c_public: *meta.get("public").ok_or("Missing metadata key: public")?,
-            c_register_natives_method: *meta.get("register_natives_method").ok_or("Missing metadata key: register_natives_method")?,
+            c_register_natives_method: *meta
+                .get("register_natives_method")
+                .ok_or("Missing metadata key: register_natives_method")?,
             c_static: *meta.get("static").ok_or("Missing metadata key: static")?,
         })
     }
@@ -47,43 +73,43 @@ impl SrdConstants {
 #[derive(Clone, Debug, Default)]
 pub struct SrdFacts {
     pub constants: SrdConstants,
-    pub r_classtype: Vec<(i32, )>,
-    pub r_arraytype: Vec<(i32, )>,
-    pub r_interfacetype: Vec<(i32, )>,
-    pub r_applicationclass: Vec<(i32, )>,
-    pub r_directsuperclass: Vec<(i32, i32, )>,
-    pub r_directsuperinterface: Vec<(i32, i32, )>,
-    pub r_method_simplename: Vec<(i32, i32, )>,
-    pub r_method_descriptor: Vec<(i32, i32, )>,
-    pub r_method_declaringtype: Vec<(i32, i32, )>,
-    pub r_method_modifier: Vec<(i32, i32, )>,
-    pub r_mainclass: Vec<(i32, )>,
-    pub r_virtualmethodinvocation_base: Vec<(i32, i32, )>,
-    pub r_specialmethodinvocation_base: Vec<(i32, i32, )>,
-    pub r_componenttype: Vec<(i32, i32, )>,
-    pub r_assigncast: Vec<(i32, i32, i32, i32, )>,
-    pub r_heapallocation_type: Vec<(i32, i32, )>,
-    pub r_thisvar: Vec<(i32, i32, )>,
-    pub r_virtualmethodinvocation_simplename: Vec<(i32, i32, )>,
-    pub r_virtualmethodinvocation_descriptor: Vec<(i32, i32, )>,
-    pub r_assignheapallocation: Vec<(i32, i32, i32, )>,
-    pub r_instruction_method: Vec<(i32, i32, )>,
-    pub r_methodinvocation_method: Vec<(i32, i32, )>,
-    pub r_isstaticmethodinvocation_insn: Vec<(i32, )>,
-    pub r_storestaticfield: Vec<(i32, i32, i32, )>,
-    pub r_field_declaringtype: Vec<(i32, i32, )>,
-    pub r_loadstaticfield: Vec<(i32, i32, i32, )>,
-    pub r_staticmethodinvocation: Vec<(i32, i32, i32, )>,
-    pub r_formalparam: Vec<(i32, i32, i32, )>,
-    pub r_actualparam: Vec<(i32, i32, i32, )>,
-    pub r_returnvar: Vec<(i32, i32, )>,
-    pub r_assignreturnvalue: Vec<(i32, i32, )>,
-    pub r_assignlocal: Vec<(i32, i32, i32, )>,
-    pub r_loadinstancefield: Vec<(i32, i32, i32, i32, )>,
-    pub r_loadarrayindex: Vec<(i32, i32, i32, )>,
-    pub r_var_type: Vec<(i32, i32, )>,
-    pub r_storeinstancefield: Vec<(i32, i32, i32, i32, )>,
-    pub r_storearrayindex: Vec<(i32, i32, i32, )>,
+    pub r_classtype: Vec<(i32,)>,
+    pub r_arraytype: Vec<(i32,)>,
+    pub r_interfacetype: Vec<(i32,)>,
+    pub r_applicationclass: Vec<(i32,)>,
+    pub r_directsuperclass: Vec<(i32, i32)>,
+    pub r_directsuperinterface: Vec<(i32, i32)>,
+    pub r_method_simplename: Vec<(i32, i32)>,
+    pub r_method_descriptor: Vec<(i32, i32)>,
+    pub r_method_declaringtype: Vec<(i32, i32)>,
+    pub r_method_modifier: Vec<(i32, i32)>,
+    pub r_mainclass: Vec<(i32,)>,
+    pub r_virtualmethodinvocation_base: Vec<(i32, i32)>,
+    pub r_specialmethodinvocation_base: Vec<(i32, i32)>,
+    pub r_componenttype: Vec<(i32, i32)>,
+    pub r_assigncast: Vec<(i32, i32, i32, i32)>,
+    pub r_heapallocation_type: Vec<(i32, i32)>,
+    pub r_thisvar: Vec<(i32, i32)>,
+    pub r_virtualmethodinvocation_simplename: Vec<(i32, i32)>,
+    pub r_virtualmethodinvocation_descriptor: Vec<(i32, i32)>,
+    pub r_assignheapallocation: Vec<(i32, i32, i32)>,
+    pub r_instruction_method: Vec<(i32, i32)>,
+    pub r_methodinvocation_method: Vec<(i32, i32)>,
+    pub r_isstaticmethodinvocation_insn: Vec<(i32,)>,
+    pub r_storestaticfield: Vec<(i32, i32, i32)>,
+    pub r_field_declaringtype: Vec<(i32, i32)>,
+    pub r_loadstaticfield: Vec<(i32, i32, i32)>,
+    pub r_staticmethodinvocation: Vec<(i32, i32, i32)>,
+    pub r_formalparam: Vec<(i32, i32, i32)>,
+    pub r_actualparam: Vec<(i32, i32, i32)>,
+    pub r_returnvar: Vec<(i32, i32)>,
+    pub r_assignreturnvalue: Vec<(i32, i32)>,
+    pub r_assignlocal: Vec<(i32, i32, i32)>,
+    pub r_loadinstancefield: Vec<(i32, i32, i32, i32)>,
+    pub r_loadarrayindex: Vec<(i32, i32, i32)>,
+    pub r_var_type: Vec<(i32, i32)>,
+    pub r_storeinstancefield: Vec<(i32, i32, i32, i32)>,
+    pub r_storearrayindex: Vec<(i32, i32, i32)>,
 }
 impl SrdFacts {
     pub fn load(dir: &std::path::Path) -> crate::Result<Self> {
@@ -91,88 +117,175 @@ impl SrdFacts {
         let constants = SrdConstants::load(&meta)?;
         Ok(Self {
             constants,
-            r_classtype: crate::load_rows::<1, _>(&dir.join("ClassType.csv"), |row| (row[0], ))?,
-            r_arraytype: crate::load_rows::<1, _>(&dir.join("ArrayType.csv"), |row| (row[0], ))?,
-            r_interfacetype: crate::load_rows::<1, _>(&dir.join("InterfaceType.csv"), |row| (row[0], ))?,
-            r_applicationclass: crate::load_rows::<1, _>(&dir.join("ApplicationClass.csv"), |row| (row[0], ))?,
-            r_directsuperclass: crate::load_rows::<2, _>(&dir.join("DirectSuperclass.csv"), |row| (row[0], row[1], ))?,
-            r_directsuperinterface: crate::load_rows::<2, _>(&dir.join("DirectSuperinterface.csv"), |row| (row[0], row[1], ))?,
-            r_method_simplename: crate::load_rows::<2, _>(&dir.join("Method_SimpleName.csv"), |row| (row[0], row[1], ))?,
-            r_method_descriptor: crate::load_rows::<2, _>(&dir.join("Method_Descriptor.csv"), |row| (row[0], row[1], ))?,
-            r_method_declaringtype: crate::load_rows::<2, _>(&dir.join("Method_DeclaringType.csv"), |row| (row[0], row[1], ))?,
-            r_method_modifier: crate::load_rows::<2, _>(&dir.join("Method_Modifier.csv"), |row| (row[0], row[1], ))?,
-            r_mainclass: crate::load_rows::<1, _>(&dir.join("MainClass.csv"), |row| (row[0], ))?,
-            r_virtualmethodinvocation_base: crate::load_rows::<2, _>(&dir.join("VirtualMethodInvocation_Base.csv"), |row| (row[0], row[1], ))?,
-            r_specialmethodinvocation_base: crate::load_rows::<2, _>(&dir.join("SpecialMethodInvocation_Base.csv"), |row| (row[0], row[1], ))?,
-            r_componenttype: crate::load_rows::<2, _>(&dir.join("ComponentType.csv"), |row| (row[0], row[1], ))?,
-            r_assigncast: crate::load_rows::<4, _>(&dir.join("AssignCast.csv"), |row| (row[0], row[1], row[2], row[3], ))?,
-            r_heapallocation_type: crate::load_rows::<2, _>(&dir.join("HeapAllocation_Type.csv"), |row| (row[0], row[1], ))?,
-            r_thisvar: crate::load_rows::<2, _>(&dir.join("ThisVar.csv"), |row| (row[0], row[1], ))?,
-            r_virtualmethodinvocation_simplename: crate::load_rows::<2, _>(&dir.join("VirtualMethodInvocation_SimpleName.csv"), |row| (row[0], row[1], ))?,
-            r_virtualmethodinvocation_descriptor: crate::load_rows::<2, _>(&dir.join("VirtualMethodInvocation_Descriptor.csv"), |row| (row[0], row[1], ))?,
-            r_assignheapallocation: crate::load_rows::<3, _>(&dir.join("AssignHeapAllocation.csv"), |row| (row[0], row[1], row[2], ))?,
-            r_instruction_method: crate::load_rows::<2, _>(&dir.join("Instruction_Method.csv"), |row| (row[0], row[1], ))?,
-            r_methodinvocation_method: crate::load_rows::<2, _>(&dir.join("MethodInvocation_Method.csv"), |row| (row[0], row[1], ))?,
-            r_isstaticmethodinvocation_insn: crate::load_rows::<1, _>(&dir.join("isStaticMethodInvocation_Insn.csv"), |row| (row[0], ))?,
-            r_storestaticfield: crate::load_rows::<3, _>(&dir.join("StoreStaticField.csv"), |row| (row[0], row[1], row[2], ))?,
-            r_field_declaringtype: crate::load_rows::<2, _>(&dir.join("Field_DeclaringType.csv"), |row| (row[0], row[1], ))?,
-            r_loadstaticfield: crate::load_rows::<3, _>(&dir.join("LoadStaticField.csv"), |row| (row[0], row[1], row[2], ))?,
-            r_staticmethodinvocation: crate::load_rows::<3, _>(&dir.join("StaticMethodInvocation.csv"), |row| (row[0], row[1], row[2], ))?,
-            r_formalparam: crate::load_rows::<3, _>(&dir.join("FormalParam.csv"), |row| (row[0], row[1], row[2], ))?,
-            r_actualparam: crate::load_rows::<3, _>(&dir.join("ActualParam.csv"), |row| (row[0], row[1], row[2], ))?,
-            r_returnvar: crate::load_rows::<2, _>(&dir.join("ReturnVar.csv"), |row| (row[0], row[1], ))?,
-            r_assignreturnvalue: crate::load_rows::<2, _>(&dir.join("AssignReturnValue.csv"), |row| (row[0], row[1], ))?,
-            r_assignlocal: crate::load_rows::<3, _>(&dir.join("AssignLocal.csv"), |row| (row[0], row[1], row[2], ))?,
-            r_loadinstancefield: crate::load_rows::<4, _>(&dir.join("LoadInstanceField.csv"), |row| (row[0], row[1], row[2], row[3], ))?,
-            r_loadarrayindex: crate::load_rows::<3, _>(&dir.join("LoadArrayIndex.csv"), |row| (row[0], row[1], row[2], ))?,
-            r_var_type: crate::load_rows::<2, _>(&dir.join("Var_Type.csv"), |row| (row[0], row[1], ))?,
-            r_storeinstancefield: crate::load_rows::<4, _>(&dir.join("StoreInstanceField.csv"), |row| (row[0], row[1], row[2], row[3], ))?,
-            r_storearrayindex: crate::load_rows::<3, _>(&dir.join("StoreArrayIndex.csv"), |row| (row[0], row[1], row[2], ))?,
+            r_classtype: crate::load_rows::<1, _>(&dir.join("ClassType.csv"), |row| (row[0],))?,
+            r_arraytype: crate::load_rows::<1, _>(&dir.join("ArrayType.csv"), |row| (row[0],))?,
+            r_interfacetype: crate::load_rows::<1, _>(&dir.join("InterfaceType.csv"), |row| {
+                (row[0],)
+            })?,
+            r_applicationclass: crate::load_rows::<1, _>(
+                &dir.join("ApplicationClass.csv"),
+                |row| (row[0],),
+            )?,
+            r_directsuperclass: crate::load_rows::<2, _>(
+                &dir.join("DirectSuperclass.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_directsuperinterface: crate::load_rows::<2, _>(
+                &dir.join("DirectSuperinterface.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_method_simplename: crate::load_rows::<2, _>(
+                &dir.join("Method_SimpleName.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_method_descriptor: crate::load_rows::<2, _>(
+                &dir.join("Method_Descriptor.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_method_declaringtype: crate::load_rows::<2, _>(
+                &dir.join("Method_DeclaringType.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_method_modifier: crate::load_rows::<2, _>(&dir.join("Method_Modifier.csv"), |row| {
+                (row[0], row[1])
+            })?,
+            r_mainclass: crate::load_rows::<1, _>(&dir.join("MainClass.csv"), |row| (row[0],))?,
+            r_virtualmethodinvocation_base: crate::load_rows::<2, _>(
+                &dir.join("VirtualMethodInvocation_Base.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_specialmethodinvocation_base: crate::load_rows::<2, _>(
+                &dir.join("SpecialMethodInvocation_Base.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_componenttype: crate::load_rows::<2, _>(&dir.join("ComponentType.csv"), |row| {
+                (row[0], row[1])
+            })?,
+            r_assigncast: crate::load_rows::<4, _>(&dir.join("AssignCast.csv"), |row| {
+                (row[0], row[1], row[2], row[3])
+            })?,
+            r_heapallocation_type: crate::load_rows::<2, _>(
+                &dir.join("HeapAllocation_Type.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_thisvar: crate::load_rows::<2, _>(&dir.join("ThisVar.csv"), |row| (row[0], row[1]))?,
+            r_virtualmethodinvocation_simplename: crate::load_rows::<2, _>(
+                &dir.join("VirtualMethodInvocation_SimpleName.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_virtualmethodinvocation_descriptor: crate::load_rows::<2, _>(
+                &dir.join("VirtualMethodInvocation_Descriptor.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_assignheapallocation: crate::load_rows::<3, _>(
+                &dir.join("AssignHeapAllocation.csv"),
+                |row| (row[0], row[1], row[2]),
+            )?,
+            r_instruction_method: crate::load_rows::<2, _>(
+                &dir.join("Instruction_Method.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_methodinvocation_method: crate::load_rows::<2, _>(
+                &dir.join("MethodInvocation_Method.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_isstaticmethodinvocation_insn: crate::load_rows::<1, _>(
+                &dir.join("isStaticMethodInvocation_Insn.csv"),
+                |row| (row[0],),
+            )?,
+            r_storestaticfield: crate::load_rows::<3, _>(
+                &dir.join("StoreStaticField.csv"),
+                |row| (row[0], row[1], row[2]),
+            )?,
+            r_field_declaringtype: crate::load_rows::<2, _>(
+                &dir.join("Field_DeclaringType.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_loadstaticfield: crate::load_rows::<3, _>(&dir.join("LoadStaticField.csv"), |row| {
+                (row[0], row[1], row[2])
+            })?,
+            r_staticmethodinvocation: crate::load_rows::<3, _>(
+                &dir.join("StaticMethodInvocation.csv"),
+                |row| (row[0], row[1], row[2]),
+            )?,
+            r_formalparam: crate::load_rows::<3, _>(&dir.join("FormalParam.csv"), |row| {
+                (row[0], row[1], row[2])
+            })?,
+            r_actualparam: crate::load_rows::<3, _>(&dir.join("ActualParam.csv"), |row| {
+                (row[0], row[1], row[2])
+            })?,
+            r_returnvar: crate::load_rows::<2, _>(&dir.join("ReturnVar.csv"), |row| {
+                (row[0], row[1])
+            })?,
+            r_assignreturnvalue: crate::load_rows::<2, _>(
+                &dir.join("AssignReturnValue.csv"),
+                |row| (row[0], row[1]),
+            )?,
+            r_assignlocal: crate::load_rows::<3, _>(&dir.join("AssignLocal.csv"), |row| {
+                (row[0], row[1], row[2])
+            })?,
+            r_loadinstancefield: crate::load_rows::<4, _>(
+                &dir.join("LoadInstanceField.csv"),
+                |row| (row[0], row[1], row[2], row[3]),
+            )?,
+            r_loadarrayindex: crate::load_rows::<3, _>(&dir.join("LoadArrayIndex.csv"), |row| {
+                (row[0], row[1], row[2])
+            })?,
+            r_var_type: crate::load_rows::<2, _>(&dir.join("Var_Type.csv"), |row| {
+                (row[0], row[1])
+            })?,
+            r_storeinstancefield: crate::load_rows::<4, _>(
+                &dir.join("StoreInstanceField.csv"),
+                |row| (row[0], row[1], row[2], row[3]),
+            )?,
+            r_storearrayindex: crate::load_rows::<3, _>(&dir.join("StoreArrayIndex.csv"), |row| {
+                (row[0], row[1], row[2])
+            })?,
         })
     }
 }
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct SrdResults {
-    pub r_istype: Vec<(i32, )>,
-    pub r_isreferencetype: Vec<(i32, )>,
-    pub r_isclasstype_idb: Vec<(i32, )>,
-    pub r_isarraytype_idb: Vec<(i32, )>,
-    pub r_isinterfacetype_idb: Vec<(i32, )>,
-    pub r_directsubclass: Vec<(i32, i32, )>,
-    pub r_superinterface: Vec<(i32, i32, )>,
-    pub r_methodimplemented: Vec<(i32, i32, i32, i32, )>,
-    pub r_mainmethoddeclaration: Vec<(i32, )>,
-    pub r_methodinvocation_base: Vec<(i32, i32, )>,
-    pub r_subclass: Vec<(i32, i32, )>,
-    pub r_superclass: Vec<(i32, i32, )>,
-    pub r_subtypeof: Vec<(i32, i32, )>,
-    pub r_supertypeof: Vec<(i32, i32, )>,
-    pub r_subtypeofdifferent: Vec<(i32, i32, )>,
-    pub r_methodlookup: Vec<(i32, i32, i32, i32, )>,
-    pub r_classinitializer: Vec<(i32, i32, )>,
-    pub r_castto: Vec<(i32, i32, i32, i32, )>,
-    pub r_iscastabletostring: Vec<(i32, )>,
-    pub r_isstringheap: Vec<(i32, )>,
-    pub r_heaphelper: Vec<(i32, i32, i32, i32, i32, )>,
-    pub r_heaphelpernothis: Vec<(i32, i32, i32, i32, )>,
-    pub r_virtualmethodinvocation: Vec<(i32, i32, i32, i32, )>,
-    pub r_nonstringheapallocsupertype: Vec<(i32, i32, )>,
-    pub r_isstringarrayheap: Vec<(i32, )>,
-    pub r_eligiblestringarrayheap: Vec<(i32, )>,
-    pub r_isobjectarrayheap: Vec<(i32, )>,
-    pub r_eligibleobjectarrayheap: Vec<(i32, )>,
-    pub r_arraytypecompat: Vec<(i32, i32, )>,
-    pub r_initializedclass: Vec<(i32, )>,
-    pub r_reachable: Vec<(i32, )>,
-    pub r_callgraphedge: Vec<(i32, i32, )>,
-    pub r_assign: Vec<(i32, i32, )>,
-    pub r_varpointsto: Vec<(i32, i32, )>,
-    pub r_reachableloadinstancefield: Vec<(i32, i32, i32, )>,
-    pub r_instancefieldpointsto: Vec<(i32, i32, i32, )>,
-    pub r_staticfieldpointsto: Vec<(i32, i32, )>,
-    pub r_arrayindexpointsto: Vec<(i32, i32, )>,
-    pub r_reachableinstruction: Vec<(i32, )>,
-    pub r_reachablesortedindex: Vec<(i32, i32, )>,
+    pub r_istype: Vec<(i32,)>,
+    pub r_isreferencetype: Vec<(i32,)>,
+    pub r_isclasstype_idb: Vec<(i32,)>,
+    pub r_isarraytype_idb: Vec<(i32,)>,
+    pub r_isinterfacetype_idb: Vec<(i32,)>,
+    pub r_directsubclass: Vec<(i32, i32)>,
+    pub r_superinterface: Vec<(i32, i32)>,
+    pub r_methodimplemented: Vec<(i32, i32, i32, i32)>,
+    pub r_mainmethoddeclaration: Vec<(i32,)>,
+    pub r_methodinvocation_base: Vec<(i32, i32)>,
+    pub r_subclass: Vec<(i32, i32)>,
+    pub r_superclass: Vec<(i32, i32)>,
+    pub r_subtypeof: Vec<(i32, i32)>,
+    pub r_supertypeof: Vec<(i32, i32)>,
+    pub r_subtypeofdifferent: Vec<(i32, i32)>,
+    pub r_methodlookup: Vec<(i32, i32, i32, i32)>,
+    pub r_classinitializer: Vec<(i32, i32)>,
+    pub r_castto: Vec<(i32, i32, i32, i32)>,
+    pub r_iscastabletostring: Vec<(i32,)>,
+    pub r_isstringheap: Vec<(i32,)>,
+    pub r_heaphelper: Vec<(i32, i32, i32, i32, i32)>,
+    pub r_heaphelpernothis: Vec<(i32, i32, i32, i32)>,
+    pub r_virtualmethodinvocation: Vec<(i32, i32, i32, i32)>,
+    pub r_nonstringheapallocsupertype: Vec<(i32, i32)>,
+    pub r_isstringarrayheap: Vec<(i32,)>,
+    pub r_eligiblestringarrayheap: Vec<(i32,)>,
+    pub r_isobjectarrayheap: Vec<(i32,)>,
+    pub r_eligibleobjectarrayheap: Vec<(i32,)>,
+    pub r_arraytypecompat: Vec<(i32, i32)>,
+    pub r_initializedclass: Vec<(i32,)>,
+    pub r_reachable: Vec<(i32,)>,
+    pub r_callgraphedge: Vec<(i32, i32)>,
+    pub r_assign: Vec<(i32, i32)>,
+    pub r_varpointsto: Vec<(i32, i32)>,
+    pub r_reachableloadinstancefield: Vec<(i32, i32, i32)>,
+    pub r_instancefieldpointsto: Vec<(i32, i32, i32)>,
+    pub r_staticfieldpointsto: Vec<(i32, i32)>,
+    pub r_arrayindexpointsto: Vec<(i32, i32)>,
+    pub r_reachableinstruction: Vec<(i32,)>,
+    pub r_reachablesortedindex: Vec<(i32, i32)>,
 }
 impl SrdResults {
     pub fn counts(&self) -> std::collections::BTreeMap<String, usize> {
@@ -181,12 +294,21 @@ impl SrdResults {
             ("isReferenceType".into(), self.r_isreferencetype.len()),
             ("isClassType_IDB".into(), self.r_isclasstype_idb.len()),
             ("isArrayType_IDB".into(), self.r_isarraytype_idb.len()),
-            ("isInterfaceType_IDB".into(), self.r_isinterfacetype_idb.len()),
+            (
+                "isInterfaceType_IDB".into(),
+                self.r_isinterfacetype_idb.len(),
+            ),
             ("DirectSubclass".into(), self.r_directsubclass.len()),
             ("Superinterface".into(), self.r_superinterface.len()),
             ("MethodImplemented".into(), self.r_methodimplemented.len()),
-            ("MainMethodDeclaration".into(), self.r_mainmethoddeclaration.len()),
-            ("MethodInvocation_Base".into(), self.r_methodinvocation_base.len()),
+            (
+                "MainMethodDeclaration".into(),
+                self.r_mainmethoddeclaration.len(),
+            ),
+            (
+                "MethodInvocation_Base".into(),
+                self.r_methodinvocation_base.len(),
+            ),
             ("Subclass".into(), self.r_subclass.len()),
             ("Superclass".into(), self.r_superclass.len()),
             ("SubtypeOf".into(), self.r_subtypeof.len()),
@@ -199,68 +321,233 @@ impl SrdResults {
             ("IsStringHeap".into(), self.r_isstringheap.len()),
             ("HeapHelper".into(), self.r_heaphelper.len()),
             ("HeapHelperNoThis".into(), self.r_heaphelpernothis.len()),
-            ("VirtualMethodInvocation".into(), self.r_virtualmethodinvocation.len()),
-            ("NonStringHeapAllocSuperType".into(), self.r_nonstringheapallocsupertype.len()),
+            (
+                "VirtualMethodInvocation".into(),
+                self.r_virtualmethodinvocation.len(),
+            ),
+            (
+                "NonStringHeapAllocSuperType".into(),
+                self.r_nonstringheapallocsupertype.len(),
+            ),
             ("IsStringArrayHeap".into(), self.r_isstringarrayheap.len()),
-            ("EligibleStringArrayHeap".into(), self.r_eligiblestringarrayheap.len()),
+            (
+                "EligibleStringArrayHeap".into(),
+                self.r_eligiblestringarrayheap.len(),
+            ),
             ("IsObjectArrayHeap".into(), self.r_isobjectarrayheap.len()),
-            ("EligibleObjectArrayHeap".into(), self.r_eligibleobjectarrayheap.len()),
+            (
+                "EligibleObjectArrayHeap".into(),
+                self.r_eligibleobjectarrayheap.len(),
+            ),
             ("ArrayTypeCompat".into(), self.r_arraytypecompat.len()),
             ("InitializedClass".into(), self.r_initializedclass.len()),
             ("Reachable".into(), self.r_reachable.len()),
             ("CallGraphEdge".into(), self.r_callgraphedge.len()),
             ("Assign".into(), self.r_assign.len()),
             ("VarPointsTo".into(), self.r_varpointsto.len()),
-            ("ReachableLoadInstanceField".into(), self.r_reachableloadinstancefield.len()),
-            ("InstanceFieldPointsTo".into(), self.r_instancefieldpointsto.len()),
-            ("StaticFieldPointsTo".into(), self.r_staticfieldpointsto.len()),
+            (
+                "ReachableLoadInstanceField".into(),
+                self.r_reachableloadinstancefield.len(),
+            ),
+            (
+                "InstanceFieldPointsTo".into(),
+                self.r_instancefieldpointsto.len(),
+            ),
+            (
+                "StaticFieldPointsTo".into(),
+                self.r_staticfieldpointsto.len(),
+            ),
             ("ArrayIndexPointsTo".into(), self.r_arrayindexpointsto.len()),
-            ("ReachableInstruction".into(), self.r_reachableinstruction.len()),
-            ("ReachableSortedIndex".into(), self.r_reachablesortedindex.len()),
+            (
+                "ReachableInstruction".into(),
+                self.r_reachableinstruction.len(),
+            ),
+            (
+                "ReachableSortedIndex".into(),
+                self.r_reachablesortedindex.len(),
+            ),
         ])
     }
     pub fn export(&self, dir: &std::path::Path) -> crate::Result<()> {
         std::fs::create_dir_all(dir)?;
-        crate::export_rows(&dir.join("isType.csv"), self.r_istype.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("isReferenceType.csv"), self.r_isreferencetype.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("isClassType_IDB.csv"), self.r_isclasstype_idb.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("isArrayType_IDB.csv"), self.r_isarraytype_idb.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("isInterfaceType_IDB.csv"), self.r_isinterfacetype_idb.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("DirectSubclass.csv"), self.r_directsubclass.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("Superinterface.csv"), self.r_superinterface.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("MethodImplemented.csv"), self.r_methodimplemented.iter().map(|row| [row.0, row.1, row.2, row.3]))?;
-        crate::export_rows(&dir.join("MainMethodDeclaration.csv"), self.r_mainmethoddeclaration.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("MethodInvocation_Base.csv"), self.r_methodinvocation_base.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("Subclass.csv"), self.r_subclass.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("Superclass.csv"), self.r_superclass.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("SubtypeOf.csv"), self.r_subtypeof.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("SupertypeOf.csv"), self.r_supertypeof.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("SubtypeOfDifferent.csv"), self.r_subtypeofdifferent.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("MethodLookup.csv"), self.r_methodlookup.iter().map(|row| [row.0, row.1, row.2, row.3]))?;
-        crate::export_rows(&dir.join("ClassInitializer.csv"), self.r_classinitializer.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("CastTo.csv"), self.r_castto.iter().map(|row| [row.0, row.1, row.2, row.3]))?;
-        crate::export_rows(&dir.join("IsCastableToString.csv"), self.r_iscastabletostring.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("IsStringHeap.csv"), self.r_isstringheap.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("HeapHelper.csv"), self.r_heaphelper.iter().map(|row| [row.0, row.1, row.2, row.3, row.4]))?;
-        crate::export_rows(&dir.join("HeapHelperNoThis.csv"), self.r_heaphelpernothis.iter().map(|row| [row.0, row.1, row.2, row.3]))?;
-        crate::export_rows(&dir.join("VirtualMethodInvocation.csv"), self.r_virtualmethodinvocation.iter().map(|row| [row.0, row.1, row.2, row.3]))?;
-        crate::export_rows(&dir.join("NonStringHeapAllocSuperType.csv"), self.r_nonstringheapallocsupertype.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("IsStringArrayHeap.csv"), self.r_isstringarrayheap.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("EligibleStringArrayHeap.csv"), self.r_eligiblestringarrayheap.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("IsObjectArrayHeap.csv"), self.r_isobjectarrayheap.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("EligibleObjectArrayHeap.csv"), self.r_eligibleobjectarrayheap.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("ArrayTypeCompat.csv"), self.r_arraytypecompat.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("InitializedClass.csv"), self.r_initializedclass.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("Reachable.csv"), self.r_reachable.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("CallGraphEdge.csv"), self.r_callgraphedge.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("Assign.csv"), self.r_assign.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("VarPointsTo.csv"), self.r_varpointsto.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("ReachableLoadInstanceField.csv"), self.r_reachableloadinstancefield.iter().map(|row| [row.0, row.1, row.2]))?;
-        crate::export_rows(&dir.join("InstanceFieldPointsTo.csv"), self.r_instancefieldpointsto.iter().map(|row| [row.0, row.1, row.2]))?;
-        crate::export_rows(&dir.join("StaticFieldPointsTo.csv"), self.r_staticfieldpointsto.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("ArrayIndexPointsTo.csv"), self.r_arrayindexpointsto.iter().map(|row| [row.0, row.1]))?;
-        crate::export_rows(&dir.join("ReachableInstruction.csv"), self.r_reachableinstruction.iter().map(|row| [row.0]))?;
-        crate::export_rows(&dir.join("ReachableSortedIndex.csv"), self.r_reachablesortedindex.iter().map(|row| [row.0, row.1]))?;
+        crate::export_rows(
+            &dir.join("isType.csv"),
+            self.r_istype.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("isReferenceType.csv"),
+            self.r_isreferencetype.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("isClassType_IDB.csv"),
+            self.r_isclasstype_idb.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("isArrayType_IDB.csv"),
+            self.r_isarraytype_idb.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("isInterfaceType_IDB.csv"),
+            self.r_isinterfacetype_idb.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("DirectSubclass.csv"),
+            self.r_directsubclass.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("Superinterface.csv"),
+            self.r_superinterface.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("MethodImplemented.csv"),
+            self.r_methodimplemented
+                .iter()
+                .map(|row| [row.0, row.1, row.2, row.3]),
+        )?;
+        crate::export_rows(
+            &dir.join("MainMethodDeclaration.csv"),
+            self.r_mainmethoddeclaration.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("MethodInvocation_Base.csv"),
+            self.r_methodinvocation_base
+                .iter()
+                .map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("Subclass.csv"),
+            self.r_subclass.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("Superclass.csv"),
+            self.r_superclass.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("SubtypeOf.csv"),
+            self.r_subtypeof.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("SupertypeOf.csv"),
+            self.r_supertypeof.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("SubtypeOfDifferent.csv"),
+            self.r_subtypeofdifferent.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("MethodLookup.csv"),
+            self.r_methodlookup
+                .iter()
+                .map(|row| [row.0, row.1, row.2, row.3]),
+        )?;
+        crate::export_rows(
+            &dir.join("ClassInitializer.csv"),
+            self.r_classinitializer.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("CastTo.csv"),
+            self.r_castto.iter().map(|row| [row.0, row.1, row.2, row.3]),
+        )?;
+        crate::export_rows(
+            &dir.join("IsCastableToString.csv"),
+            self.r_iscastabletostring.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("IsStringHeap.csv"),
+            self.r_isstringheap.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("HeapHelper.csv"),
+            self.r_heaphelper
+                .iter()
+                .map(|row| [row.0, row.1, row.2, row.3, row.4]),
+        )?;
+        crate::export_rows(
+            &dir.join("HeapHelperNoThis.csv"),
+            self.r_heaphelpernothis
+                .iter()
+                .map(|row| [row.0, row.1, row.2, row.3]),
+        )?;
+        crate::export_rows(
+            &dir.join("VirtualMethodInvocation.csv"),
+            self.r_virtualmethodinvocation
+                .iter()
+                .map(|row| [row.0, row.1, row.2, row.3]),
+        )?;
+        crate::export_rows(
+            &dir.join("NonStringHeapAllocSuperType.csv"),
+            self.r_nonstringheapallocsupertype
+                .iter()
+                .map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("IsStringArrayHeap.csv"),
+            self.r_isstringarrayheap.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("EligibleStringArrayHeap.csv"),
+            self.r_eligiblestringarrayheap.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("IsObjectArrayHeap.csv"),
+            self.r_isobjectarrayheap.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("EligibleObjectArrayHeap.csv"),
+            self.r_eligibleobjectarrayheap.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("ArrayTypeCompat.csv"),
+            self.r_arraytypecompat.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("InitializedClass.csv"),
+            self.r_initializedclass.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("Reachable.csv"),
+            self.r_reachable.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("CallGraphEdge.csv"),
+            self.r_callgraphedge.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("Assign.csv"),
+            self.r_assign.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("VarPointsTo.csv"),
+            self.r_varpointsto.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("ReachableLoadInstanceField.csv"),
+            self.r_reachableloadinstancefield
+                .iter()
+                .map(|row| [row.0, row.1, row.2]),
+        )?;
+        crate::export_rows(
+            &dir.join("InstanceFieldPointsTo.csv"),
+            self.r_instancefieldpointsto
+                .iter()
+                .map(|row| [row.0, row.1, row.2]),
+        )?;
+        crate::export_rows(
+            &dir.join("StaticFieldPointsTo.csv"),
+            self.r_staticfieldpointsto.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("ArrayIndexPointsTo.csv"),
+            self.r_arrayindexpointsto.iter().map(|row| [row.0, row.1]),
+        )?;
+        crate::export_rows(
+            &dir.join("ReachableInstruction.csv"),
+            self.r_reachableinstruction.iter().map(|row| [row.0]),
+        )?;
+        crate::export_rows(
+            &dir.join("ReachableSortedIndex.csv"),
+            self.r_reachablesortedindex.iter().map(|row| [row.0, row.1]),
+        )?;
         Ok(())
     }
 }

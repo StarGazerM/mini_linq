@@ -906,6 +906,49 @@ fn gpu_launch_checker_rejects_zero_partition_rows() {
 }
 
 #[test]
+fn gpu_launch_checker_accepts_any_legal_spread_share_and_meta() {
+    let (mut p, mut analysis) = gpu_launch_fixture(false);
+    p.sequence.roots = Roots::Spread;
+    let execution = analysis.dispatches[0].gpu.as_mut().unwrap();
+    // Any positive bound and tile cap is sound; neither is the producer's default.
+    execution.partition = gpu::Partition::Spread { max_rows: 5 };
+    execution.share = gpu::Share::FirstExpansion { tiles: 7 };
+    gpu::check(&p, &analysis).unwrap();
+    // Sharing and resident words are optional.
+    analysis.dispatches[0].gpu.as_mut().unwrap().share = gpu::Share::None;
+    gpu::check(&p, &analysis).unwrap();
+}
+
+#[test]
+fn gpu_launch_checker_rejects_illegal_spread_share_and_meta() {
+    let (mut p, analysis) = gpu_launch_fixture(false);
+    let mutated = |p: &Program, mutate: &dyn Fn(&mut gpu::Execution)| {
+        let mut analysis = analysis.clone();
+        mutate(analysis.dispatches[0].gpu.as_mut().unwrap());
+        gpu::check(p, &analysis).is_err()
+    };
+    // Without `roots spread` a dispatch neither spreads nor shares.
+    assert!(mutated(&p, &|execution| {
+        execution.partition = gpu::Partition::Spread { max_rows: 5 }
+    }));
+    assert!(mutated(&p, &|execution| {
+        execution.share = gpu::Share::FirstExpansion { tiles: 7 }
+    }));
+    // Resident words need the arena terminal protocol.
+    assert!(mutated(&p, &|execution| execution.meta = gpu::Meta::Resident));
+    p.sequence.roots = Roots::Spread;
+    // Under `roots spread` a fold-free dispatch spreads with a positive bound.
+    assert!(mutated(&p, &|_| {}));
+    assert!(mutated(&p, &|execution| {
+        execution.partition = gpu::Partition::Spread { max_rows: 0 }
+    }));
+    assert!(mutated(&p, &|execution| {
+        execution.partition = gpu::Partition::Spread { max_rows: 5 };
+        execution.share = gpu::Share::FirstExpansion { tiles: 0 };
+    }));
+}
+
+#[test]
 fn every_grammar_form_round_trips() {
     let mut p = program(quote! {
         a = rows r;

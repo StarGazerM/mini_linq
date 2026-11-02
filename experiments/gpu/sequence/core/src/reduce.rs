@@ -8,6 +8,7 @@
 //! DO NOT fold once per implementation stripe, invent extra reductions, or pick a grouping strategy.
 
 use cq_lang_sequence::Monoid;
+use cq_lang_sequence::gpu::realization::{Auxiliary, BlockGeometry};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Ident;
@@ -100,7 +101,10 @@ pub fn group(
     direct: Option<GroupInput>,
     codecs: &crate::runs::Codecs,
     captures: &cq_lang_structures::syntax::Captures,
+    geometry: &BlockGeometry,
 ) -> syn::Result<(TokenStream, TokenStream)> {
+    let threads = proc_macro2::Literal::u32_unsuffixed(geometry.block_threads);
+    let shared = proc_macro2::Literal::u32_unsuffixed(geometry.shared_bytes);
     use cq_lang_structures::{physical::symbol_name, syntax::algebra::AggregateKind};
     use quote::format_ident;
     let owner = format_ident!("__cq_canonical_{input_index}");
@@ -265,8 +269,8 @@ pub fn group(
     Ok((
         quote! {
             #[kernel]
-            #[launch_bounds(256)]
-            #[launch_contract(domain=1,block=(256,1,1))]
+            #[launch_bounds(#threads)]
+            #[launch_contract(domain=1,block=(#threads,1,1))]
             pub fn #kernel(values:*mut i64,length:usize,#input_parameters #(#params),*) {
                 unsafe {
                     let mut position=::cuda_device::thread::index_1d().get() as usize;
@@ -275,7 +279,7 @@ pub fn group(
                         #load
                         #live_write
                         if __live { #(#writes)* }
-                        position+=::cuda_device::thread::gridDim_x() as usize*256;
+                        position+=::cuda_device::thread::gridDim_x() as usize*#threads;
                     }
                 }
             }
@@ -284,14 +288,14 @@ pub fn group(
             let __cq_group_values=unsafe {::cq_gpu_runtime::Buffer::<i64>::uninitialized(__cq_pool.clone(),#length.checked_mul(#width).ok_or("group allocation overflow")?)?};
             #live_buffer
             if #length!=0 {
-                let shape=__cq_module.#prepare(::cuda_core::LaunchConfig1D::new(1,256,0))?;
-                let grid=::cq_gpu_runtime::launch_grid_for_kernel(shape.function(),#length.div_ceil(256),256,0)?;
-                let prepared=__cq_module.#prepare(::cuda_core::LaunchConfig1D::new(grid,256,0))?;
+                let shape=__cq_module.#prepare(::cuda_core::LaunchConfig1D::new(1,#threads,#shared))?;
+                let grid=::cq_gpu_runtime::launch_grid_for_kernel(shape.function(),#length.div_ceil(#threads),#threads,#shared)?;
+                let prepared=__cq_module.#prepare(::cuda_core::LaunchConfig1D::new(grid,#threads,#shared))?;
                 __cq_module.#kernel(__cq_pool.stream(),&prepared,__cq_group_values.ptr(),#length,#input_arguments #(#args),*)?;
             }
             #status
             let __cq_result=unsafe {#fold(
-                __cq_pool.clone(),&__cq_group_values,#live_argument,#length,#keys,&[#(#descriptors),*],__cq_statuses,
+                __cq_pool.clone(),&__cq_group_values,#live_argument,#length,#keys,&[#(#descriptors),*],__cq_statuses,&__cq_auxiliary,
             )?}.with_decoder(
                 move |values:&[i64],valid:&[u8]| -> ::cq_gpu_sequence_runtime::Result<_> {Ok((#(#decoded,)*))}
             );
@@ -352,10 +356,11 @@ fn decoders(
 }
 
 /// Formal rule GPU-GroupGridFold: a keyless group folds its canonical
-/// valuations in one fused pass: every occupancy-grid block reduces its
-/// grid-stride rows into typed per-aggregate partials (with presence for
-/// extrema), and one stream-ordered block combines the partials into the
-/// single global row, keeping the empty-input identity and checked overflow.
+/// valuations in one fused pass: every occupancy-grid block (recorded block
+/// geometry) reduces its grid-stride rows into typed per-aggregate partials
+/// (with presence for extrema), and one stream-ordered block per aggregate
+/// (recorded combine geometry) combines them into the single global row,
+/// keeping the empty-input identity and checked overflow.
 pub fn global(
     group: &cq_lang_structures::syntax::algebra::Group,
     input_columns: &[String],
@@ -366,7 +371,14 @@ pub fn global(
     direct: Option<GroupInput>,
     codecs: &crate::runs::Codecs,
     captures: &cq_lang_structures::syntax::Captures,
+    geometry: &BlockGeometry,
+    combine: &BlockGeometry,
 ) -> syn::Result<(TokenStream, TokenStream)> {
+    let threads = proc_macro2::Literal::u32_unsuffixed(geometry.block_threads);
+    let shared = proc_macro2::Literal::u32_unsuffixed(geometry.shared_bytes);
+    let half = proc_macro2::Literal::usize_suffixed(geometry.block_threads as usize / 2);
+    let presence = proc_macro2::Literal::usize_unsuffixed(geometry.block_threads as usize * 8);
+    let combine_geometry = geometry_tokens(combine);
     use cq_lang_structures::{physical::symbol_name, syntax::algebra::AggregateKind};
     use quote::format_ident;
     if !group.keys.is_empty() {
@@ -502,7 +514,7 @@ pub fn global(
             *values.add(__tid) = #value;
             *present.add(__tid) = #present as u32;
             ::cuda_device::thread::sync_threads();
-            let mut stride = 128usize;
+            let mut stride = #half;
             while stride != 0 {
                 if __tid < stride {
                     let mut __present = *present.add(__tid) != 0;
@@ -534,8 +546,8 @@ pub fn global(
     Ok((
         quote! {
             #[kernel]
-            #[launch_bounds(256)]
-            #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(3072,3072))]
+            #[launch_bounds(#threads)]
+            #[launch_contract(domain=1,block=(#threads,1,1),dynamic_shared_range=(#shared,#shared))]
             pub fn #kernel(partials:*mut i64,partial_present:*mut u32,error:*mut u32,length:usize,#input_parameters #(#params),*) {
                 unsafe {
                     let __tid = ::cuda_device::thread::threadIdx_x() as usize;
@@ -545,27 +557,74 @@ pub fn global(
                         let mut __live = true;
                         #load
                         if __live { #(#update)* }
-                        position += ::cuda_device::thread::gridDim_x() as usize * 256;
+                        position += ::cuda_device::thread::gridDim_x() as usize * #threads;
                     }
                     let shared = ::cuda_device::DynamicSharedArray::<u8, 16>::get_raw();
                     let values = shared.cast::<i64>();
-                    let present = shared.add(2048).cast::<u32>();
+                    let present = shared.add(#presence).cast::<u32>();
                     #(#reduce)*
                 }
             }
         },
         quote! {
-            let shape = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(1,256,3072))?;
-            let grid = ::cq_gpu_runtime::launch_grid_for_kernel(shape.function(),#length.div_ceil(256),256,3072)?;
+            let shape = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(1,#threads,#shared))?;
+            let grid = ::cq_gpu_runtime::launch_grid_for_kernel(shape.function(),#length.div_ceil(#threads),#threads,#shared)?;
             let __cq_global = ::cq_gpu_sequence_runtime::group::GlobalFold::new(
                 __cq_pool.clone(), grid as usize, &[#(#descriptors),*])?;
-            let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(grid,256,3072))?;
+            let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(grid,#threads,#shared))?;
             __cq_module.#kernel(__cq_pool.stream(),&prepared,__cq_global.partials(),__cq_global.present(),
                 __cq_global.error(),#length,#input_arguments #(#args),*)?;
             #status
-            let __cq_result = unsafe { __cq_global.finish(__cq_statuses)? }.with_decoder(
+            let __cq_result = unsafe { __cq_global.finish(__cq_statuses, #combine_geometry)? }.with_decoder(
                 move |values:&[i64],valid:&[u8]| -> ::cq_gpu_sequence_runtime::Result<_> {Ok((#(#decoded,)*))}
             );
         },
     ))
+}
+
+/// The runtime value of a recorded kernel geometry.
+pub(crate) fn geometry_tokens(geometry: &BlockGeometry) -> TokenStream {
+    let threads = proc_macro2::Literal::u32_unsuffixed(geometry.block_threads);
+    let shared = proc_macro2::Literal::u32_unsuffixed(geometry.shared_bytes);
+    quote!(::cq_gpu_sequence_runtime::Geometry { block_threads: #threads, shared_bytes: #shared })
+}
+
+/// The runtime `Auxiliary` value of the recorded auxiliary geometry.
+pub(crate) fn auxiliary_tokens(auxiliary: &Auxiliary) -> TokenStream {
+    let Auxiliary {
+        selection,
+        offsets,
+        range,
+        canon,
+        group,
+        group_reduce,
+        bounds,
+    } = auxiliary;
+    let [
+        selection,
+        offsets,
+        range,
+        canon,
+        group,
+        group_reduce,
+        bounds,
+    ] = [
+        selection,
+        offsets,
+        range,
+        canon,
+        group,
+        group_reduce,
+        bounds,
+    ]
+    .map(geometry_tokens);
+    quote!(::cq_gpu_sequence_runtime::Auxiliary {
+        selection: #selection,
+        offsets: #offsets,
+        range: #range,
+        canon: #canon,
+        group: #group,
+        group_reduce: #group_reduce,
+        bounds: #bounds,
+    })
 }

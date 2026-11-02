@@ -120,13 +120,23 @@ fn explicit_support_composes_and_retyping_cannot_leave_stale_promises() {
         )
         .unwrap();
     }
-    let cleared = retype(&custom, quote!(r => @custom_provider as CustomProvider<_, _>)).unwrap();
+    let cleared = retype(
+        &custom,
+        quote!(r => @custom_provider as CustomProvider<_, _>),
+    )
+    .unwrap();
     assert_eq!(retain_lookups(&cleared, quote!()).unwrap(), cleared);
     assert_eq!(expand_lookups(&cleared, quote!(2)).unwrap(), cleared);
     assert!(cleared.structures.entries.iter().all(|entry| !matches!(
         &entry.structure, Structure::Built { keyed, .. } if keyed.supports.is_some()
     )));
-    assert!(retype(&source, quote!(dedup => @btree_set as BTreeSet<_> supports [keys])).is_err());
+    assert!(
+        retype(
+            &source,
+            quote!(dedup => @btree_set as BTreeSet<_> supports [keys])
+        )
+        .is_err()
+    );
     let retained_only = retype(
         &source,
         quote!(#declared r => @custom_provider as CustomProvider<_, _> supports [retain]),

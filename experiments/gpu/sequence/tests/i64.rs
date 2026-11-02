@@ -77,9 +77,11 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
         .declare(&cq_gpu_sequence::providers::declarations());
     let analysis = check_grading(&smallest, &cq_gpu_sequence::machine()).unwrap();
     let error = cq_gpu_sequence::translate(&smallest, &analysis).unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("T-Gpu: probe smallest is realized only over two-level radix layouts"));
+    assert!(
+        error
+            .to_string()
+            .contains("T-Gpu: probe smallest is realized only over two-level radix layouts")
+    );
 }
 
 #[test]

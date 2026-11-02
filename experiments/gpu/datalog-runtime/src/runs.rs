@@ -160,9 +160,32 @@ impl Timing {
     }
 }
 
+/// Caller-recorded maintenance and run-kernel geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RunParams {
+    pub ratio: usize,
+    pub merge_tile_rows: usize,
+    pub block_threads: u32,
+}
+impl RunParams {
+    pub fn validate(&self) -> Result<()> {
+        if self.ratio < 2 {
+            return Err("device maintenance ratio must be at least two".into());
+        }
+        if self.merge_tile_rows == 0 {
+            return Err("merge tile must contain at least one row".into());
+        }
+        if self.block_threads != 256 {
+            return Err("run kernels require exactly 256 threads per block".into());
+        }
+        Ok(())
+    }
+}
+
 /// Formal rule DL-DeviceRuns: `fresh` subtracts all accepted immutable runs
 /// without changing them; each appended run is unique and disjoint from the
-/// accepted runs, and merging preserves their union.
+/// accepted runs, and merging preserves their union using the recorded positive
+/// merge tile and checked run-kernel launch geometry.
 ///
 /// Each nonempty `fresh` downloads only the candidate unique count and, when
 /// accepted state is nonempty, the fresh count. There are no row readbacks.
@@ -174,15 +197,13 @@ pub struct DeviceRuns<W: Word> {
     rows: usize,
     module: run_kernels::LoadedModule,
     timing: Option<Timing>,
-    ratio: usize,
+    params: RunParams,
 }
 impl<W: Word> DeviceRuns<W> {
-    /// Formal rule DL-DeviceRatio: consume the recorded positive geometric
-    /// maintenance ratio; the caller resolves the default advice to four.
-    pub fn new(pool: Arc<Pool>, ratio: usize) -> Result<Self> {
-        if ratio < 2 {
-            return Err("device maintenance ratio must be at least two".into());
-        }
+    /// Formal rule DL-DeviceRatio: consume the recorded maintenance ratio
+    /// (at least two), positive merge tile, and supported launch geometry.
+    pub fn new(pool: Arc<Pool>, params: RunParams) -> Result<Self> {
+        params.validate()?;
         // SAFETY: module is loaded in, and retained with, the pool's context.
         let module = unsafe { run_kernels::load(pool.context())? };
         Ok(Self {
@@ -191,7 +212,7 @@ impl<W: Word> DeviceRuns<W> {
             rows: 0,
             module,
             timing: None,
-            ratio,
+            params,
         })
     }
     pub fn len(&self) -> usize {
@@ -352,7 +373,14 @@ impl<W: Word> DeviceRuns<W> {
             }
         } else {
             // The permutation owner lives until this branch has enqueued its consumer.
-            let permutation = stable_order(&self.pool, &self.module, &launch, input, rows)?;
+            let permutation = stable_order(
+                &self.pool,
+                &self.module,
+                &launch,
+                input,
+                rows,
+                self.params.block_threads,
+            )?;
             let order = permutation.get().cu_deviceptr() as *const u32;
             if let Some((count, compact)) = &mut compaction {
                 let source = input.ptr();
@@ -370,16 +398,18 @@ impl<W: Word> DeviceRuns<W> {
                     compact,
                 )?;
             } else {
-                let initial = self
-                    .module
-                    .prepare_gather_lane::<W>(LaunchConfig1D::new(1, 256, 0))?;
+                let initial = self.module.prepare_gather_lane::<W>(LaunchConfig1D::new(
+                    1,
+                    self.params.block_threads,
+                    0,
+                ))?;
                 let grid = cq_gpu_runtime::launch_grid_for_kernel(
                     initial.function(),
-                    rows.div_ceil(256),
-                    256,
+                    rows.div_ceil(self.params.block_threads as usize),
+                    self.params.block_threads,
                     0,
                 )?;
-                let config = LaunchConfig1D::new(grid, 256, 0);
+                let config = LaunchConfig1D::new(grid, self.params.block_threads, 0);
                 self.module.gather_sorted::<W>(
                     self.pool.stream(),
                     &self.module.prepare_gather_sorted::<W>(config)?,
@@ -405,12 +435,18 @@ impl<W: Word> DeviceRuns<W> {
         // SAFETY: the flag kernel and stable select initialize these outputs.
         let flags = unsafe { Buffer::<u32>::uninitialized(self.pool.clone(), rows)? };
         let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
-        let initial = self
-            .module
-            .prepare_absent::<W>(LaunchConfig1D::new(1, 256, 0))?;
-        let grid =
-            cq_gpu_runtime::launch_grid_for_kernel(initial.function(), rows.div_ceil(256), 256, 0)?;
-        let config = LaunchConfig1D::new(grid, 256, 0);
+        let initial = self.module.prepare_absent::<W>(LaunchConfig1D::new(
+            1,
+            self.params.block_threads,
+            0,
+        ))?;
+        let grid = cq_gpu_runtime::launch_grid_for_kernel(
+            initial.function(),
+            rows.div_ceil(self.params.block_threads as usize),
+            self.params.block_threads,
+            0,
+        )?;
+        let config = LaunchConfig1D::new(grid, self.params.block_threads, 0);
         self.module.absent::<W>(
             self.pool.stream(),
             &self.module.prepare_absent::<W>(config)?,
@@ -461,7 +497,9 @@ impl<W: Word> DeviceRuns<W> {
         // Prepare the complete merge before mutating state: failures leave it unchanged.
         let mut merged = run;
         let mut keep = self.accepted.len();
-        while keep > 0 && self.accepted[keep - 1].len() <= merged.len().saturating_mul(self.ratio) {
+        while keep > 0
+            && self.accepted[keep - 1].len() <= merged.len().saturating_mul(self.params.ratio)
+        {
             merged = self.merge(&self.accepted[keep - 1], &merged)?;
             keep -= 1;
         }
@@ -478,23 +516,26 @@ impl<W: Word> DeviceRuns<W> {
         // SAFETY: merge writes every output element before publication.
         let mut output = Output(unsafe { Buffer::uninitialized(self.pool.clone(), rows)? });
         if W::BITS > 128 {
-            let tiles = rows.div_ceil(run_kernels::MERGE_TILE_ROWS);
-            let initial = self
-                .module
-                .prepare_merge_wide::<W>(LaunchConfig1D::new(1, 256, 0))?;
+            let tiles = rows.div_ceil(self.params.merge_tile_rows);
+            let initial = self.module.prepare_merge_wide::<W>(LaunchConfig1D::new(
+                1,
+                self.params.block_threads,
+                0,
+            ))?;
             let grid = cq_gpu_runtime::launch_grid_for_kernel(
                 initial.function(),
-                tiles.div_ceil(256),
-                256,
+                tiles.div_ceil(self.params.block_threads as usize),
+                self.params.block_threads,
                 0,
             )?;
-            let config = LaunchConfig1D::new(grid, 256, 0);
+            let config = LaunchConfig1D::new(grid, self.params.block_threads, 0);
             self.module.merge_wide::<W>(
                 self.pool.stream(),
                 &self.module.prepare_merge_wide::<W>(config)?,
                 first.view(),
                 second.view(),
                 output.0.ptr(),
+                self.params.merge_tile_rows,
             )?;
             // SAFETY: disjoint merge-path tiles initialize the sorted union.
             return unsafe { Run::from_sorted(output.0, rows) };
@@ -620,6 +661,7 @@ pub(crate) fn stable_order<W: Word>(
     launch: &rccl_cub::cuda::Launch<'_, '_>,
     input: &Buffer<W>,
     rows: usize,
+    block_threads: u32,
 ) -> Result<Native<u32>> {
     let mut first = Native::<u64>::new(pool, rows)?;
     let mut alternate = Native::<u64>::new(pool, rows)?;
@@ -635,10 +677,15 @@ pub(crate) fn stable_order<W: Word>(
             (alternate.get_mut(), alternate_indices.get_mut()),
         )
         .ok_or("unequal lane radix buffers")?;
-        let initial = module.prepare_gather_lane::<W>(LaunchConfig1D::new(1, 256, 0))?;
-        let grid =
-            cq_gpu_runtime::launch_grid_for_kernel(initial.function(), rows.div_ceil(256), 256, 0)?;
-        let prepared = module.prepare_gather_lane::<W>(LaunchConfig1D::new(grid, 256, 0))?;
+        let initial = module.prepare_gather_lane::<W>(LaunchConfig1D::new(1, block_threads, 0))?;
+        let grid = cq_gpu_runtime::launch_grid_for_kernel(
+            initial.function(),
+            rows.div_ceil(block_threads as usize),
+            block_threads,
+            0,
+        )?;
+        let prepared =
+            module.prepare_gather_lane::<W>(LaunchConfig1D::new(grid, block_threads, 0))?;
         // Stable least-significant-lane passes retain full-row order.
         for lane in 0..W::BITS / 64 {
             let (values, order) = buffers.current_mut();
@@ -703,21 +750,25 @@ pub(crate) unsafe fn corank<W: Word>(
 pub(crate) mod run_kernels {
     use crate::{runs::RunView, Word};
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
-    pub const MERGE_TILE_ROWS: usize = 32;
 
     /// Each thread finds one merge-path diagonal, then merges a bounded tile.
     /// Tiles partition the output, so rows need neither atomics nor scratch.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn merge_wide<W: Word>(first: RunView<W>, second: RunView<W>, output: *mut W) {
+    pub fn merge_wide<W: Word>(
+        first: RunView<W>,
+        second: RunView<W>,
+        output: *mut W,
+        merge_tile_rows: usize,
+    ) {
         let rows = first.len + second.len;
         let mut tile = thread::index_1d().get() as usize;
         let stride = thread::gridDim_x() as usize * 256;
-        let tiles = rows.div_ceil(MERGE_TILE_ROWS);
+        let tiles = rows.div_ceil(merge_tile_rows);
         while tile < tiles {
-            let start = tile * MERGE_TILE_ROWS;
-            let end = start + (rows - start).min(MERGE_TILE_ROWS);
+            let start = tile * merge_tile_rows;
+            let end = start + (rows - start).min(merge_tile_rows);
             // Find how many first-run rows precede this output diagonal.
             // Equal keys prefer the first run, matching the merge below.
             let lo =

@@ -1405,6 +1405,9 @@ with $s_j=64L-\sum_{i\le j}w_i$.
  \text{and append (merge) follow \textsc{DL-RunLayout} on words}}
  {\mathrm{unpack}(\text{state after fresh then append})=\text{the CPU run state after the same candidate batches}}
 \end{mathpar}
+Run maintenance consumes a recorded positive merge-tile row count and
+per-family auxiliary block widths. The current run and permutation kernels
+require exactly 256 threads; unsupported widths are rejected, never adjusted.
 A layout run built from an admitted delta permutes columns of a run whose
 words are pairwise distinct; the permutation is injective, so its image is
 also pairwise distinct and sorting alone yields a sorted unique run of the same
@@ -1450,6 +1453,11 @@ membership, schema cardinality, logical column order and key boundaries.
 The Round binding packet copies these declarations and input records into CQ
 Host providers; Rust spellings remain opaque and are printed unchanged.
 No consumer infers codecs or native ABIs from provider names or generic arguments.
+Independent legality predicates check these schema and token facts, the
+resolved ratio in each state, positive merge tiles, compiled launch bounds,
+and initializer agreement with the declared ABI. They never rerun the device
+realization producer. Fixed-width scalar eligibility, including type aliases,
+is checked by Rust's \code{Scalar} bounds rather than by type-name recognition.
 \begin{mathpar}
 \Rule{DL-DeviceSymbols}{D=\mathrm{Storage.device.symbols}\quad
  \mathrm{dom}(D)\text{ consists of distinct, declared nonnative logical types}\quad
@@ -1461,7 +1469,7 @@ No consumer infers codecs or native ABIs from provider names or generic argument
 \Rule{CK-DL-DeviceStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad
  \text{restoring default providers and erasing device records in }t\text{ gives }s\quad
- t\text{ equals the device realization of that restoration}\quad
+ \text{independent token, schema, parameter, initializer and scratch predicates hold}\quad
  \textsc{DL-DevicePacking}\text{ premises hold for every relation}}
  {\mathrm{check}_{\mathrm{deviceStorage}}(s,t)}
 \end{mathpar}
@@ -1498,6 +1506,9 @@ sum of the fresh counts. Outputs read the canonical layout's rows through its
 column permutation. Hole grain and inline advice is rejected: each hole is one
 device invocation. Issuing waves in order on one stream is exact by
 \textsc{DL-WaveCommute}; concurrent streams per wave would change only cost.
+Worker lanes construct each relation's arena from the same recorded initializer
+as the caller. Component release drops those arenas, releases that worker's
+thread-local scratch and then returns unused pool storage, matching the caller.
 \begin{mathpar}
 \Rule{P-DL-Gpu}{\mathrm{WF}_{\mathrm{Round}}(r)\quad
  \text{every hole has the batch interface}\quad\text{no hole policy}\quad

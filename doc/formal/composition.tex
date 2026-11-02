@@ -127,7 +127,7 @@ with the recipe cleared; the report retains the original recipe separately.
 
 \Rule{DR-GroupedPublication}{\mathsf{publication}(s,p)=(device,v)\quad
  s\text{ grouped}\quad \sigma=\text{head slots over keys then aggregates}\quad
- \beta_k=\text{first positive atom field binding key }k\text{, else full}}
+ \beta_k=\text{first binding positive atom field with recorded placement, else full}}
  {\mathsf{grouped}(s,p)=(\sigma,\beta)\text{ recorded and checked before generation}}
 
 \Rule{DR-Recipe}{r=\mathsf{inputRecipe}(p)\quad
@@ -159,7 +159,13 @@ device publication without validity support is rejected. Generated carriers
 and downstream input bindings consume the same recorded placement.
 DR-GroupedPublication records a resident grouped answer's conversion: the
 column slots and each key's bounds source (resident column metadata or one host
-scan of a host relation; aggregates take the full domain). The wrapper prints
+scan of a host relation; aggregates and keys without input bindings take the full
+domain). Table loader placements follow the selected target; staged inputs carry
+their producer's publication placement. Missing input placements are errors.
+Independently of the producer, the checker requires each slot to name its head
+argument's key or aggregate, and each input bounds record to bind that key at
+the named positive atom field with residency equal to the recorded input
+placement. Input bounds on aggregate slots are rejected. The wrapper prints
 that record; it adds no device fence, and its timing remains host wall time.
 DR-Recipe uses only explicit selectors and geometry, applying the existing
 checked rewrites. Workload labels occur only in catalog registration.

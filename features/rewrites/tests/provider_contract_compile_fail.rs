@@ -272,7 +272,10 @@ fn ordinary_read_obligations_reject_builtins_and_aliases_uniformly() {
     let compiler = Compiler::new();
     let aliases = "type SetAlias<T> = std::collections::HashSet<T>; type KeySetAlias<K> = cq_storage::AdaptiveKeySet<K, cq_storage::BorrowedI64TupleCodec, 64>;";
     for (name, ty) in [
-        ("set_payload", "@std_hash_set as ::std::collections::HashSet<_>"),
+        (
+            "set_payload",
+            "@std_hash_set as ::std::collections::HashSet<_>",
+        ),
         ("alias_payload", "@set_alias as SetAlias<_>"),
         ("keyset_payload", "@keyset_alias as KeySetAlias<_>"),
     ] {
@@ -298,7 +301,9 @@ fn host_ordering_and_interval_summaries_require_real_runtime_traits() {
     let aliases = "type SetAlias<T> = std::collections::HashSet<T>;";
     let ordered = |ty: Option<&str>| {
         let native = ty.is_none();
-        let retype = ty.map(|ty| format!("{},", retype("ordered", ty))).unwrap_or_default();
+        let retype = ty
+            .map(|ty| format!("{},", retype("ordered", ty)))
+            .unwrap_or_default();
         let hosts = if native {
             r#"
             let left = std::collections::BTreeMap::from([((1_i64,), vec![()])]);
@@ -329,11 +334,7 @@ mini_linq::passes::select! {{
 }}"#
         )
     };
-    success(compiler.compile(
-        "host_ordered",
-        aliases,
-        &ordered(None),
-    ));
+    success(compiler.compile("host_ordered", aliases, &ordered(None)));
     rejected(
         compiler.compile(
             "host_unordered_array",
@@ -372,7 +373,9 @@ mini_linq::passes::select! {{
     success(compiler.compile(
         "exact_interval",
         aliases,
-        &interval("@adaptive_keyset as ::cq_storage::AdaptiveKeySet<_, ::cq_storage::I64Codec, 64>"),
+        &interval(
+            "@adaptive_keyset as ::cq_storage::AdaptiveKeySet<_, ::cq_storage::I64Codec, 64>",
+        ),
     ));
     rejected(
         compiler.compile(
@@ -532,6 +535,9 @@ mini_linq::compile! {{ pipeline {{ plan = mini_linq::passes::plan(no_reduce); }}
         ("narrow_key_exact", narrow, probe, "IndexRead"),
         ("narrow_key_membership", narrow, semi, "ExactMembership"),
     ] {
-        rejected(compiler.compile(name, "", &query(host, exact, body)), obligation);
+        rejected(
+            compiler.compile(name, "", &query(host, exact, body)),
+            obligation,
+        );
     }
 }

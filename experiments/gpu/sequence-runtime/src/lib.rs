@@ -22,6 +22,142 @@ use std::{cell::RefCell, sync::Arc};
 
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
+/// Launch geometry of one auxiliary kernel family, printed from the GPU realization record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Geometry {
+    pub block_threads: u32,
+    pub shared_bytes: u32,
+}
+
+impl Geometry {
+    /// The family's launch configuration over `blocks` blocks.
+    pub(crate) fn config(self, blocks: u32) -> LaunchConfig1D {
+        LaunchConfig1D::new(blocks, self.block_threads, self.shared_bytes)
+    }
+
+    /// Resident grid for a grid-stride kernel over `items` elements.
+    pub(crate) fn grid(self, function: &cuda_core::CudaFunction, items: usize) -> Result<u32> {
+        cq_gpu_runtime::launch_grid_for_kernel(
+            function,
+            items.div_ceil(self.block_threads as usize),
+            self.block_threads,
+            self.shared_bytes,
+        )
+    }
+
+    /// Reject a recorded geometry the family's kernels cannot execute.
+    pub(crate) fn check(self, family: &str, supported: Geometry) -> Result<Self> {
+        if self == supported {
+            Ok(self)
+        } else {
+            Err(format!(
+                "unsupported {family} auxiliary geometry {self:?}; its kernels support only {supported:?}"
+            )
+            .into())
+        }
+    }
+}
+
+/// Per-family auxiliary kernel geometry (formal rule GPU-Realization auxiliary record).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Auxiliary {
+    /// `range_flags`: selection predicates of `select`, `radix_layout` and range builds.
+    pub selection: Geometry,
+    /// `offsets::scan` adjacent-prefix check.
+    pub offsets: Geometry,
+    /// Range-provider key extraction (`keys_and_rows`, `sequence_decode_column`).
+    pub range: Geometry,
+    /// Canon element kernels (`gather_lane`, `unpack_field`).
+    pub canon: Geometry,
+    /// Group element kernels (`identity`, `gather_key`, `boundaries`).
+    pub group: Geometry,
+    /// Group `reduce`: one block per group and column.
+    pub group_reduce: Geometry,
+    /// `numeric_bounds` reduction of uploads and measured publications.
+    pub bounds: Geometry,
+}
+
+impl Auxiliary {
+    /// Supported-value table. Every auxiliary kernel's launch contract and
+    /// `launch_bounds` fix 256-thread blocks, with matching grid strides and
+    /// tree reductions. Element kernels use no shared memory; `reduce` stages
+    /// 256 i64 lanes (4096 B); `numeric_bounds` writes one partial pair per
+    /// warp. There is deliberately no public default: callers pass the record.
+    pub(crate) const SUPPORTED: Auxiliary = Auxiliary {
+        selection: Geometry {
+            block_threads: 256,
+            shared_bytes: 0,
+        },
+        offsets: Geometry {
+            block_threads: 256,
+            shared_bytes: 0,
+        },
+        range: Geometry {
+            block_threads: 256,
+            shared_bytes: 0,
+        },
+        canon: Geometry {
+            block_threads: 256,
+            shared_bytes: 0,
+        },
+        group: Geometry {
+            block_threads: 256,
+            shared_bytes: 0,
+        },
+        group_reduce: Geometry {
+            block_threads: 256,
+            shared_bytes: 4096,
+        },
+        bounds: Geometry {
+            block_threads: 256,
+            shared_bytes: 0,
+        },
+    };
+    /// `GlobalFold::finish` combine: 256 i64 values, then 256 u32 presence
+    /// flags at byte 2048 (3072 B), one block per aggregate.
+    pub(crate) const SUPPORTED_COMBINE: Geometry = Geometry {
+        block_threads: 256,
+        shared_bytes: 3072,
+    };
+
+    /// Reject any family geometry its kernels cannot execute; never adjusts.
+    pub fn validate(&self) -> Result<()> {
+        let supported = Self::SUPPORTED;
+        self.selection.check("selection", supported.selection)?;
+        self.offsets.check("offsets", supported.offsets)?;
+        self.range.check("range", supported.range)?;
+        self.canon.check("canon", supported.canon)?;
+        self.group.check("group", supported.group)?;
+        self.group_reduce
+            .check("group_reduce", supported.group_reduce)?;
+        self.bounds.check("bounds", supported.bounds)?;
+        Ok(())
+    }
+}
+
+/// How an uploaded column's bounds are established.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UploadBounds {
+    /// One device reduction and one readback over the uploaded column.
+    Measure,
+    /// The column scalar type's full range, without a readback.
+    Scalar,
+}
+
+/// Device codec of an uploaded column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UploadCodec {
+    /// Frame-of-reference over the column's established bounds.
+    For,
+}
+
+/// Recorded representation of one uploaded numeric column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UploadColumn {
+    pub codec: UploadCodec,
+    pub bounds: UploadBounds,
+}
+
 thread_local! {
     // Scratch capacity only: every invocation repopulates every live lane.
     static NUMERIC_UPLOAD_SCRATCH: RefCell<Vec<Vec<i64>>> = const { RefCell::new(Vec::new()) };
@@ -124,7 +260,10 @@ impl Drop for QueryScope {
 }
 
 /// Upload scalar numeric lanes emitted by a host Sequence boundary.
-/// The translator supplies one i64 lane per declared field, in layout order.
+/// The translator supplies one i64 lane per declared field, in layout order,
+/// and one recorded [`UploadColumn`] per field. Measured columns run one
+/// `numeric_bounds` reduction and readback each, with the recorded `bounds`
+/// family `geometry`; scalar columns use their type's full range.
 /// Scalar codecs retain Decimal coefficients, Date epoch days, and published
 /// symbol codes without staging a tuple vector. Scratch capacities are reused,
 /// and all realization and upload work remains inside the provider's build timing.
@@ -132,17 +271,23 @@ impl Drop for QueryScope {
 pub fn upload_numeric_columns<Row: gpu_datalog_runtime::ScalarTuple, F>(
     pool: Arc<Pool>,
     fill: F,
+    columns: &[UploadColumn],
+    geometry: Geometry,
 ) -> Result<DeviceColumns<'static, Row>>
 where
     F: FnOnce(&mut [Vec<i64>]) -> Result<()>,
 {
+    if columns.len() != Row::COLUMNS.len() {
+        return Err("numeric upload records must describe every row column".into());
+    }
+    geometry.check("bounds", Auxiliary::SUPPORTED.bounds)?;
     // Check out the scratch rather than holding a RefCell borrow across host
     // evaluation: an opaque host expression may invoke another query.
     let mut raw = NUMERIC_UPLOAD_SCRATCH.with(|cache| std::mem::take(&mut *cache.borrow_mut()));
     raw.resize_with(Row::COLUMNS.len(), Vec::new);
     let result = (|| {
         fill(&mut raw)?;
-        upload_numeric_lanes(pool, &raw)
+        upload_numeric_lanes(pool, &raw, columns, geometry)
     })();
     for column in &mut raw {
         column.clear();
@@ -151,9 +296,25 @@ where
     result
 }
 
+/// The full range of a scalar lane, which must be representable in i64.
+fn scalar_bounds(column: gpu_datalog_runtime::Column) -> Result<Bounds> {
+    let bits = column.bits();
+    let (min, max) = if column.is_signed() {
+        (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+    } else {
+        (0, (1i128 << bits) - 1)
+    };
+    match (i64::try_from(min), i64::try_from(max)) {
+        (Ok(min), Ok(max)) => Ok(Bounds::Inclusive { min, max }),
+        _ => Err(format!("{column:?} upload lanes have no i64 scalar range").into()),
+    }
+}
+
 fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
     pool: Arc<Pool>,
     raw: &[Vec<i64>],
+    records: &[UploadColumn],
+    geometry: Geometry,
 ) -> Result<DeviceColumns<'static, Row>> {
     let rows = raw.first().ok_or("numeric upload needs a column")?.len();
     if raw.len() != Row::COLUMNS.len() || raw.iter().any(|column| column.len() != rows) {
@@ -172,13 +333,22 @@ fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
     )?);
     let columns = raw
         .iter()
-        .map(|values| {
+        .zip(records)
+        .zip(Row::COLUMNS)
+        .map(|((values, record), &column)| {
             let input = Buffer::from_host(pool.clone(), values)?;
-            let bounds = source_bounds(
-                &pool,
-                ColumnDescriptor::native_source(input.ptr().cast(), rows),
-                rows,
-            )?;
+            let bounds = match record.bounds {
+                UploadBounds::Measure => source_bounds(
+                    &pool,
+                    ColumnDescriptor::native_source(input.ptr().cast(), rows),
+                    rows,
+                    geometry,
+                )?,
+                UploadBounds::Scalar => scalar_bounds(column)?,
+            };
+            let codec = match record.codec {
+                UploadCodec::For => Codec::For,
+            };
             // This upload initialized the complete prefix. The immutable
             // metadata retains its exact count; no compact-extent readback
             // is needed in a timed provider build.
@@ -189,7 +359,7 @@ fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
                     rows,
                     metadata.clone(),
                     0,
-                    Codec::For,
+                    codec,
                     bounds,
                 )
                 .map(Arc::new)
@@ -383,10 +553,12 @@ impl ColumnDescriptor {
         self.bounds
     }
     /// Measure a computed publication when its declared scalar range is not
-    /// a usable provider domain. Only reduction metadata crosses to the host.
-    pub fn measure_bounds(&mut self) -> Result<()> {
+    /// a usable provider domain, with the recorded `bounds` family geometry.
+    /// Only reduction metadata crosses to the host.
+    pub fn measure_bounds(&mut self, geometry: Geometry) -> Result<()> {
+        geometry.check("bounds", Auxiliary::SUPPORTED.bounds)?;
         // DECODE V: measuring a computed packed publication reconstructs values before provider planning; P6 reuse recorded summaries.
-        self.bounds = source_bounds(self.pool(), self.source, self.rows)?;
+        self.bounds = source_bounds(self.pool(), self.source, self.rows, geometry)?;
         Ok(())
     }
     pub fn rows(&self) -> usize {
@@ -398,24 +570,27 @@ impl ColumnDescriptor {
 }
 
 // DECODE ?: source-bound reduction accepts identity and packed sources; caller representation facts decide whether it decodes.
+/// `geometry` is the checked `bounds` family geometry.
 fn source_bounds(
     pool: &Arc<Pool>,
     source: gpu_device_columns::SourceView,
     rows: usize,
+    geometry: Geometry,
 ) -> Result<Bounds> {
     if rows == 0 {
         return Ok(Bounds::Empty);
     }
     let rows_u32 = u32::try_from(rows).map_err(|_| "numeric bounds exceed the u32 row domain")?;
     let module = build_module(pool)?;
-    let shape = module.prepare_numeric_bounds(LaunchConfig1D::new(1, 256, 0))?;
-    let blocks =
-        cq_gpu_runtime::launch_grid_for_kernel(shape.function(), rows.div_ceil(256), 256, 0)?;
-    let partial = unsafe { Buffer::<i64>::uninitialized(pool.clone(), blocks as usize * 16)? };
+    let shape = module.prepare_numeric_bounds(geometry.config(1))?;
+    let blocks = geometry.grid(shape.function(), rows)?;
+    // One (min, max) partial per warp of every launched block.
+    let partials = blocks as usize * (geometry.block_threads as usize / 32) * 2;
+    let partial = unsafe { Buffer::<i64>::uninitialized(pool.clone(), partials)? };
     // DECODE V: bounds discovery launches source reconstruction before index building; P6 consume recorded summaries instead.
     module.numeric_bounds(
         pool.stream(),
-        &module.prepare_numeric_bounds(LaunchConfig1D::new(blocks, 256, 0))?,
+        &module.prepare_numeric_bounds(geometry.config(blocks))?,
         source,
         rows_u32,
         partial.ptr(),
@@ -558,12 +733,14 @@ impl RangeDescriptor {
 /// recorded half-open selection when present. Every column shares `pool`
 /// and the same live row count; keys and lanes follow the caller's recorded
 /// schema (`K`, `C`), checked against the layout's types by the runtime.
+/// `selection_geometry` is the recorded `selection` family geometry.
 pub fn radix_layout<K, V, W, O, C>(
     pool: &Arc<Pool>,
     params: gpu_datalog_runtime::RadixRunParams,
     keys: &[ColumnDescriptor],
     values: &[ColumnDescriptor],
     selection: Option<&RangeSelection>,
+    selection_geometry: Geometry,
 ) -> Result<gpu_datalog_runtime::RadixLayout<K, V, W, O, C>>
 where
     K: gpu_datalog_runtime::ScalarTuple,
@@ -586,7 +763,7 @@ where
         return Err("radix source columns must share the pool and live row count".into());
     }
     let selected = selection
-        .map(|selection| select(pool.clone(), selection))
+        .map(|selection| select(pool.clone(), selection, selection_geometry))
         .transpose()?;
     let (positions, count) = match &selected {
         Some(selected) if selected.is_empty() => (std::ptr::null(), 0),
@@ -594,7 +771,10 @@ where
         None => (std::ptr::null(), rows),
     };
     let keys = keys.iter().map(ColumnDescriptor::view).collect::<Vec<_>>();
-    let values = values.iter().map(ColumnDescriptor::view).collect::<Vec<_>>();
+    let values = values
+        .iter()
+        .map(ColumnDescriptor::view)
+        .collect::<Vec<_>>();
     // SAFETY: descriptors own their columns, whose live prefixes are ready on
     // `pool`'s stream (ColumnDescriptor contract); selected positions are
     // produced on the same stream and index that prefix.
@@ -633,18 +813,23 @@ pub struct RangeProvider {
 }
 impl RangeProvider {
     /// Construction follows the selected provider, including its reusable workspace ABI.
-    pub fn builder(pool: &Arc<Pool>) -> Result<RangeBuilder<'_>> {
-        RangeBuilder::new(pool)
+    pub fn builder<'pool>(pool: &'pool Arc<Pool>, aux: &Auxiliary) -> Result<RangeBuilder<'pool>> {
+        RangeBuilder::new(pool, aux)
     }
-    pub fn build(pool: Arc<Pool>, descriptor: &RangeDescriptor) -> Result<Self> {
-        RangeBuilder::new(&pool)?.build(descriptor)
+    pub fn build(pool: Arc<Pool>, descriptor: &RangeDescriptor, aux: &Auxiliary) -> Result<Self> {
+        RangeBuilder::new(&pool, aux)?.build(descriptor)
     }
     pub fn from_catalog(
         pool: Arc<Pool>,
         catalog: &Catalog,
         descriptor: &CatalogRangeDescriptor,
+        aux: &Auxiliary,
     ) -> Result<Self> {
-        Self::build(pool, &RangeDescriptor::from_catalog(catalog, descriptor)?)
+        Self::build(
+            pool,
+            &RangeDescriptor::from_catalog(catalog, descriptor)?,
+            aux,
+        )
     }
     pub fn len(&self) -> usize {
         self.len as usize
@@ -821,19 +1006,25 @@ impl RangeWorkspace {
 
 /// Reuse loaded build/RCCL programs across providers on the existing pool.
 /// Fresh builders also share the named module and radix controls on this thread.
+/// Every build launches with the recorded `selection` and `range` geometries.
 pub struct RangeBuilder<'pool> {
     pool: &'pool Arc<Pool>,
     module: kernels::build::LoadedModule,
     thrust: rccl_thrust::cuda::Program<'pool>,
     cub: rccl_cub::cuda::Program<'pool>,
+    selection: Geometry,
+    range: Geometry,
 }
 impl<'pool> RangeBuilder<'pool> {
-    pub fn new(pool: &'pool Arc<Pool>) -> Result<Self> {
+    pub fn new(pool: &'pool Arc<Pool>, aux: &Auxiliary) -> Result<Self> {
+        aux.validate()?;
         Ok(Self {
             module: build_module(pool)?,
             thrust: rccl_thrust::cuda::Program::load(pool.context())?,
             cub: rccl_cub::cuda::Program::load(pool.context())?,
             pool,
+            selection: aux.selection,
+            range: aux.range,
         })
     }
     pub fn pool(&self) -> &Arc<Pool> {
@@ -908,17 +1099,12 @@ impl<'pool> RangeBuilder<'pool> {
         let (rows, selected) = match &descriptor.selection {
             Some(selection) if base_rows > 0 => {
                 let flags = temporary::<u32>(stream, base_rows)?;
-                let shape = module.prepare_range_flags(LaunchConfig1D::new(1, 256, 0))?;
-                let blocks = cq_gpu_runtime::launch_grid_for_kernel(
-                    shape.function(),
-                    base_rows.div_ceil(256),
-                    256,
-                    0,
-                )?;
+                let shape = module.prepare_range_flags(self.selection.config(1))?;
+                let blocks = self.selection.grid(shape.function(), base_rows)?;
                 // DECODE V: index selection launch reconstructs values before range comparison; P6 translate predicates to codes.
                 module.range_flags(
                     stream,
-                    &module.prepare_range_flags(LaunchConfig1D::new(blocks, 256, 0))?,
+                    &module.prepare_range_flags(self.selection.config(blocks))?,
                     selection.column.view(),
                     base_rows as u32,
                     selection.start,
@@ -1015,20 +1201,14 @@ impl<'pool> RangeBuilder<'pool> {
         let source = selected
             .as_ref()
             .map_or(std::ptr::null(), |selected| pointer(selected) as *const u32);
-        let shape = module.prepare_keys_and_rows(LaunchConfig1D::new(1, 256, 0))?;
-        let blocks =
-            cq_gpu_runtime::launch_grid_for_kernel(shape.function(), rows.div_ceil(256), 256, 0)?;
-        let keys_prepared = module.prepare_keys_and_rows(LaunchConfig1D::new(blocks, 256, 0))?;
+        let shape = module.prepare_keys_and_rows(self.range.config(1))?;
+        let blocks = self.range.grid(shape.function(), rows)?;
+        let keys_prepared = module.prepare_keys_and_rows(self.range.config(blocks))?;
         if descriptor.key.len() > 1 {
-            let shape = module.prepare_sequence_decode_column(LaunchConfig1D::new(1, 256, 0))?;
-            let blocks = cq_gpu_runtime::launch_grid_for_kernel(
-                shape.function(),
-                rows.div_ceil(256),
-                256,
-                0,
-            )?;
+            let shape = module.prepare_sequence_decode_column(self.range.config(1))?;
+            let blocks = self.range.grid(shape.function(), rows)?;
             let decode_prepared =
-                module.prepare_sequence_decode_column(LaunchConfig1D::new(blocks, 256, 0))?;
+                module.prepare_sequence_decode_column(self.range.config(blocks))?;
             let plain = descriptor
                 .key
                 .iter()

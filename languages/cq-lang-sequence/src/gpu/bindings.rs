@@ -17,8 +17,9 @@ pub enum ProviderAbi {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderLayout {
-    /// Actual provider type whose catalog ABI was checked during binding.
-    pub ty: syn::Type,
+    /// The built provider instance (declared token, printed spelling) whose
+    /// catalog ABI was checked during binding.
+    pub provider: cq_lang_structures::Provider,
     pub abi: ProviderAbi,
     pub keys: Vec<String>,
     pub payload: Vec<String>,
@@ -33,6 +34,16 @@ pub struct RadixParams {
     pub ratio: usize,
     pub radix_bits: u32,
     pub merge_tile_rows: u32,
+    /// Block width of the radix engine's kernels.
+    pub block_threads: u32,
+}
+
+/// `gpu_datalog_runtime::RunParams` of a materialized run provider, printed verbatim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunParams {
+    pub ratio: usize,
+    pub merge_tile_rows: usize,
+    pub block_threads: u32,
 }
 
 /// How one Sequence read of a radix instance is executed.
@@ -63,15 +74,27 @@ pub struct RadixRealization {
     pub reads: Vec<(Vec<String>, RadixRead)>,
 }
 
+/// A complete permutation of a run input materialized as a declared
+/// provider before the lookup reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Materialization {
+    /// Source position of each payload column.
+    pub permutation: Vec<usize>,
+    /// The declared materialized provider instance.
+    pub provider: cq_lang_structures::Provider,
+    pub params: RunParams,
+    /// Block width of the permutation kernel.
+    pub permutation_threads: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeLookup {
     pub host: String,
     pub source: Vec<String>,
     pub keys: Vec<String>,
     pub payload: Vec<String>,
-    /// None borrows the existing view; Some materializes this complete permutation.
-    pub permutation: Option<Vec<usize>>,
-    pub materialized_provider: Option<syn::Type>,
+    /// None borrows the existing view.
+    pub materialization: Option<Materialization>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,18 +105,47 @@ pub enum ColumnBounds {
     Scalar { ty: syn::Type },
 }
 
+/// How an uploaded column's bounds are established.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UploadBounds {
+    /// One device reduction and one readback over the uploaded column.
+    Measure,
+    /// The column carrier's whole range; no device work.
+    Scalar,
+}
+
+/// Device encoding of an uploaded column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UploadCodec {
+    /// Frame of reference over the column's bounds.
+    For,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UploadColumn {
+    pub codec: UploadCodec,
+    pub bounds: UploadBounds,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UploadAdapter {
     EmptyRows,
-    NumericColumns { types: Vec<syn::Type> },
+    /// One carrier and one encoding record per layout column.
+    NumericColumns {
+        types: Vec<syn::Type>,
+        columns: Vec<UploadColumn>,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Bindings {
     pub providers: BTreeMap<String, Vec<ProviderLayout>>,
     pub native: BTreeMap<String, NativeLookup>,
-    /// Downloaded host scans use these recorded replacement providers.
-    pub downloads: BTreeMap<String, syn::Type>,
+    /// Downloaded host scans read through these recorded declared providers.
+    pub downloads: BTreeMap<String, cq_lang_structures::Provider>,
+    /// Device carrier of every Physical and capture answer column: its
+    /// logical type, or the declared codec's u32 code.
+    pub carriers: BTreeMap<String, syn::Type>,
     pub bounds: BTreeMap<String, ColumnBounds>,
     pub uploads: BTreeMap<String, UploadAdapter>,
     /// Source access, publication steps, transfers, captures and auxiliary

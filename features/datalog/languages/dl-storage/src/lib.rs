@@ -90,6 +90,11 @@ pub struct DeviceState {
     pub word: Type,
     pub packing: Expr,
     pub state: Type,
+    /// Resolved maintenance and auxiliary launch parameters, consumed verbatim.
+    pub ratio: usize,
+    pub merge_tile_rows: usize,
+    pub block_threads: u32,
+    pub permutation_threads: u32,
     pub state_init: Expr,
     pub init: Expr,
 }
@@ -128,6 +133,10 @@ record!(DeviceState {
     word: Type,
     packing: Expr,
     state: Type,
+    ratio: usize,
+    merge_tile_rows: usize,
+    block_threads: u32,
+    permutation_threads: u32,
     state_init: Expr,
     init: Expr
 });

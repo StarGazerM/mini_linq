@@ -171,20 +171,31 @@ fn rejects_host_observers_and_timing() {
 #[test]
 fn rejects_hole_chunking_policy() {
     let mut program = program();
-    program.schedule = program.schedule.clone().with_policy(0, cq_lang_datalog_round::schedule::HolePolicy {
-        phase: syn::parse_quote!(step),
-        index: 0,
-        grain: Some(64),
-        inline_below: None,
-    });
-    assert!(print::compile(&program).unwrap_err().to_string().contains("grain"));
+    program.schedule = program.schedule.clone().with_policy(
+        0,
+        cq_lang_datalog_round::schedule::HolePolicy {
+            phase: syn::parse_quote!(step),
+            index: 0,
+            grain: Some(64),
+            inline_below: None,
+        },
+    );
+    assert!(
+        print::compile(&program)
+            .unwrap_err()
+            .to_string()
+            .contains("grain")
+    );
 }
 
 #[test]
 fn key_sets_and_layouts_print_recorded_device_records() {
     let program = program();
     let device = program.storage.device.as_ref().unwrap();
-    let source = print::compile(&program).unwrap().to_token_stream().to_string();
+    let source = print::compile(&program)
+        .unwrap()
+        .to_token_stream()
+        .to_string();
     for record in device.layouts.iter().chain(&device.delta_layouts) {
         assert!(source.contains(&record.state_init.to_token_stream().to_string()));
         assert!(source.contains(&record.init.to_token_stream().to_string()));
@@ -196,6 +207,24 @@ fn key_sets_and_layouts_print_recorded_device_records() {
         if let Some(delta) = &relation.delta_host {
             assert!(source.contains(&quote!(#delta = ).to_string()));
         }
+    }
+}
+
+#[test]
+fn printer_rejects_tampered_device_facts() {
+    let source = program();
+    let changes: &[fn(&mut cq_lang_datalog_storage::DeviceStorage)] = &[
+        |device| device.layouts[0].ratio += 1,
+        |device| device.layouts[0].merge_tile_rows = 0,
+        |device| device.layouts[0].block_threads = 512,
+        |device| device.layouts[0].permutation_threads = 128,
+        |device| device.layouts[0].input.columns[0].storage = syn::parse_quote!(f32),
+        |device| device.layouts[0].token = syn::parse_quote!(unknown),
+    ];
+    for change in changes {
+        let mut target = source.clone();
+        change(target.storage.device.as_mut().unwrap());
+        assert!(print::compile(&target).is_err());
     }
 }
 

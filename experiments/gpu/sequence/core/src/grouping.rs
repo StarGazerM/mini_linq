@@ -53,10 +53,13 @@ pub fn check(source: &Program, analysis: &Analysis) -> syn::Result<()> {
                     "GPU-Group: missing recorded keyed accumulator provider",
                 )
             })?;
-        if recorded != &expected {
+        // Token identity with its declared facts; the spelling is printed and
+        // rustc-checked.
+        let declared = cq_lang_structures::provider::base::declaration("group_map").facts;
+        if !recorded.same_token(&expected) || analysis.facts(recorded).clone() != declared {
             return Err(syn::Error::new_spanned(
                 recorded,
-                "GPU-Group: keyed accumulator must record ::cq_gpu_sequence_runtime::group::SegmentedGroup; apply GPU grouping binding before translation",
+                "GPU-Group: keyed accumulator must record the group_map token (SegmentedGroup); apply GPU grouping binding before translation",
             ));
         }
     }
@@ -100,18 +103,16 @@ mod tests {
     }
 
     #[test]
-    fn binding_records_provider_and_checker_does_not_select_it() {
+    fn checker_accepts_legal_records_and_binding_records_provider() {
+        // The source already records the group_map token with its declared
+        // facts; the spelling (HashMap) does not decide legality.
         let source = source(true);
         let original = source.to_token_stream().to_string();
         let analysis = cq_lang_structures::contract::check(&source).unwrap();
-        assert!(
-            check(&source, &analysis)
-                .unwrap_err()
-                .to_string()
-                .contains("GPU-Group")
-        );
-        assert_eq!(source.to_token_stream().to_string(), original);
+        assert!(analysis.groups["grouped"].same_token(&provider()));
+        check(&source, &analysis).unwrap();
         let target = bind(&source).unwrap();
+        assert_eq!(source.to_token_stream().to_string(), original);
         let analysis = cq_lang_structures::contract::check(&target).unwrap();
         assert_eq!(analysis.groups["grouped"], provider());
         check(&target, &analysis).unwrap();
@@ -119,25 +120,14 @@ mod tests {
             bind(&target).unwrap().to_token_stream().to_string(),
             target.to_token_stream().to_string()
         );
-        assert_eq!(source.to_token_stream().to_string(), original);
         let mut missing = analysis;
         missing.groups.remove("grouped");
-        assert!(
-            check(&target, &missing)
-                .unwrap_err()
-                .to_string()
-                .contains("missing recorded")
-        );
+        assert!(check(&target, &missing).is_err());
     }
 
     #[test]
-    fn checker_rejects_foreign_and_malformed_accumulators() {
-        let providers: [syn::Type; 3] = [
-            syn::parse_quote!(::other::SegmentedGroup),
-            syn::parse_quote!(SegmentedGroup),
-            syn::parse_quote!(::cq_gpu_sequence_runtime::group::SegmentedGroup<u32>),
-        ];
-        for ty in providers {
+    fn checker_compares_accumulator_tokens_not_spellings() {
+        let respelled = |ty: syn::Type| {
             let mut target = bind(&source(true)).unwrap();
             for entry in &mut target.structures.entries {
                 if let Structure::Group {
@@ -147,14 +137,33 @@ mod tests {
                     recorded.ty = ty.clone();
                 }
             }
-            let analysis = cq_lang_structures::contract::check(&target).unwrap();
-            assert!(
-                check(&target, &analysis)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("GPU-Group")
-            );
+            target
+        };
+        let target = respelled(syn::parse_quote!(
+            ::cq_gpu_sequence_runtime::group::SegmentedGroup<u32>
+        ));
+        let analysis = cq_lang_structures::contract::check(&target).unwrap();
+        check(&target, &analysis).unwrap();
+        let mut foreign = bind(&source(true)).unwrap();
+        foreign
+            .structures
+            .declare(&[cq_lang_structures::provider::base::declaration(
+                "sorted_run",
+            )]);
+        for entry in &mut foreign.structures.entries {
+            if let Structure::Group {
+                provider: recorded, ..
+            } = &mut entry.structure
+            {
+                *recorded = cq_lang_structures::provider::base::instance(
+                    "sorted_run",
+                    syn::parse_quote!(::cq_gpu_sequence_runtime::group::SegmentedGroup),
+                );
+            }
         }
+        let rejected = cq_lang_structures::contract::check(&foreign)
+            .map_or(true, |analysis| check(&foreign, &analysis).is_err());
+        assert!(rejected);
     }
 
     #[test]

@@ -54,6 +54,7 @@ fn params(ratio: usize, radix_bits: u32) -> RadixRunParams {
         ratio,
         radix_bits,
         merge_tile_rows: 16,
+        block_threads: 256,
     }
 }
 

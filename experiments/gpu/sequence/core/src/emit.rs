@@ -834,12 +834,107 @@ impl<'a> Compiler<'a> {
             .collect()
     }
 
+    fn lookup_columns(&self, provider: &str) -> syn::Result<Vec<String>> {
+        if let Some(source) = self.rows.whole_lookups.get(provider) {
+            return Ok(self.analysis.structures.physical.headings[source]
+                .iter()
+                .cloned()
+                .collect());
+        }
+        Ok(self.rows.provider(provider)?.1)
+    }
+
+    fn whole_load(&self, source: &str, position: TokenStream) -> syn::Result<TokenStream> {
+        let Some((prior, stored)) = self
+            .stored
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, stored)| stored.result == source || stored.name == source)
+        else {
+            return self.rows.source(source, position, quote!(__row));
+        };
+        let rows = format_ident!("__cq_store_rows_{prior}");
+        if let Some(columns) = &stored.packed {
+            let keys = format_ident!("__cq_store_packed_{prior}");
+            let lanes = format_ident!("__cq_stored_lanes_{prior}");
+            let mut load = TokenStream::new();
+            for (field, column) in columns.iter().enumerate() {
+                let slot = self.slot(column)?;
+                let base = format_ident!("__cq_stored_base_{prior}_{field}");
+                let shift = format_ident!("__cq_stored_shift_{prior}_{field}");
+                let bits = format_ident!("__cq_stored_bits_{prior}_{field}");
+                let offset = packed_offset(
+                    quote!(#keys),
+                    quote!((#position) as usize),
+                    quote!(#lanes),
+                    quote!(#shift),
+                    quote!(#bits),
+                );
+                load.extend(quote!(__row[#slot] = #base.wrapping_add((#offset) as i64);));
+            }
+            return Ok(load);
+        }
+        let width = self.rows.width;
+        let columns = &self.analysis.structures.physical.headings[&stored.result];
+        if let Some(provider) = &stored.range {
+            let begin = format_ident!("__cq_store_begin_{prior}");
+            let offsets = format_ident!("__cq_store_offsets_{prior}");
+            let meta = format_ident!("__cq_store_meta_{prior}");
+            let payload_columns = self.lookup_columns(provider)?;
+            let copy = columns
+                .iter()
+                .filter(|column| !payload_columns.contains(column))
+                .map(|column| {
+                    let slot = self.slot(column)?;
+                    Ok(quote!(__row[#slot] = *#rows.add(__whole_parent * #width + #slot);))
+                })
+                .collect::<syn::Result<Vec<_>>>()?;
+            let payload = self.payload(provider, &[], quote!(__whole_position))?;
+            return Ok(quote! {
+                let __whole_parent = ::cq_gpu_sequence_runtime::device::owner(
+                    #offsets, *#meta, (#position) as u32) as usize;
+                #(#copy)*
+                let __whole_position = *#begin.add(__whole_parent)
+                    + ((#position) as u32 - *#offsets.add(__whole_parent));
+                #payload
+            });
+        }
+        let copy = columns
+            .iter()
+            .map(|column| {
+                let slot = self.slot(column)?;
+                Ok(quote!(__row[#slot] = *#rows.add((#position) as usize * #width + #slot);))
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
+        Ok(quote!(#(#copy)*))
+    }
+
     fn lookup(
         &self,
         provider: &str,
         keys: &[String],
         membership: bool,
     ) -> syn::Result<TokenStream> {
+        if let Some(source) = self.rows.whole_lookups.get(provider) {
+            let length = if let Some((prior, _)) = self
+                .stored
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, stored)| stored.result == *source || stored.name == *source)
+            {
+                let length = format_ident!("__cq_store_length_{prior}");
+                quote!(#length)
+            } else {
+                let length = format_ident!("{provider}_length");
+                quote!(#length)
+            };
+            return Ok(quote! {
+                let (mut __begin, mut __end) = (0u32, if __live { (#length) as u32 } else { 0 });
+                let __member_found = __begin < __end;
+            });
+        }
         let (view, payload, order) = self.rows.provider(provider)?;
         if self.rows.radix_provider(provider).is_some() {
             let probe = self.radix_probe(provider, keys, None)?;
@@ -1001,6 +1096,9 @@ impl<'a> Compiler<'a> {
         bound: &[String],
         position: TokenStream,
     ) -> syn::Result<TokenStream> {
+        if let Some(source) = self.rows.whole_lookups.get(provider) {
+            return self.whole_load(source, position);
+        }
         let (view, payload, _) = self.rows.provider(provider)?;
         if let Some(radix) = self.rows.radix_provider(provider) {
             // Item lanes hold native values: a positional read, no decode.
@@ -1061,6 +1159,9 @@ struct Kernel<'c, 'p> {
     expansion_stages: usize,
     /// The current chain's recorded strips, consumed in pre-order.
     strips: std::collections::VecDeque<Strip>,
+    /// The current chain's recorded BE-Resource payload parents
+    /// (`ResourceAllocation::Payload`), consumed in pre-order per expansion.
+    parents: std::collections::VecDeque<Vec<String>>,
     /// GPU-RootShare: metadata word of the per-tile cursors, taken by the
     /// chain's first expansion.
     share: Option<usize>,
@@ -1131,7 +1232,7 @@ impl Kernel<'_, '_> {
                     ..
                 } => {
                     if !membership {
-                        for column in self.compiler.rows.provider(provider)?.1 {
+                        for column in self.compiler.lookup_columns(provider)? {
                             live.remove(&self.compiler.slot(&column)?);
                         }
                     }
@@ -1344,34 +1445,24 @@ impl Kernel<'_, '_> {
                         "range lookup must be flattened or published as offsets",
                     ));
                 }
-                // BE-Resource: a key still live after the lookup is carried as
-                // a parent, even where the provider row also stores it.
-                let key_slots = keys
-                    .iter()
-                    .map(|column| self.compiler.slot(column))
-                    .collect::<syn::Result<BTreeSet<_>>>()?;
-                let payload_columns = self
-                    .compiler
-                    .rows
-                    .provider(provider)?
-                    .1
-                    .iter()
-                    .map(|column| self.compiler.slot(column))
-                    .collect::<syn::Result<BTreeSet<_>>>()?
-                    .difference(&key_slots)
-                    .copied()
-                    .collect::<BTreeSet<_>>();
                 let (begin_offset, offsets_offset) = self.shared.payload()?;
                 let begins = format_ident!("__begins_{begin_offset}");
                 let offsets = format_ident!("__offsets_{offsets_offset}");
                 let owner = format_ident!("__owner_{begin_offset}");
                 let mut shared = TokenStream::new();
                 let mut child = DeviceRow::default();
-                let mut parents = self.live_columns(rest)?;
-                if let Some(probe) = smallest {
-                    parents.extend(self.compiler.smallest_carried(probe)?);
-                }
-                for slot in parents.difference(&payload_columns) {
+                // BE-Resource: the recorded payload parents (later uses, live
+                // keys and smallest prefixes, without provider payload).
+                let parents = self
+                    .parents
+                    .pop_front()
+                    .ok_or_else(|| {
+                        error("BE-Resource: expansion lacks its recorded payload parents")
+                    })?
+                    .iter()
+                    .map(|column| self.compiler.slot(column))
+                    .collect::<syn::Result<BTreeSet<_>>>()?;
+                for slot in &parents {
                     let ty = self.code_type(*slot);
                     let at = self.shared.parent(8)?;
                     let id = format_ident!("__parent_{at}");
@@ -1645,10 +1736,8 @@ impl Kernel<'_, '_> {
 
     fn output_write(&self) -> syn::Result<TokenStream> {
         if let Some(packing) = self.arena_packing {
-            let values = self
-                .compiler
-                .rows
-                .output_columns
+            let values = packing
+                .fields()
                 .iter()
                 .map(|column| self.compiler.rows.output_value(column))
                 .collect::<syn::Result<Vec<_>>>()?;
@@ -1937,9 +2026,6 @@ fn translate_observed(
     }
     let rows = Rows::new(program, analysis)?;
     let codecs = crate::runs::Codecs::check(&program.structures)?;
-    let arena_packing = arena
-        .map(|_| rows.output_types().and_then(crate::arena::Packing::new))
-        .transpose()?;
     let mut compiler = Compiler {
         program,
         analysis,
@@ -1999,16 +2085,19 @@ fn translate_observed(
             "GPU scalar fold publication requires one output column",
         ));
     }
-    let final_group = compiler
-        .definitions
-        .get(final_name)
-        .and_then(|term| grouped_boundary(term, &compiler.definitions));
-    if arena.is_some() && (final_group.is_some() || final_fold.is_some()) {
-        return Err(error(
-            "GPU arena terminal requires raw candidate rows, not a group or fold",
-        ));
-    }
     let terminal_record = publication_record(analysis, final_name)?;
+    // GPU-Arena: only a recorded raw-candidate terminal publishes into an arena.
+    let arena_packing = arena
+        .map(|_| {
+            terminal_record
+                .arena
+                .as_ref()
+                .map(crate::arena::Packing::new)
+                .ok_or_else(|| {
+                    error("GPU arena terminal requires a recorded raw-candidate arena encoding")
+                })
+        })
+        .transpose()?;
     // CUDA exports are not scoped by the surrounding Rust expression. Give
     // each expansion its own module, including repeated identical programs.
     static NEXT_MODULE: AtomicUsize = AtomicUsize::new(0);
@@ -2234,7 +2323,10 @@ fn translate_observed(
                 .unwrap_or((0, &[]));
             let kernel = format_ident!("__cq_group_arguments_{module_name}");
             let (code, publication) = match &record.completion {
-                GroupCompletion::Segmented { arguments } => {
+                GroupCompletion::Segmented {
+                    arguments,
+                    geometry,
+                } => {
                     let Grid::KernelOccupancy = arguments else {
                         return Err(error(
                             "GPU-TerminalGroup: argument extraction uses the occupancy grid",
@@ -2255,9 +2347,14 @@ fn translate_observed(
                         direct,
                         &codecs,
                         &compiler.rows.query_captures,
+                        geometry,
                     )?
                 }
-                GroupCompletion::GridPartials { partials } => {
+                GroupCompletion::GridPartials {
+                    partials,
+                    geometry,
+                    combine,
+                } => {
                     let Grid::KernelOccupancy = partials else {
                         return Err(error(
                             "GPU-TerminalGroup: grid partials use the occupancy grid",
@@ -2278,6 +2375,8 @@ fn translate_observed(
                         direct,
                         &codecs,
                         &compiler.rows.query_captures,
+                        geometry,
+                        combine,
                     )?
                 }
             };
@@ -2295,11 +2394,6 @@ fn translate_observed(
         });
         let index = compiler.stored.len();
         let Some(dispatch) = dispatch else {
-            if arena.is_some() && publication == final_name {
-                return Err(error(
-                    "GPU arena terminal requires a recorded device row dispatch",
-                ));
-            }
             if let Step::HostUnion(union) = step {
                 let result = &analysis.results[&publication];
                 let record = publication_record(analysis, &publication)?;
@@ -2492,7 +2586,7 @@ fn translate_observed(
                     let owner = format_ident!("__cq_canonical_{index}");
                     let saved_fields = format_ident!("__cq_fields_{index}");
                     let canonicalize = quote! {
-                        let mut canon = <#provider>::new(&__cq_pool,#store_length)?;
+                        let mut canon = <#provider>::new(&__cq_pool,#store_length,__cq_auxiliary.canon)?;
                         let #owner = unsafe { canon.canonicalize(&#keys,#store_length,__cq_key_bits)? };
                     };
                     if final_output {
@@ -2548,6 +2642,7 @@ fn translate_observed(
             continue;
         };
         let Step::Dispatch {
+            result: dispatch_result,
             provider: dispatch_provider,
         } = step
         else {
@@ -2590,11 +2685,6 @@ fn translate_observed(
         let record = publication_record(analysis, &publication)?;
         let provider = record.storage.canonical_provider();
         let canonical = provider.is_some();
-        if arena.is_some() && final_output && canonical {
-            return Err(error(
-                "GPU arena terminal publishes raw candidates; terminal canon requires a separate publication",
-            ));
-        }
         for chain in &chains {
             let mut partitions = 0usize;
             for (at, operation) in chain.operations.iter().enumerate() {
@@ -2717,6 +2807,9 @@ fn translate_observed(
             let begin = format_ident!("__cq_store_begin_{prior}");
             let offsets = format_ident!("__cq_store_offsets_{prior}");
             let meta = format_ident!("__cq_store_meta_{prior}");
+            let length = format_ident!("__cq_store_length_{prior}");
+            parameters.push(quote!(#length:usize));
+            arguments.push(quote!(#length));
             parameters.extend([
                 quote!(#rows:*const i64),
                 quote!(#begin:*const u32),
@@ -2749,6 +2842,22 @@ fn translate_observed(
                         quote!(#fields[#field].bits),
                     ]);
                 }
+            }
+        }
+        let mut whole_lengths = BTreeSet::new();
+        for operation in chains.iter().flat_map(|chain| &chain.operations) {
+            if let Operation::Lookup { provider, .. } = operation
+                && let Some(source) = compiler.rows.whole_lookups.get(provider)
+                && !compiler
+                    .stored
+                    .iter()
+                    .any(|stored| stored.result == *source || stored.name == *source)
+                && whole_lengths.insert(provider)
+            {
+                let length = format_ident!("{provider}_length");
+                let value = compiler.rows.source_len(source)?;
+                parameters.push(quote!(#length:usize));
+                arguments.push(quote!(#value));
             }
         }
         for i in 0..packed_columns.as_ref().map_or(0, Vec::len) {
@@ -2791,6 +2900,7 @@ fn translate_observed(
             expansion_counters,
             expansion_stages: 0,
             strips: Default::default(),
+            parents: Default::default(),
             share: None,
         };
         let mut bodies = Vec::new();
@@ -2895,6 +3005,19 @@ fn translate_observed(
                 .strips
                 .iter()
                 .cloned()
+                .collect();
+            generator.parents = analysis
+                .resources
+                .get(&publication)
+                .and_then(|resource| resource.shape.chains.get(chain_index))
+                .into_iter()
+                .flatten()
+                .filter_map(|allocation| match allocation {
+                    cq_lang_sequence::ResourceAllocation::Payload { parents } => {
+                        Some(parents.iter().map(|column| column.name.clone()).collect())
+                    }
+                    cq_lang_sequence::ResourceAllocation::Fold => None,
+                })
                 .collect();
             let strip = generator.next_strip()?;
             if strip.rows.is_some() {
@@ -3233,7 +3356,7 @@ fn translate_observed(
         let complete_offsets = match execution.offsets {
             cq_lang_sequence::gpu::OffsetScan::None => quote!(__cq_required),
             cq_lang_sequence::gpu::OffsetScan::DeviceExclusive => quote!(
-                ::cq_gpu_sequence_runtime::offsets::scan(&__cq_pool, &#store_offsets, __cq_required, &#store_meta)?
+                ::cq_gpu_sequence_runtime::offsets::scan(&__cq_pool, &#store_offsets, __cq_required, &#store_meta, __cq_auxiliary.offsets)?
             ),
         };
         // GPU-ReservePrevious: a keys-only arena attempt uses the leased slot's
@@ -3426,7 +3549,7 @@ fn translate_observed(
                 }
             } else if canonical {
                 quote! {
-                    let mut __cq_canon=<#provider>::new(&__cq_pool,#store_length)?;
+                    let mut __cq_canon=<#provider>::new(&__cq_pool,#store_length,__cq_auxiliary.canon)?;
                     let __cq_keys=unsafe {__cq_canon.canonicalize(&#output_keys,#store_length,__cq_key_bits)?};
                     // DECODE V: P6 canonical output adapter reconstructs device i64 columns before final host publication.
                     let __cq_result=__cq_output_adapter.borrow_mut().unpack_columns(__cq_keys,&__cq_fields,__cq_dictionary,__cq_statuses)?;
@@ -3443,7 +3566,7 @@ fn translate_observed(
             let canonical_owner = format_ident!("__cq_canonical_{index}");
             let fields = format_ident!("__cq_fields_{index}");
             launches.push(quote! {
-                let mut __cq_canon=<#provider>::new(&__cq_pool,#store_length)?;
+                let mut __cq_canon=<#provider>::new(&__cq_pool,#store_length,__cq_auxiliary.canon)?;
                 let #canonical_owner=unsafe {__cq_canon.canonicalize(&#output_keys,#store_length,__cq_key_bits)?};
                 let #store_length=#canonical_owner.logical_count()?;
                 let #fields=__cq_fields;
@@ -3453,7 +3576,7 @@ fn translate_observed(
         if !final_output {
             launches.push(compiler.rows.publish_provider(
                 analysis,
-                &chains[0].result,
+                dispatch_result,
                 &publication,
                 index,
                 packed_columns.as_deref(),
@@ -3462,7 +3585,7 @@ fn translate_observed(
         }
         compiler.stored.push(Stored {
             name: publication.clone(),
-            result: chains[0].result.clone(),
+            result: dispatch_result.clone(),
             range: virtual_range,
             packed: packed_columns,
         });
@@ -3523,6 +3646,7 @@ fn translate_observed(
                 expansion_counters: false,
                 expansion_stages: 0,
                 strips: Default::default(),
+                parents: Default::default(),
                 share: None,
             };
             let write = row.rewrite(generator.output_write()?)?;
@@ -3568,7 +3692,7 @@ fn translate_observed(
             output = Some(if canonical {
                 quote! {
                     let mut canon = <#provider>::new(
-                        &__cq_pool,__cq_host_output_length)?;
+                        &__cq_pool,__cq_host_output_length,__cq_auxiliary.canon)?;
                     let keys = unsafe { canon.canonicalize(
                         &__cq_host_output_keys,__cq_host_output_length,__cq_key_bits)? };
                     // DECODE V: P6 host-origin canonical output is reuploaded then expanded on device, rather than decoded at host publication.
@@ -3599,11 +3723,22 @@ fn translate_observed(
         quote!(#setup #arena_setup #build #(#launches)* #output),
         &mut used,
     );
+    // A support object may be referenced only by a later support object
+    // (for example the auxiliary geometry by the range builder): include
+    // dependencies from the last object back to the first.
+    let mut included = vec![false; compiler.rows.support.len()];
+    for (index, (name, before, after)) in compiler.rows.support.iter().enumerate().rev() {
+        if used.contains(&name.to_string()) {
+            included[index] = true;
+            identifiers(quote!(#before #after), &mut used);
+        }
+    }
     let support = compiler
         .rows
         .support
         .iter()
-        .filter(|(name, ..)| used.contains(&name.to_string()));
+        .zip(&included)
+        .filter_map(|(support, included)| included.then_some(support));
     let (support_before, support_after): (Vec<_>, Vec<_>) =
         support.map(|(_, before, after)| (before, after)).unzip();
     // Formal rule GPU-Arena-Timing: optional measurements alone add a terminal fence;
@@ -3792,6 +3927,7 @@ mod tests {
             expansion_counters: false,
             expansion_stages: 0,
             strips: Default::default(),
+            parents: Default::default(),
             share: None,
         };
         let write = kernel.output_write().unwrap();
@@ -3806,6 +3942,99 @@ mod tests {
         let write = kernel.output_write().unwrap();
         assert!(DeviceRow::uses(write.clone()).unwrap().is_empty());
         DeviceRow::default().rewrite(write).unwrap();
+    }
+
+    /// A raw-candidate terminal, or with `canon` a canonical one.
+    fn arena_program(canon: bool) -> Program {
+        let canon = canon.then(|| quote!(canon));
+        syn::parse_quote! {
+            physical {
+                relation R(a:i64,b:i64) = (&data);
+                r = let rename R@0 {a -> a,b -> b};
+                driver = pipe rename R@1 {a -> a,b -> c};
+                joined = let canon probe first [a] driver,r;
+                return joined as answer(c,a,b);
+            }
+            structures {
+                providers {
+                    device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns };
+                    packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 };
+                    range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range };
+                }
+                r host scan = @device_columns input { keys 0; columns [i64 => i64,i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+                driver host scan = @device_columns input { keys 0; columns [i64 => i64,i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+                r = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a];
+                joined rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                joined canon = rows;
+            }
+            sequence {
+                index = store rows r;
+                input = store rows driver;
+                output_rows = store #canon map joined flatten lookup r [a] flatten tile 256 input;
+                output count;
+            }
+            graded gpu { index at host; input at host; output_rows at device; }
+        }
+    }
+
+    #[test]
+    fn arena_encoding_is_recorded_for_raw_terminals_only() {
+        use cq_lang_sequence::gpu::publication::{self, ArenaColumn, ArenaRows};
+        let program = arena_program(false);
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let records = &analysis.gpu_publications;
+        let arena = records["output_rows"].arena.clone().unwrap();
+        let i64: syn::Type = syn::parse_quote!(i64);
+        assert_eq!(
+            arena,
+            ArenaRows {
+                columns: ["c", "a", "b"]
+                    .map(|column| ArenaColumn {
+                        column: column.into(),
+                        carrier: i64.clone(),
+                    })
+                    .into()
+            }
+        );
+        let rejected = |mutate: &dyn Fn(&mut BTreeMap<String, publication::PublicationRecord>)| {
+            let mut records = records.clone();
+            mutate(&mut records);
+            publication::check(&program, &analysis, &records).is_err()
+        };
+        assert!(rejected(&|records| records
+            .get_mut("output_rows")
+            .unwrap()
+            .arena = None));
+        assert!(rejected(&|records| {
+            let fields = &mut records
+                .get_mut("output_rows")
+                .unwrap()
+                .arena
+                .as_mut()
+                .unwrap()
+                .columns;
+            fields.swap(0, 1);
+        }));
+        assert!(rejected(&|records| {
+            let fields = &mut records
+                .get_mut("output_rows")
+                .unwrap()
+                .arena
+                .as_mut()
+                .unwrap()
+                .columns;
+            fields[0].carrier = syn::parse_quote!(u32);
+        }));
+        assert!(rejected(&|records| {
+            records.get_mut("index").unwrap().arena = Some(arena.clone());
+        }));
+        let arena_expr: syn::Expr = syn::parse_quote!(arena);
+        translate_observed(&program, &analysis, Some(&arena_expr), false).unwrap();
+        // A canonical terminal publishes no raw candidates into an arena.
+        let program = arena_program(true);
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        assert_eq!(analysis.gpu_publications["output_rows"].arena, None);
+        assert!(translate_observed(&program, &analysis, Some(&arena_expr), false).is_err());
     }
 
     /// Identifiers of generated code; independent of token spacing.
@@ -4817,6 +5046,7 @@ mod tests {
                         expansion_counters: false,
                         expansion_stages: 0,
                         strips: Default::default(),
+                        parents: Default::default(),
                         share: None,
                     };
                     let strip = Strip {

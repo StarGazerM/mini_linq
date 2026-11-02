@@ -99,8 +99,8 @@ fn retained_host_alias_uses_native_copy_cursor_without_rebuilding_or_reprobing()
         [host [a] reads [exact] supports [expand]], [],
         [r native result(s) = exact [x] supports [expand];
          r native result(p) = exact [x] supports [expand];])
-        .map(|(key, value)| (*key, *value))
-        .collect();
+    .map(|(key, value)| (*key, *value))
+    .collect();
     assert_eq!(answers, expected.iter().copied().collect());
     assert_eq!(*visits.borrow(), expected);
     assert_eq!(right.lookups.get(), left.len());

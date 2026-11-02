@@ -339,8 +339,9 @@ ratio is explicit maintenance advice (default four), not a semantic premise;
 it cannot change admission, the multiset, or snapshot publication.
 The device Storage constructor resolves \code{ratio(n)} (omission means four)
 to a printable integer $\rho\ge2$. Every accepted/layout run state receives
-that integer; temporary sort states use the same advice. The runtime checks
-the bound and uses $\rho$, never a hidden constant, in the merge threshold.
+that integer; temporary sort states receive their caller's recorded parameters.
+The runtime checks the ratio bound, positive merge tile and compiled block-width
+contract, then uses $\rho$, never a hidden constant, in the merge threshold.
 \begin{mathpar}
 \Rule{DL-DeviceRatio}{\rho=\mathrm{Storage.device.ratio}\ge2\quad
  \rho\text{ passed to every device run constructor}}

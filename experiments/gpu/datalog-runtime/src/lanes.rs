@@ -34,6 +34,7 @@ use std::{
 pub struct Lane {
     pool: Arc<Pool>,
     arenas: BTreeMap<usize, CandidateArena>,
+    initialize: fn(usize, Arc<Pool>) -> CandidateArena,
 }
 
 impl Lane {
@@ -47,7 +48,7 @@ impl Lane {
         let pool = &self.pool;
         self.arenas
             .entry(relation)
-            .or_insert_with(|| CandidateArena::new(pool.clone()))
+            .or_insert_with(|| (self.initialize)(relation, pool.clone()))
             .hole(hole)
     }
 }
@@ -63,7 +64,7 @@ enum Message {
 
 enum Reply {
     Joined(Vec<(usize, thread::Result<CandidateBatch>)>),
-    Released,
+    Released(std::result::Result<(), String>),
 }
 
 struct Worker {
@@ -82,7 +83,12 @@ pub struct Lanes {
 }
 
 impl Lanes {
-    pub fn new(main: &Arc<Pool>, streams: usize) -> Result<Self> {
+    pub fn new(
+        main: &Arc<Pool>,
+        streams: usize,
+        initialize: fn(usize, Arc<Pool>) -> CandidateArena,
+        release_scratch: fn(&Arc<Pool>),
+    ) -> Result<Self> {
         if streams == 0 {
             return Err("wave lanes need at least one stream".into());
         }
@@ -95,7 +101,16 @@ impl Lanes {
             let (lane_pool, lane_done) = (pool.clone(), done.clone());
             let handle = thread::Builder::new()
                 .name(format!("gpu-datalog-lane-{index}"))
-                .spawn(move || work(lane_pool, lane_done, inbox, outbox))?;
+                .spawn(move || {
+                    work(
+                        lane_pool,
+                        lane_done,
+                        inbox,
+                        outbox,
+                        initialize,
+                        release_scratch,
+                    )
+                })?;
             workers.push(Worker {
                 pool,
                 messages: Some(messages),
@@ -178,9 +193,10 @@ impl Lanes {
                 .map_err(|_| "wave lane worker exited")?;
         }
         for worker in &self.workers {
-            let Ok(Reply::Released) = worker.replies.recv() else {
+            let Ok(Reply::Released(result)) = worker.replies.recv() else {
                 return Err("wave lane worker exited before releasing".into());
             };
+            result.map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
         }
         Ok(())
     }
@@ -202,6 +218,8 @@ fn work(
     done: Arc<CudaEvent>,
     inbox: mpsc::Receiver<Message>,
     outbox: mpsc::Sender<Reply>,
+    initialize: fn(usize, Arc<Pool>) -> CandidateArena,
+    release_scratch: fn(&Arc<Pool>),
 ) {
     if pool.context().bind_to_thread().is_err() {
         return;
@@ -209,6 +227,7 @@ fn work(
     let mut lane = Lane {
         pool,
         arenas: BTreeMap::new(),
+        initialize,
     };
     let mut results = Vec::new();
     while let Ok(message) = inbox.recv() {
@@ -232,7 +251,13 @@ fn work(
             }
             Message::Release => {
                 lane.arenas.clear();
-                if outbox.send(Reply::Released).is_err() {
+                release_scratch(&lane.pool);
+                let released = lane
+                    .pool
+                    .release_unused()
+                    .map(|_| ())
+                    .map_err(|error| error.to_string());
+                if outbox.send(Reply::Released(released)).is_err() {
                     return;
                 }
             }

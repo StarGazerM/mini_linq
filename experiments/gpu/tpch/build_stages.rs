@@ -31,11 +31,18 @@ pub fn compile(
         let mut dependencies = Vec::new();
         for input in stage.program.inputs() {
             let name = input.name.to_string();
-            let (_, producer_name) = stage.inputs.iter().find(|(name, _)| *name == input.name)
+            let (_, producer_name) = stage
+                .inputs
+                .iter()
+                .find(|(name, _)| *name == input.name)
                 .ok_or_else(|| reject("checked stage input binding missing".into()))?;
             if let Some(producer) = program.publication_index(producer_name).map_err(&reject)? {
-                let columns = input.columns.iter().zip(&output_types[producer])
-                    .map(|(column, ty)| (column.name.clone(), ty.clone())).collect();
+                let columns = input
+                    .columns
+                    .iter()
+                    .zip(&output_types[producer])
+                    .map(|(column, ty)| (column.name.clone(), ty.clone()))
+                    .collect();
                 types.insert(name.clone(), columns);
                 publications.insert(name, publication_facts[producer].clone());
                 dependencies.push(format_ident!("result_{producer}"));
@@ -44,23 +51,37 @@ pub fn compile(
                 if !matches!(source.producer, stages::Producer::Table(_)) {
                     let columns = program.input_columns(source).map_err(&reject)?;
                     let width = columns.len();
-                    types.insert(name.clone(), input.columns.iter().zip(columns)
-                        .map(|(column, (_, ty))| (column.name.clone(), ty)).collect());
-                    publications.insert(name, crate::Publication {
-                        placement: advice::Placement::Host,
-                        nullable: vec![false; width],
-                        domains: program.input_origins(source).map_err(&reject)?,
-                        grouped: None,
-                    });
+                    types.insert(
+                        name.clone(),
+                        input
+                            .columns
+                            .iter()
+                            .zip(columns)
+                            .map(|(column, (_, ty))| (column.name.clone(), ty))
+                            .collect(),
+                    );
+                    publications.insert(
+                        name,
+                        crate::Publication {
+                            placement: advice::Placement::Host,
+                            nullable: vec![false; width],
+                            domains: program.input_origins(source).map_err(&reject)?,
+                            grouped: None,
+                        },
+                    );
                     dependencies.push(stages::Program::prepared_name(source));
                 }
             }
         }
         let mut kernel = program.kernel(index, &types).map_err(&reject)?;
-        kernel.published_origins = publications.iter()
+        kernel.published_origins = publications
+            .iter()
             .map(|(name, publication)| (name.clone(), publication.domains.clone()))
             .collect();
-        kernel.evidence.facts.extend(advice::Pipeline::staged_keys(query, index));
+        kernel
+            .evidence
+            .facts
+            .extend(advice::Pipeline::staged_keys(query, index));
         let mut pipeline = if let Some(pipeline) = override_pipeline {
             pipeline.clone()
         } else if mode == "automatic" {
@@ -71,12 +92,7 @@ pub fn compile(
         if override_pipeline.is_none() {
             pipeline.publication = advice::Placement::Automatic;
         }
-        let (code, mut artifact) = compile_stage(
-            &kernel,
-            manifest,
-            &pipeline,
-            &publications,
-        )?;
+        let (code, mut artifact) = compile_stage(&kernel, manifest, &pipeline, &publications)?;
         artifact["stage"] = json!(index);
         artifact["cpu_query"] = json!(kernel.cpu_query().to_string());
         artifact["dependencies"] = json!(
@@ -95,8 +111,10 @@ pub fn compile(
                 .collect::<syn::Result<_>>()
                 .map_err(|error| reject(Box::new(error)))?,
         );
-        publication_facts.push(serde_json::from_value(artifact["publication_facts"].clone())
-            .map_err(|error| reject(Box::new(error)))?);
+        publication_facts.push(
+            serde_json::from_value(artifact["publication_facts"].clone())
+                .map_err(|error| reject(Box::new(error)))?,
+        );
         artifacts.push(artifact);
         let module = format_ident!("stage_{index}");
         let data = format_ident!("data_{index}");
@@ -152,10 +170,17 @@ pub fn compile(
         });
     }
     let preprocessing = program.preprocessing_tokens().map_err(&reject)?;
-    let terminal_stages: Vec<_> = program.terminal.iter()
-        .map(|terminal| program.stage_index(&terminal.stage)).collect::<crate::manifest::Result<_>>()
+    let terminal_stages: Vec<_> = program
+        .terminal
+        .iter()
+        .map(|terminal| program.stage_index(&terminal.stage))
+        .collect::<crate::manifest::Result<_>>()
         .map_err(&reject)?;
-    let terminal_direct: Vec<_> = program.terminal.iter().map(|terminal| terminal.direct).collect();
+    let terminal_direct: Vec<_> = program
+        .terminal
+        .iter()
+        .map(|terminal| terminal.direct)
+        .collect();
     let artifact = json!({"stages": artifacts, "terminal_stages": terminal_stages,
         "stage_source": program.to_token_stream().to_string(), "terminal_direct": terminal_direct,
         "timing": "sum of stage phase timings; host-graded stages use elapsed host execution"});
@@ -187,30 +212,57 @@ pub fn compile(
 }
 
 fn check_terminal_domains(
-    program: &stages::Program, terminal: &stages::Terminal, publication: &crate::Publication,
+    program: &stages::Program,
+    terminal: &stages::Terminal,
+    publication: &crate::Publication,
 ) -> crate::manifest::Result<()> {
     for (slot, projection) in terminal.projection.iter().enumerate() {
-        let stages::Projection::Column(source) = projection else { continue; };
-        let declared = terminal.dictionaries.iter().find(|(output, _)| *output == slot)
-            .map(|(_, name)| program.domain(name).map(|domain| (domain.table.to_string(), domain.column.to_string())))
+        let stages::Projection::Column(source) = projection else {
+            continue;
+        };
+        let declared = terminal
+            .dictionaries
+            .iter()
+            .find(|(output, _)| *output == slot)
+            .map(|(_, name)| {
+                program
+                    .domain(name)
+                    .map(|domain| (domain.table.to_string(), domain.column.to_string()))
+            })
             .transpose()?;
-        if publication.domains.get(*source).ok_or("terminal publication width mismatch")? != &declared {
-            return Err(format!("terminal {} column {slot} dictionary publication differs from its recorded domain", terminal.stage).into());
+        if publication
+            .domains
+            .get(*source)
+            .ok_or("terminal publication width mismatch")?
+            != &declared
+        {
+            return Err(format!(
+                "terminal {} column {slot} dictionary publication differs from its recorded domain",
+                terminal.stage
+            )
+            .into());
         }
     }
     Ok(())
 }
 
 fn terminal_projection(terminal: &stages::Terminal) -> TokenStream {
-    if terminal.direct { return quote!(rows); }
+    if terminal.direct {
+        return quote!(rows);
+    }
     let mut captures = Vec::new();
-    let outputs = terminal.projection.iter().enumerate().map(|(index, projection)| match projection {
-        stages::Projection::Column(slot) => quote!(::std::mem::take(&mut row[#slot])),
-        stages::Projection::Value(expression) => {
-            let name = format_ident!("__cq_terminal_value_{index}");
-            captures.push(quote!(let #name = ({ #expression }).to_string();));
-            quote!(#name.clone())
-        }
-    }).collect::<Vec<_>>();
+    let outputs = terminal
+        .projection
+        .iter()
+        .enumerate()
+        .map(|(index, projection)| match projection {
+            stages::Projection::Column(slot) => quote!(::std::mem::take(&mut row[#slot])),
+            stages::Projection::Value(expression) => {
+                let name = format_ident!("__cq_terminal_value_{index}");
+                captures.push(quote!(let #name = ({ #expression }).to_string();));
+                quote!(#name.clone())
+            }
+        })
+        .collect::<Vec<_>>();
     quote!({ #(#captures)* rows.into_iter().map(move |mut row| vec![#(#outputs),*]) })
 }

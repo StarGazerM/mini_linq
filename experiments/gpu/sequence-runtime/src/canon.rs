@@ -2,9 +2,9 @@
 //! lanes; `WideCanon` stably radix-sorts arbitrary-width rows lane by lane.
 //! Recorded codec bounds determine the lane count before dispatch.
 
-use crate::Result;
+use crate::{Auxiliary, Geometry, Result};
 use cq_gpu_runtime::{Bounds, Buffer, DeviceColumns, Dictionary, EncodedColumn, Pool, RowCodec};
-use cuda_core::{CudaContext, DeviceBuffer, DeviceCopy, LaunchConfig1D};
+use cuda_core::{CudaContext, DeviceBuffer, DeviceCopy};
 use gpu_device_columns::{ColumnView, OutputCount, Table};
 use rccl_cub::{DeviceRadixSortBufferWorkspace, DoubleBuffer};
 use rccl_thrust::prelude::*;
@@ -153,13 +153,15 @@ impl PackedField {
 /// Sort/count and exact-live-size key scratch are cached per thread across
 /// providers sharing the same pool, until [`crate::release_cached_scratch`].
 /// Sort controls reuse a larger allocation when it fits; results own their
-/// allocations and survive provider reuse or cache release.
+/// allocations and survive provider reuse or cache release. The recorded
+/// `canon` family geometry travels with each result to its unpack launch.
 pub struct PackedCanon<'pool> {
     pool: &'pool Arc<Pool>,
     cub: rccl_cub::cuda::Program<'pool>,
     thrust: rccl_thrust::cuda::Program<'pool>,
     scratch: Option<CanonScratch>,
     capacity: usize,
+    geometry: Geometry,
 }
 
 impl<'pool> PackedCanon<'pool> {
@@ -181,7 +183,8 @@ impl<'pool> PackedCanon<'pool> {
         }
         Self::key_lanes(bits)
     }
-    pub fn new(pool: &'pool Arc<Pool>, capacity: usize) -> Result<Self> {
+    pub fn new(pool: &'pool Arc<Pool>, capacity: usize, geometry: Geometry) -> Result<Self> {
+        geometry.check("canon", Auxiliary::SUPPORTED.canon)?;
         if capacity > u32::MAX as usize {
             return Err("packed canon capacity exceeds u32::MAX".into());
         }
@@ -223,6 +226,7 @@ impl<'pool> PackedCanon<'pool> {
             thrust,
             scratch: Some(scratch),
             capacity,
+            geometry,
         })
     }
 
@@ -369,6 +373,7 @@ impl<'pool> PackedCanon<'pool> {
             keys: Arc::new(keys),
             metadata,
             lanes,
+            geometry: self.geometry,
         })
     }
 }
@@ -399,6 +404,7 @@ impl Drop for PackedCanon<'_> {
 
 /// Arbitrary-width instance of the canon law, using stable least-significant
 /// lane radix passes over row indices and full-row adjacent equality.
+/// Lane gathers launch with the recorded `canon` family geometry.
 pub struct WideCanon<'pool> {
     inner: PackedCanon<'pool>,
 }
@@ -417,9 +423,9 @@ impl<'pool> WideCanon<'pool> {
         Self::key_lanes(bits)
     }
 
-    pub fn new(pool: &'pool Arc<Pool>, capacity: usize) -> Result<Self> {
+    pub fn new(pool: &'pool Arc<Pool>, capacity: usize, geometry: Geometry) -> Result<Self> {
         Ok(Self {
-            inner: PackedCanon::new(pool, capacity)?,
+            inner: PackedCanon::new(pool, capacity, geometry)?,
         })
     }
 
@@ -474,15 +480,11 @@ impl<'pool> WideCanon<'pool> {
                 .expect("alternate row scratch");
             let mut buffers = DoubleBuffer::paired((first, indices), (second, alternate))
                 .ok_or("wide canon radix buffer extents differ")?;
+            let geometry = self.inner.geometry;
             let module = module(pool)?;
-            let shape = module.prepare_gather_lane(LaunchConfig1D::new(1, 256, 0))?;
-            let grid = cq_gpu_runtime::launch_grid_for_kernel(
-                shape.function(),
-                rows.div_ceil(256),
-                256,
-                0,
-            )?;
-            let prepared = module.prepare_gather_lane(LaunchConfig1D::new(grid, 256, 0))?;
+            let shape = module.prepare_gather_lane(geometry.config(1))?;
+            let grid = geometry.grid(shape.function(), rows)?;
+            let prepared = module.prepare_gather_lane(geometry.config(grid))?;
             for lane in 0..lanes {
                 let (values, order) = buffers.current_mut();
                 module.gather_lane(
@@ -532,16 +534,19 @@ impl<'pool> WideCanon<'pool> {
             keys,
             metadata,
             lanes,
+            geometry: self.inner.geometry,
         })
     }
 }
 
 /// Owning, ascending distinct packed keys in row-major, low-lane-first storage.
 /// Only the first `*count_ptr()` rows are live; capacity is an allocation bound.
+/// Retains its provider's recorded `canon` geometry for unpacking.
 pub struct CanonicalKeys {
     keys: Arc<Buffer<u64>>,
     metadata: Arc<Buffer<OutputCount>>,
     lanes: usize,
+    geometry: Geometry,
 }
 
 impl CanonicalKeys {
@@ -579,6 +584,7 @@ impl CanonicalKeys {
     /// Field values must use the supplied dictionary's encoding for any
     /// dictionary-valued columns. `statuses` must include all consumed ancestor
     /// failures; they are preserved for DeviceColumns' normal host validation.
+    /// Unpacking launches with the producing provider's `canon` geometry.
     // DECODE V: packed answers expand into resident columns usable by chained queries; P6 retain packed fields until an allowed read.
     pub fn into_columns<'data, Row: RowCodec<'data>>(
         self,
@@ -586,7 +592,7 @@ impl CanonicalKeys {
         dictionary: Arc<Dictionary<'data>>,
         statuses: Vec<Arc<Buffer<OutputCount>>>,
     ) -> Result<DeviceColumns<'data, Row>> {
-        PackedColumnsAdapter::new(self.keys.pool().clone(), fields.len())?
+        PackedColumnsAdapter::new(self.keys.pool().clone(), fields.len(), self.geometry)?
             // DECODE V: into_columns invokes device expansion before host publication; P6 preserve the packed view.
             .unpack_columns(self, fields, dictionary, statuses)
     }
@@ -596,7 +602,7 @@ impl CanonicalKeys {
 /// Row order and multiplicity are preserved; this function makes no canonical
 /// or distinctness claim. The initialized prefix must be ready on the keys'
 /// pool stream. Field values and ancestor statuses follow the same contracts
-/// as `CanonicalKeys::into_columns`.
+/// as `CanonicalKeys::into_columns`, including the recorded `canon` geometry.
 // DECODE V: packed_rows wrapper eagerly expands into device columns before consumers; P6 retain packed resident fields.
 pub fn packed_columns<'data, Row: RowCodec<'data>>(
     keys: Buffer<u64>,
@@ -604,8 +610,9 @@ pub fn packed_columns<'data, Row: RowCodec<'data>>(
     fields: &[PackedField],
     dictionary: Arc<Dictionary<'data>>,
     statuses: Vec<Arc<Buffer<OutputCount>>>,
+    geometry: Geometry,
 ) -> Result<DeviceColumns<'data, Row>> {
-    PackedColumnsAdapter::new(keys.pool().clone(), fields.len())?
+    PackedColumnsAdapter::new(keys.pool().clone(), fields.len(), geometry)?
         // DECODE V: packed_rows wrapper dispatches device expansion before publication; P6 defer logical inversion.
         .packed_columns(keys, rows, fields, dictionary, statuses)
 }
@@ -616,16 +623,19 @@ pub fn packed_columns<'data, Row: RowCodec<'data>>(
 /// Uploads reuse those buffers only while their Arcs are unique; published
 /// outputs retain immutable storage even across later calls or adapter drop.
 /// Generated programs can retain this adapter outside their timed dispatch.
+/// Unpacking launches with the recorded `canon` family geometry.
 pub struct PackedColumnsAdapter {
     pool: Arc<Pool>,
     module: Rc<canon_kernels::LoadedModule>,
     metadata: Arc<Buffer<OutputCount>>,
     views: Arc<Buffer<ColumnView>>,
     host_views: Vec<ColumnView>,
+    geometry: Geometry,
 }
 
 impl PackedColumnsAdapter {
-    pub fn new(pool: Arc<Pool>, width: usize) -> Result<Self> {
+    pub fn new(pool: Arc<Pool>, width: usize, geometry: Geometry) -> Result<Self> {
+        geometry.check("canon", Auxiliary::SUPPORTED.canon)?;
         let module = module(&pool)?;
         // These private buffers are initialized by upload before publication.
         let metadata = Arc::new(unsafe { Buffer::uninitialized(pool.clone(), 1)? });
@@ -636,6 +646,7 @@ impl PackedColumnsAdapter {
             metadata,
             views,
             host_views: Vec::with_capacity(width),
+            geometry,
         })
     }
 
@@ -739,18 +750,11 @@ impl PackedColumnsAdapter {
         }
         let mut columns = Vec::with_capacity(fields.len());
         let prepared = if capacity != 0 && !fields.is_empty() {
-            let shape = self
-                .module
-                .prepare_unpack_field(LaunchConfig1D::new(1, 256, 0))?;
-            let grid = cq_gpu_runtime::launch_grid_for_kernel(
-                shape.function(),
-                capacity.div_ceil(256),
-                256,
-                0,
-            )?;
+            let shape = self.module.prepare_unpack_field(self.geometry.config(1))?;
+            let grid = self.geometry.grid(shape.function(), capacity)?;
             Some(
                 self.module
-                    .prepare_unpack_field(LaunchConfig1D::new(grid, 256, 0))?,
+                    .prepare_unpack_field(self.geometry.config(grid))?,
             )
         } else {
             None

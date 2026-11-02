@@ -1,7 +1,6 @@
 //! Device-wide checked exclusive offsets for resident range lengths.
-use crate::{release, temporary, Buffer, MemoryResource, Pool, Result};
-use cq_gpu_runtime::launch_grid_for_kernel;
-use cuda_core::{LaunchConfig1D, PreparedLaunch};
+use crate::{release, temporary, Auxiliary, Buffer, Geometry, MemoryResource, Pool, Result};
+use cuda_core::PreparedLaunch;
 use std::{cell::RefCell, sync::Arc};
 
 thread_local! {
@@ -20,7 +19,11 @@ struct ScanCache {
     workspace: Option<rccl_cub::DeviceScanWorkspace<'static, &'static MemoryResource, u32>>,
     cub: rccl_cub::cuda::Program<'static>,
     module: offset_kernels::LoadedModule,
-    check: Option<(usize, PreparedLaunch<offset_kernels::__check_CudaKernel>)>,
+    check: Option<(
+        usize,
+        Geometry,
+        PreparedLaunch<offset_kernels::__check_CudaKernel>,
+    )>,
     pool: Arc<Pool>,
 }
 
@@ -44,7 +47,7 @@ impl ScanCache {
         })
     }
 
-    fn prepare(&mut self, count: usize) -> Result<()> {
+    fn prepare(&mut self, count: usize, geometry: Geometry) -> Result<()> {
         let entries = count + 1; // The public entrypoint checked this extent.
         let required = rccl_cub::device_scan_workspace_counts(entries)?.temporary_items;
         if self
@@ -63,13 +66,17 @@ impl ScanCache {
                 entries,
             )?);
         }
-        if self.check.as_ref().is_none_or(|(rows, _)| *rows != count) {
-            let prepared = self.module.prepare_check(LaunchConfig1D::new(1, 256, 0))?;
-            let blocks = launch_grid_for_kernel(prepared.function(), count.div_ceil(256), 256, 0)?;
+        if self
+            .check
+            .as_ref()
+            .is_none_or(|(rows, shape, _)| *rows != count || *shape != geometry)
+        {
+            let prepared = self.module.prepare_check(geometry.config(1))?;
+            let blocks = geometry.grid(prepared.function(), count)?;
             self.check = Some((
                 count,
-                self.module
-                    .prepare_check(LaunchConfig1D::new(blocks, 256, 0))?,
+                geometry,
+                self.module.prepare_check(geometry.config(blocks))?,
             ));
         }
         Ok(())
@@ -94,6 +101,7 @@ impl ScanCache {
 /// `Buffer` may own a pooled suballocation. Reusing the runtime's native scratch
 /// and copying the live prefix in and out avoids an invalid ownership adapter.
 /// No range lengths or scanned offsets are downloaded to the host.
+/// The check launches with the recorded `offsets` family `geometry`.
 ///
 /// The current thread retains the named module, RCCL program, growing pooled
 /// CUB workspace and last live-count check launch for the most recent pool.
@@ -104,7 +112,9 @@ pub fn scan(
     offsets: &Buffer<u32>,
     count: usize,
     meta: &Buffer<u32>,
+    geometry: Geometry,
 ) -> Result<usize> {
+    geometry.check("offsets", Auxiliary::SUPPORTED.offsets)?;
     let entries = count.checked_add(1).ok_or("range offset extent overflow")?;
     if offsets.len() < entries
         || meta.len() < 4
@@ -128,7 +138,7 @@ pub fn scan(
             *cache = Some(ScanCache::new(pool)?);
         }
         let cached = cache.as_mut().unwrap();
-        cached.prepare(count)?;
+        cached.prepare(count, geometry)?;
         scan_cached(cached, offsets, count, meta, bytes)
     })
 }
@@ -179,7 +189,7 @@ fn scan_cached(
     release(stream, scratch)?;
     cached.module.check(
         stream,
-        &cached.check.as_ref().unwrap().1,
+        &cached.check.as_ref().unwrap().2,
         offsets.ptr(),
         count,
         meta.ptr(),

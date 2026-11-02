@@ -206,81 +206,81 @@ impl<K: Eq + Hash + Send + Sync, S: BuildHasher + Clone + Sync> ShardedLayout<K,
             .chain(chunks.into_iter().map(|chunk| (true, chunk)))
             .collect();
         let shards = self.shards.len();
-        let admitted: Vec<Vec<T>> = if count < threshold
-            || shards == 1
-            || rayon::current_num_threads() == 1
-        {
-            let mut admitted: Vec<Vec<T>> = (0..shards).map(|_| Vec::new()).collect();
-            for (checked, chunk) in parts {
-                for row in chunk {
-                    let hash = self.hasher.hash_one(key(&row));
-                    let shard = self.shard(hash);
-                    let fresh = if checked {
-                        Self::admit_hashed(
-                            &self.shards[shard],
-                            &mut new.shards[shard],
-                            &self.hasher,
-                            hash,
-                            key(&row),
-                        )
-                    } else {
-                        Self::insert_new(&mut new.shards[shard], &self.hasher, hash, key(&row))
-                    };
-                    if fresh {
-                        admitted[shard].push(row);
-                    }
-                }
-            }
-            admitted
-        } else {
-            // Hash and route every chunk in parallel; each row is moved once.
-            let routed: Vec<(bool, Vec<Vec<(u64, T)>>)> = parts
-                .into_par_iter()
-                .map(|(checked, chunk)| {
-                    let mut buckets: Vec<Vec<(u64, T)>> = (0..shards).map(|_| Vec::new()).collect();
+        let admitted: Vec<Vec<T>> =
+            if count < threshold || shards == 1 || rayon::current_num_threads() == 1 {
+                let mut admitted: Vec<Vec<T>> = (0..shards).map(|_| Vec::new()).collect();
+                for (checked, chunk) in parts {
                     for row in chunk {
                         let hash = self.hasher.hash_one(key(&row));
-                        buckets[self.shard(hash)].push((hash, row));
+                        let shard = self.shard(hash);
+                        let fresh = if checked {
+                            Self::admit_hashed(
+                                &self.shards[shard],
+                                &mut new.shards[shard],
+                                &self.hasher,
+                                hash,
+                                key(&row),
+                            )
+                        } else {
+                            Self::insert_new(&mut new.shards[shard], &self.hasher, hash, key(&row))
+                        };
+                        if fresh {
+                            admitted[shard].push(row);
+                        }
                     }
-                    (checked, buckets)
-                })
-                .collect();
-            let mut by_shard: Vec<Vec<(bool, Vec<(u64, T)>)>> = (0..shards)
-                .map(|_| Vec::with_capacity(routed.len()))
-                .collect();
-            for (checked, chunk) in routed {
-                for (shard, bucket) in by_shard.iter_mut().zip(chunk) {
-                    shard.push((checked, bucket));
                 }
-            }
-            let hasher = &self.hasher;
-            new.shards
-                .par_iter_mut()
-                .zip(self.shards.par_iter())
-                .zip(by_shard.into_par_iter())
-                .map(|((fresh, committed), mut buckets)| {
-                    // Subtract the committed shard first so NEW is sized once
-                    // for at most the survivors.
-                    for (checked, bucket) in &mut buckets {
-                        if *checked {
-                            bucket.retain(|(hash, row)| {
-                                !Self::committed(committed, *hash, &key(row))
-                            });
+                admitted
+            } else {
+                // Hash and route every chunk in parallel; each row is moved once.
+                let routed: Vec<(bool, Vec<Vec<(u64, T)>>)> = parts
+                    .into_par_iter()
+                    .map(|(checked, chunk)| {
+                        let mut buckets: Vec<Vec<(u64, T)>> =
+                            (0..shards).map(|_| Vec::new()).collect();
+                        for row in chunk {
+                            let hash = self.hasher.hash_one(key(&row));
+                            buckets[self.shard(hash)].push((hash, row));
                         }
+                        (checked, buckets)
+                    })
+                    .collect();
+                let mut by_shard: Vec<Vec<(bool, Vec<(u64, T)>)>> = (0..shards)
+                    .map(|_| Vec::with_capacity(routed.len()))
+                    .collect();
+                for (checked, chunk) in routed {
+                    for (shard, bucket) in by_shard.iter_mut().zip(chunk) {
+                        shard.push((checked, bucket));
                     }
-                    fresh.reserve(buckets.iter().map(|(_, bucket)| bucket.len()).sum(), |(k, _)| {
-                        hasher.hash_one(k)
-                    });
-                    let mut admitted = Vec::new();
-                    for (hash, row) in buckets.into_iter().flat_map(|(_, bucket)| bucket) {
-                        if Self::insert_new(fresh, hasher, hash, key(&row)) {
-                            admitted.push(row);
+                }
+                let hasher = &self.hasher;
+                new.shards
+                    .par_iter_mut()
+                    .zip(self.shards.par_iter())
+                    .zip(by_shard.into_par_iter())
+                    .map(|((fresh, committed), mut buckets)| {
+                        // Subtract the committed shard first so NEW is sized once
+                        // for at most the survivors.
+                        for (checked, bucket) in &mut buckets {
+                            if *checked {
+                                bucket.retain(|(hash, row)| {
+                                    !Self::committed(committed, *hash, &key(row))
+                                });
+                            }
                         }
-                    }
-                    admitted
-                })
-                .collect()
-        };
+                        fresh.reserve(
+                            buckets.iter().map(|(_, bucket)| bucket.len()).sum(),
+                            |(k, _)| hasher.hash_one(k),
+                        );
+                        let mut admitted = Vec::new();
+                        for (hash, row) in buckets.into_iter().flat_map(|(_, bucket)| bucket) {
+                            if Self::insert_new(fresh, hasher, hash, key(&row)) {
+                                admitted.push(row);
+                            }
+                        }
+                        admitted
+                    })
+                    .collect()
+            };
         let mut rows = Vec::with_capacity(admitted.iter().map(Vec::len).sum());
         for shard in admitted {
             rows.extend(shard);

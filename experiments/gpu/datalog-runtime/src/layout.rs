@@ -179,7 +179,13 @@ struct LayoutStorage {
     // Descriptors borrow these immutable runs, never the caller's vector.
     _owner: Box<dyn Any + Send + Sync>,
     download: fn(&dyn Any, &Packing, usize) -> Result<Vec<Vec<i128>>>,
-    permute: fn(&LayoutStorage, &Arc<Pool>, &[usize]) -> Result<Arc<LayoutStorage>>,
+    permute: fn(
+        &LayoutStorage,
+        &Arc<Pool>,
+        &[usize],
+        crate::RunParams,
+        u32,
+    ) -> Result<Arc<LayoutStorage>>,
 }
 
 /// Whether two descriptor lists denote the same rows: equal lengths, and equal
@@ -295,6 +301,8 @@ impl LayoutStorage {
             storage: &LayoutStorage,
             pool: &Arc<Pool>,
             order: &[usize],
+            params: crate::RunParams,
+            permutation_threads: u32,
         ) -> Result<Arc<LayoutStorage>> {
             let packing = storage.packing.permute(order)?;
             let pool = pool.clone();
@@ -302,13 +310,16 @@ impl LayoutStorage {
                 ._owner
                 .downcast_ref::<Vec<Run<W>>>()
                 .expect("layout permutation matches its retained run word type");
-            let sorter = crate::DeviceRuns::<W>::new(pool.clone(), 4)?;
+            let sorter = crate::DeviceRuns::<W>::new(pool.clone(), params)?;
             let mut runs = Vec::with_capacity(source.len());
             for run in source {
-                let values =
-                    storage
-                        .packing
-                        .permute_device_on(&pool, run.buffer(), run.len(), order)?;
+                let values = storage.packing.permute_device_on(
+                    &pool,
+                    run.buffer(),
+                    run.len(),
+                    order,
+                    permutation_threads,
+                )?;
                 // SAFETY: a column permutation is injective, and each retained
                 // immutable Run already contains pairwise distinct rows.
                 runs.push(unsafe { sorter.sort_known_unique(&values, run.len())? });
@@ -469,9 +480,24 @@ impl<K: ScalarTuple, V: ScalarTuple> DeviceLayout<K, V> {
     /// Materialize a sorted lookup provider without changing the source runs,
     /// on `pool`'s stream (the executing hole's pool, which must share this
     /// layout's memory). `order[destination]` is the source column there.
-    pub fn permuted_provider(&self, pool: &Arc<Pool>, order: &[usize]) -> Result<PackedProvider> {
+    pub fn permuted_provider(
+        &self,
+        pool: &Arc<Pool>,
+        order: &[usize],
+        params: crate::RunParams,
+        permutation_threads: u32,
+    ) -> Result<PackedProvider> {
+        if permutation_threads != 256 {
+            return Err("permutation kernel requires exactly 256 threads per block".into());
+        }
         Ok(PackedProvider {
-            storage: (self.storage.permute)(&self.storage, pool, order)?,
+            storage: (self.storage.permute)(
+                &self.storage,
+                pool,
+                order,
+                params,
+                permutation_threads,
+            )?,
         })
     }
     /// Check the emitter's fixed physical column order without device readback.

@@ -1,4 +1,5 @@
 path	marker	class	reason
+experiments/gpu/sequence-runtime/tests/providers.rs	// DECODE P: diagnostic scalar-bounded upload publishes logical host values for exact assertions.	P	diagnostic scalar-bounded upload publishes logical host values for exact assertions.
 experiments/gpu/compress/src/lib.rs	// DECODE ?: source-key ordinal inversion serves answer decoding and generic DomainMap callers; require caller read evidence.	?	source-key ordinal inversion serves answer decoding and generic DomainMap callers; require caller read evidence.
 experiments/gpu/datalog-runtime/src/layout.rs	// DECODE ?: Scalar inverse lacks a caller-level opaque-read/publication requirement.	?	Scalar inverse lacks a caller-level opaque-read/publication requirement.
 experiments/gpu/datalog-runtime/src/layout.rs	// DECODE ?: numeric Scalar inverse has no local logical-consumer evidence.	?	numeric Scalar inverse has no local logical-consumer evidence.

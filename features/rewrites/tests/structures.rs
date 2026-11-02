@@ -405,7 +405,11 @@ fn selectors_are_by_recorded_reads_and_levels_not_old_type_spelling() {
     let original = source();
     let result = replacement(quote!(Replacement<'_, _, _>));
     assert_eq!(
-        retype(&original, quote!(#result r#r => @replacement as Replacement<'_, _, _>)).unwrap(),
+        retype(
+            &original,
+            quote!(#result r#r => @replacement as Replacement<'_, _, _>)
+        )
+        .unwrap(),
         fixture(include_str!("fixtures/retype_result.structures"))
     );
     let alias = custom("alias", quote!(Alias<'_, _, _>), "typed");

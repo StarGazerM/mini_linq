@@ -412,8 +412,9 @@ impl Packing {
         input: &Buffer<W>,
         rows: usize,
         order: &[usize],
+        block_threads: u32,
     ) -> Result<Buffer<W>> {
-        self.permute_device_on(input.pool(), input, rows, order)
+        self.permute_device_on(input.pool(), input, rows, order, block_threads)
     }
 
     /// [`Self::permute_device`] on `pool`'s stream, which must share the
@@ -424,7 +425,11 @@ impl Packing {
         input: &Buffer<W>,
         rows: usize,
         order: &[usize],
+        block_threads: u32,
     ) -> Result<Buffer<W>> {
+        if block_threads != 256 {
+            return Err("permutation kernel requires exactly 256 threads per block".into());
+        }
         self.check_word::<W>()?;
         self.check_order(order)?;
         if rows > input.len() {
@@ -448,10 +453,14 @@ impl Packing {
         }
         let descriptors = Buffer::from_host_async(pool.clone(), &descriptors[..order.len() * 3])?;
         let module = module(pool)?;
-        let initial = module.prepare_permute::<W>(LaunchConfig1D::new(1, 256, 0))?;
-        let grid =
-            cq_gpu_runtime::launch_grid_for_kernel(initial.function(), rows.div_ceil(256), 256, 0)?;
-        let launch = LaunchConfig1D::new(grid, 256, 0);
+        let initial = module.prepare_permute::<W>(LaunchConfig1D::new(1, block_threads, 0))?;
+        let grid = cq_gpu_runtime::launch_grid_for_kernel(
+            initial.function(),
+            rows.div_ceil(block_threads as usize),
+            block_threads,
+            0,
+        )?;
+        let launch = LaunchConfig1D::new(grid, block_threads, 0);
         module.permute::<W>(
             pool.stream(),
             &module.prepare_permute::<W>(launch)?,

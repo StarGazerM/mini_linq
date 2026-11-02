@@ -1,5 +1,6 @@
 //! Caller-owned candidate publication for checked GPU Sequence programs.
 
+use cq_lang_sequence::gpu::publication::ArenaRows;
 use cq_lang_sequence::{Analysis, Program};
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -9,7 +10,7 @@ use quote::quote;
 /// The arena expression is evaluated once and mutably borrowed. Intermediate
 /// publications retain their recorded protocols; terminal canon, folds, groups,
 /// and host-only publications require a separate supported publication boundary.
-// Formal rule GPU-Arena: Publish fixed declared head-column encodings into a retained caller-owned lease.
+// Formal rule GPU-Arena: Publish the recorded raw-candidate arena encoding into a retained caller-owned lease.
 pub fn translate_arena(
     program: &Program,
     analysis: &Analysis,
@@ -19,15 +20,36 @@ pub fn translate_arena(
 }
 
 pub(crate) struct Packing {
+    fields: Vec<String>,
     columns: Vec<TokenStream>,
     pub bits: TokenStream,
 }
 
 impl Packing {
-    pub fn new(types: Vec<syn::Type>) -> syn::Result<Self> {
-        let columns: Vec<_> = types.iter().map(crate::runs::scalar).collect();
+    /// Print the recorded GPU-Arena encoding; each field's width and
+    /// signedness is its recorded carrier's `Scalar::COLUMN`.
+    pub fn new(record: &ArenaRows) -> Self {
+        let fields = record
+            .columns
+            .iter()
+            .map(|field| field.column.clone())
+            .collect();
+        let columns: Vec<_> = record
+            .columns
+            .iter()
+            .map(|field| crate::runs::scalar(&field.carrier))
+            .collect();
         let bits = quote!((0u32 #(+ #columns.bits())*));
-        Ok(Self { columns, bits })
+        Self {
+            fields,
+            columns,
+            bits,
+        }
+    }
+
+    /// The answer columns the packing writes, in recorded field order.
+    pub fn fields(&self) -> &[String] {
+        &self.fields
     }
 
     /// Bind the arena and make its pool the execution pool: a hole runs on its

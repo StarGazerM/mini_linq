@@ -306,15 +306,22 @@ fn device_state(provider: Type, input: InputSchema, ratio: usize) -> syn::Result
         .collect::<Vec<_>>();
     let word = word_type(types.iter().copied())?;
     let state: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>);
+    let (merge_tile_rows, block_threads, permutation_threads) = (32usize, 256u32, 256u32);
     Ok(DeviceState {
         token: Ident::new(DEVICE_LAYOUT, proc_macro2::Span::call_site()),
         input,
         packing: syn::parse_quote!(<#provider>::derive_packing()?),
-        state_init: syn::parse_quote!(<#state>::new(__cq_gpu_pool.clone(), #ratio)?),
+        state_init: syn::parse_quote!(<#state>::new(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RunParams {
+            ratio: #ratio, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
+        })?),
         init: empty_view(&provider, &word),
         provider,
         word,
         state,
+        ratio,
+        merge_tile_rows,
+        block_threads,
+        permutation_threads,
     })
 }
 
@@ -485,9 +492,9 @@ pub fn compile_with(source: &Program, args: TokenStream) -> syn::Result<Program>
     Ok(target)
 }
 
-/// Formal rule CK-DL-DeviceStorage: only provider realizations, layout
-/// protocols and explicit device records change; restoring default providers
-/// and erasing the device records gives the source exactly.
+/// Formal rule CK-DL-DeviceStorage: independently check token facts, schemas,
+/// state parameters, initializers and scratch policy; structural erasure alone
+/// restores the source. No device producer is replayed by the checker.
 pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
     ensure(
         source.device.is_none(),
@@ -502,18 +509,232 @@ pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
     )
 }
 
-/// Validate the concrete realization at the printer boundary: the program is
-/// exactly the device realization of its restored default source.
+/// Validate recorded facts at the printer boundary, independently of realization.
 pub fn check_device(program: &Program) -> syn::Result<()> {
     let advice = program
         .device
         .as_ref()
         .ok_or_else(|| syn::Error::new_spanned(program, "missing device storage records"))?;
+    let analysis = storage::contract::check(program)?;
     let symbols = Symbols::from_program(program)?;
+    let declarations = &program.incremental.strata.source.declarations;
     ensure(
-        realize(&restore(program)?, &symbols, advice.ratio)? == *program,
+        advice.ratio >= 2,
         program,
-        "GPU printer requires checked device_storage providers and records",
+        "device maintenance ratio must be at least two",
+    )?;
+    ensure(
+        advice.relations.len() == declarations.len()
+            && advice.layouts.len() == program.layouts.len()
+            && advice.delta_layouts.len() == program.delta_layouts.len()
+            && advice.negations.len() == program.negations.len(),
+        program,
+        "device records must cover every relation, layout and negative key set",
+    )?;
+    ensure(
+        advice.scratch.arenas == "component" && advice.scratch.release == "component",
+        program,
+        "device scratch must be component scoped",
+    )?;
+    let token = program
+        .tokens
+        .iter()
+        .find(|token| token.token == DEVICE_LAYOUT)
+        .ok_or_else(|| syn::Error::new_spanned(program, "missing device layout token"))?;
+    ensure(
+        token.protocol == Some(LayoutProtocol::Bulk)
+            && !token.hashed
+            && token.spelling == provider::Spelling::Verbatim
+            && token.admission == provider::Admission::None
+            && token.task_hasher == provider::TaskHasher::Fx,
+        program,
+        "device layout token has incompatible declared facts",
+    )?;
+    ensure(
+        advice.providers.len() == 1
+            && advice.providers[0] == cq_gpu_sequence_core::providers::declaration(DEVICE_LAYOUT),
+        program,
+        "device read token facts differ from its declared ABI",
+    )?;
+    for ((relation, declaration), providers) in advice
+        .relations
+        .iter()
+        .zip(declarations)
+        .zip(&program.providers)
+    {
+        let logical = declaration
+            .columns
+            .iter()
+            .map(|column| &column.ty)
+            .collect::<Vec<_>>();
+        check_input(&relation.input, &logical, logical.len(), &symbols, program)?;
+        let types = relation
+            .input
+            .columns
+            .iter()
+            .map(|column| &column.storage)
+            .collect::<Vec<_>>();
+        let columns = types
+            .iter()
+            .map(|ty| quote!(<#ty as ::gpu_datalog_runtime::Scalar>::COLUMN));
+        ensure(
+            relation.word == word_type(types.iter().copied())?
+                && relation.packing
+                    == syn::parse_quote!(::gpu_datalog_runtime::Packing::with_columns(&[#(#columns),*])?)
+                && relation.candidates
+                    == syn::parse_quote!(::std::vec::Vec<::gpu_datalog_runtime::CandidateBatch>)
+                && relation.candidates_init == syn::parse_quote!(::std::vec::Vec::new())
+                && relation.arena == syn::parse_quote!(::gpu_datalog_runtime::CandidateArena)
+                && relation.arena_init
+                    == syn::parse_quote!(::gpu_datalog_runtime::CandidateArena::new(
+                        __cq_gpu_pool.clone()
+                    ))
+                && relation.next == "fresh_run",
+            program,
+            "inconsistent relation storage ABI or initializer",
+        )?;
+        if declaration.value.is_none() {
+            let ty: Type =
+                syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(#(#types,)*), ()>);
+            let word = &relation.word;
+            let init: Expr = syn::parse_quote!(<#ty>::from_runs::<#word>(
+                __cq_gpu_pool.clone(), <#ty>::derive_packing()?, ::std::vec::Vec::new())?);
+            ensure(
+                providers.delta.token == DEVICE_LAYOUT
+                    && providers.next.token == DEVICE_LAYOUT
+                    && providers.delta.ty == ty
+                    && providers.next.ty == ty
+                    && providers.delta_init == init
+                    && providers.next_init == init,
+                program,
+                "IDB row views must use the declared device token and relation schema",
+            )?;
+        } else {
+            ensure(
+                providers.delta.token == provider::ROWS_VEC
+                    && providers.next.token == provider::ROWS_VEC
+                    && providers.delta_init == syn::parse_quote!(::std::vec::Vec::new())
+                    && providers.next_init == syn::parse_quote!(::std::vec::Vec::new()),
+                program,
+                "unused EDB row buffers must retain their default initializers",
+            )?;
+        }
+    }
+    for (layout, state) in program
+        .layouts
+        .iter()
+        .zip(&advice.layouts)
+        .chain(program.delta_layouts.iter().zip(&advice.delta_layouts))
+    {
+        let declaration =
+            &declarations[analysis.positions[&cq_syntax::symbol_name(&layout.relation)]];
+        let logical = layout
+            .columns
+            .iter()
+            .map(|&column| &declaration.columns[column].ty)
+            .collect::<Vec<_>>();
+        ensure(
+            layout.provider.token == DEVICE_LAYOUT
+                && layout.provider.ty == state.provider
+                && layout.protocol == LayoutProtocol::Bulk
+                && layout.hasher == Hasher::None,
+            program,
+            "every device layout must use its declared bulk provider",
+        )?;
+        check_input(&state.input, &logical, layout.key, &symbols, program)?;
+        check_state(state, advice.ratio, program)?;
+    }
+    for (negative, state) in program.negations.iter().zip(&advice.negations) {
+        let declaration = &declarations[negative.relation];
+        ensure(
+            negative.provider.token == DEVICE_LAYOUT
+                && negative.provider.ty == state.provider
+                && negative.hasher == Hasher::None,
+            program,
+            "every negative key set must use its recorded device provider without a hasher",
+        )?;
+        let logical = negative
+            .columns
+            .iter()
+            .map(|&column| &declaration.columns[column].ty)
+            .collect::<Vec<_>>();
+        check_input(&state.input, &logical, logical.len(), &symbols, program)?;
+        check_state(state, advice.ratio, program)?;
+    }
+    storage::contract::check(&restore(program)?)?;
+    Ok(())
+}
+
+fn check_input(
+    input: &InputSchema,
+    logical: &[&Type],
+    key: usize,
+    symbols: &Symbols,
+    program: &Program,
+) -> syn::Result<()> {
+    ensure(
+        input.key_count == key && input.columns.len() == logical.len(),
+        program,
+        "device input schema has an incorrect key boundary or column count",
+    )?;
+    for (column, ty) in input.columns.iter().zip(logical) {
+        ensure(
+            column.logical == **ty && column.codec.as_ref() == symbols.codec(ty),
+            program,
+            "device column disagrees with its logical schema or declared codec",
+        )?;
+        // Scalar's sealed implementation set checks fixed-width integer support
+        // in rustc, including aliases. Do not classify a type by its spelling.
+        let storage: Type = match &column.codec {
+            Some(codec) => syn::parse_quote!(::gpu_datalog_runtime::Symbol<#ty, #codec>),
+            None => (*ty).clone(),
+        };
+        ensure(
+            column.storage == storage,
+            program,
+            "device column storage disagrees with its codec ABI",
+        )?;
+    }
+    Ok(())
+}
+
+fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program) -> syn::Result<()> {
+    ensure(
+        record.token == DEVICE_LAYOUT
+            && record.ratio == advice_ratio
+            && record.ratio >= 2
+            && record.merge_tile_rows >= 1
+            && record.block_threads == 256
+            && record.permutation_threads == 256,
+        program,
+        "device state has an invalid token, ratio, merge tile or kernel geometry",
+    )?;
+    let types = record
+        .input
+        .columns
+        .iter()
+        .map(|column| &column.storage)
+        .collect::<Vec<_>>();
+    let (keys, values) = types.split_at(record.input.key_count);
+    let provider = &record.provider;
+    let word = &record.word;
+    let state = &record.state;
+    let (ratio, merge_tile_rows, block_threads) =
+        (record.ratio, record.merge_tile_rows, record.block_threads);
+    ensure(
+        *provider
+            == syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(#(#keys,)*), (#(#values,)*)>)
+            && *word == word_type(types.iter().copied())?
+            && *state == syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>)
+            && record.packing == syn::parse_quote!(<#provider>::derive_packing()?)
+            && record.state_init
+                == syn::parse_quote!(<#state>::new(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RunParams {
+            ratio: #ratio, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
+        })?) && record.init
+            == syn::parse_quote!(<#provider>::from_runs::<#word>(
+            __cq_gpu_pool.clone(), <#provider>::derive_packing()?, ::std::vec::Vec::new())?),
+        program,
+        "device state ABI and initializers disagree with its recorded schema or parameters",
     )
 }
 
@@ -772,6 +993,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn independent_checker_accepts_legal_nondefault_merge_tiles() {
+        let source = source();
+        let mut target = compile(&source).unwrap();
+        let device = target.device.as_mut().unwrap();
+        for record in device
+            .layouts
+            .iter_mut()
+            .chain(&mut device.delta_layouts)
+            .chain(&mut device.negations)
+        {
+            record.merge_tile_rows = 7;
+            let state = &record.state;
+            let (ratio, merge_tile_rows, block_threads) =
+                (record.ratio, record.merge_tile_rows, record.block_threads);
+            record.state_init = syn::parse_quote!(<#state>::new(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RunParams {
+                ratio: #ratio, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
+            })?);
+        }
+        check(&source, &target).unwrap();
+        let roundtrip: Program = syn::parse2(quote!(#target)).unwrap();
+        check_device(&roundtrip).unwrap();
+        target.device.as_mut().unwrap().layouts[0].merge_tile_rows = 8;
+        assert!(
+            check_device(&target).is_err(),
+            "initializer must agree with its recorded tile"
+        );
+    }
+
     /// A `Custom` instance of an authored verbatim token declaring `protocol`.
     fn custom(program: &mut Program, protocol: Option<LayoutProtocol>) -> Provider {
         let name = match protocol {
@@ -859,6 +1109,11 @@ mod tests {
             |d| d.providers.push(d.providers[0].clone()),
             |d| d.providers[0].facts.abi = None,
             |d| d.layouts[0].token = syn::parse_quote!(unknown),
+            |d| d.layouts[0].ratio += 1,
+            |d| d.layouts[0].merge_tile_rows = 0,
+            |d| d.layouts[0].block_threads = 128,
+            |d| d.layouts[0].permutation_threads = 512,
+            |d| d.layouts[0].input.columns[0].storage = syn::parse_quote!(f32),
             |d| d.layouts[0].input.key_count += 1,
             |d| {
                 d.relations[0].input.columns.pop();

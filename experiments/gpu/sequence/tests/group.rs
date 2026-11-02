@@ -209,12 +209,18 @@ fn whole_input_fold_combines_block_partials_including_empty_identity() -> Result
 #[test]
 fn deferred_range_offsets_scan_large_domains_and_reject_overflow() -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
+    // The recorded `offsets` family geometry generated programs print.
+    let geometry = cq_gpu_sequence_runtime::Geometry {
+        block_threads: 256,
+        shared_bytes: 0,
+    };
     for count in [0usize, 5, 100_003] {
         let mut lengths: Vec<u32> = (0..count).map(|i| (i % 17) as u32).collect();
         lengths.extend([u32::MAX, 123]);
         let offsets = cq_gpu_runtime::Buffer::from_host(pool.clone(), &lengths)?;
         let meta = cq_gpu_runtime::Buffer::<u32>::zeroed(pool.clone(), 4)?;
-        let total = cq_gpu_sequence_runtime::offsets::scan(&pool, &offsets, count, &meta)?;
+        let total =
+            cq_gpu_sequence_runtime::offsets::scan(&pool, &offsets, count, &meta, geometry)?;
         let actual = offsets.to_host()?;
         let mut sum = 0;
         for i in 0..count {
@@ -227,6 +233,6 @@ fn deferred_range_offsets_scan_large_domains_and_reject_overflow() -> Result<()>
     }
     let offsets = cq_gpu_runtime::Buffer::from_host(pool.clone(), &[u32::MAX, 1, 0])?;
     let meta = cq_gpu_runtime::Buffer::<u32>::zeroed(pool.clone(), 4)?;
-    assert!(cq_gpu_sequence_runtime::offsets::scan(&pool, &offsets, 2, &meta).is_err());
+    assert!(cq_gpu_sequence_runtime::offsets::scan(&pool, &offsets, 2, &meta, geometry).is_err());
     Ok(())
 }

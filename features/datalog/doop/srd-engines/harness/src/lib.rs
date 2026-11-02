@@ -12,7 +12,9 @@ pub struct Options {
 impl Options {
     pub fn parse(parallel: bool, gpu: bool) -> Result<Self> {
         let mut args = std::env::args_os().skip(1);
-        let directory = args.next().ok_or("usage: <prepared-directory> [--export directory] [--threads N | --gpu-only]")?;
+        let directory = args
+            .next()
+            .ok_or("usage: <prepared-directory> [--export directory] [--threads N | --gpu-only]")?;
         let mut options = Self {
             directory: directory.into(),
             export: None,
@@ -23,7 +25,10 @@ impl Options {
                 options.export = Some(args.next().ok_or("--export requires a directory")?.into());
             } else if arg == "--threads" && parallel {
                 let value = args.next().ok_or("--threads requires a count")?;
-                let count = value.to_str().ok_or("invalid thread count")?.parse::<usize>()?;
+                let count = value
+                    .to_str()
+                    .ok_or("invalid thread count")?
+                    .parse::<usize>()?;
                 if count == 0 {
                     return Err("--threads must be positive".into());
                 }
@@ -73,13 +78,16 @@ pub fn execute(
     let evaluation = start.elapsed();
     eprintln!("phase\tevaluation\tdone\t{:.6}", evaluation.as_secs_f64());
     println!("counts\t{}", serde_json::to_string(&results.counts())?);
-    println!("runtime\t{}", serde_json::json!({
-        "engine": engine,
-        "dataset": options.directory,
-        "threads": threads,
-        "load_seconds": load.as_secs_f64(),
-        "evaluation_seconds": evaluation.as_secs_f64(),
-    }));
+    println!(
+        "runtime\t{}",
+        serde_json::json!({
+            "engine": engine,
+            "dataset": options.directory,
+            "threads": threads,
+            "load_seconds": load.as_secs_f64(),
+            "evaluation_seconds": evaluation.as_secs_f64(),
+        })
+    );
     if let Some(directory) = options.export {
         eprintln!("phase\texport\tstart");
         let start = Instant::now();

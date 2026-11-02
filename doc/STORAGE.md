@@ -366,9 +366,10 @@ yet. Provider choices are recorded upstream, never by type name.
   upstream from item-count bounds; builds and merges that exceed it fail
   (`offset_fits`), with no widening. `C` is `Buffer<T>` (one opaque column),
   a tuple of layouts (independent columns, arity ≤ 12), or `()` (key-only).
-  `RadixRunParams { ratio, radix_bits, merge_tile_rows }` is supplied by the
-  caller. Blocks are the kernels' compiled 256-thread contract
-  (`BLOCK_THREADS`); grids follow GPU-LAUNCH-OCCUPANCY. Scratch is sized by
+  `RadixRunParams { ratio, radix_bits, merge_tile_rows, block_threads }` is
+  supplied by the caller. The recorded block width is checked against the
+  kernels' compiled 256-thread contract before construction and retained by
+  snapshots for reads; grids follow GPU-LAUNCH-OCCUPANCY. Scratch is sized by
   the input/merge row counts.
 - **Build.** The stable lane radix permutation shared with `DeviceRuns`
   (`runs::stable_order`, RCCL pairs radix sort per lane), a group-start flag

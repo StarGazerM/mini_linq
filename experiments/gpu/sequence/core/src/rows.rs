@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::gpu::bindings::{
-    DirectoryPolicy, ProviderAbi, ProviderLayout, UploadAdapter,
+    DirectoryPolicy, ProviderAbi, ProviderLayout, UploadAdapter, UploadBounds, UploadCodec,
 };
 use cq_lang_sequence::gpu::realization::{
-    BaseBounds, BoundSource, DescriptorBounds, HostEvaluation, Phase, ProviderBuild, SourceAccess,
-    SourceOrigin, TransferSource,
+    BaseBounds, BoundSource, DescriptorBounds, HostEvaluation, Interval, IntervalBound, Phase,
+    ProviderBuild, Side, SourceAccess, SourceOrigin, TransferSource,
 };
 use cq_lang_sequence::{Analysis, Program};
 use cq_lang_structures::physical::{Definition, Operator, Row, symbol_name};
@@ -20,12 +20,6 @@ use quote::{format_ident, quote};
 use syn::visit_mut::VisitMut;
 use syn::{Ident, Type};
 
-#[derive(Clone)]
-pub(crate) struct Interval {
-    pub(crate) column: String,
-    pub(crate) start: TokenStream,
-    pub(crate) end: TokenStream,
-}
 #[derive(Clone)]
 pub(crate) struct Origin {
     pub(crate) host: String,
@@ -147,8 +141,21 @@ fn upload_expression(adapter: &UploadAdapter) -> TokenStream {
             &mut ::cq_gpu_runtime::Dictionary::default(),
             &[]
         )?),
-        UploadAdapter::NumericColumns { types } => quote!(
-            ::cq_gpu_sequence_runtime::upload_numeric_columns::<(#(#types,)*), _>(__cq_pool.clone(), rows)?),
+        UploadAdapter::NumericColumns { types, columns } => {
+            let columns = columns.iter().map(|column| {
+                let UploadCodec::For = column.codec;
+                let bounds = match column.bounds {
+                    UploadBounds::Measure => quote!(Measure),
+                    UploadBounds::Scalar => quote!(Scalar),
+                };
+                quote!(::cq_gpu_sequence_runtime::UploadColumn {
+                    codec: ::cq_gpu_sequence_runtime::UploadCodec::For,
+                    bounds: ::cq_gpu_sequence_runtime::UploadBounds::#bounds,
+                })
+            });
+            quote!(::cq_gpu_sequence_runtime::upload_numeric_columns::<(#(#types,)*), _>(
+                __cq_pool.clone(), rows, &[#(#columns),*], __cq_auxiliary.bounds)?)
+        }
     }
 }
 
@@ -292,6 +299,8 @@ fn row_slot(expression: &syn::Expr) -> Option<usize> {
 pub struct Rows {
     pub width: usize,
     pub columns: BTreeMap<String, usize>,
+    pub whole_lookups: BTreeMap<String, String>,
+    whole_lookup_names: BTreeMap<(String, Vec<String>), String>,
     pub setup: TokenStream,
     pub build: TokenStream,
     /// Optional support objects as `(identifier, before setup, after setup)`.
@@ -599,7 +608,19 @@ impl Rows {
             setup.extend(quote!(let __cq_pool = ::gpu_datalog_runtime::thread_pool()?;));
         }
         let output_width = output_columns.len();
+        let auxiliary = crate::reduce::auxiliary_tokens(
+            realization
+                .auxiliary
+                .as_ref()
+                .ok_or_else(|| error("GPU-Realization: missing auxiliary kernel geometry"))?,
+        );
+        // The auxiliary geometry precedes every support object that reads it.
         let mut support = vec![
+            (
+                format_ident!("__cq_auxiliary"),
+                TokenStream::new(),
+                quote!(let __cq_auxiliary = #auxiliary;),
+            ),
             (
                 format_ident!("__cq_dictionary"),
                 quote!(let mut __cq_dictionary = ::cq_gpu_runtime::Dictionary::default();),
@@ -629,7 +650,7 @@ impl Rows {
                         if cache.as_ref().is_none_or(|adapter|
                             !::std::sync::Arc::ptr_eq(adapter.borrow().pool(), &__cq_pool)) {
                             *cache = Some(::std::rc::Rc::new(::std::cell::RefCell::new(
-                                ::cq_gpu_sequence_runtime::canon::PackedColumnsAdapter::new(__cq_pool.clone(), #output_width)?)));
+                                ::cq_gpu_sequence_runtime::canon::PackedColumnsAdapter::new(__cq_pool.clone(), #output_width, __cq_auxiliary.canon)?)));
                         }
                         Ok(cache.as_ref().unwrap().clone())
                     })?;
@@ -641,11 +662,11 @@ impl Rows {
             .flatten()
             .find(|layout| layout.abi == ProviderAbi::Range)
         {
-            let ty = &layout.ty;
+            let ty = &layout.provider.ty;
             support.push((
                 format_ident!("__cq_range_builder"),
                 TokenStream::new(),
-                quote!(let __cq_range_builder = <#ty>::builder(&__cq_pool)?;),
+                quote!(let __cq_range_builder = <#ty>::builder(&__cq_pool, &__cq_auxiliary)?;),
             ));
         }
         let mut sources = BTreeMap::new();
@@ -756,17 +777,28 @@ impl Rows {
                     if recorded.source != payload || recorded.host != origin_host {
                         return Err(error("GPU-NativeAbi: stale native lookup"));
                     }
-                    let (provider_view, provider_payload) = if let Some(order) =
-                        &recorded.permutation
+                    let (provider_view, provider_payload) = if let Some(materialization) =
+                        &recorded.materialization
                     {
-                        let provider =
-                            recorded.materialized_provider.as_ref().ok_or_else(|| {
-                                error("GPU-NativeAbi: missing materialization provider")
-                            })?;
+                        let order = &materialization.permutation;
+                        let provider = &materialization.provider.ty;
+                        let cq_lang_sequence::gpu::bindings::RunParams {
+                            ratio,
+                            merge_tile_rows,
+                            block_threads,
+                        } = materialization.params;
+                        let threads = materialization.permutation_threads;
                         let owner = format_ident!("__cq_native_provider_{provider_name}");
                         let provider_view = format_ident!("__cq_native_view_{provider_name}");
                         build.extend(quote! {
-                                let #owner: #provider = #host.permuted_provider(&__cq_pool, &[#(#order),*])?;
+                                let #owner: #provider = #host.permuted_provider(
+                                    &__cq_pool,
+                                    &[#(#order),*],
+                                    ::gpu_datalog_runtime::RunParams {
+                                        ratio: #ratio, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads,
+                                    },
+                                    #threads,
+                                )?;
                                 __cq_run_owners.push(#owner.owner());
                             });
                         parameters.push((
@@ -799,8 +831,7 @@ impl Rows {
             };
             let selection = if let Some(interval) = interval {
                 let index = fields[&interval.column].0;
-                let start = &interval.start;
-                let end = &interval.end;
+                let (start, end) = interval_tokens(interval);
                 quote!(Some(::cq_gpu_sequence_runtime::RangeSelection {
                     column: unsafe { ::cq_gpu_sequence_runtime::ColumnDescriptor::new(
                         #host.storage().columns[#index].clone(), #host_length)? },
@@ -843,7 +874,7 @@ impl Rows {
                         .iter()
                         .map(descriptor)
                         .collect::<syn::Result<Vec<_>>>()?;
-                    let ty = &layout.ty;
+                    let ty = &layout.provider.ty;
                     let key_types = &radix.key_types;
                     let lanes = &radix.lanes;
                     let word = &radix.word;
@@ -851,6 +882,7 @@ impl Rows {
                     let ratio = radix.params.ratio;
                     let radix_bits = radix.params.radix_bits;
                     let merge_tile_rows = radix.params.merge_tile_rows;
+                    let block_threads = radix.params.block_threads;
                     let owner = format_ident!("__cq_sequence_provider_{}", name);
                     let view = format_ident!("__cq_sequence_provider_view_{}", name);
                     let items = format_ident!("__cq_sequence_provider_items_{}", name);
@@ -862,10 +894,12 @@ impl Rows {
                             &__cq_pool,
                             ::gpu_datalog_runtime::RadixRunParams {
                                 ratio: #ratio, radix_bits: #radix_bits, merge_tile_rows: #merge_tile_rows,
+                                block_threads: #block_threads,
                             },
                             &[#(#keys),*],
                             &[#(#values),*],
                             (#selection).as_ref(),
+                            __cq_auxiliary.selection,
                         )?;
                     });
                     // GPU-Smallest ChoiceCarrier::PositionTag: a side's key
@@ -916,7 +950,8 @@ impl Rows {
                         let param = format_ident!("__cq_sequence_selected_rows_{}", name);
                         build.extend(quote! {
                             let #selected = ::cq_gpu_sequence_runtime::select(
-                                __cq_pool.clone(), &(#selection).expect("recorded selection"))?;
+                                __cq_pool.clone(), &(#selection).expect("recorded selection"),
+                                __cq_auxiliary.selection)?;
                         });
                         parameters.push((
                             param.clone(),
@@ -1074,7 +1109,8 @@ impl Rows {
                         let param = format_ident!("__cq_sequence_selected_rows_{}", name);
                         build.extend(quote! {
                             let #selected = ::cq_gpu_sequence_runtime::select(
-                                __cq_pool.clone(), &(#selection).expect("recorded selection"))?;
+                                __cq_pool.clone(), &(#selection).expect("recorded selection"),
+                                __cq_auxiliary.selection)?;
                         });
                         parameters.push((
                             param.clone(),
@@ -1113,6 +1149,20 @@ impl Rows {
             .collect();
         Ok(Self {
             width: columns.len().max(1),
+            whole_lookups: analysis
+                .gpu_bindings
+                .realization
+                .whole_lookups
+                .iter()
+                .map(|name| (format!("__cq_whole_{name}"), name.clone()))
+                .collect(),
+            whole_lookup_names: analysis
+                .gpu_bindings
+                .realization
+                .whole_lookups
+                .iter()
+                .map(|name| ((name.clone(), Vec::new()), format!("__cq_whole_{name}")))
+                .collect(),
             columns,
             setup,
             build,
@@ -1246,6 +1296,12 @@ impl Rows {
             .ok_or_else(|| error(format!("T-Gpu: {name} has no recorded source length")))
     }
     pub fn provider_name(&self, name: &str, keys: &[String]) -> syn::Result<String> {
+        if let Some(alias) = self
+            .whole_lookup_names
+            .get(&(name.to_owned(), keys.to_vec()))
+        {
+            return Ok(alias.clone());
+        }
         if self.providers.contains_key(name) {
             return Ok(name.to_owned());
         }
@@ -1293,23 +1349,6 @@ impl Rows {
     pub fn is_capture_output(&self, column: &str) -> bool {
         self.capture_types.contains_key(column)
     }
-    pub fn output_types(&self) -> syn::Result<Vec<Type>> {
-        self.output_columns
-            .iter()
-            .map(|column| {
-                self.physical_rows
-                    .values()
-                    .find_map(|row| row.types.get(column))
-                    .or_else(|| self.capture_types.get(column))
-                    .cloned()
-                    .ok_or_else(|| {
-                        error(format!(
-                            "GPU-Arena: output column {column} has no declared type"
-                        ))
-                    })
-            })
-            .collect()
-    }
     /// Realize the recorded provider only after its device store has published
     /// its live count. Descriptors borrow the stored layout without transposing
     /// or copying it before the ordinary radix/lower-bound range build.
@@ -1322,18 +1361,20 @@ impl Rows {
         packed: Option<&[String]>,
         build: Option<&ProviderBuild>,
     ) -> syn::Result<TokenStream> {
-        let Some(layouts) = analysis.structures.built.get(result) else {
+        let Some(build) = build else {
             return Ok(TokenStream::new());
         };
-        let build = build.ok_or_else(|| {
-            error("GPU-Realization: provider publication lacks its descriptor bounds")
-        })?;
+        let layouts =
+            analysis.structures.built.get(result).ok_or_else(|| {
+                error("GPU-Realization: provider publication lacks built layouts")
+            })?;
         let rows = format_ident!("__cq_store_rows_{index}");
         let mut output = TokenStream::new();
         if packed.is_none() {
             output.extend(quote! { let #rows = ::std::sync::Arc::new(#rows); });
         }
-        for layout in self.provider_layouts[result].clone() {
+        for &layout_index in &build.layouts {
+            let layout = self.provider_layouts[result][layout_index].clone();
             if layout.abi != ProviderAbi::Range {
                 return Err(error(
                     "GPU-ProviderLayout: recorded provider cannot build a row publication",
@@ -1388,7 +1429,7 @@ impl Rows {
                 let source = column(key)?;
                 let measure = build.columns[key].measure.then(|| {
                     quote! {
-                        column.measure_bounds()?;
+                        column.measure_bounds(__cq_auxiliary.bounds)?;
                         if column.rows() != 0 { ::gpu_datalog_runtime::record_readback(); }
                     }
                 });
@@ -1712,14 +1753,21 @@ fn host_rows(
             .get(&symbol_name(&entry.name))
             && let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure
         {
-            keyed.provider =
-                cq_lang_structures::provider::base::instance("host_scan", provider.clone());
+            keyed.provider = provider.clone();
             keyed.supports = None;
         }
     }
-    host_structures
-        .structures
-        .declare(&[cq_lang_structures::provider::base::declaration("host_scan")]);
+    let downloaded: BTreeSet<_> = analysis
+        .gpu_bindings
+        .downloads
+        .values()
+        .map(|provider| provider.token.to_string())
+        .collect();
+    let declarations: Vec<_> = downloaded
+        .iter()
+        .map(|token| cq_lang_structures::provider::base::declaration(token))
+        .collect();
+    host_structures.structures.declare(&declarations);
     cq_lang_structures::check_rewrite(&program.structures, &host_structures)?;
     let host_analysis = cq_lang_structures::contract::check(&host_structures)?;
     let mut context = cq_print::Context::new(&host_structures, &host_analysis);
@@ -1926,6 +1974,7 @@ pub(crate) fn origin(
                     };
                     interval(
                         &mut result.selection,
+                        name,
                         symbol_name(&equality.left),
                         quote!(::gpu_datalog_runtime::encode_scalar(&(#value))),
                         "eq",
@@ -1942,7 +1991,12 @@ pub(crate) fn origin(
             if !contiguous(&select.condition) {
                 result.predicate = true;
             } else {
-                intervals(&select.condition, &result.columns, &mut result.selection)?;
+                intervals(
+                    &select.condition,
+                    &result.columns,
+                    &mut result.selection,
+                    name,
+                )?;
             }
             Ok(Some(result))
         }
@@ -1970,6 +2024,7 @@ fn contiguous(theta: &Theta) -> bool {
 
 fn interval(
     target: &mut Option<Interval>,
+    definition: &str,
     column: String,
     value: TokenStream,
     op: &str,
@@ -1981,36 +2036,54 @@ fn interval(
     }
     let selection = target.get_or_insert(Interval {
         column,
-        start: quote!(i64::MIN),
-        end: quote!(i64::MAX),
+        bounds: Vec::new(),
     });
-    let next = quote!((#value).checked_add(1).ok_or("T-Gpu: selection bound overflow")?);
+    let value: syn::Expr = syn::parse2(value)?;
+    let mut bound = |side, inclusive| {
+        selection.bounds.push(IntervalBound {
+            definition: definition.to_owned(),
+            side,
+            inclusive,
+            value: value.clone(),
+        });
+    };
     match op {
         "eq" => {
-            let start = &selection.start;
-            let end = &selection.end;
-            selection.start = quote!((#start).max(#value));
-            selection.end = quote!((#end).min(#next));
+            bound(Side::Lower, true);
+            bound(Side::Upper, true);
         }
-        "ge" | "gt" => {
-            let prior = &selection.start;
-            let value = if op == "gt" { next } else { value };
-            selection.start = quote!((#prior).max(#value));
-        }
-        "lt" | "le" => {
-            let prior = &selection.end;
-            let value = if op == "le" { next } else { value };
-            selection.end = quote!((#prior).min(#value));
-        }
+        "ge" => bound(Side::Lower, true),
+        "gt" => bound(Side::Lower, false),
+        "lt" => bound(Side::Upper, false),
+        "le" => bound(Side::Upper, true),
         _ => return Err(error("T-Gpu: provider selection is not a contiguous range")),
     }
     Ok(())
+}
+
+/// The half-open `[start, end)` of a recorded interval: its bounds folded in
+/// recorded order; inclusive upper and exclusive lower bounds step by one.
+pub(crate) fn interval_tokens(interval: &Interval) -> (TokenStream, TokenStream) {
+    let mut start = quote!(i64::MIN);
+    let mut end = quote!(i64::MAX);
+    for bound in &interval.bounds {
+        let value = &bound.value;
+        let next = quote!((#value).checked_add(1).ok_or("T-Gpu: selection bound overflow")?);
+        match (bound.side, bound.inclusive) {
+            (Side::Lower, true) => start = quote!((#start).max(#value)),
+            (Side::Lower, false) => start = quote!((#start).max(#next)),
+            (Side::Upper, true) => end = quote!((#end).min(#next)),
+            (Side::Upper, false) => end = quote!((#end).min(#value)),
+        }
+    }
+    (start, end)
 }
 
 fn intervals(
     theta: &Theta,
     columns: &BTreeMap<String, String>,
     target: &mut Option<Interval>,
+    definition: &str,
 ) -> syn::Result<()> {
     for equality in &theta.equalities {
         let EqualityValue::Literal(value) = &equality.right else {
@@ -2018,6 +2091,7 @@ fn intervals(
         };
         interval(
             target,
+            definition,
             columns[&symbol_name(&equality.left)].clone(),
             quote!(::gpu_datalog_runtime::encode_scalar(&(#value))),
             "eq",
@@ -2039,25 +2113,17 @@ fn intervals(
                     Comparison::Le(_) => "le",
                     _ => "ne",
                 };
-                interval(target, columns[&symbol_name(column)].clone(), value, op)?;
+                let column = columns[&symbol_name(column)].clone();
+                interval(target, definition, column, value, op)?;
             }
             Constraint::Between {
                 term: Term::Variable(column),
                 low,
                 high,
             } => {
-                interval(
-                    target,
-                    columns[&symbol_name(column)].clone(),
-                    host_value(low)?,
-                    "ge",
-                )?;
-                interval(
-                    target,
-                    columns[&symbol_name(column)].clone(),
-                    host_value(high)?,
-                    "le",
-                )?;
+                let column = columns[&symbol_name(column)].clone();
+                interval(target, definition, column.clone(), host_value(low)?, "ge")?;
+                interval(target, definition, column, host_value(high)?, "le")?;
             }
             _ => {
                 return Err(error(
@@ -2093,45 +2159,54 @@ fn payload_kind(ty: &Type) -> syn::Result<TokenStream> {
     })
 }
 
-pub(crate) fn lookup_demands(program: &Program) -> BTreeSet<(String, Vec<String>)> {
-    fn collect(term: &cq_lang_sequence::Term, demands: &mut BTreeSet<(String, Vec<String>)>) {
-        use cq_lang_sequence::Term;
-        match term {
-            Term::Lookup {
-                provider,
-                keys,
-                inner,
-            } => {
-                let mut keys: Vec<_> = keys.iter().map(symbol_name).collect();
-                keys.sort();
-                demands.insert((symbol_name(provider), keys));
-                collect(inner, demands);
-            }
-            Term::Map(_, inner)
-            | Term::Compact(_, inner)
-            | Term::Flatten(inner)
-            | Term::Fold(_, inner)
-            | Term::Group(_, inner)
-            | Term::Canon(inner)
-            | Term::Store { inner, .. }
-            | Term::Tile { inner, .. }
-            | Term::PartitionK { inner, .. } => collect(inner, demands),
-            Term::Union(arms) => {
-                for arm in arms {
-                    collect(arm, demands);
-                }
-            }
-            Term::Choose(arms) => {
-                for (_, arm) in arms {
-                    collect(arm, demands);
-                }
-            }
-            Term::Rows(_) | Term::Ref(_) => {}
+/// Every lookup of `term` as (provider, sorted keys), not following Refs.
+fn collect_lookups(term: &cq_lang_sequence::Term, demands: &mut BTreeSet<(String, Vec<String>)>) {
+    use cq_lang_sequence::Term;
+    match term {
+        Term::Lookup {
+            provider,
+            keys,
+            inner,
+        } => {
+            let mut keys: Vec<_> = keys.iter().map(symbol_name).collect();
+            keys.sort();
+            demands.insert((symbol_name(provider), keys));
+            collect_lookups(inner, demands);
         }
+        Term::Map(_, inner)
+        | Term::Compact(_, inner)
+        | Term::Flatten(inner)
+        | Term::Fold(_, inner)
+        | Term::Group(_, inner)
+        | Term::Canon(inner)
+        | Term::Store { inner, .. }
+        | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. } => collect_lookups(inner, demands),
+        Term::Union(arms) => {
+            for arm in arms {
+                collect_lookups(arm, demands);
+            }
+        }
+        Term::Choose(arms) => {
+            for (_, arm) in arms {
+                collect_lookups(arm, demands);
+            }
+        }
+        Term::Rows(_) | Term::Ref(_) => {}
     }
+}
+
+/// The providers `term` itself looks up.
+pub(crate) fn lookup_providers(term: &cq_lang_sequence::Term) -> BTreeSet<String> {
+    let mut demands = BTreeSet::new();
+    collect_lookups(term, &mut demands);
+    demands.into_iter().map(|(provider, _)| provider).collect()
+}
+
+pub(crate) fn lookup_demands(program: &Program) -> BTreeSet<(String, Vec<String>)> {
     let mut demands = BTreeSet::new();
     for definition in &program.sequence.definitions {
-        collect(&definition.term, &mut demands);
+        collect_lookups(&definition.term, &mut demands);
     }
     demands
 }
@@ -2143,11 +2218,11 @@ mod tests {
     #[test]
     fn row_regression_equality_intersects_existing_interval() {
         let mut selection = None;
-        interval(&mut selection, "x".into(), quote!(2i64), "lt").unwrap();
-        interval(&mut selection, "x".into(), quote!(3i64), "eq").unwrap();
-        let selection = selection.unwrap();
+        interval(&mut selection, "s", "x".into(), quote!(2i64), "lt").unwrap();
+        interval(&mut selection, "s", "x".into(), quote!(3i64), "eq").unwrap();
+        let (_, end) = interval_tokens(&selection.unwrap());
         assert_eq!(
-            selection.end.to_string(),
+            end.to_string(),
             quote!(
                 ((i64::MAX).min(2i64)).min(
                     (3i64)
@@ -2353,7 +2428,8 @@ mod tests {
         assert_eq!(provider.payload, ["b", "a"]);
         assert_eq!(rows.run_sources["r"].reads[0].0, rows.columns["a"]);
         let recorded = &analysis.gpu_bindings.native["r"];
-        assert_eq!(recorded.permutation, Some(vec![1, 0]));
+        let materialization = recorded.materialization.as_ref().unwrap();
+        assert_eq!(materialization.permutation, vec![1, 0]);
         assert_eq!(recorded.source, ["a", "b"]);
         struct Permutations(Vec<Vec<usize>>);
         impl VisitMut for Permutations {
@@ -2389,21 +2465,24 @@ mod tests {
         let mut block: syn::Block = syn::parse2(quote!({ #build })).unwrap();
         let mut printed = Permutations(Vec::new());
         printed.visit_block_mut(&mut block);
-        assert_eq!(printed.0, vec![recorded.permutation.clone().unwrap()]);
+        assert_eq!(printed.0, vec![materialization.permutation.clone()]);
         let mut invalid = analysis.clone();
         invalid
             .gpu_bindings
             .native
             .get_mut("r")
             .unwrap()
-            .permutation = Some(vec![0, 0]);
+            .materialization
+            .as_mut()
+            .unwrap()
+            .permutation = vec![0, 0];
         assert!(Rows::new(&program, &invalid).is_err());
         let mut missing = analysis.clone();
         missing.gpu_bindings.native.remove("r");
         assert!(Rows::new(&program, &missing).is_err());
         let mut wrong_provider = analysis.clone();
-        wrong_provider.gpu_bindings.providers.get_mut("r").unwrap()[0].ty =
-            syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider);
+        wrong_provider.gpu_bindings.providers.get_mut("r").unwrap()[0].provider =
+            crate::providers::declaration("range_provider").instance();
         assert!(Rows::new(&program, &wrong_provider).is_err());
         let mut wrong_materialization = analysis.clone();
         wrong_materialization
@@ -2411,8 +2490,22 @@ mod tests {
             .native
             .get_mut("r")
             .unwrap()
-            .materialized_provider = Some(syn::parse_quote!(::other::PackedProvider));
+            .materialization
+            .as_mut()
+            .unwrap()
+            .provider = crate::providers::declaration("device_layout").instance();
         assert!(Rows::new(&program, &wrong_materialization).is_err());
+        let mut wide_permutation = analysis.clone();
+        wide_permutation
+            .gpu_bindings
+            .native
+            .get_mut("r")
+            .unwrap()
+            .materialization
+            .as_mut()
+            .unwrap()
+            .permutation_threads = 512;
+        assert!(Rows::new(&program, &wide_permutation).is_err());
         let mut missing_download = analysis.clone();
         missing_download.gpu_bindings.downloads.clear();
         assert!(Rows::new(&program, &missing_download).is_err());

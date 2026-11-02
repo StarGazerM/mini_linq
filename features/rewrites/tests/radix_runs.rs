@@ -199,14 +199,8 @@ fn named_pipeline_composes_and_executes() {
     );
     let program: ir::Program = syn::parse_str(captured).unwrap();
     let facts = ir::contract::check(&program).unwrap();
-    assert!(
-        facts
-            .built
-            .values()
-            .flatten()
-            .any(|(_, provider)| *provider
-                == syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>))
-    );
+    assert!(facts.built.values().flatten().any(|(_, provider)| *provider
+        == syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)));
     assert!(!facts.expands.is_empty());
     let left = [(i64::MIN,), (-1,), (2,), (i64::MAX,)];
     let right = [(i64::MIN, 1i64), (-1, 2), (-1, -3), (i64::MAX, 4), (-1, 2)];

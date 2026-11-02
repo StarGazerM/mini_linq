@@ -1,5 +1,7 @@
 //! Upload adapters and immutable bounds provenance, recorded before emission.
-use cq_lang_sequence::gpu::bindings::{Bindings, ColumnBounds, UploadAdapter};
+use cq_lang_sequence::gpu::bindings::{
+    Bindings, ColumnBounds, UploadAdapter, UploadBounds, UploadCodec, UploadColumn,
+};
 use cq_lang_sequence::{Analysis, Program};
 use cq_lang_structures::{
     ReaderRef, Structure,
@@ -26,38 +28,81 @@ fn capture_types(program: &Program) -> Vec<(String, syn::Type)> {
         .collect()
 }
 
+/// The device carrier of a logical column type: the u32 code of its
+/// declared codec, otherwise the type itself (GPU-Representation).
+fn device_carrier(codecs: &crate::runs::Codecs, logical: &syn::Type) -> syn::Type {
+    if codecs.get(logical).is_some() {
+        syn::parse_quote!(u32)
+    } else {
+        logical.clone()
+    }
+}
+
+/// Record the device carrier of every Physical column and capture answer
+/// column; a capture answer publishes one host value of its declared type.
+pub(crate) fn carriers(
+    program: &Program,
+    analysis: &Analysis,
+) -> syn::Result<BTreeMap<String, syn::Type>> {
+    let codecs = crate::runs::Codecs::check(&program.structures)?;
+    let mut carriers = BTreeMap::new();
+    for row in analysis.structures.physical.rows.values() {
+        for (column, ty) in &row.types {
+            carriers.insert(column.clone(), device_carrier(&codecs, ty));
+        }
+    }
+    for (column, ty) in capture_types(program) {
+        carriers.insert(column, device_carrier(&codecs, &ty));
+    }
+    Ok(carriers)
+}
+
+/// Every recorded carrier is its column's representation in every row (and
+/// capture binder) that types it, and every typed column has one.
+fn check_carriers(program: &Program, analysis: &Analysis, records: &Bindings) -> syn::Result<()> {
+    let codecs = crate::runs::Codecs::check(&program.structures)?;
+    let mut typed: BTreeMap<&String, Vec<&syn::Type>> = BTreeMap::new();
+    for row in analysis.structures.physical.rows.values() {
+        for (column, ty) in &row.types {
+            typed.entry(column).or_default().push(ty);
+        }
+    }
+    let captures = capture_types(program);
+    for (column, ty) in &captures {
+        typed.entry(column).or_default().push(ty);
+    }
+    if records.carriers.len() != typed.len() {
+        return Err(error("GPU-Representation: incomplete carrier records"));
+    }
+    for (column, logicals) in typed {
+        let carrier = records
+            .carriers
+            .get(column)
+            .ok_or_else(|| error("GPU-Representation: incomplete carrier records"))?;
+        // A codec column's device carrier is its u32 code; any other column
+        // is carried as its logical type.
+        let legal = |logical: &&syn::Type| match codecs.get(logical) {
+            Some(_) => *carrier == syn::parse_quote!(u32),
+            None => carrier == *logical,
+        };
+        if !logicals.iter().all(legal) {
+            return Err(error(
+                "GPU-Representation: carrier is not its column's representation",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn select(
     program: &Program,
     analysis: &Analysis,
     records: &mut Bindings,
 ) -> syn::Result<()> {
-    let codecs = crate::runs::Codecs::check(&program.structures)?;
-    let mut types = BTreeMap::new();
+    let types = records.carriers.clone();
     let mut unbounded = BTreeSet::new();
     for row in analysis.structures.physical.rows.values() {
-        for (column, ty) in &row.types {
-            types.insert(
-                column.clone(),
-                if codecs.get(ty).is_some() {
-                    syn::parse_quote!(u32)
-                } else {
-                    ty.clone()
-                },
-            );
-        }
         unbounded.extend(row.computed.iter().cloned());
-    }
-    // A capture answer column publishes one host value of its declared type;
-    // its bounds are that type's whole domain (IF-Capture).
-    for (column, ty) in capture_types(program) {
-        types.insert(
-            column,
-            if codecs.get(&ty).is_some() {
-                syn::parse_quote!(u32)
-            } else {
-                ty
-            },
-        );
     }
     let resident: BTreeSet<_> = program
         .structures
@@ -122,8 +167,17 @@ pub(crate) fn select(
             if layout.is_empty() {
                 UploadAdapter::EmptyRows
             } else {
+                // Uploaded bounds feed provider descriptors' merges, so each
+                // column is measured once at upload.
                 UploadAdapter::NumericColumns {
                     types: layout.iter().map(|column| types[column].clone()).collect(),
+                    columns: vec![
+                        UploadColumn {
+                            codec: UploadCodec::For,
+                            bounds: UploadBounds::Measure,
+                        };
+                        layout.len()
+                    ],
                 }
             },
         );
@@ -133,7 +187,8 @@ pub(crate) fn select(
 
 /// Validate source coverage and carrier legality; never call selection or require its preference.
 pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) -> syn::Result<()> {
-    let codecs = crate::runs::Codecs::check(&program.structures)?;
+    check_carriers(program, analysis, records)?;
+    let carrier = |column: &String| &records.carriers[column];
     let captures = capture_types(program);
     let mut columns: BTreeSet<_> = analysis
         .structures
@@ -148,12 +203,8 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
     {
         return Err(error("GPU-Bounds: incomplete bounds or upload records"));
     }
-    for (column, logical) in &captures {
-        let expected: syn::Type = if codecs.get(logical).is_some() {
-            syn::parse_quote!(u32)
-        } else {
-            logical.clone()
-        };
+    for (column, _) in &captures {
+        let expected = carrier(column).clone();
         if records.bounds.get(column) != Some(&ColumnBounds::Scalar { ty: expected }) {
             return Err(error(
                 "GPU-Bounds: a capture column has its type's scalar bounds",
@@ -163,22 +214,8 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
     for (column, domain) in &records.bounds {
         match domain {
             ColumnBounds::Scalar { ty } => {
-                for row in analysis
-                    .structures
-                    .physical
-                    .rows
-                    .values()
-                    .filter(|row| row.types.contains_key(column))
-                {
-                    let logical = &row.types[column];
-                    let expected = if codecs.get(logical).is_some() {
-                        syn::parse_quote!(u32)
-                    } else {
-                        logical.clone()
-                    };
-                    if *ty != expected {
-                        return Err(error("GPU-Bounds: scalar bounds use a different carrier"));
-                    }
+                if ty != carrier(column) {
+                    return Err(error("GPU-Bounds: scalar bounds use a different carrier"));
                 }
             }
             ColumnBounds::Resident { sources } => {
@@ -240,18 +277,15 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
             .ok_or_else(|| error("GPU-Upload: missing adapter"))?;
         match upload {
             UploadAdapter::EmptyRows if layout.is_empty() => {}
-            UploadAdapter::NumericColumns { types }
-                if !layout.is_empty() && types.len() == layout.len() =>
+            UploadAdapter::NumericColumns { types, columns }
+                if !layout.is_empty()
+                    && types.len() == layout.len()
+                    && columns.len() == layout.len() =>
             {
-                let row = &analysis.structures.physical.rows[name];
+                // Any recorded bounds source is sound: a measurement is
+                // exact and a carrier range encloses every value.
                 for (column, ty) in layout.iter().zip(types) {
-                    let logical = &row.types[column];
-                    let expected = if codecs.get(logical).is_some() {
-                        syn::parse_quote!(u32)
-                    } else {
-                        logical.clone()
-                    };
-                    if *ty != expected {
+                    if ty != carrier(column) {
                         return Err(error("GPU-Upload: adapter carrier differs from its column"));
                     }
                 }
@@ -303,7 +337,11 @@ mod tests {
         assert_eq!(
             records.uploads["r"],
             UploadAdapter::NumericColumns {
-                types: vec![syn::parse_quote!(i64)]
+                types: vec![syn::parse_quote!(i64)],
+                columns: vec![UploadColumn {
+                    codec: UploadCodec::For,
+                    bounds: UploadBounds::Measure,
+                }],
             }
         );
         let mut wrong = records.clone();

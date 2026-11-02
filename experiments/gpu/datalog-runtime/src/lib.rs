@@ -28,7 +28,7 @@ pub use radix_run::{
     RadixLayout, RadixLayoutView, RadixMatch, RadixMatches, RadixRunParams, RadixSnapshot,
     SourceItemColumns, SourceLane,
 };
-pub use runs::{AdmissionTimings, DeviceRuns, Run, RunView};
+pub use runs::{AdmissionTimings, DeviceRuns, Run, RunParams, RunView};
 pub use stats::{readback_count, record_readback, trace_kernels, trace_memory, MemoryUse};
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 

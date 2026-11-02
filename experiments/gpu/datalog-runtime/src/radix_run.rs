@@ -6,7 +6,8 @@
 //! Keys are [`Word`]s: the DL-DevicePacking word is the one order-preserving
 //! key embedding and is stored whole, never truncated into the directory.
 //! Every policy is a caller parameter ([`RadixRunParams`]) or a type fact
-//! (`W`, `O`, `C`, and the kernels' compiled [`BLOCK_THREADS`] contract).
+//! (`W`, `O`, and `C`). Recorded block widths are checked against the kernels'
+//! compiled launch contracts before construction.
 //! Grid sizes follow the shared occupancy convention for the target device.
 //!
 //! Key reads ([`RadixKeysView`]) carry no item pointers; item columns are read
@@ -37,8 +38,6 @@ use std::{
     },
 };
 
-/// Threads per block of every radix-run kernel: their compiled launch contract.
-pub const BLOCK_THREADS: u32 = 256;
 const SIDE: u64 = 1 << 63;
 
 mod sealed {
@@ -172,20 +171,21 @@ pub trait DeviceItemColumns: sealed::Columns + Sized + Send + Sync + 'static {
 pub struct ItemKernels {
     pool: Arc<Pool>,
     module: radix_kernels::LoadedModule,
+    block_threads: u32,
 }
 
 impl ItemKernels {
     fn config(&self, function: &cuda_core::CudaFunction, parts: usize) -> Result<LaunchConfig1D> {
         let grid = cq_gpu_runtime::launch_grid_for_kernel(
             function,
-            parts.div_ceil(BLOCK_THREADS as usize),
-            BLOCK_THREADS,
+            parts.div_ceil(self.block_threads as usize),
+            self.block_threads,
             0,
         )?;
-        Ok(LaunchConfig1D::new(grid, BLOCK_THREADS, 0))
+        Ok(LaunchConfig1D::new(grid, self.block_threads, 0))
     }
-    fn shape() -> LaunchConfig1D {
-        LaunchConfig1D::new(1, BLOCK_THREADS, 0)
+    fn shape(&self) -> LaunchConfig1D {
+        LaunchConfig1D::new(1, self.block_threads, 0)
     }
 }
 
@@ -207,7 +207,7 @@ impl<T: ItemLane> DeviceItemColumns for Buffer<T> {
         let output = unsafe { Buffer::<T>::uninitialized(kernels.pool.clone(), rows)? };
         if rows != 0 {
             let module = &kernels.module;
-            let initial = module.prepare_gather_items::<T>(ItemKernels::shape())?;
+            let initial = module.prepare_gather_items::<T>(kernels.shape())?;
             let config = kernels.config(initial.function(), rows)?;
             module.gather_items::<T>(
                 kernels.pool.stream(),
@@ -232,7 +232,7 @@ impl<T: ItemLane> DeviceItemColumns for Buffer<T> {
         let output = unsafe { Buffer::<T>::uninitialized(kernels.pool.clone(), rows)? };
         if rows != 0 {
             let module = &kernels.module;
-            let initial = module.prepare_merge_items::<T, O>(ItemKernels::shape())?;
+            let initial = module.prepare_merge_items::<T, O>(kernels.shape())?;
             let config = kernels.config(initial.function(), rows)?;
             module.merge_items::<T, O>(
                 kernels.pool.stream(),
@@ -376,7 +376,7 @@ impl<T: SourceLane> SourceItemColumns for Buffer<T> {
         let output = unsafe { Buffer::<T>::uninitialized(kernels.pool.clone(), rows)? };
         if rows != 0 {
             let module = &kernels.module;
-            let initial = module.prepare_source_lane::<T>(ItemKernels::shape())?;
+            let initial = module.prepare_source_lane::<T>(kernels.shape())?;
             let config = kernels.config(initial.function(), rows)?;
             module.source_lane::<T>(
                 kernels.pool.stream(),
@@ -436,6 +436,9 @@ pub struct RadixRunParams {
     pub radix_bits: u32,
     /// Merged key slots per merge-path tile (`>= 1`).
     pub merge_tile_rows: u32,
+    /// Threads per block for radix auxiliary kernels, including stable ordering.
+    /// Must equal the kernels' compiled 256-thread launch contract.
+    pub block_threads: u32,
 }
 
 impl RadixRunParams {
@@ -448,6 +451,9 @@ impl RadixRunParams {
         }
         if self.merge_tile_rows == 0 {
             return Err("merge tile must contain at least one slot".into());
+        }
+        if self.block_threads != 256 {
+            return Err("radix kernels require exactly 256 block threads".into());
         }
         Ok(())
     }
@@ -613,6 +619,8 @@ pub struct HostRadixRun<W, O, H> {
 /// keys, `O` offsets and gathered item columns; an exact radix-prefix directory
 /// bounds a lower-bound search, so membership, counts, ranges and absent-key
 /// insertion positions equal the CPU RadixRun's for the same occurrences.
+/// Auxiliary launch widths are caller-recorded in `RadixRunParams`, checked
+/// against compiled contracts before construction, and retained by snapshots.
 ///
 /// Each nonempty build downloads one group count; key reads never touch items.
 pub struct DeviceRadixRun<W: Word, O: OffsetWord, C: DeviceItemColumns> {
@@ -636,6 +644,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             kernels: ItemKernels {
                 pool: pool.clone(),
                 module,
+                block_threads: params.block_threads,
             },
             pool,
             params,
@@ -731,6 +740,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             runs: self.runs.clone(),
             module: self.kernels.module.clone(),
             pool: self.pool.clone(),
+            block_threads: self.params.block_threads,
         });
         *published = Some(snapshot.clone());
         Ok(snapshot)
@@ -781,11 +791,18 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         let module = &self.kernels.module;
         let cub = rccl_cub::cuda::Program::load(pool.context())?;
         let launch = cub.on(pool.stream())?;
-        let permutation = runs::stable_order(pool, &self.order, &launch, keys, rows)?;
+        let permutation = runs::stable_order(
+            pool,
+            &self.order,
+            &launch,
+            keys,
+            rows,
+            self.params.block_threads,
+        )?;
         let order = permutation.get().cu_deviceptr() as *const u32;
         // SAFETY: the flag kernel initializes all rows + 1 entries.
         let flags = unsafe { Buffer::<u32>::uninitialized(pool.clone(), rows + 1)? };
-        let initial = module.prepare_group_flags::<W>(ItemKernels::shape())?;
+        let initial = module.prepare_group_flags::<W>(self.kernels.shape())?;
         let config = self.launch_config(initial.function(), rows + 1)?;
         module.group_flags::<W>(
             pool.stream(),
@@ -859,7 +876,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         let positions = unsafe { Buffer::<O>::uninitialized(pool.clone(), slots + 1)? };
         let flags = unsafe { Buffer::<u32>::uninitialized(pool.clone(), slots + 1)? };
         let tile = self.params.merge_tile_rows as usize;
-        let initial = module.prepare_merge_slots::<W, O>(ItemKernels::shape())?;
+        let initial = module.prepare_merge_slots::<W, O>(self.kernels.shape())?;
         let config = self.launch_config(initial.function(), slots.div_ceil(tile))?;
         module.merge_slots::<W, O>(
             pool.stream(),
@@ -916,7 +933,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         )?;
         // SAFETY: each merged item position has exactly one source occurrence.
         let sources = unsafe { Buffer::<O>::uninitialized(pool.clone(), total)? };
-        let initial = module.prepare_item_sources::<W, O>(ItemKernels::shape())?;
+        let initial = module.prepare_item_sources::<W, O>(self.kernels.shape())?;
         let config = self.launch_config(initial.function(), total)?;
         module.item_sources::<W, O>(
             pool.stream(),
@@ -960,7 +977,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         // SAFETY: one thread initializes each directory entry.
         let directory = unsafe { Buffer::<O>::uninitialized(self.pool.clone(), entries)? };
         let module = &self.kernels.module;
-        let initial = module.prepare_build_directory::<W, O>(ItemKernels::shape())?;
+        let initial = module.prepare_build_directory::<W, O>(self.kernels.shape())?;
         let config = self.launch_config(initial.function(), entries)?;
         module.build_directory::<W, O>(
             self.pool.stream(),
@@ -989,6 +1006,7 @@ pub struct RadixSnapshot<W: Word, O: OffsetWord, C> {
     runs: Vec<Arc<Segment<W, O, C>>>,
     module: radix_kernels::LoadedModule,
     pool: Arc<Pool>,
+    block_threads: u32,
 }
 
 /// Formal rule GPU-RadixLaneRead:
@@ -1049,14 +1067,18 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
         }
     }
 
+    fn shape(&self) -> LaunchConfig1D {
+        LaunchConfig1D::new(1, self.block_threads, 0)
+    }
+
     fn config(&self, function: &cuda_core::CudaFunction, parts: usize) -> Result<LaunchConfig1D> {
         let grid = cq_gpu_runtime::launch_grid_for_kernel(
             function,
-            parts.div_ceil(BLOCK_THREADS as usize),
-            BLOCK_THREADS,
+            parts.div_ceil(self.block_threads as usize),
+            self.block_threads,
             0,
         )?;
-        Ok(LaunchConfig1D::new(grid, BLOCK_THREADS, 0))
+        Ok(LaunchConfig1D::new(grid, self.block_threads, 0))
     }
 
     fn check_probes(&self, pool: &Pool, probes: &Buffer<W>, count: usize) -> Result<()> {
@@ -1079,9 +1101,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
         // SAFETY: one thread initializes each result.
         let output = unsafe { Buffer::<KeyProbe>::uninitialized(pool.clone(), count)? };
         if count != 0 {
-            let initial = self
-                .module
-                .prepare_probe_keys::<W, O>(ItemKernels::shape())?;
+            let initial = self.module.prepare_probe_keys::<W, O>(self.shape())?;
             let config = self.config(initial.function(), count)?;
             self.module.probe_keys::<W, O>(
                 pool.stream(),
@@ -1110,9 +1130,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
         // SAFETY: one thread initializes every run cursor of its probe.
         let matches = unsafe { Buffer::<RadixMatch>::uninitialized(pool.clone(), len)? };
         if len != 0 {
-            let initial = self
-                .module
-                .prepare_probe_matches::<W, O>(ItemKernels::shape())?;
+            let initial = self.module.prepare_probe_matches::<W, O>(self.shape())?;
             let config = self.config(initial.function(), count)?;
             self.module.probe_matches::<W, O>(
                 pool.stream(),
@@ -1143,9 +1161,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
         // SAFETY: one thread initializes each result.
         let output = unsafe { Buffer::<IntervalProbe>::uninitialized(pool.clone(), count)? };
         if count != 0 {
-            let initial = self
-                .module
-                .prepare_probe_intervals::<W, O>(ItemKernels::shape())?;
+            let initial = self.module.prepare_probe_intervals::<W, O>(self.shape())?;
             let config = self.config(initial.function(), count)?;
             self.module.probe_intervals::<W, O>(
                 pool.stream(),
@@ -1217,7 +1233,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixMatches<W, O, C> {
         let output = unsafe { Buffer::<T>::uninitialized(pool.clone(), total)? };
         if cursors != 0 && total != 0 {
             let module = &self.snapshot.module;
-            let initial = module.prepare_gather_matches::<T>(ItemKernels::shape())?;
+            let initial = module.prepare_gather_matches::<T>(self.snapshot.shape())?;
             let config = self.snapshot.config(initial.function(), cursors)?;
             module.gather_matches::<T>(
                 pool.stream(),
@@ -1516,7 +1532,7 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Source
             // SAFETY: the pack kernel initializes every key before grouping.
             let words = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
             let module = &run.kernels.module;
-            let initial = module.prepare_pack_sources::<W>(ItemKernels::shape())?;
+            let initial = module.prepare_pack_sources::<W>(run.kernels.shape())?;
             let config = run.kernels.config(initial.function(), rows)?;
             module.pack_sources::<W>(
                 pool.stream(),
@@ -1972,7 +1988,7 @@ mod radix_kernels {
         keys: *mut W,
     ) {
         let mut row = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * 256;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
         while row < rows {
             let source = if positions.is_null() {
                 row
@@ -2012,7 +2028,7 @@ mod radix_kernels {
         output: *mut T,
     ) {
         let mut row = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * 256;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
         while row < rows {
             let source = if positions.is_null() {
                 row
@@ -2033,7 +2049,7 @@ mod radix_kernels {
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub fn group_flags<W: Word>(input: *const W, order: *const u32, rows: u64, flags: *mut u32) {
         let mut row = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * 256;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
         while row <= rows {
             let start = row == 0
                 || row == rows
@@ -2059,7 +2075,7 @@ mod radix_kernels {
         output: *mut T,
     ) {
         let mut row = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * 256;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
         while row < rows {
             unsafe {
                 *output.add(row as usize) = *input.add(*order.add(row as usize) as usize);
@@ -2085,7 +2101,7 @@ mod radix_kernels {
         let (left_len, right_len) = (left.keys_len as usize, right.keys_len as usize);
         let slots = left_len + right_len;
         let mut tile = thread::index_1d().get() as usize;
-        let stride = thread::gridDim_x() as usize * 256;
+        let stride = thread::gridDim_x() as usize * thread::blockDim_x() as usize;
         if tile == 0 {
             unsafe {
                 *positions.add(slots) = O::from_u64(left.items + right.items);
@@ -2152,7 +2168,7 @@ mod radix_kernels {
         sources: *mut O,
     ) {
         let mut item = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * 256;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
         while item < total {
             // Slot positions strictly increase: every group is nonempty.
             let (mut low, mut high) = (0_u64, slots);
@@ -2191,7 +2207,7 @@ mod radix_kernels {
         output: *mut T,
     ) {
         let mut row = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * 256;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
         while row < rows {
             let source = unsafe { *sources.add(row as usize) }.to_u64();
             unsafe {
@@ -2217,7 +2233,7 @@ mod radix_kernels {
     ) {
         let entries = (1_u64 << radix_bits) + 1;
         let mut bucket = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * 256;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
         let min = unsafe { *keys };
         let max = unsafe { *keys.add(len as usize - 1) };
         while bucket < entries {
@@ -2249,7 +2265,7 @@ mod radix_kernels {
         output: *mut KeyProbe,
     ) {
         let mut probe = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * 256;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
         while probe < count {
             let key = unsafe { *probes.add(probe as usize) };
             let (begin, end) = unsafe { device::range(view, key) };
@@ -2277,7 +2293,7 @@ mod radix_kernels {
         output: *mut RadixMatch,
     ) {
         let mut probe = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * 256;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
         while probe < count {
             let key = unsafe { *probes.add(probe as usize) };
             let mut index = 0;
@@ -2305,7 +2321,7 @@ mod radix_kernels {
         output: *mut T,
     ) {
         let mut index = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * 256;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
         while index < count {
             let cursor = unsafe { *cursors.add(index as usize) };
             let base = unsafe { *bases.add(index as usize) };
@@ -2334,7 +2350,7 @@ mod radix_kernels {
         output: *mut IntervalProbe,
     ) {
         let mut probe = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * 256;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
         while probe < count {
             let (lo, hi) = unsafe { (*low.add(probe as usize), *high.add(probe as usize)) };
             let mut result = IntervalProbe {
