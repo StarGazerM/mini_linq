@@ -1,5 +1,7 @@
 # CPU h01 decomposition — 2026-10-29
 
+> Point-in-time measurement: 2026-10-29 (measured source revision not recorded; report preserved by `0124315f`, 2026-10-29). **Superseded by:** the P4 integrated CPU h01 measurements in [PLANNING-REDESIGN](../../../doc/PLANNING-REDESIGN.md); the decomposition controls and exact-DISTINCT experiments below retain their original scope.
+
 **Scope update:** M6 below retains historical no-dedup controls for decomposition, not a recommendation to assume source-key uniqueness. M6b at the end measures exact DISTINCT using a checked ordering fact or general packed sort-unique; those strategies do not assume uniqueness.
 
 ## Scope and protocol

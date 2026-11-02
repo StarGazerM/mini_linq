@@ -6,23 +6,36 @@ compute) and with both running at once. Standalone cargo workspace; the Metal
 kernels in `src/kernels.metal` are compiled by `build.rs` (`xcrun metal -O3`,
 `metallib`) into `OUT_DIR` and loaded at start.
 
+Commands describe the current driver in [src/main.rs](src/main.rs); the results
+below are a **historical 2026-10-23 calibration**, committed in `9426e27b`, not
+current-checkout measurements. No calibration was rerun for this documentation
+audit. Hardware/topology descriptions are the original run notes, not device
+discovery performed by the CLI.
+
 ## Running
+
+Run from `experiments/mac/calib` on an Apple-silicon Mac with the Metal toolchain:
 
 ```
 cargo run --release -- <cpu|gpu|hybrid|all> [flags]
 
   --footprints 4MiB,64MiB,1GiB,4GiB   primary array size per primitive (default shown)
-  --threads 1,5,10,15                 CPU worker counts (default; hw.ncpu is 15 = 5P + 10E)
+  --threads 1,5,10,15                 fixed default CPU worker counts, not autodetected
   --reps 9                            timed repetitions (plus 2 warm-ups); medians reported
   --seconds 2.0                       hybrid pairing window
   --probes 32M                        random accesses per gather/scatter/rmw run
   --seed 42
-  --quick                             4MiB,64MiB / threads 1,6 / reps 3 / 0.5 s / 2M probes
+  --quick                             4MiB,64MiB / threads 1,5 / reps 3 / 0.5 s / 2M probes
+  --ops seq_read,merge_path            filter CPU/GPU operations; not hybrid pairs
+  --tag rerun                         results filename tag; use a fresh tag for new evidence
 ```
 
 Each run writes `results/<sub>-<YYYY-MM-DD>.json` (array of `Measurement`)
-and `results/<sub>-<date>.md` (the table printed to stdout). `all` runs the
-three phases in sequence (CPU, GPU, hybrid), dropping each phase's buffers
+and `results/<sub>-<date>.md` (the table printed to stdout), relative to the
+working directory. With `--tag`, the stem is `<sub>-<tag>-<date>`. Existing files
+with that stem are overwritten; use a distinct tag to preserve earlier runs.
+Explicit footprint/thread/repetition/window/probe flags override `--quick`.
+`all` runs CPU, GPU and hybrid in sequence, dropping each phase's work buffers
 before the next.
 
 ## Conventions
@@ -88,8 +101,9 @@ For each default pair, each side is timed solo (`time_work`), then a CPU
 thread runs `run_for(cpu, seconds)` while the main thread runs
 `run_for(gpu, seconds)` from one `Barrier`. Both rows carry
 `partner`, `solo_median_ms`, `solo_gbps` and `slowdown = paired / solo`.
-Pairs (`hybrid::DEFAULT_PAIRS`, CPU threads 15 = all cores, 5 = P-cores only,
-10): cpu seq_read(15) x gpu seq_read; cpu gather_line(15, 1 GiB | 64 MiB) x
+Pairs (`hybrid::DEFAULT_PAIRS`, fixed CPU thread counts 15, 5 and 10; no
+core-affinity guarantee): cpu seq_read(15) x gpu seq_read;
+cpu gather_line(15, 1 GiB | 64 MiB) x
 gpu seq_copy; cpu gather_line(15) x gpu merge_path; cpu hashbrown_probe(15,
 64 MiB | 1 GiB) x gpu partition_pass; cpu hashbrown_probe(15) x gpu
 merge_path; cpu merge_u32(15) x gpu gather_line; cpu seq_read(5) x gpu
@@ -98,12 +112,27 @@ The hybrid phase builds exactly the footprints/threads the table needs
 (capped at the largest `--footprints` value, so `--quick` pairs at 64 MiB);
 requests are matched to the nearest available footprint/thread count.
 
-## Results
+## Results (historical, 2026-10-23)
 
-Full suite, 2026-10-23, Apple M5 Pro (16-core GPU; hw.ncpu = 15 CPU cores, 5P + 10E),
-24 GB unified memory, macOS 27, `all --reps 9 --seconds 2.0`, default footprints
+Original run description: Apple M5 Pro (16-core GPU; hw.ncpu = 15 CPU cores,
+recorded as “5P + 10E”), 24 GB unified memory, macOS 27,
+`all --reps 9 --seconds 2.0`, default footprints
 (4 MiB, 64 MiB, 1 GiB, 4 GiB), threads 1/5/10/15, 32M probes, nothing else
-running. Raw data in `results/{cpu,gpu,hybrid}-2026-10-23.json`.
+running. The raw measurement arrays do not independently establish the reported
+core-type breakdown or idle-machine condition.
+
+Every measurement in the headline summary and GPU/Hybrid/CPU tables below refers
+to this dated run: [CPU JSON](results/cpu-2026-10-23.json),
+[GPU JSON](results/gpu-2026-10-23.json), and
+[hybrid JSON](results/hybrid-2026-10-23.json). The separate
+[CPU sweep](results/cpu-sweep-2026-10-23.json) and
+[GPU sweep](results/gpu-sweep-2026-10-23.json) are different invocations.
+Ratios and nominal bandwidth are derived from these measurements, not hardware
+counters or current performance guarantees.
+
+The historical headline's LPDDR5X specification claim and attribution of the
+combined rate to “DRAM peak” are not established by the repository measurements.
+Likewise, the 5/10-thread runs do not establish which physical core classes ran.
 
 ### Headline numbers
 

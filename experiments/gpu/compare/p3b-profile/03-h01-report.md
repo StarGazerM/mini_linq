@@ -1,5 +1,7 @@
 # CPU TPC-H retail_h01 default, SF1
 
+> Point-in-time measurement: M0 timing worker, 2026-10-31 (source revision not stated in this report; preserved by `1031adf6`, 2026-10-31). **Superseded by:** the P4 CPU compiler-selection measurements in [PLANNING-REDESIGN](../../../../doc/PLANNING-REDESIGN.md); the wide-sort diagnosis below describes that worker, not the current selected storage.
+
 Profiled the **already-built, uninstrumented timing worker**, not Cargo/xtask or a counting worker. No compilation. Command:
 
 ```text

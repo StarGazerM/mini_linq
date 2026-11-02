@@ -3,8 +3,22 @@
 Design: `doc/formal/backend_ir.tex` (Section "Sequence"). Sequence is the
 shipped default CPU target. This file records the crates, their public
 functions and contracts, with their dependencies and acceptance criteria.
-Nothing here names a data structure or an algorithm; implementations live in
-runtime crates behind traits.
+Recorded provider/codec types select runtime implementations behind traits;
+the translator consumes those facts rather than rediscovering an algorithm.
+
+Audit baseline: `7e187597` (2026-11-02). Box acceptance narratives, timings
+and command outcomes below are historical checkpoints, not checks rerun for
+this audit or claims about the current tree. Every numerical observation is
+sourced to this document at that commit unless a more specific dated result
+artifact is cited. `/tmp` and external `/data/tpch-gpu` reports are not
+checked-in evidence and cannot independently substantiate those checkpoints.
+Current contracts and later cutovers take precedence over their historical
+mechanism descriptions; see `PLANNING-REDESIGN.md` Progress.
+
+Current host realization uses recorded per-reader direct calls and
+`Build::build`, not autoref dispatch, a `build!` macro, or `AutoDense`.
+Closed captures use plain values cloned at consuming move-closure creation
+(`passes/cq-print/src/ownership.rs`), not inserted `Arc` capture handles.
 
 GPU TPC-H build reports record `generation_seconds` per query, scale, and mode.
 
@@ -310,7 +324,7 @@ both pool and task levels rather than reducing each chunk independently.
 Acceptance: conformance with [4] on the corpus; the parallel
 Datalog extension's sharded admission expressible as `tile` + `canon`.
 
-## [6] `experiments/gpu/sequence` (CUDA translation; replaces `experiments/gpu/printer` at cutover)
+## [6] `experiments/gpu/sequence` (CUDA translation; former printer removed)
 
 Same signature. Machine `gpu { host > device(separated, dynamic) > block(collaborative) > lane }` (no warp level).
 Templates: dispatch (one query kernel plus recorded completion steps per `Dispatch`, dynamic tile claiming), `tile`
@@ -361,13 +375,13 @@ offset module, CUB program and workspace removed repeated preparation cost.
 
 ## [7] runtime traits (`cq-storage`, `cq-gpu-runtime`)
 
-```rust
-pub trait RangeCursor<K> { fn range(&self, k: &K) -> (usize, usize); }   // contiguous bucket
-pub trait Membership<K>  { fn contains(&self, k: &K) -> bool; }
-pub trait Codec<T> { type Code: Copy + Eq; fn enc(&T) -> Option<Self::Code>; fn dec(Self::Code) -> T; }  // injective; Ord impl ⇒ monotone
-pub trait Canon<Row> { fn canon(rows) -> Self; }
-```
-Storage-law tests per implementation (α commutes), as today's `cq-storage`.
+The public CPU contracts are `cq_storage::RangeCursor` (associated `Item`,
+`items()` and `range(key)`), `ExactMembership::contains`, `IndexRead`, and
+`SequenceCodec::{encode, decode}` with an associated `Code: Copy + Eq`.
+See `runtime/cq-storage/src/{sequence,membership}.rs` for exact signatures
+and laws. The original `Membership`, `Codec`, and `Canon` sketch was design
+pseudocode, not public Rust API. Canonicalization uses the recorded provider;
+storage-law tests check each implementation's abstraction obligations.
 
 The GPU implementations are `RangeBuilder`/`RangeProvider` (stable RCCL
 radix ordering, dense-code lower-bound offsets and gathered packed payload),
@@ -1377,9 +1391,9 @@ Current computed-column bounds must come from recorded representations;
 neither a Rust type spelling nor a source-column codec establishes the range
 of an arbitrary expression. WideCanon handles recorded complete keys wider
 than 128 bits.
-## [14] Staged programs in the GPU suite
+## [14] Historical staged-program integration evidence
 
-The importer retains the authored compile! graph, not merely its final rule:
+The original importer retained the authored compile! graph, not merely its final rule:
 H02/H18/H20 have two nodes, H15 has three, H11 has four, and H13 has two
 independent terminal branches. H13 also retains its authored one-time
 QualifiedOrders preprocessing and counts/zeros iterator composition. Each node
@@ -1387,6 +1401,12 @@ has a separately checked/advised plan and replay artifact. Resident numeric
 publications retain count, input key codec bounds, output column order and
 ancestor statuses; nullable or host-planned publications use host rows.
 Explicit caller advice is not discarded when device planning fails.
+
+Current cutover: `tpch/src/source.rs::SOURCES` loads authored `queries/*.stages`
+programs, checked by `tpch/src/stages.rs`; it does not extract compile macros
+or recognize host Rust pipelines. The stage DSL records inputs, domains,
+captures and dependencies. The following results describe the earlier importer
+and must not be read as execution evidence for the current DSL.
 
 The advised correctness gate passes at SF1 and SF10, including exact comparison
 against every exported answer TSV and same-Physical Sequential graph conformance
@@ -1422,9 +1442,9 @@ Scoped clippy checks the runtime with warnings, but the suite lint gate reports
 44 `clippy::erasing_op` errors in generated zero-width CUDA allocations
 (`capacity * 0`); no translator change or lint suppression is included here.
 
-### Box 14b: arithmetic/key-aware staged replanning
+### Box 14b: historical arithmetic/key-aware staged replanning
 
-H15 now computes per-supplier revenue, a global grouped `max()`, and an equality
+At this historical checkpoint H15 computed per-supplier revenue, a global grouped `max()`, and an equality
 join retaining every tied supplier. The nullable maximum preserves empty-input
 semantics and removes the quadratic anti-dominance stage. Its independent
 DuckDB oracle SQL is unchanged.

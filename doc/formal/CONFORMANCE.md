@@ -1,4 +1,16 @@
-# Rule conformance and layering audit (2026-10-28)
+# Rule conformance and layering audit
+
+Origin: read-only audit of 2026-10-28; living status synchronized against
+`7e187597` (2026-11-02). The per-area current tables supersede historical
+finding narratives and their old line numbers. `exact` describes conditional
+structural conformance, not a fresh test run or a proof of runtime laws.
+
+Current host realization uses recorded direct calls: `build!`, autoref
+dispatch tiers and `AutoDense` are retired (see `CHANGELOG.md`, “No fallback
+tiers”). Host IF-Capture values use owned clones per consuming move closure,
+including nested closures (`passes/cq-print/src/ownership.rs`), not the
+historical type-dependent capture handles. GPU-Capture is a distinct
+host-expression/codec/domain record, not that retired ownership mechanism.
 
 `doc/formal/check.py` proves only that every `\Rule` has one source marker. This
 record pairs each rule's written premises with the code that implements it and

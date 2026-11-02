@@ -12,6 +12,11 @@ Wider GPU index keys, Datalog publication integration, automatic placement and
 a Metal query backend remain separate work. Earlier measurement sections and
 command blocks retain their historical boundaries.
 
+Evidence provenance: historical numerical results below are preserved from
+this document at repository snapshot `7e187597` (2026-11-02), with the original
+dated result files and machine/source identifiers cited in each experiment.
+They are not measurements of the current direct-call compiler cutover.
+
 ## Decision
 
 Start with GPU-built, CPU-readable immutable indexes and an explicitly
@@ -1823,17 +1828,18 @@ fallback, even when the supplied host had an index on that field.
 `cq_storage::dispatch::IndexedColumn<N>` is now the explicit single-column
 contract. Its key is a one-field tuple of the declared owned key type; its
 payload implements `Columns` in the original order of every remaining column.
-`ColumnHost` reuses ordinary autoref dispatch, fallback ownership and cursor
-proofs. The printer derives N from the checked declaration/rename, not from
-coincidental equality of Rust field types. Prefix, computed-key, multicolumn
-nonleading, candidate and PointLookup paths retain their existing rules.
+`ColumnHost` implements the ordinary direct-read traits; a declared
+`host [column] reads [...]` capability and the per-reader Structures record
+select it. The printer derives N from the checked declaration/rename, not
+from coincidental equality of Rust field types. There are no autoref tiers.
 Membership requires its separate trait, and retained/expanded reads retain
 their Copy/exact-size requirements.
 
-This is a host-read registration through a Rust capability, not a Mac-specific
-provider-name exception or a new logical operator. A host without the matching
-slot/capability still uses the recorded lazy fallback. Constructor context,
-placement and failures remain explicit outside the compiled query.
+This is an explicit host declaration backed by a Rust capability, not a
+Mac-specific provider-name exception or a new logical operator. A host without
+a matching declaration uses the recorded lazy fallback; a declared capability
+missing from the Rust type is a rustc error, not a fallback. Constructor
+context, placement and failures remain explicit outside the compiled query.
 
 ### Execution proof and measurement boundaries
 

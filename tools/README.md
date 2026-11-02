@@ -135,6 +135,13 @@ require measured compile-time improvement and passing tests before adoption.
 
 ## Measured quick tier
 
+Historical measurements below are retained from committed documentation:
+`7e187597` (2026-11-02) records the expanded quick tier and its timings;
+`f82091ce` (2026-11-01) records the impact-selection, layout and reuse
+experiments. These are checkpoint observations, not current-run results.
+Their `target/` paths identify original local evidence, not committed result
+artifacts; raw logs have not been revalidated by this documentation audit.
+
 The 15-target quick tier passed in **21.939 seconds** (external gate time
 **21.98 seconds**): 21.383 summed build seconds and 6.841 summed test/scenario
 seconds. Build settings were the environment above with workspace target directories.
@@ -224,6 +231,8 @@ and gate time before the harness returns failure if either lane failed.
 
 ## Warm shared-directory indicator
 
+Historical checkpoint: `f82091ce` (2026-11-01), as retained in this file.
+
 After warming each layout, the identical 12-target quick tier passed in both:
 
 | Layout | Wall | Summed build | Summed test | 1-minute load before → after |
@@ -244,6 +253,10 @@ no default or test-profile settings were changed. The full-suite warm A/B and
 large-generated-crate codegen/debuginfo measurements are explicitly deferred.
 
 ## Reuse demonstration and remaining gate evidence
+
+Historical checkpoint: `f82091ce` (2026-11-01), as retained in this file.
+The temporary build prohibitions and pending gates below describe that
+experiment, not today's gate policy.
 
 The requested full baseline was interrupted immediately when DuckDB and
 `--all-features` builds were prohibited. Before interruption, 72 targets completed

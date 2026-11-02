@@ -59,6 +59,12 @@ Implementation inventory: planner compositions and pass protocol are recorded in
 
 ## Findings
 
+The defect narratives below preserve the original audit's evidence, not
+current driver behavior. The tables above record the subsequent cutovers:
+explicit target/publication/recipe facts, shared planning and registry, and
+configuration-owned defaults. Historical code excerpts and line numbers must
+not be used as present implementation instructions.
+
 ### 1. Any device-compilation error can silently select a different target and discard advice [B, E, F] [severity high]
 
 **Resolved by DR-Target:** `Pipeline.target` is explicit (`device` by default,
@@ -268,4 +274,4 @@ historical; no GPU execution is claimed by this structural conformance update.
 - **Protocol:** `facade/cq-stage/src/lib.rs` resolves the ordinary queue and records boundary cutoffs in that same construction. The receiver runs after ordinary source/target/correspondence/context checks. Terminal Rust is captured after translation, not by stringifying an unexpanded printer invocation.
 - **Evidence boundary:** Source inspection and regression tests cover queue prefixes, argument preservation and payload round trips. Capturing Rust does not type-check or execute the query. No new test execution is claimed here.
 
-Remaining driver findings above are independent of this diagnostic cutover.
+The current rule table, rather than the retained historical defect excerpts, records the driver cutovers independently of this diagnostic cutover.

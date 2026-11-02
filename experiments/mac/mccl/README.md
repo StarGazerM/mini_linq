@@ -7,13 +7,40 @@ by MLX primitives and offline-compiled Metal kernels. CPU comparison/radix index
 construction is explicitly selectable; there is no automatic CPU fallback or
 Python runtime dependency.
 
+## Current API versus historical evidence
+
+The current contracts are implemented in [src/lib.rs](src/lib.rs),
+[src/relation.rs](src/relation.rs), [src/index.rs](src/index.rs),
+[src/radix.rs](src/radix.rs) and [include/mccl.h](include/mccl.h).
+All timings, bandwidths, speedups and observed false-positive rates below are
+**historical measurements**, not current-checkout results. Measurement dates
+are in the linked artifact names; imported evidence is not a new run.
+Likewise, recorded “passed” checks describe their original snapshots, not
+verification performed for this documentation audit.
+
+| Historical measurements | Repository evidence / date |
+|---|---|
+| Initial merge/copy bandwidth | [Completed-call CSV](benchmarks/m5-pro-2026-10-15.csv), 2026-10-15 |
+| Multiset difference | [Preserved CSV](benchmarks/set-difference-2026-10-15.csv), 2026-10-15; the earlier prose-only run below does not match this artifact |
+| Bloom bits, rate and latency | [CSV](benchmarks/bloom-filter-2026-10-15.csv), [oracle fixtures](benchmarks/bloom-oracle-2026-10-15.json), 2026-10-15 |
+| Initial hash map | [CSV](benchmarks/hash-map-2026-10-16.csv), 2026-10-16 |
+| Hash-map refinement | [Exploration](benchmarks/hash-map-refinement-2026-10-18.csv), [sparse](benchmarks/hash-map-sparse-2026-10-18.csv), [steady](benchmarks/hash-map-steady-2026-10-18.csv), [churn](benchmarks/hash-map-churn-2026-10-18.csv), [final](benchmarks/hash-map-final-2026-10-18.csv), 2026-10-18 |
+| Probe kernels and counter interpretation | [Vector4](benchmarks/hash-map-vector-probe-2026-10-18.txt), [vector8](benchmarks/hash-map-vector8-2026-10-18.txt), [vector16](benchmarks/hash-map-vector16-2026-10-18.txt), [vector32](benchmarks/hash-map-vector32-2026-10-18.txt), [counters](benchmarks/hash-map-counters-2026-10-18.json), 2026-10-18 |
+| Lifecycle/reuse phase timings | [Lifecycle](benchmarks/m3-max-lifecycle-2026-10-25.json.gz), [wired](benchmarks/m3-max-lifecycle-wired-2026-10-25.json.gz), [extra synchronization](benchmarks/m3-max-lifecycle-sync-2026-10-25.json.gz), 2026-10-25 |
+| Shared-source construction | [Native timing CSV](benchmarks/shared-source-index-timing-m3max-20261026.csv), 2026-10-26 |
+
+See the [evidence inventory](benchmarks/README.md) for timing-boundary changes and
+the unavailable private raw-trace archive. Prose-only historical validation and
+profiling reports are not substitutes for retained logs or a fresh run.
+
 ## Build and run
 
 Requires Apple silicon, Xcode with the Metal Toolchain component, CMake >= 3.27,
 and Rust. The first CMake configure downloads dependencies. Run these commands
-from the MCCL crate directory: the standalone repository root, or
-`experiments/mac/mccl` inside mini_linq. The same source tree is published in
-both repositories; mini_linq keeps it outside its portable core workspace.
+from this repository's `experiments/mac/mccl` directory. MCCL remains outside
+the portable core workspace. Historical notes also refer to a standalone MCCL
+repository; publication or source parity with that external repository is not
+established by this checkout.
 
 ```sh
 cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Release
@@ -55,12 +82,13 @@ xcrun dsymutil build/profile/libmccl_native.dylib
 release optimization, retains full debug info, and disables stripping. Do not
 accidentally profile `target/release/mccl` linked to the normal native build.
 
-The profiling executable passed all 456 GPU correctness cases. Loader diagnostics
-confirmed it loads `build/profile` libraries. Recording it with Metal System Trace
-still reported the log-archive error; symbols do not by themselves enable GPU
-counters. The resulting trace metadata still reported `Counter Set: (null)` and
-`Shader Timeline: Disabled`. Source attribution, recording health, and counter
-configuration must be checked separately.
+The historical profiling note reported all 456 GPU correctness cases passing and
+loader diagnostics selecting `build/profile`. It also reported a Metal System
+Trace log-archive error, `Counter Set: (null)` and `Shader Timeline: Disabled`.
+These are retained reports, not verified current build/capture status; the
+private raw archive is not present here (see [artifact availability](benchmarks/README.md)).
+Symbols alone do not enable counters. Source attribution, recording health and
+counter configuration must be checked separately.
 
 ## Sorted-array API and semantics
 
@@ -131,11 +159,14 @@ cargo run --release -- difference-bench --sizes 64K,1M --reps 20 --warmup 5
 
 Sizes denote combined A+B length. CSV reports each input length, survivor count,
 and completed-call latency; no single-pass bandwidth formula is applied.
-The initial release run passed 100 difference cases and all 456 merge cases with
-Metal Shader Validation enabled. At 524,288 elements per input, the initial
-20-sample median was approximately 0.74–0.93 ms across disjoint, interleaved, and
-equal-multiplicity duplicate inputs. These are wall timings, not GPU-counter
-measurements; no memory-boundness conclusion is established for difference.
+The original 2026-10-15 note reported 100 difference cases and all 456 merge cases
+passing with Metal Shader Validation. It reported an initial 20-sample median
+of approximately 0.74–0.93 ms at 524,288 elements per input across disjoint,
+interleaved and equal-multiplicity duplicate inputs. **Unverified earlier run:**
+the committed [CSV](benchmarks/set-difference-2026-10-15.csv) instead records
+30 repetitions and different timings, so it does not substantiate that retained
+20-sample range. Neither the historical note nor the CSV reports GPU counters;
+no memory-boundness conclusion is established for difference.
 
 
 ## Blocked Bloom filter
@@ -183,7 +214,7 @@ clear, empty/extreme keys, seeds, snapshot isolation and lifetime/context checks
 Six additional GPU bit-layout fixtures matched independent Python `xxhash==3.6.0`
 results, including strided C inputs. Existing merge/difference regressions passed.
 
-Initial data is in `benchmarks/bloom-filter-2026-10-15.csv`. Inserting 1,048,576
+Historical data (2026-10-15) is in [the Bloom CSV](benchmarks/bloom-filter-2026-10-15.csv). Inserting 1,048,576
 distinct keys into 65,536 blocks (2 MiB), then querying 1,048,576 members and
 1,048,576 known nonmembers, produced 1,382 false positives (0.1318% of nonmembers)
 and no false negatives. GPU bits and query flags matched the CPU oracle.
@@ -252,14 +283,14 @@ cargo run --release -- hashmap-bench --keys 64K --queries 64K \
 GPU checks passed under Metal Shader Validation against a CPU map oracle,
 including collisions, duplicate updates, full-map updates, partial admission,
 reserved keys, all value bits, erase/reinsert, rehash, snapshots and lifetimes.
-The initial 50%-load benchmark is in `benchmarks/hash-map-2026-10-16.csv`:
+The historical initial 50%-load benchmark is in [the 2026-10-16 CSV](benchmarks/hash-map-2026-10-16.csv):
 insert/find/erase medians 0.587/0.259/0.298 ms. Input arrays are resident;
 each insertion follows erasing all keys, so tombstone maintenance is included.
 Queries alternate hits with a repeated missing key; this is not a broad
 random-miss workload. Timings include host submission/completion, not just GPU
 time. No saturation or throughput-optimality claim is made.
 
-### Refinement measurements (2026-10-18)
+### Historical refinement measurements (2026-10-18)
 
 `hashmap-bench` separates `cold-insert`, `update`, `churn`, `steady-update`, and
 `persistent-churn` scenarios, with optional `--batch` (defaults to `--keys`).
@@ -402,15 +433,15 @@ primitives remain lazy and useful for already-packed GPU arrays.
 Low-level allocation returns **uninitialized storage**: callers must initialize
 it exclusively before sharing/evaluating it. See `include/mccl.h`.
 
-Shared-source verification on M3 Max/macOS 27.0.1 passed ten MCCL integration
+The historical 2026-10-26 shared-source note reported M3 Max/macOS 27.0.1 passing ten MCCL integration
 tests and twelve CQ tests. All eight MCCL index regressions also passed with
 Metal Shader Validation, including repeated columns, original row IDs after
 mask compaction, selected signed-domain errors, lazy GPU-produced inputs and
 source/index survival across cache clearing and context disposal. Actual hybrid
 maintenance and repeated H03/H09 execution passed with validation enabled.
 A direct C smoke verified error-atomic publication and retained lazy sources.
-See the [shared-source cutover](https://github.com/StarGazerM/mini_linq/blob/codex/all-answers/doc/MAC-IMPLEMENTATION.md#shared-relation-input-cutover)
-for query boundaries and measurements. This pair-index remains a sorted-run/
+See the [shared-source cutover](../../../doc/MAC-IMPLEMENTATION.md#shared-relation-input-cutover)
+for historical query boundaries and measurements. This pair-index remains a sorted-run/
 prefix-directory index; the separate grouped RadixRun path below builds a spline.
 
 ## GPU-built grouped RadixRun
@@ -446,7 +477,7 @@ Existing pair-index APIs remain independently selectable, not aliases.
 The C ABI exposes `mccl_build_relation_radix_u32`, `mccl_merge_radix_u32` and
 `mccl_radix_index`. All five initialized output handles and scalar fields remain
 unchanged on failure. See `include/mccl.h` for layout and completed-input contracts,
-and the [implementation notes](https://github.com/StarGazerM/mini_linq/blob/codex/all-answers/doc/MAC-IMPLEMENTATION.md)
+and the [implementation notes](../../../doc/MAC-IMPLEMENTATION.md)
 for the matched construction/read benchmark.
 
 ## Index construction diagnostics
@@ -482,7 +513,7 @@ remain empty fields. `--cache cleared` affects unused output/scratch allocations
 not the still-owned relation; ownership does not guarantee physical residency.
 Previous CSV files retain their original per-build-population boundaries.
 
-The [large construction investigation](https://github.com/StarGazerM/mini_linq/blob/codex/all-answers/doc/MAC-IMPLEMENTATION.md#2026-10-26-controlled-construction-investigation)
+The [historical construction investigation](../../../doc/MAC-IMPLEMENTATION.md#2026-10-26-controlled-construction-investigation)
 contains the size/distribution/relation matrix, matched raw-Metal controls,
 actual scheduling/idle measurements and remaining causal limits.
 
@@ -538,6 +569,8 @@ M5 Pro CSV retains the previous timing boundary and is not rewritten.
 
 ### Lifecycle diagnostic
 
+Unlike the crate-relative commands above, run these from the mini_linq repository root:
+
 ```sh
 cargo run --release --manifest-path experiments/mac/mccl/Cargo.toml -- lifecycle --sizes 64K,1M,16M,64M --reps 9 --warmup 2 \
   --wired 0 --out experiments/mac/mccl/benchmarks/lifecycle-rerun.json
@@ -569,7 +602,7 @@ Peak memory is MLX's process high-water mark and is not reset. The extra-copy
 control reproduces the extra data movement, not every barrier in the old wrapper.
 
 
-## Verification
+## Historical verification reports
 
 On 2026-10-15, the release build and the GPU integration test passed. The actual
 CLI passed 456 merge cases and their forced copies, graph-lifetime checks, and
@@ -585,9 +618,9 @@ MTL_SHADER_VALIDATION_ABORT_ON_FAULT=1 ./target/release/mccl check
 
 Do not enable validation during performance measurement.
 
-## Initial bandwidth investigation
+## Historical initial bandwidth investigation (2026-10-15)
 
-Raw results: `benchmarks/m5-pro-2026-10-15.csv`.
+Raw results: [completed-call CSV](benchmarks/m5-pro-2026-10-15.csv).
 Machine: M5 Pro, 16 GPU cores, 24 GB unified memory; macOS 27.0.1, Xcode 27.0.
 The desktop was active on a 7680x2160 display; this was not a headless/isolated
 hardware-counter experiment. Dependency build and validation finished before timing.
@@ -622,7 +655,7 @@ memory movement. Copy throughput is a measured comparison point, not a theoretic
 hardware maximum. Earlier Instruments recording attempts had logging errors;
 no clean hardware-counter capture is claimed here.
 
-## 2026-10-25 lifecycle integration (M3 Max)
+## Historical 2026-10-25 lifecycle integration (M3 Max)
 
 The first-touch/reuse investigation is now implemented in MCCL without replacing
 MLX's allocation ownership. The release build passed both Rust integration tests,

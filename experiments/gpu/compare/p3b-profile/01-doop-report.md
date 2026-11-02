@@ -1,5 +1,7 @@
 # GPU DOOP vs recorded SRDatalog
 
+> Point-in-time measurement: M0 binaries, 2026-10-31 (source revision not stated in this report; preserved by `1031adf6`, 2026-10-31). **Superseded by:** the same-workload P6b lane measurements in [PLANNING-REDESIGN](../../../../doc/PLANNING-REDESIGN.md), 2026-10-31; the profile and SRD clock/boundary caveats below remain historical evidence.
+
 Read-only capture of the supplied M0 `bin/base/srd-doop-gpu`, `GPU_DATALOG_PHASES=1 --gpu-only`; no compilation. GPU: RTX 6000 Ada, 142 SMs, nominal 960.096 GB/s. Commands/environment: `capture-manifest.json`; raw timelines: `xalan.nsys-rep`, `batik.nsys-rep` and SQLite exports. Logs retain program phase timings.
 
 ## Evidence

@@ -5,7 +5,19 @@ clippy, workspace tests, regressions, dependency isolation, the out-of-tree
 gate, the public-API check, the formal check, goldens, fuzz, and TPC-derived
 kernels exact against DuckDB at SF 0.1 and SF 1.
 
+Entries record successive changes, not a cumulative current API specification.
+Later removals supersede earlier additions (including autoref/build-macro
+dispatch and capture handles); retain those earlier entries as history. For
+current contracts use the living design docs, and for the latest recorded
+measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
+
 ## Unreleased
+
+- Documentation audit: distinguish current compiler/runtime contracts from
+  historical mechanisms and benchmark snapshots; add report provenance and
+  same-workload supersession links without changing measured data. The GPU
+  profiling guide separates the removed cvc5 backend from the later P6b DOOP
+  evidence, and explicitly flags unavailable measurement provenance.
 
 - DriftFix4: domain-id exhaustion is a parse error rather than overflow;
   IX checks recorded supply legality without replaying demand classification.

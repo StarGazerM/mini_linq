@@ -3,8 +3,11 @@
 Originally imported from the independent `mini_linq-gpu-index-20261024` snapshot
 alongside the CPU join improvements. The GPU runtime and MCCL are now consolidated
 under `experiments/mac/`; sibling snapshots are historical backups only.
-The measurements below predate integration and retain their original provenance.
-They are not new measurements of the current native provider.
+All performance numbers below are historical, not new measurements of the current
+native provider or MCCL runtime. The initial undated JSON sweeps were preserved
+in repository commit `c142c37d` (2026-10-27); they do not record a measurement
+timestamp or tested commit. The snapshot name is not sufficient to establish
+an exact run date. Later dated artifacts identify separate invocations.
 
 This standalone Rust/Metal executable implements stable u32-key/u32-payload
 sorting, stable old-run-before-delta merging, exact radix-prefix directories,
@@ -67,10 +70,11 @@ checkpoints. MCCL evaluation wall time is never mislabeled GPU time; actual
 MCCL timestamps come from the separate native `mccl_index_timing` observer.
 Run timing experiments sequentially and without Shader Validation.
 
-[Current shared-source contract and measurements](../../../doc/MAC-IMPLEMENTATION.md#shared-relation-input-cutover).
-[Shared-source comparison](shared-source-compare-m3max-20261026.json).
-The [historical host-populated comparison](index-compare-m3max-20261026.json.gz)
-remains unchanged and has different timing boundaries.
+[Shared-source contract and historical measurements](../../../doc/MAC-IMPLEMENTATION.md#shared-relation-input-cutover).
+[Shared-source comparison, 2026-10-26](shared-source-compare-m3max-20261026.json).
+The [historical host-populated comparison, 2026-10-26](index-compare-m3max-20261026.json.gz)
+remains unchanged and has different timing boundaries. Neither artifact is a
+measurement of subsequent runtime/compiler changes.
 
 
 Correctness checks execute real Metal kernels and compare complete rows against
@@ -111,9 +115,11 @@ Evidence: [first touch](m3max-first-touch-20261025.json),
 See the [root-cause analysis and verified reusable runtime](../../../doc/MAC-IMPLEMENTATION.md#first-touch-and-resource-lifetime-root-cause-isolation).
 
 
-## Evidence and measured choices
+## Historical evidence and measured choices
 
-M3 Max, 40 GPU cores, 128 GiB memory:
+Original machine description: M3 Max, 40 GPU cores, 128 GiB memory.
+The following initial sweeps have import provenance `c142c37d` (2026-10-27),
+but no embedded measurement date/tested revision:
 
 - [Initial construction/native comparison](m3max-baseline.json).
 - [Controlled merge-partition comparison](m3max-partitioned.json).
@@ -121,12 +127,14 @@ M3 Max, 40 GPU cores, 128 GiB memory:
 - [Final maintenance sweep](m3max-tuned-maintenance.json): 116 measurement records,
   seven samples each, after warmup.
 
-Choose four **8-bit radix passes with 8 rows/thread** for large builds.
-Choose **parallel merge-path partitioning followed by 4-row/thread tiled merge**
-for large maintenance. The separate partition dispatch avoids serial global
-boundary searches inside every merging threadgroup.
+Those sweeps selected four **8-bit radix passes with 8 rows/thread** for large
+builds, and **parallel merge-path partitioning followed by 4-row/thread tiled
+merge** for large maintenance. The separate partition dispatch avoids serial
+global boundary searches inside every merging threadgroup. This is a measured
+choice for the historical harness, not a universal current-device optimum.
 
-67,108,864 uniform full-width keys, five-sample GPU medians:
+[Radix digit sweep](m3max-radix-digits.json): 67,108,864 uniform full-width keys,
+five-sample GPU medians (same source for the directory/skew timings below):
 
 | Operation | GPU ms | Modeled logical GB/s |
 |---|---:|---:|
@@ -149,7 +157,8 @@ also pays input population and residency/submission costs; see the
 [phase profiles, CPU tuning and Metal trace evidence](../../../doc/MAC-IMPLEMENTATION.md#cpu-tuning-and-gpu-bandwidth-reconciliation).
 
 
-Final updates into a 67,108,864-row base, seven-sample medians:
+[Final maintenance sweep](m3max-tuned-maintenance.json): historical updates into
+a 67,108,864-row base, seven-sample medians:
 
 | Delta/base | Output rows | Merge GPU ms | Merge logical GB/s | Whole update GPU ms | Whole update host ms |
 |---|---:|---:|---:|---:|---:|
@@ -158,11 +167,13 @@ Final updates into a 67,108,864-row base, seven-sample medians:
 | 100% | 134,217,728 | 6.876 | 312.30 | 29.241 | 29.565 |
 
 Whole update means sort raw delta, merge with the old run, and rebuild the exact
-radix directory in one submission. In the controlled comparison, balanced
-merge took 21.370 ms direct, 12.133 ms tiled, and 6.970 ms partitioned at
-4 rows/thread. Eight rows/thread was slower for merging despite winning for sort.
+radix directory in one submission. In the
+[controlled partition comparison](m3max-partitioned.json), balanced merge took
+21.370 ms direct, 12.133 ms tiled, and 6.970 ms partitioned at 4 rows/thread.
+Eight rows/thread was slower for merging despite winning for sort.
 
-Eight 1,048,576-row duplicate-heavy deltas merged 25,165,824 rows with binary
+The [final maintenance sweep](m3max-tuned-maintenance.json) also records histories:
+eight 1,048,576-row duplicate-heavy deltas merged 25,165,824 rows with binary
 carries versus 36,700,160 with flat compaction: 31.4% less merge traffic.
 Batched host times were 4.770 versus 5.523 ms; separately completed submissions
 cost 6.752 versus 7.087 ms. At 65,536 rows/delta, leveled separate submissions
@@ -189,10 +200,14 @@ work or extra probes across live levels. They are not a persistent LSM provider.
   deletion, concurrent readers, persistence and production-provider adoption
   have not been implemented here.
 
-Keeping the native spline was CPU-bound in the initial snapshot: the 67M-row
-hybrid build took 1,669 ms host time, with about 1,596 ms in CPU spline building;
-ordinary native construction took 4,443 ms. The hybrid experiment does not
-adopt its buffers into the native provider's layout. The exact GPU radix
-alternative avoids that sequential spline build but has unmeasured probe
-performance and potentially skewed high-bit buckets on dense domains.
-Do not substitute it for RadixSpline based on build time alone.
+Keeping the native spline was CPU-bound in the
+[initial baseline snapshot](m3max-baseline.json): the 67M-row hybrid build took
+1,669 ms host time, with about 1,596 ms in CPU spline building; ordinary native
+construction took 4,443 ms. The hybrid experiment does not adopt its buffers into
+the native provider's layout. In that snapshot, the exact GPU radix alternative
+avoided sequential spline building but had unmeasured probe performance and
+potentially skewed high-bit buckets on dense domains. Those observations are
+not current-runtime limitations: [MCCL](../mccl/README.md#gpu-built-grouped-radixrun)
+now also builds grouped spline indexes on GPU, and the separate
+[CQ adapter](../cq-mac/src/radix.rs) uses the native CPU spline reader.
+Do not substitute a structure for RadixSpline based on historical build time alone.

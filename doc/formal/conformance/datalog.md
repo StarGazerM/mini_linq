@@ -12,6 +12,14 @@ stated runtime premises, not a proof. Items marked [INFERENCE] were not
 executed. `doc/formal/check.py` verifies that every rule named here exists in
 `rules.tsv` and every cited file exists.
 
+This is a living rule map originating in the dated audit above, not evidence
+that the latest snapshot's runtime gates passed. Inventory line numbers
+(`I<n>`) are historical locators; rule names are authoritative. Concrete
+maintained-run implementations below do not implement the general abstract
+incremental calculus. Latest checkpoint evidence and its limitations are
+tracked in `doc/PLANNING-REDESIGN.md` (Progress and P6b), not inferred from
+these structural conformance statuses.
+
 ## Rule conformance
 
 **Scope and interpretation.** This enumerates the rules in `doc/formal/datalog.tex`, the Datalog rules and supporting run laws in `doc/formal/incremental.tex`, and their inventory entries in `doc/formal/rules.tsv:161-219`. `I<n>` below identifies the exact inventory row. **Exact** means the inspected implementation matches the structural check or operational construction, conditional on the explicitly opaque Rust/provider premises; it is not a claim of mechanically proved Rust equivalence. **Unimplemented** on an `abstract` inventory entry means no implementation/checker is assigned to that rule—not that the documented abstract law is necessarily violated.

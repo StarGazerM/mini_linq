@@ -1,5 +1,7 @@
 # TPC-H statistics and hand-authored GPU plans
 
+> Point-in-time measurement: statistics/advice collection through 2026-10-24 (report `4cbe5eea`; a common measured source revision is not recorded). **Superseded by:** the broader [performance report](performance_report.md), collected through 2026-10-25, and later [planning progress](../../../doc/PLANNING-REDESIGN.md); the statistics and hand-authored plans below are historical evidence, not current automatic planner behavior.
+
 Measurement scope: the original 17 runnable suite queries. h07, h10, h14 and h19 were excluded from those historical runs for the then-rejected-query reasons. The h07 section now includes a separate exact h07/h07_block run after dictionary disjunction support; its advice uses the existing h07_block statistics for their identical SQL predicate and output. The final H19 section separately derives advice from SF1/SF10 statistics after manual interning; it does not extend the historical execution claims.
 
 Measurements use read-only DuckDB 1.5.6 over `/data/tpch-gpu/{sf1,sf10}/dbgen.duckdb`, `SET threads=4`. Manifest row counts are cross-checked by SQL; the manifests contain no min/max fields, so key bounds below are measured with SQL rather than invented. DuckDB t24 benchmark timings are the suite's recorded independent timing files, not the four-thread statistics queries.

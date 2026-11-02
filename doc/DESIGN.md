@@ -63,6 +63,12 @@ tree semijoins; elaboration writes RA′. IX adds exact demand descriptors witho
 changing RA′. Physical records operators, modes, intersection choices, semijoin
 eagerness, and canonical boundaries. Structures adds concrete build, host
 fallback, retained-row, and dedup types. Later passes consume those decisions.
+The written reference is `cq_order::compile_written`, followed by
+`cq_elaborate::compile`; elaboration does not own reference scheduling.
+Host builds print direct `Build::build` calls. Neither a `build!` dispatch macro
+nor `AutoDense` capability selection remains. Closed capture values are owned
+plainly; `cq_print::own_captures` clones only the values read by each move
+closure, including nested closures, rather than inserting `Arc` handles.
 
 ## Programs and storage
 
@@ -78,16 +84,18 @@ lowering does not rediscover selection classes or intersect join headings.
 The independent Physical correspondence check still verifies keyed-read demands.
 
 Declarations supply ordered columns and optional leaf expressions. Declaration
-order fixes host layout; types and runtime traits determine native access.
-Leading-prefix stream reads use native traits when available. A single
-nonleading borrowed-key read may use `IndexedColumn<N>` for its checked
-declaration slot, preserving the original payload-column order. Unsupported
-slots or capabilities use a recorded fallback built lazily once. Const/range
-reads use direct access or scan/filter without building an index. Those predicate reads are distinct from
-literal-bearing atom occurrences: every index for such an occurrence holds only
-its filtered, projected data, including retained rows when it is a stream source.
-Building that data uses native leading-prefix point lookup when available,
-falling back to a host scan and filter, without changing the retained relation.
+order fixes host layout. Native keyed access requires explicit `host [k..]
+reads [...]` declarations and a matching per-reader Structures record; rustc
+checks the selected runtime trait. A single nonleading read may use
+`IndexedColumn<N>` for its declared slot, preserving payload-column order.
+Without a matching declaration, selection records a fallback built lazily
+once. A declared native capability that the Rust type lacks is an error,
+not an autoref fallback. Const/range reads use their recorded native read or
+scan/filter. Those predicate reads are distinct from literal-bearing atom
+occurrences: every index for such an occurrence holds only its filtered,
+projected data, including retained rows when it is a stream source.
+Building that data uses recorded native point access or a host scan/filter,
+without changing the retained relation.
 Only the occurrence's row source is constant-specific. Its ordinary `let`
 entries, retained rows, and indexes use the same selection and build machinery
 as every other retained relation; no occurrence-specific `payload/constants`

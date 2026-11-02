@@ -1,3 +1,5 @@
+> Point-in-time debug measurement: exact run date/source revision not recorded in [raw data](cpu-debug-18thr.json); preserved by `9426e27b`, 2026-10-23. Not re-measured since in the retained evidence; use the [dated calibration suite](cpu-2026-10-23.md) for the model's standard thread configuration, not these oversubscription diagnostics.
+
 | op | proc | thr | footprint | GB/s | ns/item | median ms | gpu ms | notes |
 |---|---|---:|---:|---:|---:|---:|---:|---|
 | cpu_spawn | cpu | 12 | - | 0.0 | 15770.83 | 0.189 | - |  |

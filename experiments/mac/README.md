@@ -1,7 +1,7 @@
 # Mac (Apple silicon) calibration and cost model
 
-Branch `mac-cost-model`. The experiments use standalone workspaces; the native
-provider and join improvements live in the main workspace. Five experiment pieces:
+The experiments use standalone workspaces; the native provider and join
+improvements live in the main workspace. Five experiment pieces:
 
 - `calib/` — `maccal`: measured primitive costs on this machine (CPU, GPU, and
   CPU+GPU concurrently). Rust + Metal; see `calib/README.md` for every primitive.
@@ -22,12 +22,38 @@ The [Mac implementation plan](../../doc/MAC-IMPLEMENTATION.md) separates
 GPU-assisted host providers, LSM-like snapshot maintenance, Datalog publication,
 and a future Metal-resident Sequence backend, including their compiler boundaries.
 
+## Reading current contracts and historical evidence
+
+API descriptions below refer to the checked-in sources. **All performance numbers
+on this page are historical**, not measurements of the current checkout. Dates
+in linked evidence identify the runs; later import commits are not measurement
+dates. The calibration was committed as `9426e27b` (2026-10-23); the original
+GPU-index evidence was preserved in `c142c37d` (2026-10-27).
+
+| Historical section | Repository evidence and measurement date |
+|---|---|
+| Primitive costs, overheads and contention | [CPU](calib/results/cpu-2026-10-23.json), [GPU](calib/results/gpu-2026-10-23.json), [hybrid](calib/results/hybrid-2026-10-23.json), 2026-10-23 |
+| Footprint curves and model predictions | [CPU sweep](calib/results/cpu-sweep-2026-10-23.json), [GPU sweep](calib/results/gpu-sweep-2026-10-23.json), 2026-10-23; arithmetic in [model.py](model/model.py) and [analyze.py](model/analyze.py), not end-to-end measurements |
+| C++ artifact comparison | [Measurements](index-bench/results/m3max-2026-10-23/measurements.csv) and [metadata](index-bench/results/m3max-2026-10-23/metadata.json), 2026-10-23 |
+| Native Rust provider comparison | [CSV](index-bench/native/results/m3max-2026-10-24.csv) and [provenance](index-bench/native/results/m3max-2026-10-24.json), 2026-10-24 |
+| TPC-H-derived, H09 and profiler comparisons | Linked raw files in the respective sections, 2026-10-24; each retains its own source snapshot |
+| Predicate/transfer diagnosis | [Samples](index-bench/results/predicate-transfer-m3max-2026-10-25/results.json) and [summary](index-bench/results/predicate-transfer-m3max-2026-10-25/summary.json), 2026-10-25 |
+
+**Provenance caveat:** the early primitive summary is preserved verbatim, but
+some values disagree with the committed full-suite rows (notably copy/merge
+bandwidth and the scan ratio). Its “+1.8 µs per additional dispatch” is the
+model's amortized multi-dispatch coefficient, not the incremental difference
+between one and many dispatches. Use the raw files and the
+[calibration table](calib/README.md#results-historical-2026-10-23) for those runs.
+The initial and revised model tables are preserved predictions; no separately
+saved model-output artifact establishes every printed estimate.
+
 Primitive-calibration machine: Apple M5 Pro, 16-core GPU, **15 logical CPUs**
 (5 super + 10 perf), 24 GB unified memory, macOS 27.0.1, Metal 4.
 Results dated 2026-10-23. The separate index benchmark runs on an **M3 Max,
 128 GiB, 16 logical CPUs**; do not combine its timings with the M5 primitive curves.
 
-## Measured primitives (1 GiB footprints unless noted)
+## Historical measured primitives (2026-10-23; 1 GiB footprints unless noted)
 
 | primitive | GPU | CPU 1 thread | CPU 15 threads |
 |---|---:|---:|---:|
@@ -49,7 +75,7 @@ Overheads: Metal command buffer with one dispatch, commit→completed **128 µs*
 (all cores busy). Single-pass decoupled-lookback scan makes forward progress on
 this GPU and is 1.33× faster than reduce-then-scan at 1 GiB.
 
-## CPU + GPU concurrently (contention, 1 GiB footprints)
+## Historical CPU + GPU contention (2026-10-23; 1 GiB footprints)
 
 | CPU job (threads) | solo → concurrent GB/s | GPU job | solo → concurrent GB/s |
 |---|---|---|---|
@@ -72,7 +98,8 @@ into the index every round; level-0 capacity 64 K rows; 8 B rows unless noted.
 These initial estimates predate both the footprint-sweep revision and the
 build/probe ordering correction below. In particular, the bulk row priced probes
 against an empty index; its hash winner and 12.5× payoff are not valid comparisons.
-Use the corrected level-aware grid for current structure decisions.
+The corrected level-aware grid below supersedes that historical model comparison;
+it is not a new benchmark or a universal current structure recommendation.
 
 | scenario | best @gpu | best @cpu (15 thr) | best hybrid (cpu probe / gpu merge) | GPU payoff vs CPU |
 |---|---|---|---|---:|
@@ -104,18 +131,22 @@ Reading:
 
 ## Caveats
 
-- Primitives are measured; compositions are arithmetic. No end-to-end structure has
-  been built and timed on this machine yet — the next validation step is one leveled
-  merge build and one probe batch (Crystal-style predicted vs measured).
+- Primitives are measured; model compositions remain arithmetic. End-to-end
+  construction and reads now exist in [gpu-index](gpu-index/README.md),
+  [MCCL](mccl/README.md) and the [CQ Mac runtime](cq-mac/src/maintained.rs),
+  including pinned flat/binary-carry snapshots and GPU-built grouped RadixRun.
+  Their M3 Max experiments do not validate the M5 Pro model on the same machine.
 - The in-place hash model assumes 1.5 lines/probe, 2 CAS stages on Metal (no 64-bit
   CAS), no duplicate-key contention, amortized doubling; real tables with Datalog's
   duplicate-heavy keys will do worse.
-- Synthetic round shapes; the cvc5/oracle traces live on the CUDA host and have not
-  been extracted yet (`model.py --trace` accepts `[{delta, probes, touched}]`).
+- The model scenarios here are synthetic. The original note referred to
+  cvc5/oracle traces on a CUDA host; their external availability/extraction status
+  is not established by this checkout. `model.py --trace` accepts
+  `[{delta, probes, touched}]`, with optional `reset` and `build_first`.
 - Hybrid solos are only reliable with footprints ≤ 1 GiB in one process (24 GB box);
   the 18-thread rows in `results/*-debug-18thr.*` are oversubscription artifacts.
 
-## Level-aware revision (footprint sweeps, `results/*-sweep-*.json`)
+## Historical level-aware revision (2026-10-23 footprint sweeps)
 
 13 footprints from 256 KiB to 4 GiB per primitive. The model now builds a monotone,
 log-interpolated cost curve per (primitive, processor, threads) instead of picking the
@@ -188,8 +219,8 @@ in-place mutation does not automatically provide that isolation. The current
 overlap arithmetic does not model snapshot retention or its memory cost.
 The default scenario grid keeps overlap disabled.
 
-Reproduce the current grid from the repository root (exclude debug/oversubscribed
-calibrations):
+Run the model against the preserved calibration inputs from the repository root
+(exclude debug/oversubscribed calibrations); this does not refresh measurements:
 
 ```sh
 python3 experiments/mac/model/analyze.py \
@@ -292,7 +323,7 @@ baseline, not a CPU saturation test, GPU-build benchmark, or heterogeneous
 end-to-end Datalog result. Existing cost-model coefficients are intentionally
 unchanged.
 
-### First M3 Max results
+### Historical first M3 Max results (2026-10-23)
 
 [Raw measurements and provenance](index-bench/results/m3max-2026-10-23/)
 contain 637 rows: seven workloads, fifteen index/filter variants with six query
@@ -357,16 +388,16 @@ CPU-only hash construction is the best heterogeneous design.
 
 ### Native backend RadixSpline provider and processing advice
 
-`cq_storage::RadixRun<K,V>` is a native Rust RadixSpline provider, not the old
-`SortedRun` search algorithm and not a per-lookup C++ FFI wrapper. It uses the
-measured radix12/error32 family, with an extra conservative floating-point
-rounding allowance. Only grouping and Copy payload-range cursors are shared with
-the other run provider. Payload lookup has no hash/full-array binary-search
-fallback. Dense-domain membership can lazily project the sorted keys into an
-exact presence bitmap: at most 128 KiB and one byte per distinct key, including
-word rounding. Sparse membership retains spline search; payload-only use never
-allocates the bitmap. This is a membership side index, not a replacement for the
-payload directory.
+[`cq_storage::RadixRun<K,V,C>`](../../runtime/cq-storage/src/radix_run.rs) is a
+native Rust RadixSpline provider, not the old `SortedRun` search algorithm or a
+per-lookup C++ FFI wrapper. Current storage comprises immutable grouped runs with
+ratio-bounded merging and a selectable payload-column container (`C` defaults to
+`Vec<V>`). Membership, key enumeration and lookup cursors read live runs directly;
+requesting the contiguous `items()` view can materialize a stable merged view.
+The historical single-build measurements below predate these run/publication
+changes and do not measure them. Each segment uses a bounded-error spline with
+exact search; dense-domain membership can use the bounded lazy presence bitmap.
+That bitmap is a membership side index, not a replacement payload directory.
 
 Select it through the existing checked Structures advice mechanism:
 
@@ -379,12 +410,13 @@ pipeline {
 }
 ```
 
-`radix_runs` selects eligible explicitly built singleton i32/i64/u32/u64 payload
-indexes, including borrowed and computed/owned keys. Composite/non-integral
-keys, host fallbacks, membership-only providers, multi-level tries, and
-smallest-intersection candidates remain unchanged. Default hash selection is
-unchanged. The prior `sorted_runs` advice still means the old binary/rank provider;
-it is not an alias for RadixRun.
+[`radix_runs`](../../features/rewrites/passes/src/structures.rs) selects eligible
+explicit one-level `hash_index` payload builds with one stored key column;
+Rust checks the selected provider's `OrderKey` requirements. Host fallbacks,
+membership-only providers, multi-level tries and smallest-intersection candidates
+remain unchanged. The advice records row/column payload layout explicitly.
+Default hash selection is unchanged. `sorted_runs` still selects the distinct
+binary/rank provider; it is not an alias for RadixRun.
 
 Processing is a separate checked decision:
 
@@ -393,9 +425,10 @@ Processing is a separate checked decision:
   to its later matching probe without repeating the directory search.
 - Optionally add `expand_lookups(32)` for segmented traversal of length-known
   ranges. Compatibility is established, **not a universal speedup**.
-- The Sequential catalog exposes Exact/Range/Membership, not Ordered or GPU
-  capability. Sorted storage does not establish that the probe input is ordered;
-  no merge join is selected implicitly.
+- The [base provider catalog](../../languages/cq-lang-structures/src/provider/base.rs)
+  declares exact/range/membership reads and retain/expand/keys support for
+  `radix_run`, not an implicit GPU or ordered-probe algorithm. Sorted storage
+  does not establish probe order; no merge join is selected implicitly.
 
 Native provider validation covers full-width integer extrema, empty/singleton
 relations, irregular gaps, misses, duplicate occurrences and stable payload
@@ -409,7 +442,7 @@ cargo test -p cq-storage -p cq-lang-structures -p cq-sequence-pull --all-feature
 cargo run --release --locked --manifest-path experiments/mac/index-bench/native/Cargo.toml -- 1048576 262144 5
 ```
 
-### Native Rust provider measurements
+### Historical native Rust provider measurements (2026-10-24)
 
 [CSV](index-bench/native/results/m3max-2026-10-24.csv) and
 [provenance](index-bench/native/results/m3max-2026-10-24.json):
@@ -442,14 +475,15 @@ hashbrown baseline builds only a key-to-rank map over pre-existing payload/offse
 arrays. Its construction time therefore is not a like-for-like build comparison.
 Build columns are single observations; query columns are medians. Checksums are
 output sinks, not full tuple materialization. CPU/GPU overlap and GPU construction
-of the RadixSpline directory remain unmeasured; the earlier M5 cost coefficients
-are intentionally unchanged.
+were not measured by this CPU comparison; later [MCCL GPU-built grouped
+RadixRun](mccl/README.md#gpu-built-grouped-radixrun) is a separate implementation
+and experiment. The earlier M5 cost coefficients remain unchanged.
 
-## TPC-H-derived hash versus RadixRun comparison
+## Historical TPC-H-derived hash versus RadixRun comparison (2026-10-24)
 
 This first full-suite record predates the profiler optimizations. The
-[broader optimized comparison](#broader-optimized-cpu-comparison) below uses the
-current runtime and remote H19 interning; keep the two source snapshots separate.
+[broader optimized comparison](#broader-optimized-cpu-comparison) below used its
+then-current runtime and remote H19 interning; neither is a current-checkout run.
 
 [Complete table](index-bench/results/tpch-m3max-2026-10-24/comparison.tsv) and
 [raw samples/provenance](index-bench/results/tpch-m3max-2026-10-24/comparison.json)
@@ -542,11 +576,10 @@ cargo run --manifest-path features/workloads/xtask/Cargo.toml --features oracle 
   bench --tpch --sf 1 --runs 5 --query retail_h09 --config built_radix
 ```
 
-Legacy retained-byte and direct-range row counters do not cover all RadixRun
-storage/iteration, so their values are not full memory-footprint or traffic
-comparisons. The cost model still needs separately measured GPU construction and
-CPU/GPU contention; these CPU end-to-end results do not establish heterogeneous
-speedup.
+Legacy retained-byte and direct-range row counters did not cover all RadixRun
+storage/iteration in these runs, so their values are not full memory-footprint or
+traffic comparisons. These CPU end-to-end results do not establish heterogeneous
+speedup or calibrate later GPU construction and CPU/GPU contention.
 
 ### Profiler-guided CPU optimization
 
@@ -692,11 +725,13 @@ times are SF1 medians of five plain executions, with construction included:
 | D27 | 14.741 | 24.218 | 14.691 |
 | H08 | 22.271 | 27.446 | 22.270 |
 
-The temporary absorption configuration applies the existing checked
-`simplify_reductions` (now `cq_ra_rewrites::simplify_reductions`) after Transfer and verifies CQ correspondence.
-Production Transfer currently does not take that path. The ablation removes
-backward support versions, restores useful scan filters, and avoids retaining
-fact intermediates needed only by those versions. No compiler fix was applied.
+The historical temporary absorption configuration applied the then-existing
+checked `simplify_reductions` (then in `cq_elaborate`, now
+`cq_ra_rewrites::simplify_reductions`) after Transfer and verified CQ
+correspondence. Production Transfer did not take that path in the measured
+snapshot. The ablation removed backward support versions, restored useful scan
+filters, and avoided retaining their fact intermediates. No compiler fix was
+applied in that investigation; this is not a statement about current Transfer.
 Some absorbed plans still construct the same scan/build/key filter twice for
 different covering operators; those costs remain visible.
 

@@ -1,5 +1,14 @@
 # Experimental GPU Sequence backend
 
+**Audit scope (2026-11-02):** implementation descriptions below were checked
+against repository revision `7e187597c478cfcbc5ff9daf61c520c3ce984106`.
+Commands are reproduction instructions, not evidence that this revision passed
+them. Measurement tables are retained historical results at their cited
+revisions/dates, not current benchmark baselines or current test inventories.
+Where a retained claim lacks a checked-in measurement artifact, it is explicitly
+marked unverified. Do not compare different query versions, timing boundaries,
+or profiled and unprofiled runs as a paired speedup.
+
 The main workspace uses checked Sequence programs, resident compressed columns,
 and explicit GPU grading. `cq-gpu-sequence` exposes `machine()` and the direct
 `translate(&Program, &Analysis)` API alongside the pipeline macros
@@ -18,11 +27,15 @@ license to substitute another query or plan.
 
 The translator must decide nothing (T-Gpu, `doc/formal/backend_ir.tex`
 §"Refinement and the emitter"): kernels, barriers and launch shapes come from
-the grading and recorded analysis. `emit.rs` still decides grid size (1 or
-the literal 2272), deferred lookup ranges, one-block offset scans and fold
-finalization, and per-dispatch host synchronization; these are listed as open
-violations in `doc/SEQUENCE-PLAN.md` [6]. Do not add further translator-side
-decisions; record them in grading first.
+grading and recorded analysis. The former emitter decisions are now checked
+records: `Partition::{One,Tiles,Spread}` and kernel occupancy for dispatch
+geometry, `Publication::DeferredRange`, `OffsetScan::DeviceExclusive`,
+`FoldCompletion::BlockPartials`, and recorded metadata synchronization.
+The old literal grid cap and one-block offset/fold completion are historical,
+not open violations. See [Sequence contract §6](../../doc/SEQUENCE-PLAN.md#6-experimentsgpusequence-cuda-translation-replaces-experimentsgpuprinter-at-cutover),
+[`realize.rs`](sequence/core/src/realize.rs), and
+[`emit.rs`](sequence/core/src/emit.rs). New decisions must likewise be recorded
+and checked before emission.
 
 Rust `if`/`let` expressions remain opaque, total Rust. Device execution requires
 identity representation for every column read; codec-backed reads execute on the
@@ -37,11 +50,12 @@ values acquires the shared device-0 thread pool for its recorded GPU publication
 
 ## Build and run
 
-The workspace pins the pushed `mini-linq/main` branches of the StarGazerM
-cuda-oxide and RCCL forks by commit, without local dependency patches.
-The declared source of truth is cuda-oxide `299eda41b` and RCCL `1d33079a`;
-the local `/data/cuda-oxide` and `/data/rccl` checkouts match those pushed
-revisions. Do not add path patches: update the git pins and lockfile together.
+The workspace pins the StarGazerM cuda-oxide and RCCL forks by commit, without
+local dependency patches. [`Cargo.toml`](Cargo.toml) declares cuda-oxide
+`299eda41b287642ef3323144d8fef8f16fe4fbe1` and RCCL
+`1d33079a9b89ebe672618856f2f98afda0f74e12`; [`Cargo.lock`](Cargo.lock) records the
+resolved sources. These pins do not establish the state of local fork checkouts
+or remote branch heads. Do not add path patches: update git pins and lockfile together.
 It uses cuda-oxide's Rust **1.99.1** SIMT toolchain, with `RUSTC_BOOTSTRAP=1`
 configured for the compiler backend. Build the backend and install `cargo-oxide`
 from that pinned fork's nested `cuda-oxide/` workspace; the backend path is
@@ -171,13 +185,16 @@ packed-layout prefix contract: FieldFlow needs a field-first candidate prefix;
 dispatch's canonical `(descriptor, simplename, heap)` prefix differs from its
 packed `(simplename, descriptor, heap)` order. No layout or type is inferred.
 
-**GPU smallest is currently unsupported.** This experiment exposed a silent
-fallback: the GPU emitter lowered a smallest probe to one provider's range
-followed by membership, without per-tuple minimum-candidate selection.
-Both the GPU Structures entry and terminal now reject it with
-`T-Gpu: probe smallest is not realized by this target`.
-Thus `advice-aipt` and `advice-load` are reproducible rejection cases until P4
-grouped-run ranges realize the decision. CPU smallest support is unchanged.
+**Smallest support is provider-specific.** The P3.2 experiment exposed a
+historical silent fallback to one provider's range followed by membership.
+That fallback was rejected, then P4-GPU slice B (`af735660`, 2026-11-01)
+added real minimum-candidate selection over recorded two-level radix layouts
+with a Candidates read on every side. The current rejection boundary is
+documented in [`realize.rs`](sequence/core/src/realize.rs), not a blanket
+target-wide prohibition. The packed `DeviceLayout` experiments here do not
+automatically acquire radix providers; `advice-aipt` and `advice-load` are not
+evidence of a realized smallest plan. See the executable `triangle-smallest`
+case and its dated paired evidence below. CPU smallest support is unchanged.
 
 Build each variant separately, e.g.
 `cargo oxide build --arch sm_89 -- --release -p srd-doop-gpu --features advice-fieldflow`.
@@ -187,6 +204,11 @@ Counter builds are separate; relation counts must match all 40 reference
 relations on every run (the factored program also exposes three helper outputs).
 
 #### P3.3 evidence ordering and grading (2026-10-31)
+
+Historical acceptance snapshot; “treatment” below means the measured P3.3
+revision, not the current checkout. The dated
+[`p33-evidence.results.json.gz`](compare/p33-evidence.results.json.gz) is the
+source for this table; later P6b DOOP measurements are summarized below.
 
 The automatic TPC-H route records manifest counts and TPC-H primary keys in
 the VO (O-EvidenceLe); a key-functional root replaces the written root only
@@ -199,7 +221,7 @@ Same protocol as below (5 AB/BA pairs, 1 warmup + 5 samples, bootstrap
 20,000 resamples, seed 3303), all answers exact; H05 step R uses the
 preserved step-R order as advice.
 
-| Target | `c1b75718` median ms | Current median ms | Current/base [95% CI] |
+| Target | `c1b75718` median ms | P3.3 treatment median ms | Treatment/base [95% CI] |
 |---|---:|---:|---:|
 | H04 SF1 automatic | 0.990 | 0.647 | 0.661 [0.652, 0.676] |
 | H04 SF10 automatic | 11.677 | 5.810 | 0.500 [0.497, 0.503] |
@@ -216,15 +238,15 @@ root in d85: 1.363 [1.358, 1.367]. Raw pairs and page faults:
 
 #### P3.3-lite removal acceptance (2026-10-30)
 
-Automatic GPU routes now decompose the planner's recorded order; Sequence
-lookup-first and optional-filter adaptive replanning are deleted. Five fresh-
-process interleaved AB/BA pairs compare against HEAD `0072f5f`. TPC-H uses
-one warmup and five samples per process; DOOP uses the synchronized
-`GPU_DATALOG_PHASES=1` fixpoint phase. The GPU was idle before every invocation.
-Intervals below are paired current/HEAD ratios, percentile bootstrap,
-20,000 resamples, seed 3303 (lower is better).
+At this historical removal checkpoint, automatic GPU routes decomposed the
+planner's recorded order; Sequence lookup-first and optional-filter adaptive
+replanning had been deleted. Five fresh-process interleaved AB/BA pairs compare
+against baseline `0072f5f`. TPC-H uses one warmup and five samples per process;
+DOOP uses the synchronized `GPU_DATALOG_PHASES=1` fixpoint phase. The GPU was
+idle before every invocation. Intervals below are paired treatment/baseline
+ratios, percentile bootstrap, 20,000 resamples, seed 3303 (lower is better).
 
-| Target | HEAD median ms | Current median ms | Current/HEAD [95% CI] |
+| Target | `0072f5f` median ms | P3.3-lite treatment median ms | Treatment/baseline [95% CI] |
 |---|---:|---:|---:|
 | H05 SF1 automatic | 7.409 | 1.752 | 0.236 [0.235, 0.237] |
 | H05 SF10 automatic | 68.649 | 13.084 | 0.191 [0.190, 0.191] |
@@ -252,6 +274,12 @@ binary hashes, advised-code hashes and the two H04 plans are retained in
 
 #### P3.2 DOOP measurements (2026-10-30)
 
+This is the historical P3.2 checkpoint (`7a1c19df`, 2026-10-30), before
+P3.3 order-preserving cutover and P6b root sharing/multistream execution.
+The baseline and control timings below remain evidence of that experiment,
+not current GPU timings. For later xalan/batik fixpoint results see the
+SRDatalog section below; no old measurements have been overwritten.
+
 Five interleaved process-isolated pairs per comparison and dataset, alternating
 AB/BA; `nvidia-smi` confirmed no competing compute process before every run.
 Every run matched all 40 reference counts in
@@ -262,13 +290,13 @@ ratios against the **decomposition-only** baseline, not against automatic plans.
 
 **The AIPT and array-load timing rows below are historical measurements of the
 pre-rejection sequential fallback, not measurements of realized smallest
-intersections.** The supported lookup-only controls and the two baseline
-configurations remain valid. The counter discrepancy below is why the target
-was changed to reject smallest rather than silently accept it.
+intersections.** The lookup-only controls and baseline configurations are
+historical measurements too. The counter discrepancy below motivated rejecting
+unsupported smallest plans rather than silently accepting them.
 
 | Whole-program baseline comparison | xalan ms | batik ms |
 |---|---:|---:|
-| Current automatic Sequence plan | 1587.5 [1585.1,1669.9] | 5401.7 [5396.7,5420.9] |
+| P3.2 automatic Sequence plan (historical) | 1587.5 [1585.1,1669.9] | 5401.7 [5396.7,5420.9] |
 | Decomposition-only, no rule advice | 1489.6 [1482.2,1493.4] | 4380.6 [4368.2,4385.1] |
 | Paired automatic/decomposition-only speedup | 1.070 [1.064,1.124] | 1.234 [1.231,1.238] |
 
@@ -324,7 +352,7 @@ prediction. Delta positions 0/1/2 are ReachableSortedIndex/base VarPointsTo/sour
 VarPointsTo; global variant IDs are 101/102/103. The historical advised stages
 equal the automatic stages; decomposition-only omits their final closing stage.
 
-| Dataset | Delta | Current / historical advised stage children | Decomposition-only stage children | Fresh | Traced GPU total ms: current / decompose / historical advice |
+| Dataset | Delta | P3.2 automatic / historical advised stage children | Decomposition-only stage children | Fresh | Traced GPU total ms: automatic / decompose / historical advice |
 |---|---:|---|---|---:|---|
 | xalan | 0 | 5,558; 1,829; 506 | 5,558; 1,829 | 506 | 7.483 / 6.860 / 6.913 |
 | xalan | 1 | 8,772; 3,789; 560 | 8,772; 3,789 | 555 | 11.000 / 10.244 / 35.269 |
@@ -357,8 +385,11 @@ normalized equality without reordering instructions).
 ### Packed Datalog runtime
 
 `gpu-datalog-runtime` provides `Packing`/`Column` encodings and `DeviceRuns<W>`
-on the resident-column `Pool`. The narrowest word is u64, u128, or `[u64; L]`
-for larger schemas. Array lanes are most-significant first; native u128 keeps
+on the resident-column `Pool`. This is still the Datalog layout state emitted
+and checked by [`datalog/src/storage.rs`](datalog/src/storage.rs), with APIs
+defined in [`datalog-runtime/src/runs.rs`](datalog-runtime/src/runs.rs).
+The narrowest word is u64, u128, or `[u64; L]` for larger schemas.
+Array lanes are most-significant first; native u128 keeps
 its native in-memory lane order. Integer columns use their full declared width;
 signed columns flip the sign bit, and the first tuple column occupies the most
 significant packed bits. `prefix_range` returns inclusive bounds, including the
@@ -379,7 +410,9 @@ Merges retain sorted, unique, pairwise-disjoint runs. For another layout, permut
 `append_sorted` after proving disjointness. This path needs no unique-count
 readback or compaction; arbitrary inputs still use `sort_unique`. `RunView` and device
 `runs::range` support inclusive prefix searches without materialization.
-All work and frees use the pool's legacy default stream.
+Work is ordered on the owning pool's stream. The main pool uses the legacy
+default stream; explicit wave lanes use streams sharing that pool's allocator,
+with event fork/join before admission (see `lanes` below).
 Packed permutation, wide-word radix gather, admission membership and wide merge
 size their grid-stride launches from the loaded kernel's CUDA occupancy,
 capped by the work domain; they do not assume a particular device's grid cap.
@@ -418,12 +451,15 @@ events, the final fence, and `take_last_timings()` publication. Required metadat
 validation and device overflow/failure checks are unchanged; retained owners
 and the pool stream order protect asynchronous work.
 The explicitly recorded `output reserve_previous` protocol is supported only by
-the arena terminal. Its initial capacity is the arena's last validated row count
-(zero on first use or after `clear`), not a proven bound. Each attempt counts all
-rows and checks sticky failure flags; an undersized attempt is discarded and
-replayed against the unchanged inputs at the required capacity before publication.
-Thus shrinking, growing, and empty rounds remain exact, and retained batches
-cannot be overwritten by subsequent leases. Other output protocols are unchanged.
+the arena terminal. Its initial capacity is
+the arena's last validated row count for the selected Round hole, not a
+relation-wide count or a proven bound (zero initially or after `clear`).
+Keys-only attempts may use the full capacity of the leased slot.
+Each attempt counts all rows and checks sticky failure flags; an undersized
+attempt is discarded and replayed against unchanged inputs at the required
+capacity before publication. Shrinking, growing, and empty rounds remain exact,
+and retained batches cannot be overwritten by subsequent leases.
+Other output protocols are unchanged.
 Declared run layouts also realize native keyed Host fallbacks: scan and keyed
 reader records remain distinct, and lookups reuse the supplied runs without
 building another index.
@@ -439,21 +475,40 @@ Datalog pipeline (`CK-DL-DeviceStorage`, `P-DL-Gpu`):
 
 ```rust
 pipeline {
+    incremental = ::cq_datalog::passes::incremental(driver(delta_first););
     storage_rewrites = [::cq_gpu_datalog::device_storage];
     cq = pipeline {
         physical = [::cq_gpu_sequence::capture_constants];
-        structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
+        structures = [
+            ::cq_gpu_datalog::bind_inputs,
+            ::cq_gpu_sequence::bind_runs,
+            ::cq_gpu_sequence::select_catalog,
+        ];
         stage = ::cq_gpu_sequence::stage;
         sequence = ::mini_linq::passes::sequence;
-        decompose = [::cq_gpu_sequence::decompose];
+        decompose = [
+            ::cq_gpu_sequence::decompose,
+            ::cq_sequence_rewrites::output(reserve_previous),
+            ::cq_sequence_rewrites::roots(spread),
+        ];
         grade = ::cq_gpu_sequence::machine_grade;
         print = ::cq_gpu_sequence::translate_arena;
     };
     terminals = [::cq_gpu_sequence::translate_arena => batch];
-    round = [::cq_gpu_datalog::bind_round(binding = 5)];
+    round = [
+        ::cq_gpu_datalog::bind_round(binding = 5),
+        ::cq_gpu_datalog::lanes(streams = 4),
+    ];
     print = ::cq_gpu_datalog::print_rounds;
 }
 ```
+
+This configuration follows [`srd-doop/src/lib.rs`](srd-doop/src/lib.rs);
+[`doop/src/lib.rs`](doop/src/lib.rs) additionally declares its symbol codec.
+`reserve_previous`, `roots(spread)`, and `lanes(streams = 4)` are explicit
+benchmark choices, not implicit defaults. The lane rewrite records independent
+holes of a wave on worker streams sharing the allocator; fork/join events order
+their work before main-stream admission. It does not run dependent waves in parallel.
 
 The GPU Structures stage validates target support without inheriting the CPU
 batching policy. GPU batches are selected by Sequence decomposition; explicit
@@ -477,10 +532,11 @@ canonical layout, appends it to every full layout, builds NEW from it and
 moves NEW to the delta; outputs read the canonical layout once. All programs on one thread share
 `gpu_datalog_runtime::thread_pool()` (device 0), so the runtime's thread-local
 caches never pin a finished program's pool.
-Candidate batches are released after admission, arenas are scoped to the
-producing stratum, and completed strata release cached Sequence scratch and
-wholly unused pool chunks. Layout states and views retain their published
-owners; trimming never invalidates live device views.
+Candidate batches are released after admission. Multistream execution retains
+component-scoped arenas per lane/head and hole-local previous-count hints;
+completed strata release cached Sequence scratch and wholly unused pool chunks.
+Layout states and views retain their published owners; trimming never
+invalidates live device views.
 
 Symbol columns are declared with
 `device_storage(symbols(IStr => MyCodec))`, where
@@ -566,6 +622,14 @@ stream synchronization.
 
 #### Relational heads (2026-10-31)
 
+Historical `c1b75718` comparison. Later same-workload P6b acceptance
+([planning record](../../doc/PLANNING-REDESIGN.md), 2026-10-31) records Cassandra
+fixpoint **1.668 → 1.205 s**, four streams versus one, ratio
+**0.723 [0.702, 0.765]** over five locked pairs, with all **26/26 outputs exact**.
+This is a fixpoint comparison, not an update to the evaluation-time rows below.
+The following Cassandra sections retain separate older toolchain, loading,
+code-generation and scheduling experiments; they are not today's performance.
+
 Since contract 7 (`0124315f`) every Rust expression is opaque, and Rust that
 reads a codec-encoded column must run at host (BE-RustRepresentation). The DOOP
 source wrote every head as an Ascent copy (`varpointsto(*heap, *to) :- ...`),
@@ -601,7 +665,7 @@ regression (top holes, main vs `4944b917`), the paired timings and the profile
 summaries are in
 [`compare/doop_cassandra.relational_heads.results.json`](compare/doop_cassandra.relational_heads.results.json).
 
-#### Delta-driven rule scheduling
+#### Historical delta-driven rule scheduling (2026-10-26, `2bfb7f23`)
 
 On Cassandra with Rust 1.99.1, CUDA 13.0 and `sm_89` cubins, paired untraced
 runs measured **9.602122 s → 3.672471 s** GPU evaluation (2.61×), matching all
@@ -636,7 +700,7 @@ run sizes for these five holes, admission counts and full-set evidence are in
 The remaining largest kernel is the instance-field delta variant; this change
 does not claim to eliminate its signature-key expansion skew.
 
-#### Earlier measurements
+#### Earlier measurements (2026-10-26, `9245cdb5`)
 
 Cassandra validation matched all 26 outputs exactly. An untraced release run
 measured GPU evaluation **11.809409 s**, sequential mini **4.269240 s**, versus
@@ -664,7 +728,7 @@ Constant lane shifts fix the permutation; the corrected hole emits 33,667
 candidates using 269,336 bytes. Runtime differential tests cover that regression
 and the explicit wide-row merge path required beyond RCCL's 16-byte key limit.
 
-#### Ahead-of-time cubin loading
+#### Historical ahead-of-time cubin loading (2026-10-26, `7901fb3f`)
 
 The `sm_89` AOT run preserves exact full-tuple results for all 26 Cassandra
 outputs. The 13-program Datalog oracle and all fixtures passed, as did the three
@@ -716,7 +780,7 @@ verification results are in
 The temporary profiles and intercepted images from that historical measurement
 have been removed; the JSON retains their measurements and image identities.
 
-#### Preserving code generation during AOT assembly
+#### Historical AOT code-generation repair (2026-10-26, `14ec44d2`)
 
 The initial AOT mode changed more than module loading: it forced
 `CUDA_OXIDE_EMIT_NVVM_IR=1`, replacing LLVM 23's `internalize,default<O2>`/`llc`
@@ -774,7 +838,7 @@ unprofiled warm run is 9.314324 s and also matches all outputs exactly.
 The three required Datalog packages pass **54 tests** (two opt-in probes
 ignored), and `cq-gpu-sequence --test run_holes` passes **14 tests**.
 
-The published fork revisions are cuda-oxide
+The fork revisions used for that historical measurement were cuda-oxide
 `d89093b8149b93c63324c5a0e687a097061f117c` and RCCL
 `67f06e4ad723d6fefb7222bbead01ea94a20f29b`. Artifact identities, per-kernel
 resource/SASS comparisons, compiler flags, Nsight Compute counters, and
@@ -789,7 +853,8 @@ It instantiates `srd_doop_shared::srd_doop_engine!` from
 rules, and 43 output relations. Prepared integer IDs and `meta.json` constants
 are passed unchanged; there is no symbol codec or alternate GPU query body.
 The pipeline uses `device_storage`, `delta_first`, `capture_constants`,
-`reserve_previous`, `translate_arena`, and `print_rounds`, like `doop-gpu`.
+`select_catalog`, `reserve_previous`, `roots(spread)`, `translate_arena`,
+`lanes(streams = 4)`, and `print_rounds`, like `doop-gpu`.
 Each rule keeps its SRDatalog name as a label. Join orders come from the
 planner's connected default; SRDatalog's `with_plan` orders are not emitted
 unless `translate.py --plans` is used, which turns every `with_plan` into
@@ -842,6 +907,26 @@ The small shared field-flow fixture test asserts every one of the 43 output
 relations against explicit expected tuples and requires CUDA. Run GPU jobs
 serially. These commands describe how to build and verify, not recorded results.
 
+**Later same-workload evidence (P6b, 2026-10-31):** the
+[planning record](../../doc/PLANNING-REDESIGN.md) records locked four-stream
+fixpoint results of **0.905 s xalan** and **1.580 s batik**, versus one-stream
+**1.046 s / 1.947 s**, with paired ratios **0.865 [0.852, 0.892] /
+0.811 [0.800, 0.816]** and **43/43 relations byte-identical**. These supersede
+the P3.2/P3.3 snapshots as later recorded timings of this workload, not as
+measurements of every subsequent revision. Raw P6b captures are referenced by
+the planning record under `/data/p6b-work`; the summary is checked in, but this
+README audit did not revalidate those external captures.
+
+For context only, the older SRDatalog fullclock reference ranges are
+**1.008194–1.021628 s xalan / 1.818340–2.101104 s batik**, retained in
+[`srd_query_xalan_batik.results.json`](compare/srd_query_xalan_batik.results.json)
+(`external_default_reference`, 2026-10-26) and the
+[2026-10-31 profile report](compare/p3b-profile/01-doop-report.md).
+Those are the SRD **default-query** references, not the factored field-flow
+query, and are not interleaved P6b comparisons. The artifact flags a different
+process deadline, cardinality-only validation, and no under-load clock sample
+for xalan. Do not infer a controlled cross-engine speedup from these ranges.
+
 `compare/srd_query_benchmark.py` retains provenance, per-process logs, uptime,
 and in-run `nvidia-smi` SM-clock samples in the results JSON. From this directory:
 
@@ -872,7 +957,7 @@ Each CQ stage uses the checked CQ → VO → RA → Physical → Structures pass
 catalog selection, Sequence lowering, grading and translation.
 The default build generates only `advised`
 executors, using explicit pipeline choices followed by decomposition-only
-completion. Automatic is opt-in pending box 11b: build with
+completion. Automatic generation is opt-in: build with
 `CQ_GPU_TPCH_AUTOMATIC=1` to also generate `automatic` executors using
 `cq_sequence_plan::decompose` plus existing grading. The advised recipe
 path remains unchanged; automatic Sequence relational replanning is removed.
@@ -998,10 +1083,10 @@ thread-local caches register release hooks; scope teardown drops their owning
 references, runtime scratch, and per-program modules before the next query
 loads. Caches remain reusable across warmup and measured iterations. The suite
 uses one process and one calling thread; teardown is outside query timings.
-Do not substitute a fresh worker thread: H09/H21's large downloaded answers
-fragment its malloc arena, and subsequent host-publication allocations spend
-hundreds of milliseconds in `malloc_consolidate` inside the build interval.
-The four-query subset can still show H09 totals around 45–66 ms, with an
+The historical cache-lifetime investigation (2026-10-24, `dc518657`) found that
+a fresh worker thread let H09/H21's large downloaded answers fragment its malloc
+arena, delaying subsequent host-publication allocations inside the build interval.
+That four-query subset showed H09 totals around 45–66 ms, with an
 occasional ~820 ms sample: glibc consolidates the freed answer allocations on
 a later provider allocation. This is host work inside the build timing, not
 slower device kernels. Reusing the numeric-bound readback vector moved that
@@ -1017,7 +1102,8 @@ the pre-query free-memory baseline (64 MiB allowance for driver bookkeeping).
 Run it alone on an idle device after building all advised executors:
 `cargo oxide test --arch sm_89 -- --release -p cq-gpu-tpch tests::sequential_sf10_queries_release_device_memory -- --ignored --exact --test-threads=1 --nocapture`.
 The [SF10 lifetime regression measurements](compare/gpu_tpch_vram.results.json)
-record all 25 compiled queries exact in one process, with zero free-memory
+(`dc518657`, 2026-10-24; not a current inventory or a remeasurement of the later
+authored-stage suite) record all 25 compiled queries exact in one process, with zero free-memory
 delta after every query (49,617,043,456 bytes free before and after each).
 Before the fix, per-expansion thread-local `RangeWorkspace` and
 `PackedColumnsAdapter` owners kept their pools' arenas alive across queries:
@@ -1026,29 +1112,31 @@ release hooks remove those owners without changing plans or kernels. The
 merged cuda-host module cache is bounded per native context and needs no
 external API change. That historical full inventory exited 1 for H14/H19
 translation rejections, not a runtime failure; its H05 timing gate passed at
-10.275 ms. Final full-suite totals versus
+10.275 ms. That run's full-suite totals versus
 `performance_report.md` are H05 10.275 vs 10.314 ms, H09 44.588 vs 44.563 ms,
 H21-positive 40.053 vs 40.158 ms, and D85 26.925 vs 26.935 ms.
 Statistics-derived H07 advice and its comparison with H07-block are recorded in
 [`compare/tpch_statistics.md`](compare/tpch_statistics.md).
 
-**h14 removed for now: prefix predicate inside the aggregate; needs order-preserving interning.**
-The CPU h14 workload is unchanged. H19 explicitly declares its shipping,
-brand and container columns as `u32`: the author prepares sorted-distinct,
-zero-based dictionaries and binds `intern(table, column, literal)` constants.
-The GPU importer resolves those constants against the column's manifest
-dictionary and preserves the authored `u32` storage type. Other queries retain
-the existing automatic literal-equality `dictionary_types` path.
-The exporter already assigns the same sorted-distinct, zero-based codes to
-all four columns; SF1/SF10 data need no re-export. Raw String loader declarations
-remain the export contract, independently of the authored interned CQ types.
+H14 is absent from the current authored-stage inventory
+([`tpch/src/source.rs`](tpch/src/source.rs)); no GPU support claim is made here.
+Current H19 declares explicit dictionary domains and `StringCode` columns in
+[`tpch/queries/h19.stages`](tpch/queries/h19.stages), with relational string
+guards and a revenue aggregate. The loader's `dictionary_types` consumes
+declared domains, not special recognition of an `intern(...)` function.
+
+The following H19 measurements are the historical author-interned query
+checkpoint (`4cbe5eea`, 2026-10-24), before the current staged query contract.
+They are not timings or output counts for today's H19 aggregate:
 The [author-interned full-suite run](compare/gpu_tpch_intern.results.json) passed
 all 26 supported queries at SF1 and SF10 in one process (52 exact results).
 H19 total/build/query medians are SF1 9.254/0.002/9.253 ms and SF10
 24.375/0.002/24.373 ms; [the performance addendum](compare/performance_report.md#author-interned-h19-addendum)
 compares these with the report's DuckDB t1/t24 baselines.
 
-Historical initial inventory, before the subsequent translation fixes: all eleven queries were rejected at both scales, so **no GPU
+Historical initial inventory (retained README account at audit revision
+`7e187597`, not an independently located raw acceptance log), before subsequent
+translation fixes: all eleven queries were rejected at both scales, so **no GPU
 exactness, conformance agreement, or timing is claimed**. The release build and
 13 tests passed (two source/encoding tests plus eleven explicit rejection
 reports). No compiler gap was patched around. The table abbreviates only the
@@ -1080,10 +1168,16 @@ from each directory's existing `dbgen.duckdb`, from the repository root:
 python3 experiments/gpu/compare/export_tpch.py --root /data/tpch-gpu --sf 1 10
 ```
 
-The exporter reads every `features/workloads/src/queries/retail/tpch/*.rs`
-relation declaration and its exact `sql r#"..."#` reference, including guards.
-These are positive CQ kernels, not the original aggregate TPC-H/TPC-DS queries.
-The required union of columns is:
+The exporter reads authored declarations and SQL from
+`features/workloads/src/queries/retail/tpch/*.rs`, including both
+`retail_kernel!` and explicit `NAME`/`SQL`/`relation_loaders!` forms.
+The current corpus includes grouped folds and negation as well as positive CQ
+kernels; it is not uniformly the original TPC-H/TPC-DS SQL. The GPU frontend
+still reads `.stages`, not CPU Rust. See [`export_tpch.py`](compare/export_tpch.py).
+
+The column table below describes the historical initial positive-query export,
+not the complete current union. Current exports derive their column inventories
+from those declarations and record each query's `required_columns` in the manifest.
 
 | Table | Exported columns |
 |---|---|
@@ -1116,8 +1210,8 @@ Every `queries.<query>` entry records source path, exact SQL,
 answer filename, distinct answer count, and timing filename. Answers are
 `answer.retail_<query>.tsv` plus `.count`, sorted by all output columns.
 `duckdb_timing.retail_<query>.json` retains the original timing schema:
-engine/version, SQL, seconds, one warmup and five measured full SELECT DISTINCT
-runs, and thread-keyed warmup/samples/median at 1 and 24 threads. Raw CLI logs
+engine/version, SQL, seconds, one warmup and five measured complete SELECT
+runs (including grouped folds), and thread-keyed warmup/samples/median at 1 and 24 threads. Raw CLI logs
 are retained per query/thread count; timings include normal result emission,
 not a COUNT wrapper or the separate sorted answer export. H05 additionally
 retains `answer.tsv`, `answer.count`, and `duckdb_timing.json`.
@@ -1128,8 +1222,12 @@ the H05 binary inputs byte-for-byte. The manifest is published only after all
 columns, checksums, answers, and timings complete. Temporary projected TSVs
 are removed after conversion.
 
-The completed SF1/SF10 export has the following distinct counts and DuckDB
-median wall times in seconds (five samples after one warmup):
+Historical initial positive-query export: distinct counts and DuckDB median
+wall times in seconds (five samples after one warmup). These tables and the
+byte totals are retained from the README at audit revision `7e187597`; the
+original local manifests/logs are not checked-in evidence here, so their
+measurement date and exact raw provenance remain unverified. They do not
+describe the expanded staged suite or establish current directory sizes.
 
 | Query (`retail_` prefix) | SF1 count | SF1 1 thread | SF1 24 threads | SF10 count | SF10 1 thread | SF10 24 threads |
 |---|---:|---:|---:|---:|---:|---:|
@@ -1152,8 +1250,9 @@ median wall times in seconds (five samples after one warmup):
 | Named query answer TSVs | 12,386,099 | 143,352,887 |
 | Entire directory, including database, logs, and H05 copies | 757,972,236 | 7,876,436,632 |
 
-All 13 pre-existing H05 `.bin` files at each scale passed before/after SHA-256
-equality. The manifest includes all 11 query inventories and all 8 tables.
+That initial export was reported to have passed before/after SHA-256 equality
+for all 13 pre-existing H05 `.bin` files per scale and to contain 11 query
+inventories and 8 tables. This is a historical report, not the current manifest inventory.
 
 `h05-reference` remains the independent H05 reference implementation.
 The Sequence H05 example in `sequence/examples/h05.rs` is also available with
@@ -1179,7 +1278,11 @@ initialization; loading or CUDA failures with the directory present fail the
 test. It also runs in the default `cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence`
 suite without feature flags; only the standalone example requires `cuda-oracle`.
 
-### H05 step-order experiment (P3.2)
+### Historical H05 step-order experiment (P3.2, 2026-10-30, `7a1c19df`)
+
+The tables below retain the pre-P3.3 experiment. The P3.3 evidence table above
+records later step-R results with retained-prefix/fan-out grading; do not read
+the old “Automatic/default” row as the current default's performance.
 
 The opt-in workload configurations `step_r`, `step_r_lookups`, and
 `step_r_retained` leave existing configurations unchanged. `step_r` requests
@@ -1346,14 +1449,15 @@ zero-copy projections for later providers. This is provider-internal storage
 selection, not a translator or planner choice; no schema narrowing, ID
 remapping, or alternate query plan is substituted.
 
-## Device-store and i64 acceptance
+## Historical device-store and i64 acceptance
 
-On NVIDIA RTX 6000 Ada Generation (driver 580.178.04), the `sm_89` release
-workspace build and test commands pass, including 22 tests and all doc tests.
-The positive tests cover provider construction after device-store publication,
-i64 triangle translation/execution, signed 64-bit payload extrema, and strided
-and packed stored-column descriptors. `python3 doc/formal/check.py` reports
-228 synchronized rules; no new translation decision or rule was introduced.
+The 2026-10-22 checkpoint (`ddef2065`) recorded an NVIDIA RTX 6000 Ada Generation
+(driver 580.178.04), an `sm_89` release build/test pass, 22 tests and doc tests,
+and a formal inventory of 228 rules. Those counts are not current gate results;
+the linked timing JSON below substantiates H05 samples, not those separate
+build/test/formal claims. Positive source coverage includes provider construction
+after publication, i64 triangle execution, signed payload extrema and stored
+column descriptors. No checks were rerun for this documentation audit.
 
 These H05 measurements use one discarded warmup and five measured resident
 calls. Every A/B/R call and the reference compare complete tuples against
@@ -1382,17 +1486,22 @@ with IDs relabeled across the full signed i64 domain
 (`x * 0x9E3779B97F4A7C15` wrapping), which the dense Range directory cannot
 represent.
 
-Paired timing (`compare/p4_gpu_triangle_smallest.paired.json`, RTX 6000 Ada,
-timing and GPU locks held, five interleaved process pairs, each one warmup
-plus five resident calls; medians of per-process medians), DBLP:
+Later paired triangle timing (`af735660`, 2026-11-01;
+[`compare/p4_gpu_triangle_smallest.paired.json`](compare/p4_gpu_triangle_smallest.paired.json),
+RTX 6000 Ada, timing and GPU locks held, five interleaved process pairs,
+each one warmup plus five resident calls; medians of per-process medians), DBLP:
 
 | Triangle binary (DBLP) | Build ms | Kernel ms | Dedup ms | GPU total ms | Minor faults |
 |---|---:|---:|---:|---:|---:|
 | `triangle-compiled` (probe first, Range) | 0.485 | 1.347 | 0.303 | 2.129 | 24,712 |
 | `triangle-smallest` (probe smallest, radix) | 0.975 | 1.939 | 0.366 | 3.278 | 22,765 |
 
-Smallest is 1.54× slower in GPU total (bootstrap 95% CI 1.52–1.55×), so it is
-not the default. The first smallest kernel took 3.795 ms (2.42× total): nsys
+In that paired run, smallest was 1.54× slower in GPU total (bootstrap 95% CI
+1.52–1.55×); it remains opt-in. The following profiling figures are retained
+from the `af735660` README account, not from the paired JSON (which contains
+timing samples, medians and ratios): their raw nsys/ncu captures are not cited
+as checked-in evidence and remain unverified by this audit.
+The first smallest kernel reportedly took 3.795 ms (2.42× total): nsys
 attributed 77% of GPU time to the dispatch kernel, whose children recomputed
 every side's counts and choice per candidate. The parent now counts and
 chooses once and passes the choice in the child position tag
@@ -1408,12 +1517,13 @@ The H05 samples are retained in
 `compare/gpu_sequence_device_stores.results.json` and
 `compare/gpu_sequence_device_stores.reference.sf{1,10}.json`.
 
-## Cutover validation
+## Historical cutover validation (2026-10-22, `358012d9`)
 
-On NVIDIA RTX 6000 Ada, `sm_89`, both workspace build and test commands above
-passed. The main workspace has 16 passing tests, including one test exercising
-three schema UI cases. `python3 doc/formal/check.py` passed with a 226-rule
-inventory; the GPU interpretation marker now lives in `sequence/core`.
+The checked-in [`cutover summary`](compare/gpu_sequence_cutover.summary.json)
+records both workspace build/test commands passing on NVIDIA RTX 6000 Ada,
+`sm_89`, with 16 main-workspace tests, one exercising three schema UI cases,
+and a formal inventory of 226 rules. This is acceptance of that revision, not
+today's gate status or rule count. The GPU interpretation marker lives in `sequence/core`.
 The generated CUDA exports have expansion-specific names so multiple query
 expansions in one binary do not collide.
 
@@ -1475,27 +1585,30 @@ against `/data/tpch-gpu/sf{1,10}/dbgen.duckdb`, compares exact aggregate tuples,
 and reports GPU and DuckDB t24 wall times. A saved `duckdb_timing.json` is reused
 only when its SQL matches H01; the normal H05 timing is not substituted.
 
-## Negation GPU acceptance
+## Historical negation GPU acceptance
 
-The suite now imports 15 CPU workload sources, including H04, H04-not-exists,
-H16 and H22. The latter three retain Physical `anti eager` provenance and
-lower to `compact result lookup provider [keys] input`; H04 retains positive
-membership. No lowering change was needed. E-Neg's GPU instance uses the
-same provider membership probe in either polarity and inverts only the keep
-bit for anti. Wildcard order keys in H22 remain existential witnesses.
+The original negation checkpoint expanded the then CPU-importing suite to
+15 workload sources, including H04, H04-not-exists, H16 and H22. Current
+executors instead consume explicit authored stage programs; see
+[`tpch/src/source.rs`](tpch/src/source.rs) for the current inventory.
+The historical test exercised negative membership for the latter three and
+positive membership for H04, with wildcard H22 keys as existential witnesses.
+This is not a claim that the current frontend imports CPU source initializers.
 
-Advised order is `Lineitem, Orders` for H04, `Orders` for H04-not-exists,
-`Part, Partsupp` for H16, and `Customer` for H22, with `no_reduce`.
-The importer executes the original `LateLineitem` and `BadSupplier` setup
-initializers once while loading. These derived-input construction costs,
-manifest loading, and initial base-column uploads are outside the reported
-query interval. Provider construction and uploads from retained host rows,
-including string predicate evaluation, are inside `build`.
+The checkpoint's advised order was `Lineitem, Orders` for H04, `Orders` for
+H04-not-exists, `Part, Partsupp` for H16, and `Customer` for H22, with `no_reduce`.
+At that checkpoint the importer executed the original `LateLineitem` and
+`BadSupplier` setup initializers once while loading. Derived-input construction,
+manifest loading and initial uploads were outside its query interval; provider
+construction and uploads from retained host rows, including string predicates,
+were inside `build`. Current producers are explicit `.stages` declarations.
 DuckDB's existing t24 measurements execute the complete independent SQL;
 these are not identical end-to-end timing boundaries.
 
-Release sm_89 run, one warmup and five measured iterations, all eight answers
-exact against exported TSVs; SF1 also agrees with Sequential:
+Historical release sm_89 report: one warmup and five measured iterations,
+all eight answers reported exact against TSVs, with SF1 Sequential agreement.
+The only cited raw artifact is the external file below; its measurement date
+and results are unverified by this repository-only audit (README at `7e187597`).
 
 | query | scale | rows | GPU total ms (build / kernels / dedup) | DuckDB t24 ms |
 |---|---|---:|---:|---:|
@@ -1526,10 +1639,13 @@ between expanding stages and choices; the emitter never chooses a fallback.
 Kernel signatures and their launch arguments retain only parameters referenced
 by each generated body, preserving declaration order. This includes column and
 provider views, prior stores, packing fields, domains, enables, and output
-pointers. The translator checks the aligned NVPTX64 parameter ABI after pruning:
-a live signature of 4096 bytes or more is rejected as `BE-Resource`, naming the
-kernel, byte demand, and live parameter count. It does not silently move
-parameters into device memory or change the recorded plan.
+pointers. [`prune_kernel_parameters`](sequence/core/src/emit.rs) emits a
+const assertion that accumulates each retained parameter's `size_of` and
+`align_of`: a parameter area of 4096 bytes or more fails compilation with
+`BE-Resource: kernel parameter area must be below 4096 bytes`.
+This is a generated compile-time check, not a translator diagnostic reporting
+the byte demand and live parameter count. It does not move parameters into
+device memory or change the recorded plan.
 
 Catalog `levels` describe provider reads, not construction. Resident
 `RangeProvider` and `PackedCanon` tokens are device/block/lane tokens;
@@ -1537,7 +1653,9 @@ host-only row providers remain host-only even when their inputs are built there.
 
 The TPC-H build script parses its generated module as a `syn::File` and writes
 `prettyplease::unparse` output. Generated-code warnings are scoped out at the
-module boundary; ordinary handwritten code retains its diagnostics. The measured
-automatic-suite library compile fell from an interrupted run exceeding 54 minutes
-to 398.31 seconds after this source-format change (482.87 seconds for that whole
-release build). These are compilation measurements, not query execution timings.
+module boundary; ordinary handwritten code retains its diagnostics. The retained
+README account reports an interrupted automatic-suite library compile exceeding
+54 minutes, then 398.31 seconds after formatting (482.87 seconds for the whole
+release build). No raw timing artifact or measurement revision is cited for
+those numbers; they remain **unverified historical compilation observations**
+at audit revision `7e187597`, not current compile or query performance.

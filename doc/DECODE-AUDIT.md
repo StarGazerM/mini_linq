@@ -4,6 +4,13 @@
 
 The original inventory is a source audit, not a performance experiment or a behavior change. Its runtime/compiler edits were comments only. The 2026-10-31 P3c checkpoint below adds ownership and prerequisite facts, not decoder removal or new execution evidence. Concurrent implementation work is outside this claim.
 
+Snapshot status: the inventory tables and verification transcript below are
+historical source-audit evidence, preserved at `7e187597` (2026-11-02), not
+a recount of today's remaining violations. The P5 S2 cutover below retires
+sites without rewriting those historical tables. Use `DECODE-SITES.tsv` and
+the live source markers for current locations/classes; use
+`PLANNING-REDESIGN.md` Progress for implementation and measurement status.
+
 Authority: `STORAGE.md` §1 (preserved operations), §§10–12, and `PLANNING-REDESIGN.md` contract 7. R is reconstruction required by an opaque authored Rust read; P is logical answer publication on the host after device download; V is premature reconstruction with relational consumers (the comment names P4/P5/P6); I is immediate decode/re-encode reorganization, with avoidability stated; ? means a generic primitive, mixed-use boundary, or diagnostic invocation lacks enough consumer evidence for an unconditional R/P/V classification. **? does not authorize decoding.** Runtime call attribution and per-column read facts are still required at those sites.
 
 A site is a conversion implementation or a conversion-emitting/calling block. A marker may cover adjacent alternatives of the same boundary (for example borrowed/owned answer formatting, nullable/nonnullable codecs, or a macro's generated scalar family); it is not a count of dynamic decodes. Both a primitive and its concrete caller can be listed. A P marker explicitly mentioning a test/oracle is diagnostic exposure, not a claim that intermediate engine materialization is lawful. Several diagnostic fixtures instead remain ? because they feed independent CPU references.
@@ -21,9 +28,9 @@ The inventory covers `experiments/gpu/**`, `runtime/cq-load`, `runtime/cq-storag
 * DOOP `IStr::from_code` wraps an existing code without string resolution. `res()` is the string conversion. Authored descriptor `format!` callers are R: they need string contents to compute a new descriptor, even when the result is subsequently interned.
 * Datalog run merges compare packed words; they do not necessarily decode. Gather/repack paths that reconstruct logical fields are I and explicitly identify avoidability.
 
-## Verification exercised
+## Historical verification exercised by the original audit
 
-Only `python3 doc/formal/check.py` was run for this assignment. It passed:
+The original audit reported only `python3 doc/formal/check.py`. It passed:
 
 ```
 Documentation inventory: 309 rules.

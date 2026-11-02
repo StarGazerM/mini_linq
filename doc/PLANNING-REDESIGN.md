@@ -7,6 +7,21 @@ product with no reductions (xalan: 2.0e9 pairs expanded, 3.27e6 kept).
 Regression target: `facade/mini-linq/tests/doop_heapalloc.rs` and its
 per-route siblings listed below.
 
+Audit baseline: `7e187597` (2026-11-02). Dated plans, profiles and Progress
+entries below are an append-only evidence history, not simultaneous descriptions
+of the current tree. Numerical observations without a more specific artifact
+are sourced to this document at that commit; they are not new measurements.
+The direct-call cutover (`60622956`, 2026-11-01; `0c031b1d`, 2026-11-02)
+removed autoref tiers, `build!` dispatch and `AutoDense`. Host read declarations
+and per-reader Structures facts now select direct calls. Capture ownership is
+plain value cloning per consuming move closure (`434b2d14`, 2026-11-02), not
+`Arc` handles. `cq_order::compile_written` owns the written reference;
+`cq_elaborate::compile` lowers it. Datalog negative provider/hash choices live
+in Storage (`f7511375`, 2026-11-02), not a `hasher_round` rewrite.
+`DeviceRuns` still implements Datalog state: `fresh` plus `append_sorted`
+replaces fused `admit`; replacing this state with grouped radix sets remains
+planned in this baseline.
+
 ## Contract
 
 1. **Join planning happens once, at CQ → VO.** Join order, reductions,
@@ -404,11 +419,11 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   rather than an index, so it lost laziness and reimplemented index work.
 - **P3d Distinct and admission are anti-joins against an ordinary index**
   (decided 2026-10-30; replaces CQ `seen`/sort canon and Datalog `seen`/`all`).
-  - **Problem.** CQ canon (`__cq_seen` hash set, then whole-stream sort) and
+  - **Historical problem at the decision date.** CQ canon (`__cq_seen` hash set, then whole-stream sort) and
     Datalog admission (CPU `seen` beside `all`,
     `features/datalog/print/src/lib.rs:703-718`; GPU `DeviceRuns::admit` fused
     with maintenance, `experiments/gpu/datalog-runtime/src/runs.rs:163-177`)
-    each keep duplicate state outside the index machinery. The result: shadow
+    each kept duplicate state outside the index machinery. The result: shadow
     copies, contention, lost laziness, and index work (selection, maintenance,
     providers, lazy merge) redone ad hoc in each printer.
   - **One semantics.** No layer's semantics contains sorting or a seen set,
@@ -652,7 +667,7 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   scan codecs only where measured). Device blocks with per-vector summaries, tile decode
   fused with predicates, narrow carriers, summary skip; GPU Datalog runs as
   grouped runs.
-- **P6b GPU Datalog parallelism** (profile 2026-10-31,
+- **P6b GPU Datalog parallelism — historical initial profile** (2026-10-31,
   `experiments/gpu/compare/p3b-profile/01-doop-report.md`): fixpoint xalan 1.76 s /
   batik 4.97 s vs SRDatalog ~1.0–1.5 s / 1.8–3.0 s; one stream, zero kernel
   overlap, GPU idle 40% / 22%; joins 0.70 / 3.40 s (batik `VPT_LoadArray` alone
@@ -699,6 +714,13 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   pairs vs (5): K=2 xalan 1.009× [0.972, 1.072], batik 0.979× [0.976, 1.026];
   K=4 xalan 0.865× [0.852, 0.892] (1.046 → 0.905 s), batik 0.811×
   [0.800, 0.816] (1.947 → 1.580 s). `srd-doop-gpu` records `lanes(streams = 4)`.
+  These are the latest recorded 2026-10-31 `srd-doop-gpu` P6b medians here,
+  not the initial profile above. The retained SRD fullclock reference is
+  xalan 1.01–1.02 s and batik 1.82–2.10 s (the same dated
+  `p3b-profile/01-doop-report.md`, backed by
+  `experiments/gpu/compare/srd_query_xalan_batik.results.json`).
+  The historical SRD clock/configuration boundary is different; this is not
+  a fresh paired speedup experiment.
   The ~5.4 µs host setup per hole (occupancy query, module lookup) is the next
   per-hole cost.
   doop-gpu (relational heads, c1b75718) records `roots(spread)` again:
@@ -756,8 +778,8 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
 
 ### Review open issues by owner (2026-11-01)
 
-These are implementation gaps against the contracts, not completed gates.
-Paths and lines refer to the reviewed `17a14b93` tree.
+This is the historical review of `17a14b93`, not a current open-issue inventory.
+Paths and lines refer to that tree; later cutovers below supersede resolved items.
 
 1. **Checker owners — checker reruns producer for plan decisions.**
    Staging compares recorded additions with `decisions(source, ...)`
@@ -769,12 +791,11 @@ Paths and lines refer to the reviewed `17a14b93` tree.
    (`experiments/gpu/datalog/src/storage.rs:347`). Replace producer replay
    with checks of recorded facts in the owning tracks. The formal text
    describes today's replay rather than claiming independence.
-2. **Runtime/provider owners — autoref tiers (DirectCalls in progress).**
-   Membership/build dispatch still chooses capabilities through reference
-   tiers (`runtime/cq-storage/src/dispatch.rs:1-4,27-79`), including
-   AutoDense's dense/NoDense realization. Record/consume the appropriate
-   provider facts rather than treating the current runtime selection as a
-   completed direct-call cutover.
+2. **Runtime/provider owners — autoref tiers (resolved after this review).**
+   The reviewed tree selected membership/build capabilities through reference
+   tiers and AutoDense. The DirectCalls cutover removed both; current
+   `runtime/cq-storage/src/dispatch.rs` exposes direct functions, and selection
+   records native or fallback reads. See `STORAGE.md` §13.3.
 3. **CQ → VO / elaboration owners — ElabFix in progress.** Branch spanning
    trees are deleted and predicate attachment targets are recorded in VO by
    `cq-order` (`passes/cq-order/src/restrict.rs`, O-Restrict) under the
@@ -783,14 +804,12 @@ Paths and lines refer to the reviewed `17a14b93` tree.
    its free columns (WF-BlockPlacement), not a written-order join, and the
    checked RA rewrites moved to `cq-ra-rewrites`. Remaining: the
    `cq-relational-lowering` rename.
-4. **GPU runtime owners — unrecorded runtime work.** Datalog run kernels
-   still choose occupancy grids and 256-thread launches in the runtime
-   (`experiments/gpu/datalog-runtime/src/runs.rs:377-379,411-413,480-489`).
-   The lane job carries a closure and hole identity, not explicit
-   rule/variant/round counter context
-   (`experiments/gpu/datalog-runtime/src/lanes.rs:55-60`).
-   Record the remaining work/attribution facts; C2 provider records and G1
-   ABI records do not by themselves close these runtime gaps.
+4. **GPU runtime owners — historical unrecorded runtime work.** The reviewed
+   tree chose run geometry inside the runtime. Current `DeviceState` records
+   merge tile, block and permutation threads, consumed by `RunParams`
+   (`experiments/gpu/datalog/src/storage.rs`, `datalog-runtime/src/runs.rs`;
+   `14d76950`, 2026-11-02). The original lane-attribution concern is not
+   independently closed by that geometry change.
 5. **Datalog fork/round owners — plan-argument correspondence.** Authored
    order forwarding is implemented, but fork synthesizes `no_reduce`,
    `order`, `smallest` and `known` argument tokens
@@ -1141,10 +1160,10 @@ Paths and lines refer to the reviewed `17a14b93` tree.
   The typed_* workloads are tiny fixtures with no timed harness and were
   not timed. GPU TPC-H paired timing is still owed on the combined tree
   with ImporterDSL.
-  Follow-up: IF-Capture no longer collects a lazy answer because of a
-  capture. Each `let` capture is bound as `Arc::new` of the host value, and
-  every `move` closure reading its binder owns a handle clone and rebinds the
-  binder (`cq_print::own_captures`). This replaces the
+  Historical follow-up (superseded by plain ownership below): IF-Capture
+  stopped collecting a lazy answer because of a capture. Each `let` capture
+  was bound as `Arc::new` of the host value, and consuming move closures cloned
+  the handle (`cq_print::own_captures`). This replaced the
   `interned-capture-collect` class and also removes the collection from the
   closed-capture targets `tpch_q06` and `correlated_exists`. h19 still
   collects its one grouped row, because its new plan builds a part_key

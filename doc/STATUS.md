@@ -1,5 +1,13 @@
 # Status
 
+Audit baseline: `7e187597` (2026-11-02). Numerical measurements and execution
+reports below are historical records from this document at that commit unless
+a dated result artifact is linked; they are not new runs of the current tree.
+Where raw artifacts are absent, the recorded numbers are not independently
+reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
+newer evidence source; proposals under “Left work” and “Decisions needed”
+are historical, not a replacement for that plan.
+
 ## Where we are
 
 - Contract 7: `if`/`let`/`for` embed unchanged opaque Rust, pure and total by
@@ -9,8 +17,9 @@
   eligibility uses recorded identity representations plus closed captures.
   Formal rules, inventory and conformance records describe this cutover;
   updated conformance rows are explicitly unverified pending integration.
-- Semantics, IRs, checks and the pass protocol are complete. Every decision is
-  recorded in IR text, and all features build outside the repository.
+- The checked IRs and pass protocol are implemented. Recorded-decision and
+  independent-checker gaps remain tracked in `PLANNING-REDESIGN.md`; this is
+  not a claim that every contract or external-consumer gate is complete.
 - Default pipeline (`mini_linq::passes::plan`): left-deep connected growth
   (Connected/Coarse), not written-order scheduling. The first scheduled clause
   of each scope streams; later clauses are indexed and probed.
@@ -61,6 +70,12 @@
   Native emission checks cursor/key traits; selection and replay replace support
   with the provider and preserve live obligations. Target switches reject
   decisions a terminal cannot realize rather than silently discarding them.
+- Host reads and builds use direct calls selected by per-reader Structures
+  facts, not autoref tiers, `build!`, or `AutoDense`. Declared native trait
+  mismatches are rustc errors; undeclared reads use recorded lazy fallbacks.
+  Captures are plain owned values cloned per consuming move closure, not
+  compiler-generated `Arc` handles. The written reference belongs to
+  `cq_order::compile_written`, not `cq-elaborate`.
 - Mac: standalone Metal build/merge experiments are integrated with the optimized
   native RadixRun tree. The [Mac implementation plan](MAC-IMPLEMENTATION.md)
   includes flat and LSM-like maintenance, snapshot/publication obligations and
@@ -387,11 +402,13 @@ work is lower on H09 and D72.
    scan/canonicalization gap needs fresh measurements; the old attribution
    does not establish current bottlenecks or the benefit of columnar storage.
 3. **Positional default.** Selections need the caller's `positional(..)` advice.
-4. **Zone maps.** Block min/max exists only in the `hypergraph_zone`
-   configuration; scan key sets skip blocks only there.
-5. **Known limits.** Static heuristics only (no statistics); no keys or
-   constraints on data; no parallel execution in the default sequential target
+4. **Zone maps.** The historical `hypergraph_zone`-only limitation is superseded
+   by P5 S2's columnar `ScanTable` loaders and block summaries. Runtime support
+   is not a claim of default compiler scan selection; see `DECODE-AUDIT.md`.
+5. **Known limits.** The default sequential target is not parallel
    (`sequence-tasks` and `datalog-parallel` provide Rayon realizations).
+   Explicit keys/counts and evidence-driven choices now exist; their coverage
+   is described in `PLANNING-REDESIGN.md`, rather than “no statistics/keys”.
 
 ### Decisions needed
 
@@ -415,8 +432,9 @@ work is lower on H09 and D72.
 
 ## Next step
 
-Decide whether runtime adaptivity (abandon reductions whose builds keep over
-35% of their source) should choose such reductions without advice.
+Follow the current steps in `PLANNING-REDESIGN.md`. The earlier proposal to
+abandon reductions by selectivity is distinct from the implemented, recorded
+join-filter abandonment policy described above.
 
 ## Datalog (`features/datalog`, `features/datalog-parallel`)
 
@@ -442,6 +460,8 @@ approval.
   built once per stratum; zero per-call index builds.
 - Fx hashing is the default; keyed `cq_storage` providers, negation key sets
   included, via `hasher(keyed)` (`mini-keyed` engines).
+  Storage's `Negative` record owns each negation provider and hasher;
+  there is no `hasher_round` rewrite.
 - Compile time (base DOOP crate): macro expansion 139 → 3.4 s (holes declare
   only what they read, one check per pass, linear source checks, optimized
   proc macros); codegen partitioned per component/hole; one crate per engine.
@@ -457,9 +477,9 @@ approval.
   `DL-PublishAfterReaders`, `DL-AsyncCovering`, `CK-DL-Schedule`,
   `P-DL-Waves`, `P-DL-Relational`, `DL-RelationalScheduler`;
   `doc/formal/datalog.tex` "Schedule records", "Relational progress"). Waves
-  are rayon scopes on CPU and will be stream/graph branches on GPU; admission
-  is the only per-head join. `relational` progress drops the step-round
-  barrier: per-member batches, tiled delta windows, scheduler-gated
+  are Rayon scopes on CPU and recorded stream lanes on GPU (`DL-WaveLanes`);
+  admission joins lane work before publication. `relational` progress drops
+  the CPU step-round barrier: per-member batches, tiled delta windows, scheduler-gated
   isolation (no lock ever waits). DOOP cassandra at 15 threads is exact under
   every mode; relational is ~8% slower (1.84–1.88 s vs 1.67–1.76 s) because
   its dense points-to SCC has holes reading most members, so commits drain
@@ -473,19 +493,21 @@ approval.
 - GPU Datalog (`experiments/gpu/datalog`, `cq-gpu-datalog`): `device_storage`
   (`CK-DL-DeviceStorage`) + `batch` hole terminal `translate_arena` over
   packed-run inputs (`GPU-Runs`, `GPU-Arena`) + `print_rounds` (`P-DL-Gpu`) on
-  device runs (`DL-DevicePacking`, `DL-DeviceRuns`). The 13-program oracle is
-  exact on the GPU (416 comparisons). Random graph, 2048 nodes, ~4.1M answers:
-  TC 0.36–0.49 s vs 1.58–1.79 s mini / 1.83–2.18 s mini-par; same generation
-  0.41 s vs 3.58 s / 3.07 s. Remaining realization cost: per-hole metadata
-  readback and stream synchronize, per-admission and per-layout-sort count
-  readbacks, waves issued in order on the pool's single stream.
+  device runs (`DL-DevicePacking`, `DL-DeviceRuns`). Historical acceptance:
+  the 13-program oracle was exact on the GPU (416 comparisons). Random graph,
+  2048 nodes, ~4.1M answers: TC 0.36–0.49 s vs 1.58–1.79 s mini /
+  1.83–2.18 s mini-par; same generation 0.41 s vs 3.58 s / 3.07 s.
+  That checkpoint issued waves on one stream. Current storage still uses
+  `DeviceRuns`, with read-only `fresh` admission and separate `append_sorted`
+  publication; the grouped-radix Datalog replacement remains planned.
+  Current scheduling can record multiple lanes; see the dated P6b evidence.
   DOOP cassandra runs on the GPU and all 26 outputs equal `mini` exactly:
   strings stay in the dataset (`method_descriptor` interned at load, symbol
   columns as `SymbolCodec` u32 codes, closed constants captured on the host),
   wide inputs use multi-lane words. 11.8 s vs 4.27 s `mini` / 1.26 s `mini-par`.
   nsys: kernels 7.7 s (one hole 4.07 s: 306 × 13.3 ms), PTX module JIT 5.6 s
   (158 × 35 ms); readback transfers 21 ms, the rest of D2H time is waiting.
-  Now: AOT sm_89 cubins (module loading 0.12 s) and delta-first occurrence
+  Subsequent historical checkpoint: AOT sm_89 cubins (module loading 0.12 s) and delta-first occurrence
   order (`driver(delta_first)`, `DL-OccurrenceOrder`): GPU DOOP 3.67 s warm,
   kernels 1.90 s; largest remaining kernel is the field-load delta variant.
   Host overhead cut (no arena fences, `reserve_previous`, known-unique sorts):
@@ -493,6 +515,15 @@ approval.
   Before AOT: cold first run after a rebuild ~25 s (driver PTX JIT cache empty). The GPU
   workspace pins pushed forks (cuda-oxide and RCCL `mini-linq/main`), Rust
   1.99.1, CUDA 13.0.
+  Latest recorded `srd-doop-gpu` P6b checkpoint (2026-10-31):
+  xalan **0.905 s**, batik **1.580 s**, with `lanes(streams = 4)`;
+  [P6b](PLANNING-REDESIGN.md) records paired predecessor comparisons and
+  exact output evidence. The historical SRD fullclock references are
+  **1.01–1.02 s / 1.82–2.10 s** in
+  [`p3b-profile/01-doop-report.md`](../experiments/gpu/compare/p3b-profile/01-doop-report.md).
+  Different clock/configuration boundaries prevent treating that cross-source
+  comparison as a new paired benchmark. These timings do not describe the
+  distinct 26-output `doop-gpu` Cassandra workload above.
 - Open: reach chain at 15 threads below sequential; nested CQ code in one
   codegen unit; rule-local aggregates; FlowLog comparison; surface sugar
   (disjunction, facts, rule macros). Pure-total Rust remains a semantic premise.

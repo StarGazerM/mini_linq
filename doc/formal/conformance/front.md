@@ -25,7 +25,7 @@ executed. `doc/formal/check.py` verifies that every rule named here exists in
 | STR-Reader | `doc/formal/ir_structures.tex` | `languages/cq-lang-structures/src/lib.rs` (`ReaderRef`, `analyze`); `passes/cq-print/src/access.rs` (`fallback_type`) | Tagged roles and named results are disjoint; each fallback matches its exact read. | Parses/prints `host scan`, `host candidates`, `host membership`, or `host result(name)` and carries the tag through analysis and consumers. | **exact** (was no-rule) | Reader identity never changes with result spelling. |
 | STR-Group; SEL-Group; P-GroupState | `doc/formal/ir_structures.tex` | `languages/cq-lang-structures/src/lib.rs` (`check_group`); `passes/cq-structure-selection/src/lib.rs` (`group_accumulator`); `passes/cq-physical-realization/src/operators.rs` (`group_with_accumulator`) | Every keyed Group has exactly one concrete accumulator entry; providers satisfy the finite-map protocol. | Rejects missing/duplicate/misplaced entries; selector records HashMap with `cq_storage::HashState` and realization consumes the recorded type, preserving authored collection hashers. | **exact**, conditional on provider laws (was no-rule) | Concrete accumulator choices, including the default hasher, are printable IR decisions. |
 | WF-BlockPlacement; O-BlockPlacement; O-WrittenBlocks; E-BlockPlacement; CK-BlockPlacement | `doc/formal/ir_vo.tex`; `doc/formal/passes.tex` | `languages/cq-lang-vo/src/blocks.rs` (`Placement`); `languages/cq-lang-vo/src/lib.rs` (`WF-BlockPlacement`, `domain_requires`); `passes/cq-order/src/lib.rs` (`compile_written`); `passes/cq-elaborate/src/block_contract.rs` (`check_placement`); `facade/mini-linq/tests/pass_contracts.rs` (`a_hoisted_block_domain_is_read_only_after_vo_binds_its_free_columns`) | VO records and checks Hoisted versus Correlated; ordering chooses explicitly; elaboration preserves the recorded choice. | Required parsed/printed enum; Rust-free hoisting, a hoisted finite-domain block and its reductions after its free variables, bound correlated free variables, repeated-read agreement, reduction exclusion, and exact RA correlation provenance are checked; the domain is the current prefix projected to F, never a written-order join. | **exact** (was no-rule) | Placement is printable VO evidence, never an elaborator mode. |
-| —: implicit planner insertion | `doc/formal/composition.tex:6-8`; `doc/DESIGN.md:138-140` | `facade/mini-linq-macros/src/lib.rs:86-108` | `π = resolve(configuration, defaults)`; omitted lists empty. | Searches the resolved queue for an exact pass path and conditionally inserts `plan_sequential`. | **no-rule** | Pipeline execution follows explicit resolution. |
+| ST-Entry | `doc/formal/composition.tex` (`ST-Entry`) | `facade/mini-linq-macros/src/lib.rs` (`defaults`, `expand_compile`); `facade/cq-stage/src/lib.rs` (`Configuration::resolve`) | `π = resolve(configuration, defaults)` | `plan_sequential` is a default decomposition; the facade starts the resolved queue unchanged. | **exact** (former implicit-insertion finding resolved) | Pipeline execution follows explicit resolution. |
 | CQ-Atom | `doc/formal/ir_cq.tex:68-84` | `languages/cq-lang-cq/src/lib.rs:596-674` (`CQ-Atom`) | Declared relation, matching arity; computed arguments see incoming scope plus simultaneous bare tuple binders. | Derives bare binders once, rejects escaped branch locals, checks computed arguments under that scope. The rule now states the intentional A-Local semantics; later-clause variables remain forbidden. | **exact** (was weaker than stale left-to-right argument wording) | Column permutation does not alter atom scope; body clauses remain left-to-right. |
 | WF-VO; WF-VO-Rust | `doc/formal/ir_vo.tex` (`WF-VO-Rust`) | `languages/cq-lang-vo/src/lib.rs` (`WF-VO-Rust`) | Every unchanged Rust expression appears once with its free variables bound. | Placement uses free-variable dependencies only. | **unverified** | Rust has one pure-total meaning. |
 | STR-Lineage | `doc/formal/ir_structures.tex:48-71` | `languages/cq-lang-structures/src/positional.rs:84-130` (`STR-Lineage`) | Single-occurrence spine and injective heading-to-host mapping; eager semi propagates its left lineage independently of support. | Propagates the left lineage without requiring RHS lineage; joined/computed supports remain admissible. | **exact** (was stronger) | Position lineage preserves one base occurrence. |
@@ -214,6 +214,12 @@ executed. `doc/formal/check.py` verifies that every rule named here exists in
 
 ## Findings
 
+Historical defect narratives below retain their original evidence excerpts.
+Current status is given by the tables above: in particular, declared provider
+capabilities/direct calls and configuration-owned defaults supersede the old
+type-recognition and post-resolution insertion descriptions. Old code line
+numbers are historical locators, not current API anchors.
+
 ### 1. Host-reader roles and result identifiers [C] — resolved
 
 - **Former defect:** A single identifier represented either a synthetic role or a Physical consumer, so `scan`, `candidates` and `membership` could collide with legal result names.
@@ -260,8 +266,8 @@ executed. `doc/formal/check.py` verifies that every rule named here exists in
 - **Rules:** WF-BlockPlacement, O-BlockPlacement, O-WrittenBlocks, E-BlockPlacement, CK-BlockPlacement.
 - **Recorded fact:** `languages/cq-lang-vo/src/blocks.rs` requires `block @path(columns) hoisted { ... }` or `correlated`. Parsing, printing and recursive reduction cloning preserve the enum.
 - **Choice owner:** ordinary `cq-order::compile` hoists Rust-free blocks and correlates Rustful ones; `cq-order::compile_written` explicitly records correlated arms throughout the exact reference.
-- **Consumer:** `cq-elaborate` reads that field for prefix/domain construction. Both public compilation entries preserve it; the written reference rejects hoisted input instead of silently changing it. Correspondence checks matching RA `over` provenance.
-- **Coverage:** block-placement fixtures cover nested union/fallback, both elaboration entries, placement mismatches, repeated reads and free-variable scope.
+- **Consumer:** `cq-elaborate::compile` reads that field for prefix/domain construction. The exact reference first uses `cq-order::compile_written` to record correlated placement and no restrictions, then uses the same elaboration entry as ordinary plans. There is no `cq_elaborate::compile_written` entry. Correspondence checks matching RA `over` provenance.
+- **Coverage:** block-placement fixtures cover nested union/fallback, ordinary and written-reference ordering, placement mismatches, repeated reads and free-variable scope.
 - **Status:** placement is independent of expression syntax or totality classification.
 
 ### 6. Resolved contract: one opaque Rust expression
@@ -315,4 +321,4 @@ These updated obligations have not been verified by running checks in this chang
 
 The dominant front/middle-end gap is not absent checking: most layers have substantial structural contracts, and IX/Physical/Structures preservation obligations are explicit.  
 The remaining leaks are untyped identities/capabilities, repeated expression recognition, and planning/representation choices hidden in adapters or entry orchestration.  
-Independent policy checking, block placement, typed reader roles and recorded keyed aggregate state are resolved. Provider-capability recording remains a separate layering issue.
+Independent policy checking, block placement, typed reader roles, recorded keyed aggregate state and declared provider capabilities/direct calls supersede the historical findings above. Runtime provider laws remain semantic premises.

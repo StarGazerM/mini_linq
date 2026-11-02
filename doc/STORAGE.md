@@ -1,10 +1,13 @@
 # Storage: compressed blocks, summaries, scans and merges (contract 8)
 
-Status: design, 2026-10-28. Governs `runtime/cq-load`, `runtime/cq-storage`,
+Status: design begun 2026-10-28, with implemented slices and historical evidence
+distinguished below. Audit baseline: `7e187597` (2026-11-02). It governs
+`runtime/cq-load`, `runtime/cq-storage`,
 `experiments/gpu/{compress,device-columns,datalog-runtime,sequence}` and the
 compiler passes that plan over them. Contract text: `doc/PLANNING-REDESIGN.md`
-contract 8. Sources (read for this design; cite them, do not paraphrase from
-memory):
+contract 8. Numerical observations retain their dated result sources; otherwise
+their source is this document at the audit baseline, not a new measurement.
+Sources (read for the original design; cite them, do not paraphrase from memory):
 
 | Id | Source | Used for |
 |---|---|---|
@@ -186,9 +189,15 @@ Merge correctness is STR-RunCompact (same multiset; set only under canon)
 plus per-block encode laws (§1). Merges never change admission, multiplicity
 or snapshot publication.
 
-## 6. What changes in the current code
+## 6. Historical baseline motivating contract 8 (2026-10-28)
 
-| Today | Contract 8 |
+This table is the original gap inventory, not today's API inventory. P5 S2
+(`db6d9e5b`, 2026-11-01) added direct Arrow/Parquet/CSV `ScanTable` loaders
+through `ColumnarRelation`/`ColumnarLoader` and `ScanColumnBuilder`; the eager
+`ZoneRows::from_batches` route was removed. This runtime cutover does not
+establish default compiler selection. See `DECODE-AUDIT.md` for disposition.
+
+| Original baseline | Contract 8 target |
 |---|---|
 | `cq-load::ZoneRows` owns decoded row tuples with per-block min/max (`zone.rs:9-15`) | columnar blocks; summaries over the stored payload |
 | GPU catalog fixes FOR for every column (`experiments/gpu/compress/src/lib.rs`, `Catalog::compress`); it does not call `detect_integer_codec` | per-block codec choice by size; codec set recorded |
@@ -199,7 +208,7 @@ or snapshot publication.
 | run merges on plain words | index runs: merge-path over plain arrays + directory rebuild (§8); scan columns: tile-streamed re-encoding (§5) |
 
 
-## 7. Implementation slices (each measured against current TPC-H/DOOP)
+## 7. Original implementation slices (proposals, not completion claims)
 
 1. Runtime block format + codec trait + summary build (CPU), round-trip and
    enclosure property tests; loader writes columnar blocks.
@@ -212,7 +221,10 @@ or snapshot publication.
 5. Join filters through summaries on both targets.
 6. Datalog: tail+frozen blocks, tile-streamed merges, dictionary policy.
 7. Index runs (§8): adopt RadixRun as the index-role provider on all
-   targets after merging the remote branch; retire AdaptiveKeySet staging/Arc.
+   targets. The remote provider is now merged; compiler selection remains
+   scoped to recorded eligibility. Standalone AdaptiveKeySet remains for
+   non-Clone interval/hash callers (see `PLANNING-REDESIGN.md` P4), rather
+   than claiming all staging/Arc use has been retired.
 
 ## 8. Index runs vs scan columns (RadixRun evidence, 2026-10-28)
 
@@ -469,10 +481,11 @@ yet. Provider choices are recorded upstream, never by type name.
   above `u32::MAX` rows and offset-carrier overflow at a merge are rejected
   errors (no widening, no chunked build). FOR-coded sources are decoded once
   during the build (two registered P4 DECODE V sites).
-- **Relation to existing device storage.** `DeviceRuns`/`DeviceLayout` (unique
-  packed-word sets with admission) and `RangeProvider` (dense `u32` domain
-  directory) are unchanged; this provider is the occurrence-preserving,
-  full-domain grouped index they can later be expressed with.
+- **Relation to existing device storage.** `DeviceRuns`/`DeviceLayout` still
+  implement Datalog's packed-word state and views; `fresh` and `append_sorted`
+  replaced the old fused admission API (§13.2), not the `DeviceRuns` type.
+  `RangeProvider` remains the dense-domain provider. Replacing Datalog state
+  with grouped radix storage is planned, not completed by this CQ provider.
 
 `experiments/gpu/datalog-runtime/tests/radix_run.rs` checks these laws on
 the device with fixed seeds: `u64` keys against `cq_storage::RadixRun`
@@ -1119,6 +1132,10 @@ The runtime contract requires each appended run to be sorted, unique and
 disjoint from accepted rows (`experiments/gpu/datalog-runtime/src/runs.rs`,
 `DeviceRuns::fresh` and `DeviceRuns::append_sorted`). This is no longer the
 old fused device admission path.
+`DeviceState` also records merge-tile, block-thread and permutation-thread
+geometry; `RunParams` consumes the recorded run settings rather than selecting
+them implicitly (`14d76950`, 2026-11-02). This is separate from the proposed
+grouped-run replacement.
 
 ### 13.3 Host reads and dispatch (no fallback tiers)
 
@@ -1144,6 +1161,7 @@ one direct call; there are no autoref dispatch tiers and no silent fallbacks.
   keyed by another type, is a rustc error naming the trait (`IndexRead`,
   `PointLookup`, `ExactMembership`, `Candidates`, `SeekRangeLookup`,
   `OrderedRead`).
+  The former `build!` macro and `AutoDense` tier selection are removed.
 - **Codecs and membership.** Key sets and sorted runs spell their codec
   (`I64Codec`) in the recorded provider type. One-column membership stores
   record `dense_membership` (requires `OrderKey`), wider keys hash

@@ -1,5 +1,7 @@
 # P3d final acceptance timing: M0 baseline 4112249a vs codex/p3d-final 085f9a0f
 
+> Point-in-time measurement: `4112249a` versus `085f9a0f`, 2026-10-31 (report preserved by `1031adf6`, 2026-10-31). **Superseded by:** [PLANNING-REDESIGN](../../../doc/PLANNING-REDESIGN.md) P4/P6b progress for subsequent CPU-storage/GPU-DOOP evidence; this exact acceptance matrix has not been re-measured since.
+
 Interleaved pairs (baseline then new, fresh process each). Ratio = median(new)/median(base); CI = percentile bootstrap of the median of resampled paired ratios (10000 resamples, seed 20261030). **↑** = CI entirely above 1.0 (regression).
 
 ## 1. CPU TPC-H SF1

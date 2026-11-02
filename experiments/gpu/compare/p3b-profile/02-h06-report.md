@@ -1,5 +1,7 @@
 # Advised GPU TPC-H h06, SF1
 
+> Point-in-time measurement: M0 binaries, 2026-10-31 (source revision not stated in this report; preserved by `1031adf6`, 2026-10-31). **Superseded implementation:** P3e's recorded grid fold in [PLANNING-REDESIGN](../../../../doc/PLANNING-REDESIGN.md); this exact profile has not been re-measured since in the retained evidence, and the one-CTA diagnosis below describes the measured baseline, not the current implementation.
+
 Existing M0 `cq-gpu-tpch-advised OUTPUT --scale sf1 --mode advised --query h06`; no compilation. `h06.results.json` reports exact/conformance passed, one answer, 6,001,215 input rows, and median total **0.486912 ms** (build 0.001888, kernels 0.002368, dedup 0.479136 ms). The label `dedup` is broad: `sequence_trace` explicitly says **`group_without_canon`**. No radix sort or duplicate-removal sort occurs in the query timeline; this case is a grouped-fold/materialization problem, not expensive sorting.
 
 ## nsys evidence

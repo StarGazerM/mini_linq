@@ -1,26 +1,34 @@
-# Preserved merge investigation
+# Preserved MCCL investigations and evidence boundaries
 
-The original merge measurements in this section were collected on 2026-10-15 on
-the local M5 Pro (16 GPU cores, 24 GB unified memory). No experiment data was overwritten when
-moving to the set-difference investigation. The production merge kernel remains
-the original tiled implementation; neither direct stores nor cached run heads
-showed a consistent improvement.
+This is an inventory of **historical evidence**, not current performance or
+verification status. Dates in section headings and filenames identify measurement
+runs. API and command documentation lives in [the crate README](../README.md).
+No measurements, integrity checks or external downloads were run for this audit.
+
+## Historical merge investigation (2026-10-15)
+
+The original merge measurements were collected on 2026-10-15 on the reported
+M5 Pro (16 GPU cores, 24 GB unified memory). Their values are preserved.
+The current [key-only merge kernel](../native/merge.metal) remains tiled.
+The archived direct-store/cached-run-head trials did not show a consistent
+improvement; that conclusion is scoped to the recorded experiments.
 
 | File | Meaning |
 |---|---|
-| `m5-pro-2026-10-15.csv` | Initial MLX/Rust completed-call timings; includes submission/allocation/waits, not just GPU time. |
-| `m5-pro-gpu-diagnosis-2026-10-15.txt` | Unchanged shader dispatched directly through Metal; GPU command-buffer timestamps and pipeline resource limits. |
-| `limiter-investigation-2026-10-15.json` | Early mixed merge/copy counter recording. Do not attribute its aggregate stall signals to merge alone. |
-| `isolated-limiters-2026-10-15.json` | Separate merge-only/copy-only recordings; middle-60%-span filtering, counter statistics and caveats. |
-| `cached-heads-2026-10-15.txt` | Paired baseline/cached-head GPU timings. Candidate rejected; original restored. |
-| `merge-profile-raw-2026-10-15.tar.gz` | Preserved source traces, capture, verified counter template, diagnostic harnesses and AIR. Kept outside `build/` so cleaning build output does not delete this evidence. |
-| `SHA256SUMS` | Integrity checksums for those six artifacts. Run `shasum -a 256 -c benchmarks/SHA256SUMS` from the MCCL crate directory. |
+| [m5-pro-2026-10-15.csv](m5-pro-2026-10-15.csv) | Initial MLX/Rust completed-call timings; includes submission/allocation/waits, not just GPU time. |
+| [m5-pro-gpu-diagnosis-2026-10-15.txt](m5-pro-gpu-diagnosis-2026-10-15.txt) | Unchanged shader dispatched directly through Metal; GPU command-buffer timestamps and pipeline resource limits. |
+| [limiter-investigation-2026-10-15.json](limiter-investigation-2026-10-15.json) | Early mixed merge/copy counter recording. Do not attribute its aggregate stall signals to merge alone. |
+| [isolated-limiters-2026-10-15.json](isolated-limiters-2026-10-15.json) | Separate merge-only/copy-only recordings; middle-60%-span filtering, counter statistics and caveats. |
+| [cached-heads-2026-10-15.txt](cached-heads-2026-10-15.txt) | Paired baseline/cached-head GPU timings. Candidate rejected; original restored. |
+| `merge-profile-raw-2026-10-15.tar.gz` | External/private archive claimed by the historical notes; absent from this checkout, not repository-contained evidence. |
+| [SHA256SUMS](SHA256SUMS) | Expected checksums for those six artifacts, including the absent archive. A full manifest check requires obtaining that archive first. |
 
-The raw archive includes the mixed counter trace, the isolated merge/copy traces,
-the merge/copy GPU capture, `PerformanceLimiters.tracetemplate`, the paired timing
-Swift harness, the isolated C++ workload, and baseline/cached optimized AIR. Its
-paths retain their original `build/profile/` or `build/profiling/` prefix. Extract
-into a separate directory when inspecting; do not overwrite active builds.
+The historical note describes the raw archive as containing the mixed counter
+trace, isolated merge/copy traces, GPU capture, `PerformanceLimiters.tracetemplate`,
+paired Swift timing harness, isolated C++ workload and baseline/cached optimized
+AIR, with original `build/profile/` or `build/profiling/` path prefixes. These
+contents cannot be inspected from the committed summaries or checksum alone.
+If obtained, extract into a separate directory rather than over active builds.
 
 The `.trace` recordings reported a logging-stream error. Their GPU counter tables
 were nevertheless exported successfully. Counter configuration was established
@@ -28,13 +36,16 @@ through the supported Instruments Performance Limiters menu, not guessed from
 undocumented profile IDs. Counter influence metrics are not fractions of time
 stalled. Samples remain device-wide even when selected by target GPU intervals.
 
-The archive includes local process/device metadata; review it before public
-sharing. It is retained locally and as an asset of the private GitHub release
-`merge-checkpoint-2026-10-15` in `StarGazerM/mccl`, not in Git history.
-The original artifacts under `build/` also remain intact. The archive passed
-`gzip -t`; GitHub's uploaded SHA-256 digest matches the local checksum.
+**Unverified external artifact:** the historical note says the archive contains
+local process/device metadata and was retained as an asset of the private GitHub
+release `merge-checkpoint-2026-10-15` in `StarGazerM/mccl`, outside Git history.
+This checkout does not establish present release availability, the archive's
+contents, continued existence of the original `build/` files, or the reported
+past `gzip -t`/uploaded SHA-256 match. [SHA256SUMS](SHA256SUMS) records an expected
+digest, not proof that a downloadable asset exists or has been checked now.
 
-Retrieve it into a fresh checkout with:
+The historical retrieval command below requires access to that private release;
+it is not a guaranteed fresh-checkout reproduction path:
 
 ```sh
 gh release download merge-checkpoint-2026-10-15 --repo StarGazerM/mccl \
@@ -42,9 +53,9 @@ gh release download merge-checkpoint-2026-10-15 --repo StarGazerM/mccl \
 shasum -a 256 -c benchmarks/SHA256SUMS
 ```
 
-## MCCL lifecycle integration, 2026-10-25
+## Historical MCCL lifecycle integration (2026-10-25)
 
-New measurements use the local **M3 Max, 40 GPU cores, 128 GiB**, macOS 27.0.1.
+These measurements used the reported **M3 Max, 40 GPU cores, 128 GiB**, macOS 27.0.1.
 The original M5 Pro files and their checksum manifest remain unchanged.
 
 | File | Meaning |
@@ -76,7 +87,7 @@ movement, not all synchronization details of the previous Rust wrapper. The olde
 CSV's `cpu_wall_completed_call` and the new `cpu_wall_array_ready_call` therefore
 have different completion boundaries and must not be silently combined.
 
-## Index construction investigation, 2026-10-26
+## Historical index construction investigation (2026-10-26)
 
 M3 Max, 40 GPU cores, 128 GiB, macOS 27.0.1. These files record the
 **pre-shared-relation revision**, including per-build CPU population.
@@ -99,13 +110,13 @@ copy benchmark. GPU sums/spans, driver scheduling and CPU wall intervals have
 different scopes and need not add. No physical DRAM counters or clock telemetry
 were collected. Previous cache limits were restored.
 
-The mini_linq repository retains the 240-configuration construction matrix and
-matched raw-Metal/MCCL comparator JSON. See [methods, raw links, measured causes and limits](https://github.com/StarGazerM/mini_linq/blob/codex/all-answers/doc/MAC-IMPLEMENTATION.md#2026-10-26-controlled-construction-investigation).
+The repository retains the historical 240-configuration construction matrix and
+matched raw-Metal/MCCL comparator JSON. See [methods, raw links, measured causes and limits](../../../../doc/MAC-IMPLEMENTATION.md#2026-10-26-controlled-construction-investigation).
 
 
-## Shared-relation construction cutover, 2026-10-26
+## Historical shared-relation construction cutover (2026-10-26)
 
-`shared-source-index-timing-m3max-20261026.csv` measures the new fused shared-source
+[shared-source-index-timing-m3max-20261026.csv](shared-source-index-timing-m3max-20261026.csv) measures the then-new fused shared-source
 builder at 1M/16M/64M rows, with five samples per retained/cleared cache policy.
 A single-column relation is ingested once per size and retained across every
 build; GPU projection generates original row IDs. Source bytes are `4*N`, not
@@ -118,9 +129,20 @@ count/error publication. Exact output/directory/source validation is separate.
 The data include actual command-buffer and CPU-driver scheduling timestamps;
 these are not interchangeable with wall time or hardware DRAM counters.
 
-The [shared-source cutover](https://github.com/StarGazerM/mini_linq/blob/codex/all-answers/doc/MAC-IMPLEMENTATION.md#shared-relation-input-cutover)
+The [shared-source cutover](../../../../doc/MAC-IMPLEMENTATION.md#shared-relation-input-cutover)
 links the updated source-reuse matrix, two-column/multi-index cases and complete
 H03/H09 execution. Do not treat old per-build population times as inherent GPU
 construction costs, or compare the new boundary without including ingestion
 when the workload actually needs it.
+
+The shared-source API remains documented in [the crate README](../README.md),
+but the dated samples do not measure later grouped RadixRun or compiler changes.
+
+## Other historical operation evidence
+
+The crate README's Bloom and hash-map performance claims refer to the dated
+`bloom-filter-2026-10-15.csv` and `hash-map-*-2026-10-{16,18}.*` artifacts in this
+directory, not to the lifecycle or index-construction samples.
+[set-difference-2026-10-15.csv](set-difference-2026-10-15.csv) records 30 repetitions;
+it does not substantiate the README's preserved earlier 20-sample timing range.
 

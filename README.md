@@ -12,8 +12,9 @@ CQ → CQ-NF → VO → RA′ → IX → Physical → Structures → Sequence �
 
 Each structural pass has an independent source/target check. Printers are
 validated by compiling and executing their output against independent oracles.
-Queries denote `bottom + Set`: a panic aborts evaluation, opaque Rust steps
-retain their written ancestry, and relational equality assumes Leibniz identity.
+Queries denote `bottom + Set`. Embedded Rust is opaque, pure and total by
+premise; a panic violates that premise. Placement follows free variables, not
+written-order Rust ancestry. Relational equality assumes Leibniz identity.
 
 Core body blocks `{ A } | { B }` combine answers; `{ A } else { B }` use B only
 where A is empty. Both need two nonempty branches, allow nesting, and export
@@ -22,7 +23,7 @@ Join distributes over union, while fallback is `B1 ∪ (B2 ▷_F B1)`, with an
 antijoin on the block's free variables F. Rust-free blocks become derived
 relations; other blocks run per row and stream their prefix once. The IR records
 branch paths, common headings, negative references, canonicalization, witness
-stopping, retention, and the Rust ancestry tree. Rust `||` keeps its guard rules.
+stopping, retention, and Rust environments. Rust `||` keeps its guard rules.
 
 ## Layout
 
@@ -53,19 +54,27 @@ Metal remains outside the portable core workspace.
 
 Select macro paths in named phases; omitted phases use the defaults. Pass
 arguments belong to the selected pass, and rewrite phases accept ordered lists.
-The default planner is left-deep in written order: the first clause of each
-scope streams and later clauses are indexed and probed. Before the stream
-starts, each indexed clause is reduced by its filtered subtrees of the
+The default planner uses left-deep connected growth (Connected/Coarse), not
+written order: the first scheduled clause of each scope streams and later
+clauses are indexed and probed. Before the stream starts, each indexed clause
+is reduced by its filtered subtrees of the
 stream-rooted reduction tree (checked Masks semijoins, plus exact atom-to-block
 cuts), and each filtered build pushes an exact key set into the probe-side
 scan. Each block branch is analyzed independently. Select
 `plan = mini_linq::passes::plan(no_reduce);` to disable optional reductions while
-retaining written order; other phases keep their defaults.
+retaining connected scheduling; other phases keep their defaults.
 
 The shipped CPU target lowers with `sequence`, grades with `sequential`, and
 emits with `translate_pull`, including profile counters when enabled.
 An explicit Structures terminal such as `own_push::push` remains selectable:
 set `print` without authoring `sequence`, `grade`, or `decompose`.
+
+Host native reads require declared capabilities and a recorded per-reader
+Structures choice; undeclared hosts use the recorded fallback. Printing uses
+direct runtime calls and `Build::build`, not autoref tiers or a `build!` macro.
+Closed captures use plain owned values cloned at each consuming move closure,
+not compiler-inserted `Arc` handles. See [storage contracts](doc/STORAGE.md#133-host-reads-and-dispatch-no-fallback-tiers)
+and [current progress and dated evidence](doc/PLANNING-REDESIGN.md#progress).
 
 ```rust
 let rows = [(1_i32,), (1,), (2,)];

@@ -73,7 +73,10 @@ free-variable placement, Rust trait obligations and expansion fixtures belong to
 [validation.tex](validation.tex); realization has no source/target
 correspondence `check`.
 
-The manuscript describes source revision `3b21e5d`. Its exact written reference
+This is a living specification, not a frozen description of revision `3b21e5d`.
+The documentation audit baseline is `7e187597` (2026-11-02); rule status and
+semantic premises are distinguished in [CONFORMANCE.md](CONFORMANCE.md).
+The current exact written reference
 is desugared CQ-NF passed through `cq_order::compile_written` (Written/Coarse
 with recorded correlated blocks and no restrictions) and `cq_elaborate::compile`;
 the default `plan` records O-Restrict restrictions that the lowering applies. Core blocks and
