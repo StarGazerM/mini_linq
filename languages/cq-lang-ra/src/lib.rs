@@ -39,7 +39,7 @@
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
 //! Union siblings are unordered; fallback retains its relational anti steps.
-//! Only differing literals on one interface column prove union arms disjoint.
+//! Only fallback construction proves union arms disjoint; literal values prove nothing.
 //!
 //! `scope[names] @c.j.k` records a Rust step's lexical inputs and source path.
 //! Prefix Rust reached through a positive semijoin remains outside the arm;
@@ -758,9 +758,18 @@ fn check_all_reachable(
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
 
-mod constants;
 mod structural;
-pub use constants::disjoint_unions;
+
+/// Unions whose arms are disjoint by construction (fallback blocks).
+pub fn disjoint_unions(program: &Program) -> syn::Result<BTreeSet<String>> {
+    contract::check(program)?;
+    Ok(cq_syntax::algebra::disjoint_unions(
+        program.plan.definitions.iter().filter_map(|definition| match &definition.operator {
+            Operator::Union(union) => Some((&definition.result, union.origin.as_ref())),
+            _ => None,
+        }),
+    ))
+}
 
 /// Check local contracts and fixed structural obligations of an RA rewrite.
 ///

@@ -53,13 +53,37 @@ pub use capture::{Capture, Captures};
 /// One named, typed column in a declared input relation.
 ///
 /// ```text
-/// ColumnDecl ::= Ident ":" Type
+/// ColumnDecl ::= Ident ":" Type ["in" "(" Expr ")"]
 /// ```
+///
+/// The optional `in (D)` is the column's authored code domain: a query-closed
+/// host value implementing `cq_storage::CodeDomain` whose codes the column
+/// stores (WF-Domain, A-Domain). The type stays opaque; only the domain fact
+/// decides operand translation.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct ColumnDecl {
     pub name: Ident,
     pub colon_token: Token![:],
     pub ty: Type,
+    #[syn(optional, peek = Token![in])]
+    pub domain: Option<CodeDomain>,
+}
+
+/// `in (D)`: the code domain of a declared column.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct CodeDomain {
+    pub in_token: Token![in],
+    #[syn(parenthesized)]
+    pub paren_token: token::Paren,
+    #[syn(in = paren_token)]
+    pub expression: syn::Expr,
+}
+
+impl CodeDomain {
+    /// Domain identity is token identity of the authored expression.
+    pub fn key(&self) -> String {
+        quote::ToTokens::to_token_stream(&self.expression).to_string()
+    }
 }
 
 /// One typed relation declaration supplied by the host program.

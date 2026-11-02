@@ -189,6 +189,34 @@ impl<H: crate::PointLookup<Key = K>, K: Eq, F> PointRead<K> for &&PointHost<H, K
     }
 }
 
+/// A one-probe read keyed by borrowed closed operands (captured references).
+/// Native dispatch owns the borrowed key once per read through [`OwnKey`];
+/// a key whose owned form is not the declared key falls back to the scan.
+pub trait BorrowedPointRead<Q> {
+    type Item;
+    type Cursor: Iterator<Item = Self::Item>;
+    fn borrowed_point(self, key: &Q) -> Self::Cursor;
+}
+impl<H, K, Q, F: Fn() -> I, I: Iterator> BorrowedPointRead<Q> for &PointHost<H, K, Q, F> {
+    type Item = I::Item;
+    type Cursor = I;
+    fn borrowed_point(self, _: &Q) -> I {
+        (self.1)()
+    }
+}
+impl<H, K, Q, F> BorrowedPointRead<Q> for &&PointHost<H, K, Q, F>
+where
+    H: crate::PointLookup<Key = K>,
+    K: Eq,
+    Q: OwnKey<Owned = K>,
+{
+    type Item = H::Row;
+    type Cursor = H::Cursor;
+    fn borrowed_point(self, key: &Q) -> Self::Cursor {
+        self.0.point_lookup(&key.own_key())
+    }
+}
+
 /// The key and fallback types are fixed before method resolution, so an
 /// unsupported key type falls back even when another keyed read is implemented.
 pub struct Host<H, K, T, F>(pub H, Lazy<T, F>, std::marker::PhantomData<fn() -> K>);

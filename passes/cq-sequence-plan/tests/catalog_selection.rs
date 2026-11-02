@@ -286,11 +286,11 @@ fn host_range_index_selection_does_not_pick_an_exact_only_token() {
 }
 
 #[test]
-fn unused_string_payload_is_projected_from_renamed_provider() {
+fn unused_code_payload_is_projected_from_renamed_provider() {
     for retained in [false, true] {
         let mut physical: structures::physical::Program = syn::parse_quote! {
             physical {
-                relation L(a:i64); relation R(a:i64,unused:String);
+                relation L(a:i64); relation R(a:i64,unused:StringCode);
                 l = pipe rename L@0 {a -> a};
                 r = pipe rename R@1 {a -> a,unused -> unused};
                 joined = pipe probe first [a] l,r;

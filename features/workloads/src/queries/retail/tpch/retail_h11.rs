@@ -69,7 +69,6 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
 crate::tpch_runtime::standalone_configs! { $;
     pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
         assert!(CONFIGS.contains(&config), "unknown H11 configuration");
-        let germany = data.dictionaries.literal("n_name", "GERMANY");
         let Partsupp = data.partsupp.as_slice();
         let Supplier = data.supplier.as_slice();
         let Nation = data.nation.as_slice();
@@ -78,12 +77,12 @@ crate::tpch_runtime::standalone_configs! { $;
             struct Matches;
             relation Partsupp(ps_partkey: i64, ps_suppkey: i64, ps_availqty: i64, ps_supplycost: Decimal);
             relation Supplier(s_suppkey: i64, s_nationkey: i32);
-            relation Nation(n_nationkey: i32, n_name: StringCode);
+            relation Nation(n_nationkey: i32, n_name: StringCode in (data.dictionaries.domain("n_name")));
             relation answer(part_key: i64, supplier_key: i64, quantity: i64, cost_units: i64);
             answer(*part_key, *supplier_key, *quantity, *cost_units) :-
                 Partsupp(part_key, supplier_key, quantity, cost),
                 Supplier(supplier_key, nation_key), Nation(nation_key, nation_name),
-                where nation_name == germany,
+                where nation_name == "GERMANY",
                 let cost_units: i64 = cost.scaled();
         }.collect();
         let Stock = Stock.as_slice();

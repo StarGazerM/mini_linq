@@ -39,11 +39,14 @@ pub fn declarations(inputs: &[Relation]) -> Vec<cq_syntax::RelationDecl> {
                                     ColumnType::I64 => "i64",
                                     ColumnType::Date => "Date",
                                     ColumnType::Decimal => "Decimal",
-                                    ColumnType::Text => "String",
+                                    ColumnType::Text => "StringCode",
                                 },
                                 proc_macro2::Span::call_site(),
                             );
-                            if matches!(kind, ColumnType::Date | ColumnType::Decimal) {
+                            if matches!(
+                                kind,
+                                ColumnType::Date | ColumnType::Decimal | ColumnType::Text
+                            ) {
                                 let mut path: syn::Path =
                                     syn::Ident::new("cq_load", proc_macro2::Span::call_site())
                                         .into();
@@ -54,6 +57,7 @@ pub fn declarations(inputs: &[Relation]) -> Vec<cq_syntax::RelationDecl> {
                             }
                         },
                     }),
+                    domain: None,
                 })
                 .collect(),
             value: None,

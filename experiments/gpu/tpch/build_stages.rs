@@ -31,34 +31,29 @@ pub fn compile(
         let mut dependencies = Vec::new();
         for input in stage.program.inputs() {
             let name = input.name.to_string();
-            if let Some(&producer) = program.aliases.get(&name) {
-                if producer >= index {
-                    return Err(Rejected {
-                        phase: "stage dependency",
-                        error: format!("{name} is not a preceding publication"),
-                        term: stage.program.to_token_stream().to_string(),
-                    });
-                }
-                let columns = input
-                    .columns
-                    .iter()
-                    .zip(&output_types[producer])
-                    .map(|(column, ty)| (column.name.clone(), ty.clone()))
-                    .collect();
+            let (_, producer_name) = stage.inputs.iter().find(|(name, _)| *name == input.name)
+                .ok_or_else(|| reject("checked stage input binding missing".into()))?;
+            if let Some(producer) = program.publication_index(producer_name).map_err(&reject)? {
+                let columns = input.columns.iter().zip(&output_types[producer])
+                    .map(|(column, ty)| (column.name.clone(), ty.clone())).collect();
                 types.insert(name.clone(), columns);
                 publications.insert(name, publication_facts[producer].clone());
                 dependencies.push(format_ident!("result_{producer}"));
-            } else if let Some(preprocess) =
-                program.preprocessing.iter().find(|p| p.name == input.name)
-            {
-                types.insert(name.clone(), preprocess.columns.clone());
-                publications.insert(name, crate::Publication {
-                    placement: advice::Placement::Host,
-                    nullable: vec![false; preprocess.columns.len()],
-                    domains: vec![None; preprocess.columns.len()],
-                    grouped: None,
-                });
-                dependencies.push(preprocess.name.clone());
+            } else {
+                let source = program.input(producer_name).map_err(&reject)?;
+                if !matches!(source.producer, stages::Producer::Table(_)) {
+                    let columns = program.input_columns(source).map_err(&reject)?;
+                    let width = columns.len();
+                    types.insert(name.clone(), input.columns.iter().zip(columns)
+                        .map(|(column, (_, ty))| (column.name.clone(), ty)).collect());
+                    publications.insert(name, crate::Publication {
+                        placement: advice::Placement::Host,
+                        nullable: vec![false; width],
+                        domains: program.input_origins(source).map_err(&reject)?,
+                        grouped: None,
+                    });
+                    dependencies.push(stages::Program::prepared_name(source));
+                }
             }
         }
         let mut kernel = program.kernel(index, &types).map_err(&reject)?;
@@ -80,7 +75,7 @@ pub fn compile(
             &kernel,
             manifest,
             &pipeline,
-            Some(&publications),
+            &publications,
         )?;
         artifact["stage"] = json!(index);
         artifact["cpu_query"] = json!(kernel.cpu_query().to_string());
@@ -123,7 +118,8 @@ pub fn compile(
     }
     let mut device_terminal = Vec::new();
     let mut cpu_terminal = Vec::new();
-    for &index in &program.terminal {
+    for (position, terminal) in program.terminal.iter().enumerate() {
+        let index = program.stage_index(&terminal.stage).map_err(&reject)?;
         let module = format_ident!("stage_{index}");
         let data = format_ident!("data_{index}");
         let result = format_ident!("result_{index}");
@@ -133,25 +129,40 @@ pub fn compile(
         } else {
             quote!(#result)
         };
-        let composition =
-            terminal_map(&program.stages[index], output_types[index].len()).map_err(&reject)?;
+        check_terminal_domains(program, terminal, &publication_facts[index]).map_err(&reject)?;
+        let composition = terminal_projection(terminal);
+        let append = if position == 0 {
+            if terminal.direct {
+                quote!(let mut answer = #composition;)
+            } else {
+                quote!(let mut answer: Vec<Vec<String>> = (#composition).collect();)
+            }
+        } else {
+            quote!(answer.extend(#composition);)
+        };
         // DECODE P: terminal GPU answer resolves source dictionaries and formats values after download.
         device_terminal.push(quote! {
             let rows = #module::decode(&#data, manifest, #download)?;
-            answer.extend(#composition);
+            #append
         });
         // DECODE P: terminal CPU reference answer resolves the same source dictionaries for final comparison.
         cpu_terminal.push(quote! {
             let rows = #module::decode(&#data, manifest, #result)?;
-            answer.extend(#composition);
+            #append
         });
     }
-    let preprocessing = program.preprocessing_tokens();
-    let artifact = json!({"stages": artifacts, "terminal_stages": program.terminal,
+    let preprocessing = program.preprocessing_tokens().map_err(&reject)?;
+    let terminal_stages: Vec<_> = program.terminal.iter()
+        .map(|terminal| program.stage_index(&terminal.stage)).collect::<crate::manifest::Result<_>>()
+        .map_err(&reject)?;
+    let terminal_direct: Vec<_> = program.terminal.iter().map(|terminal| terminal.direct).collect();
+    let artifact = json!({"stages": artifacts, "terminal_stages": terminal_stages,
+        "stage_source": program.to_token_stream().to_string(), "terminal_direct": terminal_direct,
         "timing": "sum of stage phase timings; host-graded stages use elapsed host execution"});
     Ok((
         quote! {
-            use cq_load::StringCode;
+            use cq_load::{Date, Load, StringCode};
+            type Decimal = cq_load::Decimal<2>;
             #(#modules)*
             pub(super) fn run(manifest: &crate::manifest::Manifest, query: &str, conformance_only: bool) -> crate::manifest::Result<serde_json::Value> {
                 let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
@@ -159,14 +170,12 @@ pub fn compile(
                 #(#loads)*
                 let reference = if manifest.sf == 1 {
                     #(#sequential)*
-                    let mut answer = Vec::new();
                     #(#cpu_terminal)*
                     Some(answer)
                 } else { None };
                 crate::benchmark::run(manifest, query, || {
                     let mut total = cq_gpu_runtime::Timings::default();
                     #(#device)*
-                    let mut answer = Vec::new();
                     #(#device_terminal)*
                     cq_gpu_runtime::publish_timings(total);
                     Ok(answer)
@@ -177,57 +186,31 @@ pub fn compile(
     ))
 }
 
-fn terminal_map(stage: &stages::Stage, width: usize) -> crate::manifest::Result<TokenStream> {
-    let Some(map) = &stage.map else {
-        return Ok(quote!(rows));
-    };
-    if stages::check_identity_map(map).is_ok() {
-        return Ok(quote!(rows));
-    }
-    let map = stages::owned_map(map);
-    let body = if let syn::Expr::Block(block) = map.body.as_ref() {
-        match block.block.stmts.last() {
-            Some(syn::Stmt::Expr(expression, None)) => expression,
-            _ => return Err("terminal ownership map must return a tuple".into()),
-        }
-    } else {
-        map.body.as_ref()
-    };
-    let syn::Expr::Tuple(tuple) = body else {
-        return Err("terminal ownership map must return a tuple".into());
-    };
-    let Some(syn::Pat::Tuple(pattern)) = map.inputs.first() else {
-        return Err("terminal ownership map must destructure its row".into());
-    };
-    if pattern.elems.len() != width {
-        return Err("terminal ownership map input width differs".into());
-    }
-    let mut outputs = Vec::new();
-    let mut used = std::collections::BTreeSet::new();
-    for expression in &tuple.elems {
-        match expression {
-            syn::Expr::Path(path) => {
-                let slot = pattern
-                    .elems
-                    .iter()
-                    .position(|pat| {
-                        matches!(pat,
-                            syn::Pat::Ident(name) if path.path.is_ident(&name.ident)
-                        )
-                    })
-                    .ok_or("terminal map references an unbound field")?;
-                if !used.insert(slot) {
-                    return Err("terminal map repeats a field".into());
-                }
-                outputs.push(quote!(::std::mem::take(&mut row[#slot])));
-            }
-            syn::Expr::Lit(literal) => outputs.push(quote!((#literal).to_string())),
-            _ => {
-                return Err(
-                    "terminal map must be an ownership projection or literal extension".into(),
-                );
-            }
+fn check_terminal_domains(
+    program: &stages::Program, terminal: &stages::Terminal, publication: &crate::Publication,
+) -> crate::manifest::Result<()> {
+    for (slot, projection) in terminal.projection.iter().enumerate() {
+        let stages::Projection::Column(source) = projection else { continue; };
+        let declared = terminal.dictionaries.iter().find(|(output, _)| *output == slot)
+            .map(|(_, name)| program.domain(name).map(|domain| (domain.table.to_string(), domain.column.to_string())))
+            .transpose()?;
+        if publication.domains.get(*source).ok_or("terminal publication width mismatch")? != &declared {
+            return Err(format!("terminal {} column {slot} dictionary publication differs from its recorded domain", terminal.stage).into());
         }
     }
-    Ok(quote!(rows.into_iter().map(|mut row| vec![#(#outputs),*])))
+    Ok(())
+}
+
+fn terminal_projection(terminal: &stages::Terminal) -> TokenStream {
+    if terminal.direct { return quote!(rows); }
+    let mut captures = Vec::new();
+    let outputs = terminal.projection.iter().enumerate().map(|(index, projection)| match projection {
+        stages::Projection::Column(slot) => quote!(::std::mem::take(&mut row[#slot])),
+        stages::Projection::Value(expression) => {
+            let name = format_ident!("__cq_terminal_value_{index}");
+            captures.push(quote!(let #name = ({ #expression }).to_string();));
+            quote!(#name.clone())
+        }
+    }).collect::<Vec<_>>();
+    quote!({ #(#captures)* rows.into_iter().map(move |mut row| vec![#(#outputs),*]) })
 }

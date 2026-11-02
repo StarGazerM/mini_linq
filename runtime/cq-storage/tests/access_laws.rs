@@ -209,27 +209,54 @@ fn immutable_adaptive_forms_support_shared_task_reads() {
 }
 
 #[test]
-fn literal_backing_and_predicate_encoding_follow_representation_traits() {
-    use cq_storage::{PredicateValue, StringLiteral};
-    type HostString = String;
-    static OWNED: std::sync::LazyLock<<HostString as StringLiteral>::Storage> =
-        std::sync::LazyLock::new(|| HostString::storage("green"));
-    static BORROWED: std::sync::LazyLock<<str as StringLiteral>::Storage> =
-        std::sync::LazyLock::new(|| str::storage("green"));
-    type Nested = &'static &'static HostString;
-    static NESTED: std::sync::LazyLock<<Nested as StringLiteral>::Storage> =
-        std::sync::LazyLock::new(|| Nested::storage("green"));
-    let owned = HostString::reference(&OWNED);
-    let borrowed = str::reference(&BORROWED);
-    assert_eq!(owned.as_str(), borrowed);
-    assert!(std::ptr::eq(owned, HostString::reference(&OWNED)));
-    assert_eq!(***Nested::reference(&NESTED), *owned);
-    assert!(std::ptr::eq(
-        Nested::reference(&NESTED),
-        Nested::reference(&NESTED)
-    ));
-    let encoded: &str = owned.predicate_value();
-    assert_eq!(encoded, borrowed);
+fn predicate_value_is_identity_for_cloneable_values() {
+    use cq_storage::PredicateValue;
     let scalar: i32 = 7i32.predicate_value();
     assert_eq!(scalar, 7);
+    let owned = vec![1i64, 2];
+    let encoded: Vec<i64> = owned.predicate_value();
+    assert_eq!(encoded, owned);
+}
+
+/// Sorted test domain: code = rank, absent exact = `u32::MAX`.
+struct Sorted(Vec<&'static str>);
+
+impl cq_storage::CodeDomain for Sorted {
+    type Value = str;
+    type Code = u32;
+    fn exact(&self, value: &str) -> u32 {
+        self.0
+            .binary_search(&value)
+            .map_or(u32::MAX, |rank| rank as u32)
+    }
+}
+
+impl cq_storage::OrderedCodeDomain for Sorted {
+    fn lower(&self, value: &str) -> u32 {
+        self.0.partition_point(|v| *v < value) as u32
+    }
+    fn upper(&self, value: &str) -> u32 {
+        self.0.partition_point(|v| *v <= value) as u32
+    }
+}
+
+#[test]
+fn domain_functions_encode_through_code_domains() {
+    use cq_storage::domain::{exact, lower, upper};
+    let domain = Sorted(vec!["apple", "cherry", "plum"]);
+    assert_eq!(exact(&domain, "cherry"), 1);
+    assert_eq!(exact(&domain, &String::from("plum")), 2);
+    assert_eq!(exact(&domain, "banana"), u32::MAX);
+    assert_eq!(exact(&&domain, "apple"), 0);
+    // `v < x` ⇔ `code < lower(x)`; `v <= x` ⇔ `code < upper(x)`.
+    assert_eq!((lower(&domain, "cherry"), upper(&domain, "cherry")), (1, 2));
+    assert_eq!((lower(&domain, "banana"), upper(&domain, "banana")), (1, 1));
+    assert_eq!((lower(&domain, "a"), upper(&domain, "zzz")), (0, 3));
+    for (code, value) in domain.0.iter().enumerate() {
+        let code = code as u32;
+        for probe in ["a", "apple", "banana", "cherry", "plum", "zzz"] {
+            assert_eq!(code < lower(&domain, probe), *value < probe);
+            assert_eq!(code < upper(&domain, probe), *value <= probe);
+        }
+    }
 }

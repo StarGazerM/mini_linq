@@ -116,25 +116,23 @@ macro_rules! runner {
                 let Region = data.region.as_slice();
                 let dictionaries = &data.dictionaries;
                 let start = date("1995-01-01"); let end = date("1996-12-31");
-                let america = dictionaries.literal("r_name", "AMERICA");
-                let economy_anodized_steel = dictionaries.literal("p_type", "ECONOMY ANODIZED STEEL");
                 query! {
                     struct Query;
                     relation Lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64);
-                    relation Part(p_partkey: i64, p_type: cq_load::StringCode);
+                    relation Part(p_partkey: i64, p_type: cq_load::StringCode in (dictionaries.domain("p_type")));
                     relation Supplier(s_suppkey: i64, s_nationkey: i32);
                     relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date);
                     relation Customer(c_custkey: i64, c_nationkey: i32);
                     relation Nation(n_nationkey: i32, n_regionkey: i32);
-                    relation Region(r_regionkey: i32, r_name: cq_load::StringCode);
+                    relation Region(r_regionkey: i32, r_name: cq_load::StringCode in (dictionaries.domain("r_name")));
                     relation answer(order_key: i64, part_key: i64, supplier_key: i64);
                     answer(order_key, part_key, supplier_key) :-
                         Lineitem(order_key, part_key, supplier_key),
-                        Part(part_key, { economy_anodized_steel }),
+                        Part(part_key, "ECONOMY ANODIZED STEEL"),
                         Supplier(supplier_key, supplier_nation),
                         Orders(order_key, customer_key, order_date), where order_date >= start && order_date <= end,
                         Customer(customer_key, customer_nation), Nation(customer_nation, customer_region),
-                        Region(customer_region, { america }),
+                        Region(customer_region, "AMERICA"),
                         Nation(supplier_nation, _supplier_region);
                 }
                 .map(|(order_key, part_key, supplier_key,)| (*order_key, *part_key, *supplier_key,))

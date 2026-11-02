@@ -30,12 +30,10 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
                     (
                         i64::from(r[0]),
                         i64::from(r[1]),
-                        dictionaries.literal(
-                            "l_returnflag",
+                        ::cq_storage::domain::exact(dictionaries.domain("l_returnflag"),
                             &char::from_u32(r[2] as u32).unwrap().to_string(),
                         ),
-                        dictionaries.literal(
-                            "l_linestatus",
+                        ::cq_storage::domain::exact(dictionaries.domain("l_linestatus"),
                             &char::from_u32(r[3] as u32).unwrap().to_string(),
                         ),
                         Decimal::from_scaled(i64::from(r[4])).unwrap(),

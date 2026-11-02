@@ -76,7 +76,6 @@ macro_rules! query_body {
         let Supplier = data.supplier.as_slice();
         let AllowedKinds = data.allowed_kinds.as_slice();
         let BadComments = data.bad_comments.as_slice();
-        let excluded_brand = data.dictionaries.literal("p_brand", "Brand#45");
         let BadSupplier: Vec<(i64,)> = query! {
             plan(no_reduce, order(Supplier, BadComments));
             struct BadSuppliers;
@@ -89,14 +88,15 @@ macro_rules! query_body {
         query! {
             plan(no_reduce, order(Part, AllowedKinds, Partsupp));
             struct Query;
-            relation Part(p_partkey: i64, p_brand: StringCode, p_type: StringCode, p_size: i32);
+            relation Part(p_partkey: i64, p_brand: StringCode in (data.dictionaries.domain("p_brand")),
+                p_type: StringCode, p_size: i32);
             relation Partsupp(ps_partkey: i64, ps_suppkey: i64);
             relation AllowedKinds(kind: StringCode);
             relation BadSupplier(suppkey: i64);
             relation answer(part_key: i64, suppkey: i64);
             answer(part_key, suppkey) :-
                 Part(part_key, brand, kind, size), AllowedKinds(kind),
-                where brand != excluded_brand,
+                where brand != "Brand#45",
                 if [49, 14, 23, 45, 19, 3, 36, 9].contains(size),
                 Partsupp(part_key, suppkey), !BadSupplier(suppkey);
         }.map(|(part_key, suppkey)| (*part_key, *suppkey)).collect()

@@ -881,7 +881,7 @@ mod tests {
     fn membership() -> Program {
         let structures = syn::parse_quote! {
             physical {
-                relation L(a:i32); relation R(a:i32,s:String);
+                relation L(a:i32); relation R(a:i32,s:StringCode);
                 l = pipe rename L@0 {a -> a};
                 r = let rename R@1 {a -> a,s -> s};
                 answer = let canon semi eager [a] l,r;

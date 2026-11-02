@@ -39,39 +39,48 @@ pub struct Manifest {
     pub root: PathBuf,
 }
 
-/// Closed relational operands may already be published codes (including an
-/// imported `dictionaries.literal(column, text)` capture). Rust selects this
-/// codec without inspecting authored type spellings.
-pub trait DictionaryLiteral {
-    fn dictionary_code(&self, dictionary: &[&str]) -> u32;
-}
+/// Borrowed adapter for an explicitly declared, checked sorted dictionary.
+/// CQ's shared domain normalization owns operand capture and comparison rules.
+pub struct DictionaryDomain<'a>(pub &'a [&'a str]);
 
-impl DictionaryLiteral for u32 {
-    fn dictionary_code(&self, _: &[&str]) -> u32 {
-        *self
-    }
-}
+impl cq_storage::CodeDomain for DictionaryDomain<'_> {
+    type Value = str;
+    type Code = u32;
 
-impl DictionaryLiteral for str {
-    fn dictionary_code(&self, dictionary: &[&str]) -> u32 {
-        dictionary
-            .iter()
-            .position(|entry| *entry == self)
+    fn exact(&self, value: &str) -> u32 {
+        self.0.binary_search(&value).ok()
             .map(|index| u32::try_from(index).expect("validated dictionary size"))
             .unwrap_or(u32::MAX)
     }
 }
 
-impl DictionaryLiteral for String {
-    fn dictionary_code(&self, dictionary: &[&str]) -> u32 {
-        self.as_str().dictionary_code(dictionary)
+impl cq_storage::OrderedCodeDomain for DictionaryDomain<'_> {
+    fn lower(&self, value: &str) -> u32 {
+        u32::try_from(self.0.partition_point(|entry| *entry < value))
+            .expect("validated dictionary size")
+    }
+
+    fn upper(&self, value: &str) -> u32 {
+        u32::try_from(self.0.partition_point(|entry| *entry <= value))
+            .expect("validated dictionary size")
     }
 }
 
-impl<T: DictionaryLiteral + ?Sized> DictionaryLiteral for &T {
-    fn dictionary_code(&self, dictionary: &[&str]) -> u32 {
-        (**self).dictionary_code(dictionary)
-    }
+/// Representation conversion selected by a declared domain column, never by
+/// inspection of its Rust type. Opaque host producers retain their own carrier.
+pub trait DictionaryCode: Sized {
+    fn from_code(code: u32) -> Self;
+    fn into_code(self) -> u32;
+}
+
+impl DictionaryCode for cq_load::StringCode {
+    fn from_code(code: u32) -> Self { Self(code) }
+    fn into_code(self) -> u32 { self.0 }
+}
+
+impl DictionaryCode for u32 {
+    fn from_code(code: u32) -> Self { code }
+    fn into_code(self) -> u32 { self }
 }
 
 /// Host values follow the query declaration, not the on-disk representation.
@@ -279,16 +288,24 @@ impl Manifest {
 }
 
 #[cfg(test)]
-mod dictionary_literal_tests {
-    use super::DictionaryLiteral;
+mod dictionary_domain_tests {
+    use super::{DictionaryCode, DictionaryDomain};
+    use cq_storage::{CodeDomain, OrderedCodeDomain};
 
     #[test]
-    fn closed_codes_and_text_preserve_published_dictionary_order() {
-        let dictionary = ["red", "green part"];
-        assert_eq!(1_u32.dictionary_code(&dictionary), 1);
-        assert_eq!(u32::MAX.dictionary_code(&dictionary), u32::MAX);
-        assert_eq!("green part".dictionary_code(&dictionary), 1);
-        assert_eq!("red".to_owned().dictionary_code(&dictionary), 0);
-        assert_eq!("absent".dictionary_code(&dictionary), u32::MAX);
+    fn exact_and_ordered_operands_follow_the_declared_sorted_domain() {
+        let dictionary = DictionaryDomain(&["green part", "red"]);
+        assert_eq!(dictionary.exact("green part"), 0);
+        assert_eq!(dictionary.exact("red"), 1);
+        assert_eq!(dictionary.exact("absent"), u32::MAX);
+        assert_eq!(dictionary.lower("purple"), 1);
+        assert_eq!(dictionary.upper("purple"), 1);
+        assert_eq!(dictionary.lower("red"), 1);
+        assert_eq!(dictionary.upper("red"), 2);
+        assert_eq!(dictionary.lower("z"), 2);
+        assert_eq!(cq_storage::domain::exact(&dictionary, &"red".to_owned()), 1);
+        assert_eq!(cq_storage::domain::exact(&dictionary, &{ "red" }), 1);
+        assert_eq!(cq_load::StringCode::from_code(1).into_code(), 1);
+        assert_eq!(cq_load::StringCode::from_code(u32::MAX).into_code(), u32::MAX);
     }
 }

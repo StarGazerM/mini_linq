@@ -301,19 +301,11 @@ fn relation_facts(
         .collect()
 }
 
-fn compile(
-    kernel: &source::Kernel,
-    manifest: &Manifest,
-    pipeline: &advice::Pipeline,
-) -> CompileResult<(TokenStream, serde_json::Value)> {
-    compile_stage(kernel, manifest, pipeline, None)
-}
-
 fn compile_stage(
     kernel: &source::Kernel,
     manifest: &Manifest,
     pipeline: &advice::Pipeline,
-    publications: Option<&std::collections::BTreeMap<String, Publication>>,
+    publications: &std::collections::BTreeMap<String, Publication>,
 ) -> CompileResult<(TokenStream, serde_json::Value)> {
     let cpu_source = kernel.cpu_query();
     let host = matches!(pipeline.target, advice::Target::Host);
@@ -384,11 +376,6 @@ fn compile_stage(
                 term: cpu_source.to_string(),
             })?,
     );
-    let setup_bindings = kernel.setup_bindings(manifest).map_err(|error| Rejected {
-        phase: "loader captures",
-        error: error.to_string(),
-        term: cpu_source.to_string(),
-    })?;
     let encoded = kernel
         .encoded_query_with_types(manifest, &stored_types)
         .map_err(|error| Rejected {
@@ -398,13 +385,20 @@ fn compile_stage(
         })?;
     let cq: cq_lang_cq::Program = checked("CQ parse", &encoded, syn::parse2(encoded.clone()))?;
     let normal = checked("CQ normalize", &cq, cq_lang_cq::normal::normalize(&cq))?;
+    let captures = &normal.query.captures;
+    let setup_bindings = kernel.setup_bindings(manifest, &quote!(#captures))
+        .map_err(|error| Rejected {
+            phase: "loader captures",
+            error: error.to_string(),
+            term: cpu_source.to_string(),
+        })?;
     let mut publication = checked(
         "publication contract",
         &normal,
-        publication(&normal, pipeline, publications),
+        publication(&normal, pipeline, Some(publications)),
     )?;
     if publication.resident() {
-        publication.grouped = grouped_publication(&cq, &normal, publications);
+        publication.grouped = grouped_publication(&cq, &normal, Some(publications));
         if let Some(grouped) = &publication.grouped {
             checked(
                 "grouped publication",
@@ -553,14 +547,8 @@ fn compile_stage(
     // Nullable publication payloads have no device scalar ABI. A join carrying
     // one from either side needs a host-readable index, until a later projection
     // removes that column. Use checked layouts, never Rust type spellings.
-    if !host
-        && publications.is_some_and(|inputs| {
-            inputs
-                .values()
-                .any(|input| input.nullable.iter().any(|value| *value))
-        })
-    {
-        let nullable = nullable_inputs(&normal, publications);
+    if !host && publications.values().any(|input| input.nullable.iter().any(|value| *value)) {
+        let nullable = nullable_inputs(&normal, Some(publications));
         let host_structures = checked(
             "nullable host provider selection",
             &selected,
@@ -601,7 +589,7 @@ fn compile_stage(
                 && (nullable_reader
                     || advice::relation_of(&structures.physical, &entry.name)
                         .and_then(|relation| {
-                            publications.and_then(|inputs| inputs.get(&relation.to_string()))
+                            publications.get(&relation.to_string())
                         })
                         .is_some_and(|input| input.nullable.iter().any(|value| *value)))
             {
@@ -631,16 +619,7 @@ fn compile_stage(
                 .iter()
                 .find(|r| r.name == host.as_str())
                 .unwrap();
-            if publications
-                .and_then(|inputs| inputs.get(&relation.name.to_string()))
-                .is_some_and(|input| !input.resident())
-            {
-                continue;
-            }
-            if kernel
-                .derived
-                .iter()
-                .any(|(name, _)| *name == relation.name)
+            if publications.get(&relation.name.to_string()).is_some_and(|input| !input.resident())
             {
                 continue;
             }
@@ -711,7 +690,7 @@ fn compile_stage(
             sequence.representation.identity.insert(variable);
         }
     }
-    if let Some(publications) = publications {
+    {
         for item in &normal.query.body {
             let cq_lang_cq::BodyItem::Positive { atom } = item else {
                 continue;
@@ -871,7 +850,6 @@ fn compile_stage(
         .relations
         .iter()
         .map(|r| &r.name)
-        .chain(kernel.derived.iter().map(|(name, _)| name))
         .collect();
     let tables: Vec<_> = kernel
         .relations
@@ -934,33 +912,6 @@ fn compile_stage(
             sequential_bindings.push(quote!(let #field = data.#field.to_host()?;));
         }
     }
-    for (index, (name, _)) in kernel.derived.iter().enumerate() {
-        let row = &row_types[kernel.relations.len() + index];
-        let (initializer, dependencies) = kernel.derived_input(name).map_err(|error| Rejected {
-            phase: "derived input loader",
-            error: error.to_string(),
-            term: cpu_source.to_string(),
-        })?;
-        let initializer = source::dictionary_initializer(initializer, &kernel.exports)
-            .map_err(|error| Rejected {
-                phase: "dictionary input loader",
-                error: error.to_string(),
-                term: cpu_source.to_string(),
-            })?
-            .unwrap_or_else(|| initializer.to_token_stream());
-        let host_inputs = dependencies.iter().map(|relation| {
-            let input = &relation.name;
-            if host {
-                quote!(let #input = &#input;)
-            } else {
-                // DECODE ?: authored derived-input Rust consumes this download, but whole-row reconstruction needs column-level read evidence.
-                quote!(let #input = #input.to_host()?;)
-            }
-        });
-        input_types.push(quote!(Vec<#row>));
-        bindings.push(quote!({ #(#host_inputs)* #initializer }));
-        sequential_bindings.push(quote!(let #name = &data.#name;));
-    }
     let answer_columns = kernel.answer_columns().map_err(|error| Rejected {
         phase: "loader output domains",
         error: error.to_string(),
@@ -968,7 +919,6 @@ fn compile_stage(
     })?;
     let mut answer_types = Vec::new();
     let mut decode_bindings = Vec::new();
-    let mut borrowed_outputs = Vec::new();
     let mut owned_outputs = Vec::new();
     for (index, ((_, ty), column)) in kernel.answer.iter().zip(&answer_columns).enumerate() {
         let output = syn::Index::from(index);
@@ -984,7 +934,6 @@ fn compile_stage(
             let decoder = format_ident!("domain_{index}");
             decode_bindings.push(quote!(let #decoder = data.catalog.domain(#domain)?;));
             // DECODE P: final answer formatting inverts dense source-key domains on the host.
-            borrowed_outputs.push(quote!(#decoder.value(*row.#output).to_string()));
             owned_outputs.push(quote!(#decoder.value(row.#output).to_string()));
         } else if column.as_ref().is_some_and(|origin| {
             stored_types.contains_key(origin)
@@ -1000,13 +949,10 @@ fn compile_stage(
                 quote!(let #decoder = manifest.dictionary(manifest.column(#table, #column)?)?;),
             );
             // DECODE P: final answer formatting resolves source string dictionaries on the host.
-            borrowed_outputs.push(quote!(#decoder[*row.#output as usize].clone()));
             owned_outputs.push(quote!(#decoder[row.#output as usize].clone()));
         } else if publication.nullable[index] {
-            borrowed_outputs.push(quote!(format!("{:?}", row.#output)));
             owned_outputs.push(quote!(format!("{:?}", row.#output)));
         } else {
-            borrowed_outputs.push(quote!(row.#output.to_string()));
             owned_outputs.push(quote!(row.#output.to_string()));
         }
     }
@@ -1026,7 +972,7 @@ fn compile_stage(
             quote!(let mut loader = crate::loader::Loader::new(manifest, pool.clone());),
         )
     };
-    if let Some(publications) = publications {
+    {
         let names: Vec<_> = kernel.published.iter().map(|r| &r.name).collect();
         let rows: Vec<_> = kernel
             .published
@@ -1145,7 +1091,7 @@ fn compile_stage(
         );
         return Ok((
             quote! {
-                use cq_load::{Date, Load};
+                use cq_load::{Date, Load, StringCode};
                 type Decimal = cq_load::Decimal<2>;
                 pub(super) type Answer = (#(#answer_types,)*);
                 pub(super) type Output = #output_type;
@@ -1172,69 +1118,12 @@ fn compile_stage(
             artifact,
         ));
     }
-    let execute = if host {
-        let slots: Vec<_> = (0..answer_types.len()).map(syn::Index::from).collect();
-        let owned = answer_types.iter().zip(slots).map(|(ty, slot)| quote!(
-            <#ty as ::core::clone::Clone>::clone(::core::borrow::Borrow::<#ty>::borrow(&row.#slot))
-        ));
-        quote! {
-            let started = ::std::time::Instant::now();
-            #(#sequential_bindings)*
-            let rows = (#gpu).map(|row| (#(#owned,)*)).collect();
-            let elapsed = started.elapsed().as_secs_f64() * 1000.0;
-            cq_gpu_runtime::publish_timings(cq_gpu_runtime::Timings {
-                build_ms: elapsed, total_ms: elapsed, wall_ms: elapsed, ..Default::default()
-            });
-            Ok(rows)
-        }
-    } else {
-        quote! {
-            #(let #fields = &data.#fields;)*
-            let output = #gpu;
-            // DECODE P: standalone query execution downloads its final answer for host formatting and comparison.
-            Ok(output.to_host()?)
-        }
-    };
-    Ok((
-        quote! {
-            type Answer = (#(#answer_types,)*);
-            use cq_load::{Date, Load};
-            type Decimal = cq_load::Decimal<2>;
-            struct Inputs { #(#fields: #input_types,)* #catalog_field }
-            fn load(manifest: &crate::manifest::Manifest) -> crate::manifest::Result<Inputs> {
-                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
-                #load_setup
-                #(let #fields: #input_types = #bindings;)*
-                Ok(Inputs { #(#fields,)* #catalog_init })
-            }
-            fn gpu(data: &Inputs) -> crate::manifest::Result<Vec<Answer>> {
-                #setup_bindings
-                #execute
-            }
-            fn sequential(data: &Inputs, manifest: &crate::manifest::Manifest) -> crate::manifest::Result<Vec<Vec<String>>> {
-                #setup_bindings
-                #(#decode_bindings)*
-                #(#sequential_bindings)*
-                Ok((#cpu).map(|row| vec![#(#borrowed_outputs),*]).collect())
-            }
-            fn download(data: &Inputs, manifest: &crate::manifest::Manifest) -> crate::manifest::Result<Vec<Vec<String>>> {
-                #(#decode_bindings)*
-                Ok(gpu(data)?.into_iter().map(|row| vec![#(#owned_outputs),*]).collect())
-            }
-            pub(super) fn run(manifest: &crate::manifest::Manifest, query: &str, conformance_only: bool) -> crate::manifest::Result<Value> {
-                let data = load(manifest)?;
-                let reference = if manifest.sf == 1 { Some(sequential(&data, manifest)?) } else { None };
-                crate::benchmark::run(manifest, query, || download(&data, manifest), reference, conformance_only)
-            }
-        },
-        artifact,
-    ))
 }
 
 fn string_guard_regression(out: &Path) -> Result<TokenStream> {
     let directory = out.join("string-guard-fixture");
     fs::create_dir_all(&directory)?;
-    for (name, values) in [("keys.bin", [1_i32, 2, 3]), ("names.bin", [1_i32, 0, 1])] {
+    for (name, values) in [("keys.bin", [1_i32, 2, 3]), ("names.bin", [0_i32, 1, 0])] {
         fs::write(
             directory.join(name),
             values
@@ -1243,7 +1132,7 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
                 .collect::<Vec<_>>(),
         )?;
     }
-    fs::write(directory.join("names.txt"), "red\ngreen part\n")?;
+    fs::write(directory.join("names.txt"), "green part\nred\n")?;
     let key = |name: &str| {
         json!({
             "name": name, "type": "i32", "logical_type": "Integer",
@@ -1266,21 +1155,35 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
         }))?,
     )?;
     let manifest = Manifest::load(&directory)?;
-    let kernel: source::Kernel = syn::parse_str(
-        "$; setup {
-            let GreenNames = cq_load::dictionary_where(
-                &dictionaries, \"p_name\",
-                |value: &str| value.contains(\"green\"));
-        } relations {
-            relation Keys => keys(key: i32);
-            relation Part => part(p_partkey: i32, p_name: String);
+    let program = stages::Program::import(r#"
+        program string_guard {
+            domain Names = dictionary(part.p_name);
+            input Keys(key: i32) = table(keys);
+            input Part(p_partkey: i32, p_name: StringCode in Names) = table(part);
+            input GreenNames(code: StringCode in Names) = dictionary(Names)
+                where { |value: &str| value.contains("green") };
+            stage s0 {
+                inputs { Keys = Keys; Part = Part; GreenNames = GreenNames; }
+                captures [];
+                evidence {}
+                cq {
+                    struct Query;
+                    relation Keys(key: i32);
+                    relation Part(p_partkey: i32, p_name: StringCode);
+                    relation GreenNames(code: StringCode);
+                    relation answer(key: i32, name: StringCode);
+                    answer(key, name) :- Keys(key), Part(key, name),
+                        GreenNames(name), where name == "green part";
+                }
+            }
+            terminal { from s0 project [column(0), column(1)] dictionaries [1 = Names]; }
         }
-        derived { relation GreenNames(code: String); }
-        answer(key: i32, name: String) :-
-            Keys(key), Part(key, name), GreenNames(name), where name == \"green part\";",
-    )?;
-    let (code, _) = compile(&kernel, &manifest, &advice::Pipeline::baseline())
+    "#)?;
+    let mut pipeline = advice::Pipeline::baseline();
+    pipeline.publication = advice::Placement::Host;
+    let (code, _) = build_stages::compile(&program, "string_guard", &manifest, "advised", Some(&pipeline))
         .map_err(|error| format!("String guard regression {}: {}", error.phase, error.error))?;
+    let preprocessing = program.preprocessing_tokens()?;
     let directory = directory.to_string_lossy();
     Ok(quote! {
         #[cfg(test)]
@@ -1289,21 +1192,23 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
             use serde_json::Value;
             #code
             #[test]
-            fn synthetic_string_literal_guard_preserves_manifest_codes() {
+            fn synthetic_string_literal_guard_preserves_manifest_codes() -> crate::manifest::Result<()> {
                 let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory)).unwrap();
-                let data = load(&manifest).unwrap();
-                // DECODE P: diagnostic fixture publishes typed input rows to the host test oracle while preserving string codes.
-                assert_eq!(data.Part.to_host().unwrap(), vec![(1, 1_u32), (2, 0), (3, 1)]);
-                assert_eq!(data.GreenNames, vec![(1_u32,)]);
-                let mut actual = download(&data, &manifest).unwrap();
+                #preprocessing
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0).unwrap();
+                let data = stage_0::load(&manifest, pool).unwrap();
+                let result = stage_0::execute(&data, &__cq_prepared_GreenNames).unwrap();
+                let mut actual = stage_0::decode(&data, &manifest, result).unwrap();
                 actual.sort();
                 assert_eq!(actual, vec![
                     vec!["1".to_owned(), "green part".to_owned()],
                     vec!["3".to_owned(), "green part".to_owned()],
                 ]);
-                let mut reference = sequential(&data, &manifest).unwrap();
+                let reference = stage_0::sequential(&data, &__cq_prepared_GreenNames).unwrap();
+                let mut reference = stage_0::decode(&data, &manifest, reference).unwrap();
                 reference.sort();
                 assert_eq!(actual, reference);
+                Ok(())
             }
         }
     })
@@ -1371,15 +1276,8 @@ fn main() -> Result<()> {
             if !queries.is_empty() && !queries.contains(name) {
                 continue;
             }
-            println!(
-                "cargo:rerun-if-changed=../../../features/workloads/src/queries/retail/tpch/retail_{name}.rs"
-            );
+            println!("cargo:rerun-if-changed=queries/{name}.stages");
             let staged = stages::Program::import(source)?;
-            let kernel = if staged.is_none() {
-                Some(source::Kernel::import(source)?)
-            } else {
-                None
-            };
             for mode in ["automatic", "advised"] {
                 if mode == "automatic" && !automatic {
                     continue;
@@ -1399,8 +1297,8 @@ fn main() -> Result<()> {
                     advice::Pipeline::h05()
                 } else if let Some(hand) = hand {
                     hand
-                } else if kernel.as_ref().is_some_and(source::Kernel::is_standalone) {
-                    advice::Pipeline::grouped(&kernel.as_ref().unwrap().cpu_query())?
+                } else if staged.stages.len() == 1 {
+                    advice::Pipeline::grouped(&staged.stages[0].program.to_token_stream())?
                 } else {
                     // CPU hints remain available explicitly, but an unmeasured CPU
                     // choice must not replace the existing accepted GPU baseline.
@@ -1410,23 +1308,17 @@ fn main() -> Result<()> {
                 if name == "h05" && pipeline.storage.is_empty() {
                     pipeline.storage = "tpch_domains".into();
                 }
-                let mut report = json!({"query": name, "sf": sf, "mode": mode, "cpu_query": kernel.as_ref().map(|k| k.cpu_query().to_string()), "cpu_plan_advice": kernel.as_ref().map(|k| k.plan_advice.to_string()), "pipeline": pipeline});
+                let mut report = json!({"query": name, "sf": sf, "mode": mode,
+                    "stage_source": staged.to_token_stream().to_string(), "pipeline": pipeline});
                 let generation_started = std::time::Instant::now();
-                let compiled = if let Some(staged) = &staged {
-                    build_stages::compile(
-                        staged,
-                        name,
-                        &manifest,
-                        mode,
-                        if mode == "advised" {
-                            overrides.get(name)
-                        } else {
-                            None
-                        },
-                    )
-                } else {
-                    compile(kernel.as_ref().unwrap(), &manifest, &pipeline)
-                };
+                let compiled = build_stages::compile(
+                    &staged, name, &manifest, mode,
+                    if staged.stages.len() == 1 {
+                        Some(&pipeline)
+                    } else if mode == "advised" {
+                        overrides.get(name)
+                    } else { None },
+                );
                 match compiled {
                     Ok((code, artifact)) => {
                         let module = format_ident!("{name}_sf{sf}_{mode}");

@@ -481,42 +481,37 @@ fn owned_negative_constants_are_post_scan_filters_not_owned_prefixes() {
 }
 
 #[test]
-fn literal_key_filter_correspondence_preserves_atom_literals() {
+fn literal_key_filters_are_post_scan_filters() {
     let source = constant_schedule();
     let target = compile(&source).unwrap();
     let key = &target.context.strata[0].keys[0];
     let hole = &target.holes[key.hole].cq;
-    assert_eq!(hole.query.body.len(), 1);
+    assert_eq!(hole.query.body.len(), 2);
     let BodyItem::Positive { atom } = &hole.query.body[0] else {
         unreachable!()
     };
-    assert_eq!(atom.args[0], syn::parse_quote!("abstract"));
-    assert_eq!(atom.variables().count(), 1);
+    assert_eq!(atom.variables().count(), 2);
+    let variable = atom.args[0].clone();
+    let expected: BodyItem = syn::parse_quote!(where #variable == ("abstract"));
+    assert_eq!(hole.query.body[1], expected);
     check(&source, &target).unwrap();
     let restored: cq_lang_cq::Program = syn::parse2(hole.to_token_stream()).unwrap();
     assert_eq!(&restored, hole);
-    let normal = cq_lang_cq::normal::normalize(hole).unwrap();
-    assert_eq!(normal.query.body.len(), 1);
-    let BodyItem::Positive { atom } = &normal.query.body[0] else {
-        unreachable!()
-    };
-    assert_eq!(atom.args[0], syn::parse_quote!("abstract"));
 
     let all_constants = &target.holes[target.context.strata[1].keys[1].hole].cq;
-    assert_eq!(all_constants.query.body.len(), 1);
+    assert_eq!(all_constants.query.body.len(), 3);
     let BodyItem::Positive { atom } = &all_constants.query.body[0] else {
         unreachable!()
     };
-    assert_eq!(atom.variables().count(), 0);
-    assert_eq!(atom.args[1], syn::parse_quote!(7));
+    assert_eq!(atom.variables().count(), 2);
+    let constant = &atom.args[1];
+    let expected: BodyItem = syn::parse_quote!(where #constant == (7));
+    assert!(all_constants.query.body.iter().skip(1).any(|item| item == &expected));
 
-    // A changed literal is still valid CQ, but changes the recorded selection.
+    // A changed filter is still valid CQ, but changes the recorded selection.
     let hole_index = key.hole;
     let mut changed = target;
-    let BodyItem::Positive { atom } = &mut changed.holes[hole_index].cq.query.body[0] else {
-        unreachable!()
-    };
-    atom.args[0] = syn::parse_quote!("changed");
+    changed.holes[hole_index].cq.query.body[1] = syn::parse_quote!(where #variable == ("changed"));
     cq_lang_cq::contract::check(&changed.holes[hole_index].cq).unwrap();
     assert!(check(&source, &changed).is_err());
 }
@@ -906,11 +901,13 @@ fn repeated_negative_columns_are_filtered_once_before_distinct_key_projection() 
     let BodyItem::Positive { atom } = &hole.query.body[0] else {
         panic!("completed relation scan")
     };
-    assert_eq!(atom.args[0], syn::parse_quote!("blocked"));
+    let blocked = &atom.args[0];
+    let filter: BodyItem = syn::parse_quote!(where #blocked == ("blocked"));
+    assert_eq!(hole.query.body[1], filter);
     let left = &atom.args[1];
     let right = &atom.args[2];
     let expected = BodyItem::Equality(syn::parse_quote!(#left = #right));
-    assert_eq!(hole.query.body[1], expected);
+    assert_eq!(hole.query.body[2], expected);
     let name = &key.name;
     let expected_x: BodyItem = syn::parse_quote!(!#name(x));
     let expected_y: BodyItem = syn::parse_quote!(!#name(y));

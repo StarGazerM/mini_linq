@@ -1,0 +1,27 @@
+program h03 {
+    domain Mktsegment = dictionary(customer.c_mktsegment);
+    input Customer(c_custkey: i64, c_mktsegment: cq_load::StringCode in Mktsegment)
+        = table(customer);
+    input Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date) = table(orders);
+    input Lineitem(l_orderkey: i64, l_shipdate: Date) = table(lineitem);
+    operand cutoff: Date = date { Date::load("1995-03-15").expect("authored ISO date") };
+    stage s0 {
+        inputs { Customer = Customer; Orders = Orders; Lineitem = Lineitem; }
+        captures [cutoff];
+        evidence {}
+        cq {
+            struct Query;
+            relation Customer(c_custkey: i64, c_mktsegment: cq_load::StringCode);
+            relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date);
+            relation Lineitem(l_orderkey: i64, l_shipdate: Date);
+            relation answer(order_key: i64, customer_key: i64);
+            answer(order_key, customer_key) :-
+                Lineitem(order_key, ship_date), where ship_date > cutoff,
+                Orders(order_key, customer_key, order_date), where order_date < cutoff,
+                Customer(customer_key, "BUILDING");
+        }
+    }
+    terminal {
+        from s0 project [column(0), column(1)] dictionaries [];
+    }
+}

@@ -439,7 +439,7 @@ fn constant_key_projection_is_built_once_before_recursive_rounds() {
     let source: source::Program = syn::parse_quote! {
         struct Filtered;
         relation E(x:i32) = (input);
-        relation M(kind:String,x:i32) = (modifiers);
+        relation M(kind:cq_load::StringCode in (kinds),x:i32) = (modifiers);
         relation A(x:i32);
         output A;
         A(*x) :- E(x), !M("abstract",x);

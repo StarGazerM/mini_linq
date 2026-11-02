@@ -28,14 +28,14 @@ fn fallback_can_return_owned_non_copy_interface_values() {
     let rows: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
         struct Q; relation R(x:i32);
         answer(y) :- R(x),
-            {if std::convert::identity(*x)==1, let y:String=String::from("first")}
-            else {let y:String=String::from("second")};
+            {if std::convert::identity(*x)==1, let y:Vec<i64>=vec![1]}
+            else {let y:Vec<i64>=vec![2]};
     }
     .map(|(y,)| y)
     .collect();
     assert_eq!(
         rows,
-        std::collections::BTreeSet::from(["first".to_owned(), "second".to_owned()])
+        std::collections::BTreeSet::from([vec![1_i64], vec![2_i64]])
     );
 }
 use std::collections::BTreeSet;
@@ -195,20 +195,20 @@ fn one_arms_local_name_does_not_hide_another_arms_host_capture() {
 
 #[test]
 fn canonical_union_sorts_all_disjuncts_once_and_retains_borrowed_non_copy_columns() {
-    let A = [(String::from("a"),)];
-    let B = [(String::from("b"),)];
+    let A = [(vec![1_i64],)];
+    let B = [(vec![2_i64],)];
     let first = std::cell::Cell::new(0);
     let second = std::cell::Cell::new(0);
-    let visit_first = |_: &String| {
+    let visit_first = |_: &Vec<i64>| {
         first.set(first.get() + 1);
         true
     };
-    let visit_second = |_: &String| {
+    let visit_second = |_: &Vec<i64>| {
         second.set(second.get() + 1);
         true
     };
     let mut result = mini_linq::compile! { pipeline {}
-       struct Lazy; relation A(x:String); relation B(x:String);
+       struct Lazy; relation A(x:Vec<i64>); relation B(x:Vec<i64>);
        answer(x) :- A(x), if visit_first(x); answer(x) :- B(x), if visit_second(x);
     };
     // Sort canonicalization is a barrier: the first answer consumes every disjunct.

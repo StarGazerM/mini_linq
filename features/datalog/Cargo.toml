@@ -20,6 +20,7 @@ cq-lang-structures = { version = "0.1.0", path = "../../languages/cq-lang-struct
 cq-sequence-lowering = { version = "0.1.0", path = "../../passes/cq-sequence-lowering" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
+cq-load = { version = "0.1.0", path = "../../runtime/cq-load" }
 own-push = { version = "0.0.0", path = "../own-dialect/printer" }
 rustc-hash = "=2.1.3"
 cq-datalog-support = { version = "0.0.0", path = "support" }

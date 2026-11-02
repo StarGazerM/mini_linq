@@ -1,25 +1,25 @@
-//! Borrowed String layouts remain immutable across scoped worker evaluation.
+//! Borrowed non-Copy layouts remain immutable across scoped worker evaluation.
 use std::collections::BTreeSet;
 
 #[test]
 fn owned_columns_recursive_probes_and_frozen_negation_match_ascent() {
     rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap().install(|| {
-        let edges: Vec<_> = (0..1100).flat_map(|i| {
-            let a = format!("{i}:a:λ");
-            let b = format!("{i}:b:λ");
-            let c = format!("{i}:c:λ");
+        let edges: Vec<_> = (0..1100_i64).flat_map(|i| {
+            let a = vec![i, 0];
+            let b = vec![i, 1];
+            let c = vec![i, 2];
             [(a.clone(), b.clone()), (b, c), (a.clone(), a)]
         }).collect();
-        let blocked: Vec<_> = (0..1100).step_by(3).map(|i| (format!("{i}:c:λ"),)).collect();
+        let blocked: Vec<_> = (0..1100_i64).step_by(3).map(|i| (vec![i, 2],)).collect();
         macro_rules! run {
             ($($config:tt)*) => {{
                 let (reach, visible, input) = cq_datalog::datalog! {
                     pipeline { $($config)* }
                     struct Owned;
-                    relation Edge(x:String,y:String) = (&edges);
-                    relation Blocked(x:String) = (&blocked);
-                    relation Reach(x:String,y:String);
-                    relation Visible(x:String,y:String);
+                    relation Edge(x:Vec<i64>,y:Vec<i64>) = (&edges);
+                    relation Blocked(x:Vec<i64>) = (&blocked);
+                    relation Reach(x:Vec<i64>,y:Vec<i64>);
+                    relation Visible(x:Vec<i64>,y:Vec<i64>);
                     output Reach, Visible, Edge;
                     Reach((*x).clone(),(*y).clone()) :- Edge(x,y);
                     Reach((*x).clone(),(*z).clone()) :- Reach(x,y), Reach(y,z);
@@ -34,10 +34,10 @@ fn owned_columns_recursive_probes_and_frozen_negation_match_ascent() {
         assert_eq!(actual, expected);
         ascent::ascent! {
             struct Oracle;
-            relation edge(String,String);
-            relation blocked(String);
-            relation reach(String,String);
-            relation visible(String,String);
+            relation edge(Vec<i64>,Vec<i64>);
+            relation blocked(Vec<i64>);
+            relation reach(Vec<i64>,Vec<i64>);
+            relation visible(Vec<i64>,Vec<i64>);
             reach(x.clone(),y.clone()) <-- edge(x,y);
             reach(x.clone(),z.clone()) <-- reach(x,y), reach(y,z);
             reach(x.clone(),z.clone()) <-- edge(y,z), reach(x,y);

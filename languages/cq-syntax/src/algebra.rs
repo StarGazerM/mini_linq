@@ -427,44 +427,6 @@ impl Theta {
         }
     }
 
-    /// Exact literal assignments written in conjuncts. No data keys or input
-    /// constraints are inferred. Disjunctions and captured constants prove none.
-    pub fn literal_bindings(&self) -> std::collections::BTreeMap<String, String> {
-        use crate::constraint::{Comparison, Constraint, Term};
-        let mut result = std::collections::BTreeMap::new();
-        for equality in &self.equalities {
-            if let crate::EqualityValue::Literal(value) = &equality.right {
-                if let Some(value) = literal_value(value) {
-                    result.insert(crate::symbol_name(&equality.left), value);
-                }
-            }
-        }
-        for constraint in &self.constraints {
-            let binding = match constraint {
-                Constraint::Compare {
-                    left: Term::Variable(id),
-                    comparison: Comparison::Eq(_),
-                    right: Term::Literal(value),
-                }
-                | Constraint::Compare {
-                    right: Term::Variable(id),
-                    comparison: Comparison::Eq(_),
-                    left: Term::Literal(value),
-                } => Some((id, &**value)),
-                Constraint::In {
-                    term: Term::Variable(id),
-                    literals,
-                } if literals.len() == 1 => Some((id, literals.first().unwrap())),
-                _ => None,
-            };
-            if let Some((id, value)) = binding {
-                if let Some(value) = literal_value(value) {
-                    result.insert(crate::symbol_name(id), value);
-                }
-            }
-        }
-        result
-    }
     /// All columns read by this relational predicate.
     pub fn columns(&self) -> std::collections::BTreeSet<String> {
         self.equalities
@@ -480,25 +442,39 @@ impl Theta {
             .collect()
     }
 
-    /// Compile-time point key, when every conjunct equates a column to a literal.
-    /// Duplicate constraints retain one probe value; selection still checks all
-    /// conjuncts, including inconsistent literals on the same column.
-    pub fn constant_keys(&self) -> Option<std::collections::BTreeMap<String, syn::Expr>> {
-        if !self.constraints.is_empty() {
+    /// Point key, when every conjunct equates a column to a constant: a literal
+    /// or a once-bound closed operand (IF-Parameter: closed operands are host
+    /// values usable as keys). Duplicate conjuncts retain one probe value;
+    /// selection still checks all conjuncts, including inconsistent constants
+    /// on the same column. Membership is multi-point and is not a key.
+    pub fn constant_keys(
+        &self,
+    ) -> Option<std::collections::BTreeMap<String, crate::constraint::Term>> {
+        use crate::constraint::{Comparison, Constraint, Term};
+        if self.is_empty() {
             return None;
         }
-        if self.equalities.is_empty() {
-            return None;
-        }
-        self.equalities
-            .iter()
-            .map(|e| match &e.right {
-                crate::EqualityValue::Literal(value) => {
-                    Some((crate::symbol_name(&e.left), value.clone()))
-                }
-                crate::EqualityValue::Variable(_) => None,
-            })
-            .collect()
+        let equalities = self.equalities.iter().map(|e| match &e.right {
+            crate::EqualityValue::Literal(value) => Some((
+                crate::symbol_name(&e.left),
+                Term::Literal(Box::new(value.clone())),
+            )),
+            crate::EqualityValue::Variable(_) => None,
+        });
+        let constraints = self.constraints.iter().map(|c| match c {
+            Constraint::Compare {
+                left: Term::Variable(v),
+                comparison: Comparison::Eq(_),
+                right,
+            } if right.constant() => Some((crate::symbol_name(v), right.clone())),
+            Constraint::Compare {
+                left,
+                comparison: Comparison::Eq(_),
+                right: Term::Variable(v),
+            } if left.constant() => Some((crate::symbol_name(v), left.clone())),
+            _ => None,
+        });
+        equalities.chain(constraints).collect()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -623,59 +599,6 @@ impl Theta {
         }
         Some((column?, bounds))
     }
-}
-
-/// Literal identities ignore spelling and integer suffixes, so `1`, `01`, and
-/// `1_i32` never constitute a disjointness proof. Floats and computations prove
-/// nothing. Column typing is checked separately.
-pub fn literal_value(expression: &syn::Expr) -> Option<String> {
-    let expression = crate::rust::unparen(expression);
-    if let syn::Expr::Unary(unary) = expression {
-        if matches!(unary.op, syn::UnOp::Neg(_)) {
-            let syn::Expr::Lit(value) = crate::rust::unparen(&unary.expr) else {
-                return None;
-            };
-            let syn::Lit::Int(value) = &value.lit else {
-                return None;
-            };
-            let value = value.base10_parse::<u128>().ok()?;
-            return Some(if value == 0 {
-                "int:0".into()
-            } else {
-                format!("int:-{value}")
-            });
-        }
-        return None;
-    }
-    let syn::Expr::Lit(value) = expression else {
-        return None;
-    };
-    Some(match &value.lit {
-        syn::Lit::Int(value) => format!("int:{}", value.base10_parse::<u128>().ok()?),
-        syn::Lit::Bool(value) => format!("bool:{}", value.value),
-        syn::Lit::Char(value) => format!("char:{}", value.value()),
-        syn::Lit::Str(value) => format!("str:{:?}", value.value()),
-        syn::Lit::Byte(value) => format!("int:{}", value.value()),
-        syn::Lit::ByteStr(value) => format!("bytes:{:?}", value.value()),
-        _ => return None,
-    })
-}
-
-pub type LiteralBindings = std::collections::BTreeMap<String, String>;
-pub fn constant_disjoint<'a>(
-    branches: impl IntoIterator<Item = &'a LiteralBindings>,
-    interface: &std::collections::BTreeSet<String>,
-) -> bool {
-    let branches: Vec<_> = branches.into_iter().collect();
-    branches.iter().enumerate().all(|(i, left)| {
-        branches.iter().skip(i + 1).all(|right| {
-            interface.iter().any(|column| {
-                left.get(column)
-                    .zip(right.get(column))
-                    .is_some_and(|(a, b)| a != b)
-            })
-        })
-    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -843,81 +766,18 @@ pub struct Project {
     pub attributes: CommaList<Ident>,
 }
 
-/// Borrowed operator facts used by the literal-disjointness fold.
-pub enum LiteralStep<'a> {
-    Empty,
-    Join(&'a Ident, &'a Ident),
-    Input(&'a Ident),
-    Select(&'a Select),
-    Bind(&'a Bind),
-    Project(&'a Project),
-    Union(&'a CommaList<Ident>, Option<&'a BlockOrigin>),
-}
-
-/// Propagate literal bindings and prove only the existing literal/fallback disjointness.
+/// Union arms are disjoint only by construction: a fallback block runs a later
+/// arm only when the earlier arms are empty. Relational literals are operands
+/// like any other; the compiler never decodes their values, so differing
+/// literals prove nothing and such unions are canonicalized.
 pub fn disjoint_unions<'a>(
-    steps: impl IntoIterator<Item = (&'a Ident, LiteralStep<'a>)>,
+    unions: impl IntoIterator<Item = (&'a Ident, Option<&'a BlockOrigin>)>,
 ) -> std::collections::BTreeSet<String> {
-    use std::collections::{BTreeMap, BTreeSet};
-    let mut constants: BTreeMap<String, LiteralBindings> = BTreeMap::new();
-    let mut disjoint = BTreeSet::new();
-    for (name, step) in steps {
-        let of = |id: &Ident| constants[&crate::symbol_name(id)].clone();
-        let values = match step {
-            LiteralStep::Empty => LiteralBindings::new(),
-            LiteralStep::Join(left, right) => {
-                let mut values = of(left);
-                values.extend(of(right));
-                values
-            }
-            LiteralStep::Input(input) => of(input),
-            LiteralStep::Select(select) => {
-                let mut values = of(&select.input);
-                values.extend(select.condition.literal_bindings());
-                values
-            }
-            LiteralStep::Bind(bind) => of(&bind.input),
-            LiteralStep::Project(project) => {
-                let mut values = of(&project.input);
-                values.retain(|name, _| {
-                    project
-                        .attributes
-                        .iter()
-                        .any(|id| crate::symbol_name(id) == *name)
-                });
-                values
-            }
-            LiteralStep::Union(operands, origin) => {
-                let interface = origin
-                    .map(|o| o.interface.iter().map(crate::symbol_name).collect())
-                    .unwrap_or_else(|| {
-                        constants[&crate::symbol_name(&operands[0])]
-                            .keys()
-                            .cloned()
-                            .collect()
-                    });
-                if origin.is_some_and(|o| o.fallback.is_some())
-                    || constant_disjoint(
-                        operands
-                            .iter()
-                            .map(|id| &constants[&crate::symbol_name(id)]),
-                        &interface,
-                    )
-                {
-                    disjoint.insert(crate::symbol_name(name));
-                }
-                let mut values = of(&operands[0]);
-                values.retain(|name, value| {
-                    operands
-                        .iter()
-                        .all(|id| constants[&crate::symbol_name(id)].get(name) == Some(value))
-                });
-                values
-            }
-        };
-        constants.insert(crate::symbol_name(name), values);
-    }
-    disjoint
+    unions
+        .into_iter()
+        .filter(|(_, origin)| origin.is_some_and(|o| o.fallback.is_some()))
+        .map(|(name, _)| crate::symbol_name(name))
+        .collect()
 }
 
 /// Accumulated heading and declared (noncomputed) column types of a union.

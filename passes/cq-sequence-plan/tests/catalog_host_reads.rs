@@ -54,10 +54,10 @@ fn catalog() -> Catalog {
     catalog
 }
 
-fn string_reader(retained: bool) -> structures::Program {
+fn code_reader(retained: bool) -> structures::Program {
     let mut source: structures::Program = syn::parse_quote! {
         physical {
-            relation L(a:i32,label:String); relation R(a:i32,b:i32);
+            relation L(a:i32,label:StringCode); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a,label -> label};
             r = pipe rename R@1 {a -> a,b -> b};
             answer = let canon probe first [a] l,r;
@@ -80,12 +80,12 @@ fn string_reader(retained: bool) -> structures::Program {
     source
 }
 
-/// Row element types are not catalog facts: a string-carrying reader selects
+/// Row element types are not catalog facts: a code-carrying reader selects
 /// the first token declaring its reads, and no token declaring them rejects.
 #[test]
-fn string_carrying_reader_selects_the_first_token_declaring_its_reads() {
+fn code_carrying_reader_selects_the_first_token_declaring_its_reads() {
     for retained in [false, true] {
-        let source = string_reader(retained);
+        let source = code_reader(retained);
         let selected = select_from_catalog(&source, &catalog()).unwrap();
         let facts = structures::contract::check(&selected).unwrap();
         assert_eq!(facts.layouts["r"], ["a", "b"]);
@@ -115,10 +115,10 @@ fn assert_replay(source: &Program, planned: &cq_sequence_plan::Planned) {
 }
 
 #[test]
-fn numeric_lookup_is_published_before_host_string_expansion() {
+fn numeric_lookup_is_published_before_host_code_expansion() {
     let structures = syn::parse_quote! {
         physical {
-            relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32,label:String);
+            relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32,label:StringCode);
             r = pipe rename R@0 {a -> a};
             s = let rename S@1 {a -> a,b -> b};
             t = let rename T@2 {b -> b,label -> label};
@@ -164,14 +164,14 @@ fn numeric_lookup_is_published_before_host_string_expansion() {
 fn automatic_h09_uses_catalog_read_levels_after_opaque_prefix() {
     let physical = syn::parse_quote! {
         physical {
-            relation Part(part_key:i32,part_name:String);
+            relation Part(part_key:i32,part_name:StringCode);
             relation Orders(order_key:i32);
             relation Lineitem(order_key:i32,part_key:i32,supplier_key:i32);
             relation PartSupp(part_key:i32,supplier_key:i32);
             relation Supplier(supplier_key:i32,nation_key:i32);
             relation Nation(nation_key:i32);
             p = pipe rename Part@0 {part_key -> part_key,part_name -> part_name};
-            green = pipe guard p if (part_name.contains("green"));
+            green = pipe guard p if (accept(part_name));
             o = let rename Orders@2 {order_key -> order_key};
             po = pipe probe first [] green,o;
             l = let rename Lineitem@3 {
@@ -200,14 +200,14 @@ fn automatic_h09_uses_catalog_read_levels_after_opaque_prefix() {
 }
 
 #[test]
-fn automatic_h07_keeps_numeric_forwards_legal_before_string_readers() {
+fn automatic_h07_keeps_numeric_forwards_legal_before_code_readers() {
     let physical = syn::parse_quote! {
         physical {
             relation Supplier(supplier_key:i32,supplier_nation:i32);
             relation Lineitem(order_key:i32,supplier_key:i32,ship_date:i32);
             relation Orders(order_key:i32,customer_key:i32);
             relation Customer(customer_key:i32,customer_nation:i32);
-            relation Nation(nation_key:i32,name:String);
+            relation Nation(nation_key:i32,name:StringCode);
             s = pipe rename Supplier@2 {
                 supplier_key -> supplier_key,supplier_nation -> supplier_nation
             };
@@ -256,7 +256,7 @@ fn automatic_h07_keeps_numeric_forwards_legal_before_string_readers() {
 
 #[test]
 fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
-    let source = string_reader(false);
+    let source = code_reader(false);
     let mut selected = select_from_catalog(&source, &catalog()).unwrap();
     for entry in &mut selected.structures.entries {
         if entry.name == "answer"

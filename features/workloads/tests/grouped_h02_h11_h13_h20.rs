@@ -64,27 +64,27 @@ fn h02_minimum_preserves_ties_and_restricts_the_minimum_to_europe() {
             part: vec![
                 (
                     1,
-                    dictionaries.literal("p_mfgr", "M"),
+                    ::cq_storage::domain::exact(dictionaries.domain("p_mfgr"), "M"),
                     15,
-                    dictionaries.literal("p_type", "BRASS"),
+                    ::cq_storage::domain::exact(dictionaries.domain("p_type"), "BRASS"),
                 ),
                 (
                     2,
-                    dictionaries.literal("p_mfgr", "M"),
+                    ::cq_storage::domain::exact(dictionaries.domain("p_mfgr"), "M"),
                     14,
-                    dictionaries.literal("p_type", "BRASS"),
+                    ::cq_storage::domain::exact(dictionaries.domain("p_type"), "BRASS"),
                 ),
                 (
                     3,
-                    dictionaries.literal("p_mfgr", "M"),
+                    ::cq_storage::domain::exact(dictionaries.domain("p_mfgr"), "M"),
                     15,
-                    dictionaries.literal("p_type", "BRASSX"),
+                    ::cq_storage::domain::exact(dictionaries.domain("p_type"), "BRASSX"),
                 ),
                 (
                     4,
-                    dictionaries.literal("p_mfgr", "M"),
+                    ::cq_storage::domain::exact(dictionaries.domain("p_mfgr"), "M"),
                     15,
-                    dictionaries.literal("p_type", "BRASS"),
+                    ::cq_storage::domain::exact(dictionaries.domain("p_type"), "BRASS"),
                 ),
             ],
             partsupp: rows
@@ -96,37 +96,37 @@ fn h02_minimum_preserves_ties_and_restricts_the_minimum_to_europe() {
                     1,
                     1,
                     decimal(123),
-                    dictionaries.literal("s_name", "A"),
-                    dictionaries.literal("s_address", "X"),
-                    dictionaries.literal("s_phone", "P"),
-                    dictionaries.literal("s_comment", "C"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_name"), "A"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_address"), "X"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_phone"), "P"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_comment"), "C"),
                 ),
                 (
                     2,
                     1,
                     decimal(456),
-                    dictionaries.literal("s_name", "B"),
-                    dictionaries.literal("s_address", "Y"),
-                    dictionaries.literal("s_phone", "P"),
-                    dictionaries.literal("s_comment", "C"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_name"), "B"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_address"), "Y"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_phone"), "P"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_comment"), "C"),
                 ),
                 (
                     3,
                     2,
                     decimal(789),
-                    dictionaries.literal("s_name", "C"),
-                    dictionaries.literal("s_address", "Z"),
-                    dictionaries.literal("s_phone", "P"),
-                    dictionaries.literal("s_comment", "C"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_name"), "C"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_address"), "Z"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_phone"), "P"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_comment"), "C"),
                 ),
             ],
             nation: vec![
-                (1, 1, dictionaries.literal("n_name", "N")),
-                (2, 2, dictionaries.literal("n_name", "O")),
+                (1, 1, ::cq_storage::domain::exact(dictionaries.domain("n_name"), "N")),
+                (2, 2, ::cq_storage::domain::exact(dictionaries.domain("n_name"), "O")),
             ],
             region: vec![
-                (1, dictionaries.literal("r_name", "EUROPE")),
-                (2, dictionaries.literal("r_name", "ASIA")),
+                (1, ::cq_storage::domain::exact(dictionaries.domain("r_name"), "EUROPE")),
+                (2, ::cq_storage::domain::exact(dictionaries.domain("r_name"), "ASIA")),
             ],
             brass_types: cq_load::dictionary_where(&dictionaries, "p_type", |value| {
                 value.ends_with("BRASS")
@@ -201,8 +201,8 @@ fn h11_threshold_is_strict_and_both_sums_preserve_supplier_identity() {
                 .collect(),
             supplier: vec![(1, 1), (2, 1), (3, 2)],
             nation: vec![
-                (1, dictionaries.literal("n_name", "GERMANY")),
-                (2, dictionaries.literal("n_name", "FRANCE")),
+                (1, ::cq_storage::domain::exact(dictionaries.domain("n_name"), "GERMANY")),
+                (2, ::cq_storage::domain::exact(dictionaries.domain("n_name"), "FRANCE")),
             ],
             dictionaries,
         };
@@ -265,7 +265,7 @@ fn h13_counts_zero_and_obeys_ordered_comment_pattern() {
                     (
                         i64::from(r[0]),
                         i64::from(r[1]),
-                        dictionaries.literal("o_comment", comments[r[2] as usize]),
+                        ::cq_storage::domain::exact(dictionaries.domain("o_comment"), comments[r[2] as usize]),
                     )
                 })
                 .collect(),
@@ -329,34 +329,34 @@ fn h20_preserves_line_identity_date_bounds_and_absent_group_null_semantics() {
         dictionaries.insert("n_name", ["CANADA", "FRANCE"].into_iter());
         let data = h20::Data {
             part: vec![
-                (1, dictionaries.literal("p_name", "forest green")),
-                (2, dictionaries.literal("p_name", "xforest")),
-                (3, dictionaries.literal("p_name", "forest")),
+                (1, ::cq_storage::domain::exact(dictionaries.domain("p_name"), "forest green")),
+                (2, ::cq_storage::domain::exact(dictionaries.domain("p_name"), "xforest")),
+                (3, ::cq_storage::domain::exact(dictionaries.domain("p_name"), "forest")),
             ],
             partsupp: vec![(1, 1, 2), (1, 2, 3), (1, 3, 5), (2, 1, 100), (3, 1, 5)],
             supplier: vec![
                 (
                     1,
                     1,
-                    dictionaries.literal("s_name", "A"),
-                    dictionaries.literal("s_address", "X"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_name"), "A"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_address"), "X"),
                 ),
                 (
                     2,
                     1,
-                    dictionaries.literal("s_name", "B"),
-                    dictionaries.literal("s_address", "Y"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_name"), "B"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_address"), "Y"),
                 ),
                 (
                     3,
                     2,
-                    dictionaries.literal("s_name", "C"),
-                    dictionaries.literal("s_address", "Z"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_name"), "C"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_address"), "Z"),
                 ),
             ],
             nation: vec![
-                (1, dictionaries.literal("n_name", "CANADA")),
-                (2, dictionaries.literal("n_name", "FRANCE")),
+                (1, ::cq_storage::domain::exact(dictionaries.domain("n_name"), "CANADA")),
+                (2, ::cq_storage::domain::exact(dictionaries.domain("n_name"), "FRANCE")),
             ],
             lineitem: rows
                 .iter()
@@ -442,27 +442,27 @@ fn h15_grouped_max_preserves_all_maximum_ties_and_quarter_boundaries() {
             supplier: vec![
                 (
                     1,
-                    dictionaries.literal("s_name", "A"),
-                    dictionaries.literal("s_address", "X"),
-                    dictionaries.literal("s_phone", "P"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_name"), "A"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_address"), "X"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_phone"), "P"),
                 ),
                 (
                     2,
-                    dictionaries.literal("s_name", "B"),
-                    dictionaries.literal("s_address", "Y"),
-                    dictionaries.literal("s_phone", "Q"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_name"), "B"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_address"), "Y"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_phone"), "Q"),
                 ),
                 (
                     3,
-                    dictionaries.literal("s_name", "C"),
-                    dictionaries.literal("s_address", "Z"),
-                    dictionaries.literal("s_phone", "R"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_name"), "C"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_address"), "Z"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_phone"), "R"),
                 ),
                 (
                     4,
-                    dictionaries.literal("s_name", "D"),
-                    dictionaries.literal("s_address", "W"),
-                    dictionaries.literal("s_phone", "S"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_name"), "D"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_address"), "W"),
+                    ::cq_storage::domain::exact(dictionaries.domain("s_phone"), "S"),
                 ),
             ],
             lineitem: rows

@@ -1,9 +1,10 @@
 //! TPC-H H19 global discounted revenue with the three standard branches.
 //! Scale-two price/discount inputs yield exact scale-four revenue coefficients.
-//! The disjunction remains a pinned Rust guard, not a bag-producing rule union.
+//! The disjunction is one relational `where`, not a bag-producing rule union.
 //! Named order/line identities retain equal revenues from different lineitems.
 //! The common loader interns four columns independently using sorted dictionaries;
-//! absent query literals use a code no source row can contain.
+//! query literals at those columns translate through their declared domains, and
+//! absent literals use a code no source row can contain.
 use cq_load::{Decimal, Dictionaries, StringCode};
 
 pub const NAME: &str = "retail_h19";
@@ -93,45 +94,35 @@ crate::tpch_runtime::standalone_configs! { $;
         assert!(CONFIGS.contains(&config), "unknown H19 configuration");
         let Lineitem = data.lineitem.as_slice();
         let Part = data.part.as_slice();
-        let air = data.dictionaries.literal("l_shipmode", "AIR");
-        let air_reg = data.dictionaries.literal("l_shipmode", "AIR REG");
-        let deliver_in_person = data.dictionaries.literal("l_shipinstruct", "DELIVER IN PERSON");
-        let brand12 = data.dictionaries.literal("p_brand", "Brand#12");
-        let brand23 = data.dictionaries.literal("p_brand", "Brand#23");
-        let brand34 = data.dictionaries.literal("p_brand", "Brand#34");
-        let sm_case = data.dictionaries.literal("p_container", "SM CASE");
-        let sm_box = data.dictionaries.literal("p_container", "SM BOX");
-        let sm_pack = data.dictionaries.literal("p_container", "SM PACK");
-        let sm_pkg = data.dictionaries.literal("p_container", "SM PKG");
-        let med_bag = data.dictionaries.literal("p_container", "MED BAG");
-        let med_box = data.dictionaries.literal("p_container", "MED BOX");
-        let med_pkg = data.dictionaries.literal("p_container", "MED PKG");
-        let med_pack = data.dictionaries.literal("p_container", "MED PACK");
-        let lg_case = data.dictionaries.literal("p_container", "LG CASE");
-        let lg_box = data.dictionaries.literal("p_container", "LG BOX");
-        let lg_pack = data.dictionaries.literal("p_container", "LG PACK");
-        let lg_pkg = data.dictionaries.literal("p_container", "LG PKG");
+        let q1_low = Decimal::from_scaled(100).unwrap();
+        let q1_high = Decimal::from_scaled(1100).unwrap();
+        let q2_low = Decimal::from_scaled(1000).unwrap();
+        let q2_high = Decimal::from_scaled(2000).unwrap();
+        let q3_low = Decimal::from_scaled(2000).unwrap();
+        let q3_high = Decimal::from_scaled(3000).unwrap();
         query! {
             plan(no_reduce, order(Lineitem, Part));
             struct Query;
             relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,
                 l_quantity: Decimal, l_extendedprice: Decimal, l_discount: Decimal,
-                l_shipmode: StringCode, l_shipinstruct: StringCode);
-            relation Part(p_partkey: i64, p_brand: StringCode, p_container: StringCode, p_size: i32);
+                l_shipmode: StringCode in (data.dictionaries.domain("l_shipmode")),
+                l_shipinstruct: StringCode in (data.dictionaries.domain("l_shipinstruct")));
+            relation Part(p_partkey: i64, p_brand: StringCode in (data.dictionaries.domain("p_brand")),
+                p_container: StringCode in (data.dictionaries.domain("p_container")), p_size: i32);
             relation answer(revenue: i64);
             answer(sum(revenue_units)) :-
                 Lineitem(order_key, line_number, part_key, quantity, price, discount, ship_mode, ship_instruction),
-                where (ship_mode == air || ship_mode == air_reg) && ship_instruction == deliver_in_person,
+                where (ship_mode == "AIR" || ship_mode == "AIR REG") && ship_instruction == "DELIVER IN PERSON",
                 Part(part_key, brand, container, size),
-                if (*brand == brand12
-                    && (*container == sm_case || *container == sm_box || *container == sm_pack || *container == sm_pkg)
-                    && quantity.scaled() >= 100 && quantity.scaled() <= 1100 && *size >= 1 && *size <= 5)
-                    || (*brand == brand23
-                    && (*container == med_bag || *container == med_box || *container == med_pkg || *container == med_pack)
-                    && quantity.scaled() >= 1000 && quantity.scaled() <= 2000 && *size >= 1 && *size <= 10)
-                    || (*brand == brand34
-                    && (*container == lg_case || *container == lg_box || *container == lg_pack || *container == lg_pkg)
-                    && quantity.scaled() >= 2000 && quantity.scaled() <= 3000 && *size >= 1 && *size <= 15),
+                where (brand == "Brand#12"
+                    && (container == "SM CASE" || container == "SM BOX" || container == "SM PACK" || container == "SM PKG")
+                    && quantity >= q1_low && quantity <= q1_high && size >= 1 && size <= 5)
+                    || (brand == "Brand#23"
+                    && (container == "MED BAG" || container == "MED BOX" || container == "MED PKG" || container == "MED PACK")
+                    && quantity >= q2_low && quantity <= q2_high && size >= 1 && size <= 10)
+                    || (brand == "Brand#34"
+                    && (container == "LG CASE" || container == "LG BOX" || container == "LG PACK" || container == "LG PKG")
+                    && quantity >= q3_low && quantity <= q3_high && size >= 1 && size <= 15),
                 let revenue_units: i64 = price.scaled() * (100 - discount.scaled());
         }
         .collect()

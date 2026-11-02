@@ -116,7 +116,7 @@ pub struct Context {
     pub leaves: Vec<Leaf>,
     pub keys: Vec<Ident>,
     pub measures: Vec<Measure>,
-    /// Literal-bound group columns prove that at most one group can exist.
+    /// Capture-bound group columns (A-Capture) prove that at most one group can exist.
     pub constant_group: bool,
     /// Computed head columns are owned; relation columns are borrowed.
     pub owned: BTreeSet<String>,
@@ -193,11 +193,18 @@ fn owned_columns(rows: &Program) -> BTreeSet<String> {
     output
 }
 
+/// EXT-ConstantGroup: every group key is bound by a top-level `let` that the
+/// CQ capture producer (A-Capture) records as a host-once capture. Closedness
+/// comes from that owner, never from the initializer's Rust shape.
 fn constant_group(source: &Source) -> bool {
-    source.keys.iter().all(|key| source.rows.query.body.iter().any(|item| {
+    let body = &source.rows.query.body;
+    let captured: Vec<_> = cq_lang_cq::normal::capture_positions(body)
+        .into_iter()
+        .map(|position| &body[position])
+        .collect();
+    source.keys.iter().all(|key| captured.iter().any(|item| {
         matches!(item, cq_lang_cq::BodyItem::Let(binding)
-            if matches!(&binding.pattern, syn::Pat::Ident(pattern) if same_symbol(&pattern.ident, key))
-                && matches!(&binding.expression, syn::Expr::Lit(_)))
+            if rust::bindings(&binding.pattern).iter().any(|binder| same_symbol(binder, key)))
     }))
 }
 pub fn compile(source: &Source) -> syn::Result<Context> {
@@ -275,8 +282,8 @@ pub fn compile_with_pipeline(
 
 /// Formal rule EXT-SetFold: Fold the checked canonical core stream exactly once;
 /// an unknown terminal retains a fast-hashed set boundary.
-/// Formal rule EXT-ConstantGroup: Literal-bound group columns use an optional
-/// accumulator, preserving empty-input and set-valued aggregate semantics.
+/// Formal rule EXT-ConstantGroup: Capture-bound group columns (A-Capture) use an
+/// optional accumulator, preserving empty-input and set-valued aggregate semantics.
 pub fn check_with_pipeline(
     source: &Source,
     target: &Context,

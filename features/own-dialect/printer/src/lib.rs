@@ -32,8 +32,8 @@
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
 //! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
 //! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
-//! its existing recognition. Only differing literals on one interface column
-//! prove union arms disjoint; no data keys or constraints are assumed.
+//! its existing recognition. Only fallback construction proves union arms
+//! disjoint; literal values prove nothing, and no data keys or constraints are assumed.
 //!
 use cq_lang_structures as structures;
 use cq_print::{Context, Repr, access::Access, error, index, sorted};
@@ -228,7 +228,8 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
         #run
         #result
     }))?;
-    cq_print::own_captures(&mut expression, &push.owned);
+    // Push loops finish inside this block, so captures stay borrowed.
+    cq_print::own_captures(&mut expression, &push.owned, &[]);
     Ok(expression)
 }
 

@@ -52,7 +52,7 @@ fn retains_an_empty_key_cartesian_provider_without_changing_the_join() {
 #[test]
 fn retains_nonintegral_hosts_but_skips_lazy_membership() {
     let source: ir::Program = syn::parse_quote! { physical {
-        relation L(a:String); relation R(a:String);
+        relation L(a:Vec<i64>); relation R(a:Vec<i64>);
         l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
         s = pipe semi eager [x] l,r; return s as answer(x);
     }};

@@ -25,6 +25,11 @@ of the column representation, under the Leibniz and Order laws. Operands
 are query variables, literals or closed Rust expressions evaluated once on
 the host. Fields, function calls and other closed host expressions are not
 special cases; free-variable analysis supplies the same closure criterion.
+At a column with a declared code domain the operand is first translated to a
+code capture (A-Domain), so string equality and order are code equality and
+order within one domain (WF-Domain). There is no pattern operator:
+contains/LIKE predicates are prepared at load as code sets
+(\code{cq\_load::dictionary\_where}), never evaluated by \code{where}.
 Only this syntax supplies point/range/membership reads, filter priorities,
 Masks supports, derived domains and user-authored join equalities. Atoms,
 occurrence literals, normalization identities, semijoins and antijoins retain

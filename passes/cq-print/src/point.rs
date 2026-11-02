@@ -37,7 +37,21 @@ impl Context<'_> {
             &access.key,
         );
         let types = access.key.iter().map(|c| &self.infos[&input_name].types[c]);
-        let values = access.key.iter().map(|c| &keys[c]);
+        // IF-Parameter: literal keys keep their typed constant; a key with a
+        // closed operand borrows captured references, owned once per read.
+        let closed = access
+            .key
+            .iter()
+            .any(|c| matches!(keys[c], syntax::constraint::Term::Closed(_)));
+        let values = access.key.iter().map(|c| match &keys[c] {
+            syntax::constraint::Term::Literal(value) if !closed => quote!(#value),
+            value => value.reference(&self.parameters),
+        });
+        let (dispatch, method) = if closed {
+            (quote!(BorrowedPointRead), quote!(borrowed_point))
+        } else {
+            (quote!(PointRead), quote!(point))
+        };
         let fields = access.key.iter().chain(&access.payload).map(|c| {
             if self.carried(&input_name).contains(c) {
                 self.access(&input_name, c)
@@ -47,12 +61,12 @@ impl Context<'_> {
         });
         let row = self.carrier(&input_name, |c| self.access(&input_name, c));
         let looked_up = quote!({
-            use ::cq_storage::dispatch::PointRead as _;
+            use ::cq_storage::dispatch::#dispatch as _;
             let __cq_key = (#(#values,)*);
             ::core::iter::Iterator::map(
                 (&&::cq_storage::dispatch::PointHost::<_, (#(#types,)*), _, _>::new(
                     #host, &__cq_key, move || { let __cq_scan: #fallback_ty = ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(#host), ::core::convert::identity); __cq_scan }
-                )).point(&__cq_key),
+                )).#method(&__cq_key),
                 move |(#(#fields,)*)| #row
             )
         });

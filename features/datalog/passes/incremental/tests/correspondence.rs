@@ -334,7 +334,7 @@ fn multioutput_and_constant_negation_survive_both_schedules() {
     let source: source::Program = syn::parse_quote! {
         struct Constants;
         relation E(x:i32) = (edges);
-        relation Modifier(kind:String,x:i32) = (modifiers);
+        relation Modifier(kind:cq_load::StringCode in (kinds),x:i32) = (modifiers);
         relation A(x:i32); relation B(x:i32);
         output B, A;
         A(*x) :- E(x), !Modifier("abstract",x);

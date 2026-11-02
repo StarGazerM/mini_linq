@@ -620,44 +620,18 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
         }));
     }
     let source: structures::physical::Program = syn::parse_quote!(physical {
-        relation L(k:i32); relation R(tag:String,k:i32);
+        relation L(k:i32); relation R(tag:u32,k:i32);
         l = pipe rename L@0 {k -> k}; r = pipe rename R@1 {tag -> tag,k -> k};
-        f = let point select r if (tag = "a");
+        f = let point select r if (tag = 0u32);
         j = let canon probe first [k] l,f; return j as answer(k,tag);
     });
     let expression = sequence_rows(&cq_structure_selection::compile(&source).unwrap()).unwrap();
     checks.push(quote!({
         let L: &[(i32,)] = &[(1,), (2,)];
-        let R = vec![(String::from("a"),1), (String::from("b"),2)];
-        let actual: Vec<(&i32,&String)> = (#expression).collect();
-        assert_eq!(actual, vec![(&1, &String::from("a"))]);
+        let R = vec![(0_u32,1), (1_u32,2)];
+        let actual: Vec<(&i32,&u32)> = (#expression).collect();
+        assert_eq!(actual, vec![(&1, &0)]);
     }));
-    for ty in ["&'a str", "&'a String"] {
-        let source: structures::physical::Program = syn::parse_str(&format!(
-            "physical {{
-            relation L(k:i32); relation R(tag:{ty},k:i32);
-            l = pipe rename L@0 {{k -> k}}; r = pipe rename R@1 {{tag -> tag,k -> k}};
-            f = let point select r if (tag = \"a\");
-            j = let canon probe first [k] l,f; return j as answer(k,tag);
-        }}"
-        ))
-        .unwrap();
-        let expression = sequence_rows(&cq_structure_selection::compile(&source).unwrap()).unwrap();
-        let ty: syn::Type = syn::parse_str(ty).unwrap();
-        let input = if text(&ty).contains("String") {
-            quote!(let a = String::from("a"); let b = String::from("b"); let R = [(&a,1),(&b,2)];)
-        } else {
-            quote!(let R = [("a",1),("b",2)];)
-        };
-        checks.push(quote!({
-            fn run<'a>(L: &'a [(i32,)], R: &'a [(#ty,i32)]) -> Vec<(&'a i32,&'a #ty)> {
-                (#expression).collect()
-            }
-            let L = [(1,), (2,)];
-            #input
-            assert_eq!(run(&L,&R), vec![(&L[0].0,&R[0].0)]);
-        }));
-    }
     checks
 }
 
@@ -733,8 +707,8 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         assert_eq!(actual, [(1,10),(3,30)].into_iter().collect());
     }));
     let source: structures::physical::Program = syn::parse_quote! { physical {
-        relation R(tag:String,a:i32,b:bool);
-        r = let rename R@0 {a -> tag} constants {tag = "yes", b = true};
+        relation R(tag:u32,a:i32,b:bool);
+        r = let rename R@0 {a -> tag} constants {tag = 1u32, b = true};
         g = let canon guard r if (*tag > 1);
         return g as answer(tag);
     }};
@@ -748,11 +722,11 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
     let expression = sequence_rows(&selected).unwrap();
     checks.push(quote!({
         let R = vec![
-            (String::from("yes"),1,true),
-            (String::from("yes"),2,true),
-            (String::from("yes"),2,true),
-            (String::from("no"),3,true),
-            (String::from("yes"),4,false),
+            (1_u32,1,true),
+            (1_u32,2,true),
+            (1_u32,2,true),
+            (0_u32,3,true),
+            (1_u32,4,false),
         ];
         let actual: Vec<_> = (#expression).map(|(x,)| *x).collect();
         assert_eq!(actual, vec![2]);

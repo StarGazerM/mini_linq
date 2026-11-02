@@ -19,7 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use syn::Ident;
 
 /// Formal rule WF-NF: Check CQ, distinct variable or literal atom arguments, variable-only
-/// output bound by the body or a capture, and no query-closed top-level `let`/`if` (A-Capture).
+/// output bound by the body or a capture, no query-closed top-level `let`/`if` (A-Capture),
+/// and translated code-domain operands (WF-Domain).
 pub fn check(module: &Program) -> syn::Result<()> {
     super::contract::check(module)?;
     for item in super::blocks::walk(&module.query.body) {
@@ -110,7 +111,7 @@ pub fn check(module: &Program) -> syn::Result<()> {
             "normal form: output variable is not bound by the body",
         ));
     }
-    Ok(())
+    super::domain::check(module)
 }
 
 /// Canonicalize at each atom's written position.
@@ -121,14 +122,22 @@ pub fn check(module: &Program) -> syn::Result<()> {
 /// Formal rule A-Closed: Keep a query-closed atom operand as a relational restriction.
 /// Formal rule A-Local: Place a dependent binding and relational equality after its atom.
 /// Formal rule A-Capture: Record a query-closed `let`/`if` or head operand once as a host capture.
+/// Formal rule A-Domain: Translate a closed operand compared with a code-domain column once on the host.
 pub fn normalize(module: &Program) -> syn::Result<Program> {
     super::contract::check(module)?;
-    if module.query.group.is_some() {
-        check(module)?;
-        return Ok(module.clone());
-    }
     let declarations: BTreeMap<_, _> = module.inputs().map(|d| (symbol_name(&d.name), d)).collect();
     let mut names = reserved(module);
+    if module.query.group.is_some() {
+        let mut normal = module.clone();
+        super::domain::translate(
+            &mut normal.query.body,
+            &declarations,
+            &mut normal.query.captures,
+            &mut names,
+        )?;
+        check(&normal)?;
+        return Ok(normal);
+    }
     let mut normal = module.clone();
     hoist(&mut normal.query);
     let mut bound = BTreeSet::new();
@@ -142,7 +151,7 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
             .is_empty()
     };
     let mut branch_captures = Vec::new();
-    let mut body = normalize_body(
+    let body = normalize_body(
         &normal.query.body,
         &declarations,
         &logical,
@@ -151,6 +160,14 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
         &mut branch_captures,
     )?;
     normal.query.captures.items.extend(branch_captures);
+    let mut translated: super::CommaList<BodyItem> = body.into_iter().collect();
+    super::domain::translate(
+        &mut translated,
+        &declarations,
+        &mut normal.query.captures,
+        &mut names,
+    )?;
+    let mut body: Vec<BodyItem> = translated.into_iter().collect();
     let grouped = module
         .query
         .head
@@ -418,7 +435,7 @@ fn solve_aliases(query: &mut super::Query) {
         .collect();
 }
 
-fn capture(item: BodyItem) -> cq_syntax::Capture {
+pub(super) fn capture(item: BodyItem) -> cq_syntax::Capture {
     match item {
         BodyItem::Let(binding) => cq_syntax::Capture::Let(binding),
         BodyItem::Filter(guard) => cq_syntax::Capture::Guard(guard),
@@ -717,7 +734,7 @@ fn equality(left: Ident, right: EqualityValue) -> BodyItem {
     })
 }
 
-fn binding(key: &Ident, ty: &syn::Type, expression: syn::Expr) -> BodyItem {
+pub(super) fn binding(key: &Ident, ty: &syn::Type, expression: syn::Expr) -> BodyItem {
     BodyItem::Let(Box::new(Let {
         let_token: Default::default(),
         pattern: ident_pattern(key),
@@ -741,12 +758,12 @@ fn ident_pattern(key: &Ident) -> syn::Pat {
     })
 }
 
-fn path(ident: &Ident) -> syn::Expr {
+pub(super) fn path(ident: &Ident) -> syn::Expr {
     syn::parse2(quote!(#ident)).expect("identifier expression")
 }
 
 /// `__cq_c_<n>`, the first unused.
-fn fresh_capture(names: &mut BTreeSet<String>) -> Ident {
+pub(super) fn fresh_capture(names: &mut BTreeSet<String>) -> Ident {
     let name = (0..)
         .map(|n| format!("__cq_c_{n}"))
         .find(|name| !names.contains(name))
@@ -774,7 +791,7 @@ fn reserved(module: &Program) -> BTreeSet<String> {
 }
 
 /// `__cq_<clause>_<argument>`, extended until unused.
-fn fresh(names: &mut BTreeSet<String>, clause: usize, argument: usize) -> Ident {
+pub(super) fn fresh(names: &mut BTreeSet<String>, clause: usize, argument: usize) -> Ident {
     let mut name = format!("__cq_{clause}_{argument}");
     while !names.insert(name.clone()) {
         name.push('_');

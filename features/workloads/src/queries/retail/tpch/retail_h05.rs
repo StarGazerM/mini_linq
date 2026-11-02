@@ -105,7 +105,6 @@ macro_rules! runner {
                 let Region = data.region.as_slice();
                 let dictionaries = &data.dictionaries;
                 let start = date("1994-01-01"); let end = date("1995-01-01");
-                let asia = dictionaries.literal("r_name", "ASIA");
                 query! {
                     struct Query;
                     relation Customer(c_custkey: i64, c_nationkey: i32);
@@ -113,12 +112,12 @@ macro_rules! runner {
                     relation Lineitem(l_orderkey: i64, l_suppkey: i64);
                     relation Supplier(s_suppkey: i64, s_nationkey: i32);
                     relation Nation(n_nationkey: i32, n_regionkey: i32);
-                    relation Region(r_regionkey: i32, r_name: cq_load::StringCode);
+                    relation Region(r_regionkey: i32, r_name: cq_load::StringCode in (dictionaries.domain("r_name")));
                     relation answer(order_key: i64, supplier_key: i64, nation_key: i32);
                     answer(order_key, supplier_key, nation_key) :-
                         Lineitem(order_key, supplier_key),
                         Orders(order_key, customer_key, order_date), where order_date >= start && order_date < end,
-                        Customer(customer_key, nation_key), Nation(nation_key, region_key), Region(region_key, { asia }),
+                        Customer(customer_key, nation_key), Nation(nation_key, region_key), Region(region_key, "ASIA"),
                         Supplier(supplier_key, nation_key);
                 }
                 .map(|(order_key, supplier_key, nation_key,)| (*order_key, *supplier_key, *nation_key,))

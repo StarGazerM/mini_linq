@@ -1,0 +1,57 @@
+program h16 {
+    domain PartBrand = dictionary(part.p_brand);
+    domain PartType = dictionary(part.p_type);
+    domain SupplierComment = dictionary(supplier.s_comment);
+    input Part(p_partkey: i64, p_brand: StringCode in PartBrand, p_type: StringCode in PartType, p_size: i32) = table(part);
+    input Partsupp(ps_partkey: i64, ps_suppkey: i64) = table(partsupp);
+    input Supplier(s_suppkey: i64, s_comment: StringCode in SupplierComment) = table(supplier);
+    input AllowedKinds(kind: StringCode in PartType) = dictionary(PartType) where {
+        |value: &str| !value.starts_with("MEDIUM POLISHED")
+    };
+    input BadComments(comment: StringCode in SupplierComment) = dictionary(SupplierComment) where {
+        |value: &str| value.split_once("Customer")
+            .is_some_and(|(_, rest)| rest.contains("Complaints"))
+    };
+    stage s0 {
+        inputs {
+            Supplier = Supplier;
+            BadComments = BadComments;
+        }
+        captures [];
+        evidence {}
+        cq {
+            struct BadSuppliers;
+            relation Supplier(s_suppkey: i64, s_comment: StringCode);
+            relation BadComments(comment: StringCode);
+            relation answer(suppkey: i64);
+            answer(suppkey) :- Supplier(suppkey, comment), BadComments(comment);
+        }
+    }
+    publish BadSupplier = s0 owned;
+    stage s1 {
+        inputs {
+            Part = Part;
+            Partsupp = Partsupp;
+            AllowedKinds = AllowedKinds;
+            BadSupplier = BadSupplier;
+        }
+        captures [];
+        evidence {}
+        cq {
+            struct Query;
+            relation Part(p_partkey: i64, p_brand: StringCode, p_type: StringCode, p_size: i32);
+            relation Partsupp(ps_partkey: i64, ps_suppkey: i64);
+            relation AllowedKinds(kind: StringCode);
+            relation BadSupplier(suppkey: i64);
+            relation answer(part_key: i64, suppkey: i64);
+            answer(part_key, suppkey) :-
+                Part(part_key, brand, kind, size), AllowedKinds(kind),
+                where brand != "Brand#45",
+                if [49, 14, 23, 45, 19, 3, 36, 9].contains(size),
+                Partsupp(part_key, suppkey), !BadSupplier(suppkey);
+        }
+    }
+    terminal {
+        from s1 project [column(0), column(1)] dictionaries [];
+    }
+}

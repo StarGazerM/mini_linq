@@ -52,7 +52,28 @@ arguments, fresh $k$ starts at \code{__cq_i_j}; cases are tried in order:
  y\notin\mathsf{Protected}(q)\quad
  \text{no atom repeats a name under }[y:=x]}
  {q\leadsto_{NF}q[y:=x]\text{ without the solved identity}}
+
+\Rule{A-Domain}{x\ op\ t\text{ (in }\code{where}\text{, an atom or negated-atom position, membership or range)}\quad
+ x\text{ at a column of domain }D:T\quad Q\vdash t:\mathsf{Closed}\quad k\text{ fresh}\\
+ (op',f)=\begin{cases}(op,\mathsf{exact})&op\in\{=,\ne\}\text{ or a position}\\
+ (op,\mathsf{lower})&op\in\{<,\geq\}\\
+ (<,\mathsf{upper})&op={\leq}\\
+ ({\geq},\mathsf{upper})&op={>}\end{cases}}
+ {x\ op\ t\leadsto_{NF}x\ op'\ k\quad[\mathsf{captures}:=\mathsf{captures}\concat[\mathsf{let}\ k:T=\code{::cq\_storage::domain::}f\code{(\&(}D\code{), \&(}t\code{))}]]}
 \end{mathpar}
+A-Domain runs once per operand at normalization; a literal membership
+\code{x in [t, ...]} first becomes the disjunction of $x=t_i$, \code{x in a..b}
+becomes $x\geq a\land x<b$ (both \textsf{lower}) and \code{x in a..=b} becomes
+$x\geq a\land x<\mathsf{upper}(b)$. Because the code map $\varphi$ of an ordered
+domain is order-preserving on present values ($v\leq w\iff\varphi(v)\leq\varphi(w)$),
+$x<t\iff\varphi(x)<\mathsf{lower}(t)$ (first code $\geq t$) and
+$x\leq t\iff\varphi(x)<\mathsf{upper}(t)$ (first code $>t$); an absent
+\textsf{exact} value is the domain's non-member code (\code{StringCode::MAX}),
+which no row carries. \textsf{exact} needs \code{CodeDomain};
+\textsf{lower}/\textsf{upper} need \code{OrderedCodeDomain}, so an ordered
+comparison on an unordered domain is rejected by rustc. Columns without a
+domain keep their operands unchanged. The captured code is then an ordinary
+closed operand (A-Closed, IF-Capture); no later pass knows it came from a domain.
 Replace the atom by $\mathit{before}\concat[R(\bar a')]\concat\mathit{after}$.
 Identities are relational clauses, not guards. Row-dependent Rust guards,
 lets and generators are copied; branch bodies normalize recursively with fresh names; a
@@ -714,9 +735,15 @@ expansion fixtures. Interfaces at the Rust boundary:
 
 \Rule{IF-Capture}{\mathsf{let}\ p=e\in\mathsf{captures}\quad b\text{ fresh}\quad
  \mathsf{if}\ g\in\mathsf{captures}}
- {\code{let b = e; let p = \&b;}\text{ once before IF-Parameter};\ 
+ {\code{let b = e; let b = Value::new(b).share(); let p = \&*b;}\text{ once before IF-Parameter};\ 
+  \text{a move closure reading }p\text{ owns }\code{Clone::clone(\&b)}\text{ and rebinds }\code{p = \&*b};\ 
   \text{answer}=\code{if g \{rows\} else \{empty\}};\ 
   \mathsf{capture}\ c\longmapsto\code{Clone::clone(c)}\ /\ \code{*c}}
+The handle \code{share()} is chosen by Rust method resolution in
+\code{cq\_storage::capture}: a \code{Copy} value is its own handle (closures
+copy it; nothing is allocated), any other value is moved once into an
+\code{Arc}. The printer emits the same tokens for every capture and inspects
+no type; a lazy answer is never collected because of a capture.
 
 \Rule{IF-Range}{C=\{d_1\}\quad H:\code{OrderedRead}\text{ at the matching key type}}
  {\mathsf{window}(H,C)\text{ is an ordered read; otherwise scan/filter, no build}}
@@ -743,6 +770,13 @@ its separate Rust trait; retention and expansion still require Copy and
 Copy plus ExactSizeIterator respectively. An unsupported slot or capability
 uses the ordinary fallback. Computed keys, multicolumn nonleading keys,
 candidate enumeration and PointLookup retain their existing paths.
+A point read's key is every conjunct of its selection that equates a column
+with a constant: a literal keeps its typed constant, and a closed operand
+(IF-Parameter, including every A-Domain capture) keeps its captured
+reference; a key with a closed operand dispatches through
+\code{BorrowedPointRead}, owning the borrowed key once per read
+(\code{OwnKey}), and falls back to the scan when that owned key is not the
+declared key type.
 
 \begin{mathpar}
 \Rule{IF-Positional}{r\text{ has a checked positional read }(H,C,P)}

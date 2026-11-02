@@ -74,8 +74,7 @@ fn h14_components_preserve_identity_dates_and_empty_global_group() {
                 .map(|r| {
                     (
                         r[0].into(),
-                        dictionaries.literal(
-                            "p_type",
+                        ::cq_storage::domain::exact(dictionaries.domain("p_type"),
                             match r[1] {
                                 1 => "PROMO BRASS",
                                 2 => "STANDARD BRASS",
@@ -171,8 +170,7 @@ fn h18_threshold_is_strict_and_joins_follow_identity_preserving_sum() {
                 .map(|r| {
                     (
                         r[0].into(),
-                        dictionaries
-                            .literal("c_name", &char::from_u32(r[1] as u32).unwrap().to_string()),
+                        ::cq_storage::domain::exact(dictionaries.domain("c_name"), &char::from_u32(r[1] as u32).unwrap().to_string()),
                     )
                 })
                 .collect(),

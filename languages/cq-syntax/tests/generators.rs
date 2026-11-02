@@ -1,4 +1,4 @@
-use cq_syntax::algebra::{Bind, LiteralStep, Select, disjoint_unions};
+use cq_syntax::algebra::{Bind, BlockOrigin, disjoint_unions};
 use quote::ToTokens;
 
 #[test]
@@ -20,52 +20,15 @@ fn generator_and_bind_round_trip_preserve_kind() {
 }
 
 #[test]
-fn generator_preserves_input_constants_without_scalar_literal_inference() {
-    let root = syn::parse_quote!(root);
-    let left = syn::parse_quote!(left);
-    let right = syn::parse_quote!(right);
-    let a: syn::Ident = syn::parse_quote!(a);
-    let b: syn::Ident = syn::parse_quote!(b);
-    let union = syn::parse_quote!(union);
-    let operands = [a.clone(), b.clone()].into_iter().collect();
-    // Relational equalities provide facts; opaque Rust bindings do not.
-    let left_select: Select = syn::parse_quote!(select root if (tag = 0));
-    let right_select: Select = syn::parse_quote!(select root if (tag = 1));
-    let left_generator: Bind = syn::parse_quote!(bind left with for x = (items));
-    let right_generator: Bind = syn::parse_quote!(bind right with for x = (items));
-    let result = disjoint_unions([
-        (&root, LiteralStep::Empty),
-        (&left, LiteralStep::Select(&left_select)),
-        (&right, LiteralStep::Select(&right_select)),
-        (&a, LiteralStep::Bind(&left_generator)),
-        (&b, LiteralStep::Bind(&right_generator)),
-        (&union, LiteralStep::Union(&operands, None)),
-    ]);
-    assert!(result.contains("union"));
-
-    let left_bind: Bind = syn::parse_quote!(bind root with tag = (0));
-    let right_bind: Bind = syn::parse_quote!(bind root with tag = (1));
-    let result = disjoint_unions([
-        (&root, LiteralStep::Empty),
-        (&left, LiteralStep::Bind(&left_bind)),
-        (&right, LiteralStep::Bind(&right_bind)),
-        (&a, LiteralStep::Bind(&left_generator)),
-        (&b, LiteralStep::Bind(&right_generator)),
-        (&union, LiteralStep::Union(&operands, None)),
-    ]);
-    assert!(!result.contains("union"));
-
-    // Even syntactically literal generator expressions must not be scalar facts;
-    // their IntoIterator validity is Rust's responsibility, not this fold's.
-    let left_generator: Bind = syn::parse_quote!(bind root with for x = (0));
-    let right_generator: Bind = syn::parse_quote!(bind root with for x = (1));
-    let result = disjoint_unions([
-        (&root, LiteralStep::Empty),
-        (&a, LiteralStep::Bind(&left_generator)),
-        (&b, LiteralStep::Bind(&right_generator)),
-        (&union, LiteralStep::Union(&operands, None)),
-    ]);
-    assert!(!result.contains("union"));
+fn only_fallback_construction_proves_union_disjointness() {
+    let union: syn::Ident = syn::parse_quote!(union);
+    // Literal values are never decoded: an origin-free union or a union block
+    // is canonicalized whatever literals its arms select.
+    assert!(disjoint_unions([(&union, None)]).is_empty());
+    let block: BlockOrigin = syn::parse_quote!(block @0 free [] interface [tag]);
+    assert!(disjoint_unions([(&union, Some(&block))]).is_empty());
+    let fallback: BlockOrigin = syn::parse_quote!(block @0 free [] interface [tag] fallback);
+    assert!(disjoint_unions([(&union, Some(&fallback))]).contains("union"));
 }
 
 #[test]

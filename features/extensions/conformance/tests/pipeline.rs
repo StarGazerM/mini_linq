@@ -125,9 +125,9 @@ fn aggregate_keeps_owned_leaf_rows_alive_and_evaluates_them_once() {
         pipeline { surface = [cq_ext_aggregate::aggregate]; }
         aggregate! {
             by(d); n=count(); s=sum(a); struct Owned;
-            relation Sale(d:String,id:i32,a:i32) = ({
+            relation Sale(d:Vec<i64>,id:i32,a:i32) = ({
                 calls.set(calls.get()+1);
-                vec![(String::from("a"),1,10), (String::from("a"),2,-5)]
+                vec![(vec![1_i64],1,10), (vec![1_i64],2,-5)]
             });
             rows(d,id,a) :- Sale(d,id,a);
         }
@@ -135,7 +135,7 @@ fn aggregate_keeps_owned_leaf_rows_alive_and_evaluates_them_once() {
     assert_eq!(calls.get(), 1);
     let rows: Vec<_> = groups
         .iter()
-        .flat_map(|((d,), values)| values.iter().map(move |&(n, s)| (d.as_str(), n, s)))
+        .flat_map(|((d,), values)| values.iter().map(move |&(n, s)| (d.clone(), n, s)))
         .collect();
-    assert_eq!(rows, [("a", 2, 5)]);
+    assert_eq!(rows, [(vec![1_i64], 2, 5)]);
 }

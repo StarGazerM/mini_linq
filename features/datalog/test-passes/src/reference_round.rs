@@ -171,10 +171,12 @@ fn hole(program: &Program, index: usize, fresh: &mut Fresh) -> syn::Result<Token
     let types = output.columns.iter().map(|column| &column.ty);
     let state = fresh.id("round_hole_inputs");
     let candidates = fresh.id("round_hole_rows");
+    let domains = crate::reference::domains(inputs.iter().copied());
     let evaluation = crate::reference::emit_query(
         &cq.query,
         &state,
         &positions,
+        &domains,
         &candidates,
         &borrowed,
         &borrowed_negative_inputs,

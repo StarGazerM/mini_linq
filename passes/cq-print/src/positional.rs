@@ -206,17 +206,12 @@ impl Context<'_> {
                     let reference = expressions::term_reference(term, &self.parameters);
                     let host = Self::positional_host(&symbol_name(&read.origin.base));
                     let marker = &read.marker;
-                    if term.string_literal() {
-                        // Encoding only: the closed string operand becomes a column key, not a decoded row value.
-                        quote!(::cq_storage::encode_predicate(#host, <#marker>::default(), #reference))
-                    } else {
-                        let ty = &self.infos[name].types[&column];
-                        // Encoding only: this closed typed operand is translated before the positional predicate, never decoded.
-                        quote!({
-                            let __cq_value: &#ty = #reference;
-                            ::cq_storage::encode_predicate(#host, <#marker>::default(), __cq_value)
-                        })
-                    }
+                    let ty = &self.infos[name].types[&column];
+                    // Encoding only: this closed typed operand is translated before the positional predicate, never decoded.
+                    quote!({
+                        let __cq_value: &#ty = #reference;
+                        ::cq_storage::encode_predicate(#host, <#marker>::default(), __cq_value)
+                    })
                 };
                 if let Some((_, bounds)) = s.condition.range_bounds() {
                     let bound = |lower: bool| {

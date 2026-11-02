@@ -178,7 +178,7 @@ mod interned {
                 ),
             ]
         );
-        assert_eq!(dictionaries.literal("label", "missing"), Text::MAX);
+        assert_eq!(::cq_storage::domain::exact(dictionaries.domain("label"), "missing"), Text::MAX);
         assert_eq!(
             dictionaries.select("label", |value| value == "a"),
             [(cq_load::StringCode(0),)]
@@ -193,7 +193,7 @@ mod interned {
         assert!(<relation_loader!(Encoded)>::intern(Vec::new(), &mut dictionaries).is_empty());
         assert!(dictionaries.get("label").is_some());
         assert!(dictionaries.get("other").is_some());
-        assert_eq!(dictionaries.literal("label", ""), Text::MAX);
+        assert_eq!(::cq_storage::domain::exact(dictionaries.domain("label"), ""), Text::MAX);
     }
 }
 

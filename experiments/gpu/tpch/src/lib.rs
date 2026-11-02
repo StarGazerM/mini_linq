@@ -247,7 +247,9 @@ mod tests {
                     .unwrap()
                     .iter()
                     .any(|value| value.as_bool().unwrap());
-                let expected = if stage["pipeline"]["target"] == "device" && !nullable {
+                // A one-stage terminal retains its explicit host publication;
+                // inter-stage automatic placement follows target and validity.
+                let expected = if stages.len() > 1 && stage["pipeline"]["target"] == "device" && !nullable {
                     "device"
                 } else {
                     "host"
@@ -385,7 +387,10 @@ mod tests {
             .filter(|row| row["query"] == "h05" && row["mode"] == "advised")
         {
             assert_eq!(report["status"], "accepted", "{}", report["error"]);
-            let advice = report["pipeline"]["sequence"]
+            let stages = report["stages"].as_array().unwrap();
+            assert_eq!(stages.len(), 1);
+            let stage = &stages[0];
+            let advice = stage["pipeline"]["sequence"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -420,7 +425,7 @@ mod tests {
                 1
             );
             assert!(
-                report["pipeline"]["physical"]
+                stage["pipeline"]["physical"]
                     .as_array()
                     .unwrap()
                     .iter()

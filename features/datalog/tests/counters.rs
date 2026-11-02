@@ -35,17 +35,20 @@ fn reach_reuses_indexes_across_every_round() {
 
 #[test]
 fn shared_owned_delta_layouts_probe_without_core_fallback_builds() {
-    let edges: Vec<_> = [("a", "b"), ("b", "c"), ("c", "a"), ("a", "b")]
-        .into_iter()
-        .map(|(x, y)| (x.to_owned(), y.to_owned()))
-        .collect();
+    let (a, b, c) = (vec![1_i64], vec![2_i64], vec![3_i64]);
+    let edges = vec![
+        (a.clone(), b.clone()),
+        (b.clone(), c.clone()),
+        (c.clone(), a.clone()),
+        (a.clone(), b.clone()),
+    ];
     let flags = [(7_i32,), (7,)];
     cq_storage::counters::reset();
     let (rows, flags) = cq_datalog::datalog! {
         struct IndexedRuns;
-        relation Edge(x:String,y:String) = (&edges);
+        relation Edge(x:Vec<i64>,y:Vec<i64>) = (&edges);
         relation FlagInput(flag:i32) = (&flags);
-        relation Reach(x:String,y:String);
+        relation Reach(x:Vec<i64>,y:Vec<i64>);
         relation Flag(flag:i32);
         output Reach, Flag;
         Reach((*x).clone(),(*y).clone()) :- Edge(x,y);
@@ -60,15 +63,16 @@ fn shared_owned_delta_layouts_probe_without_core_fallback_builds() {
     let flags: Vec<_> = flags.collect();
     let cost = cq_storage::counters::snapshot();
     assert_eq!(rows.len(), 9);
+    let nodes = [a, b, c];
     assert_eq!(
         rows.into_iter().collect::<std::collections::BTreeSet<_>>(),
-        ["a", "b", "c"]
-            .into_iter()
-            .flat_map(|x| ["a", "b", "c"].map(|y| (x.to_owned(), y.to_owned())))
+        nodes
+            .iter()
+            .flat_map(|x| nodes.iter().map(|y| (x.clone(), y.clone())))
             .collect()
     );
     assert_eq!(flags, [(7,)]);
-    // The same borrowed String key is probed by several holes; reversed,
+    // The same borrowed non-Copy key is probed by several holes; reversed,
     // all-column, and later key-zero layouts are native grouped hosts too.
     assert_eq!(cost.index_builds, 0);
 }
@@ -102,16 +106,17 @@ fn alternating_empty_delta_indexes_never_fall_back_to_vec_builds() {
 
 #[test]
 fn borrowed_negative_keys_use_membership_without_building_indexes() {
-    let domain: Vec<_> = (0..128_i32).map(|id| (id, format!("key-{id}"))).collect();
+    // Non-Copy keys: negation probes borrow them.
+    let domain: Vec<_> = (0..128_i32).map(|id| (id, vec![i64::from(id)])).collect();
     let blocked: Vec<_> = (0..128_i32)
         .filter(|id| id % 3 == 0)
-        .map(|id| (format!("key-{id}"),))
+        .map(|id| (vec![i64::from(id)],))
         .collect();
     cq_storage::counters::reset();
     let rows: std::collections::BTreeSet<_> = cq_datalog::datalog! {
         struct NegativeKeys;
-        relation Domain(id:i32,key:String) = (&domain);
-        relation Blocked(key:String) = (&blocked);
+        relation Domain(id:i32,key:Vec<i64>) = (&domain);
+        relation Blocked(key:Vec<i64>) = (&blocked);
         relation Allowed(id:i32);
         output Allowed;
         Allowed(*id) :- Domain(id,key), !Blocked(key);
@@ -154,12 +159,14 @@ fn recursive_negation_reuses_completed_keys_across_rounds() {
 #[test]
 fn empty_negative_keys_test_existence_without_building_indexes() {
     let domain: Vec<_> = (0..128_i32).map(|id| (id,)).collect();
-    for blocked in [&[][..], &[(String::from("blocked"),)][..]] {
+    let keys = cq_load::StringDictionary::new(["blocked"]);
+    let present = [(cq_storage::domain::exact(&keys, "blocked"),)];
+    for blocked in [&[][..], &present[..]] {
         cq_storage::counters::reset();
         let rows: std::collections::BTreeSet<_> = cq_datalog::datalog! {
             struct NegativeExistence;
             relation Domain(id:i32) = (&domain);
-            relation Blocked(key:String) = (blocked);
+            relation Blocked(key:cq_load::StringCode) = (blocked);
             relation Allowed(id:i32);
             output Allowed;
             Allowed(*id) :- Domain(id), !Blocked(_);
@@ -178,26 +185,33 @@ fn empty_negative_keys_test_existence_without_building_indexes() {
 
 #[test]
 fn repeated_negative_variables_and_constants_use_prepared_keys_without_builds() {
-    let domain: Vec<_> = (0..128_i32).map(|id| (id, format!("key-{id}"))).collect();
+    use cq_storage::domain::exact;
+    let names: Vec<_> = (0..128_i32)
+        .flat_map(|id| [format!("key-{id}"), format!("other-{id}")])
+        .collect();
+    let keys = cq_load::StringDictionary::new(names.iter().map(String::as_str));
+    let kinds = cq_load::StringDictionary::new(["blocked", "ignored"]);
+    let key = |id: i32| exact(&keys, &format!("key-{id}"));
+    let domain: Vec<_> = (0..128_i32).map(|id| (id, key(id))).collect();
     let blocked: Vec<_> = (0..128_i32)
         .flat_map(|id| {
-            let left = format!("key-{id}");
+            let left = key(id);
             let right = if id % 3 == 0 {
-                left.clone()
+                left
             } else {
-                format!("other-{id}")
+                exact(&keys, &format!("other-{id}"))
             };
             [
-                (String::from("blocked"), left.clone(), right, id),
-                (String::from("ignored"), left.clone(), left, id),
+                (exact(&kinds, "blocked"), left, right, id),
+                (exact(&kinds, "ignored"), left, left, id),
             ]
         })
         .collect();
     cq_storage::counters::reset();
     let rows: std::collections::BTreeSet<_> = cq_datalog::datalog! {
         struct RepeatedNegativeKeys;
-        relation Domain(id:i32,key:String) = (&domain);
-        relation Blocked(kind:String,left:String,right:String,extra:i32) = (&blocked);
+        relation Domain(id:i32,key:cq_load::StringCode) = (&domain);
+        relation Blocked(kind:cq_load::StringCode in (kinds),left:cq_load::StringCode,right:cq_load::StringCode,extra:i32) = (&blocked);
         relation Allowed(id:i32);
         output Allowed;
         Allowed(*id) :- Domain(id,key), !Blocked(String::from("blocked"),key,key,_);

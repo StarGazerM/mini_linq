@@ -49,7 +49,12 @@ per-route siblings listed below.
      P && P | P || P`. Operands `t` are query variables, literals, or closed
      Rust expressions (`fv ∩ query = ∅`), evaluated once on the host. Only
      `where` yields point/range/membership reads, filter ranks, Masks
-     supports, derived domains and join equalities.
+     supports, derived domains and join equalities. Operands at a column
+     declared with a code domain (`c: T in (D)`) are translated once on the
+     host by A-Domain into captures `::cq_storage::domain::{exact,lower,upper}`
+     of `D`; strings are always interned, so string equality/order is code
+     equality/order within one domain (WF-Domain). `where` has no pattern
+     operator: contains/LIKE are load-time `dictionary_where` code sets.
    - Atom literals remain occurrence restrictions.
    - Types exist only in the host language. The compiler never inspects a
      `syn::Type` for meaning: no integer/`Decimal`/`String`/`Option`/float
@@ -123,6 +128,11 @@ per-route siblings listed below.
 | `cq_planners::order(le)` | Lookup = dropped-column subatom, phase not recorded | fold into the default planner with recorded phases |
 | GPU emitter | tile defaults, virtual-range publication, retry protocol | representation; document |
 | Datalog `fork` | authored incremental permutation reaches CQ as explicit order advice | done for authored order (contract 5); argument correspondence remains an open issue below |
+| printers/cq-syntax (closed by InternedStrings) | string-literal branches (`StringLiteral`, `relational_string_eq`, string bound forcing a scan) | deleted; one typed form, operands are A-Domain captures |
+| `algebra::disjoint_unions` (closed by InternedStrings) | literal-value union disjointness proof | option (b): deleted; only fallback construction proves disjointness (pending paired measurement) |
+| `cq-ext-aggregate constant_group` (closed by InternedStrings) | `Expr::Lit` initializer shape | keyed on A-Capture-recorded top-level lets |
+| GPU `capture.rs` (closed by InternedStrings) | `Expr::Lit` exemption from closed extraction | removed; literals are ordinary closed captures |
+| Datalog `fork` (closed by InternedStrings) | literal key embedding in filtered occurrences | every negative-key filter is `where v == (e)` after the scan |
 
 ## Architecture (replanned 2026-10-28)
 
@@ -142,6 +152,69 @@ sit where a representation is introduced.**
 
 Evidence/advice (counts, keys, selectivities, ratios) never carries
 semantics: it chooses among checked candidates.
+
+### GPU TPC-H authored stage frontend (DR-StageSource)
+
+The 26 GPU programs are authored in
+`experiments/gpu/tpch/queries/<query>.stages`. CPU workload files are independent
+reference programs, not importer input. One checked, printable `stages::Program`
+owns input producers, domain identities, captures, stage dependencies and
+terminal composition. The frontend grammar is:
+
+```text
+program name {
+  domain Labels = dictionary(items.label);
+  input Items(key: i64, label: StringCode in Labels) = table(items);
+  input Selected(code: StringCode in Labels)
+    = dictionary(Labels) where { |text: &str| text.contains("green") };
+  operand cutoff: Date = date { Date::load("1994-01-01").expect("ISO date") };
+  stage s0 {
+    inputs { Items = Items; Selected = Selected; }
+    captures [];
+    evidence {}
+    cq {
+      struct Query;
+      relation Items(key: i64, label: StringCode);
+      relation Selected(code: StringCode);
+      relation answer(key: i64, label: StringCode);
+      answer(key, label) :- Items(key, label), Selected(label);
+    }
+  }
+  publish Rows = s0 owned;
+  terminal { from s0 project [column(0), column(1)] dictionaries [1 = Labels]; }
+}
+```
+
+`input R(...) = host uses [dependencies] rust { expression };` declares opaque
+host preprocessing; `host value uses [...] rust { expression };` declares a
+nonrelation host dependency. Dependencies are borrowed for the opaque producer.
+`operand x: T = rust { expression };` and `date { expression }` preserve their
+payloads and evaluate on the host, never at build time. `value { expression }`
+in a terminal projection is a host-once constant extension. Terminal clauses
+concatenate in declaration order; projection slots are explicit and cannot be
+out of bounds or repeated. The examples' Rust types remain opaque.
+
+Top-level column domains propagate to CQ's `in (domain)` declarations; shared
+CQ normalization owns exact/lower/upper operand captures. The importer never
+distinguishes a string literal from a block expression. Dictionary predicates
+are explicit value-once producers, not calls recognized by a Rust function
+name. Host producer code carriers convert to published `u32` through runtime
+trait dispatch at the declared domain-column boundary.
+
+The existing CQ→VO→RA→Physical→Structures→Sequence pipeline consumes each stage.
+Input representation, nullable/grouped publication and dictionary origins
+remain recorded facts; `plans.json` includes `stage_source`, per-stage
+`sequence_input`, `sequence_planned`, trace and publication records.
+Checkers inspect those facts, never rerun source extraction. The code no longer
+contains the Rust stage/terminal/ownership-map recognizers, Data/load/EXPORTS
+producer recovery, dictionary-call recognition, or compile-time `date` folding.
+
+Acceptance is the combined shared-domain/frontend tree: all 26 queries exact
+at GPU SF1 in advised and automatic modes, Sequence dumps identical or
+individually classified, expanded-Rust evidence for intended differences,
+frontend/domain regressions and formal checks. H19's explicit `where` DNF
+belongs to the shared interned-string migration, not an identity claim for
+rewriting opaque Rust in this frontend.
 
 ## Plan (replanned 2026-10-28)
 
@@ -997,3 +1070,114 @@ Paths and lines refer to the reviewed `17a14b93` tree.
   schema to `cq-sequence-tasks` catalog constructors changes the crate hash,
   although every emitted expansion is identical. This verification was not
   run in this slice; do not report the full gate as passed.
+- InternedStrings (strings are always interned) and P5 S0, implemented on
+  top of closed capture: `ColumnDecl ::= c: T ["in" "(" Expr ")"]` records a
+  column code domain; normalization rule A-Domain translates closed operands
+  at domain columns into host-once `cq_storage::domain::{exact,lower,upper}`
+  captures (`<=`/`>` via `upper`, ranges via `lower`/`upper`, literal
+  membership as an `Or` of equalities) and WF-Domain rejects cross-domain
+  joins/comparisons. `cq_storage::{CodeDomain, OrderedCodeDomain}` replace
+  `StringValue`/`relational_string_eq`/`relational_str_cmp`/`StringLiteral`;
+  `StringDictionary` implements both, `Dictionaries::domain` replaces
+  `Dictionaries::literal`. Printer string branches, the literal-value union
+  disjointness proof (option (b)), the `Expr::Lit` tests in
+  `constant_group` and GPU closed extraction, and fork literal key embedding
+  are deleted. P5 S0 done: 17 TPC-H sources (retail d19, d27, d85, h02, h03,
+  h05, h07, h07_block, h08, h10, h11, h12, h16, h19, h20, h21_positive;
+  tpch q19) write literals in atoms/`where` over declared
+  `dictionaries.domain("col")` domains (h19's opaque `if` is a relational
+  `where`), and typed_* workloads intern text with registered publication
+  decodes. Formal rules, conformance, STORAGE §13.1 and anchors updated
+  (`doc/formal/check.py` passes). Point reads: `Select::constant_keys` took
+  only literal equalities, so the A-Domain captures had lost point-read
+  eligibility (closed operands never had it). It now returns `Term`s for
+  every column = constant conjunct; `host_point` reads a key with a closed
+  operand through `dispatch::BorrowedPointRead` (owns the borrowed key once
+  per read via `OwnKey`, else scans). The facade dispatch tests are back to
+  1 read / 0 scans on a code-keyed `HashMap`, plus a host-parameter test.
+  Gates against main `a1e3423b`: root 1214, every `features/*` workspace
+  (datalog 292, datalog-parallel 105, own-dialect 239, rewrites 197,
+  workloads 2308, …) and `experiments/gpu` sequence 90 tests pass;
+  regressions 119/119; CPU TPC-H SF1 `default,par` 58/58 exact against
+  DuckDB; DOOP xalan `--check` mini and mini-keyed 26/26. Expanded gate: 28
+  targets identical modulo runtime and 18 targets differ (the 17 S0
+  targets and `typed_line_filter`), 826 hunks in 222 distinct hunks. All are
+  reviewed in `tools/expanded_gate_classes_interned_strings.json`:
+  `interned-domain-capture` 158, `interned-renumber` 42, `interned-h19-where`
+  12, `interned-capture-collect` 8 and `interned-typed` 2, so 0 are
+  unexplained. No union target changed under option (b), and no target
+  needed a map point read. Verification for the runtime-changed targets
+  (`--verified-results`) is not imported yet. Paired timing (locked, 5
+  AB/BA pairs, median of 3, bootstrap 95% CI) gives new/base ratios. Only
+  h19 changes counters: `hash_computations` 594597 → 149999, `lookups`
+  214377 → 128371, `rows_tested` 7.07M → 7.30M. The other targets'
+  counters and all answer rows are identical: d19 1.004 [0.977, 1.021],
+  d27 1.000 [0.974, 1.014], d85 0.983 [0.974, 0.987], h02 1.026
+  [0.982, 1.070], h03 0.930 [0.872, 1.020], h05 0.967 [0.937, 0.989],
+  h07 0.946 [0.919, 1.009], h07_block 1.053 [0.970, 1.135] (rerun 1.085
+  [0.981, 1.114]), h08 0.993 [0.970, 1.016], h10 1.005 [0.967, 1.033],
+  h11 1.010 [0.972, 1.030], h12 1.008 [0.982, 1.016], h16 1.073
+  [0.748, 1.189] (rerun 0.985 [0.932, 1.165]), h19 0.315 [0.276, 0.341],
+  h20 1.010 [0.972, 1.048], h21_positive 0.983 [0.974, 1.026], q19 0.961
+  [0.819, 1.007]. No CI lies entirely above 1.0, so option (b) stands.
+  The typed_* workloads are tiny fixtures with no timed harness and were
+  not timed. GPU TPC-H paired timing is still owed on the combined tree
+  with ImporterDSL.
+  Follow-up: IF-Capture no longer collects a lazy answer because of a
+  capture. Each `let` capture is bound as `Arc::new` of the host value, and
+  every `move` closure reading its binder owns a handle clone and rebinds the
+  binder (`cq_print::own_captures`). This replaces the
+  `interned-capture-collect` class and also removes the collection from the
+  closed-capture targets `tpch_q06` and `correlated_exists`. h19 still
+  collects its one grouped row, because its new plan builds a part_key
+  index. Rerun: workspaces as above; regressions 119/119 (two architecture
+  checks rerun with the system Python 3.10 after a `tomllib` import
+  failure); TPC-H SF1 `default,par` 58/58. Locked pairs: h02 0.998
+  [0.980, 1.019], h11 0.988 [0.909, 1.061], h12 0.999 [0.959, 1.060], h16
+  1.024 [0.996, 1.100], h19 0.318 [0.278, 0.342]. Expanded gate against
+  `a1e3423b` with
+  `--classes tools/expanded_gate_classes_interned_strings.json
+  --verified-results` exits 0: 20 intended and 26 refactor-only targets,
+  0 unexplained. TPC-H evidence is the default+par oracle files, plus
+  paired counts where they exist. Library evidence is the e2e
+  extended/typed regression logs.
+- InternedStrings + GPU TPC-H stage DSL on `17a14b93` (C1, C2, P3.3e, G1),
+  2026-11-01. IF-Capture handles: an `Arc` for every capture made CPU
+  `retail_h07` 1.058 [1.047, 1.137] slower than `c395fe83` with identical
+  counters (+0.15% instructions, +3.7% cycles, extra realloc copies); the
+  same tree without captures ran 1.002. The printer now emits
+  `cq_storage::capture::Value::new(c).share()`; Rust method resolution makes
+  a `Copy` value its own handle and shares any other value through one
+  `Arc`, with no type inspection. Gates on the rebased tree: root 1230 and
+  all feature workspaces (4633 tests, 0 failed); GPU sequence 92/92;
+  regressions 119/119; CPU TPC-H SF1 `default,par` 58/58 exact; DOOP xalan
+  `--check` mini and mini-keyed ok; GPU TPC-H SF1 52/52 exact (advised +
+  automatic) and 26/26 advised-only; `doop-gpu` cassandra 26/26;
+  `srd-doop-gpu` exactness ok. Expanded gate against `17a14b93` with the
+  re-keyed `tools/expanded_gate_classes_interned_strings.json` (170 kept,
+  67 new reviewed rules): 0 unexplained, 20 intended and 26 refactor-only.
+  GPU TPC-H timing now includes the final answer download for every query
+  (the stage frontend times each stage's `to_host`; the removed standalone
+  path did not). Against a `17a14b93` base built with the same boundary, all
+  52 SF1 targets are within noise except h09 advised (1.004 [1.003, 1.005],
+  rerun 1.016 [1.006, 1.028]): its kernels, launch and whole timed host
+  region are token-identical to the base (only the kernel module name
+  differs); the +14–21 µs lies in `build` (4.58 ms), so it is host binary
+  layout. Locked CPU pairs (new/base): h07 0.961
+  [0.805, 1.104], h19 0.261 [0.250, 0.301], q06 0.960 [0.936, 0.984], q19
+  0.965 [0.935, 0.984], h12 0.981 [0.973, 0.989], d27 0.970 [0.960, 0.992],
+  others' CIs include 1.0. `correlated_exists` (synthetic) 1.102 [1.093,
+  1.108] is loop alignment: 99.4% of its time is
+  `cq_storage::exists::Exists::from_iter`, whose hot loop has the same
+  instructions in both binaries but crosses a 64-byte line only in the new
+  one; built on both sides with `-C llvm-args=-align-loops=64` the ratio is
+  0.999 (8 interleaved runs). The capture there is the subquery's unit
+  answer, bound once per outer row, never in the loop.
+  Rebased on `c0f79500` (GpuCorrect, ElabFix slices 1–2; A-Alias kept next to
+  A-Domain): root 1232 and feature workspaces (4635 tests, 0 failed), GPU
+  sequence 100/100, regressions 119/119, CPU TPC-H SF1 `default,par` 58/58,
+  DOOP xalan `--check` ok, GPU TPC-H SF1 52/52 + 26/26, cassandra 26/26,
+  `srd-doop-gpu` exactness ok; expanded gate against `c0f79500` exits 0 with
+  the same keys as the timed tree (all 46 cached, 0 unexplained). All 52 GPU
+  SF1 modules are identical to the timed tree (modulo kernel module names),
+  so no pair was re-timed.

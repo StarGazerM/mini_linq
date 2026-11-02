@@ -18,7 +18,7 @@
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
 //! Union siblings are unordered; fallback retains its relational anti steps.
-//! Only differing literals on one interface column prove union arms disjoint.
+//! Only fallback construction proves union arms disjoint; literal values prove nothing.
 //!
 use std::collections::{BTreeMap, BTreeSet};
 

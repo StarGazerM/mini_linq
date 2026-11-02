@@ -78,6 +78,32 @@ impl StringDictionary {
             .ok()
             .map(|index| index as u32)
     }
+
+    /// The number of stored values that sort `before` a query value.
+    // Encoding only: partition stored dictionary entries around a query value.
+    fn rank(&self, mut before: impl FnMut(&str) -> bool) -> StringCode {
+        StringCode(self.values.partition_point(|candidate| before(candidate)) as u32)
+    }
+}
+
+/// The dictionary is the column's code domain: codes follow the sorted order of
+/// distinct values, so it supports ordered comparisons. Absent values map to
+/// [`StringCode::MAX`] for equality and to their insertion rank for bounds.
+impl cq_storage::CodeDomain for StringDictionary {
+    type Value = str;
+    type Code = StringCode;
+    fn exact(&self, value: &str) -> StringCode {
+        self.lookup(value).map_or(StringCode::MAX, StringCode)
+    }
+}
+
+impl cq_storage::OrderedCodeDomain for StringDictionary {
+    fn lower(&self, value: &str) -> StringCode {
+        self.rank(|candidate| candidate < value)
+    }
+    fn upper(&self, value: &str) -> StringCode {
+        self.rank(|candidate| candidate <= value)
+    }
 }
 
 /// Load-time dictionaries keyed by declaration column name.
@@ -113,13 +139,12 @@ impl Dictionaries {
         self.columns.get(column)
     }
 
-    /// Translate an equality or membership literal without inserting it.
-    /// An absent column or value returns the nonmatching sentinel, not an
-    /// insertion rank for ordered comparisons against an absent value.
-    pub fn literal(&self, column: &str, value: &str) -> StringCode {
-        self.get(column)
-            .and_then(|dictionary| dictionary.lookup(value))
-            .map_or(StringCode::MAX, StringCode)
+    /// The code domain of a column, named in query declarations as
+    /// `col: StringCode in (dictionaries.domain("col"))`.
+    /// An unregistered column has the empty domain: no value is present.
+    pub fn domain(&self, column: &str) -> &StringDictionary {
+        static EMPTY: StringDictionary = StringDictionary { values: Vec::new() };
+        self.get(column).unwrap_or(&EMPTY)
     }
 
     /// Borrow source text for an explicit opaque Rust read.
@@ -381,20 +406,41 @@ mod tests {
 
     #[test]
     fn dictionaries_keep_column_order_and_missing_literals_stable() {
+        use cq_storage::domain::exact;
         let mut dictionaries = Dictionaries::default();
         dictionaries.insert("name", ["z", "", "a", "a"]);
         dictionaries.insert("other", ["a", "z"]);
-        assert_eq!(dictionaries.literal("name", ""), StringCode(0));
-        assert_eq!(dictionaries.literal("name", "a"), StringCode(1));
-        assert_eq!(dictionaries.literal("other", "a"), StringCode(0));
-        assert_eq!(dictionaries.literal("name", "missing"), StringCode::MAX);
-        assert_eq!(dictionaries.literal("absent", "a"), StringCode::MAX);
+        assert_eq!(exact(dictionaries.domain("name"), ""), StringCode(0));
+        assert_eq!(exact(dictionaries.domain("name"), "a"), StringCode(1));
+        assert_eq!(exact(dictionaries.domain("other"), "a"), StringCode(0));
+        assert_eq!(exact(dictionaries.domain("name"), "missing"), StringCode::MAX);
+        assert_eq!(exact(dictionaries.domain("absent"), "a"), StringCode::MAX);
         dictionaries.insert("name", ["a", "z", ""]);
         // DECODE R: the dictionary diagnostic borrows a stored string for its exact-value assertion.
         assert_eq!(dictionaries.read("name", StringCode(1)), "a");
         // DECODE P: the dictionary diagnostic publishes a stored string to its owned-value assertion.
         assert_eq!(dictionaries.publish("name", StringCode(2)), "z");
-        assert!(dictionaries.literal("name", "z") < StringCode::MAX);
+        assert!(exact(dictionaries.domain("name"), "z") < StringCode::MAX);
+    }
+
+    #[test]
+    fn ordered_bounds_translate_comparisons_to_codes() {
+        use cq_storage::domain::{lower, upper};
+        let dictionary = StringDictionary::new(["b", "d", "f"]);
+        let codes = [StringCode(0), StringCode(1), StringCode(2)];
+        let values = ["b", "d", "f"];
+        for probe in ["", "a", "b", "c", "d", "e", "f", "g", "é"] {
+            let (low, high) = (lower(&dictionary, probe), upper(&dictionary, probe));
+            for (code, value) in codes.iter().zip(values) {
+                assert_eq!(*code < low, value < probe, "{value} < {probe}");
+                assert_eq!(*code >= low, value >= probe, "{value} >= {probe}");
+                assert_eq!(*code < high, value <= probe, "{value} <= {probe}");
+                assert_eq!(*code >= high, value > probe, "{value} > {probe}");
+            }
+        }
+        let empty = Dictionaries::default();
+        assert_eq!(lower(empty.domain("absent"), "a"), StringCode(0));
+        assert_eq!(upper(empty.domain("absent"), "a"), StringCode(0));
     }
 
     #[test]
@@ -408,7 +454,7 @@ mod tests {
         });
         assert_eq!(visited, ["blue", "green", "red"]);
         assert_eq!(selected, [(StringCode(0),)]);
-        assert_eq!(dictionaries.literal("type", "missing"), StringCode::MAX);
+        assert_eq!(cq_storage::domain::exact(dictionaries.domain("type"), "missing"), StringCode::MAX);
         assert_eq!(dictionaries.select("type", |_| true).len(), 3);
         assert!(
             dictionaries
@@ -421,7 +467,7 @@ mod tests {
                 .select("empty", |_| panic!("no values"))
                 .is_empty()
         );
-        assert_eq!(dictionaries.literal("empty", ""), StringCode::MAX);
+        assert_eq!(cq_storage::domain::exact(dictionaries.domain("empty"), ""), StringCode::MAX);
     }
 
     #[test]

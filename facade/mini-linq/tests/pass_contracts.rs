@@ -331,9 +331,9 @@ fn a_constraint_on_a_let_result_can_cross_total_rust() {
 #[test]
 fn shared_names_survive_order_reduce_and_elaborate_as_natural_join_columns() {
     let source: cq::Program = syn::parse_quote! {
-        struct Shared; relation Customer(id:i32,segment:&str);
+        struct Shared; relation Customer(id:i32,segment:i32);
         relation Orders(id:i32,customer:i32,date:i32);
-        answer(o,c,d) :- Customer(c,s), if *s == "BUILDING", Orders(o,c,d);
+        answer(o,c,d) :- Customer(c,s), if *s == 1, Orders(o,c,d);
     };
     let nf = cq::normal::normalize(&source).unwrap();
     let vo = cq_order::compile(&nf, &Default::default()).unwrap();

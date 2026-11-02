@@ -1174,7 +1174,7 @@ impl<'a> Emitter<'a> {
         } else {
             syn::parse2(quote!({ #registration #(#statements)* #rows }))?
         };
-        cq_print::own_captures(&mut output, &context.owned);
+        cq_print::own_captures(&mut output, &context.owned, &context.capture_handles);
         Ok(output)
     }
 }

@@ -662,12 +662,12 @@ fn rust_without_identity_facts_and_its_feeds_stay_host() {
 }
 
 #[test]
-fn relational_string_predicates_do_not_imply_host_placement() {
+fn relational_code_predicates_do_not_imply_host_placement() {
     let source: Program = syn::parse_quote! {
         physical {
-            relation R(a:i32,s:String);
+            relation R(a:i32,s:StringCode);
             r = pipe rename R@0 {a -> a,s -> s};
-            selected = pipe select r if (s = "green");
+            selected = pipe select r if (s = 7);
             numeric = pipe project selected keep {a};
             answer = let canon project numeric keep {a};
             return answer as answer(a);
@@ -691,12 +691,12 @@ fn relational_string_predicates_do_not_imply_host_placement() {
 }
 
 #[test]
-fn host_string_filter_uploads_projected_index_before_device_lookups() {
+fn host_opaque_filter_uploads_projected_index_before_device_lookups() {
     let physical = syn::parse_quote! {
         physical {
-            relation L(a:i32); relation P(a:i32,s:String);
+            relation L(a:i32); relation P(a:i32,s:StringCode);
             p = pipe rename P@0 {a -> a,s -> s};
-            filtered = pipe guard p if (s.contains("green"));
+            filtered = pipe guard p if (accept(s));
             selected = let project filtered keep {a};
             l = pipe rename L@1 {a -> a};
             joined = pipe probe first [a] l,selected;
@@ -712,7 +712,7 @@ fn host_string_filter_uploads_projected_index_before_device_lookups() {
     assert_eq!(facts.layouts["selected"], ["a"]);
     let mut source = cq_sequence_lowering::compile(&structures).unwrap();
     // The target records the projected key's device representation; the
-    // unrepresented string payload remains available only to the host guard.
+    // unrepresented code payload remains available only to the host guard.
     source.representation.identity.insert("a".into());
     let planned = decompose(&source, &machine, &available).unwrap();
     let analysis = replay(&source, &machine, &planned);
@@ -739,14 +739,14 @@ fn automatic_h09_keeps_retained_dependencies_in_their_read_extent() {
     // before Orders and the composite Lineitem/PartSupp join, not moved there.
     let physical = syn::parse_quote! {
         physical {
-            relation Part(part_key:i32,part_name:String);
+            relation Part(part_key:i32,part_name:StringCode);
             relation Orders(order_key:i32);
             relation Lineitem(order_key:i32,part_key:i32,supplier_key:i32);
             relation PartSupp(part_key:i32,supplier_key:i32);
             relation Supplier(supplier_key:i32,nation_key:i32);
             relation Nation(nation_key:i32);
             p = pipe rename Part@0 {part_key -> part_key,part_name -> part_name};
-            green = pipe guard p if (part_name.contains("green"));
+            green = pipe guard p if (accept(part_name));
             o = let rename Orders@2 {order_key -> order_key};
             po = pipe probe first [] green,o;
             l = let rename Lineitem@3 {

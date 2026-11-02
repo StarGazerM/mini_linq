@@ -112,8 +112,8 @@ fn arguments_are_expressions_and_result_declaration_is_not_an_input() {
     let source: cq::Program = syn::parse_quote! {
         struct P;
         relation R(a:i32,b:i32);
-        relation answer(value:String);
-        answer(format!("{x}")) :- R(x, f(x));
+        relation answer(value:Vec<i32>);
+        answer(vec![*x]) :- R(x, f(x));
     };
     cq::contract::check(&source).unwrap();
     assert_eq!(source.inputs().count(), 1);
@@ -129,9 +129,9 @@ fn declaration_classification_preserves_source_order_and_rejects_duplicates() {
     let inputs = ["relation R(a:i32);", "relation S(a:i32);"];
     for position in 0..=inputs.len() {
         let mut declarations = inputs.to_vec();
-        declarations.insert(position, "relation answer(value:String);");
+        declarations.insert(position, "relation answer(value:Vec<i32>);");
         let source: cq::Program = syn::parse_str(&format!(
-            "struct P; {} answer(format!(\"{{x}}\")) :- R(x), S(x);",
+            "struct P; {} answer(vec![*x]) :- R(x), S(x);",
             declarations.join(" ")
         ))
         .unwrap();
@@ -224,8 +224,8 @@ fn logical_forward_references_and_shadowing_are_errors() {
 #[test]
 fn result_types_are_explicit_at_the_public_rust_boundary() {
     let source: cq::Program = syn::parse_quote! {
-        struct P; relation R(value:i32); relation answer(value:String);
-        answer(format!("{x}")) :- R(x);
+        struct P; relation R(value:i32); relation answer(value:Vec<i32>);
+        answer(vec![*x]) :- R(x);
     };
     cq::contract::check(&source).unwrap();
     let mut missing = source.clone();

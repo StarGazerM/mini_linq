@@ -99,21 +99,17 @@ mod computed_candidate_keys {
 
 #[test]
 fn answers_from_a_query_are_a_zero_copy_canonical_host() {
-    // String is deliberately non-Copy; both stages keep references to it.
-    let R = [
-        (String::from("a"),),
-        (String::from("b"),),
-        (String::from("a"),),
-    ];
+    // Vec is deliberately non-Copy; both stages keep references to it.
+    let R = [(vec![1_i64],), (vec![2_i64],), (vec![1_i64],)];
     let A = Answers::collect_from(::mini_linq::mini_linq! {
-        struct First; relation R(x: String); answer(x) :- R(x);
+        struct First; relation R(x: Vec<i64>); answer(x) :- R(x);
     });
-    let allowed = ["b"];
+    let allowed = [2_i64];
     let B = Answers::collect_from(::mini_linq::mini_linq! {
         struct Second;
-        relation A(x: &String);
-        relation answer(x: &String);
-        answer(*x) :- A(x), if allowed.contains(&x.as_str());
+        relation A(x: &Vec<i64>);
+        relation answer(x: &Vec<i64>);
+        answer(*x) :- A(x), if allowed.as_slice() == x.as_slice();
     });
     assert_eq!(B.len(), 1);
     let (value,) = B.iter().next().unwrap();
@@ -251,10 +247,10 @@ mod fuzz_owned_merge_keys {
 #[test]
 fn repeated_plain_head_variables_preserve_positions_and_input_references() {
     // Differential seed 4: the CQ normal-form check rejected answer(x, x).
-    let R = [(String::from("left"),), (String::from("right"),)];
+    let R = [(vec![1_i64],), (vec![2_i64],)];
     let mut rows: Vec<_> = ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_prefix_connected_fine; }
         struct RepeatedHead;
-        relation R(value: String);
+        relation R(value: Vec<i64>);
         answer(x, x) :- R(x);
     }
     .collect();

@@ -1,0 +1,39 @@
+program d27 {
+    domain PartBrand = dictionary(part.p_brand);
+    domain NationName = dictionary(nation.n_name);
+    input Lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64) = table(lineitem);
+    input Orders(o_orderkey: i64, o_orderdate: Date) = table(orders);
+    input Part(p_partkey: i64, p_brand: cq_load::StringCode in PartBrand) = table(part);
+    input Supplier(s_suppkey: i64, s_nationkey: i32) = table(supplier);
+    input Nation(n_nationkey: i32, n_name: cq_load::StringCode in NationName) = table(nation);
+    operand start: Date = date { Date::load("1995-01-01").expect("authored ISO date") };
+    operand end: Date = date { Date::load("1995-04-01").expect("authored ISO date") };
+    stage s0 {
+        inputs {
+            Lineitem = Lineitem;
+            Orders = Orders;
+            Part = Part;
+            Supplier = Supplier;
+            Nation = Nation;
+        }
+        captures [start, end];
+        evidence {}
+        cq {
+            struct Query;
+            relation Lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64);
+            relation Orders(o_orderkey: i64, o_orderdate: Date);
+            relation Part(p_partkey: i64, p_brand: cq_load::StringCode);
+            relation Supplier(s_suppkey: i64, s_nationkey: i32);
+            relation Nation(n_nationkey: i32, n_name: cq_load::StringCode);
+            relation answer(order_key: i64, part_key: i64, supplier_key: i64);
+            answer(order_key, part_key, supplier_key) :-
+                Lineitem(order_key, part_key, supplier_key),
+                Orders(order_key, order_date), where order_date >= start && order_date < end,
+                Part(part_key, "Brand#12"),
+                Supplier(supplier_key, nation_key), Nation(nation_key, "UNITED STATES");
+        }
+    }
+    terminal {
+        from s0 project [column(0), column(1), column(2)] dictionaries [];
+    }
+}

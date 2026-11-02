@@ -70,8 +70,6 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
 crate::tpch_runtime::standalone_configs! { $;
     pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
         assert!(CONFIGS.contains(&config), "unknown H12 configuration");
-        let mail = data.dictionaries.literal("l_shipmode", "MAIL");
-        let ship = data.dictionaries.literal("l_shipmode", "SHIP");
         let Orders = data.orders.as_slice();
         let Lineitem = data.lineitem.as_slice();
         let HighPriorities = data.high_priorities.as_slice();
@@ -81,13 +79,14 @@ crate::tpch_runtime::standalone_configs! { $;
             plan(no_reduce, order(Lineitem, Orders));
             struct Matches;
             relation Orders(o_orderkey: i64, o_orderpriority: StringCode);
-            relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_shipmode: StringCode,
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64,
+                l_shipmode: StringCode in (data.dictionaries.domain("l_shipmode")),
                 l_commitdate: Date, l_receiptdate: Date, l_shipdate: Date);
             relation answer(order_key: i64, line_number: i64, shipmode: StringCode,
                 commitdate: Date, receiptdate: Date, shipdate: Date, priority: StringCode);
             answer(order_key, line_number, shipmode, commitdate, receiptdate, shipdate, priority) :-
                 Lineitem(order_key, line_number, shipmode, commitdate, receiptdate, shipdate),
-                where shipmode == mail || shipmode == ship,
+                where shipmode == "MAIL" || shipmode == "SHIP",
                 where shipdate < commitdate && commitdate < receiptdate,
                 where receiptdate >= start && receiptdate < end,
                 Orders(order_key, priority);

@@ -96,22 +96,20 @@ macro_rules! runner {
                 let Nation = data.nation.as_slice();
                 let dictionaries = &data.dictionaries;
                 let start = date("1995-01-01"); let end = date("1996-12-31");
-                let france = dictionaries.literal("n_name", "FRANCE");
-                let germany = dictionaries.literal("n_name", "GERMANY");
                 query! {
                     struct Query;
                     relation Supplier(s_suppkey: i64, s_nationkey: i32);
                     relation Lineitem(l_orderkey: i64, l_suppkey: i64, l_shipdate: Date);
                     relation Orders(o_orderkey: i64, o_custkey: i64);
                     relation Customer(c_custkey: i64, c_nationkey: i32);
-                    relation Nation(n_nationkey: i32, n_name: cq_load::StringCode);
+                    relation Nation(n_nationkey: i32, n_name: cq_load::StringCode in (dictionaries.domain("n_name")));
                     relation answer(order_key: i64, supplier_nation: i32, customer_nation: i32);
                     answer(order_key, supplier_nation, customer_nation) :-
                         Lineitem(order_key, supplier_key, ship_date), where ship_date >= start && ship_date <= end,
                         Supplier(supplier_key, supplier_nation),
                         Orders(order_key, customer_key), Customer(customer_key, customer_nation),
-                        { Nation(supplier_nation, { france }), Nation(customer_nation, { germany }) }
-                        | { Nation(supplier_nation, { germany }), Nation(customer_nation, { france }) };
+                        { Nation(supplier_nation, "FRANCE"), Nation(customer_nation, "GERMANY") }
+                        | { Nation(supplier_nation, "GERMANY"), Nation(customer_nation, "FRANCE") };
                 }
                 .map(|(order_key, supplier_nation, customer_nation,)| (*order_key, *supplier_nation, *customer_nation,))
                 .collect()

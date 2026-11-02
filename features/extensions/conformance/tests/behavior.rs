@@ -82,19 +82,19 @@ fn aggregate_grouped_output_is_a_native_leading_key_host() {
 #[test]
 fn aggregate_keys_can_own_non_copy_values() {
     let Sale = [
-        (String::from("a"), 1, -5),
-        (String::from("a"), 2, 10),
-        (String::from("b"), 3, 7),
+        (vec![1_i64], 1, -5),
+        (vec![1_i64], 2, 10),
+        (vec![2_i64], 3, 7),
     ];
     let result = mini_linq::compile! { pipeline { surface = [cq_ext_aggregate::aggregate]; } aggregate! {
-       by(d); lo=min(a); hi=max(a); struct Stats; relation Sale(d:String,id:i32,a:i32);
+       by(d); lo=min(a); hi=max(a); struct Stats; relation Sale(d:Vec<i64>,id:i32,a:i32);
        rows(d,id,a) :- Sale(d,id,a);
     } };
     let groups: BTreeSet<_> = result
         .iter()
-        .flat_map(|((d,), payload)| payload.iter().map(move |&(lo, hi)| (d.as_str(), lo, hi)))
+        .flat_map(|((d,), payload)| payload.iter().map(move |&(lo, hi)| (d.clone(), lo, hi)))
         .collect();
-    assert_eq!(groups, [("a", -5, 10), ("b", 7, 7)].into());
+    assert_eq!(groups, [(vec![1], -5, 10), (vec![2], 7, 7)].into());
 }
 
 #[test]
@@ -165,16 +165,16 @@ fn recursion_owns_non_copy_delta_rows_and_hoists_leaves_once() {
     let calls = Cell::new(0);
     let result: BTreeSet<_> = mini_linq::compile! { pipeline { surface = [cq_ext_recursion::recursion]; } recursion! {
         struct Owned;
-        relation Seed(x:String) = ({calls.set(calls.get()+1);[(String::from("a"),)]});
-        relation Edge(x:String,y:String) = ({calls.set(calls.get()+1);[(String::from("a"),String::from("b")),(String::from("b"),String::from("a"))]});
-        relation reach(x:String);
+        relation Seed(x:Vec<i64>) = ({calls.set(calls.get()+1);[(vec![1_i64],)]});
+        relation Edge(x:Vec<i64>,y:Vec<i64>) = ({calls.set(calls.get()+1);[(vec![1_i64],vec![2_i64]),(vec![2_i64],vec![1_i64])]});
+        relation reach(x:Vec<i64>);
         reach(x) :- Seed(x); reach(y) :- reach(x), Edge(x,y);
      } }.collect();
-    assert_eq!(result, [(String::from("a"),), (String::from("b"),)].into());
+    assert_eq!(result, [(vec![1_i64],), (vec![2_i64],)].into());
     assert_eq!(calls.get(), 2);
-    type Name = String;
-    let seed = [(Name::from("a"),)];
-    let edge = [(Name::from("a"), Name::from("b")), (Name::from("b"), Name::from("a"))];
+    type Name = Vec<i64>;
+    let seed: [(Name,); 1] = [(vec![1],)];
+    let edge: [(Name, Name); 2] = [(vec![1], vec![2]), (vec![2], vec![1])];
     let aliased: BTreeSet<_> = mini_linq::compile! {
         pipeline { surface = [cq_ext_recursion::recursion]; }
         recursion! {
@@ -205,13 +205,13 @@ fn correlated_exists_evaluates_with_each_outer_value_and_borrowed_parameters() {
 
 #[test]
 fn correlated_environment_keeps_borrowed_non_copy_hosts_and_parameters() {
-    let A = [(String::from("apple"),), (String::from("pear"),)];
-    let S = [(String::from("apple"),)];
-    let prefix = String::from("app");
+    let A = [(vec![1_i64, 2],), (vec![3_i64],)];
+    let S = [(vec![1_i64, 2],)];
+    let prefix = vec![1_i64];
     let prefix = &prefix;
     let result: Vec<_> = mini_linq::compile! { pipeline { surface = [cq_ext_correlated::correlated]; }
-        struct Borrowed; relation A(x:String); relation S(y:String);
-        answer(x) :- A(x), exists!{S(y), if y.starts_with(prefix.as_str()), if x.as_str() == y.as_str()};
+        struct Borrowed; relation A(x:Vec<i64>); relation S(y:Vec<i64>);
+        answer(x) :- A(x), exists!{S(y), if y.starts_with(prefix.as_slice()), if x.as_slice() == y.as_slice()};
      }.collect();
     assert_eq!(result.len(), 1);
     assert!(std::ptr::eq(result[0].0, &A[0].0));

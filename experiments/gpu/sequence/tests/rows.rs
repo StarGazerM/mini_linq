@@ -288,7 +288,12 @@ fn segmented_arithmetic_bindings_are_lane_local() {
     let generated = translate(&segmented_binding(quote!(*value * 2)));
     assert!(generated.contains("__child_position"), "{generated}");
     assert!(generated.contains("let mut __map_code_"), "{generated}");
-    assert!(generated.contains("* value * 2"), "{generated}");
+    // GPU-Capture: the literal is a closed value read from its host witness.
+    assert!(generated.contains(":: MaybeUninit :: new (2)"), "{generated}");
+    assert!(
+        generated.contains("* value * unsafe { __cq_closed_0 . assume_init () }"),
+        "{generated}"
+    );
     assert!(!generated.contains("wrapping_mul"), "{generated}");
     // Parent slots can be read by sibling lanes, never assigned by a map.
     for statement in generated.split(';') {

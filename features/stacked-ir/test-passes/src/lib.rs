@@ -10,8 +10,8 @@
 //! Rust is opaque, pure and total; placement follows free-variable binders within
 //! each branch, not written order. Fallback keeps its relational anti steps.
 //! Relational constraints use `where`; Rust `||` is not a relational operator.
-//! Only differing literals on one interface column prove union arms disjoint;
-//! no data keys or constraints are assumed.
+//! Only fallback construction proves union arms disjoint; literal values prove
+//! nothing, and no data keys or constraints are assumed.
 //!
 use cq_lang_physical as physical;
 use cq_lang_structures::Structure;

@@ -1,0 +1,60 @@
+program h15 {
+    domain SupplierName = dictionary(supplier.s_name);
+    domain SupplierAddress = dictionary(supplier.s_address);
+    domain SupplierPhone = dictionary(supplier.s_phone);
+    input Supplier(s_suppkey: i64, s_name: StringCode in SupplierName,
+        s_address: StringCode in SupplierAddress, s_phone: StringCode in SupplierPhone)
+        = table(supplier);
+    input Lineitem(l_orderkey: i64, l_linenumber: i64, l_suppkey: i64,
+        l_extendedprice: Decimal, l_discount: Decimal, l_shipdate: Date) = table(lineitem);
+    operand start: Date = date { Date::load("1996-01-01").expect("authored ISO date") };
+    operand end: Date = date { Date::load("1996-04-01").expect("authored ISO date") };
+    stage s0 {
+        inputs { Lineitem = Lineitem; }
+        captures [start, end];
+        evidence {}
+        cq {
+            struct RevenueBySupplier;
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_suppkey: i64,
+                l_extendedprice: Decimal, l_discount: Decimal, l_shipdate: Date);
+            relation answer(supplier_key: i64, revenue: i64);
+            answer(supplier_key, sum(revenue_units)) :-
+                Lineitem(order_key, line_number, supplier_key, price, discount, shipdate),
+                where shipdate >= start && shipdate < end,
+                let revenue_units: i64 = price.scaled() * (100 - discount.scaled());
+        }
+    }
+    publish Revenue = s0 owned;
+    stage s1 {
+        inputs { Revenue = Revenue; }
+        captures [];
+        evidence {}
+        cq {
+            struct MaximumRevenue;
+            relation Revenue(supplier_key: i64, revenue: i64);
+            relation answer(maximum: Option<i64>);
+            answer(max(revenue)) :- Revenue(supplier_key, revenue);
+        }
+    }
+    publish Maximum = s1 owned;
+    stage s2 {
+        inputs { Supplier = Supplier; Revenue = Revenue; Maximum = Maximum; }
+        captures [];
+        evidence {}
+        cq {
+            struct Query;
+            relation Supplier(s_suppkey: i64, s_name: StringCode, s_address: StringCode, s_phone: StringCode);
+            relation Revenue(supplier_key: i64, revenue: i64);
+            relation Maximum(maximum: Option<i64>);
+            relation answer(supplier_key: i64, name: StringCode, address: StringCode, phone: StringCode, revenue: i64);
+            answer(supplier_key, name, address, phone, revenue) :-
+                Revenue(supplier_key, revenue), Maximum(maximum),
+                if Some(*revenue) == *maximum,
+                Supplier(supplier_key, name, address, phone);
+        }
+    }
+    terminal {
+        from s2 project [column(0), column(1), column(2), column(3), column(4)]
+            dictionaries [1 = SupplierName, 2 = SupplierAddress, 3 = SupplierPhone];
+    }
+}

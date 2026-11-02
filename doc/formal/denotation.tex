@@ -159,8 +159,8 @@ data property. Rust \code{||} inside a guard keeps Rust's meaning. Laws:
  C\bowtie(L\cup M)=(C\bowtie L)\cup(C\bowtie M),\qquad
  B_1\ \mathsf{else}\ B_2=B_1\cup(B_2\triangleright_F B_1).
 \]
-Fallback arms are disjoint by construction. A union is statically disjoint only
-if every pair of arms has some interface column with different proved literal
-values. Positive semijoin reductions distribute into union arms and into the
+Fallback arms are disjoint by construction, and that construction is the only
+static disjointness proof: differing literal values in union arms prove
+nothing. Positive semijoin reductions distribute into union arms and into the
 positive uses of fallback arms; the negated operand of an antijoin is always the
 unmodified named branch result.

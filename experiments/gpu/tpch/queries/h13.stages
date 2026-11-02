@@ -1,0 +1,53 @@
+program h13 {
+    domain Comment = dictionary(orders.o_comment);
+    input Customer(c_custkey: i64) = table(customer);
+    input Orders(o_orderkey: i64, o_custkey: i64, o_comment: StringCode in Comment)
+        = table(orders);
+    input SelectedComments(code: StringCode in Comment) = dictionary(Comment) where { |value: &str| {
+        !value
+            .split_once("special")
+            .is_some_and(|(_, rest)| rest.contains("requests"))
+    } };
+    host QualifiedComments uses [SelectedComments] rust {
+        cq_storage::DenseMembership::<StringCode, 16777216>::from_dense_keys(
+            SelectedComments.iter().map(|(code,)| *code),
+        )
+    };
+    input QualifiedOrders(o_orderkey: i64, o_custkey: i64)
+        = host uses [Orders, QualifiedComments] rust {
+            Orders.iter()
+                .filter(|(_, _, comment)| cq_storage::ExactMembership::contains(QualifiedComments, comment))
+                .map(|(order_key, customer_key, _)| (*order_key, *customer_key))
+                .collect::<Vec<(i64, i64)>>()
+        };
+    stage s0 {
+        inputs { Customer = Customer; QualifiedOrders = QualifiedOrders; }
+        captures [];
+        evidence {}
+        cq {
+            struct Counts;
+            relation Customer(c_custkey: i64);
+            relation QualifiedOrders(o_orderkey: i64, o_custkey: i64);
+            relation answer(customer_key: i64, order_count: usize);
+            answer(customer_key, count()) :-
+                Customer(customer_key), QualifiedOrders(order_key, customer_key);
+        }
+    }
+    publish CountedCustomers = s0 owned;
+    stage s1 {
+        inputs { Customer = Customer; CountedCustomers = CountedCustomers; }
+        captures [];
+        evidence {}
+        cq {
+            struct Zeros;
+            relation Customer(c_custkey: i64);
+            relation CountedCustomers(customer_key: i64, order_count: usize);
+            relation answer(customer_key: i64);
+            answer(customer_key) :- Customer(customer_key), !CountedCustomers(customer_key, _);
+        }
+    }
+    terminal {
+        from s0 project [column(0), column(1)] dictionaries [];
+        from s1 project [column(0), value { 0 }] dictionaries [];
+    }
+}

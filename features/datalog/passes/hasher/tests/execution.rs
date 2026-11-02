@@ -49,20 +49,16 @@ fn recursive_duplicate_heavy_negation_matches_fx_default_and_keyed() {
 }
 
 #[test]
-fn borrowed_string_edbs_and_owned_outputs_use_selected_canonical_sets() {
-    let output: std::vec::IntoIter<(String,)> = {
-        let rows = vec![
-            (String::from("alpha"),),
-            (String::from("alpha"),),
-            (String::from("beta"),),
-        ];
+fn borrowed_noncopy_edbs_and_owned_outputs_use_selected_canonical_sets() {
+    let output: std::vec::IntoIter<(Vec<i64>,)> = {
+        let rows = vec![(vec![1_i64],), (vec![1_i64],), (vec![2_i64],)];
         cq_datalog::datalog! {
             pipeline {
                 storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
                 round = [cq_datalog_hasher::hasher_round(keyed)];
             }
             struct CanonicalOutput;
-            relation Names(name:String) = (&rows);
+            relation Names(name:Vec<i64>) = (&rows);
             output Names;
         }
     };
@@ -70,7 +66,7 @@ fn borrowed_string_edbs_and_owned_outputs_use_selected_canonical_sets() {
     assert_eq!(rows.len(), 2);
     assert_eq!(
         rows.into_iter().collect::<BTreeSet<_>>(),
-        BTreeSet::from([(String::from("alpha"),), (String::from("beta"),)])
+        BTreeSet::from([(vec![1_i64],), (vec![2_i64],)])
     );
 }
 

@@ -50,6 +50,19 @@ equality, not order) must decode before comparing. Comparing codes there
 would silently change answers. This is recorded per column representation and
 checked; it is not inferred from a type.
 
+GPU TPC-H authors dictionary identity separately from Rust types in its stage
+DSL: `domain D = dictionary(table.column)` and `column: T in D`. The frontend
+passes that domain to CQ normalization; shared `CodeDomain` /
+`OrderedCodeDomain` runtime dispatch encodes all closed operands uniformly,
+once on the host. The manifest adapter's codes are checked sorted dictionary
+positions, so exact/lower/upper retain their equality and order laws, including
+absent operands. An explicit dictionary producer tests each text value once
+and publishes code rows. Opaque host preprocessing keeps its declared carrier;
+only domain-marked publication columns convert to the device code carrier.
+Terminal text publication consumes the recorded domain and projection slots.
+Rust `.literal`, `.publish`, `dictionary_where` or `date` spellings establish
+none of these representation facts (DR-StageSource).
+
 ## 2. Runtime data structures
 
 One **logical layout and byte layout** shared by every reader (CPU, CUDA,
@@ -910,18 +923,43 @@ assumed: constructing the membership set handles duplicate witnesses.
 
 The loader-side `interned_relation_loaders!` opt-in uses ordinary Rust
 field declarations; plain `relation_loaders!` expansion is unchanged.
-No new query syntax or compiler type inspection is needed.
+Loading needs no compiler type inspection; the only query-side fact is the
+authored column domain below.
 `InternedField` trait dispatch preserves ordinary `Load` fields unchanged
 and maps `StringCode` fields from input-only `String` values.
 `InternedRelation` prepares the dictionaries and encodes the rows;
 `parquet_interned` is the load boundary. Representation facts come from
 authored declarations/provenance, not guessed Rust type spellings.
 
-`Dictionaries::literal(column, text)` performs a lookup without inserting
-absent literals. Missing values or columns return `StringCode::MAX`,
-which is reserved and never assigned to source text. Query setup may
-translate equality literals into codes; it does not rebuild dictionaries.
-Opaque string predicates use
+Strings are always interned: string equality and order in a query are code
+equality and order within one column domain, and no compiler pass has a
+string-specific branch, string literal form, string index or string scan.
+A declaration names a column's domain explicitly,
+`l_shipmode: StringCode in (data.dictionaries.domain("l_shipmode"))`.
+`Dictionaries::domain(column)` returns that column's `StringDictionary`
+(a static empty dictionary when the column is absent). The domain is any
+query-closed host value implementing `cq_storage::CodeDomain`
+(`exact`); ordered domains also implement `cq_storage::OrderedCodeDomain`
+(`lower`, `upper`). `StringDictionary` implements both: `exact` maps an
+absent value to `StringCode::MAX`, which is reserved and never assigned to
+source text (so it matches no row), and `lower`/`upper` are the
+`partition_point` ranks of the first entry `>= v` / `> v` in the sorted
+entries. Normalization rule A-Domain translates every closed operand
+compared with a domain column (in `where`, atom or negated-atom positions,
+membership items and range bounds) into a host-once capture
+`let __cq_c_i: T = ::cq_storage::domain::f(&(D), &(t));`:
+`exact` for `==`, `!=`, positions and literal membership (an `Or` of
+equalities); `lower` for `<` and `>=`; `x <= t` becomes `x < upper(t)` and
+`x > t` becomes `x >= upper(t)`; `a..b` becomes `>= lower(a) && < lower(b)`
+and `a..=b` becomes `>= lower(a) && < upper(b)`. Columns without a domain
+keep their operands unchanged. WF-Domain rejects joins and comparisons
+across domains. Unordered domains (DOOP's first-sight `IStr`, GPU Datalog
+`Symbol` codecs) do not implement `OrderedCodeDomain`, so rustc rejects an
+ordered comparison on them. `Dictionaries::literal` no longer exists:
+query setup does not translate literals by hand.
+
+`where` has no pattern operator; contains/LIKE and other opaque string
+predicates use
 `cq_load::dictionary_where(&dictionaries, "column", predicate)` during loading,
 once per distinct dictionary entry, producing code-set relations stored
 in `Data`. Execution binds those sets and joins codes instead of scanning

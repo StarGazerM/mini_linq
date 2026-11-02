@@ -122,14 +122,14 @@ fn h10_customer_revenue_matches_duckdb_without_limit() {
         let data = h10::Data {
             customer: vec![(
                 1,
-                dictionaries.literal("c_name", "C"),
+                ::cq_storage::domain::exact(dictionaries.domain("c_name"), "C"),
                 decimal(12345),
                 1,
-                dictionaries.literal("c_address", "A"),
-                dictionaries.literal("c_phone", "P"),
-                dictionaries.literal("c_comment", "X"),
+                ::cq_storage::domain::exact(dictionaries.domain("c_address"), "A"),
+                ::cq_storage::domain::exact(dictionaries.domain("c_phone"), "P"),
+                ::cq_storage::domain::exact(dictionaries.domain("c_comment"), "X"),
             )],
-            nation: vec![(1, dictionaries.literal("n_name", "N"))],
+            nation: vec![(1, ::cq_storage::domain::exact(dictionaries.domain("n_name"), "N"))],
             orders: rows
                 .iter()
                 .map(|r| {
@@ -153,8 +153,7 @@ fn h10_customer_revenue_matches_duckdb_without_limit() {
                         i64::from(r[1]),
                         decimal(r[2]),
                         decimal(r[3]),
-                        dictionaries.literal(
-                            "l_returnflag",
+                        ::cq_storage::domain::exact(dictionaries.domain("l_returnflag"),
                             &char::from_u32(r[5] as u32).unwrap().to_string(),
                         ),
                     )
@@ -239,7 +238,7 @@ fn h12_priority_counts_match_duckdb_and_date_guards() {
                 .map(|r| {
                     (
                         i64::from(r[0]),
-                        dictionaries.literal("o_orderpriority", priorities[r[6] as usize]),
+                        ::cq_storage::domain::exact(dictionaries.domain("o_orderpriority"), priorities[r[6] as usize]),
                     )
                 })
                 .collect(),
@@ -249,7 +248,7 @@ fn h12_priority_counts_match_duckdb_and_date_guards() {
                     (
                         i64::from(r[0]),
                         i64::from(r[1]),
-                        dictionaries.literal("l_shipmode", modes[r[2] as usize]),
+                        ::cq_storage::domain::exact(dictionaries.domain("l_shipmode"), modes[r[2] as usize]),
                         day(r[3]),
                         day(r[4]),
                         day(r[5]),
@@ -351,8 +350,8 @@ fn h03_radix_variants_preserve_duplicate_and_empty_answers() {
     dictionaries.insert("c_mktsegment", ["BUILDING", "AUTOMOBILE"].into_iter());
     let mut data = h03::Data {
         customer: vec![
-            (1, dictionaries.literal("c_mktsegment", "BUILDING")),
-            (2, dictionaries.literal("c_mktsegment", "AUTOMOBILE")),
+            (1, ::cq_storage::domain::exact(dictionaries.domain("c_mktsegment"), "BUILDING")),
+            (2, ::cq_storage::domain::exact(dictionaries.domain("c_mktsegment"), "AUTOMOBILE")),
         ],
         orders: vec![
             (10, 1, date("1995-03-14")),
@@ -392,9 +391,9 @@ fn h09_configurations_preserve_filtered_join_answers() {
     dictionaries.insert("p_name", ["green part", "blue part"].into_iter());
     let mut data = h09::Data {
         part: vec![
-            (1, dictionaries.literal("p_name", "green part")),
-            (2, dictionaries.literal("p_name", "blue part")),
-            (3, dictionaries.literal("p_name", "green part")),
+            (1, ::cq_storage::domain::exact(dictionaries.domain("p_name"), "green part")),
+            (2, ::cq_storage::domain::exact(dictionaries.domain("p_name"), "blue part")),
+            (3, ::cq_storage::domain::exact(dictionaries.domain("p_name"), "green part")),
         ],
         partsupp: vec![(1, 100), (2, 100), (3, 101)],
         supplier: vec![(100, 7), (101, 8)],

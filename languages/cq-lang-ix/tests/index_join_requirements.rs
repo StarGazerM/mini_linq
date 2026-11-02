@@ -127,7 +127,7 @@ fn each_definition_requires_its_terminating_semicolon() {
 fn literal_selections_are_const_reads_and_column_equalities_are_not() {
     let source: ix::Program = syn::parse_quote! {
         relational {
-            relation Customer(id: i32, segment: &'static str);
+            relation Customer(id: i32, segment: StringCode);
             c = rename Customer@0 { id -> c, segment -> segment };
             building = select c if (segment = "BUILDING");
             output building as answer(c, segment);

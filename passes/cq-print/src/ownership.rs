@@ -1,47 +1,95 @@
 //! Move shared dispatch state into each closure that needs it. Nested closures
 //! get their own handles, so repeated probes never move out of an outer closure.
+//! IF-Capture handles are shared the same way: a `move` closure reading a
+//! capture binder owns a clone of its handle (`cq_storage::capture`: a copy of
+//! a `Copy` value, else an `Arc` that tasks share across threads) and rebinds
+//! the binder pattern from it, so the answer iterator never borrows a
+//! block-local capture.
 use super::*;
 use syn::visit::Visit;
 use syn::visit_mut::VisitMut;
 
-pub fn own_captures(expression: &mut Expr, owned: &[Ident]) {
-    struct Captures<'a> {
-        owned: &'a [Ident],
+pub fn own_captures(expression: &mut Expr, owned: &[Ident], captures: &[(Ident, syn::Pat)]) {
+    struct Uses<'a> {
+        names: &'a [Ident],
         used: Vec<Ident>,
     }
-    impl<'ast> Visit<'ast> for Captures<'_> {
+    impl<'ast> Visit<'ast> for Uses<'_> {
         fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
             if let Some(ident) = path.path.get_ident() {
-                if self.owned.contains(ident) && !self.used.contains(ident) {
+                if self.names.contains(ident) && !self.used.contains(ident) {
                     self.used.push(ident.clone());
                 }
             }
         }
-    }
-    struct Owner<'a>(&'a [Ident]);
-    impl VisitMut for Owner<'_> {
-        fn visit_expr_mut(&mut self, expression: &mut Expr) {
-            syn::visit_mut::visit_expr_mut(self, expression);
-            if let Expr::Closure(closure) = expression {
-                if closure.capture.is_none() {
-                    return;
-                }
-                let mut captures = Captures {
-                    owned: self.0,
-                    used: Vec::new(),
-                };
-                captures.visit_expr(&closure.body);
-                if !captures.used.is_empty() {
-                    let used = captures.used;
-                    *expression = syn::parse_quote!({
-                        #(let #used = ::core::clone::Clone::clone(&#used);)*
-                        #closure
-                    });
+        fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+            // Opaque macro arguments may name a binder; count identifiers.
+            for token in mac.tokens.clone() {
+                if let proc_macro2::TokenTree::Ident(ident) = token {
+                    if self.names.contains(&ident) && !self.used.contains(&ident) {
+                        self.used.push(ident);
+                    }
                 }
             }
         }
     }
-    Owner(owned).visit_expr_mut(expression);
+    struct Owner<'a> {
+        owned: &'a [Ident],
+        captures: &'a [(Ident, syn::Pat)],
+        names: Vec<Vec<Ident>>,
+    }
+    impl VisitMut for Owner<'_> {
+        fn visit_expr_mut(&mut self, expression: &mut Expr) {
+            syn::visit_mut::visit_expr_mut(self, expression);
+            let Expr::Closure(closure) = expression else {
+                return;
+            };
+            if closure.capture.is_none() {
+                return;
+            }
+            let mut handles = Vec::new();
+            let mut rebinds = Vec::new();
+            for ((handle, pattern), binders) in self.captures.iter().zip(&self.names) {
+                let mut names = binders.clone();
+                names.push(handle.clone());
+                let mut uses = Uses {
+                    names: &names,
+                    used: Vec::new(),
+                };
+                uses.visit_expr(&closure.body);
+                if !uses.used.is_empty() {
+                    handles.push(handle.clone());
+                    rebinds.push(quote!(#[allow(unused_variables)] let #pattern = &*#handle;));
+                }
+            }
+            if !rebinds.is_empty() {
+                let body = &closure.body;
+                closure.body = Box::new(syn::parse_quote!({ #(#rebinds)* #body }));
+            }
+            let mut uses = Uses {
+                names: self.owned,
+                used: Vec::new(),
+            };
+            uses.visit_expr(&closure.body);
+            handles.extend(uses.used);
+            if !handles.is_empty() {
+                *expression = syn::parse_quote!({
+                    #(let #handles = ::core::clone::Clone::clone(&#handles);)*
+                    #closure
+                });
+            }
+        }
+    }
+    let names = captures
+        .iter()
+        .map(|(_, pattern)| cq_lang_structures::syntax::rust::bindings(pattern))
+        .collect();
+    Owner {
+        owned,
+        captures,
+        names,
+    }
+    .visit_expr_mut(expression);
 }
 
 /// Keep captured generator Rust intact outside fused `move` closures. Prepare

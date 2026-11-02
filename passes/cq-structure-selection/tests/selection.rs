@@ -930,7 +930,7 @@ fn built_entries(target: &structures::Program) -> structures::Structures {
 
 fn filtered_source() -> physical::Program {
     syn::parse_quote!(physical {
-        relation L(k:i32); relation R(tag:String,k:i32,value:i32,unused:i32);
+        relation L(k:i32); relation R(tag:StringCode,k:i32,value:i32,unused:i32);
         l = pipe rename L@0 {k -> k};
         r = pipe rename R@1 {tag -> tag,k -> k,value -> value,unused -> unused};
         selected = let point select r if (tag = "a");

@@ -108,21 +108,20 @@ macro_rules! runner {
                 let Supplier = data.supplier.as_slice();
                 let dictionaries = &data.dictionaries;
                 let start = date("1995-01-01"); let end = date("1995-04-01");
-                let united_states = dictionaries.literal("n_name", "UNITED STATES");
                 query! {
                     struct Query;
                     relation Lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64);
                     relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date);
                     relation Part(p_partkey: i64);
                     relation Customer(c_custkey: i64, c_nationkey: i32);
-                    relation Nation(n_nationkey: i32, n_name: cq_load::StringCode);
+                    relation Nation(n_nationkey: i32, n_name: cq_load::StringCode in (dictionaries.domain("n_name")));
                     relation Supplier(s_suppkey: i64);
                     relation answer(order_key: i64, part_key: i64, customer_key: i64, supplier_key: i64);
                     answer(order_key, part_key, customer_key, supplier_key) :-
                         Lineitem(order_key, part_key, supplier_key),
                         Orders(order_key, customer_key, order_date), where order_date >= start && order_date < end,
                         Part(part_key), Customer(customer_key, nation_key),
-                        Nation(nation_key, { united_states }),
+                        Nation(nation_key, "UNITED STATES"),
                         Supplier(supplier_key);
                 }
                 .map(|(order_key, part_key, customer_key, supplier_key,)| (*order_key, *part_key, *customer_key, *supplier_key,))

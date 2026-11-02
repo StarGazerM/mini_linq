@@ -1,33 +1,36 @@
 use crate::Data;
+use cq_load::{StringCode, StringDictionary};
+use cq_storage::domain::exact;
 use std::collections::BTreeSet;
 
+/// An owned, non-Copy label; the empty label is distinct from every node.
+fn owned(x: i32) -> Vec<i64> {
+    if x == 0 {
+        Vec::new()
+    } else {
+        vec![i64::from(x), -1]
+    }
+}
+
 pub fn check(data: &Data) {
-    // Include Unicode, punctuation, and empty strings; no integer coercion.
-    let label = |x: i32| {
-        if x == 0 {
-            String::new()
-        } else {
-            format!("node,{x}:λ")
-        }
-    };
     let edge: Vec<_> = data
         .edge
         .iter()
-        .map(|&(x, y)| (label(x), label(y)))
+        .map(|&(x, y)| (owned(x), owned(y)))
         .collect();
-    let seed: Vec<_> = data.seed.iter().map(|&(x,)| (label(x),)).collect();
+    let seed: Vec<_> = data.seed.iter().map(|&(x,)| (owned(x),)).collect();
     let oracle = ascent::ascent_run! {
-        relation edge(String, String) = edge.clone();
-        relation seed(String) = seed.clone();
-        relation answer(String);
+        relation edge(Vec<i64>, Vec<i64>) = edge.clone();
+        relation seed(Vec<i64>) = seed.clone();
+        relation answer(Vec<i64>);
         answer(x.clone()) <-- seed(x);
         answer(y.clone()) <-- answer(x), edge(x,y);
     };
     let mini: BTreeSet<_> = cq_datalog::datalog! {
             struct Owned;
-            relation edge(x:String,y:String) = (edge);
-            relation seed(x:String) = (seed);
-            relation answer(x:String);
+            relation edge(x:Vec<i64>,y:Vec<i64>) = (edge);
+            relation seed(x:Vec<i64>) = (seed);
+            relation answer(x:Vec<i64>);
             output answer;
             answer((*x).clone()) :- seed(x);
             answer((*y).clone()) :- answer(x), edge(x,y);
@@ -37,7 +40,7 @@ pub fn check(data: &Data) {
     let naive: BTreeSet<_> = crate::naive("reach", data)
         .unwrap()
         .into_iter()
-        .map(|row| (label(row[0]),))
+        .map(|row| (owned(row[0]),))
         .collect();
     assert_eq!(mini, naive);
     check_constants(data);
@@ -45,8 +48,26 @@ pub fn check(data: &Data) {
     check_delta_runs(data);
 }
 
+/// Codes of the string constants written in `check_constants`, for the Ascent
+/// mirror (Ascent has no code domains: its constants are host codes).
+struct Literals {
+    void: StringCode,
+    string_array: StringCode,
+    public: StringCode,
+    abstract_: StringCode,
+    static_: StringCode,
+    missing: StringCode,
+    absent: StringCode,
+    empty: StringCode,
+    java_string: StringCode,
+}
+
 // Differential-only cases extend the scenario/random matrices without changing
 // the integer CSV corpus or pretending a heterogeneous tuple is one relation.
+// String columns are dictionary codes: one domain per compared column family
+// (method names, which join across relations; signature types; modifier
+// kinds). Labels include Unicode, punctuation, and the empty string;
+// "missing" and "absent" are absent from their domains.
 fn check_constants(data: &Data) {
     let label = |x: i32| {
         if x == 0 {
@@ -55,68 +76,78 @@ fn check_constants(data: &Data) {
             format!("method,{x}:λ")
         }
     };
+    let labels: Vec<_> = data
+        .nodes
+        .iter()
+        .chain(&data.extra)
+        .chain(&data.seed)
+        .map(|&(x,)| x)
+        .chain(data.edge.iter().flat_map(|&(x, y)| [x, y]))
+        .map(label)
+        .collect();
+    let names = StringDictionary::new(labels.iter().map(String::as_str));
+    let types = StringDictionary::new(["void", "int", "String[]", ""]);
+    let kinds = StringDictionary::new(["public", "abstract", "static"]);
+    let texts = StringDictionary::new(["java.lang.String"]);
+    let name = |x: i32| exact(&names, &label(x));
+    let c = Literals {
+        void: exact(&types, "void"),
+        string_array: exact(&types, "String[]"),
+        public: exact(&kinds, "public"),
+        abstract_: exact(&kinds, "abstract"),
+        static_: exact(&kinds, "static"),
+        missing: exact(&kinds, "missing"),
+        absent: exact(&names, "absent"),
+        empty: exact(&names, ""),
+        java_string: exact(&texts, "java.lang.String"),
+    };
     let methods: Vec<_> = data
         .nodes
         .iter()
         .map(|&(x,)| {
             (
-                label(x),
-                if x % 2 == 0 {
-                    String::from("void")
-                } else {
-                    String::from("int")
-                },
-                if x % 3 == 0 {
-                    String::from("String[]")
-                } else {
-                    String::new()
-                },
+                name(x),
+                exact(&types, if x % 2 == 0 { "void" } else { "int" }),
+                exact(&types, if x % 3 == 0 { "String[]" } else { "" }),
             )
         })
         .collect();
     let edges: Vec<_> = data
         .edge
         .iter()
-        .map(|&(x, y)| (label(x), label(y)))
+        .map(|&(x, y)| (name(x), name(y)))
         .collect();
     let mut modifiers: Vec<_> = data
         .nodes
         .iter()
         .filter(|&&(x,)| x % 2 == 0)
-        .map(|&(x,)| (String::from("public"), label(x), 1_i32))
+        .map(|&(x,)| (c.public, name(x), 1_i32))
         .collect();
-    modifiers.extend(
-        data.extra
-            .iter()
-            .map(|&(x,)| (String::from("abstract"), label(x), 7)),
-    );
-    modifiers.extend(
-        data.seed
-            .iter()
-            .map(|&(x,)| (String::from("static"), label(x), 2)),
-    );
+    modifiers.extend(data.extra.iter().map(|&(x,)| (c.abstract_, name(x), 7)));
+    modifiers.extend(data.seed.iter().map(|&(x,)| (c.static_, name(x), 2)));
     let oracle = ascent::ascent_run! {
-        relation method(String,String,String) = methods.clone();
-        relation edge(String,String) = edges.clone();
-        relation modifier(String,String,i32) = modifiers.clone();
-        relation concrete(String);
-        relation reach(String);
-        relation descriptor(String,String);
-        relation main_method(String);
-        relation no_static(String);
-        relation absent(String);
-        relation present(String);
-        relation literal(String,String,i32,bool);
-        concrete(type_.clone()) <-- method(type_,_return_type,_parameters), !modifier("abstract".to_owned(),type_,_);
-        reach(type_.clone()) <-- modifier("public".to_owned(),type_,1), !modifier("abstract".to_owned(),type_,_);
-        reach(super_.clone()) <-- reach(type_), edge(type_,super_), !modifier("abstract".to_owned(),super_,_);
-        descriptor(type_.clone(),format!("{}({})",ret,params)) <-- concrete(type_), method(type_,ret,params);
-        main_method(type_.clone()) <-- method(type_,"void".to_owned(),"String[]".to_owned());
-        no_static(type_.clone()) <-- method(type_,_return_type,_parameters), !modifier("static".to_owned(),type_,_);
-        absent(type_.clone()) <-- method(type_,_return_type,_parameters), !modifier("missing".to_owned(),_,_), !modifier("abstract".to_owned(),"absent".to_owned(),7);
-        present(type_.clone()) <-- method(type_,_return_type,_parameters), !modifier("static".to_owned(),"".to_owned(),2);
-        literal(type_.clone(),"java.lang.String".to_owned(),-7,true) <-- concrete(type_);
+        relation method(StringCode,StringCode,StringCode) = methods.clone();
+        relation edge(StringCode,StringCode) = edges.clone();
+        relation modifier(StringCode,StringCode,i32) = modifiers.clone();
+        relation concrete(StringCode);
+        relation reach(StringCode);
+        relation descriptor(StringCode,Vec<StringCode>);
+        relation main_method(StringCode);
+        relation no_static(StringCode);
+        relation absent(StringCode);
+        relation present(StringCode);
+        relation literal(StringCode,StringCode,i32,bool);
+        concrete(*type_) <-- method(type_,_return_type,_parameters), !modifier(c.abstract_,type_,_);
+        reach(*type_) <-- modifier(c.public,type_,1), !modifier(c.abstract_,type_,_);
+        reach(*super_) <-- reach(type_), edge(type_,super_), !modifier(c.abstract_,super_,_);
+        descriptor(*type_,vec![*ret,*params]) <-- concrete(type_), method(type_,ret,params);
+        main_method(*type_) <-- method(type_,c.void,c.string_array);
+        no_static(*type_) <-- method(type_,_return_type,_parameters), !modifier(c.static_,type_,_);
+        absent(*type_) <-- method(type_,_return_type,_parameters), !modifier(c.missing,_,_), !modifier(c.abstract_,c.absent,7);
+        present(*type_) <-- method(type_,_return_type,_parameters), !modifier(c.static_,c.empty,2);
+        literal(*type_,c.java_string,-7,true) <-- concrete(type_);
     };
+    let java_string = c.java_string;
     let (
         descriptor,
         reach,
@@ -130,27 +161,27 @@ fn check_constants(data: &Data) {
         modifier,
     ) = cq_datalog::datalog! {
         struct Constants;
-        relation Method(name:String,result:String,params:String) = (methods);
-        relation Edge(caller:String,callee:String) = (edges);
-        relation Modifier(kind:String,name:String,flag:i32) = (modifiers);
-        relation Concrete(name:String);
-        relation Reach(name:String);
-        relation Descriptor(name:String,text:String);
-        relation MainMethod(name:String);
-        relation NoStatic(name:String);
-        relation Absent(name:String);
-        relation Present(name:String);
-        relation Literal(name:String,text:String,flag:i32,enabled:bool);
+        relation Method(name:cq_load::StringCode in (names),result:cq_load::StringCode in (types),params:cq_load::StringCode in (types)) = (methods);
+        relation Edge(caller:cq_load::StringCode in (names),callee:cq_load::StringCode in (names)) = (edges);
+        relation Modifier(kind:cq_load::StringCode in (kinds),name:cq_load::StringCode in (names),flag:i32) = (modifiers);
+        relation Concrete(name:cq_load::StringCode in (names));
+        relation Reach(name:cq_load::StringCode in (names));
+        relation Descriptor(name:cq_load::StringCode in (names),signature:Vec<cq_load::StringCode>);
+        relation MainMethod(name:cq_load::StringCode in (names));
+        relation NoStatic(name:cq_load::StringCode in (names));
+        relation Absent(name:cq_load::StringCode in (names));
+        relation Present(name:cq_load::StringCode in (names));
+        relation Literal(name:cq_load::StringCode in (names),text:cq_load::StringCode,flag:i32,enabled:bool);
         output Descriptor, Reach, Concrete, MainMethod, NoStatic, Absent, Present, Literal, Method, Modifier;
-        Concrete((*type_).clone()) :- Method(type_,_,_), !Modifier("abstract",type_,_);
-        Reach((*type_).clone()) :- Modifier("public",type_,1), !Modifier("abstract",type_,_);
-        Reach((*super_).clone()) :- Reach(type_), Edge(type_,super_), !Modifier("abstract",super_,_);
-        Descriptor((*type_).clone(),format!("{}({})",ret,params)) :- Concrete(type_), Method(type_,ret,params);
-        MainMethod((*type_).clone()) :- Method(type_,"void","String[]");
-        NoStatic((*type_).clone()) :- Method(type_,_,_), !Modifier(String::from("static"),type_,_);
-        Absent((*type_).clone()) :- Method(type_,_,_), !Modifier("missing",_,_), !Modifier("abstract","absent",7);
-        Present((*type_).clone()) :- Method(type_,_,_), !Modifier("static","",2);
-        Literal((*type_).clone(),"java.lang.String".to_owned(),-7,true) :- Concrete(type_);
+        Concrete(*type_) :- Method(type_,_,_), !Modifier("abstract",type_,_);
+        Reach(*type_) :- Modifier("public",type_,1), !Modifier("abstract",type_,_);
+        Reach(*super_) :- Reach(type_), Edge(type_,super_), !Modifier("abstract",super_,_);
+        Descriptor(*type_,vec![*ret,*params]) :- Concrete(type_), Method(type_,ret,params);
+        MainMethod(*type_) :- Method(type_,"void","String[]");
+        NoStatic(*type_) :- Method(type_,_,_), !Modifier(String::from("static"),type_,_);
+        Absent(*type_) :- Method(type_,_,_), !Modifier("missing",_,_), !Modifier("abstract","absent",7);
+        Present(*type_) :- Method(type_,_,_), !Modifier("static","",2);
+        Literal(*type_,{ java_string },-7,true) :- Concrete(type_);
     };
     assert_eq!(
         descriptor.collect::<BTreeSet<_>>(),
@@ -199,9 +230,10 @@ fn assert_set<T: Ord + std::fmt::Debug>(
 }
 
 // Every scenario (including empty and random graphs) exercises duplicate grouped
-// inputs, several EDB layouts, projected negation, recursion, and EDB outputs.
+// inputs, several EDB layouts, projected negation, recursion, and EDB outputs
+// over owned non-Copy columns.
 fn check_canonical_inputs(data: &Data) {
-    let label = |x: i32| format!("node,{x}:λ");
+    let label = |x: i32| vec![i64::from(x), -2];
     let edge: Vec<_> = data
         .edge
         .iter()
@@ -217,12 +249,12 @@ fn check_canonical_inputs(data: &Data) {
         grouped.entry((x.clone(),)).or_default().push((y.clone(),));
     }
     let oracle = ascent::ascent_run! {
-        relation edge(String,String) = edge;
-        relation node(String) = nodes.clone();
-        relation paths(String,String);
-        relation shared(String,String);
-        relation missing(String);
-        relation reach(String,String);
+        relation edge(Vec<i64>,Vec<i64>) = edge;
+        relation node(Vec<i64>) = nodes.clone();
+        relation paths(Vec<i64>,Vec<i64>);
+        relation shared(Vec<i64>,Vec<i64>);
+        relation missing(Vec<i64>);
+        relation reach(Vec<i64>,Vec<i64>);
         paths(x.clone(),z.clone()) <-- edge(x,y), edge(y,z);
         shared(x.clone(),z.clone()) <-- edge(x,y), edge(z,y);
         missing(x.clone()) <-- node(x), !edge(x,_);
@@ -231,12 +263,12 @@ fn check_canonical_inputs(data: &Data) {
     };
     let (facts, domain, paths, shared, missing, reach) = cq_datalog::datalog! {
         struct CanonicalInputs;
-        relation E(x:String,y:String) = (&grouped);
-        relation D(x:String) = (&nodes);
-        relation Paths(x:String,z:String);
-        relation Shared(x:String,z:String);
-        relation Missing(x:String);
-        relation Reach(x:String,y:String);
+        relation E(x:Vec<i64>,y:Vec<i64>) = (&grouped);
+        relation D(x:Vec<i64>) = (&nodes);
+        relation Paths(x:Vec<i64>,z:Vec<i64>);
+        relation Shared(x:Vec<i64>,z:Vec<i64>);
+        relation Missing(x:Vec<i64>);
+        relation Reach(x:Vec<i64>,y:Vec<i64>);
         output E, D, Paths, Shared, Missing, Reach;
         Paths((*x).clone(),(*z).clone()) :- E(x,y), E(y,z);
         Shared((*x).clone(),(*z).clone()) :- E(x,y), E(z,y);
@@ -252,7 +284,7 @@ fn check_canonical_inputs(data: &Data) {
     assert_set(reach, oracle.reach);
     let single = cq_datalog::datalog! {
         struct Facts;
-        relation E(x:String,y:String) = (&grouped);
+        relation E(x:Vec<i64>,y:Vec<i64>) = (&grouped);
         output E;
     };
     assert_set(
@@ -263,10 +295,10 @@ fn check_canonical_inputs(data: &Data) {
     );
 }
 
-// The same per-round String-keyed run serves nonlinear and linear holes,
+// The same per-round non-Copy-keyed run serves nonlinear and linear holes,
 // alongside reversed keys and a later zero-key delta in a mutual SCC.
 fn check_delta_runs(data: &Data) {
-    let label = |x: i32| format!("delta,{x}:λ");
+    let label = |x: i32| vec![i64::from(x), -3];
     let edges: Vec<_> = data
         .edge
         .iter()
@@ -274,9 +306,9 @@ fn check_delta_runs(data: &Data) {
         .collect();
     let flags = vec![(7_i32,), (7,)];
     let oracle = ascent::ascent_run! {
-        relation edge(String,String,i32) = edges.clone();
+        relation edge(Vec<i64>,Vec<i64>,i32) = edges.clone();
         relation flag_input(i32) = flags.clone();
-        relation reach(String,String);
+        relation reach(Vec<i64>,Vec<i64>);
         relation flag(i32);
         reach(x.clone(),y.clone()) <-- edge(x,y,_divisor);
         reach(x.clone(),z.clone()) <-- reach(x,y), reach(y,z);
@@ -288,9 +320,9 @@ fn check_delta_runs(data: &Data) {
     };
     let (reach, flags) = cq_datalog::datalog! {
         struct DeltaRuns;
-        relation Edge(x:String,y:String,divisor:i32) = (&edges);
+        relation Edge(x:Vec<i64>,y:Vec<i64>,divisor:i32) = (&edges);
         relation FlagInput(flag:i32) = (&flags);
-        relation Reach(x:String,y:String);
+        relation Reach(x:Vec<i64>,y:Vec<i64>);
         relation Flag(flag:i32);
         output Reach, Flag;
         Reach((*x).clone(),(*y).clone()) :- Edge(x,y,_);

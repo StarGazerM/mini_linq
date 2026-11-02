@@ -493,36 +493,32 @@ fn construct(
                                 .iter()
                                 .map(|&i| {
                                     let variable = &variables[i];
-                                    let ty = &source.incremental.strata.source.declarations
+                                    let column = &source.incremental.strata.source.declarations
                                         [relation]
-                                        .columns[i]
-                                        .ty;
+                                        .columns[i];
+                                    let (ty, domain) = (&column.ty, &column.domain);
                                     // Batch arenas own their scalar key columns;
                                     // host key sets retain borrowed projections.
+                                    // A key column keeps its authored code domain.
                                     if interface == HoleInterface::Batch {
-                                        quote!(#variable: #ty)
+                                        quote!(#variable: #ty #domain)
                                     } else {
-                                        quote!(#variable: &#ty)
+                                        quote!(#variable: &#ty #domain)
                                     }
                                 })
                                 .collect(),
                         )
                     };
-                    // Literals stay in the filtered occurrence. Nonliteral
-                    // expressions compare after scanning so owned values cannot
-                    // move through an FnMut fanout closure.
-                    let mut arguments: Vec<syn::Expr> = variables
+                    // Every key filter compares after scanning, so owned
+                    // values cannot move through an FnMut fanout closure.
+                    let arguments: Vec<syn::Expr> = variables
                         .iter()
                         .map(|variable| syn::parse_quote!(#variable))
                         .collect();
                     let mut selections = Vec::new();
                     for (column, expression) in &key.filters {
-                        if cq_syntax::equality::literal(cq_syntax::rust::unparen(expression)) {
-                            arguments[*column] = cq_syntax::rust::unparen(expression).clone();
-                        } else {
-                            let variable = &variables[*column];
-                            selections.push(quote!(where #variable == (#expression)));
-                        }
+                        let variable = &variables[*column];
+                        selections.push(quote!(where #variable == (#expression)));
                     }
                     for &(first, repeated) in &key.equalities {
                         let first = &variables[first];

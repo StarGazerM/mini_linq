@@ -1,0 +1,43 @@
+program h09 {
+    domain PartName = dictionary(part.p_name);
+    input Lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64) = table(lineitem);
+    input PartSupp(ps_partkey: i64, ps_suppkey: i64) = table(partsupp);
+    input Part(p_partkey: i64, p_name: cq_load::StringCode in PartName) = table(part);
+    input Supplier(s_suppkey: i64, s_nationkey: i32) = table(supplier);
+    input Orders(o_orderkey: i64) = table(orders);
+    input Nation(n_nationkey: i32) = table(nation);
+    input GreenNames(name: cq_load::StringCode in PartName) = dictionary(PartName) where { |value: &str| {
+            value.contains("green")
+        } };
+    stage s0 {
+        inputs {
+            Lineitem = Lineitem;
+            PartSupp = PartSupp;
+            Part = Part;
+            Supplier = Supplier;
+            Orders = Orders;
+            Nation = Nation;
+            GreenNames = GreenNames;
+        }
+        captures [];
+        evidence {}
+        cq {
+            struct Query;
+            relation Lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64);
+            relation PartSupp(ps_partkey: i64, ps_suppkey: i64);
+            relation Part(p_partkey: i64, p_name: cq_load::StringCode);
+            relation Supplier(s_suppkey: i64, s_nationkey: i32);
+            relation Orders(o_orderkey: i64);
+            relation Nation(n_nationkey: i32);
+            relation GreenNames(name: cq_load::StringCode);
+            relation answer(order_key: i64, part_key: i64, supplier_key: i64);
+            answer(order_key, part_key, supplier_key) :-
+                Part(part_key, part_name), GreenNames(part_name),
+                Lineitem(order_key, part_key, supplier_key), PartSupp(part_key, supplier_key),
+                Orders(order_key), Supplier(supplier_key, nation_key), Nation(nation_key);
+        }
+    }
+    terminal {
+        from s0 project [column(0), column(1), column(2)] dictionaries [];
+    }
+}

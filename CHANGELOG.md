@@ -148,6 +148,54 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   at 16 bits and otherwise retains plain native-width ordinals. Runtime law
   tests cover inverse decoding, enclosure and predicate preservation; no
   compiler selection or source migration is part of this slice.
+- GPU TPC-H source authoring moves to 26 explicit `queries/*.stages` programs.
+  The checked, printable frontend records table/dictionary/host producers,
+  captures, stage dependencies, owned publications and terminal projections.
+  It no longer discovers stages through Rust `map`/`collect`/`chain`, follows
+  `data`/`load` conventions, strips dereferences/`clone`/dictionary publication,
+  or evaluates calls named `date`. Dictionary domains feed shared CQ
+  host-once operand normalization; Rust payloads remain opaque. Reports retain
+  the authored stage record alongside each Sequence and publication record.
+  Independent CPU queries remain exactness references, not compiler input.
+- Strings are always interned (A-Domain, WF-Domain; clean cutover). A column
+  declaration may name its code domain, `c: StringCode in (D)`, with `D` a
+  query-closed `cq_storage::CodeDomain`. CQ normalization translates every
+  closed operand compared with such a column (in `where`, atoms, negated
+  atoms, membership and ranges) into one host-once capture
+  `::cq_storage::domain::{exact,lower,upper}(&(D), &(t))`; `<=`/`>` use
+  `upper`, ranges `lower`/`upper`, literal membership becomes equalities.
+  WF-Domain rejects joins and comparisons across domains. Ordered
+  translation needs `OrderedCodeDomain`, which `StringDictionary`
+  implements (absent `exact` is `StringCode::MAX`, bounds are sorted ranks)
+  and unordered domains such as DOOP `IStr` do not. Removed with no
+  replacement branch: `StringValue`, `relational_string_eq`,
+  `relational_str_cmp`, `StringLiteral`, the `&str` `PredicateValue`
+  adapters, `Dictionaries::literal` (use `Dictionaries::domain`), every
+  printer string branch (a string bound no longer forces a scan), the
+  literal-value union disjointness proof (only fallback construction proves
+  disjointness), the `Expr::Lit` tests in aggregate `constant_group`
+  (keys must be A-Capture-recorded lets) and GPU closed extraction, and
+  Datalog fork literal key embedding (`where v == (e)` after the scan).
+  P5 S0: 17 TPC-H sources write their literals in atoms/`where` over
+  declared dictionary domains, and typed_* workloads intern text.
+  contains/LIKE stay load-time `dictionary_where` code sets. A selection
+  equating a column with a closed operand (any capture, including every
+  A-Domain code) is a point-read key like a literal (`Select::constant_keys`
+  returns `Term`s): leading map keys read directly through
+  `cq_storage::dispatch::BorrowedPointRead`, which owns the borrowed key once
+  per read (`OwnKey`) and otherwise falls back to the scan. IF-Capture binds
+  each `let` capture in a handle that `move` closures clone and rebind
+  (`cq_print::own_captures` takes the handles), so a lazy answer is no
+  longer collected because of a capture. The printer emits
+  `cq_storage::capture::Value::new(c).share()` for every capture and Rust
+  method resolution picks the handle: a `Copy` value is its own handle
+  (nothing is allocated), any other value shares one `Arc` (an `Arc` for
+  every capture made CPU `retail_h07` 1.058 [1.047, 1.137] slower than
+  `c395fe83`; with the handle choice it is 0.961 [0.805, 1.104] against
+  `17a14b93`). GPU TPC-H timing now includes the final answer download for
+  every query (the stage frontend times every stage's `to_host`, which the
+  removed standalone path did not); paired GPU comparisons use a base built
+  with the same boundary.
 - Query-closed values are host captures (A-Capture, A-CaptureRef,
   WF-Capture, IF-Capture). CQ normalization records a top-level `let`/`if`
   that reads no query variable, a closed head operand and a closed aggregate

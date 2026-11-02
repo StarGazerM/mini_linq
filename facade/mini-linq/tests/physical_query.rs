@@ -292,12 +292,12 @@ mod computed {
     pub(super) fn run<'a>(
         R: &'a [(i32, i32)],
         S: &'a [(i32, i32)],
-    ) -> Vec<(&'a i32, String, &'a i32)> {
+    ) -> Vec<(&'a i32, Vec<i32>, &'a i32)> {
         ::core::iter::Iterator::collect(::mini_linq::compile! { pipeline {  }
             struct Computed;
             relation R(a: i32, b: i32);
             relation S(b: i32, c: i32);
-            answer(a, s, c) :- R(a, b), S(b, c), let s: String = format!("{}", a);
+            answer(a, s, c) :- R(a, b), S(b, c), let s: Vec<i32> = vec![*a];
         })
     }
 }
@@ -306,7 +306,7 @@ mod computed {
 fn computed_columns_follow_the_head_order() {
     assert_eq!(
         computed::run(&[(1, 2), (1, 2)], &[(2, 3)]),
-        vec![(&1, "1".to_string(), &3)]
+        vec![(&1, vec![1], &3)]
     );
 }
 

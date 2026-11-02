@@ -82,6 +82,7 @@
 
 mod answers;
 mod candidates;
+pub mod capture;
 macro_rules! count {
     ($field:ident) => {
         #[cfg(feature = "counters")]
@@ -182,88 +183,82 @@ pub fn relational_cmp<T: Ord + ?Sized>(left: &T, right: &T) -> std::cmp::Orderin
     left.cmp(right)
 }
 
-mod string_literal {
-    pub trait Sealed {}
-    impl Sealed for str {}
-    impl Sealed for String {}
-    impl<T: super::StringValue + ?Sized> Sealed for &T {}
+/// Code domains: the authored value→code map of an interned column.
+///
+/// A column whose declaration names a domain (`col: Ty in (D)`) stores codes.
+/// CQ normalization (A-Domain) translates every closed operand compared with
+/// that column once on the host through these functions; execution then compares
+/// codes with [`relational_eq`]/[`relational_cmp`]. `exact` maps an absent value
+/// to a code no stored value has. `lower`/`upper` exist only for domains whose
+/// code order is the value order (sorted dictionaries); for a present or absent
+/// value `v`: `x < v ⇔ code(x) < lower(v)`, `x >= v ⇔ code(x) >= lower(v)`,
+/// `x <= v ⇔ code(x) < upper(v)`, `x > v ⇔ code(x) >= upper(v)`.
+pub trait CodeDomain {
+    type Value: ?Sized;
+    type Code;
+    /// The code of `value`, or a code assigned to no stored value.
+    fn exact(&self, value: &Self::Value) -> Self::Code;
 }
 
-/// The standard string representations accepted beside a string literal.
-/// Sealing excludes arbitrary user conversions or cross-type PartialEq code.
-pub trait StringValue: string_literal::Sealed {
-    fn string_value(&self) -> &str;
+/// An order-preserving [`CodeDomain`]: codes sort exactly as their values.
+/// Unordered domains (first-sight interners) do not implement it, so ordered
+/// `where` comparisons on their columns are rejected by rustc.
+pub trait OrderedCodeDomain: CodeDomain {
+    /// The least code whose value is not less than `value`.
+    fn lower(&self, value: &Self::Value) -> Self::Code;
+    /// The least code whose value is greater than `value`.
+    fn upper(&self, value: &Self::Value) -> Self::Code;
 }
-impl StringValue for str {
-    fn string_value(&self) -> &str {
-        self
+
+impl<T: CodeDomain + ?Sized> CodeDomain for &T {
+    type Value = T::Value;
+    type Code = T::Code;
+    fn exact(&self, value: &Self::Value) -> Self::Code {
+        T::exact(*self, value)
     }
 }
-impl StringValue for String {
-    fn string_value(&self) -> &str {
-        self.as_str()
+impl<T: OrderedCodeDomain + ?Sized> OrderedCodeDomain for &T {
+    fn lower(&self, value: &Self::Value) -> Self::Code {
+        T::lower(*self, value)
     }
-}
-impl<T: StringValue + ?Sized> StringValue for &T {
-    fn string_value(&self) -> &str {
-        T::string_value(*self)
+    fn upper(&self, value: &Self::Value) -> Self::Code {
+        T::upper(*self, value)
     }
 }
 
-pub fn relational_string_eq<L: Eq + StringValue + ?Sized, R: Eq + StringValue + ?Sized>(
-    left: &L,
-    right: &R,
-) -> bool {
-    left.string_value() == right.string_value()
-}
-/// String literals compare the contents of standard String/str values.
-pub fn relational_str_cmp<L: Ord + StringValue + ?Sized, R: Ord + StringValue + ?Sized>(
-    left: &L,
-    right: &R,
-) -> std::cmp::Ordering {
-    left.string_value().cmp(right.string_value())
-}
+/// Host-once operand translation printed by A-Domain captures.
+pub mod domain {
+    use super::{CodeDomain, OrderedCodeDomain};
+    use std::borrow::Borrow;
 
-/// Backing storage for a literal's string representation. Generated static
-/// cells own the storage; references are borrowed, never leaked or cloned.
-pub trait StringLiteral {
-    type Storage: Send + Sync + 'static;
-    fn storage(value: &'static str) -> Self::Storage;
-    fn reference(storage: &'static Self::Storage) -> &'static Self;
-}
-impl StringLiteral for String {
-    type Storage = String;
-    fn storage(value: &'static str) -> Self::Storage {
-        value.to_owned()
+    pub fn exact<D, V>(domain: &D, value: &V) -> D::Code
+    where
+        D: CodeDomain + ?Sized,
+        V: Borrow<D::Value> + ?Sized,
+    {
+        domain.exact(value.borrow())
     }
-    fn reference(storage: &'static Self::Storage) -> &'static Self {
-        storage
+    pub fn lower<D, V>(domain: &D, value: &V) -> D::Code
+    where
+        D: OrderedCodeDomain + ?Sized,
+        V: Borrow<D::Value> + ?Sized,
+    {
+        domain.lower(value.borrow())
     }
-}
-impl StringLiteral for str {
-    type Storage = &'static str;
-    fn storage(value: &'static str) -> Self::Storage {
-        value
-    }
-    fn reference(storage: &'static Self::Storage) -> &'static Self {
-        storage
-    }
-}
-impl<T: StringLiteral + Sync + ?Sized + 'static> StringLiteral for &'static T {
-    type Storage = (T::Storage, std::sync::OnceLock<&'static T>);
-    fn storage(value: &'static str) -> Self::Storage {
-        (T::storage(value), std::sync::OnceLock::new())
-    }
-    fn reference(storage: &'static Self::Storage) -> &'static Self {
-        storage.1.get_or_init(|| T::reference(&storage.0))
+    pub fn upper<D, V>(domain: &D, value: &V) -> D::Code
+    where
+        D: OrderedCodeDomain + ?Sized,
+        V: Borrow<D::Value> + ?Sized,
+    {
+        domain.upper(value.borrow())
     }
 }
 
 /// Encode a host operand into a recorded column key representation.
 ///
 /// The representation law requires this conversion to preserve the equality
-/// and ordering used by `Column::key`. Identity keys clone their value; string
-/// views borrow their contents. Providers may implement additional codecs.
+/// and ordering used by `Column::key`. Identity keys clone their value.
+/// Providers may implement additional codecs.
 pub trait PredicateValue<'a, K> {
     fn predicate_value(&'a self) -> K;
 }
@@ -272,23 +267,8 @@ impl<'a, K: Clone> PredicateValue<'a, K> for K {
         self.clone()
     }
 }
-impl<'a> PredicateValue<'a, &'a str> for String {
-    fn predicate_value(&'a self) -> &'a str {
-        self.as_str()
-    }
-}
-impl<'a> PredicateValue<'a, &'a str> for str {
-    fn predicate_value(&'a self) -> &'a str {
-        self
-    }
-}
-impl<'a> PredicateValue<'a, &'a str> for &String {
-    fn predicate_value(&'a self) -> &'a str {
-        self.as_str()
-    }
-}
 
-// Encoding only: cq-print supplies closed host operands; PredicateValue's identity/string-view adapters do not decode row values.
+// Encoding only: cq-print supplies closed host operands; the identity PredicateValue does not decode row values.
 pub fn encode_predicate<'a, H, C, T>(_: H, _: C, value: &'a T) -> C::Key
 where
     H: PositionalRows,

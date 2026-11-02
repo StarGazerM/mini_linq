@@ -538,7 +538,7 @@ fn le_h05_plan_b_keeps_nation_as_an_existential_lookup() {
         relation Lineitem(l_orderkey:i64,l_suppkey:i64);
         relation Supplier(s_suppkey:i64,s_nationkey:i64);
         relation Nation(n_nationkey:i64,n_regionkey:i64);
-        relation Region(r_regionkey:i64,r_name:String);
+        relation Region(r_regionkey:i64,r_name:StringCode);
         answer(order_key,supplier_key,nation_key) :-
             Customer(customer_key,nation_key), Nation(nation_key,region_key),
             Region(region_key,"ASIA"), Orders(order_key,customer_key,order_date),

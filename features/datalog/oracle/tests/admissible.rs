@@ -147,12 +147,12 @@ macro_rules! computed {
     ($engine:ident, $rows:ident) => {
         $engine! {
             struct Computed;
-            relation Input(label:String,n:i32) = (&$rows);
-            relation Result(label:String,n:i32);
+            relation Input(label:Vec<i64>,n:i32) = (&$rows);
+            relation Result(label:Vec<i64>,n:i32);
             relation Independent(n:i32);
             output Result;
             Result(label.clone(), next) :- Input(label,n), where n < 3,
-                let prefix = label.to_uppercase(), for extra in 0..2,
+                let prefix = label.repeat(2), for extra in 0..2,
                 let next = *n + extra, if !prefix.is_empty();
             Result(label.clone(), *n + 1) :- Result(label,n), where n < 4;
             Independent(*n) :- Input(_,n);
@@ -161,21 +161,22 @@ macro_rules! computed {
 }
 
 #[test]
-fn opaque_rust_strings_generators_and_computed_recursive_heads() {
+fn opaque_rust_values_generators_and_computed_recursive_heads() {
     ascent::ascent! {
         struct Oracle;
-        relation input(String,i32);
-        relation result(String,i32);
+        relation input(Vec<i64>,i32);
+        relation result(Vec<i64>,i32);
         result(label.clone(), next) <-- input(label,n), if *n < 3,
-            let prefix = label.to_uppercase(), for extra in 0..2,
+            let prefix = label.repeat(2), for extra in 0..2,
             let next = *n + extra, if !prefix.is_empty();
         result(label.clone(), *n + 1) <-- result(label,n), if *n < 4;
     }
+    // Owned non-Copy labels; the empty label is rejected by the opaque guard.
     let rows = vec![
-        ("alpha".to_owned(), 0),
-        ("alpha".to_owned(), 0),
-        ("".to_owned(), 1),
-        ("beta".to_owned(), 2),
+        (vec![1_i64], 0),
+        (vec![1_i64], 0),
+        (Vec::new(), 1),
+        (vec![2_i64], 2),
     ];
     let mut oracle = Oracle {
         input: rows.clone(),

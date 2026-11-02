@@ -38,13 +38,19 @@ pub(crate) struct Printed {
     pub disabled: BTreeMap<usize, TokenStream>,
 }
 
+/// The host value of a closed operand. Query captures are bound once as `&T`
+/// (closed-capture convention), other closed operands as values; borrowing
+/// the operand at the column's logical type accepts both by deref coercion.
 fn value_carrier(expression: &Expr, logical: &Type, codec: Option<&Type>) -> (Type, TokenStream) {
     match codec {
         Some(codec) => (
             syn::parse_quote!(u32),
             quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#logical>>::code(&(#expression))),
         ),
-        None => (logical.clone(), quote!(#expression)),
+        None => (
+            logical.clone(),
+            quote!(<#logical as ::core::clone::Clone>::clone(&(#expression))),
+        ),
     }
 }
 
@@ -95,7 +101,13 @@ pub(crate) fn print(records: &[Capture]) -> Printed {
             } => {
                 let closed = closed.iter().enumerate().map(|(at, expression)| {
                     let name = format_ident!("__cq_closed_{at}");
-                    quote!(let #name = __cq_enabled.then(|| #expression);)
+                    // A disabled witness only fixes the Rust type; MaybeUninit
+                    // carries no discriminant (cuda-oxide rejects 128-bit ones).
+                    quote!(let #name = if __cq_enabled {
+                        ::core::mem::MaybeUninit::new(#expression)
+                    } else {
+                        ::core::mem::MaybeUninit::uninit()
+                    };)
                 });
                 let names = reads.iter().map(|(name, _)| name);
                 let types: Vec<_> = reads.iter().map(|(_, ty)| ty).collect();
@@ -342,16 +354,15 @@ impl Captures {
         }
         impl VisitMut for Closed {
             fn visit_expr_mut(&mut self, expression: &mut Expr) {
-                if !matches!(expression, Expr::Lit(_))
-                    && rust::free_variables(expression)
-                        .dependencies(&self.scope)
-                        .is_empty()
+                if rust::free_variables(expression)
+                    .dependencies(&self.scope)
+                    .is_empty()
                 {
                     let name = format_ident!("__cq_closed_{}", self.closed.len());
                     self.closed.push(expression.clone());
                     // The launch domain enables every callable used by a live
                     // row. Disabled witnesses establish only its Rust type.
-                    *expression = syn::parse_quote!(unsafe { #name.unwrap_unchecked() });
+                    *expression = syn::parse_quote!(unsafe { #name.assume_init() });
                     return;
                 }
                 syn::visit_mut::visit_expr_mut(self, expression);
@@ -555,7 +566,9 @@ mod tests {
         let setup = printed.setup.to_string();
         assert!(setup.contains("opaque (* x)"), "{setup}");
         assert!(
-            setup.contains("let __cq_closed_0 = __cq_enabled . then (|| host_value ())"),
+            setup.contains(
+                "let __cq_closed_0 = if __cq_enabled { :: core :: mem :: MaybeUninit :: new (host_value ()) }"
+            ),
             "{setup}"
         );
         assert!(!setup.contains("wrapping"));

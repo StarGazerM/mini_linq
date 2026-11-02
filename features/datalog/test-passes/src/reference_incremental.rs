@@ -16,6 +16,7 @@ pub fn emit(program: &incremental::Program) -> syn::Result<TokenStream> {
     let changed = fresh.id("reference_changed");
     let mut positions = analysis.positions.clone();
     let mut initial = Vec::new();
+    let mut domains = super::reference::domains(&source.declarations);
     for declaration in &source.declarations {
         let types = declaration.columns.iter().map(|c| &c.ty);
         let tuple = quote!((#(#types,)*));
@@ -31,6 +32,8 @@ pub fn emit(program: &incremental::Program) -> syn::Result<TokenStream> {
     }
     for delta in &program.deltas {
         positions.insert(symbol_name(&delta.name), initial.len());
+        let relation = domains[&symbol_name(&delta.relation)].clone();
+        domains.insert(symbol_name(&delta.name), relation);
         let declaration = &source.declarations[analysis.positions[&symbol_name(&delta.relation)]];
         let types = declaration.columns.iter().map(|c| &c.ty);
         initial.push(quote!(::std::collections::HashSet::<(#(#types,)*)>::new()));
@@ -60,6 +63,7 @@ pub fn emit(program: &incremental::Program) -> syn::Result<TokenStream> {
                 super::reference::Inputs {
                     state: &state,
                     positions: &positions,
+                    domains: &domains,
                     borrowed_negative_inputs: &[],
                 },
                 BTreeMap::new(),

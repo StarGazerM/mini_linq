@@ -1,0 +1,1686 @@
+{
+ "version": 1,
+ "definitions": {
+  "interned-domain-capture": {
+   "kind": "intended",
+   "description": "InternedStrings/P5 S0 (A-Domain, IF-Capture): the hand-written `data.dictionaries.literal(col, s)` lets and their `__cq_parameter_N = &x` bindings are replaced by host-once A-Domain captures `let __cq_capture_N: StringCode = ::cq_storage::domain::exact(&(dictionaries.domain(col)), &(s)); let __cq_c_N = &__cq_capture_N;`; relational comparisons read __cq_c_N instead of __cq_parameter_N (renumbered); same codes, same predicates and operator order"
+  },
+  "interned-renumber": {
+   "kind": "refactor",
+   "description": "InternedStrings renumbering only: inserted capture bindings shift generated ordinals (__cq_parameter_N, __cq_rN_*, __cq_generated_N, ...); token streams equal modulo these ordinals"
+  },
+  "interned-h19-where": {
+   "kind": "intended",
+   "description": "P5 S0 retail_h19: the opaque Rust `if` over code lets becomes one relational `where` over A-Domain captures and closed Decimal bounds; the plan and realization change (selection before the part join, no part_key fallback HashIndex), measured by exactness and paired timing"
+  },
+  "interned-typed": {
+   "kind": "intended",
+   "description": "InternedStrings typed_* workloads: text columns are interned at load through a generated loader (`intern(.., &mut dictionaries)`) and decoded once at publication (`dictionaries.publish(col, code)`) instead of query-time `to_string`"
+  },
+  "interned-capture-handle": {
+   "kind": "intended",
+   "description": "IF-Capture ownership: a `let` capture is bound as `let c = T-expr; let c = { use ::cq_storage::capture::{ShareArc as _, ShareCopy as _}; ::cq_storage::capture::Value::new(c).share() }; let p = &*c;` (Rust method resolution: a Copy value is its own handle, other values share one Arc) and every `move` closure that reads p (or c) owns `let c = Clone::clone(&c);` and rebinds `let p = &*c;` (own_captures), so a lazy answer no longer borrows the block-local capture and is not collected; parameter ordinals shift"
+  }
+ },
+ "rules": [
+  {
+   "target": "correlated_exists",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "0f029056168b883c002052401a44a91c2a02578ce4f578f90240e6d43262582f",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "22313d17aa32e21e0f27731081a6733c3bcfac5977ce925a391f2ee69d2c656a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0777039c2fb0f11ed297693498d0023a0f8b596eec1a74e9b31e5e9bc19be587",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a0681bb678f3dff2e45b01bc0c6811dcd9788f6439ec6f7555789ad77c4bbc02",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-renumber",
+   "hunk_sha256": "3979cf77d23cf253261b4d9ad8fef355cc27ee774fb39606b22f60117164fb1f",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5cf929f004f40493e060b1e454c642ce8854679a43321f11d74403af4535ea55",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "67c0385cb5998bfb7b418b74dff1847ec82e5a61b1467caa9551cceb16c61c2f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "e59e63af41e8e55f4fd5e32789d48d122e513554a918946780cbfb9efbe4e2e1",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-renumber",
+   "hunk_sha256": "e7536f5f2be593320d3c2b1e70f71cd5891f8fcf772b40848b9180c9c70d3d47",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "e3d424604c5fe7d76e7ef8c7d8d47d5e60e0afcf71d190e90b12d2d8a3bbbf23",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-renumber",
+   "hunk_sha256": "113d881eaec2bff593e5443caec6ae5d5c5663bed9cd38fb75326dbfadcf8363",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "cccec66fc540b1bb82ea9d954f699f153c065a3dc2fecbd23abaa5f880e1630c",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5cf929f004f40493e060b1e454c642ce8854679a43321f11d74403af4535ea55",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "856eacc902259a810d2de7806e6bc2607a341951548a8e0e1bb5b6348dcf4e3b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-renumber",
+   "hunk_sha256": "c10e65c14a2241f9a3ae37725b7879df6a70770610ea5193dce461309fa7d6be",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-renumber",
+   "hunk_sha256": "111d1dd83a5039cc1b77b04eb3de2b0f0933b78dfb53c691e1161afbb4af6d74",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "dab1f7b05c63d0bfc1161e19c75cc62dbb007ec563e2c67e422e2dd0168b6cac",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "22313d17aa32e21e0f27731081a6733c3bcfac5977ce925a391f2ee69d2c656a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0777039c2fb0f11ed297693498d0023a0f8b596eec1a74e9b31e5e9bc19be587",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a0681bb678f3dff2e45b01bc0c6811dcd9788f6439ec6f7555789ad77c4bbc02",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-renumber",
+   "hunk_sha256": "3979cf77d23cf253261b4d9ad8fef355cc27ee774fb39606b22f60117164fb1f",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5cf929f004f40493e060b1e454c642ce8854679a43321f11d74403af4535ea55",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "f50806bc5c4d1b0ec71c5f673e76236fd97e44fc03936137aeacc2433f23f10a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h02",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "568b0825f59b9fd3b96a0260435cc5a5eb57b030e0c656a449f7917dea1cd7b7",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h02",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "337efc50955f15aa489eb7371576226d1ad1ecd02ae0d7bda91538ff603e1ccd",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h02",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "21fce91f1ea82c51050cdb34abf533bfcfc7eb39670c6b61747a14803e30fbed",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h02",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "2fc1d23c0236778cfd32abfc00baa118c0191cd5bb8211e8b74dfe55b5dd645f",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h02",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "5fe15465a551988b1b17b69a309dba834e5d8e2e98b46b14a39a4c6f1fcf5763",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h02",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "e3f3620111b38748d9309933c61a748ab325cf9c7c07015cf7738e35c23fdec2",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "9e389eb55b4999d157bb9d24752f866b61dc101e8b0ec94c235a602a92d35f42",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "d0eef667f43e7d0fb42c4ee3ca3ea1c8d3918c70f77c09025a0f810c9d2d8074",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "d6880e149ac580f489a1f254580a9f2d1a43f076b4914477c65eaedfdccfbbc8",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "fae527ffb7b96c075002fa2726938c789c29d20df082f2490ea8c887d32a6f94",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "89924f49a2c5fe5c24c1b8bac2e4e4cf798d7f8413926a99ac5ce7ae28af6e07",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "a522850d8bb6eb10958b898c4498846086659218679dd2bc5f9c914e32cc0708",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "45e291776ab17a22247f984a1da1c709d4bc3d6e975b652511f64bf176a4ad64",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "cb3fca7e91f54c85d7c185f1b2b35ca19ce58828fa70e98f3022afe7eb57e7f9",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a16847448419d765c1698c84449c00a56a051aa2467af65e0bd8aa56c0c8ee3f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-renumber",
+   "hunk_sha256": "4d4637f799ae7e2515871928fb17e3b07cc16d768745d8441f4f90892ec089f1",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "ec0d4a950328670e18ab81f2427bdd1f64b7a4505b7ee19211e923140ac47b0b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "4e1df9b975fa53081d5409c83e1d3785ed7c1379fd7bccffe42fa9e098f42f0c",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0777039c2fb0f11ed297693498d0023a0f8b596eec1a74e9b31e5e9bc19be587",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a0681bb678f3dff2e45b01bc0c6811dcd9788f6439ec6f7555789ad77c4bbc02",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-renumber",
+   "hunk_sha256": "3979cf77d23cf253261b4d9ad8fef355cc27ee774fb39606b22f60117164fb1f",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5cf929f004f40493e060b1e454c642ce8854679a43321f11d74403af4535ea55",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "fd185668c4e37b672f15cda1d34484be874770064b6788d2fa3a2ddd79056261",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "55b52e7f046eb752ec4c9d671072a0a7751a6a480d7a417c6183fafac7371fc3",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "4cdc65032b1f4c7f79ae90055a829c91fd07a86feb5d0bcbd815a7b293918b53",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "f7ed4668363eeee821c99e51bc0ae7b8b24a7d42fe7180da16e6bd99317e129d",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "e37792d282b2e71d20ab43b1c9770a48806f8a6ded3f31567aa5a8a11546b872",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-renumber",
+   "hunk_sha256": "54042d99cdd809f1e935dddff7ba68cd7c5a66678c1a47f543243d9c1cd7c21d",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "18d7379a1fcc50951bd6fce4de5489a0bb0713527959eb2a19b223f1dbb162f0",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "1808026043bf6758696432f687f7093a629008790f5f1a9670de4614068bc505",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "511fa117bcab59ef9d4bccccac9f2f3253658dc85138cfd20e9d755d577df7f6",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-renumber",
+   "hunk_sha256": "29e50d2ad7030e6c57d86b2238380135dcc5ef223bf4477c0f01fdfa36839670",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "cb33ec134f704e5a683b526485de3ad3188ccaacbeb71bbd42eab93c00df671a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "3ed6ee18a59662417ef1b5e2f00a1835db47c221eb9349184af1bb99c8f0ac45",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "c60cc478fd9291cff32ee4697a1b30d3a3ca5ab8c64c8929cb155a6ddacaac51",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-renumber",
+   "hunk_sha256": "1fddf522a330539340b65230b747d3575be1c43b6d6c74389194dc90f4b9cd9b",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "116ea6152234a569b2c9a9c1c6845773311f9055db7c359cf9d49b865c14064f",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-renumber",
+   "hunk_sha256": "08ab310d63a6a4254bcaa5a8588ade9ed5b92271c3bcbb82ca6a43265cbe4a2a",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-renumber",
+   "hunk_sha256": "9853906ecb5be7e9af3cb9ffafa8448e565603b17b7153645cb38f86558e8c36",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "bf36a538893558a915cc73c00a49e1ff8e761f3cfae405cf83003a1adbb08b4d",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-renumber",
+   "hunk_sha256": "58bcd5be4712382f9c17f72a6354cc8106894fec7a9bbfbb4610b48f6161f35d",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "e02d9f541cf23337910c2023be8e76c640a746734feb5711a799e8a096a8272b",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "db7b97a0606314f9a250faccb2fed78809ee5e0f0f99df163c40dc2c5683929e",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "4cdc65032b1f4c7f79ae90055a829c91fd07a86feb5d0bcbd815a7b293918b53",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "f660799157bfef5c9c5f5822677f7fff633ee3843e480f7c631ab910e480bb2f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "6b089be0fcae160a89707117a5c5ce76212e64eacb2d43cb3f402aa32ff8db0f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "2ddf6df63b3f055c317e2dba59332320d55dfc5805b98caf8d31cefb543e1715",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "638c58fae8590ad2deaccb195e005657fd9635129cae8f825b333a53a929841f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-renumber",
+   "hunk_sha256": "101f1e8fe6596d7543358cd19d73a2d2a48bcf633a8376804f224780999940d0",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "8bbad9fb9219c56a93e631bb213342bb6dce92796eb8975b7b08f583cfa63e0a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "78b7e8fde63292c8225ac65cee0a3899516551c3c91caf06f1c15db8133ffff7",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "41d7a8d25defeff5e50610385d9e4e1da1114dc81b5202fd530fc452accbc8c9",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0939d7dac68fe4cebf93b06eb60dc4bdd7e6a1d298afdfbd9b20d4e8f4cd5e47",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-renumber",
+   "hunk_sha256": "6a16188c8ed43f37fecaa7b5b724b7ac29a4fd3f3bb61d1d1f35702ba3c82435",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "856eacc902259a810d2de7806e6bc2607a341951548a8e0e1bb5b6348dcf4e3b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "ce2d2fbe0c06c0ad362a24151c9fb99062b2082b0d06b5a03afccd0cd74fa03a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "b5ba706c70f11eb32599a2ef2d867c845266faa1a0f4b72d8f5b013fe12a33be",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "847d361e37365484340e43a5e954b21697ecf05e1e926d38a2a9d365accd820f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-renumber",
+   "hunk_sha256": "562baf4e08e2c726b9b1f0bb53a9d266521c70126633b34d711376384103910e",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-renumber",
+   "hunk_sha256": "b89f4efec52f5e879918ff7418732a3fd1b2766212b7400c1d02df6e29149f79",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "3cbd6c2fd873e060baf1da066487a58c4f1f92b69d071321e384fd10859e651a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "e4ea6f6fac45de115f21c599886599bc5d1e27582682b4a217e692ff68e65866",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-renumber",
+   "hunk_sha256": "aa3a0088d7cebd69615803684bea0cca2898b312ea524f5fb5342e84006bd7b0",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "64af4142246e75199d2dca20dcec1f0130ae7daffaf2cdcc7f5003452a07f70b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a853366a32dbe6047c5736ea2ce8b8ee6b247a1e07c5ba4fb6660fd7617ae620",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "c300f5a4ec260bdf11124aaa18aeaa4c658696b5d4e45ac413e5b3484ad961de",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "d06ba712504fa1dc7d72ca838cdbf6135f717bae2722acbc296017c1c7460337",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-renumber",
+   "hunk_sha256": "58bcd5be4712382f9c17f72a6354cc8106894fec7a9bbfbb4610b48f6161f35d",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "ce3e6228a81eaad39b17bba91ddbc8ea59614d0b7dc2687ea3f3a9565a3d27eb",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "7ac2f29cdedfdd7140b9838366dd33f10a735e9e726d3a597e6d5a1b263f2357",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "288541699952477808b5cf1af320e1ffb80cfcea587923fd934d533f3a1c1c76",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "64af4142246e75199d2dca20dcec1f0130ae7daffaf2cdcc7f5003452a07f70b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-renumber",
+   "hunk_sha256": "650495cf68a23e11ce0ea5eb5b62b6f2c3bf0345daf12532084eda907f1c8578",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "e3d424604c5fe7d76e7ef8c7d8d47d5e60e0afcf71d190e90b12d2d8a3bbbf23",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "90f79cfc2a607f415d04c844494cdac4d140f8e77dd0fc1582bd887ef36c2ddd",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-renumber",
+   "hunk_sha256": "bd262027e548eeb07e67c45cf165805f89387d6fdfd531a8b9eb8d5a43edaf55",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "cccec66fc540b1bb82ea9d954f699f153c065a3dc2fecbd23abaa5f880e1630c",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-renumber",
+   "hunk_sha256": "e7536f5f2be593320d3c2b1e70f71cd5891f8fcf772b40848b9180c9c70d3d47",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "856eacc902259a810d2de7806e6bc2607a341951548a8e0e1bb5b6348dcf4e3b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-renumber",
+   "hunk_sha256": "5a9642db57f482f03055a0ae27ad7d1f6ba4b90f50c2527f705c1ae4b801c63c",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "f50806bc5c4d1b0ec71c5f673e76236fd97e44fc03936137aeacc2433f23f10a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h10",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "ccb5b0284bdc60f248a34dcc8f250ffe5ebbda7fa3281ad25ab564237eb13b12",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h10",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "645d801e921e02bf173be5af315920aab86678b0823c8be6c71772f6210d35e3",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h10",
+   "class": "interned-renumber",
+   "hunk_sha256": "35e98a3e60897fb495a9d10bf93b685f721b590ffa7249123a190fac88059253",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h10",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "83872c36b1e167e6171dc8e206c5057e6fd0380b3fd69ed76ae107af769998e6",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h10",
+   "class": "interned-renumber",
+   "hunk_sha256": "a1923fcf5b6325d58d63404cf0161ca94ea6a5105220b630c0f8cfca398cf713",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h11",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "05961459eb03fc41392de392c67dfde60c512ec523580c64674e4b186a0e37da",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h11",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "09cb1f93312fd467cd71d9311d61e38676230797d711723c41b35bd3eb1f68f3",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h11",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "6540e4c71cdd9c2ff0980507f349fb9abf9676b9bfed5b75da50916f6721b2cf",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h11",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "91d302a678efeb181132d9f25ae87875339efd77dfafd5c4cf89c44bbc3e0dfb",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "c99732b59b2795fdb23e5e27aa98a08af4b72b491d3bf3305ec2fce22ad6627b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "2751902fcb0df9d8d5214aee221fa693b39a8041367f2c8346f382deaaf9cf2b",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "4bde3610aed01b3a0de625f3876448c73fc60ddbf559785411548f1b9fb793bb",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "c9997a45695b170f5a6f379dbac6e274f6c780c9c0ef5155b6968d276f7f053e",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "61e2e5b9d71f9e838ac9b46593be6bac9b41edd9a2be987c75f2bb3ae047c8a4",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "acf72961a181e206edab67ec67881468da90a2ad6880f3dc58aaf62b8647c5f9",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "15e17666fb68bc52689dbc66c2bce154fe6d409dc465aa946479343b8ae1bf84",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "6800e5fbc2749b8e9e5000c98594ced3d6d38ad71b71226f7ed6271d5ad1c538",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "e468ee0075e31751cff7905abd658041c1e81d11a3f1cfb5bc6b2d5de49878c9",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h16",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "3ecd5c7bf16cc131a816aca5c3d48e02b4d6637740bf1cc4801deb2fbfce82af",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h16",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "df619c98bc69c3030137056b7500b7f514d84e6677fe8767c17134ad90779aa4",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h16",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "50ea5071409e8adfa20dd6f109ddb34297bec3ba3e02bcfc764920f7290c9692",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h16",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5b2881804b7d6b200b3c76e0b02b8e4b42168099f5fb5d60d49d14ebc75f042a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h16",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "48533d82deaf6fe5d32948e0a5afddfc7783f1d231942a8e3648e7eb9f4b4d9b",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "6724b097f161db090675567e6f2e99aa703e2fc0fe30aff05cf133ff7ecb8014",
+   "reason": "reviewed: h19 if -> one relational where over A-Domain captures (Arc capture handles shared by move closures); the new plan builds a part_key index in a statement, so its 1-row grouped answer is collected like any plan with a block-local build",
+   "source": "features/workloads/src/retail/h19.rs;languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "9674b205e8e081b79ab369692f21fa07b6025031be8f846b9c1f136580c4f8e4",
+   "reason": "reviewed: h19 if -> one relational where over A-Domain captures (Arc capture handles shared by move closures); the new plan builds a part_key index in a statement, so its 1-row grouped answer is collected like any plan with a block-local build",
+   "source": "features/workloads/src/retail/h19.rs;languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "00776a7d67207df7df177dca0a018f83ea87e9d332b79b9c430b7bfa2030fe5e",
+   "reason": "reviewed: h19 if -> one relational where over A-Domain captures (Arc capture handles shared by move closures); the new plan builds a part_key index in a statement, so its 1-row grouped answer is collected like any plan with a block-local build",
+   "source": "features/workloads/src/retail/h19.rs;languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-renumber",
+   "hunk_sha256": "3e6d19365f51e5f6165bdbd237f0db843fc1712b60465d175359eae5ff13de0b",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-renumber",
+   "hunk_sha256": "0e3adb3806d49f68eb85d40646daaf43b9ae85860d475d9b2dade8c8487839b3",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "62b78e98e9d7a53115f4ef5c1f5d44f9276ed567acfa3016f49cfec838ef2b50",
+   "reason": "reviewed: h19 if -> one relational where over A-Domain captures (Arc capture handles shared by move closures); the new plan builds a part_key index in a statement, so its 1-row grouped answer is collected like any plan with a block-local build",
+   "source": "features/workloads/src/retail/h19.rs;languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "33770eea4eef4c0bec9a4b7d7b290606a275eadac797be975287a0b20ab7586d",
+   "reason": "reviewed: h19 if -> one relational where over A-Domain captures (Arc capture handles shared by move closures); the new plan builds a part_key index in a statement, so its 1-row grouped answer is collected like any plan with a block-local build",
+   "source": "features/workloads/src/retail/h19.rs;languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-renumber",
+   "hunk_sha256": "baf4f2dede9b8c0506a88f542fb60b631a18daccb7873202fcc259cc37d3cb7d",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "30b0a2515c9f1c9415198050860e299291ac1fadd155d9d0ea941c113fb18da3",
+   "reason": "reviewed: h19 if -> one relational where over A-Domain captures (Arc capture handles shared by move closures); the new plan builds a part_key index in a statement, so its 1-row grouped answer is collected like any plan with a block-local build",
+   "source": "features/workloads/src/retail/h19.rs;languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-renumber",
+   "hunk_sha256": "70efa7a3de76e497faf0f8b5701e8578d1f854d2e1583622f1ac030824cb7f8b",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-renumber",
+   "hunk_sha256": "4a08bdce21e89111044cf2edc6bdb029b70d4db009f84a6597f710a0a813f0e4",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-renumber",
+   "hunk_sha256": "503376e3e76559fb51174455e0480624044aba10bdba726e2522c2e391d740ba",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "retail_h20",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0fad286d887891876a28807c4d7c0914f72dc225e493d1c1b5c43427a5980dab",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h20",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "09cb1f93312fd467cd71d9311d61e38676230797d711723c41b35bd3eb1f68f3",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h20",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "6540e4c71cdd9c2ff0980507f349fb9abf9676b9bfed5b75da50916f6721b2cf",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "d0dee8bad50de7d1ca25e9e4db50198cae0535ad220599908e0f30da8fda1575",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0777039c2fb0f11ed297693498d0023a0f8b596eec1a74e9b31e5e9bc19be587",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "f660799157bfef5c9c5f5822677f7fff633ee3843e480f7c631ab910e480bb2f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a0681bb678f3dff2e45b01bc0c6811dcd9788f6439ec6f7555789ad77c4bbc02",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "8bbad9fb9219c56a93e631bb213342bb6dce92796eb8975b7b08f583cfa63e0a",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "0c94054d831e60d2a7123aec94e09bc2b3b1fe35694273201ace3efdd939eade",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "a7360540f9317384d04c6c24b37237dc73bfe96e18c448b3785720ad3df0217c",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "5c9ad4ec505341a6af004948b5d9b5a1f39aff5ec33a9f0c03b518ebc75a3114",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "fe10a29cda86e64e8a596c134777b7e62eb236a3833f7f3b013fe4399971194f",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "06078a5df738f504de9f657f943c305d8172fafd4f18b03ecce00f614bc4716d",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "70b872caee055938bcbc270bf388e5fb2bbcb601aaa1b8881b16785d4fb82e8a",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "cef4d89760c3cfadd07e7aa47fe00822f026d0c48690acee9e3d2f9e3b75c15e",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-renumber",
+   "hunk_sha256": "9c6a06e461e6b3a7c8e4914dff118df75b311bccf29559f031f64cb35e0c7d2b",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "eb238e48cd8c908f036b5585f55c0b34efd6102880ecc7340d1c775c01cfe4ab",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "a7360540f9317384d04c6c24b37237dc73bfe96e18c448b3785720ad3df0217c",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "4206e681c841e1df92d6e71b4f1676f3558df27dc885b966fb460dc92c92be3b",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "66a1f0ce78ec3ac4f5790b44c791725a294a18e570ce37610939394bf237b140",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "c388cc79f0d298f170726a0826dd013760fc570c9cc7ee27dd98ee73e8206612",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-renumber",
+   "hunk_sha256": "1367c17b921f8644751a2ad25b525cbce5b4a9509a6bb17914f3ac06c5f3043c",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "346395b08ec1850a7bf64aae0eca591f9cc253a7cb8c7ff4d9bea606211173e9",
+   "reason": "reviewed: dictionaries.literal lets / parameters replaced by A-Domain captures and __cq_c_N references, or doc wording",
+   "source": "languages/cq-lang-cq/src/domain.rs:144-421;passes/cq-print/src/lib.rs:338-368"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "c2a47a889f3280da26228780a2bf5f65cd362949fd1346119639c9a164659add",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-renumber",
+   "hunk_sha256": "f51e04d839d2458e1cf228fb853c6cbedc7d1811354cf53c6cac8d68e1e0fe57",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "6bfde56a412a2fe885a8fe6699a8b7fe9e38ac89eb29c8708da95413a75ec668",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "61ef344fa33c2231601ea9b05efc17542be39d6b9ac5652f91c99fb3ddb66049",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "79b7c71fd48fdf972ae0c0ed283bc1c7d1a1b3c8187c44cf63972afeb1e97169",
+   "reason": "reviewed: Arc capture handle, per-move-closure handle clone and binder rebind (own_captures); remaining tokens are capture bindings/renames",
+   "source": "passes/cq-print/src/lib.rs:342-368;passes/cq-print/src/ownership.rs:1-96"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-renumber",
+   "hunk_sha256": "f4b351e36224bb2073532c790ac64b17ad75c605299c069ff6fd3d0170efe70d",
+   "reason": "reviewed: identical tokens modulo generated ordinals",
+   "source": "passes/cq-print/src/lib.rs:338-409"
+  },
+  {
+   "target": "typed_line_filter",
+   "class": "interned-typed",
+   "hunk_sha256": "83b76c3cf31b0fec54a75301dc98d029287eaec332a7eeb939254655b21ff221",
+   "reason": "reviewed: generated interning loader and publication decode",
+   "source": "features/workloads/src/typed.rs;runtime/cq-load/src/intern.rs"
+  },
+  {
+   "target": "typed_line_filter",
+   "class": "interned-typed",
+   "hunk_sha256": "028dcc19f02e4bd2bd564993b6a4871b53420984ce2f1ef864aff1a0a82239b8",
+   "reason": "reviewed: generated interning loader and publication decode",
+   "source": "features/workloads/src/typed.rs;runtime/cq-load/src/intern.rs"
+  },
+  {
+   "target": "correlated_exists",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "50f61e4df1cd50b8d1f99676781826b0415bd5d7bb400f44260fff47fc485a02",
+   "reason": "reviewed vs 17a14b93: closed capture bound through a capture::Value share() handle; move closures own handle clones and rebind; the answer collection for the capture is removed",
+   "source": "passes/cq-print/src/lib.rs:342-372;passes/cq-print/src/ownership.rs:1-92;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5aee66b443f44ae5829e1ef4d0b0dc3e6468f2051e7db050e0396856587570b4",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "7eb29a8fd21d267a23fde31b8b8b5d9df5fa2aa02c7cb5aeaf4b167831d9cee3",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_d19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "cad4b0e5b342cd6f41969469333c7d12138ac7d8aea1bedc44b316adf5d52679",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "cf0919f230e9431ea88218ea0e8dd52bab9bc9de07aee9913e8d0c69eef1535e",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a71ba1a0333cd9fde1a2dfc848957ab71a59236716067fb8867c58893df9a3d4",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "ca59458f1aef46e3df7fffd457ba69714402602eb650eb85de884a14a8abc159",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "26c9e7330b8b66fc510af4093d0a9eefe90282b38b6dc9aea8580d0cc6b5e540",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_d27",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "73b1b20c47e413f24961ef3806733feee8568f59083278ccc096ca2c45e3f14f",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5aee66b443f44ae5829e1ef4d0b0dc3e6468f2051e7db050e0396856587570b4",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "7eb29a8fd21d267a23fde31b8b8b5d9df5fa2aa02c7cb5aeaf4b167831d9cee3",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_d85",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "cad4b0e5b342cd6f41969469333c7d12138ac7d8aea1bedc44b316adf5d52679",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h02",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "e202f1a9288b5e0bb6707652cc38ea133febec7846b39d4456b794b683e1a05f",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h02",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "7f7e3983cfaf476824bbedd0fb6310224416db558c099cf1a8170a6554f37eb0",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h02",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "e5e030ce8a401771866128a12091d42045e261a5260efbc592bebf7edd21f50a",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h02",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "325485e1a99a0a8faacbaa984691e88ed1f1a906b224952497b94b7e81147679",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "b3576780e302a656ae8a3cf296d7b83924f147ec9723c760f418961ae139e422",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "2c45fe35d4296cd054765917fffc0ec6ee1d52514dc0cba84ab8c4f98f6ae5f2",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "838131305598f56a32faf22a8cb0e5be400cc4c467b0559ee7c93aed23c09d46",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h03",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "0d86bc8e89f697dd2e7c4cea023c07d84b321cfc900d8d319937a71102de7617",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "8c1497c750f0014f453806d2f731b42ff630a41ce3dddf411f59f1f2a12a8930",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "5b99ffcee8142ad8c6792267f06df82d77ddd5a8606ccf2795c1ad0f2e20c33a",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h05",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "9ef4fa05a7f089ca83b2188b013a35b7fc7aceeeb777e793229d83c72d1c6f6b",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "01e8596ff046b9602fb09159fa0cb5cbb40131c5d8afee1aaf78d9b29af77d67",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "ea6185fc2dd453ecb2eaf0c232dfa7ee3249ce7a565c91c0e08b89921bc55dac",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "2313d54c4a444ee56c2aef99a40e3b5dc46c20ab68197a0376a8a3cdb6ffbb69",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h07",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "feac8ff0d38c81a515dd2f805e19812ca85f82b39a1b8b0186a14e2b388a35b6",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "07ed16ceed3e53c26e2c6ca2ee1471173980ce3267f2ba9d08325ff5b3677950",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "8262a505d22f479c11d2142270a9f54bd0273222c7bbcbbf637716645c349cd3",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "f49c57353f5e6e55cf4a5f34933aed403262180171c006f2b06f1efc09bd2bb4",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "891300e54da51660aa6b79dcec5a61d95653d48e8a166e498f68f8826f71c45c",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h07_block",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "a6b60cd06d411d7f6558c2b40bec3434f5a7b6e0d6a5861aef970b97c047d723",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "b6aeb7a8d05a26509eb1e652a4435171671959a9dc59efeb4f32522fe0158af5",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "fc02c68ba809ce920ac9e963fbcbe56a886b03880184774d3a634e98080ff447",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "09af9738297cbcda464e84b41c249ea60ce387708d909df3e81ff6811aab9886",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "b18bd375891a0a143caeb8b2ff20486af763f8c9ce0c4c0b955247682bfdc0ef",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h08",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "8c132842afaff30d259b96b2b11b0336f221053fa689579080760ec92911670e",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h10",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "2698dd24967b8595e6b10f2b26ebaffc72e7ede28dd24f90a4decf130e5cf868",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h10",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "aa3d005fc50a75daa3031bce5f3d4520c53ba2501bac308076eed1c305dc1d21",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h11",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "cd57779a0b49017739619ae730a9b1f8380ed2fb31c760bd22f586d09c2ecf6f",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h11",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "04c704efee37d422d5ee36e1589bf76d16a3b8340b9bc747e178fd5756a3181c",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "21d0cb98324f1619a42de28e6b47651673fe06d4d2bd1c14831fc0ed5f336be7",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "bfeaf4f15e56708a166af807cecf4ae4347939e16843013f79236baf86836751",
+   "reason": "reviewed vs 17a14b93: closed capture bound through a capture::Value share() handle; move closures own handle clones and rebind; the answer collection for the capture is removed",
+   "source": "passes/cq-print/src/lib.rs:342-372;passes/cq-print/src/ownership.rs:1-92;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "a0fe51762eaf7bdbf654ab04864de22f4597c2d6d7431bde60e68b95c943854b",
+   "reason": "reviewed vs 17a14b93: closed capture bound through a capture::Value share() handle; move closures own handle clones and rebind; the answer collection for the capture is removed",
+   "source": "passes/cq-print/src/lib.rs:342-372;passes/cq-print/src/ownership.rs:1-92;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "983c8bc955b6e1ddebadf27b4bb594d5004e797dbd1d24d337f58f31f5e420b4",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "cd54982dd66493b0cca57389a9b1e4eff8c1e89645ed265048704ac4aeab7dd6",
+   "reason": "reviewed vs 17a14b93: closed capture bound through a capture::Value share() handle; move closures own handle clones and rebind; the answer collection for the capture is removed",
+   "source": "passes/cq-print/src/lib.rs:342-372;passes/cq-print/src/ownership.rs:1-92;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "7d1e2421263f0ea572854d810c44a733a724609d54230aa30802950bb2f3511b",
+   "reason": "reviewed vs 17a14b93: closed capture bound through a capture::Value share() handle; move closures own handle clones and rebind; the answer collection for the capture is removed",
+   "source": "passes/cq-print/src/lib.rs:342-372;passes/cq-print/src/ownership.rs:1-92;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "c0ea5953507fa1dbc49e01f102ab18e4182fee3c5f1b12d9e997ffd79f3fb326",
+   "reason": "reviewed vs 17a14b93: closed capture bound through a capture::Value share() handle; move closures own handle clones and rebind; the answer collection for the capture is removed",
+   "source": "passes/cq-print/src/lib.rs:342-372;passes/cq-print/src/ownership.rs:1-92;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "5e78c20ed596f74d336ff7cbcb2e2c535c1416b837015c36531e4c9f58797813",
+   "reason": "reviewed vs 17a14b93: closed capture bound through a capture::Value share() handle; move closures own handle clones and rebind; the answer collection for the capture is removed",
+   "source": "passes/cq-print/src/lib.rs:342-372;passes/cq-print/src/ownership.rs:1-92;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h12",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "c02d6e487402a75789246e8dc2b736d91cb8d1c7bee4a7efdde5b3057a01c2b7",
+   "reason": "reviewed vs 17a14b93: closed capture bound through a capture::Value share() handle; move closures own handle clones and rebind; the answer collection for the capture is removed",
+   "source": "passes/cq-print/src/lib.rs:342-372;passes/cq-print/src/ownership.rs:1-92;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h16",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "f2fe80d4eaad3900b33e351203cecc879d4bb18359454de269f0e92f81d974c8",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h16",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "28567c90e899e4f82aea45d789a16078a0ae17ad40890f1d14e8d33e42a6e409",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "2237b40eae610cb10b47d9ac7d16834570857fa1f745e7a67117c2a4497e606b",
+   "reason": "reviewed vs 17a14b93: h19 relational where over A-Domain captures and Decimal bounds (plan change), share() handles",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h19.rs"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "82fcc4865087b2e164c58cfcb01330ea81c65985b801f16d203350243e1616d0",
+   "reason": "reviewed vs 17a14b93: h19 relational where over A-Domain captures and Decimal bounds (plan change), share() handles",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h19.rs"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "05bd7fb3dd93e8be2bd0d646a232f4d02be5d56160bd8390257a78610d10d5c8",
+   "reason": "reviewed vs 17a14b93: h19 relational where over A-Domain captures and Decimal bounds (plan change), share() handles",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h19.rs"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "8f1eafb58452740c405a56341a336c9019b0d434f2338be47223217fab9db586",
+   "reason": "reviewed vs 17a14b93: h19 relational where over A-Domain captures and Decimal bounds (plan change), share() handles",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h19.rs"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "1b88e67e998eecebbc0755a3d5bba89fd569e34cb1c2cebfbeb2c3617c970ae8",
+   "reason": "reviewed vs 17a14b93: h19 relational where over A-Domain captures and Decimal bounds (plan change), share() handles",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h19.rs"
+  },
+  {
+   "target": "retail_h19",
+   "class": "interned-h19-where",
+   "hunk_sha256": "ea9ba3a49f96582758fdd485b07fbc00cedc8ccb183c9ac7c6b66ac145a4f8ec",
+   "reason": "reviewed vs 17a14b93: h19 relational where over A-Domain captures and Decimal bounds (plan change), share() handles",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h19.rs"
+  },
+  {
+   "target": "retail_h20",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "051abc98012bd8b0839ea6adc4dec09d1836b4e1d843663b6ba14b2d3ff8113a",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h20",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "6b34e373c22ce5c456028ef12f903a4b5d34d776d0955eb44f6cd41b22cc792f",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "b058b7eb6d77a3bf31260444f18fbde7091c5e4a1599c3d3774cde729c527774",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "3f8b7e77288c57cf03a55886a9157521a467c6135ac74ce0d17ffb1419ea450f",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "retail_h21_positive",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "339fec270415a2c55cfb3d91e7118b7c116d5ee80534c38ecbf2028446b1b3db",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "544fa1173b5653406cb8e52013ea4bc91dfd0cbda7d14bc8e036f4d4b942c0ff",
+   "reason": "reviewed vs 17a14b93: closed capture bound through a capture::Value share() handle; move closures own handle clones and rebind; the answer collection for the capture is removed",
+   "source": "passes/cq-print/src/lib.rs:342-372;passes/cq-print/src/ownership.rs:1-92;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "tpch_q06",
+   "class": "interned-capture-handle",
+   "hunk_sha256": "19507f2da4b7d946d6c90a9fcb41635c5c382fa9c850ba03f1f272c3d4ff67bd",
+   "reason": "reviewed vs 17a14b93: closed capture bound through a capture::Value share() handle; move closures own handle clones and rebind; the answer collection for the capture is removed",
+   "source": "passes/cq-print/src/lib.rs:342-372;passes/cq-print/src/ownership.rs:1-92;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "6c93a6ccac8533db2f3334eae87ef39531b3c67ecfe9a6534ce1612ec6fa7b0f",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  },
+  {
+   "target": "tpch_q19",
+   "class": "interned-domain-capture",
+   "hunk_sha256": "3234b1c6a84affa0f401c2d554b7f273a1c514461ce00f5ebd4f34a2b8ab1c83",
+   "reason": "reviewed vs 17a14b93: A-Domain host-once capture bound through a capture::Value share() handle replaces the literal let/parameter; comparisons read __cq_c_N; parameter ordinals shift",
+   "source": "languages/cq-lang-cq/src/domain.rs;passes/cq-print/src/lib.rs:342-372;runtime/cq-storage/src/capture.rs"
+  }
+ ]
+}

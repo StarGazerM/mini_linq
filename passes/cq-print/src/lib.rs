@@ -119,6 +119,11 @@ pub struct Context<'a> {
     pub bound: bool,
     /// Shared handles cloned into the move closures that use them.
     pub owned: Vec<Ident>,
+    /// IF-Capture `let` handles (`cq_storage::capture`: the value itself when
+    /// `Copy`, else an `Arc` of it) and their binder
+    /// patterns; `move` closures own a handle and rebind the pattern, so the
+    /// answer iterator never borrows the block-local capture.
+    pub capture_handles: Vec<(Ident, syn::Pat)>,
     pub intersect: bool,
     pub candidate_reads: BTreeMap<String, Vec<Vec<String>>>,
 }
@@ -338,8 +343,13 @@ impl<'a> Context<'a> {
         // Formal rule IF-Capture: Bind each capture once, in dependency order, before
         // closed operands that may name it. Later Rust reads a binder as a reference,
         // the convention for computed bindings; `if` captures gate the whole answer.
+        // A `let` capture lives in a handle that `move` closures share
+        // (`own_captures`), so a lazy answer need not be collected. Rust method
+        // resolution picks the handle (`cq_storage::capture`): a `Copy` value is
+        // its own handle, any other value is shared through one `Arc`.
         let mut captures = BTreeMap::new();
         let mut gates = Vec::new();
+        let mut capture_handles = Vec::new();
         for item in &module.physical.program.captures.items {
             let mut n = captures.len() + gates.len();
             while used.contains(&format!("__cq_capture_{n}")) {
@@ -353,7 +363,12 @@ impl<'a> Context<'a> {
                     let annotation = &binding.annotation;
                     let pattern = &binding.pattern;
                     statements.push(syn::parse_quote!(let #id #annotation = #expression;));
-                    statements.push(syn::parse_quote!(let #pattern = &#id;));
+                    statements.push(syn::parse_quote!(let #id = {
+                        use ::cq_storage::capture::{ShareArc as _, ShareCopy as _};
+                        ::cq_storage::capture::Value::new(#id).share()
+                    };));
+                    statements.push(syn::parse_quote!(let #pattern = &*#id;));
+                    capture_handles.push((id.clone(), pattern.clone()));
                     for binder in item.binders() {
                         captures.insert(symbol_name(&binder), binder);
                     }
@@ -364,7 +379,6 @@ impl<'a> Context<'a> {
                     gates.push(id);
                 }
             }
-            bound = true;
         }
         // Formal rule IF-Parameter: Bind each captured relational value once outside all query loops.
         // A closed operand naming a capture reads its existing reference.
@@ -446,6 +460,7 @@ impl<'a> Context<'a> {
             statements,
             bound,
             owned: Vec::new(),
+            capture_handles,
             candidate_reads,
             intersect: module.physical.program.definitions.iter().any(|d| {
                 matches!(&d.operator,

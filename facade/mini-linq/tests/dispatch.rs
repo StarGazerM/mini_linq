@@ -234,13 +234,13 @@ fn computed_negation_keys_still_probe_owned_and_borrowed_hosts_in_place() {
                 pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
                 struct Q;
                 relation $left(a: i32);
-                relation $keys(y: String);
-                answer(a) :- $left(a), let y: String = a.to_string(), !$keys(y);
+                relation $keys(y: Vec<i32>);
+                answer(a) :- $left(a), let y: Vec<i32> = vec![*a], !$keys(y);
             }
         };
     }
     let left = [(1,), (2,), (3,)];
-    let values = [String::from("1"), String::from("3")];
+    let values = [vec![1_i32], vec![3_i32]];
     let keys = Observed::new(std::collections::HashSet::from([
         (values[0].clone(),),
         (values[1].clone(),),
@@ -263,7 +263,7 @@ fn computed_negation_keys_still_probe_owned_and_borrowed_hosts_in_place() {
     );
     assert_eq!((keys.scans.get(), keys.reads.get()), (0, 3));
     assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
-    let keys = Observed::new([(String::from("1"),), (String::from("3"),)]);
+    let keys = Observed::new([(vec![1_i32],), (vec![3_i32],)]);
     cq_storage::counters::reset();
     assert_eq!(
         negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
@@ -276,7 +276,7 @@ fn computed_negation_keys_still_probe_owned_and_borrowed_hosts_in_place() {
 #[test]
 fn generator_negation_keys_use_native_borrowed_membership_without_builds() {
     let left = [(1,), (2,), (3,)];
-    let values = [String::from("1"), String::from("3")];
+    let values = [vec![1_i32], vec![3_i32]];
     let keys = Observed::new(std::collections::HashSet::from([
         (&values[0],),
         (&values[1],),
@@ -285,8 +285,8 @@ fn generator_negation_keys_use_native_borrowed_membership_without_builds() {
     let answers: Vec<_> = ::mini_linq::compile! {
         pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
         struct Q;
-        relation left(a:i32); relation keys(y:String);
-        answer(a) :- left(a), for y in Some(a.to_string()), !keys(y);
+        relation left(a:i32); relation keys(y:Vec<i32>);
+        answer(a) :- left(a), for y in Some(vec![*a]), !keys(y);
     }
     .map(|(a,)| *a)
     .collect();
@@ -516,15 +516,17 @@ fn retained_opaque_guards_preserve_unsigned_comparisons() {
 #[test]
 #[allow(non_snake_case)]
 fn literal_point_reads_scan_slices_and_directly_read_leading_map_keys() {
+    let segments = cq_load::StringDictionary::new(["AUTOMOBILE", "BUILDING"]);
+    let code = |text: &str| cq_storage::domain::exact(&segments, text);
     let Customer = Observed::new(vec![
-        (1_i32, "BUILDING"),
-        (2, "AUTOMOBILE"),
-        (3, "BUILDING"),
+        (1_i32, code("BUILDING")),
+        (2, code("AUTOMOBILE")),
+        (3, code("BUILDING")),
     ]);
     cq_storage::counters::reset();
     let rows: std::collections::BTreeSet<_> = ::mini_linq::compile! { pipeline { }
         struct LiteralSlice;
-        relation Customer(id:i32, segment:&str);
+        relation Customer(id:i32, segment:cq_load::StringCode in (segments));
         answer(c) :- Customer(c, "BUILDING");
     }
     .map(|(c,)| *c)
@@ -536,50 +538,99 @@ fn literal_point_reads_scan_slices_and_directly_read_leading_map_keys() {
     assert_eq!(Customer.rows.get(), 3);
 
     let Customer = Observed::new(HashMap::from([
-        (("BUILDING",), vec![(1_i32,), (3,)]),
-        (("AUTOMOBILE",), vec![(2,)]),
+        ((code("BUILDING"),), vec![(1_i32,), (3,)]),
+        ((code("AUTOMOBILE"),), vec![(2,)]),
     ]));
     cq_storage::counters::reset();
     let rows: std::collections::BTreeSet<_> = ::mini_linq::compile! { pipeline { }
         struct LiteralMap;
-        relation Customer(segment:&str, id:i32);
+        relation Customer(segment:cq_load::StringCode in (segments), id:i32);
         answer(c) :- Customer("BUILDING", c);
     }
     .map(|(c,)| *c)
     .collect();
     assert_eq!(rows, [1, 3].into());
     assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
+    // A-Domain makes the literal a closed code capture; an equality against a
+    // capture is a point key, read directly at the leading map key.
     assert_eq!(Customer.scans.get(), 0);
     assert_eq!(Customer.reads.get(), 1);
 }
 
+/// A string literal at a domain column is a closed code operand: atom and
+/// `where` positions both become the same closed code point read.
 #[test]
-fn string_literals_use_native_views_or_scan_owned_keys_without_retyping() {
+fn string_literals_at_domain_columns_are_closed_code_point_reads() {
+    let segments = cq_load::StringDictionary::new(["AUTOMOBILE", "BUILDING"]);
+    let code = |text: &str| cq_storage::domain::exact(&segments, text);
     let rows = Observed::new(HashMap::from([
-        ((String::from("BUILDING"),), vec![(1_i32,), (3,)]),
-        ((String::from("AUTOMOBILE"),), vec![(2,)]),
+        ((code("BUILDING"),), vec![(1_i32,), (3,)]),
+        ((code("AUTOMOBILE"),), vec![(2,)]),
     ]));
     let result: std::collections::BTreeSet<_> = ::mini_linq::compile! {
         pipeline { }
-        struct OwnedLiteralMap;
-        relation rows(segment:String,id:i32);
+        struct CodeLiteralMap;
+        relation rows(segment:cq_load::StringCode in (segments),id:i32);
         answer(id) :- rows("BUILDING",id);
     }
     .map(|(id,)| *id)
     .collect();
     assert_eq!(result, [1, 3].into());
-    assert_eq!((rows.scans.get(), rows.reads.get()), (1, 0));
+    assert_eq!((rows.scans.get(), rows.reads.get()), (0, 1));
 
     let result: std::collections::BTreeSet<_> = ::mini_linq::compile! {
         pipeline { }
-        struct OwnedPointMap;
-        relation rows(segment:String,id:i32);
+        struct CodePointMap;
+        relation rows(segment:cq_load::StringCode in (segments),id:i32);
         answer(id) :- rows(segment,id), where segment == "BUILDING";
     }
     .map(|(id,)| *id)
     .collect();
     assert_eq!(result, [1, 3].into());
-    assert_eq!((rows.scans.get(), rows.reads.get()), (2, 0));
+    assert_eq!((rows.scans.get(), rows.reads.get()), (0, 2));
+
+    let result: Vec<_> = ::mini_linq::compile! {
+        pipeline { }
+        struct AbsentLiteral;
+        relation rows(segment:cq_load::StringCode in (segments),id:i32);
+        answer(id) :- rows("MACHINERY",id);
+    }
+    .collect();
+    assert!(result.is_empty());
+}
+
+/// IF-Parameter: a closed host operand is a once-bound key. Equality with a
+/// leading map key reads it directly; an owned non-Copy key is cloned once.
+#[test]
+fn closed_parameters_point_read_leading_map_keys() {
+    let rows = Observed::new(HashMap::from([((1_i32,), vec![(10_i32,)]), ((2,), vec![(20,), (21,)])]));
+    let wanted = 2;
+    let result: std::collections::BTreeSet<_> = ::mini_linq::compile! {
+        pipeline { }
+        struct ClosedPoint;
+        relation rows(key:i32,id:i32);
+        answer(id) :- rows(key,id), where key == wanted;
+    }
+    .map(|(id,)| *id)
+    .collect();
+    assert_eq!(result, [20, 21].into());
+    assert_eq!((rows.scans.get(), rows.reads.get()), (0, 1));
+
+    let paths = Observed::new(HashMap::from([
+        ((vec![1_i64],), vec![(1_i32,)]),
+        ((vec![1_i64, 2],), vec![(2,)]),
+    ]));
+    let wanted = vec![1_i64, 2];
+    let result: Vec<_> = ::mini_linq::compile! {
+        pipeline { }
+        struct OwnedClosedPoint;
+        relation paths(path:Vec<i64>,id:i32);
+        answer(id) :- paths(path,id), where path == wanted;
+    }
+    .map(|(id,)| *id)
+    .collect();
+    assert_eq!(result, [2]);
+    assert_eq!((paths.scans.get(), paths.reads.get()), (0, 1));
 }
 
 #[test]
@@ -628,16 +679,18 @@ fn relational_range_reads_seek_ordered_hosts_and_scan_slices_without_builds() {
 
 #[test]
 fn relational_disjunction_membership_and_host_parameters_compute_classical_filters() {
+    let tags = cq_load::StringDictionary::new(["a", "b", "c"]);
+    let code = |text: &str| cq_storage::domain::exact(&tags, text);
     let rows = [
-        (0, "a".to_owned()),
-        (1, "b".into()),
-        (2, "a".into()),
-        (3, "c".into()),
-        (4, "b".into()),
+        (0, code("a")),
+        (1, code("b")),
+        (2, code("a")),
+        (3, code("c")),
+        (4, code("b")),
     ];
     let low = 2;
     let got: Vec<_> = ::mini_linq::mini_linq! {
-        struct Disjunction; relation rows(key:i32,tag:String);
+        struct Disjunction; relation rows(key:i32,tag:cq_load::StringCode in (tags));
         answer(x) :- rows(x,tag),
             where (((((x >= 0 && x <= 1)) && ((tag == "a" || tag == "b"))) || ((x >= low) && (tag == "c"))));
     }
@@ -646,7 +699,7 @@ fn relational_disjunction_membership_and_host_parameters_compute_classical_filte
     assert_eq!(got, [0, 1, 3]);
     let tag_param = "b".to_owned();
     let got: Vec<_> = ::mini_linq::mini_linq! {
-        struct Parameters; relation rows(key:i32,tag:String);
+        struct Parameters; relation rows(key:i32,tag:cq_load::StringCode in (tags));
         answer(x) :- rows(x,tag), where tag == tag_param, where x > 1, where x <= 4;
     }
     .map(|(x,)| *x)

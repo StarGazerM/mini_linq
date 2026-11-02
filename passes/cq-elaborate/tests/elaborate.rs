@@ -1359,7 +1359,7 @@ fn relational_conjuncts_keep_their_independent_selection_domains() {
 
 #[test]
 fn literal_points_precede_membership_filters_without_type_classification() {
-    for ty in ["String", "StringAlias"] {
+    for ty in ["StringCode", "StringAlias"] {
         let ty: syn::Type = syn::parse_str(ty).unwrap();
         let source = cq(quote! {
             struct Q; relation Lineitem(mode:#ty,instruction:#ty);
@@ -1381,7 +1381,10 @@ fn literal_points_precede_membership_filters_without_type_classification() {
         assert_eq!(selections.len(), 2);
         let point = selections[0].condition.constant_keys().unwrap();
         assert_eq!(point.len(), 1);
-        assert_eq!(point["instruction"], syn::parse_quote!("DELIVER IN PERSON"));
+        assert_eq!(
+            point["instruction"],
+            ra::syntax::constraint::Term::Literal(Box::new(syn::parse_quote!("DELIVER IN PERSON")))
+        );
         assert!(target.plan.definitions.iter().any(|definition| {
             definition.result == selections[0].input
                 && matches!(definition.operator, ra::Operator::Rename(_))
@@ -1461,9 +1464,9 @@ fn derived_domains_filter_binders_but_preserve_the_exact_disjunction() {
 
 #[test]
 fn opaque_method_and_function_guards_keep_their_written_prefix() {
-    for guard in ["if name.contains(\"green\")", "if custom(name)"] {
+    for guard in ["if name.is_positive()", "if custom(name)"] {
         let source: cq::Program = syn::parse_str(&format!(
-            "struct Q; relation R(a:i32); relation P(k:i32,n:String); answer(x,name) :- R(x), P(x,name), {guard};"
+            "struct Q; relation R(a:i32); relation P(k:i32,n:i64); answer(x,name) :- R(x), P(x,name), {guard};"
         )).unwrap();
         let vo = coarse(&source);
         let target = compile(&vo).unwrap();
@@ -1655,7 +1658,7 @@ fn literal_occurrences_drop_exact_source_positions_and_reject_changed_values() {
         assert!(check(&planned, &changed).is_err());
     }
     let source = cq(quote! {
-        struct Q; relation R(a:i32,b:bool,c:&str); relation answer(value:i32);
+        struct Q; relation R(a:i32,b:bool,c:StringCode); relation answer(value:i32);
         answer(1) :- R(-7,true,"fixed");
     });
     let normal = cq::normal::normalize(&source).unwrap();

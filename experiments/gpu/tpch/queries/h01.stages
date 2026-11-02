@@ -1,0 +1,30 @@
+program h01 {
+    domain Returnflag = dictionary(lineitem.l_returnflag);
+    domain Linestatus = dictionary(lineitem.l_linestatus);
+    input Lineitem(l_orderkey: i64, l_linenumber: i64,
+        l_returnflag: StringCode in Returnflag, l_linestatus: StringCode in Linestatus,
+        l_quantity: Decimal, l_extendedprice: Decimal, l_shipdate: Date) = table(lineitem);
+    operand cutoff: Date = date { Date::load("1998-09-02").expect("authored ISO date") };
+    stage s0 {
+        inputs { Lineitem = Lineitem; }
+        captures [cutoff];
+        evidence { key Lineitem [l_orderkey, l_linenumber]; }
+        cq {
+            struct Query;
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64,
+                l_returnflag: StringCode, l_linestatus: StringCode, l_quantity: Decimal,
+                l_extendedprice: Decimal, l_shipdate: Date);
+            relation answer(returnflag: StringCode, linestatus: StringCode,
+                sum_quantity: i64, sum_price: i64, count_order: usize);
+            answer(returnflag, linestatus, sum(quantity_units), sum(price_units), count()) :-
+                Lineitem(order_key, line_number, returnflag, linestatus, quantity, price, shipdate),
+                where shipdate <= cutoff,
+                let quantity_units: i64 = quantity.scaled(),
+                let price_units: i64 = price.scaled();
+        }
+    }
+    terminal {
+        from s0 project [column(0), column(1), column(2), column(3), column(4)]
+            dictionaries [0 = Returnflag, 1 = Linestatus];
+    }
+}

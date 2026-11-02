@@ -81,14 +81,14 @@ fn raw_identifiers_preserve_names_but_do_not_bypass_relation_collisions() {
 fn column_types_preserve_lifetimes_and_nested_generic_arguments() {
     let source: cq::Program = syn::parse_quote! {
         struct Q;
-        relation R(c0: &'static str, c1: Option<Vec<i32>>);
+        relation R(c0: &'static [i32], c1: Option<Vec<i32>>);
         answer(x, y) :- R(x, y);
     };
     cq::contract::check(&source).unwrap();
     let reparsed: cq::Program = syn::parse2(source.to_token_stream()).unwrap();
     assert_eq!(
         reparsed.declarations[0].columns[0].ty,
-        syn::parse_quote!(&'static str)
+        syn::parse_quote!(&'static [i32])
     );
     assert_eq!(
         reparsed.declarations[0].columns[1].ty,
@@ -99,7 +99,7 @@ fn column_types_preserve_lifetimes_and_nested_generic_arguments() {
 
 #[test]
 fn declarations_keep_leaf_holes_and_reject_attributes() {
-    let source: cq::Program = syn::parse_quote! { struct Q; relation R(a:i32,b:&str) = (make_rows(config)); answer(x,y) :- R(x,y); };
+    let source: cq::Program = syn::parse_quote! { struct Q; relation R(a:i32,b:&[i32]) = (make_rows(config)); answer(x,y) :- R(x,y); };
     cq::contract::check(&source).unwrap();
     assert_eq!(
         syn::parse2::<cq::Program>(source.to_token_stream()).unwrap(),

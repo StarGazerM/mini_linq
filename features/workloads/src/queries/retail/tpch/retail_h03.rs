@@ -84,17 +84,16 @@ macro_rules! runner {
                 let Lineitem = data.lineitem.as_slice();
                 let dictionaries = &data.dictionaries;
                 let cutoff = date("1995-03-15");
-                let building = dictionaries.literal("c_mktsegment", "BUILDING");
                 query! {
                     struct Query;
-                    relation Customer(c_custkey: i64, c_mktsegment: cq_load::StringCode);
+                    relation Customer(c_custkey: i64, c_mktsegment: cq_load::StringCode in (dictionaries.domain("c_mktsegment")));
                     relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date);
                     relation Lineitem(l_orderkey: i64, l_shipdate: Date);
                     relation answer(order_key: i64, customer_key: i64);
                     answer(order_key, customer_key) :-
                         Lineitem(order_key, ship_date), where ship_date > cutoff,
                         Orders(order_key, customer_key, order_date), where order_date < cutoff,
-                        Customer(customer_key, { building });
+                        Customer(customer_key, "BUILDING");
                 }
                 .map(|(order_key, customer_key,)| (*order_key, *customer_key,))
                 .collect()

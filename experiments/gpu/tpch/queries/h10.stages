@@ -1,0 +1,50 @@
+program h10 {
+    domain CustomerName = dictionary(customer.c_name);
+    domain CustomerAddress = dictionary(customer.c_address);
+    domain CustomerPhone = dictionary(customer.c_phone);
+    domain CustomerComment = dictionary(customer.c_comment);
+    domain Returnflag = dictionary(lineitem.l_returnflag);
+    domain NationName = dictionary(nation.n_name);
+    input Customer(c_custkey: i64, c_name: StringCode in CustomerName, c_acctbal: Decimal,
+        c_nationkey: i32, c_address: StringCode in CustomerAddress,
+        c_phone: StringCode in CustomerPhone, c_comment: StringCode in CustomerComment)
+        = table(customer);
+    input Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date) = table(orders);
+    input Lineitem(l_orderkey: i64, l_linenumber: i64,
+        l_extendedprice: Decimal, l_discount: Decimal, l_returnflag: StringCode in Returnflag)
+        = table(lineitem);
+    input Nation(n_nationkey: i32, n_name: StringCode in NationName) = table(nation);
+    operand start: Date = date { Date::load("1993-10-01").expect("authored ISO date") };
+    operand end: Date = date { Date::load("1994-01-01").expect("authored ISO date") };
+    stage s0 {
+        inputs { Customer = Customer; Orders = Orders; Lineitem = Lineitem; Nation = Nation; }
+        captures [start, end];
+        evidence {}
+        cq {
+            struct Query;
+            relation Customer(c_custkey: i64, c_name: StringCode, c_acctbal: Decimal,
+                c_nationkey: i32, c_address: StringCode, c_phone: StringCode, c_comment: StringCode);
+            relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date);
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64,
+                l_extendedprice: Decimal, l_discount: Decimal, l_returnflag: StringCode);
+            relation Nation(n_nationkey: i32, n_name: StringCode);
+            relation answer(customer_key: i64, name: StringCode, revenue: i64,
+                account_balance: i64, nation: StringCode, address: StringCode, phone: StringCode, comment: StringCode);
+            answer(customer_key, name, sum(revenue_units), balance_units, nation, address, phone, comment) :-
+                Orders(order_key, customer_key, order_date),
+                where order_date >= start && order_date < end,
+                Lineitem(order_key, line_number, price, discount, returnflag),
+                where returnflag == "R",
+                Customer(customer_key, name, balance, nation_key, address, phone, comment),
+                Nation(nation_key, nation),
+                let revenue_units: i64 = price.scaled() * (100 - discount.scaled()),
+                let balance_units: i64 = balance.scaled();
+        }
+    }
+    terminal {
+        from s0 project [column(0), column(1), column(2), column(3), column(4), column(5),
+            column(6), column(7)]
+            dictionaries [1 = CustomerName, 4 = NationName, 5 = CustomerAddress,
+                6 = CustomerPhone, 7 = CustomerComment];
+    }
+}

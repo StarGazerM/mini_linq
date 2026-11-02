@@ -106,7 +106,6 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
 crate::tpch_runtime::standalone_configs! { $;
     pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
         assert!(CONFIGS.contains(&config), "unknown H02 configuration");
-        let europe = data.dictionaries.literal("r_name", "EUROPE");
         let Part = data.part.as_slice();
         let Partsupp = data.partsupp.as_slice();
         let Supplier = data.supplier.as_slice();
@@ -120,13 +119,13 @@ crate::tpch_runtime::standalone_configs! { $;
             relation Supplier(s_suppkey: i64, s_nationkey: i32, s_acctbal: Decimal,
                 s_name: StringCode, s_address: StringCode, s_phone: StringCode, s_comment: StringCode);
             relation Nation(n_nationkey: i32, n_regionkey: i32, n_name: StringCode);
-            relation Region(r_regionkey: i32, r_name: StringCode);
+            relation Region(r_regionkey: i32, r_name: StringCode in (data.dictionaries.domain("r_name")));
             relation answer(part_key: i64, minimum_cost: Option<i64>);
             answer(part_key, min(cost_units)) :-
                 Partsupp(part_key, supplier_key, cost),
                 Supplier(supplier_key, nation_key, _, _, _, _, _),
                 Nation(nation_key, region_key, _), Region(region_key, region_name),
-                where region_name == europe,
+                where region_name == "EUROPE",
                 let cost_units: i64 = cost.scaled();
         }
         .map(|(part_key, cost)| (*part_key, cost))
@@ -141,7 +140,7 @@ crate::tpch_runtime::standalone_configs! { $;
             relation Supplier(s_suppkey: i64, s_nationkey: i32, s_acctbal: Decimal,
                 s_name: StringCode, s_address: StringCode, s_phone: StringCode, s_comment: StringCode);
             relation Nation(n_nationkey: i32, n_regionkey: i32, n_name: StringCode);
-            relation Region(r_regionkey: i32, r_name: StringCode);
+            relation Region(r_regionkey: i32, r_name: StringCode in (data.dictionaries.domain("r_name")));
             relation MinimumCost(part_key: i64, minimum_cost: Option<i64>);
             relation answer(balance: i64, supplier_name: StringCode, nation_name: StringCode,
                 part_key: i64, manufacturer: StringCode, address: StringCode, phone: StringCode, comment: StringCode);
@@ -153,7 +152,7 @@ crate::tpch_runtime::standalone_configs! { $;
                 if *minimum_cost == Some(cost.scaled()),
                 Supplier(supplier_key, nation_key, balance, supplier_name, address, phone, comment),
                 Nation(nation_key, region_key, nation_name), Region(region_key, region_name),
-                where region_name == europe,
+                where region_name == "EUROPE",
                 let balance_units: i64 = balance.scaled();
         }
         .map(|(balance, supplier, nation, part, manufacturer, address, phone, comment)| {

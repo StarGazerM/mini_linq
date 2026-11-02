@@ -170,17 +170,7 @@ impl<'a> Context<'a> {
                     else {
                         unreachable!("checked occurrence literal")
                     };
-                    if matches!(
-                        literal,
-                        Expr::Lit(syn::ExprLit {
-                            lit: syn::Lit::Str(_),
-                            ..
-                        })
-                    ) {
-                        quote!(::cq_storage::relational_string_eq(*#binding, &#literal))
-                    } else {
-                        quote!(::cq_storage::relational_eq(*#binding, &#literal))
-                    }
+                    quote!(::cq_storage::relational_eq(*#binding, &#literal))
                 });
                 let row = self.carrier(result, |column| {
                     let source = &self.physical_analysis.renames[result][column];

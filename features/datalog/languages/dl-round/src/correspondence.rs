@@ -343,14 +343,8 @@ pub(crate) fn check_storage_with_analysis(
             let hole = checked_hole(source, target, key.hole, &mut used_holes)?;
             let batch = target.holes[key.hole].interface == HoleInterface::Batch;
             add_name(&hole.name)?;
-            let literal_count = key
-                .filters
-                .iter()
-                .filter(|(_, expression)| cq_syntax::equality::literal(rust::unparen(expression)))
-                .count();
             ensure(
-                hole.query.body.len()
-                    == 1 + key.filters.len() - literal_count + key.equalities.len(),
+                hole.query.body.len() == 1 + key.filters.len() + key.equalities.len(),
                 source,
                 "key hole must retain its constant and repeated-variable filters",
             )?;
@@ -373,22 +367,16 @@ pub(crate) fn check_storage_with_analysis(
             }
             let variables: Vec<_> = args.iter().map(|arg| rust::variable(arg)).collect();
             ensure(
-                args.iter().enumerate().all(|(column, argument)| {
-                    match key.filters.iter().find(|(i, expression)| {
-                        *i == column && cq_syntax::equality::literal(rust::unparen(expression))
-                    }) {
-                        Some((_, expression)) => *argument == rust::unparen(expression),
-                        None => rust::variable(argument).is_some(),
-                    }
-                }) && variables
-                    .iter()
-                    .flatten()
-                    .map(|id| symbol_name(id))
-                    .collect::<BTreeSet<_>>()
-                    .len()
-                    == declaration.arity() - literal_count,
+                variables.iter().all(Option::is_some)
+                    && variables
+                        .iter()
+                        .flatten()
+                        .map(|id| symbol_name(id))
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                        == declaration.arity(),
                 source,
-                "key projection requires distinct variables and unchanged literal columns",
+                "key projection requires distinct variables",
             )?;
             let mut output = declaration.clone();
             output.name = hole.name.clone();
@@ -416,13 +404,9 @@ pub(crate) fn check_storage_with_analysis(
             let mut expected_declarations = required_inputs(context, &[], &hole.query);
             expected_declarations.push(output);
             let name = &hole.name;
-            let selections = key.filters.iter().filter_map(|(column, expression)| {
-                if cq_syntax::equality::literal(rust::unparen(expression)) {
-                    None
-                } else {
-                    let variable = variables[*column].expect("checked filter variable");
-                    Some(quote!(where #variable == (#expression)))
-                }
+            let selections = key.filters.iter().map(|(column, expression)| {
+                let variable = variables[*column].expect("checked filter variable");
+                quote!(where #variable == (#expression))
             });
             let repeated = key.equalities.iter().map(|&(first, repeated)| {
                 let first = variables[first].expect("checked key variable");

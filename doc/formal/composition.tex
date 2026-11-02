@@ -110,6 +110,12 @@ selects the shared rule-based planner; an absent schedule selects decomposition.
 Completed replay pipelines contain expanded invocations and Sequence advice,
 with the recipe cleared; the report retains the original recipe separately.
 \begin{mathpar}
+\Rule{DR-StageSource}{s=\mathsf{parseStageDSL}(T)\quad
+ \mathsf{uniqueNames}(s)\quad\mathsf{precedingProducers}(s)\quad
+ \mathsf{inputSchemas}(s)\quad\mathsf{domainIdentities}(s)\quad
+ \mathsf{terminalSlots}(s)}
+ {\mathsf{stageSource}(T)=s\text{, with Rust payload tokens unchanged}}
+
 \Rule{DR-Target}{d=\mathsf{inputTarget}(p)\quad
  \mathsf{compile}(s,p,d)=r}
  {\mathsf{driver}(s,p)=r}
@@ -132,6 +138,19 @@ with the recipe cleared; the report retains the original recipe separately.
  (L,f)=\mathsf{registry}(i.path)\quad s:L\quad f(s,i.args)=t}
  {\mathsf{invoke}(s,T)=t}
 \end{mathpar}
+DR-StageSource is the TPC-H frontend boundary. Each query has an authored
+\code{queries/<name>.stages} program: table/dictionary/opaque-host producers,
+named captures (including date operands), CQ stages, owned publications and
+ordered terminal projections. Input bindings identify preceding publications
+or declared producers; no Rust source file is traversed. The checker compares
+declared schema tokens and domain identities, never interprets types or
+reconstructs producer expressions. Dictionary domains reach shared CQ
+operand normalization; host code-domain conversion uses the shared runtime
+domain interface. A date payload executes on the host, not in the compiler.
+Terminal projections consume stored column slots and explicit dictionary
+publication domains; constants are opaque host-once values. Stage-source text
+is retained beside per-stage Sequence and publication records.
+
 DR-Target propagates rejection unchanged: it never retries another machine or
 deletes authored advice. DR-Publication derives extrema validity from aggregate
 kinds and propagates recorded nullable columns through publication inputs, not
@@ -201,9 +220,11 @@ may repeat rows and retain an explicit fast-hashed distinct boundary.
  Q:\mathcal P_{\rm fin}(Row)}
  {\mathsf{aggregate}(Q)=\mathsf{fold}(Q)}
 
-\Rule{EXT-ConstantGroup}{\forall k\in K.\ \mathsf{literalBound}(k)}
+\Rule{EXT-ConstantGroup}{\forall k\in K.\ k\text{ is bound by a top-level }\code{let}\text{ recorded by A-Capture}}
  {\mathsf{groupFold}_K(Q)=\mathsf{optionalAccumulator}(Q)}
 \end{mathpar}
+The premise uses the CQ capture producer's closedness, never the shape of the
+\code{let} initializer, so a literal and any other closed key are treated alike.
 Constant grouping emits \code{SingleGroup}, which stores zero or one key and
 measure tuple without hashing. Empty input still has no group. Computed measures
 are borrowed for cloning at the fold, rather than materialized as another CQ

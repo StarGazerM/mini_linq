@@ -125,7 +125,6 @@ macro_rules! runner {
                 let Nation = data.nation.as_slice();
                 let dictionaries = &data.dictionaries;
                 let start = date("1995-01-01"); let end = date("1995-04-01");
-                let united_states = dictionaries.literal("n_name", "UNITED STATES");
                 query! {
                     struct Query;
                     relation Lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64);
@@ -134,13 +133,13 @@ macro_rules! runner {
                     relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date);
                     relation Customer(c_custkey: i64, c_nationkey: i32);
                     relation Supplier(s_suppkey: i64, s_nationkey: i32);
-                    relation Nation(n_nationkey: i32, n_name: cq_load::StringCode);
+                    relation Nation(n_nationkey: i32, n_name: cq_load::StringCode in (dictionaries.domain("n_name")));
                     relation answer(order_key: i64, part_key: i64, supplier_nation: i32);
                     answer(order_key, part_key, supplier_nation) :-
                         PartSupp(part_key, supplier_key, available), where available > 0,
                         Lineitem(order_key, part_key, supplier_key),
                         Orders(order_key, customer_key, order_date), where order_date >= start && order_date < end,
-                        Customer(customer_key, customer_nation), Nation(customer_nation, { united_states }),
+                        Customer(customer_key, customer_nation), Nation(customer_nation, "UNITED STATES"),
                         Part(part_key), Supplier(supplier_key, supplier_nation), Nation(supplier_nation, _supplier_name);
                 }
                 .map(|(order_key, part_key, supplier_nation,)| (*order_key, *part_key, *supplier_nation,))
@@ -214,7 +213,6 @@ crate::tpch_runtime::configuration!(hypergraph_zone, $, {
         let Nation = &zones.nation;
         let dictionaries = &data.dictionaries;
                 let start = date("1995-01-01"); let end = date("1995-04-01");
-                let united_states = dictionaries.literal("n_name", "UNITED STATES");
                 query! {
                     struct Query;
                     relation Lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64);
@@ -223,13 +221,13 @@ crate::tpch_runtime::configuration!(hypergraph_zone, $, {
                     relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date);
                     relation Customer(c_custkey: i64, c_nationkey: i32);
                     relation Supplier(s_suppkey: i64, s_nationkey: i32);
-                    relation Nation(n_nationkey: i32, n_name: cq_load::StringCode);
+                    relation Nation(n_nationkey: i32, n_name: cq_load::StringCode in (dictionaries.domain("n_name")));
                     relation answer(order_key: i64, part_key: i64, supplier_nation: i32);
                     answer(order_key, part_key, supplier_nation) :-
                         PartSupp(part_key, supplier_key, available), where available > 0,
                         Lineitem(order_key, part_key, supplier_key),
                         Orders(order_key, customer_key, order_date), where order_date >= start && order_date < end,
-                        Customer(customer_key, customer_nation), Nation(customer_nation, { united_states }),
+                        Customer(customer_key, customer_nation), Nation(customer_nation, "UNITED STATES"),
                         Part(part_key), Supplier(supplier_key, supplier_nation), Nation(supplier_nation, _supplier_name);
                 }
                 .map(|(order_key, part_key, supplier_nation,)| (*order_key, *part_key, *supplier_nation,))

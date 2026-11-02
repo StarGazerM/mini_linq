@@ -95,7 +95,6 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
 crate::tpch_runtime::standalone_configs! { $;
     pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
         assert!(CONFIGS.contains(&config), "unknown H10 configuration");
-        let returned = data.dictionaries.literal("l_returnflag", "R");
         let Customer = data.customer.as_slice();
         let Orders = data.orders.as_slice();
         let Lineitem = data.lineitem.as_slice();
@@ -109,7 +108,8 @@ crate::tpch_runtime::standalone_configs! { $;
                 c_nationkey: i32, c_address: StringCode, c_phone: StringCode, c_comment: StringCode);
             relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date);
             relation Lineitem(l_orderkey: i64, l_linenumber: i64,
-                l_extendedprice: Decimal, l_discount: Decimal, l_returnflag: StringCode);
+                l_extendedprice: Decimal, l_discount: Decimal,
+                l_returnflag: StringCode in (data.dictionaries.domain("l_returnflag")));
             relation Nation(n_nationkey: i32, n_name: StringCode);
             relation answer(customer_key: i64, name: StringCode, revenue: i64,
                 account_balance: i64, nation: StringCode, address: StringCode, phone: StringCode, comment: StringCode);
@@ -117,7 +117,7 @@ crate::tpch_runtime::standalone_configs! { $;
                 Orders(order_key, customer_key, order_date),
                 where order_date >= start && order_date < end,
                 Lineitem(order_key, line_number, price, discount, returnflag),
-                where returnflag == returned,
+                where returnflag == "R",
                 Customer(customer_key, name, balance, nation_key, address, phone, comment),
                 Nation(nation_key, nation),
                 let revenue_units: i64 = price.scaled() * (100 - discount.scaled()),

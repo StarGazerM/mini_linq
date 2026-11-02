@@ -10,7 +10,7 @@ fn consumer_form_matches_pull_with_borrowed_and_owned_columns() {
     let pull: BTreeSet<_> = mini_linq::compile! {
         pipeline {}
         struct Q; relation R(x:i32); relation S(x:i32,y:i32);
-        answer(x,label) :- R(x), S(x,y), let label:String = y.to_string();
+        answer(x,label) :- R(x), S(x,y), let label:Vec<i32> = vec![*y];
     }
     .map(|(x, label)| (*x, label))
     .collect();
@@ -19,11 +19,11 @@ fn consumer_form_matches_pull_with_borrowed_and_owned_columns() {
         pipeline {
             print_input = structures;
             print = translate_pull(consumer {
-                |(x, label): (&i32, String)| { pushed.insert((*x, label)); }
+                |(x, label): (&i32, Vec<i32>)| { pushed.insert((*x, label)); }
             };);
         }
         struct Q; relation R(x:i32); relation S(x:i32,y:i32);
-        answer(x,label) :- R(x), S(x,y), let label:String = y.to_string();
+        answer(x,label) :- R(x), S(x,y), let label:Vec<i32> = vec![*y];
     };
     assert_eq!(result, ());
     assert_eq!(pushed, pull);
@@ -110,8 +110,8 @@ fn both_printers_keep_owned_non_copy_fallback_interfaces() {
     macro_rules! run { ($endpoint:ident, $printer:path) => { mini_linq::compile! {
         pipeline {print_input = $endpoint; print = $printer;}
         struct Q; relation R(x:i32);
-        answer(y) :- R(x), {if std::convert::identity(*x)==1, let y:String=String::from("first")}
-            else {let y:String=String::from("second")};
+        answer(y) :- R(x), {if std::convert::identity(*x)==1, let y:Vec<i64>=vec![1]}
+            else {let y:Vec<i64>=vec![2]};
     }.map(|(y,)|y).collect::<BTreeSet<_>>() }; }
     assert_eq!(
         run!(structures, own_push::push),
@@ -119,7 +119,7 @@ fn both_printers_keep_owned_non_copy_fallback_interfaces() {
     );
     assert_eq!(
         run!(structures, own_push::push),
-        BTreeSet::from(["first".to_owned(), "second".to_owned()])
+        BTreeSet::from([vec![1_i64], vec![2_i64]])
     );
 }
 
@@ -641,19 +641,19 @@ fn both_printers_execute_nested_generators_with_owned_tuple_prefixes() {
             mini_linq::compile! {
                 pipeline { print_input = $endpoint; print = $printer; }
                 struct Q; relation rows(n:i32);
-                relation answer(prefix:String,label:String,index:i32,other:i32);
+                relation answer(prefix:Vec<i64>,label:Vec<i32>,index:i32,other:i32);
                 answer(prefix,label,index,other) :- rows(n),
-                    let prefix:String = String::from("prefix"),
-                    for (label,index) in (0..*n).map(|i| (i.to_string(), i)),
+                    let prefix:Vec<i64> = vec![-1_i64],
+                    for (label,index) in (0..*n).map(|i| (vec![i], i)),
                     for other in 0..(*index + 1);
             }
             .collect::<BTreeSet<_>>()
         };
     }
     let expected = BTreeSet::from([
-        (String::from("prefix"), String::from("0"), 0, 0),
-        (String::from("prefix"), String::from("1"), 1, 0),
-        (String::from("prefix"), String::from("1"), 1, 1),
+        (vec![-1_i64], vec![0_i32], 0, 0),
+        (vec![-1_i64], vec![1_i32], 1, 0),
+        (vec![-1_i64], vec![1_i32], 1, 1),
     ]);
     assert_eq!(run!(structures, own_push::push), expected);
     assert_eq!(run!(sequence, mini_linq::passes::translate_pull), expected);
@@ -662,13 +662,13 @@ fn both_printers_execute_nested_generators_with_owned_tuple_prefixes() {
 #[test]
 fn both_printers_borrow_collections_and_canonicalize_generator_duplicates() {
     let rows = [(1_i32, vec![1_i32, 2, 1]), (2, vec![])];
-    let captured = vec![String::from("b"), String::from("a"), String::from("b")];
+    let captured = vec![vec![2_i64], vec![1_i64], vec![2_i64]];
     macro_rules! run {
         ($endpoint:ident, $printer:path) => {
             mini_linq::compile! {
                 pipeline { print_input = $endpoint; print = $printer; }
                 struct Q; relation rows(key:i32,values:Vec<i32>);
-                relation answer(key:i32,value:i32,label:&String);
+                relation answer(key:i32,value:i32,label:&Vec<i64>);
                 answer(key,value,label) :- rows(key,values),
                     for value in values.iter().copied(), for label in &captured;
             }
@@ -693,13 +693,13 @@ fn both_printers_borrow_collections_and_canonicalize_generator_duplicates() {
 #[test]
 fn both_printers_join_generated_values_and_preserve_guard_before_chain() {
     let rows = [(0_i32,), (2,)];
-    let labels = [(4_i32, String::from("four")), (5, String::from("five"))];
+    let labels = [(4_i32, vec![4_i64]), (5, vec![5_i64])];
     macro_rules! run {
         ($endpoint:ident, $printer:path) => {
             mini_linq::compile! {
                 pipeline { print_input = $endpoint; print = $printer; }
-                struct Q; relation rows(n:i32); relation labels(key:i32,label:String);
-                relation answer(value:i32,label:String,next:i32);
+                struct Q; relation rows(n:i32); relation labels(key:i32,label:Vec<i64>);
+                relation answer(value:i32,label:Vec<i64>,next:i32);
                 answer(value,label,next) :- rows(n), if std::convert::identity(*n) != 0,
                     for value in 0..(10 / *n), labels(value,label),
                     let next:i32 = *value + 1;
@@ -787,10 +787,10 @@ fn both_printers_apply_ir_generator_annotations_to_items() {
                 pipeline { $($passes),+ };
                 physical {
                     relation rows(n:i32);
-                    relation answer(value:i32,label:String);
+                    relation answer(value:i32,label:Vec<i32>);
                     r = pipe rename rows@0 {n -> n};
-                    g = pipe bind r with for (value,label):(i32,String) =
-                        ((0..*n).map(|i| (i, i.to_string())));
+                    g = pipe bind r with for (value,label):(i32,Vec<i32>) =
+                        ((0..*n).map(|i| (i, vec![i])));
                     out = let canon project g keep {value,label};
                     return out as answer(value,label);
                 }
@@ -798,7 +798,7 @@ fn both_printers_apply_ir_generator_annotations_to_items() {
             .collect::<BTreeSet<_>>()
         };
     }
-    let expected = BTreeSet::from([(0, String::from("0")), (1, String::from("1"))]);
+    let expected = BTreeSet::from([(0, vec![0_i32]), (1, vec![1_i32])]);
     assert_eq!(run!(own_push::push), expected);
     assert_eq!(
         run!(
@@ -813,14 +813,14 @@ fn both_printers_apply_ir_generator_annotations_to_items() {
 #[test]
 fn both_printers_borrow_generator_captures_inside_union_and_fallback() {
     let rows = [(0_i32,), (1,), (2,)];
-    let captured = vec![String::from("first"), String::from("second")];
-    let alternate = vec![String::from("alternate")];
+    let captured = vec![vec![1_i64], vec![2_i64]];
+    let alternate = vec![vec![3_i64]];
     macro_rules! union {
         ($endpoint:ident, $printer:path) => {
             mini_linq::compile! {
                 pipeline { print_input = $endpoint; print = $printer; }
                 struct Q; relation rows(x:i32);
-                relation answer(x:i32,y:&String);
+                relation answer(x:i32,y:&Vec<i64>);
                 answer(x,y) :- rows(x),
                     { for y in captured.iter().take(*x as usize) } |
                     { for y in alternate.iter() };
@@ -833,7 +833,7 @@ fn both_printers_borrow_generator_captures_inside_union_and_fallback() {
             mini_linq::compile! {
                 pipeline { print_input = $endpoint; print = $printer; }
                 struct Q; relation rows(x:i32);
-                relation answer(x:i32,y:&String);
+                relation answer(x:i32,y:&Vec<i64>);
                 answer(x,y) :- rows(x),
                     { for y in captured.iter().take(*x as usize) } else
                     { for y in alternate.iter() };

@@ -27,9 +27,6 @@ impl Context<'_> {
         if !access.prefix {
             return Some(filtered);
         }
-        if bounds.iter().any(|b| matches!(&b.value, syntax::constraint::Term::Literal(l) if matches!(l.as_ref(), syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. })))) {
-            return Some(filtered);
-        }
         let ty = &self.infos[&input].types[&column];
         let host = &access.value;
         let fallback_ty = self.fallback_type(

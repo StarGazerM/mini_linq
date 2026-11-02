@@ -413,38 +413,45 @@ fn default_reduces_cyclic_block_scopes_and_preserves_answers() {
 }
 
 #[test]
-fn opaque_string_filters_and_derived_country_domains_execute_exactly() {
+fn load_time_string_code_sets_and_country_domains_execute_exactly() {
+    let names = ["green brass", "blue", "green dangling"];
+    let mut dictionaries = cq_load::Dictionaries::default();
+    dictionaries.insert("name", names);
+    let code = |text: &str| cq_storage::domain::exact(dictionaries.domain("name"), text);
     let parts = [
-        (1, "green brass".to_owned()),
-        (2, "blue".to_owned()),
-        (3, "green dangling".to_owned()),
+        (1, code("green brass")),
+        (2, code("blue")),
+        (3, code("green dangling")),
     ];
     let lines = [(1,), (1,), (2,)];
+    // Pattern predicates run once per distinct dictionary entry at load time.
+    let green = cq_load::dictionary_where(&dictionaries, "name", |name| name.contains("green"));
     let actual: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
-        struct Q; relation parts(key:i32,name:String); relation lines(part:i32);
-        answer(key) :- lines(key), parts(key,name), if name.contains("green");
+        struct Q; relation parts(key:i32,name:cq_load::StringCode); relation lines(part:i32);
+        relation green(name:cq_load::StringCode);
+        answer(key) :- lines(key), parts(key,name), green(name);
     }
     .map(|(key,)| *key)
     .collect();
     assert_eq!(actual, [1].into());
-    fn green(name: &str) -> bool {
-        name.contains("green")
+    fn starts_green(name: &str) -> bool {
+        name.starts_with("green")
     }
-    let custom: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
-        struct Q; relation parts(key:i32,name:String); relation lines(part:i32);
-        answer(key) :- lines(key), parts(key,name), if green(name);
-    }
-    .map(|(key,)| *key)
-    .collect();
-    assert_eq!(custom, actual);
+    let custom = cq_load::dictionary_where(&dictionaries, "name", starts_green);
+    assert_eq!(custom, green);
+    let mut countries_dictionary = cq_load::Dictionaries::default();
+    countries_dictionary.insert("name", ["FRANCE", "GERMANY", "CANADA"]);
+    let country = |text: &str| cq_storage::domain::exact(countries_dictionary.domain("name"), text);
     let countries = [
-        (1, "FRANCE".to_owned()),
-        (2, "GERMANY".to_owned()),
-        (3, "CANADA".to_owned()),
+        (1, country("FRANCE")),
+        (2, country("GERMANY")),
+        (3, country("CANADA")),
     ];
     let links = [(1, 2), (2, 1), (1, 1), (3, 2), (99, 1)];
     let pairs: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
-        struct Q; relation countries(key:i32,name:String); relation links(a:i32,b:i32);
+        struct Q;
+        relation countries(key:i32,name:cq_load::StringCode in (countries_dictionary.domain("name")));
+        relation links(a:i32,b:i32);
         answer(a,b) :- links(a,b), countries(a,left), countries(b,right),
             where (left == "FRANCE" && right == "GERMANY") || (left == "GERMANY" && right == "FRANCE");
     }
@@ -454,12 +461,12 @@ fn opaque_string_filters_and_derived_country_domains_execute_exactly() {
 }
 
 #[test]
-fn opaque_total_string_guard_handles_dangling_parts() {
-    let parts = [(1, "g".to_owned()), (2, String::new())];
+fn opaque_total_guard_handles_dangling_parts() {
+    let parts = [(1, vec![7_i64]), (2, Vec::new())];
     let lines = [(1,)];
     let actual: Vec<_> = mini_linq::mini_linq! {
-        struct Q; relation parts(key:i32,name:String); relation lines(part:i32);
-        answer(key) :- lines(key), parts(key,name), if name.as_bytes().first() == Some(&b'g');
+        struct Q; relation parts(key:i32,name:Vec<i64>); relation lines(part:i32);
+        answer(key) :- lines(key), parts(key,name), if name.first() == Some(&7);
     }
     .map(|(key,)| *key)
     .collect();
@@ -472,14 +479,14 @@ fn opaque_guard_preserves_macro_forwarded_type_and_name_hygiene() {
         ($ty:ty; $rows:ident; $name:ident) => {
             mini_linq::mini_linq! {
                 struct Q; relation $rows(name:$ty);
-                answer($name) :- $rows($name), if $name.contains("green");
+                answer($name) :- $rows($name), if $name.contains(&7);
             }
         };
     }
-    let rows = [("green".to_owned(),), ("blue".to_owned(),)];
-    let answer: Vec<_> = filtered!(String; rows; name).collect();
+    let rows = [(vec![7_i64, 8],), (vec![9_i64],)];
+    let answer: Vec<_> = filtered!(Vec<i64>; rows; name).collect();
     assert_eq!(answer.len(), 1);
-    assert_eq!(answer[0].0, "green");
+    assert_eq!(*answer[0].0, [7, 8]);
 }
 
 #[test]

@@ -223,9 +223,9 @@ fn literal_disjunctions_use_membership_inside_derived_domains() {
 #[test]
 fn opaque_membership_remains_in_its_written_rust_conjunction() {
     let source: cq::Program = syn::parse_quote! {
-        struct Q; relation R(kind:String,size:i32);
+        struct Q; relation R(kind:Vec<i32>,size:i32);
         answer(kind) :- R(kind,size), where size != 0,
-            if !kind.starts_with("MEDIUM POLISHED") && [49, 14, 23, 45, 19, 3, 36, 9].contains(size);
+            if !kind.starts_with(&[7]) && [49, 14, 23, 45, 19, 3, 36, 9].contains(size);
     };
     assert_eq!(source.query.body.len(), 3);
     let cq::BodyItem::Filter(filter) = &source.query.body[2] else {
@@ -234,7 +234,7 @@ fn opaque_membership_remains_in_its_written_rust_conjunction() {
     assert_eq!(
         filter.condition,
         syn::parse_quote!(
-            !kind.starts_with("MEDIUM POLISHED") && [49, 14, 23, 45, 19, 3, 36, 9].contains(size)
+            !kind.starts_with(&[7]) && [49, 14, 23, 45, 19, 3, 36, 9].contains(size)
         )
     );
     assert_eq!(cq::normal::normalize(&source).unwrap(), source);
@@ -282,11 +282,11 @@ fn malformed_relational_literals_are_rejected() {
 fn arbitrary_rust_guards_stay_opaque_regardless_of_declared_type() {
     for ty in ["String", "&str", "Custom", "StringAlias"] {
         for guard in [
-            "name.contains(\"green\")",
-            "name.starts_with(\"g\") || name.ends_with(\"n\")",
+            "name.contains(&7)",
+            "name.first() == Some(&1) || name.last() == Some(&2)",
             "name.contains(pattern())",
-            "name.contains(\"green\") || partial(name)",
-            "name.as_bytes()[0] == 1",
+            "name.contains(&7) || partial(name)",
+            "name[0] == 1",
             "custom(name)",
         ] {
             let q: cq::Program = syn::parse_str(&format!(
@@ -301,15 +301,15 @@ fn arbitrary_rust_guards_stay_opaque_regardless_of_declared_type() {
         }
     }
     let q: cq::Program = syn::parse_quote! {
-        struct Q; relation R(a:String,b:i32);
-        answer(name) :- R(name,id), if name.contains("green") && *id > 0;
+        struct Q; relation R(a:Vec<i32>,b:i32);
+        answer(name) :- R(name,id), if name.contains(&7) && *id > 0;
     };
     let cq::BodyItem::Filter(filter) = &q.query.body[1] else {
         panic!("Rust conditions remain whole");
     };
     assert_eq!(
         filter.condition.to_token_stream().to_string(),
-        quote::quote!(name.contains("green") && *id > 0).to_string()
+        quote::quote!(name.contains(&7) && *id > 0).to_string()
     );
 }
 
@@ -389,8 +389,8 @@ fn closed_disjunction_operands_preserve_unary_domains_without_rust_bindings() {
 #[test]
 fn opaque_predicates_survive_multi_rule_alpha_renaming() {
     let q: cq::Program = syn::parse_quote! {
-        struct Q; relation R(name:String);
-        answer(name) :- R(name), if name.contains("green");
+        struct Q; relation R(name:Vec<i32>);
+        answer(name) :- R(name), if name.contains(&7);
         answer(name) :- R(name), if custom(name);
     };
     cq::contract::check(&q).unwrap();
@@ -409,10 +409,10 @@ fn opaque_predicates_survive_multi_rule_alpha_renaming() {
 
 #[test]
 fn macro_forwarded_column_types_and_expressions_remain_opaque() {
-    let ty = proc_macro2::Group::new(proc_macro2::Delimiter::None, quote::quote!(String));
+    let ty = proc_macro2::Group::new(proc_macro2::Delimiter::None, quote::quote!(Vec<i32>));
     let expr = proc_macro2::Group::new(
         proc_macro2::Delimiter::None,
-        quote::quote!(name.contains("green")),
+        quote::quote!(name.contains(&7)),
     );
     let q: cq::Program = syn::parse2(quote::quote! {
         struct Q; relation Part(name:#ty);
@@ -449,17 +449,17 @@ fn total_is_an_ordinary_identifier_but_the_removed_attribute_is_rejected() {
 fn normalization_preserves_written_rust_expressions() {
     let query: cq::Program = syn::parse_quote! {
         struct Q;
-        relation R(a:String);
-        relation S(a:String);
-        relation Blocked(a:String);
+        relation R(a:Vec<i32>);
+        relation S(a:Vec<i32>);
+        relation Blocked(a:Vec<i32>);
         answer(name) :-
             R(name),
-            if name.contains("green"),
+            if name.contains(&7),
             let length:usize = name.len(),
             !Blocked(name),
             if custom(name, length),
             S(name),
-            if name.ends_with("n");
+            if name.ends_with(&[9]);
     };
     cq::contract::check(&query).unwrap();
     assert_eq!(cq::normal::normalize(&query).unwrap(), query);

@@ -1,0 +1,31 @@
+program h22 {
+    domain CustomerPhone = dictionary(customer.c_phone);
+    input Customer(c_custkey: i64, c_phone: StringCode in CustomerPhone) = table(customer);
+    input Orders(o_orderkey: i64, o_custkey: i64) = table(orders);
+    input QualifyingPhones(phone: StringCode in CustomerPhone) = dictionary(CustomerPhone) where {
+        |value: &str|
+            ["13", "31", "23", "29", "30", "18", "17"].iter()
+                .any(|code| value.starts_with(*code))
+    };
+    stage s0 {
+        inputs {
+            Customer = Customer;
+            Orders = Orders;
+            QualifyingPhones = QualifyingPhones;
+        }
+        captures [];
+        evidence {}
+        cq {
+            struct Query;
+            relation Customer(c_custkey: i64, c_phone: StringCode);
+            relation Orders(o_orderkey: i64, o_custkey: i64);
+            relation QualifyingPhones(phone: StringCode);
+            relation answer(custkey: i64);
+            answer(custkey) :- Customer(custkey, phone), QualifyingPhones(phone),
+                !Orders(_, custkey);
+        }
+    }
+    terminal {
+        from s0 project [column(0)] dictionaries [];
+    }
+}

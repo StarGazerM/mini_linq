@@ -12,22 +12,7 @@ fn literal_reference(ty: &syn::Type, value: &Expr) -> TokenStream {
     }
     let mut ty = ty.clone();
     syn::visit_mut::VisitMut::visit_type_mut(&mut Static, &mut ty);
-    if matches!(
-        value,
-        Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(_),
-            ..
-        })
-    ) {
-        quote!({
-            static __CQ_CONSTANT: ::std::sync::LazyLock<
-                <#ty as ::cq_storage::StringLiteral>::Storage
-            > = ::std::sync::LazyLock::new(|| <#ty as ::cq_storage::StringLiteral>::storage(#value));
-            <#ty as ::cq_storage::StringLiteral>::reference(&*__CQ_CONSTANT)
-        })
-    } else {
-        quote!({ const __CQ_CONSTANT: #ty = #value; &__CQ_CONSTANT })
-    }
+    quote!({ const __CQ_CONSTANT: #ty = #value; &__CQ_CONSTANT })
 }
 
 impl Context<'_> {
@@ -84,11 +69,7 @@ impl Context<'_> {
             let value = self.access(left, &column);
             let value = if self.infos[left].computed.contains(&column) { quote!(&#value) } else { quote!(#value) };
             let constant = expressions::term_reference(&binding.value, &self.parameters);
-            Some(if matches!(&binding.value, Term::Literal(l) if matches!(l.as_ref(), Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. }))) {
-                quote!(::cq_storage::relational_string_eq(#value, #constant))
-            } else {
-                quote!(::cq_storage::relational_eq(#value, #constant))
-            })
+            Some(quote!(::cq_storage::relational_eq(#value, #constant)))
         }).collect();
         (!tests.is_empty()).then(|| quote!(true #(&& #tests)*))
     }

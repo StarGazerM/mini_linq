@@ -1278,6 +1278,9 @@ split into recognized comparisons or rewritten to operate on dictionary IDs.
 Their row reads must all have recorded identity device representation; their
 other inputs are closed captures. Unknown or codec-encoded row reads require
 host Rust execution, independently of the common pure-total premise.
+Closed-subexpression extraction treats every query-closed subexpression of
+device Rust uniformly: a literal is extracted into the same host-once closure
+witness as any other closed value, with no \code{Expr::Lit} exemption.
 \begin{mathpar}
 \Rule{GPU-Capture}{e\text{ query-closed}\quad e\text{ deterministic and total}\quad
  \phi\text{ a relational predicate}\quad
@@ -1431,7 +1434,9 @@ reaches the translator as a constant inside a rename. The checked Physical
 rewrite \code{capture\_constants} turns each such argument into a fresh column,
 an equality guard against the literal (a closed capture), and a projection
 that drops the fresh column; its checker re-derives that triple from the
-source and requires exact equality.
+source and requires exact equality. Operands at code-domain columns arrive
+already translated by A-Domain into capture references; no string literal
+reaches this rewrite.
 \begin{mathpar}
 \Rule{PH-ConstantGuard}{a=\mathsf{rename}(R,(\ldots,c,\ldots))\quad c\text{ closed}\quad x\text{ fresh}}
  {\sem a=\sem{\mathsf{project}_{\neg x}(\mathsf{guard}_{x=c}(\mathsf{rename}(R,(\ldots,x,\ldots))))}}

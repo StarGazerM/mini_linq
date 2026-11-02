@@ -29,14 +29,14 @@ fn nonlinear_rounds_follow_permuted_layouts_and_later_direct_deltas() {
 
 #[test]
 fn borrowed_filtered_keys_preserve_native_owned_rust_and_push_interfaces() {
-    let names = [
-        ("alice".to_owned(),),
-        ("bob".to_owned(),),
-        ("alice".to_owned(),),
-    ];
+    // Names are borrowed non-Copy keys; `repeat` computes an owned value from
+    // the borrowed key. Kinds are dictionary codes compared with a literal.
+    let (alice, bob) = (vec![1_i64], vec![2_i64]);
+    let kinds = cq_load::StringDictionary::new(["blocked", "other"]);
+    let names = [(alice.clone(),), (bob.clone(),), (alice.clone(),)];
     let blocked = [
-        ("blocked".to_owned(), "bob".to_owned()),
-        ("other".to_owned(), "alice".to_owned()),
+        (cq_storage::domain::exact(&kinds, "blocked"), bob),
+        (cq_storage::domain::exact(&kinds, "other"), alice),
     ];
     let result = cq_datalog::datalog! {
         pipeline {
@@ -44,21 +44,21 @@ fn borrowed_filtered_keys_preserve_native_owned_rust_and_push_interfaces() {
             print = cq_datalog_test_passes::eval_round;
         }
         struct Names;
-        relation Name(name:String) = (&names);
-        relation Blocked(kind:String,name:String) = (&blocked);
-        relation Allowed(name:String,n:i32);
+        relation Name(name:Vec<i64>) = (&names);
+        relation Blocked(kind:cq_load::StringCode in (kinds),name:Vec<i64>) = (&blocked);
+        relation Allowed(name:Vec<i64>,n:i32);
         output Allowed;
         Allowed(owned.clone(), n) :- Name(name), !Blocked("blocked",name),
-            let owned = name.to_uppercase(), for n in 0_i32..2;
+            let owned = name.repeat(2), for n in 0_i32..2;
         Allowed(name.clone(), *n + 1) :- Allowed(name,n), where n < 3;
     };
     assert_eq!(
         result,
         HashSet::from([
-            ("ALICE".to_owned(), 0),
-            ("ALICE".to_owned(), 1),
-            ("ALICE".to_owned(), 2),
-            ("ALICE".to_owned(), 3),
+            (vec![1_i64, 1], 0),
+            (vec![1_i64, 1], 1),
+            (vec![1_i64, 1], 2),
+            (vec![1_i64, 1], 3),
         ])
     );
 }

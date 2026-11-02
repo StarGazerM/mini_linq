@@ -37,8 +37,8 @@
 //! heading and I the common new interface; other binders remain branch-local.
 //! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
 //! Union siblings are unordered; fallback retains its relational anti steps.
-//! Rust expressions never become relational predicates. Only differing literals
-//! on one interface column prove union arms disjoint.
+//! Rust expressions never become relational predicates. Only fallback construction
+//! proves union arms disjoint; literal values prove nothing.
 //!
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -469,8 +469,7 @@ pub struct Analysis {
     pub discharged_host_sets: BTreeSet<String>,
     /// The invoking consumer owns canonicalization of returned answers.
     pub consumer_canonical: bool,
-    /// Union arms are disjoint only by fallback construction or different
-    /// explicit literals on the same interface column.
+    /// Union arms are disjoint only by fallback construction.
     pub disjoint: BTreeSet<String>,
     /// Fused union -> prefix and arm-local definitions. Shared pipe reads in
     /// these groups are one streamed traversal, never independent traversals.
@@ -1215,7 +1214,12 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             }
         }
     }
-    analysis.disjoint = constants::disjoint(module);
+    analysis.disjoint = cq_syntax::algebra::disjoint_unions(program.definitions.iter().filter_map(
+        |definition| match &definition.operator {
+            Operator::Union(union) => Some((&definition.name, union.origin.as_ref())),
+            _ => None,
+        },
+    ));
     for definition in &program.definitions {
         if definition.canon.is_some()
             && matches!(definition.operator, Operator::Union(_))
@@ -1229,7 +1233,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
     }
     Ok(analysis)
 }
-mod constants;
 
 fn join_columns(keyed: &Keyed, left: &[String], right: &[String]) -> syn::Result<Vec<String>> {
     let shared: BTreeSet<String> = left.iter().filter(|c| right.contains(c)).cloned().collect();

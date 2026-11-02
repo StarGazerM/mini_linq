@@ -57,23 +57,25 @@ fn conflicting_points_keep_all_residuals_before_the_next_read() {
 #[test]
 fn nonleading_filtered_index_keeps_payload_and_constant_reconstruction() {
     let left = [(1_i64,), (2,), (3,)];
+    let labels = cq_load::StringDictionary::new(["no", "yes"]);
+    let code = |text: &str| cq_storage::domain::exact(&labels, text);
     let right = [
-        (1_i64, "yes".to_owned(), 10_i64),
-        (2, "no".to_owned(), 20),
-        (3, "yes".to_owned(), 30),
+        (1_i64, code("yes"), 10_i64),
+        (2, code("no"), 20),
+        (3, code("yes"), 30),
     ];
     let result: BTreeSet<_> = mini_linq::compile! {
         pipeline { print_input = $input; print = $($printer)::+; select = mini_linq::passes::select(positional(L,R)); }
         struct Filtered;
         relation L(a:i64) = (left);
-        relation R(a:i64,label:String,value:i64) = (right);
+        relation R(a:i64,label:cq_load::StringCode in (labels),value:i64) = (right);
         answer(a,label,value) :- L(a), R(a,label,value), where label == "yes";
     }
-    .map(|(a, l, v)| (*a, l.clone(), *v))
+    .map(|(a, l, v)| (*a, *l, *v))
     .collect();
     assert_eq!(
         result,
-        BTreeSet::from([(1, "yes".to_owned(), 10), (3, "yes".to_owned(), 30)])
+        BTreeSet::from([(1, code("yes"), 10), (3, code("yes"), 30)])
     );
 }
 

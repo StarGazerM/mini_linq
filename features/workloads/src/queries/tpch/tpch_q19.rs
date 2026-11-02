@@ -1,7 +1,8 @@
 //! TPC-H-derived Q19 with a positive join, relational comparison predicates and exact SUM.
 //! Part keys are unique in dbgen; retaining the lineitem primary key preserves
 //! SQL multiplicity even when different lineitems have equal revenues.
-//! Text columns use load-time sorted dictionary codes, including query literals.
+//! Text columns use load-time sorted dictionary codes; query literals translate
+//! through the declared column domains.
 
 use cq_load::{Decimal, StringCode};
 use std::{error::Error, path::Path};
@@ -79,24 +80,6 @@ macro_rules! query_body {
         pub(super) fn execute(data: &Data) -> Vec<Answer> {
             let lineitem = data.lineitem.as_slice();
             let part = data.part.as_slice();
-            let air = data.dictionaries.literal("l_shipmode", "AIR");
-            let air_reg = data.dictionaries.literal("l_shipmode", "AIR REG");
-            let deliver = data.dictionaries.literal("l_shipinstruct", "DELIVER IN PERSON");
-            let brand12 = data.dictionaries.literal("p_brand", "Brand#12");
-            let brand23 = data.dictionaries.literal("p_brand", "Brand#23");
-            let brand34 = data.dictionaries.literal("p_brand", "Brand#34");
-            let sm_case = data.dictionaries.literal("p_container", "SM CASE");
-            let sm_box = data.dictionaries.literal("p_container", "SM BOX");
-            let sm_pack = data.dictionaries.literal("p_container", "SM PACK");
-            let sm_pkg = data.dictionaries.literal("p_container", "SM PKG");
-            let med_bag = data.dictionaries.literal("p_container", "MED BAG");
-            let med_box = data.dictionaries.literal("p_container", "MED BOX");
-            let med_pkg = data.dictionaries.literal("p_container", "MED PKG");
-            let med_pack = data.dictionaries.literal("p_container", "MED PACK");
-            let lg_case = data.dictionaries.literal("p_container", "LG CASE");
-            let lg_box = data.dictionaries.literal("p_container", "LG BOX");
-            let lg_pack = data.dictionaries.literal("p_container", "LG PACK");
-            let lg_pkg = data.dictionaries.literal("p_container", "LG PKG");
             let q1_low = Decimal::from_scaled(100).unwrap();
             let q1_high = Decimal::from_scaled(1100).unwrap();
             let q2_low = Decimal::from_scaled(1000).unwrap();
@@ -110,22 +93,24 @@ macro_rules! query_body {
                 relation lineitem(
                     partkey: i64, orderkey: i64, linenumber: i64,
                     quantity: Decimal, price: Decimal, discount: Decimal,
-                    shipmode: StringCode, shipinstruct: StringCode
+                    shipmode: StringCode in (data.dictionaries.domain("l_shipmode")),
+                    shipinstruct: StringCode in (data.dictionaries.domain("l_shipinstruct"))
                 );
-                relation part(partkey: i64, brand: StringCode, container: StringCode, size: i32);
+                relation part(partkey: i64, brand: StringCode in (data.dictionaries.domain("p_brand")),
+                    container: StringCode in (data.dictionaries.domain("p_container")), size: i32);
                 rows(group, orderkey, linenumber, amount) :-
                     lineitem(partkey, orderkey, linenumber, quantity, price, discount, shipmode, shipinstruct),
                     part(partkey, brand, container, size),
-                    where shipmode == air || shipmode == air_reg,
-                    where shipinstruct == deliver,
-                    where (brand == brand12
-                        && (container == sm_case || container == sm_box || container == sm_pack || container == sm_pkg)
+                    where shipmode == "AIR" || shipmode == "AIR REG",
+                    where shipinstruct == "DELIVER IN PERSON",
+                    where (brand == "Brand#12"
+                        && (container == "SM CASE" || container == "SM BOX" || container == "SM PACK" || container == "SM PKG")
                         && quantity >= q1_low && quantity <= q1_high && size >= 1 && size <= 5)
-                    || (brand == brand23
-                        && (container == med_bag || container == med_box || container == med_pkg || container == med_pack)
+                    || (brand == "Brand#23"
+                        && (container == "MED BAG" || container == "MED BOX" || container == "MED PKG" || container == "MED PACK")
                         && quantity >= q2_low && quantity <= q2_high && size >= 1 && size <= 10)
-                    || (brand == brand34
-                        && (container == lg_case || container == lg_box || container == lg_pack || container == lg_pkg)
+                    || (brand == "Brand#34"
+                        && (container == "LG CASE" || container == "LG BOX" || container == "LG PACK" || container == "LG PKG")
                         && quantity >= q3_low && quantity <= q3_high && size >= 1 && size <= 15),
                     let group: i32 = 0,
                     let amount: i128 = i128::from(price.scaled()) * (100 - i128::from(discount.scaled()));
@@ -196,6 +181,7 @@ mod tests {
 
     #[test]
     fn branches_boundaries_and_equal_valued_lines_preserve_sql_sum() {
+        use cq_storage::domain::exact;
         let decimal = |value| Decimal::from_scaled(value).unwrap();
         let mut dictionaries = cq_load::Dictionaries::default();
         dictionaries.insert("p_brand", ["Brand#12", "Brand#23", "Brand#34"]);
@@ -210,34 +196,34 @@ mod tests {
                 decimal(quantity),
                 decimal(10_000),
                 decimal(5),
-                dictionaries.literal("l_shipmode", mode),
-                dictionaries.literal("l_shipinstruct", instruction),
+                exact(dictionaries.domain("l_shipmode"), mode),
+                exact(dictionaries.domain("l_shipinstruct"), instruction),
             )
         };
         let data = Data {
             part: vec![
                 (
                     1,
-                    dictionaries.literal("p_brand", "Brand#12"),
-                    dictionaries.literal("p_container", "SM CASE"),
+                    exact(dictionaries.domain("p_brand"), "Brand#12"),
+                    exact(dictionaries.domain("p_container"), "SM CASE"),
                     5,
                 ),
                 (
                     2,
-                    dictionaries.literal("p_brand", "Brand#23"),
-                    dictionaries.literal("p_container", "MED BAG"),
+                    exact(dictionaries.domain("p_brand"), "Brand#23"),
+                    exact(dictionaries.domain("p_container"), "MED BAG"),
                     10,
                 ),
                 (
                     3,
-                    dictionaries.literal("p_brand", "Brand#34"),
-                    dictionaries.literal("p_container", "LG PKG"),
+                    exact(dictionaries.domain("p_brand"), "Brand#34"),
+                    exact(dictionaries.domain("p_container"), "LG PKG"),
                     15,
                 ),
                 (
                     4,
-                    dictionaries.literal("p_brand", "Brand#12"),
-                    dictionaries.literal("p_container", "SM CASE"),
+                    exact(dictionaries.domain("p_brand"), "Brand#12"),
+                    exact(dictionaries.domain("p_container"), "SM CASE"),
                     6,
                 ),
             ],

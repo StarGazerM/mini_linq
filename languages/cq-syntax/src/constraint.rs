@@ -372,11 +372,6 @@ impl Term {
         }
     }
 
-    pub fn string_literal(&self) -> bool {
-        matches!(self, Self::Literal(l) if matches!(l.as_ref(),
-            syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. })))
-    }
-
     pub fn resolve(&mut self, logical: &BTreeSet<String>) {
         if let Self::Variable(v) = self {
             if !logical.contains(&symbol_name(v)) {
@@ -406,29 +401,18 @@ impl Comparison {
     }
 
     /// Emit the shared Eq/Ord obligations for borrowed relational operands.
-    pub fn expression(self, left: TokenStream, right: TokenStream, string: bool) -> TokenStream {
-        let equality = if string {
-            quote!(::cq_storage::relational_string_eq(#left, #right))
-        } else {
-            quote!(::cq_storage::relational_eq(#left, #right))
-        };
+    /// Operands of one comparison share a representation: code-domain columns
+    /// compare against A-Domain code captures, so there is no per-value path.
+    pub fn expression(self, left: TokenStream, right: TokenStream) -> TokenStream {
+        let equality = quote!(::cq_storage::relational_eq(#left, #right));
+        let ordering = quote!(::cq_storage::relational_cmp(#left, #right));
         match self {
             Self::Eq(_) => equality,
             Self::Ne(_) => quote!(!#equality),
-            _ => {
-                let ordering = if string {
-                    quote!(::cq_storage::relational_str_cmp(#left, #right))
-                } else {
-                    quote!(::cq_storage::relational_cmp(#left, #right))
-                };
-                match self {
-                    Self::Lt(_) => quote!(#ordering.is_lt()),
-                    Self::Le(_) => quote!(!#ordering.is_gt()),
-                    Self::Gt(_) => quote!(#ordering.is_gt()),
-                    Self::Ge(_) => quote!(!#ordering.is_lt()),
-                    _ => unreachable!(),
-                }
-            }
+            Self::Lt(_) => quote!(#ordering.is_lt()),
+            Self::Le(_) => quote!(!#ordering.is_gt()),
+            Self::Gt(_) => quote!(#ordering.is_gt()),
+            Self::Ge(_) => quote!(!#ordering.is_lt()),
         }
     }
 }

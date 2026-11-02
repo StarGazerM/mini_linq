@@ -99,7 +99,6 @@ crate::tpch_runtime::standalone_configs! { $;
         let Supplier = data.supplier.as_slice();
         let Nation = data.nation.as_slice();
         let ForestNames = data.forest_names.as_slice();
-        let canada = data.dictionaries.literal("n_name", "CANADA");
         let start = Date::load("1994-01-01").expect("authored ISO date");
         let end = Date::load("1995-01-01").expect("authored ISO date");
         let Shipped: Vec<(i64, i64, i64)> = query! {
@@ -122,14 +121,14 @@ crate::tpch_runtime::standalone_configs! { $;
             relation Partsupp(ps_partkey: i64, ps_suppkey: i64, ps_availqty: i64);
             relation Shipped(part_key: i64, supplier_key: i64, quantity_units: i64);
             relation Supplier(s_suppkey: i64, s_nationkey: i32, s_name: StringCode, s_address: StringCode);
-            relation Nation(n_nationkey: i32, n_name: StringCode);
+            relation Nation(n_nationkey: i32, n_name: StringCode in (data.dictionaries.domain("n_name")));
             relation answer(supplier_name: StringCode, address: StringCode);
             answer(supplier_name, address) :-
                 Part(part_key, part_name), ForestNames(part_name),
                 Partsupp(part_key, supplier_key, available), Shipped(part_key, supplier_key, quantity_units),
                 if i128::from(*available) * 200 > i128::from(*quantity_units),
                 Supplier(supplier_key, nation_key, supplier_name, address),
-                Nation(nation_key, nation_name), where nation_name == canada;
+                Nation(nation_key, nation_name), where nation_name == "CANADA";
         }.map(|(name, address)| {
             // DECODE P: publish the supplier name in the final answer.
             let name = data.dictionaries.publish("s_name", *name);

@@ -858,13 +858,16 @@ accumulate in `compare/srd_query_xalan_batik.results.json`; never run concurrent
 writers or GPU engines. The original-query `doop-gpu` timing is explicitly
 separate and is not an equality comparison against the SRD query.
 
-### Planner-driven 11-query TPC-H suite
+### Planner-driven 26-query TPC-H suite
 
-`tpch` is one crate with one binary, `cq-gpu-tpch`. It imports the CPU
-`retail_kernel!` invocations directly with `include_str!`; no second query body
-is duplicated. Build-time compilation uses the same CQ macro substitution,
-checked CQ → Physical → Structures passes, generic catalog selection, Sequence
-lowering, grading and translation. The default build generates only `advised`
+`tpch` is one crate with one binary, `cq-gpu-tpch`. Its authoritative frontend
+is the 26 authored `tpch/queries/*.stages` programs. CPU workload Rust remains
+an independent reference and is not parsed by the GPU compiler. The checked,
+printable stage IR explicitly declares producers, captures, dependencies,
+owned publications and terminal projections; embedded Rust stays opaque.
+Each CQ stage uses the checked CQ → VO → RA → Physical → Structures passes,
+catalog selection, Sequence lowering, grading and translation.
+The default build generates only `advised`
 executors, using explicit pipeline choices followed by decomposition-only
 completion. Automatic is opt-in pending box 11b: build with
 `CQ_GPU_TPCH_AUTOMATIC=1` to also generate `automatic` executors using
@@ -876,15 +879,14 @@ closed `where` operands encoded on the host. Rust arithmetic and conditional bin
 are never rewritten into dictionary operations; logical host adapters handle
 expressions reading nonidentity columns. Neither loader nor translator chooses a plan.
 
-The default loader reads only each imported query's declared columns. `String` columns
-are decoded from `.bin` dictionary codes and `.dict.txt` into owned host strings;
-integer/code declarations retain codes, and only their text literals are
-resolved to dictionary IDs. Integer-only relations keep resident device uploads
-and share columns between aliases. Dates use i32 epoch days and decimals use
-scale-2 integers. Substring predicates receive real strings, not dictionary IDs.
-This affects H03 (`c_mktsegment`), H05 (`r_name`), H07/H07-block (`n_name`),
-H08 (`p_type`, `r_name`), H09 (`p_name`), H21-positive (`o_orderstatus`, `n_name`),
-D19/D85 (`n_name`), and D27 (`p_brand`, `n_name`); D72-inner has no string columns.
+The default loader reads each declared table projection. Dictionary-domain
+columns retain published `u32` codes; explicit domain identities, not Rust
+type spellings, select this representation. Shared CQ domain normalization
+captures all closed operands once on the host, using exact/lower/upper runtime
+operations for sorted dictionaries. Output-only dictionary domains are not
+evaluated. Integer-only relations retain resident uploads and share columns
+between aliases. Dates use i32 epoch days and decimals use scale-2 integers
+when the recorded scalar representation supports relational-only reads.
 Catalog provider tokens declare their native ABI, contiguous-range promise and
 bounds source. Loader-authored input instances record their logical/storage
 columns and codecs; no ABI or scalar support is inferred from Rust spelling.
@@ -894,20 +896,21 @@ including equality constraints, so contradictory selections remain empty.
 An unmapped live generated row read is a compilation error rather than a
 zero-valued fallback. GPU launch checking independently validates recorded
 offset and synchronization obligations and requires positive tile sizes.
-The explicit `tpch_dictionary` profile also stores String columns as codes when
-their uses are literal equality predicates, including relational `Or` arms and
-`In` sets. Each literal uses its own column's dictionary; H07's country-pair
-select therefore executes on integer codes on the device. Opaque string
-predicates and ordered String comparisons retain host strings. Once a host
-projection drops the strings, its numeric rows are uploaded for subsequent GPU
-work; host evaluation and upload are included in the build timing interval.
-The synthetic String-guard regression checks this boundary against Sequential
+
+Opaque text predicates are authored as dictionary input producers and receive
+each distinct string once; their code sets feed relational operations.
+Arbitrary host producers declare dependencies explicitly, retain their Rust
+payloads, and convert domain-marked columns at publication. Terminal projection
+slots and dictionary domains control final text publication. Neither a method
+named `literal`/`publish` nor a function named `dictionary_where`/`date` is
+recognized by the frontend. The synthetic String-guard regression checks the
+declared dictionary producer and closed-operand boundary against Sequential
 and explicit expected keys.
 
 H05 uses the explicit `tpch_domains` loader profile in **both** modes: the shared
 `gpu_compress_host::tpch::schema`/`gpu_compress::Catalog` stores join keys as dense u32 domain IDs
 and the date/Region dictionary code as i32, exactly as the authored benchmark.
-The imported query's types and dictionary literals are adapted to that schema;
+The authored query's representation is adapted to that schema;
 GPU and Sequential outputs are decoded back to source keys before comparison.
 The loader profile is recorded in the pipeline artifact, not selected by the
 planner. H05's advised pipeline records Region → Nation → Customer → Orders →
@@ -952,14 +955,18 @@ Each entry is a pipeline object, for example:
 `membership(...)`, and `retype(...)`. Sequence entries parse the planner's
 public `Advice` syntax, including `store`, `store_level`, `tile`, `partition`,
 `segment`, `output`, `grade`, and `evidence { ... }`. CPU workload
-`advise plan(...)` hints are imported into the report's `cpu_plan_advice`
-field for explicit selection. They do not automatically replace the measured
-GPU baseline: CPU-specific reduction hints can produce unsupported GPU builds.
+`advise plan(...)` hints are not imported. GPU advice stays in its existing
+explicit catalog/override interface; CPU-specific reduction hints cannot
+silently replace the measured GPU baseline.
 
-Each accepted report includes `sequence_input`, `sequence_trace`,
-`sequence_planned`, symbolic cost, and a resolved `pipeline` object. Copy
-`{ \"query_name\": report.pipeline }` into the override file to replay it;
-`complete: true` means its Sequence trace already records the complete
+Each accepted report includes `stage_source`, `terminal_stages` and
+`terminal_direct`; each entry in `stages` includes `sequence_input`,
+`sequence_trace`, `sequence_planned`, publication facts, symbolic cost and a
+resolved `pipeline`. For a single-stage query, copy
+`{ \"query_name\": report.stages[0].pipeline }` into the override file to replay
+it. A query-level override applies to every stage, so one stage's resolved
+pipeline is not a replay specification for an arbitrary multistage query.
+`complete: true` means the Sequence trace already records the complete
 schedule and is not replanned. Manifest row counts are recorded as evidence,
 never fabricated selectivities. Replay coverage checks exact program equality.
 

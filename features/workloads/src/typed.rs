@@ -2,6 +2,8 @@
 //!
 //! Each case owns one literal CQ query and an independently authored SQL query.
 //! Ordinary Rust schemas describe loader columns and the oracle's SQL tables.
+//! Text columns are read as source strings and interned by each query module;
+//! queries declare them as `cq_load::StringCode` and publish text in answers.
 //! Fixtures include duplicate rows,
 //! integers outside the i32 range, pre-epoch and leap dates, negative fixed
 //! point values, and strings requiring CSV quoting.
@@ -130,11 +132,11 @@ macro_rules! cases {
 }
 
 cases! {
-    typed_line_filter [Lineitem, Limits] => "fixed-point and date range filters with owned text projection",
+    typed_line_filter [Lineitem, Limits] => "fixed-point and date range filters with interned text projection",
     typed_customer_orders [Customer, Orders] => "i64 customer-key join with dates and fixed-point totals",
     typed_calendar_shipping [Calendar, Shipment] => "date-key equality and duplicate input elimination",
     typed_priced_products [Price, PricedProduct] => "fixed-point key equality including negative prices",
-    typed_tagged_products [Tag, Selected, TaggedProduct] => "owned string-key join and three-relation projection",
+    typed_tagged_products [Tag, Selected, TaggedProduct] => "interned string-key join and three-relation projection",
 }
 
 pub fn case(name: &str) -> Option<&'static Case> {

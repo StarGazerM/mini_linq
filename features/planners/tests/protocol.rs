@@ -34,16 +34,16 @@ fn every_planner_runs_through_the_named_facade() {
 #[test]
 fn le_generators_join_generated_keys_and_preserve_lowered_if_let() {
     let limits = [(3_i32,), (0,)];
-    let labels = [(0_i32, String::from("zero")), (2, String::from("two"))];
+    let labels = [(0_i32, vec![0_i64]), (2, vec![2_i64])];
     let answer: std::collections::BTreeSet<_> = mini_linq::compile! {
         pipeline { plan = cq_planners::order(le); }
         struct Q;
-        relation limits(n:i32); relation labels(key:i32,label:String);
-        relation answer(value:i32,label:String,next:i32);
+        relation limits(n:i32); relation labels(key:i32,label:Vec<i64>);
+        relation answer(value:i32,label:Vec<i64>,next:i32);
         answer(value,label,next) :- limits(n), for value in 0..*n,
             labels(value,label),
-            for (next,) in match label.strip_prefix("z") {
-                Some(_) => ::core::option::Option::Some((*value + 1,)),
+            for (next,) in match label.first() {
+                Some(&0) => ::core::option::Option::Some((*value + 1,)),
                 _ => ::core::option::Option::None,
             };
     }

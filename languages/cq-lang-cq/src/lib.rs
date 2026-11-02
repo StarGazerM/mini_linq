@@ -22,6 +22,7 @@
 pub mod blocks;
 pub mod group;
 pub mod hypergraph;
+mod domain;
 pub mod normal;
 pub use blocks::{Block, Branch};
 mod sugar;

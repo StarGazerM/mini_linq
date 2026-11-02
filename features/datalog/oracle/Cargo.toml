@@ -26,5 +26,6 @@ cq-testkit = { version = "0.1.0", path = "../../../testkit/cq-testkit", features
 ascent = { version = "0.8", default-features = false }
 cq-datalog = { path = "../facade/cq-datalog" }
 mini-linq = { path = "../../../facade/mini-linq" }
+cq-load = { path = "../../../runtime/cq-load" }
 cq-datalog-testkit = { path = "../testkit" }
 cq-datalog-test-passes = { path = "../test-passes" }
