@@ -101,7 +101,6 @@ pub type Signature = (String, Vec<usize>, SupplyKind);
 /// One first-use demand of a checked RA program, in definition order.
 #[derive(Clone, Debug)]
 pub struct Demand<'a> {
-    pub definition: &'a Ident,
     pub relation: &'a Ident,
     pub signature: Signature,
 }
@@ -154,7 +153,6 @@ pub fn demands<'a>(program: &'a ra::Program, info: &ra::Analysis) -> Vec<Demand<
         // IX-Reuse: only the first occurrence contributes a demand.
         if seen.insert(signature.clone()) {
             demands.push(Demand {
-                definition: &definition.result,
                 relation: right,
                 signature,
             });
@@ -195,47 +193,61 @@ fn check_read_requirements<'a>(
     let mut reads = BTreeMap::new();
     let mut used = BTreeSet::new();
     for definition in &program.ra.plan.definitions {
-        let (relation, keys, supply) = match &definition.operator {
+        let (relation, stream_keys, condition) = match &definition.operator {
             ra::Operator::NaturalJoin(join) => (
                 &join.right,
-                Cow::Borrowed(&info[&symbol_name(&join.left)].heading),
-                SupplyKind::Stream,
+                Some(Cow::Borrowed(&info[&symbol_name(&join.left)].heading)),
+                None,
             ),
             ra::Operator::Semijoin(join) => (
                 &join.right,
-                Cow::Borrowed(&info[&symbol_name(&join.left)].heading),
-                SupplyKind::Stream,
+                Some(Cow::Borrowed(&info[&symbol_name(&join.left)].heading)),
+                None,
             ),
             ra::Operator::Anti(anti) => (
                 &anti.right,
-                Cow::Owned(anti.columns.iter().map(symbol_name).collect()),
-                SupplyKind::Stream,
+                Some(Cow::Owned(anti.columns.iter().map(symbol_name).collect())),
+                None,
             ),
-            ra::Operator::Select(selection) => {
-                let (keys, supply) = if let Some(keys) = selection.condition.point_columns() {
-                    (keys, SupplyKind::Const)
-                } else if let Some((column, _)) = selection.condition.range_bounds() {
-                    (BTreeSet::from([column]), SupplyKind::Range)
-                } else {
-                    continue;
-                };
-                (&selection.input, Cow::Owned(keys), supply)
-            }
+            ra::Operator::Select(selection) => (&selection.input, None, Some(&selection.condition)),
             _ => continue,
         };
+        let point_columns = condition.and_then(|condition| condition.point_columns());
+        let range_column = condition
+            .and_then(|condition| condition.range_bounds())
+            .map(|(column, _)| column);
+        if stream_keys.is_none() && point_columns.is_none() && range_column.is_none() {
+            continue;
+        }
         let heading = &info[&symbol_name(relation)].heading;
         let requirement = program.indexes.iter().find(|index| {
             let requirement = &index.requirement;
-            requirement.relation == *relation
-                && requirement.supply.kind() == supply
-                && requirement
-                    .columns
-                    .iter()
-                    .map(|column| column.index as usize)
-                    .eq(heading
+            if requirement.relation != *relation {
+                return false;
+            }
+            match requirement.supply.kind() {
+                SupplyKind::Stream => stream_keys.as_ref().is_some_and(|keys| {
+                    requirement
+                        .columns
                         .iter()
-                        .enumerate()
-                        .filter_map(|(ordinal, column)| keys.contains(column).then_some(ordinal)))
+                        .map(|column| column.index as usize)
+                        .eq(heading.iter().enumerate().filter_map(|(ordinal, column)| {
+                            keys.contains(column).then_some(ordinal)
+                        }))
+                }),
+                SupplyKind::Const => point_columns.as_ref().is_some_and(|keys| {
+                    requirement.columns.iter().all(|column| {
+                        heading
+                            .iter()
+                            .nth(column.index as usize)
+                            .is_some_and(|name| keys.contains(name))
+                    })
+                }),
+                SupplyKind::Range => range_column.as_ref().is_some_and(|column| {
+                    requirement.columns.len() == 1
+                        && heading.iter().nth(requirement.columns[0].index as usize) == Some(column)
+                }),
+            }
         });
         if let Some(index) = requirement {
             used.insert(symbol_name(&index.name));
@@ -244,7 +256,7 @@ fn check_read_requirements<'a>(
             return Err(syn::Error::new_spanned(
                 &definition.result,
                 format!(
-                    "definition `{}`: missing first-use demand for `{relation}` with {supply:?} supply",
+                    "definition `{}`: missing legal index requirement for `{relation}`",
                     definition.result
                 ),
             ));

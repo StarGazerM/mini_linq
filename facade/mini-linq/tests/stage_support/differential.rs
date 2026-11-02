@@ -6,18 +6,31 @@
 
 use std::collections::BTreeMap;
 
-use super::{Outcome, Rewrites, Route, compile, failure, reference};
-
-/// Seeds whose failure is recorded in design-notes/test-layer-findings.md and
-/// awaits a compiler fix. They are reported, not failed, by
-/// `every_stage_denotes_the_reference_answer` and asserted by
-/// `recorded_findings_are_fixed`.
-const RECORDED_FINDINGS: &[u64] = &[37, 877, 941]; // F1 (quick profile)
+use super::{Outcome, Rewrites, Route, Stage, compile, failure, reference};
 
 #[derive(Default)]
 struct Tally {
     judged: BTreeMap<String, usize>,
     unsupported: BTreeMap<String, BTreeMap<String, usize>>,
+}
+
+impl Tally {
+    fn observe(&mut self, stage: &Stage) -> Result<(), String> {
+        match &stage.outcome {
+            Outcome::Rows(_) => *self.judged.entry(stage.name.clone()).or_default() += 1,
+            Outcome::Failed(error) => return Err(error.to_string()),
+            Outcome::Unsupported(why) => {
+                let why: String = why.chars().take(60).collect();
+                *self
+                    .unsupported
+                    .entry(stage.name.clone())
+                    .or_default()
+                    .entry(why)
+                    .or_default() += 1;
+            }
+        }
+        Ok(())
+    }
 }
 
 fn run(seed: u64, routes: &[Route], rewrites: Rewrites, tally: &mut Tally) -> Option<String> {
@@ -34,17 +47,8 @@ fn run(seed: u64, routes: &[Route], rewrites: Rewrites, tally: &mut Tally) -> Op
         }
     };
     for stage in &compiled.stages {
-        match &stage.outcome {
-            Outcome::Rows(_) => *tally.judged.entry(stage.name.clone()).or_default() += 1,
-            Outcome::Unsupported(why) => {
-                let why: String = why.chars().take(60).collect();
-                *tally
-                    .unsupported
-                    .entry(stage.name.clone())
-                    .or_default()
-                    .entry(why)
-                    .or_default() += 1;
-            }
+        if let Err(detail) = tally.observe(stage) {
+            return Some(failure(&case, &route.name(), &stage.name, &detail));
         }
     }
     let (origin, expected) = match super::quietly(|| case.reference()) {
@@ -83,11 +87,7 @@ pub fn every_stage_denotes_the_reference_answer(rewrites: Rewrites) {
     let mut tally = Tally::default();
     for seed in (0..count).chain([rotating]) {
         if let Some(report) = run(seed, &routes, rewrites, &mut tally) {
-            if RECORDED_FINDINGS.contains(&seed) {
-                println!("recorded finding (not failed):\n{report}");
-            } else {
-                failures.push(report);
-            }
+            failures.push(report);
         }
     }
     println!(
@@ -108,12 +108,20 @@ pub fn every_stage_denotes_the_reference_answer(rewrites: Rewrites) {
     );
 }
 
-pub fn recorded_findings_are_fixed(rewrites: Rewrites) {
-    let routes = Route::all();
+#[test]
+fn execution_failures_are_reported_without_a_reference_answer() {
+    use cq_testkit::physical_semantics::Error;
     let mut tally = Tally::default();
-    let failures: Vec<String> = RECORDED_FINDINGS
-        .iter()
-        .filter_map(|seed| run(*seed, &routes, rewrites, &mut tally))
-        .collect();
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    for error in [
+        Error::Panic("overflow".into()),
+        Error::Malformed("undefined read".into()),
+    ] {
+        let stage = Stage {
+            name: "physical:lower".into(),
+            outcome: Outcome::Failed(error.clone()),
+        };
+        assert_eq!(tally.observe(&stage), Err(error.to_string()));
+    }
+    assert!(tally.unsupported.is_empty());
+    assert!(tally.judged.is_empty());
 }

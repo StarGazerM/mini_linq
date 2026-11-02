@@ -110,6 +110,9 @@ impl Printer<'_> {
                     &key.right,
                     self.heading(&right),
                 )? {
+                    Access::Rows => {
+                        return error(&key.right, "intersection membership requires a keyed read");
+                    }
                     Access::Host(access) => self.host_lookup(&first_name, &access, true, false),
                     Access::Built(s) => {
                         self.chained_contains(&first_name, &s, &right, &self.levels_of(&right, &s))

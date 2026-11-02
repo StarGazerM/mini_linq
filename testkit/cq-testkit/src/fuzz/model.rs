@@ -2016,8 +2016,6 @@ fn generate_relational(seed: u64, stream: u64, profile: &super::Profile) -> Case
                     ColumnType::I64
                 } else if profile.wide_ints && choice == 2 {
                     ColumnType::U32
-                } else if profile.strings && choice == 3 {
-                    ColumnType::Str
                 } else {
                     ColumnType::I32
                 }

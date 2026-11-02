@@ -711,7 +711,8 @@ impl<'a> Emitter<'a> {
                 partitioned: input.partitioned,
             });
         }
-        if columns.is_empty()
+        let access = self.context().keyed(&result, provider, &columns)?;
+        if matches!(access, Access::Rows)
             || self
                 .context()
                 .forcing_witness(&result, &right, &columns)
@@ -723,7 +724,7 @@ impl<'a> Emitter<'a> {
         self.register(&result);
         let context = self.context();
         let mut setup = TokenStream::new();
-        let (lookup, payload) = match context.keyed(&result, provider, &columns)? {
+        let (lookup, payload) = match access {
             Access::Host(access) if *capability == Capability::Range => {
                 let fallback = &access.fallback;
                 let key = context.host_key(left, &access);
@@ -768,7 +769,7 @@ impl<'a> Emitter<'a> {
                     context.built_payload(&right, &context.levels_of(&right, &structure)),
                 )
             }
-            Access::Prefix(..) => {
+            Access::Rows | Access::Prefix(..) => {
                 return self.map(&Ident::new(&result, provider.span()), input, true);
             }
         };

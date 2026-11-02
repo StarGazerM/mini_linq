@@ -144,7 +144,7 @@ impl Parse for Program {
         while input.peek(cq_syntax::kw::relation) {
             declarations.push(input.parse()?);
         }
-        cq_syntax::intern_domains(&mut declarations);
+        cq_syntax::intern_domains(&mut declarations)?;
         let mut models: BTreeMap<String, Ident> = declarations
             .iter()
             .map(|d: &RelationDecl| (symbol_name(&d.name), syn::parse_quote!(set)))

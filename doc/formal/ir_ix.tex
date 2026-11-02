@@ -20,10 +20,14 @@ A \code{stream} demand is the right operand of a join, semijoin or antijoin
  \text{each descriptor names a result with strictly increasing in-range ordinals}}
  {\mathsf{WF}_{IX}(t)\Downarrow\ok}
 \]
-where $D(a)$ is the set of stream, const and range descriptors the operators of
-$a$ admit. Local validity permits partial coverage and arbitrary names; complete
-first-use coverage with names \code{i0}, \code{i1}, \ldots{} is the index pass's
-correspondence obligation (Section~\ref{sec:pass-index}).
+where $D(a)$ is the set of descriptors locally legal for reads in $a$.
+A recorded \code{const} supply requires a subset of the selection's
+point columns; a recorded \code{range} supply requires bounds on its one
+recorded column. A \code{stream} supply requires the join's exact key.
+The checker checks these supply premises, not the producer's classification.
+Local validity permits partial coverage and arbitrary names; complete coverage
+and first-use names \code{i0}, \code{i1}, \ldots{} remain index-pass
+correspondence obligations (Section~\ref{sec:pass-index}).
 
 \paragraph{Meaning.} $\sem{A,D}_{IX}=\sem A_{RA}$: demands add no meaning.
 A constant selection is a point read because

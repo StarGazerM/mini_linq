@@ -164,6 +164,35 @@ fn literal_selections_are_const_reads_and_column_equalities_are_not() {
 }
 
 #[test]
+fn const_supply_accepts_a_recorded_subset_of_point_columns() {
+    let source: ix::Program = syn::parse_quote! {
+        relational {
+            relation R(a: i32, b: i32);
+            r = rename R@0 { a -> x, b -> y };
+            selected = select r if (x = 1, y = 2);
+            output selected as answer(x, y);
+        }
+        indexes { i0 = @r[0] const; }
+    };
+    ix::contract::check(&source).unwrap();
+    let info = ix::ra::contract::check(&source.ra).unwrap();
+    let reads = ix::read_requirements(&source, &info).unwrap();
+    assert_eq!(
+        ix::signature(&reads["selected"].requirement),
+        ("r".into(), vec![0], ix::SupplyKind::Const)
+    );
+    let mut unit_key = source.clone();
+    unit_key.indexes[0].requirement.columns.clear();
+    ix::contract::check(&unit_key).unwrap();
+    assert!(
+        ix::read_requirements(&unit_key, &info).unwrap()["selected"]
+            .requirement
+            .columns
+            .is_empty()
+    );
+}
+
+#[test]
 fn stream_and_const_supply_are_distinct_demand_identities() {
     let source: ix::Program = syn::parse_quote! {
         relational {

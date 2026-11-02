@@ -121,7 +121,7 @@ per-route siblings listed below.
 | `cq-syntax guard::term` (retired) | Rust recognition and field-path parameters | replaced by explicit `where` and query-closed `Term::Closed(syn::Expr)` (contract 7) |
 | `cq-order Written` | identity sequence, cross products kept | explicit reference retained; Connected/Coarse facade default done (contract 2) |
 | `cq-reduce Masks` | reduce only filter-ranked subtrees, never the root | retained default policy (contract 2/6); full reduction is an optional P8 cost question |
-| `cq-elaborate` | predicate binder choice (branch join topology deleted) | predicate placement recorded in VO as `restrict R@i where P;` by `cq-order` (O-Restrict, H-Local shared with H-FilterRank and the reducers); lowering applies only recorded restrictions. Open: order-independent H-Local (ElabFix 3b), hoisted-block written-order domain |
+| `cq-elaborate` | predicate binder choice (branch join topology deleted) | predicate placement recorded in VO as `restrict R@i where P;` by `cq-order`; lowering applies only recorded restrictions. H-Local is order-independent within its domain cut (ElabFix 3b complete); a later predicate does not cross a hoisted-block domain boundary. |
 | CQ `normalize` | computed head becomes `Bind` | retain original Rust; placement uses free variables, not expression classification (contract 7) |
 | `cq-physical-lowering` | probe first / eager / Let vs Pipe | representation choices only; point/range supply and join keys are consumed from matched, checked IX requirements |
 | Sequence decomposition | preserves recorded relational construction | P3.3-lite removes automatic replanning; ordering belongs to VO |

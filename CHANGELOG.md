@@ -7,6 +7,16 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- DriftFix4: domain-id exhaustion is a parse error rather than overflow;
+  IX checks recorded supply legality without replaying demand classification.
+  Whole-relation reads are checked access facts consumed by pull and push
+  printers, preserving their generated code. Physical evaluator panics and
+  malformed reads now fail differential tests and count as accepted-mutant
+  holes; generated seeds have no blanket exemptions. Remove the obsolete
+  zero-column-index fuzz pass and unfinished strings profile flag; narrowing
+  mutations use typed column metadata. Formal and conformance inventories
+  describe the current rewrite, retention, planning and provider rules.
+
 - F5: task decomposition recognizes independent union arms beneath unary
   consumers (including the canonicalization of lowered set union), publishes
   each arm separately, and concatenates/canonicalizes at host. The dispatch
@@ -184,7 +194,7 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   Adaptive thresholds are declared once per token: `adaptive_membership`
   (`AdaptiveMembership<_, 16777216>`), new `join_filter_membership`
   (`<_, 67108864>`) and `positional_keyset`
-  (`AdaptiveKeySet<_, AutoDense, 67108864>`). Printed spellings are unchanged
+  (`AdaptiveKeySet<_, I64Codec, 67108864>`). Printed spellings are unchanged
   except that eager host key sets now print the default `KeySet<_, true>`
   explicitly.
 - Physical records the head-dedup obligation (RevMiddle F6, PH-HeadDedup):

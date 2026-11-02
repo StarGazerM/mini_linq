@@ -296,3 +296,35 @@ fn wellformedness_requires_recorded_declaration_and_capture_ids() {
         assert!(error.contains("WF-Domain"), "{error}");
     }
 }
+
+#[test]
+fn mixed_domain_ids_exhaustion_is_a_parse_error() {
+    for id in [u32::MAX - 1, u32::MAX] {
+        let id = syn::LitInt::new(&id.to_string(), proc_macro2::Span::call_site());
+        let source = quote! {
+            struct Q;
+            relation R(m: Code in [#id] (names), n: Code in (other));
+            relation answer(m: Code);
+            answer(m) :- R(m, n);
+        };
+        assert!(syn::parse2::<cq::Program>(source).is_err());
+    }
+}
+
+#[test]
+fn fully_recorded_maximum_domain_id_is_preserved() {
+    let source = cq(quote! {
+        struct Q;
+        relation R(m: Code in [4294967295] (names));
+        relation answer(m: Code in [4294967295] (names));
+        answer(m) :- R(m);
+    });
+    assert_eq!(
+        source.declarations[0].columns[0]
+            .domain
+            .as_ref()
+            .unwrap()
+            .id,
+        Some(cq::syntax::DomainId(u32::MAX))
+    );
+}

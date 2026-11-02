@@ -651,6 +651,15 @@ use physical::{ModeKind, Operator, syntax::SupplyKind};
 /// A built structure: the sorted columns of each level, and its provider.
 pub type Built = (Vec<Vec<String>>, Provider);
 
+/// Checked access to a Physical provider, independent of its read capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadAccess {
+    /// Enumerate the retained whole relation rather than a keyed index.
+    Whole,
+    /// Read the recorded keyed provider.
+    Keyed,
+}
+
 /// What the contract establishes for later stages.
 #[derive(Clone, Debug)]
 pub struct Analysis {
@@ -672,6 +681,8 @@ pub struct Analysis {
     pub keysets: BTreeMap<(String, Vec<String>), KeySet>,
     /// Positional access decisions attached to existing Physical readers.
     pub reads: BTreeMap<String, Read>,
+    /// Checked whole-relation versus keyed access, by provider and sorted key.
+    pub read_accesses: BTreeMap<String, BTreeMap<Vec<String>, ReadAccess>>,
     /// Distinct runtime filters per scan occurrence, in first-witness order.
     /// Every raw decision's exact covering witness is checked before coalescing.
     pub join_filters: BTreeMap<String, Vec<JoinFilter>>,
@@ -892,6 +903,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         selections: BTreeMap::new(),
         keysets: BTreeMap::new(),
         reads: BTreeMap::new(),
+        read_accesses: BTreeMap::new(),
         join_filters: BTreeMap::new(),
         built: BTreeMap::new(),
         fallbacks: BTreeMap::new(),
@@ -1092,7 +1104,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 continue;
             }
             Structure::HeadDedup { provider, .. } => {
-                // STR-HeadDedup: an answer identity index types exactly the
+                // PH-HeadDedup: an answer identity index types exactly the
                 // recorded Physical return-boundary obligation (PH-HeadDedup).
                 if name != symbol_name(&program.physical.program.returned)
                     || !program.physical.program.head_dedup()
@@ -1368,6 +1380,24 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     }
                 }
             }
+        }
+    }
+    for (result, reads) in &analysis.physical.keyed_reads {
+        for (_, columns, _) in reads {
+            let access = if columns.is_empty()
+                && (analysis.host_read(result)
+                    || analysis.retained.contains_key(result)
+                    || analysis.selections.contains_key(result))
+            {
+                ReadAccess::Whole
+            } else {
+                ReadAccess::Keyed
+            };
+            analysis
+                .read_accesses
+                .entry(result.clone())
+                .or_default()
+                .insert(columns.clone(), access);
         }
     }
     // Merge sides: ordered on the key by Γ, or a pipe sorted on it by its own merge.

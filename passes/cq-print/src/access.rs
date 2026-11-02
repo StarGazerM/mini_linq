@@ -30,6 +30,8 @@ pub struct HostAccess {
 
 /// The value answering a keyed read.
 pub enum Access {
+    /// The checked empty-key read enumerates the retained whole relation.
+    Rows,
     Host(HostAccess),
     Built(Ident),
     /// A curried structure read on a proper prefix of its levels: the
@@ -432,6 +434,15 @@ impl<'a> Context<'a> {
         columns: &[String],
     ) -> syn::Result<Access> {
         let name = symbol_name(result);
+        if self
+            .analysis
+            .read_accesses
+            .get(&name)
+            .and_then(|reads| reads.get(columns))
+            == Some(&structures::ReadAccess::Whole)
+        {
+            return Ok(Access::Rows);
+        }
         if let Some(structure) = self.built(&name, columns) {
             return Ok(Access::Built(structure));
         }

@@ -1408,12 +1408,15 @@ impl Checked<'_> {
     ) -> syn::Result<()> {
         let name = symbol_name(provider);
         let key = (name.clone(), keys.to_vec());
-        // An empty key enumerates the recorded whole relation, not an index.
-        // Retention was checked by provider(); no keyed trait is required.
-        if keys.is_empty()
-            && (self.analysis.structures.host_read(&name)
-                || self.analysis.structures.retained.contains_key(&name)
-                || self.analysis.structures.selections.contains_key(&name))
+        // Whole-relation access was established by Structures; no keyed trait
+        // is required. Retention was checked by provider().
+        if self
+            .analysis
+            .structures
+            .read_accesses
+            .get(&name)
+            .and_then(|reads| reads.get(keys))
+            == Some(&cq_lang_structures::ReadAccess::Whole)
         {
             self.analysis.capabilities.insert(key, Capability::Exact);
             return Ok(());

@@ -2,6 +2,59 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[test]
 #[allow(non_snake_case)]
+fn both_printers_follow_whole_relation_access_for_empty_keys() {
+    let L = [(1_i32,), (2,), (1,)];
+    macro_rules! run {
+        ($right:ident, $mode:ident, $operation:ident, $choice:ident, [$($head:ident),+], $($passes:path),+) => {
+            mini_linq::passes::select! {
+                pipeline { $($passes),+ };
+                physical {
+                    relation L(a:i32); relation $right(b:i32);
+                    l = pipe rename L@0 {a -> a};
+                    r = $mode rename $right@1 {b -> b};
+                    out = let canon $operation $choice [] l,r;
+                    return out as answer($($head),+);
+                }
+            }
+            .collect::<BTreeSet<_>>()
+        };
+    }
+    for R in [vec![], vec![(7_i32,), (8,), (7,)]] {
+        macro_rules! check {
+            ($mode:ident, $($passes:path),+) => {
+                assert_eq!(
+                    run!(R, $mode, probe, first, [a,b], $($passes),+),
+                    L.iter().flat_map(|(a,)| R.iter().map(move |(b,)| (a, b))).collect::<BTreeSet<_>>()
+                );
+                assert_eq!(
+                    run!(R, $mode, semi, eager, [a], $($passes),+),
+                    L.iter().filter(|_| !R.is_empty()).map(|(a,)| (a,)).collect::<BTreeSet<_>>()
+                );
+                assert_eq!(
+                    run!(R, $mode, anti, eager, [a], $($passes),+),
+                    L.iter().filter(|_| R.is_empty()).map(|(a,)| (a,)).collect::<BTreeSet<_>>()
+                );
+            };
+        }
+        check!(pipe, own_push::push);
+        check!(let, own_push::push);
+        check!(
+            pipe,
+            mini_linq::passes::sequence,
+            mini_linq::passes::sequential,
+            mini_linq::passes::translate_pull
+        );
+        check!(
+            let,
+            mini_linq::passes::sequence,
+            mini_linq::passes::sequential,
+            mini_linq::passes::translate_pull
+        );
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn consumer_form_matches_pull_with_borrowed_and_owned_columns() {
     // The endpoint declaration, not this misleading alias, selects Structures.
     use own_push::push_into as translate_pull;

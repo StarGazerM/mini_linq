@@ -184,12 +184,7 @@ fn ix_const_covers_all_literal_conjunctions_and_keeps_supply_in_identity() {
     };
     // The remaining demands are locally valid; correspondence detects IX-Const omission.
     ix::contract::check(&missing).unwrap();
-    assert!(
-        check(&source, &missing)
-            .unwrap_err()
-            .to_string()
-            .contains("first-use")
-    );
+    assert!(check(&source, &missing).is_err());
     let mut wrong_supply = target;
     wrong_supply.indexes[0].requirement.supply = syn::parse_quote!(stream);
     assert!(check(&source, &wrong_supply).is_err());

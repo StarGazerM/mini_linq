@@ -184,8 +184,11 @@ Ordered, contiguous Sequence Range, or device placement.
  \mathsf{keyset}(s,K)\quad\mathsf{lineage}(r)=(H,\lambda)}
  {r\;\mathsf{read}(H,\lambda(K),\mathsf{membership}(s,K))\text{ is admissible}}
 
-\Rule{STR-Key}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,C)}
- {\mathsf{answers}(r,C,probe/semi)}
+\Rule{STR-Key}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,C)\lor
+ (C=\varnothing\land\mathsf{reusableRows}(r))}
+ {\mathsf{answers}(r,C,probe/semi)\quad
+  \mathsf{access}(r,C)=
+  \begin{cases}\mathsf{Whole}&C=\varnothing\\\mathsf{Keyed}&C\ne\varnothing\end{cases}}
 
 \Rule{STR-Keyset}{\mathsf{keyset}(r,K)\quad
  \mathsf{reusableRows}(r)\quad T:\code{ExactMembership}(K)}
@@ -559,13 +562,14 @@ Rows records are values, not shared buffers:
 \begin{mathpar}
 \Rule{STR-RowsByValue}{\mathsf{mode}(r)=let\quad
  \mathsf{scans}(r)+|\mathsf{built}(r)|\le1\quad
- r\text{ has no selection or keyset}}
+ r\text{ has no selection, keyset, or empty-key stream read}}
  {r\text{ holds no rows record; its build moves into its single consumer}}
 \end{mathpar}
-A rows record is held as storage only with more than one consumer (scan reads
-plus Built entries). Filtered builds replay their direct source, so an
-unscanned filtered result never holds rows; only a canon result's unheld rows
-record may sit beside filtered storage.
+A rows record is held as storage for an empty-key stream read that replays the
+relation, or with more than one consumer (scan reads plus Built entries).
+Filtered builds replay their direct source, so an unscanned filtered result
+never holds rows; only a canon result's unheld rows record may sit beside
+filtered storage.
 
 Selection writes the reference:
 \begin{mathpar}

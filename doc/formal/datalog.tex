@@ -995,9 +995,10 @@ The mark is denoted advice, not a validity premise: DL-OccurrenceOrder still
 checks permutation, dependencies and exact erasure. Fork records each rule
 hole's positive-occurrence order, authored flag, steps, smallest sites and
 optional known level as \code{Planning}. CK-DL-Fork checks these against the
-Incremental variant; an unauthored known level may be any legal level after
-head binding and no later than the last positive read. Round rewrites keep the
-fact fixed. The base invocation queue contains no generated planning arguments;
+Incremental variant. A numeric \code{Planning.known} must equal explicit
+\code{Known::At} advice; automatic admission records \code{None}, not a numeric
+pin. Round rewrites keep the fact fixed.
+The base invocation queue contains no generated planning arguments;
 \code{invocation\_pipeline} mechanically serializes the fact at print time.
 Named configuration resolution records
 that invocation's ordinal; a custom flat queue declares it explicitly.

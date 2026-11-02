@@ -90,7 +90,7 @@ fn parse_declarations(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Rel
     while input.peek(Token![#]) || input.peek(kw::relation) {
         declarations.push(input.parse()?);
     }
-    cq_syntax::intern_domains(&mut declarations);
+    cq_syntax::intern_domains(&mut declarations)?;
     Ok(declarations)
 }
 

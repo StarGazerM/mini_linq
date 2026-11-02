@@ -603,33 +603,33 @@ impl<'a> Printer<'a> {
         let mut outer = self.scan(&keyed.left)?;
         let left = symbol_name(&keyed.left);
         let right = symbol_name(&keyed.right);
-        if columns.is_empty() {
-            let inner = self.scan(&keyed.right)?;
-            let left_pattern = self.bind_columns(&left, self.carried(&left), false);
-            let right_pattern = self.bind_columns(&right, self.carried(&right), false);
-            let row = self.carrier(name, |column| {
-                let source = if self.heading(&right).iter().any(|c| c == column) {
-                    &right
-                } else {
-                    &left
-                };
-                let value = self.access(source, column);
-                if self.infos[source].computed.contains(column) {
-                    quote!(::core::clone::Clone::clone(&#value))
-                } else {
-                    quote!(#value)
-                }
-            });
-            return Ok(quote! {
-                ::core::iter::Iterator::flat_map(#outer, move |#left_pattern| {
-                    ::core::iter::Iterator::map(#inner, move |#right_pattern| #row)
-                })
-            });
-        }
         let access = self.keyed(name, &keyed.right, &columns)?;
         let witness = self.forcing_witness(name, &right, &columns);
         let expand = self.analysis.expands.contains(name);
         let (lookup, payload, host): (TokenStream, Vec<String>, bool) = match &access {
+            Access::Rows => {
+                let inner = self.scan(&keyed.right)?;
+                let left_pattern = self.bind_columns(&left, self.carried(&left), false);
+                let right_pattern = self.bind_columns(&right, self.carried(&right), false);
+                let row = self.carrier(name, |column| {
+                    let source = if self.heading(&right).iter().any(|c| c == column) {
+                        &right
+                    } else {
+                        &left
+                    };
+                    let value = self.access(source, column);
+                    if self.infos[source].computed.contains(column) {
+                        quote!(::core::clone::Clone::clone(&#value))
+                    } else {
+                        quote!(#value)
+                    }
+                });
+                return Ok(quote! {
+                    ::core::iter::Iterator::flat_map(#outer, move |#left_pattern| {
+                        ::core::iter::Iterator::map(#inner, move |#right_pattern| #row)
+                    })
+                });
+            }
             Access::Host(access) => (
                 witness.as_ref().map_or_else(
                     || self.host_lookup(&left, access, false, false),
@@ -826,6 +826,12 @@ impl<'a> Printer<'a> {
         let columns = sorted(&keyed.columns);
         let input = self.scan(&keyed.left)?;
         let lookup = match self.keyed(name, &keyed.right, &columns)? {
+            Access::Rows => {
+                return error(
+                    &keyed.right,
+                    "whole-relation access has no retained keyed cursor",
+                );
+            }
             Access::Built(structure) => {
                 if self.levels_of(&right, &structure).len() != 1 {
                     return error(
@@ -889,14 +895,16 @@ impl<'a> Printer<'a> {
         let input = self.scan(&keyed.left)?;
         let left = symbol_name(&keyed.left);
         let pattern = self.bind_columns(&left, &columns, true);
-        let test = if columns.is_empty() {
-            let rows = self.scan(&keyed.right)?;
-            quote!(::core::iter::Iterator::next(&mut (#rows)).is_some())
-        } else if let Some(test) = self.keyset_contains(&left, &symbol_name(&keyed.right), &columns)
+        let test = if let Some(test) =
+            self.keyset_contains(&left, &symbol_name(&keyed.right), &columns)
         {
             test
         } else {
             match self.keyed(name, &keyed.right, &columns)? {
+                Access::Rows => {
+                    let rows = self.scan(&keyed.right)?;
+                    quote!(::core::iter::Iterator::next(&mut (#rows)).is_some())
+                }
                 Access::Host(access) => self.host_lookup(&left, &access, true, negative),
                 Access::Built(structure) => {
                     let levels = self.levels_of(&symbol_name(&keyed.right), &structure);

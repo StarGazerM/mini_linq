@@ -338,6 +338,11 @@ records the checked canonical reference (a \textsc{PL-Distinct} rows provider,
 an existence-only Built index, or the host carrier), or for the returned
 answer its recorded identity index, and grading records the boundary's level;
 runtime order laws remain premises.
+Whole-relation access is a separate checked Structures fact
+(\code{ReadAccess::Whole}), not a keyed provider capability. An empty-key
+lookup consumes that fact and has exact read semantics without a keyed
+provider obligation. Pull, sequence-pull and push printers dispatch on the
+recorded access (\code{Access::Rows}); they do not classify empty keys.
 
 \subsection{Placement: a grading over a machine parameter}
 \begin{definition}[Machine model]
@@ -1536,15 +1541,17 @@ sticky failure word.
 A literal atom argument such as \code{method\_modifier(sym("abstract"), m)}
 reaches the translator as a constant inside a rename. The checked Physical
 rewrite \code{capture\_constants} turns each such argument into a fresh column,
-an equality guard against the literal (a closed capture), and a projection
-that drops the fresh column; its checker verifies that triple's structure
-against the source and that each guard column is fresh, accepting any fresh
-name. Operands at code-domain columns arrive
+an equality selection against the literal (a closed capture), and a projection
+that drops the fresh column. Its checker inspects the recorded rename--select--project
+chain: intermediate pipes are private single-use results, original mappings
+are preserved, added equalities bind only the source literals, and the final
+projection is exact. It does not regenerate fresh names or rerun the rewrite.
+Operands at code-domain columns arrive
 already translated by A-Domain into capture references; no string literal
 reaches this rewrite.
 \begin{mathpar}
 \Rule{PH-ConstantGuard}{a=\mathsf{rename}(R,(\ldots,c,\ldots))\quad c\text{ closed}\quad x\text{ fresh}}
- {\sem a=\sem{\mathsf{project}_{\neg x}(\mathsf{guard}_{x=c}(\mathsf{rename}(R,(\ldots,x,\ldots))))}}
+ {\sem a=\sem{\mathsf{project}_{\neg x}(\mathsf{select}_{x=c}(\mathsf{rename}(R,(\ldots,x,\ldots))))}}
 \end{mathpar}
 
 

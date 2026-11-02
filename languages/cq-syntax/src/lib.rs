@@ -171,14 +171,14 @@ impl RelationDecl {
 /// Rust payloads remain opaque: only their token spelling is used as an
 /// interning key, never their expression structure or meaning. Printed ids
 /// are already recorded facts and are preserved without reinterpreting Rust.
-pub fn intern_domains(declarations: &mut [RelationDecl]) {
+pub fn intern_domains(declarations: &mut [RelationDecl]) -> syn::Result<()> {
     if declarations
         .iter()
         .flat_map(|declaration| &declaration.columns)
         .filter_map(|column| column.domain.as_ref())
         .all(|domain| domain.id.is_some())
     {
-        return;
+        return Ok(());
     }
     let mut identities = BTreeMap::new();
     let mut next = 0;
@@ -192,7 +192,9 @@ pub fn intern_domains(declarations: &mut [RelationDecl]) {
                 quote::ToTokens::to_token_stream(&domain.expression).to_string(),
                 id,
             );
-            next = next.max(id.0 + 1);
+            next = next.max(id.0.checked_add(1).ok_or_else(|| {
+                syn::Error::new_spanned(&domain.expression, "domain ids exhausted")
+            })?);
         }
     }
     for domain in declarations
@@ -202,13 +204,20 @@ pub fn intern_domains(declarations: &mut [RelationDecl]) {
     {
         if domain.id.is_none() {
             let spelling = quote::ToTokens::to_token_stream(&domain.expression).to_string();
-            domain.id = Some(*identities.entry(spelling).or_insert_with(|| {
-                let id = DomainId(next);
-                next += 1;
-                id
-            }));
+            let id = match identities.entry(spelling) {
+                std::collections::btree_map::Entry::Occupied(entry) => *entry.get(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    let id = DomainId(next);
+                    next = next.checked_add(1).ok_or_else(|| {
+                        syn::Error::new_spanned(&domain.expression, "domain ids exhausted")
+                    })?;
+                    *entry.insert(id)
+                }
+            };
+            domain.id = Some(id);
         }
     }
+    Ok(())
 }
 
 /// A leaf expression is evaluated once in the enclosing Rust environment.

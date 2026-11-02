@@ -1,7 +1,7 @@
 //! C1: every one-fact mutant of a compiled Physical (and Structures) record
 //! must be rejected by its producing pass's checker, or still denote the
 //! reference answer under the independent Physical interpreter. An accepted
-//! mutant with a different answer is a checker hole.
+//! mutant with a different answer or a failing execution is a checker hole.
 //!
 //! `authored` runs the 25 authored `cq_testkit::CASES` plus fixed records
 //! (authored answers) on a fixed route set; `generated` runs generated seeds
@@ -20,6 +20,21 @@ struct Counts {
     accepted_same: usize,
     accepted_unjudged: usize,
     holes: usize,
+}
+
+impl Counts {
+    /// The caller has a successful reference answer; a target panic is a hole.
+    fn judge(&mut self, outcome: &Outcome, expected: &TypedRows) -> bool {
+        match outcome {
+            Outcome::Rows(rows) if rows == expected => self.accepted_same += 1,
+            Outcome::Unsupported(_) => self.accepted_unjudged += 1,
+            Outcome::Rows(_) | Outcome::Failed(_) => {
+                self.holes += 1;
+                return true;
+            }
+        }
+        false
+    }
 }
 
 #[derive(Default)]
@@ -60,6 +75,7 @@ impl Tally {
         expected: &TypedRows,
         database: &TypedDatabase,
         parameters: &BTreeMap<String, Value>,
+        carriers: &mutate::CarrierTypes,
     ) {
         for (position, (stage, program)) in compiled.physical.iter().enumerate() {
             let accepts = |candidate: &cq_lang_physical::Program| -> bool {
@@ -74,25 +90,21 @@ impl Tally {
                         .is_ok()
                     }
             };
-            for mutant in mutate::physical(program) {
+            for mutant in mutate::physical(program, carriers) {
                 let counts = self.physical.entry(mutant.operator).or_default();
                 if !accepts(&mutant.program) {
                     counts.rejected += 1;
                     continue;
                 }
-                match physical_outcome(&mutant.program, database, parameters) {
-                    Outcome::Rows(rows) if rows == *expected => counts.accepted_same += 1,
-                    Outcome::Rows(rows) => {
-                        counts.holes += 1;
-                        self.holes.push(format!(
-                            "CHECKER HOLE {label} stage={stage}: accepted {:?} mutant at `{}`\nexpected {expected:?}\nmutant   {rows:?}\nsource:  {}\nmutant:  {}\n",
-                            mutant.operator,
-                            mutant.site,
-                            quote::ToTokens::to_token_stream(program),
-                            quote::ToTokens::to_token_stream(&mutant.program)
-                        ));
-                    }
-                    Outcome::Unsupported(_) => counts.accepted_unjudged += 1,
+                let outcome = physical_outcome(&mutant.program, database, parameters);
+                if counts.judge(&outcome, expected) {
+                    self.holes.push(format!(
+                        "CHECKER HOLE {label} stage={stage}: accepted {:?} mutant at `{}`\nexpected {expected:?}\nmutant   {outcome:?}\nsource:  {}\nmutant:  {}\n",
+                        mutant.operator,
+                        mutant.site,
+                        quote::ToTokens::to_token_stream(program),
+                        quote::ToTokens::to_token_stream(&mutant.program)
+                    ));
                 }
             }
         }
@@ -105,7 +117,7 @@ impl Tally {
         if cq_structure_selection::check(physical, &selected).is_err() {
             return;
         }
-        for mutant in mutate::structures(&selected) {
+        for mutant in mutate::structures(&selected, carriers) {
             if mutant.site.starts_with("physical ") {
                 continue; // judged above on the Physical record itself
             }
@@ -249,6 +261,13 @@ pub fn authored_records_reject_mutants_or_keep_the_answer(rewrites: Rewrites) {
                 ),
             };
             for stage in &compiled.stages {
+                if let Outcome::Failed(error) = &stage.outcome {
+                    panic!(
+                        "case {name} route {} stage {}: {error}",
+                        route.name(),
+                        stage.name
+                    );
+                }
                 if let Outcome::Rows(rows) = &stage.outcome {
                     assert_eq!(
                         rows,
@@ -260,7 +279,15 @@ pub fn authored_records_reject_mutants_or_keep_the_answer(rewrites: Rewrites) {
                 }
             }
             let label = format!("case={name} route={}", route.name());
-            tally.judge(&label, &compiled, &expected, &typed, &BTreeMap::new());
+            let carriers = mutate::CarrierTypes::all_i32(&compiled.physical[0].1);
+            tally.judge(
+                &label,
+                &compiled,
+                &expected,
+                &typed,
+                &BTreeMap::new(),
+                &carriers,
+            );
         }
     }
     tally.report();
@@ -282,6 +309,8 @@ pub fn generated_records_reject_mutants_or_keep_the_answer(rewrites: Rewrites) {
             continue; // pass failures belong to the stage differential
         };
         let Ok(expected) = super::quietly(|| case.reference()) else {
+            // A panicking reference provides no successful answer against which
+            // to identify a mutant execution failure as a checker hole.
             continue;
         };
         let label = format!("seed={seed} route={}", route.name());
@@ -291,7 +320,30 @@ pub fn generated_records_reject_mutants_or_keep_the_answer(rewrites: Rewrites) {
             &expected,
             &super::typed_database(&case),
             &super::parameters(&case),
+            &mutate::CarrierTypes::from_case(&case),
         );
     }
     tally.report();
+}
+
+#[test]
+fn accepted_execution_failures_count_as_checker_holes() {
+    use cq_testkit::physical_semantics::Error;
+    let expected = TypedRows::new();
+    let mut counts = Counts::default();
+    for error in [
+        Error::Panic("overflow".into()),
+        Error::Malformed("undefined read".into()),
+    ] {
+        assert!(counts.judge(&Outcome::Failed(error), &expected));
+    }
+    assert_eq!(counts.holes, 2);
+    assert_eq!(counts.accepted_unjudged, 0);
+    assert!(!counts.judge(&Outcome::Unsupported("expression".into()), &expected));
+    assert_eq!(counts.accepted_unjudged, 1);
+    assert!(!counts.judge(&Outcome::Rows(expected.clone()), &expected));
+    assert_eq!(counts.accepted_same, 1);
+    let different = [vec![Value::I32(1)]].into_iter().collect();
+    assert!(counts.judge(&Outcome::Rows(different), &expected));
+    assert_eq!(counts.holes, 3);
 }

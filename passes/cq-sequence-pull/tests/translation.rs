@@ -379,6 +379,10 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
         analysis.capabilities[&("r".into(), vec!["a".into()])],
         cq_lang_sequence::structures::Capability::Exact
     );
+    assert_eq!(
+        analysis.structures.read_accesses["r"][&vec!["a".into()]],
+        cq_lang_structures::ReadAccess::Keyed
+    );
     let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
     assert!(!output.to_token_stream().to_string().contains("RangeCursor"));
     run(quote!(
@@ -388,6 +392,52 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
             assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&1, &7), (&1, &8)]);
         }
     ));
+}
+
+#[test]
+fn whole_relation_access_preserves_host_and_retained_empty_key_reads() {
+    let mut checks = Vec::new();
+    for mode in ["pipe", "let"] {
+        for (operator, choice, head) in [
+            ("probe", "first", "a,b"),
+            ("semi", "eager", "a"),
+            ("anti", "eager", "a"),
+        ] {
+            let physical = syn::parse_str(&format!(
+                "physical {{
+                    relation L(a:i32); relation R(b:i32);
+                    l = pipe rename L@0 {{a -> a}};
+                    r = {mode} rename R@1 {{b -> b}};
+                    out = let canon {operator} {choice} [] l,r;
+                    return out as answer({head});
+                }}"
+            ))
+            .unwrap();
+            let structures = cq_structure_selection::compile(&physical).unwrap();
+            let program = cq_sequence_lowering::compile(&structures).unwrap();
+            let analysis = contract::check(&program).unwrap();
+            assert_eq!(
+                analysis.structures.read_accesses["r"][&Vec::<String>::new()],
+                cq_lang_structures::ReadAccess::Whole
+            );
+            let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
+            let expected = match operator {
+                "probe" => quote!(L.iter().flat_map(|(a,)| R.iter().map(move |(b,)| (a, b)))),
+                "semi" => quote!(L.iter().filter(|_| !R.is_empty()).map(|(a,)| (a,))),
+                "anti" => quote!(L.iter().filter(|_| R.is_empty()).map(|(a,)| (a,))),
+                _ => unreachable!(),
+            };
+            checks.push(quote! {
+                for R in [vec![], vec![(7i32,), (8,), (7,)]] {
+                    let L = vec![(1i32,), (2,), (1,)];
+                    let actual = (#output).into_iter().collect::<::std::collections::BTreeSet<_>>();
+                    let expected = (#expected).collect::<::std::collections::BTreeSet<_>>();
+                    assert_eq!(actual, expected);
+                }
+            });
+        }
+    }
+    run(quote!(fn main() { #(#checks)* }));
 }
 
 #[test]

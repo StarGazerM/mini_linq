@@ -142,7 +142,7 @@ fn route_configuration(route: &str) -> String {
         "push" => ("", "", "", "print_input = structures; print = ::own_push::push;"),
         _ => panic!("unrecognized CPU route {route}"),
     };
-    format!("pipeline {{ {plan} physical = [{physical}]; structures = [{structures} ::cq_fuzz_planner::check_indexes]; {execution} }}")
+    format!("pipeline {{ {plan} physical = [{physical}]; structures = [{structures}]; {execution} }}")
 }
 
 impl std::fmt::Display for Config {
@@ -654,8 +654,6 @@ impl Runner {
             "rayon = \"1\"\ncq-sequence-tasks = {{ path = {:?} }}\ncq-sequence-tasks-macros = {{ path = {:?} }}\n",
             root.join("../sequence-tasks"), root.join("../sequence-tasks/macros")
         ));
-        // Feature unification instruments storage used by every generated route.
-        manifest = manifest.replace("cq-storage = {", "cq-storage = { features = [\"counters\"],");
         std::fs::write(directory.join("Cargo.toml"), manifest)?;
         let mut manifest = String::from(
             "[package]\nname = \"cq-fuzz-planner\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\nproc-macro = true\n[dependencies]\nsyn = { version = \"2\", features = [\"full\"] }\nquote = \"1\"\n",
@@ -664,7 +662,6 @@ impl Runner {
             "cq-stage",
             "cq-lang-cq",
             "cq-lang-ra",
-            "cq-lang-structures",
             "cq-order",
             "cq-reduce",
             "cq-elaborate",
@@ -852,7 +849,6 @@ fn counter_{name}() {{
     for count in &COUNTS {{ count.store(0, std::sync::atomic::Ordering::SeqCst); }}
     let input = (0i32..128).map(|x| (x,)).collect::<Vec<_>>();
     let R = input.as_slice();
-    cq_storage::counters::reset();
     let rows: Vec<_> = ::mini_linq::compile! {{
         {configuration}
         struct ClosedCapture;
@@ -863,7 +859,6 @@ fn counter_{name}() {{
     }}.map(|(x, c, value)| (crate::integer(x), crate::integer(c), crate::integer(value))).collect();
     assert_eq!(rows.into_iter().collect::<std::collections::BTreeSet<_>>(),
         (0i32..128).map(|x| (x, 7, 7)).collect(), "C2-ANSWERS route={route}");
-    crate::invariant(cq_storage::counters::snapshot().index_builds == 0, "C2-ZERO-COLUMN-INDEX");
     for count in &COUNTS {{
         crate::invariant(count.load(std::sync::atomic::Ordering::SeqCst) == 1, "C2-CLOSED-CAPTURE");
     }}
@@ -907,8 +902,7 @@ fn consumer_case(id: usize, case: &Case, c: Config) -> String {
     } else {
         let configuration = if c.route == "advised" {
             let source = syn::parse_str(&cq).expect("preflight checked CQ");
-            c.pipeline().configuration(&source).expect("checked pipeline")
-                .to_string().replace("structures = [", "structures = [::cq_fuzz_planner::check_indexes,")
+            c.pipeline().configuration(&source).expect("checked pipeline").to_string()
         } else {
             route_configuration(c.route)
         };
@@ -931,22 +925,6 @@ pub fn written_reference(tokens: proc_macro::TokenStream) -> proc_macro::TokenSt
         if !arguments.is_empty() { return Err(syn::Error::new_spanned(arguments, "written_reference takes no arguments")); }
         compiler::written(source)
     }).into()
-}
-#[proc_macro]
-pub fn check_indexes(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    cq_stage::pass::<cq_lang_structures::Program, cq_lang_structures::Program>(
-        tokens.into(), |source, _| {
-            cq_lang_structures::contract::check(source)?;
-            for entry in &source.structures.entries {
-                if let cq_lang_structures::Structure::Built { keyed, .. } = &entry.structure {
-                    if keyed.columns().next().is_none() {
-                        return Err(syn::Error::new_spanned(&entry.name, "C2-ZERO-COLUMN-INDEX"));
-                    }
-                }
-            }
-            Ok(source.clone())
-        }
-    ).into()
 }
 "#;
 

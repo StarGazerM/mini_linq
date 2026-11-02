@@ -32,6 +32,17 @@ fn source_interns_domains_once_and_preserves_recorded_identities() {
 }
 
 #[test]
+fn exhausted_domain_ids_are_rejected_at_the_source_boundary() {
+    let result = syn::parse2::<Program>(quote::quote! {
+        struct Domains;
+        relation Input(x:u32 in [4294967295] (names)) = (input);
+        relation Other(x:u32 in (other)) = (other);
+        output Input;
+    });
+    assert!(result.is_err());
+}
+
+#[test]
 fn declaration_rule_and_output_obligations_are_checked() {
     for source in [
         "struct P; relation E(x:i32) = (e); relation A(x:i32); output A;",

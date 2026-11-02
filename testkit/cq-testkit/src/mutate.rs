@@ -6,15 +6,15 @@
 //! definition order. A checker must reject every mutant, or the mutant must
 //! still denote the reference answer (judged by `physical_semantics` for
 //! Physical, by an executable route otherwise). Mutants are deterministic,
-//! pairwise distinct and never equal to their source. Only language syntax is
-//! used; no pass is called.
+//! pairwise distinct and never equal to their source. Carrier mutations use
+//! typed fixture/model facts, never Rust type syntax; no pass is called.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use quote::ToTokens;
 use syn::parse_quote;
 
-use crate::{physical, structures};
+use crate::{physical, structures, values::ColumnType};
 use cq_syntax::constraint::{Comparison, Constraint, Term};
 
 /// The C1 operator family a mutant belongs to.
@@ -48,6 +48,73 @@ pub struct Mutant<P> {
     pub program: P,
 }
 
+/// Typed scalar carriers supplied by the fixture or fuzz model, not recovered
+/// from Rust type syntax. Names are canonical (without an `r#` prefix).
+#[derive(Clone, Debug, Default)]
+pub struct CarrierTypes {
+    /// Relation name and positional column ordinal.
+    pub columns: BTreeMap<(String, usize), ColumnType>,
+    /// Scalar binding name.
+    pub bindings: BTreeMap<String, ColumnType>,
+}
+
+impl CarrierTypes {
+    /// Read the generated schema and scalar bindings directly from the model.
+    /// Optional aggregate outputs are not scalar narrowing sites.
+    pub fn from_case(case: &crate::fuzz::Case) -> Self {
+        let mut types = Self::default();
+        for relation in &case.query.schema {
+            for (column, ty) in relation.types.iter().copied().enumerate() {
+                types.columns.insert(
+                    (relation.name.trim_start_matches("r#").to_owned(), column),
+                    ty,
+                );
+            }
+        }
+        for (column, ty) in case.output_types().into_iter().enumerate() {
+            if !ty.optional {
+                types.columns.insert(("answer".into(), column), ty.column);
+            }
+        }
+        for binding in &case.query.bindings {
+            if binding.generator.is_none() {
+                types.bindings.insert(
+                    case.query
+                        .name(binding.variable)
+                        .trim_start_matches("r#")
+                        .to_owned(),
+                    ColumnType::I32,
+                );
+            }
+        }
+        types
+    }
+
+    /// Record the caller's assertion that every carrier in this authored
+    /// fixture is i32. This does not inspect or infer Rust types.
+    pub fn all_i32(program: &physical::Program) -> Self {
+        let mut types = Self::default();
+        for declaration in &program.program.declarations {
+            let relation = cq_syntax::symbol_name(&declaration.name);
+            for column in 0..declaration.columns.len() {
+                types
+                    .columns
+                    .insert((relation.clone(), column), ColumnType::I32);
+            }
+        }
+        for definition in &program.program.definitions {
+            if let physical::Operator::Bind(binding) = &definition.operator {
+                if let syn::Pat::Ident(pattern) = &binding.pattern {
+                    types
+                        .bindings
+                        .insert(cq_syntax::symbol_name(&pattern.ident), ColumnType::I32);
+                }
+            }
+        }
+        types
+    }
+}
+
 struct Collector<P> {
     source: String,
     seen: BTreeSet<String>,
@@ -76,18 +143,12 @@ impl<P: ToTokens> Collector<P> {
     }
 }
 
-fn narrower(ty: &syn::Type) -> Option<syn::Type> {
-    let syn::Type::Path(path) = ty else {
-        return None;
-    };
-    Some(match path.path.get_ident()?.to_string().as_str() {
-        "i64" => parse_quote!(u32),
-        "i32" => parse_quote!(i16),
-        "u32" => parse_quote!(u16),
-        "usize" | "u64" => parse_quote!(u32),
-        "i128" => parse_quote!(i64),
-        "u128" => parse_quote!(u64),
-        _ => return None,
+fn narrower(ty: ColumnType) -> Option<syn::Type> {
+    Some(match ty {
+        ColumnType::I64 | ColumnType::Usize => parse_quote!(u32),
+        ColumnType::I32 => parse_quote!(i16),
+        ColumnType::U32 => parse_quote!(u16),
+        ColumnType::Str => return None,
     })
 }
 
@@ -299,14 +360,23 @@ fn keyed_variants(k: &physical::Keyed) -> Vec<(Operator, String, physical::Keyed
     out
 }
 
-/// Every one-fact mutant of a Physical program.
-pub fn physical(program: &physical::Program) -> Vec<Mutant<physical::Program>> {
+/// Every one-fact mutant of a Physical program. Width mutations require a
+/// corresponding typed carrier fact; unrecorded carriers are left alone.
+pub fn physical(
+    program: &physical::Program,
+    types: &CarrierTypes,
+) -> Vec<Mutant<physical::Program>> {
     use physical::{Mode, Operator as Op};
     let mut c = Collector::new(program);
     let body = &program.program;
     for (d, declaration) in body.declarations.iter().enumerate() {
         for (i, column) in declaration.columns.iter().enumerate() {
-            if let Some(ty) = narrower(&column.ty) {
+            if let Some(ty) = types
+                .columns
+                .get(&(cq_syntax::symbol_name(&declaration.name), i))
+                .copied()
+                .and_then(narrower)
+            {
                 let mut m = program.clone();
                 m.program.declarations[d].columns[i].ty = ty;
                 c.push(
@@ -459,7 +529,15 @@ pub fn physical(program: &physical::Program) -> Vec<Mutant<physical::Program>> {
                 with(Operator::FlipConstraint, "negate guard", Op::Guard(m));
             }
             Op::Bind(b) => {
-                if let Some(ty) = b.annotation.as_ref().and_then(|a| narrower(&a.ty)) {
+                let ty = match &b.pattern {
+                    syn::Pat::Ident(pattern) if b.annotation.is_some() => types
+                        .bindings
+                        .get(&cq_syntax::symbol_name(&pattern.ident))
+                        .copied()
+                        .and_then(narrower),
+                    _ => None,
+                };
+                if let Some(ty) = ty {
                     let mut m = b.clone();
                     m.annotation.as_mut().unwrap().ty = ty;
                     with(Operator::NarrowWidth, "narrow binding", Op::Bind(m));
@@ -556,9 +634,12 @@ fn keyed_of(structure: &mut structures::Structure) -> Option<&mut structures::Ke
 
 /// Every one-fact mutant of a Structures program, including every Physical
 /// mutant of its embedded Physical program.
-pub fn structures(program: &structures::Program) -> Vec<Mutant<structures::Program>> {
+pub fn structures(
+    program: &structures::Program,
+    types: &CarrierTypes,
+) -> Vec<Mutant<structures::Program>> {
     let mut c = Collector::new(program);
-    for mutant in physical(&program.physical) {
+    for mutant in physical(&program.physical, types) {
         let mut m = program.clone();
         m.physical = mutant.program;
         c.push(mutant.operator, format!("physical {}", mutant.site), m);
@@ -612,4 +693,116 @@ pub fn structures(program: &structures::Program) -> Vec<Mutant<structures::Progr
         c.push(Operator::DropFlag, site("drop entry"), m);
     }
     c.out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn narrowing_pairs_come_from_typed_carriers() {
+        for (source, target) in [
+            (ColumnType::I32, parse_quote!(i16)),
+            (ColumnType::I64, parse_quote!(u32)),
+            (ColumnType::U32, parse_quote!(u16)),
+            (ColumnType::Usize, parse_quote!(u32)),
+        ] {
+            assert_eq!(narrower(source), Some(target));
+        }
+        assert_eq!(narrower(ColumnType::Str), None);
+    }
+
+    #[test]
+    fn scalar_aliases_and_qualified_types_do_not_select_mutations() {
+        let program: physical::Program = parse_quote!(physical {
+            relation R(x: Carrier);
+            relation answer(y: ::std::primitive::i64);
+            r = pipe rename R@0 { x -> x };
+            b = pipe bind r with y: OtherCarrier = (x.to_owned());
+            p = let canon project b keep { y };
+            return p as answer(y);
+        });
+        let types = CarrierTypes {
+            columns: BTreeMap::from([
+                (("R".into(), 0), ColumnType::I64),
+                (("answer".into(), 0), ColumnType::I64),
+            ]),
+            bindings: BTreeMap::from([("y".into(), ColumnType::I64)]),
+        };
+        let mutants = physical(&program, &types)
+            .into_iter()
+            .filter(|mutant| mutant.operator == Operator::NarrowWidth)
+            .collect::<Vec<_>>();
+        assert_eq!(mutants.len(), 3);
+        assert_eq!(
+            mutants[0].program.program.declarations[0].columns[0].ty,
+            parse_quote!(u32)
+        );
+        assert_eq!(
+            mutants[1].program.program.declarations[1].columns[0].ty,
+            parse_quote!(u32)
+        );
+        let physical::Operator::Bind(binding) = &mutants[2].program.program.definitions[1].operator
+        else {
+            panic!("expected the binding mutant");
+        };
+        assert_eq!(binding.annotation.as_ref().unwrap().ty, parse_quote!(u32));
+        assert!(
+            physical(&program, &CarrierTypes::default())
+                .iter()
+                .all(|mutant| mutant.operator != Operator::NarrowWidth)
+        );
+    }
+
+    #[test]
+    fn model_carriers_preserve_raw_names_and_optional_outputs() {
+        use crate::fuzz::{
+            Atom, Binding, Case, Expr, Fold, FoldArg, FoldKind, Query, Relation, Term,
+        };
+
+        let case = Case {
+            seed: 0,
+            query: Query {
+                schema: vec![Relation {
+                    name: "r#match".into(),
+                    types: vec![ColumnType::I64, ColumnType::U32],
+                    key: Vec::new(),
+                }],
+                atoms: vec![Atom {
+                    relation: 0,
+                    terms: vec![Term::Var(0), Term::Var(2)],
+                }],
+                bindings: vec![Binding {
+                    variable: 1,
+                    expression: Expr::Constant(7),
+                    generator: None,
+                }],
+                head: vec![Expr::Var(0)],
+                folds: vec![
+                    Fold {
+                        kind: FoldKind::Count,
+                        argument: None,
+                    },
+                    Fold {
+                        kind: FoldKind::Min,
+                        argument: Some(FoldArg::Var(2)),
+                    },
+                ],
+                raw_names: true,
+                negations: Vec::new(),
+                guards: Vec::new(),
+                constraints: Vec::new(),
+                blocks: Vec::new(),
+                order: Vec::new(),
+            },
+            data: vec![Vec::new()],
+        };
+        let types = CarrierTypes::from_case(&case);
+        assert_eq!(types.columns[&("match".into(), 0)], ColumnType::I64);
+        assert_eq!(types.columns[&("match".into(), 1)], ColumnType::U32);
+        assert_eq!(types.columns[&("answer".into(), 0)], ColumnType::I64);
+        assert_eq!(types.columns[&("answer".into(), 1)], ColumnType::Usize);
+        assert!(!types.columns.contains_key(&("answer".into(), 2)));
+        assert_eq!(types.bindings["type"], ColumnType::I32);
+    }
 }

@@ -60,12 +60,26 @@ impl Route {
     }
 }
 
-/// The denotation of one stage, or why it was not judged.
+/// The denotation of one stage, an execution failure, or why it was not judged.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Rows(TypedRows),
+    /// An interpreted execution failed; never an unsupported-fragment skip.
+    Failed(physical_semantics::Error),
     /// Outside the stage evaluator's fragment; not judged.
     Unsupported(String),
+}
+
+impl From<Result<physical_semantics::Evaluation, physical_semantics::Error>> for Outcome {
+    fn from(result: Result<physical_semantics::Evaluation, physical_semantics::Error>) -> Self {
+        match result {
+            Ok(evaluation) => Self::Rows(evaluation.output),
+            Err(error @ physical_semantics::Error::Unsupported(_)) => {
+                Self::Unsupported(error.to_string())
+            }
+            Err(error) => Self::Failed(error),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -154,10 +168,7 @@ pub fn physical_outcome(
     database: &TypedDatabase,
     parameters: &BTreeMap<String, Value>,
 ) -> Outcome {
-    match physical_semantics::evaluate(program, database, parameters) {
-        Ok(evaluation) => Outcome::Rows(evaluation.output),
-        Err(error) => Outcome::Unsupported(error.to_string()),
-    }
+    physical_semantics::evaluate(program, database, parameters).into()
 }
 
 pub fn pass<T, E: std::fmt::Display>(stage: &str, result: Result<T, E>) -> Result<T, PassError> {
@@ -265,7 +276,7 @@ pub fn compile_source(
 pub fn reference(stages: &[Stage]) -> Option<(String, TypedRows)> {
     stages.iter().find_map(|stage| match &stage.outcome {
         Outcome::Rows(rows) => Some((stage.name.clone(), rows.clone())),
-        Outcome::Unsupported(_) => None,
+        Outcome::Unsupported(_) | Outcome::Failed(_) => None,
     })
 }
 
@@ -310,4 +321,19 @@ pub fn generate(seed: u64) -> Case {
 /// Evaluators key tables by symbol name: `r#match` is table `match`.
 fn table_name(name: &str) -> String {
     name.strip_prefix("r#").unwrap_or(name).to_owned()
+}
+
+#[test]
+fn physical_execution_errors_are_not_unsupported() {
+    use physical_semantics::Error;
+    for error in [
+        Error::Panic("overflow".into()),
+        Error::Malformed("undefined read".into()),
+    ] {
+        assert_eq!(Outcome::from(Err(error.clone())), Outcome::Failed(error));
+    }
+    assert!(matches!(
+        Outcome::from(Err(Error::Unsupported("expression".into()))),
+        Outcome::Unsupported(_)
+    ));
 }

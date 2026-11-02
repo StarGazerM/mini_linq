@@ -18,8 +18,6 @@ pub struct Profile {
     pub keys: bool,
     /// i64 and u32 columns, including extremes and low-32-bit collisions.
     pub wide_ints: bool,
-    /// Interned string columns. Off until interned `StringCode` columns land.
-    pub strings: bool,
     /// Raw keyword identifiers (`r#type`) for relations and variables.
     pub raw_identifiers: bool,
     /// Closed host captures in lets, guards, heads and folds; `()` heads.
@@ -39,7 +37,6 @@ impl Profile {
             aggregates: true,
             keys: true,
             wide_ints: true,
-            strings: false,
             raw_identifiers: true,
             closed_captures: true,
             max_rows: 64,

@@ -1940,6 +1940,10 @@ fn empty_key_membership_reads_the_whole_relation_without_an_index_obligation() {
         ))
         .unwrap();
         let analysis = contract::check(&program).unwrap();
+        assert_eq!(
+            analysis.structures.read_accesses["r"][&Vec::<String>::new()],
+            cq_lang_structures::ReadAccess::Whole
+        );
         assert!(!analysis.obligations.iter().any(|obligation| matches!(
             obligation,
             Obligation::Provider { provider, keys, .. }
