@@ -161,14 +161,31 @@ default, quick or `--changed-since` gate:
 
 ```sh
 bash tools/test_regressions.sh --tier fuzz
-bash tools/test_regressions.sh cq-xtask/fuzz
+bash tools/test_regressions.sh cq-xtask/fuzz-quick
 ```
 
-The existing `cq-xtask/fuzz` oracle row has moved to this opt-in tier. The current
-default is therefore **118 deterministic targets**, while the inventory still
-contains 119 rows. The impact/quick measurements above predate this intentional
+The old `cq-xtask/fuzz` oracle row is replaced by `cq-xtask/fuzz-quick` (64
+fixed-seed cases × 4 CPU routes) and `cq-xtask/fuzz-full` (2,000 cases, rotating
+logged seed, every CPU route), both in this opt-in tier. `cq-rewrites/rewrite_stages`
+runs the generated stage differential and checker mutants through the six Physical
+rewrites; its Cargo target is `test = false`, so only an explicit `--test` runs
+it. The default is therefore **118 deterministic targets** and the inventory
+contains 121 rows. The impact/quick measurements above predate this intentional
 tier migration. Test-layer additions must keep randomly generated consumers out
 of ordinary `cargo test` and the quick/default suites.
+
+The runner's kinds cannot pass `--ignored`, so the core-pipeline generated
+sweeps (through Physical lowering) are explicit commands rather than rows:
+
+```sh
+cargo test -p mini-linq --test stage_differential -- --ignored
+cargo test -p mini-linq --test checker_mutants -- --include-ignored
+cargo test --manifest-path features/datalog/oracle/Cargo.toml --test random_programs random_programs_quick -- --ignored
+cargo test -p cq-testkit --features duckdb -- --ignored
+flock /tmp/mini_linq-gpu.lock cargo run --manifest-path experiments/gpu/Cargo.toml -p cq-gpu-fuzz -- SEED CASES
+```
+
+The GPU lane needs CUDA and stays a manual command.
 
 ## Warm shared-directory indicator
 

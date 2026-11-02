@@ -14,6 +14,150 @@ pub type Database = BTreeMap<String, Rows>;
 /// A complete assignment to the named variables of a heading.
 pub type Binding = BTreeMap<String, i32>;
 
+/// Column types of generated relations. `Str` is an interned dictionary code
+/// in compiled programs; the reference compares the decoded strings, whose
+/// dictionary is ordered, so order comparisons agree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ColumnType {
+    I32,
+    I64,
+    U32,
+    Usize,
+    Str,
+}
+
+impl ColumnType {
+    /// The Rust column type spelling for numeric columns. `Str` has none:
+    /// queries see interned codes, never `&str` columns.
+    pub fn rust(self) -> &'static str {
+        match self {
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::U32 => "u32",
+            Self::Usize => "usize",
+            Self::Str => panic!("string columns are interned codes, declared by the consumer"),
+        }
+    }
+
+    /// The DuckDB column type with the same value domain.
+    pub fn sql(self) -> &'static str {
+        match self {
+            Self::I32 => "INTEGER",
+            Self::I64 => "BIGINT",
+            Self::U32 => "UINTEGER",
+            Self::Usize => "UBIGINT",
+            Self::Str => "VARCHAR",
+        }
+    }
+
+    /// Parse the runtime text encoding produced by `Value`'s `Display`.
+    pub fn parse(self, text: &str) -> Value {
+        fn number<T: std::str::FromStr>(text: &str, ty: ColumnType) -> T {
+            text.parse()
+                .unwrap_or_else(|_| panic!("{text:?} is not a {ty:?} value"))
+        }
+        match self {
+            Self::I32 => Value::I32(number(text, self)),
+            Self::I64 => Value::I64(number(text, self)),
+            Self::U32 => Value::U32(number(text, self)),
+            Self::Usize => Value::Usize(number(text, self)),
+            Self::Str => Value::Str(text.to_owned()),
+        }
+    }
+}
+
+/// One typed scalar. Ordering is by type, then by value; generated relations
+/// never compare values of different types.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Value {
+    I32(i32),
+    I64(i64),
+    U32(u32),
+    Usize(u64),
+    Str(String),
+}
+
+impl Value {
+    pub fn column_type(&self) -> ColumnType {
+        match self {
+            Self::I32(_) => ColumnType::I32,
+            Self::I64(_) => ColumnType::I64,
+            Self::U32(_) => ColumnType::U32,
+            Self::Usize(_) => ColumnType::Usize,
+            Self::Str(_) => ColumnType::Str,
+        }
+    }
+
+    /// A suffixed Rust literal, e.g. `-5i64`; strings are quoted.
+    pub fn rust_literal(&self) -> String {
+        match self {
+            Self::I32(v) => format!("{v}i32"),
+            Self::I64(v) => format!("{v}i64"),
+            Self::U32(v) => format!("{v}u32"),
+            Self::Usize(v) => format!("{v}usize"),
+            Self::Str(s) => format!("{s:?}"),
+        }
+    }
+
+    /// A literal DuckDB accepts for the same domain.
+    pub fn sql_literal(&self) -> String {
+        match self {
+            Self::I32(v) => format!("CAST({v} AS INTEGER)"),
+            Self::I64(v) => format!("CAST({v} AS BIGINT)"),
+            Self::U32(v) => format!("CAST({v} AS UINTEGER)"),
+            Self::Usize(v) => format!("CAST({v} AS UBIGINT)"),
+            Self::Str(s) => format!("'{}'", s.replace('\'', "''")),
+        }
+    }
+
+    /// Integer value widened to i128; `None` for strings.
+    pub fn as_i128(&self) -> Option<i128> {
+        match self {
+            Self::I32(v) => Some((*v).into()),
+            Self::I64(v) => Some((*v).into()),
+            Self::U32(v) => Some((*v).into()),
+            Self::Usize(v) => Some((*v).into()),
+            Self::Str(_) => None,
+        }
+    }
+
+    pub fn as_i32(&self) -> i32 {
+        match self {
+            Self::I32(v) => *v,
+            other => panic!("{other:?} is not an i32 value"),
+        }
+    }
+}
+
+impl std::fmt::Display for Value {
+    /// Runtime text encoding: plain decimal, or the raw ASCII string.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::I32(v) => write!(f, "{v}"),
+            Self::I64(v) => write!(f, "{v}"),
+            Self::U32(v) => write!(f, "{v}"),
+            Self::Usize(v) => write!(f, "{v}"),
+            Self::Str(s) => f.write_str(s),
+        }
+    }
+}
+
+impl From<i32> for Value {
+    fn from(value: i32) -> Self {
+        Self::I32(value)
+    }
+}
+
+/// A finite set of typed tuples (the G3 reference's answer type).
+pub type TypedRows = BTreeSet<Vec<Value>>;
+
+/// Lift i32 answers of the IR evaluators into typed rows for comparison.
+pub fn typed(rows: &Rows) -> TypedRows {
+    rows.iter()
+        .map(|row| row.iter().copied().map(Value::I32).collect())
+        .collect()
+}
+
 /// A finite named-heading relation under Set semantics.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Relation {

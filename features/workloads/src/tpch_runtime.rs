@@ -1,6 +1,10 @@
 //! Explicit pipelines and the common typed shell for TPC-H-derived CQ kernels.
 //! Query collection is timed; answer serialization and comparison are separate.
 
+#[allow(dead_code)]
+#[path = "../xtask/src/fuzz/routes.rs"]
+pub(crate) mod cpu_routes;
+
 /// Expand the same authored CQ with an explicit sequence of public passes.
 macro_rules! configuration {
     (default, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
@@ -72,7 +76,7 @@ pub(crate) use configuration;
 /// Each `query!` carries stage-local advice; only the advised variant applies it.
 macro_rules! standalone_configs {
     ($d:tt; $($body:tt)*) => {
-        pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "no-reduce", "transfer", "le", "le_runs", "advised"];
+        pub const CONFIGS: &[&str] = crate::tpch_runtime::cpu_routes::cpu_route_names!("advised");
         crate::tpch_runtime::standalone_configuration!(default, $d, {}, [], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(radix, $d, {}, [::cq_rewrites::radix_runs], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(radix_retained, $d, {}, [::cq_rewrites::radix_runs, ::cq_rewrites::retain_lookups], { $($body)* });
@@ -386,7 +390,7 @@ macro_rules! retail_kernel {
     ) => {
         pub const NAME: &str = $name;
         pub const SQL: &str = $sql;
-        pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
+        pub const CONFIGS: &[&str] = crate::tpch_runtime::cpu_routes::cpu_route_names!("built_hash", "built_radix", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?);
         pub const EXPORTS: &[(&str, &str)] = &[$(
             (stringify!($table), concat!(stringify!($first) $(, ",", stringify!($column))*)),
         )*];

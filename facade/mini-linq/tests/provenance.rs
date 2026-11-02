@@ -238,10 +238,13 @@ fn seed_997_hypergraph_executes_against_the_written_reference() {
     let written = realize(&reference, "");
     let hypergraph = realize(&target, "");
     // Saved data.txt is `0 2 3 0 2 0`: both declared inputs are empty.
-    let generated = cq_testkit::fuzz::generate(997);
     let inputs = [
         [Vec::new(), Vec::new()],
-        [generated.data[0].clone(), generated.data[1].clone()],
+        // The original seed-997 dataset (the generator has since changed).
+        [
+            vec![vec![1, -2, 0], vec![3, 1, -3], vec![1, -2, 0]],
+            vec![vec![3, 1], vec![-3, 1], vec![1, 3], vec![-2, -2]],
+        ],
         [
             vec![
                 vec![-3, 1, -3],

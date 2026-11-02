@@ -60,10 +60,11 @@
 //!   distinct rows of the declared width; it rejects CRLF, leading zeros, and
 //!   missing final newlines. Git inventory needs the Git CLI.
 //! * The optional `duckdb` feature also enables `golden` and adds an in-memory
-//!   integer SQL oracle. SQL must select the desired set and ordering explicitly.
-//!   `evaluate_fuzz` routes opaque Rust operations and generators elsewhere and
-//!   checks DISTINCT. Default and `golden`-only builds do not build or link DuckDB.
-//!   The bundled native engine can make the first `duckdb` feature build slower.
+//!   SQL oracle that runs the prebuilt DuckDB CLI (`DUCKDB_CLI` or `duckdb` on
+//!   PATH). Corpus SQL uses integer tables; `evaluate_fuzz` loads typed tables
+//!   and returns typed rows. SQL must select the desired set and ordering
+//!   explicitly. `evaluate_fuzz` routes opaque Rust operations and generators
+//!   elsewhere and checks DISTINCT. No build links DuckDB.
 //!
 //! ```rust
 //! use cq_testkit::{CASES, cq_semantics};
@@ -128,6 +129,8 @@ pub mod fuzz;
 #[cfg(feature = "golden")]
 pub mod golden;
 pub mod harness;
+pub mod mutate;
+pub mod physical_semantics;
 mod positional_cases;
 pub mod random;
 pub mod rewrites;

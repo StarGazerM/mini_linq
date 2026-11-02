@@ -2,15 +2,24 @@
 // allowing the very same compiled query to shrink rows after a mismatch.
 use std::io::{BufRead, Write};
 
-type Data = Vec<Vec<Vec<i32>>>;
+type Data = Vec<Vec<Vec<String>>>;
 
 fn integer(value: impl std::borrow::Borrow<i32>) -> i32 {
     *value.borrow()
 }
 
+#[derive(Debug)]
+struct Invariant(&'static str);
+
+fn invariant(holds: bool, rule: &'static str) {
+    if !holds {
+        std::panic::panic_any(Invariant(rule));
+    }
+}
+
 fn main() {
-    // Panic is one undistinguished abort in the denotation. Payloads and
-    // backtraces are not part of the oracle protocol.
+    // Ordinary panic payloads are not part of the answer protocol. Counter
+    // invariants instead report their stable rule id, never assertion wording.
     std::panic::set_hook(Box::new(|_| {}));
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -28,7 +37,7 @@ fn main() {
                 (0..rows)
                     .map(|_| {
                         (0..arity)
-                            .map(|_| words.next().unwrap().parse::<i32>().unwrap())
+                            .map(|_| words.next().unwrap().to_owned())
                             .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>(),
@@ -51,7 +60,13 @@ fn main() {
                 }
                 writeln!(out).unwrap();
             }
-            Err(_) => writeln!(out, "{id} PANIC").unwrap(),
+            Err(payload) => {
+                if let Some(Invariant(rule)) = payload.downcast_ref::<Invariant>() {
+                    writeln!(out, "{id} INVARIANT {rule}").unwrap();
+                } else {
+                    writeln!(out, "{id} PANIC").unwrap();
+                }
+            }
         }
         out.flush().unwrap();
     }

@@ -641,6 +641,7 @@ dependencies = [
  "cq-syntax",
  "csv",
  "hashbrown 0.15.5",
+ "quote",
  "rayon",
  "syn 2.0.119",
  "tempfile",

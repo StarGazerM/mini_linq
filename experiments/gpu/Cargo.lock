@@ -362,6 +362,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-gpu-fuzz"
+version = "0.1.0"
+dependencies = [
+ "cq-testkit",
+]
+
+[[package]]
 name = "cq-gpu-runtime"
 version = "0.1.0"
 dependencies = [
@@ -909,6 +916,7 @@ dependencies = [
  "cq-lang-vo",
  "cq-syntax",
  "hashbrown 0.15.5",
+ "quote",
  "rayon",
  "syn 2.0.119",
 ]

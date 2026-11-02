@@ -224,16 +224,59 @@ fn mask_steps(
         .collect()
 }
 
+/// Why `compile` refused a plan.
+#[derive(Debug)]
+pub enum Error {
+    /// The Yannakakis (`Tree`) reducer was requested on a cyclic query: the
+    /// route does not apply to this query.
+    Cyclic(syn::Error),
+    /// Any other contract or planning failure.
+    Invalid(syn::Error),
+}
+
+impl From<syn::Error> for Error {
+    fn from(error: syn::Error) -> Self {
+        Self::Invalid(error)
+    }
+}
+
+impl From<Error> for syn::Error {
+    fn from(error: Error) -> Self {
+        match error {
+            Error::Cyclic(error) | Error::Invalid(error) => error,
+        }
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cyclic(error) | Self::Invalid(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
 /// Insert the reductions `options` ask for, then check the VO contract.
 /// Formal rule R-Guard: Retain every unchanged Rust guard in its recorded placement.
 /// Formal rule R-Tree: Insert the relational tree schedule before the first atom.
-pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<valuation::Program> {
+pub fn compile(
+    source: &valuation::Program,
+    options: &Options,
+) -> Result<valuation::Program, Error> {
     let analysis = valuation::contract::check(source)?;
     let graph = scope_graph(
         &source.cq.query.body,
         &source.valuation.steps,
         &BTreeSet::new(),
     );
+    if options.semijoins == Reductions::Tree && graph.join_tree.is_none() {
+        return Err(Error::Cyclic(syn::Error::new_spanned(
+            &source.cq.query.body,
+            "Yannakakis reduction requires an acyclic query",
+        )));
+    }
     let steps = compile_steps(
         &source.cq.query.body,
         &source.valuation.steps,

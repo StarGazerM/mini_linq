@@ -28,7 +28,20 @@ cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
 cq-rewrite-test-driver = { version = "0.1.0", path = "test-driver" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage", features = ["counters"] }
 cq-load = { version = "0.1.0", path = "../../runtime/cq-load" }
+# Core passes of the generated rewrite-stage driver (tests/rewrite_stages.rs).
+cq-lang-cq = { version = "0.1.0", path = "../../languages/cq-lang-cq" }
+cq-lang-ix = { version = "0.1.0", path = "../../languages/cq-lang-ix" }
+cq-order = { version = "0.1.0", path = "../../passes/cq-order" }
+cq-reduce = { version = "0.1.0", path = "../../passes/cq-reduce" }
+cq-elaborate = { version = "0.1.0", path = "../../passes/cq-elaborate" }
+cq-index-policy = { version = "0.1.0", path = "../../passes/cq-index-policy" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }
+
+# Generated stage differential and checker mutants through the rewrites:
+# opt-in, only run when selected with `--test rewrite_stages`.
+[[test]]
+name = "rewrite_stages"
+test = false

@@ -733,6 +733,7 @@ dependencies = [
  "cq-lang-vo",
  "cq-syntax",
  "hashbrown 0.15.5",
+ "quote",
  "rayon",
  "syn 2.0.119",
 ]

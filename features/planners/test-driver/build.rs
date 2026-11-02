@@ -8,7 +8,7 @@ use std::fmt::Write;
 fn executable(case: &Case, name: &str, invocation: &str) -> String {
     let mut code = format!("pub(super) fn {name}(data: &[Vec<Vec<i32>>]) -> cq_testkit::Rows {{\n");
     for (index, relation) in case.query.schema.iter().enumerate() {
-        let fields = (0..relation.arity)
+        let fields = (0..relation.arity())
             .map(|column| format!("row[{column}],"))
             .collect::<String>();
         writeln!(

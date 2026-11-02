@@ -1,15 +1,26 @@
-//! Relational scalar queries use independently printed DuckDB SQL. Opaque Rust
-//! terms and generators use a second compiled query in written order with
-//! reordering disabled. Rust is pure and total by premise: a panic in either
-//! execution fails comparison. Successful executions must return equal sets.
-//! `xtask fuzz` writes a disposable Cargo consumer under target/fuzz. Its small
-//! proc macro runs the selected logical passes, then calls the public facade
-//! for physical lowering and realization. Each batch is compiled once; runtime
-//! data travels over stdin so row minimization does not require recompilation.
+//! Every route compares against the independent typed model evaluator. Opaque
+//! Rust and generators additionally run a compiled written-order oracle.
+//! `--duckdb` adds a SQL cross-check (requires Cargo's `oracle` feature).
+//! A panic in any lane fails comparison; successful runs must return equal sets.
+//! `xtask fuzz-quick` uses 64 fixed-seed cases on default, Tasks, radix and
+//! seeded legal advice. `xtask fuzz-full` defaults to 2,000 cases on every CPU
+//! route and each native host kind; its run id is the logged seed (`--seed`
+//! replays a run). Both write disposable Cargo consumers under target/fuzz.
+//! Each batch is compiled once; runtime data travels over stdin so row
+//! minimization does not require recompilation. Every Structures record rejects
+//! zero-column built indexes, and counted closed let/guard/head probes run on
+//! each route. Failures retain the seed, route, CQ, SQL and minimized input.
+//! These are opt-in commands, never part of default tests or regular regression
+//! selection. Unit tests below use only fixed tiny cases and never invoke Cargo.
 #[cfg(test)]
 #[path = "fuzz/compiler.rs"]
 mod compiler;
 use cq_testkit::fuzz as model;
+use cq_testkit::values::Value;
+#[path = "fuzz/routes.rs"]
+mod routes;
+#[path = "fuzz/captures.rs"]
+mod captures;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -23,11 +34,13 @@ use crate::Result;
 
 const DEFAULT_SEED: u64 = 0;
 const BATCH: usize = 64;
-type Answers = Vec<Vec<i32>>;
+const REFERENCE_OFFSET: usize = 1_000_000;
+type Answers = Vec<Vec<Value>>;
 type ConsumerResult = std::result::Result<Answers, String>;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Config {
+    route: &'static str,
     reference: bool,
     planner: usize,
     merge: bool,
@@ -51,6 +64,7 @@ impl Config {
             (seed.next_u64() % n) as usize
         }
         Self {
+            route: "advised",
             planner: next(seed, cq_workloads::pipelines::Planner::ALL.len() as u64),
             merge: next(seed, 2) == 1,
             canon: next(seed, 2) == 1,
@@ -113,8 +127,30 @@ impl Config {
     }
 }
 
+fn route_configuration(route: &str) -> String {
+    let (plan, physical, structures, execution) = match route {
+        "" | "default" => ("", "", "", ""),
+        "par" => ("", "", "", "decompose = [::cq_sequence_tasks_macros::plan]; grade = ::cq_sequence_tasks_macros::tasks; print = ::cq_sequence_tasks_macros::translate_tasks;"),
+        "radix" => ("", "", "::cq_rewrites::radix_runs,", ""),
+        "radix_retained" => ("", "", "::cq_rewrites::radix_runs, ::cq_rewrites::retain_lookups,", ""),
+        "built_hash" => ("", "::cq_rewrites::build_host_reads", "", ""),
+        "built_radix" => ("", "::cq_rewrites::build_host_reads", "::cq_rewrites::radix_runs,", ""),
+        "no-reduce" | "advised" => ("plan = ::mini_linq::passes::plan(no_reduce);", "", "", ""),
+        "transfer" => ("plan = ::cq_planners::order(transfer);", "", "", ""),
+        "le" => ("plan = ::cq_planners::order(le);", "", "", ""),
+        "le_runs" => ("plan = ::cq_planners::order(le);", "", "::cq_rewrites::sorted_runs, ::cq_rewrites::retain_lookups,", ""),
+        "push" => ("", "", "", "print_input = structures; print = ::own_push::push;"),
+        _ => panic!("unrecognized CPU route {route}"),
+    };
+    format!("pipeline {{ {plan} physical = [{physical}]; structures = [{structures} ::cq_fuzz_planner::check_indexes]; {execution} }}")
+}
+
 impl std::fmt::Display for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.route != "advised" {
+            return write!(f, "route={}, host={}", self.route, ["slice", "hashmap", "btreemap"][self.host]);
+        }
+        write!(f, "route={}, ", self.route)?;
         for (i, (axis, value)) in self.axes().into_iter().enumerate() {
             if i != 0 {
                 write!(f, ", ")?;
@@ -140,15 +176,29 @@ fn eligible(case: &Case, c: Config) -> Result<bool> {
 }
 
 fn eligible_inner(case: &Case, c: Config) -> Result<bool> {
+    // Fixed routes are checked by their actual compiled pipeline, not by an
+    // unrelated sampled planner. Only legal-advice sampling needs preflight.
+    if c.route != "advised" {
+        return Ok(true);
+    }
     let source = syn::parse_str(&case.cq())?;
     Ok(c.pipeline().rejection(&source, c.host)?.is_none())
 }
 
 pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
-    let (mut count, mut seed) = (200usize, DEFAULT_SEED);
+    let full = arguments.iter().any(|arg| arg == "--full");
+    let (mut count, mut seed) = if full {
+        (2000usize, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos() as u64)
+    } else {
+        (64usize, DEFAULT_SEED)
+    };
+    let routes = if full { routes::FULL } else { routes::QUICK };
+    let mut duckdb = false;
     let mut args = arguments.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--quick" | "--full" => {}
+            "--duckdb" => duckdb = true,
             "--cases" => count = args.next().ok_or("--cases requires a number")?.parse()?,
             "--seed" => {
                 seed = args
@@ -166,19 +216,50 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
     if count == 0 {
         return Err("--cases must be positive".into());
     }
+    if duckdb && !cfg!(feature = "oracle") {
+        return Err("--duckdb requires building cq-xtask with --features oracle".into());
+    }
     let started = Instant::now();
     let mut coverage = model::Coverage::default();
+    let mut route_coverage = model::RouteCoverage::default();
     let mut distribution = BTreeMap::<String, usize>::new();
     let mut rejected = 0;
-    let mut cases = Vec::with_capacity(count);
-    println!("fuzz: {count} cases, seed {seed}, batches of {BATCH}");
+    println!("fuzz: tier={} cases={count} seed={seed} run_id={seed} routes={routes:?} batches={BATCH}", if full { "full" } else { "quick" });
     let progress = root.join("target/fuzz/preflight-current.txt");
     std::fs::create_dir_all(progress.parent().ok_or("preflight parent")?)?;
-    for index in 0..count {
-        let case = model::generate(seed.wrapping_add(index as u64));
+    std::fs::write(root.join(format!("target/fuzz/run-{seed}.txt")),
+        format!("seed={seed}\nrun_id={seed}\ncases={count}\nroutes={routes:?}\n"))?;
+    let mut runner = Runner::new(root, duckdb)?;
+    let mut compile_time = Duration::ZERO;
+    let mut execute_time = Duration::ZERO;
+    let mut oracle_time = Duration::ZERO;
+    let mut nonempty = 0;
+    let mut rust_cases = 0;
+    let hosts = if full { 3 } else { 1 };
+    let executions = count * routes.len() * hosts;
+    for first in (0..count).step_by(BATCH) {
+    let mut cases = Vec::with_capacity(BATCH * routes.len() * hosts);
+    let mut originals = BTreeMap::new();
+    for index in first..(first + BATCH).min(count) {
+        let profile = if full { model::Profile::full() } else { model::Profile::quick() };
+        let case = model::generate_with(seed.wrapping_add(index as u64), &profile);
+        coverage.observe(&case);
+        originals.insert(case.seed, case.clone());
+        for host in 0..hosts {
+        let case = if host == 0 { case.clone() } else { native_case(&case) };
+        for &route in routes {
         let mut config_seed = cq_testkit::random::SplitMix64::new(case.seed ^ 0x434f_4e46_4947);
+        let mut attempts = 0;
         let config = loop {
-            let config = Config::sample(&mut config_seed);
+            attempts += 1;
+            if attempts > 256 {
+                return Err(format!("no legal advice at seed {} host={host}", case.seed).into());
+            }
+            let config = if route == "advised" {
+                Config { route, host, push: false, ..Config::sample(&mut config_seed) }
+            } else {
+                Config { route, host, push: route == "push", ..Default::default() }
+            };
             std::fs::write(
                 &progress,
                 format!(
@@ -189,7 +270,8 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
             )?;
             match eligible(&case, config) {
                 Ok(true) => break config,
-                Ok(false) => rejected += 1,
+                Ok(false) if route == "advised" => rejected += 1,
+                Ok(false) => return Err(format!("route capability rejected: seed={} {config}", case.seed).into()),
                 Err(error) => {
                     let fingerprint = diagnostic(&*error);
                     let mut minimal = case.clone();
@@ -204,6 +286,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
                         root,
                         &minimal,
                         config,
+                        "preflight",
                         &format!("compiler preflight: {error}"),
                     )?;
                     return Err(format!(
@@ -214,20 +297,19 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
                 }
             }
         };
-        coverage.observe(&case);
-        for (axis, value) in config.axes() {
-            *distribution.entry(format!("{axis}/{value}")).or_default() += 1;
+        *distribution.entry(format!("route/{route}/host/{host}")).or_default() += 1;
+        if route == "advised" {
+            for (axis, value) in config.axes() {
+                *distribution.entry(format!("advised/{axis}/{value}")).or_default() += 1;
+            }
         }
-        cases.push((case, config));
+        cases.push((case.clone(), config));
+        }
+        }
     }
-    let mut runner = Runner::new(root)?;
-    let mut compile_time = Duration::ZERO;
-    let mut execute_time = Duration::ZERO;
-    let mut oracle_time = Duration::ZERO;
-    let mut nonempty = 0;
-    let mut rust_cases = 0;
-    for (batch_index, batch) in cases.chunks(BATCH).enumerate() {
-        let offset = batch_index * BATCH;
+    let batch_size = BATCH * routes.len();
+    for (batch_index, batch) in cases.chunks(batch_size).enumerate() {
+        let offset = first * routes.len() * hosts + batch_index * batch_size;
         let started = Instant::now();
         if let Err(error) = runner.compile(batch) {
             let (mut minimal, config) = match runner.isolate_compile_failure(batch) {
@@ -238,6 +320,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
                             root,
                             case,
                             *config,
+                            "cpu-compile",
                             &format!(
                                 "batch-only compilation failure; could not minimize independently: {isolation}\n{error}"
                             ),
@@ -262,6 +345,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
                 root,
                 &minimal,
                 config,
+                "cpu-compile",
                 &format!("Rust compilation: {minimized_error}"),
             )?;
             return Err(format!("fuzz Rust compilation failed; seed {}", minimal.seed).into());
@@ -283,6 +367,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
                             root,
                             &minimal,
                             *config,
+                            "cpu-execution",
                             &format!("consumer execution: {error}"),
                         )?;
                         return Err(format!("fuzz consumer failure at seed {}", case.seed).into());
@@ -295,6 +380,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
                         root,
                         case,
                         *config,
+                        "cpu-execution",
                         &format!(
                             "batch-only consumer failure; could not minimize independently: {error}"
                         ),
@@ -316,7 +402,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
                             runner.reference(id, candidate).is_err()
                         });
                         if !minimal.requires_rust_oracle() {
-                            shrink_atoms(&mut minimal, |candidate| reference(candidate).is_err());
+                            shrink_atoms(&mut minimal, |candidate| reference(candidate, runner.duckdb).is_err());
                         }
                         if size(&minimal) == before {
                             break;
@@ -326,6 +412,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
                         root,
                         &minimal,
                         *config,
+                        "reference",
                         &format!("reference evaluation: {error}"),
                     )?;
                     return Err(format!("fuzz oracle failure at seed {}", case.seed).into());
@@ -359,26 +446,30 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
                     root,
                     &minimal,
                     *config,
+                    "cpu-execution",
                     &format!("expected {expected:?}, actual {got:?}"),
                 )?;
                 return Err(
                     format!("fuzz mismatch at case {}, seed {}", offset + id, case.seed).into(),
                 );
             }
+            route_coverage.record(config.route, &originals[&case.seed], true);
         }
         println!(
             "fuzz: {}/{} passed; compilation {:.2}s, execution {:.2}s, references {:.2}s",
             offset + batch.len(),
-            count,
+            executions,
             compile_time.as_secs_f64(),
             execute_time.as_secs_f64(),
             oracle_time.as_secs_f64()
         );
     }
+    }
     println!("query distribution: {coverage}");
     println!("configuration distribution: {distribution:?}");
+    println!("features by route:\n{route_coverage}");
     println!(
-        "fuzz: passed {count}; {nonempty} nonempty reference answers; {rust_cases} Rust oracle cases; {rejected} unavailable native-merge configurations resampled; total {:.2}s (compile {:.2}s, execute {:.2}s, references {:.2}s)",
+        "fuzz: passed {count} cases / {executions} route-host executions; {nonempty} nonempty reference answers; {rust_cases} Rust oracle executions; {rejected} unavailable advice configurations resampled; total {:.2}s (compile {:.2}s, execute {:.2}s, references {:.2}s)",
         started.elapsed().as_secs_f64(),
         compile_time.as_secs_f64(),
         execute_time.as_secs_f64(),
@@ -387,13 +478,31 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn reference(case: &Case) -> Result<Vec<Vec<i32>>> {
-    if case.requires_rust_oracle() {
-        return Err(
-            "opaque Rust terms and generators require the compiled written-order reference".into(),
-        );
+fn native_case(source: &Case) -> Case {
+    let mut case = source.clone();
+    for (relation, schema) in source.query.schema.iter().enumerate() {
+        if !schema.key.is_empty() {
+            let mut order = schema.key.clone();
+            order.extend((0..schema.arity()).filter(|column| !schema.key.contains(column)));
+            case = case.reorder_columns(relation, &order);
+        }
     }
-    cq_testkit::duckdb::evaluate_fuzz(case).map_err(crate::testkit_error)
+    case
+}
+
+fn reference(case: &Case, duckdb: bool) -> Result<Answers> {
+    let expected = case.reference().into_iter().collect::<Answers>();
+    #[cfg(not(feature = "oracle"))]
+    let _ = duckdb;
+    #[cfg(feature = "oracle")]
+    if duckdb && !case.requires_rust_oracle() {
+        let sql = cq_testkit::duckdb::evaluate_fuzz(case).map_err(crate::testkit_error)?
+            .into_iter().collect::<Answers>();
+        if sql != expected {
+            return Err(format!("reference oracles disagree: model={expected:?}, DuckDB={sql:?}").into());
+        }
+    }
+    Ok(expected)
 }
 
 fn refines(target: &ConsumerResult, written: &ConsumerResult) -> bool {
@@ -437,21 +546,23 @@ fn size(case: &Case) -> (usize, usize) {
     (case.query.atoms.len(), case.data.iter().map(Vec::len).sum())
 }
 
-fn report(root: &Path, case: &Case, config: Config, reason: &str) -> Result<()> {
+fn report(root: &Path, case: &Case, config: Config, stage: &str, reason: &str) -> Result<()> {
     let dir = root
         .join("target/fuzz/failures")
-        .join(case.seed.to_string());
+        .join(case.seed.to_string())
+        .join(format!("{}-host{}-{stage}", config.route, config.host));
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("query.cq"), case.cq())?;
     std::fs::write(dir.join("query.sql"), case.sql())?;
     std::fs::write(dir.join("data.txt"), input_line(0, case))?;
     std::fs::write(
         dir.join("configuration.txt"),
-        format!("seed={}\n{config}\n{reason}\n", case.seed),
+        format!("seed={}\nstage={stage}\n{config}\n{reason}\n", case.seed),
     )?;
     eprintln!(
-        "FUZZ FAILURE seed={}\nconfiguration: {config}\nCQ:\n{}\nSQL:\n{}\nminimized dataset: {:?}\n{reason}\nartifacts: {}\nreproduce original: cargo xtask fuzz --cases 1 --seed {}",
+        "FUZZ FAILURE seed={} route={} stage={stage}\nconfiguration: {config}\nCQ:\n{}\nSQL:\n{}\nminimized dataset: {:?}\n{reason}\nartifacts: {}\nreproduce original: cargo xtask fuzz-full --cases 1 --seed {}",
         case.seed,
+        config.route,
         case.cq(),
         case.sql(),
         case.data,
@@ -487,7 +598,7 @@ fn diagnostic(error: impl std::fmt::Display) -> String {
 fn input_line(id: usize, case: &Case) -> String {
     let mut line = format!("{id} {}", case.data.len());
     for (relation, rows) in case.query.schema.iter().zip(&case.data) {
-        write!(line, " {} {}", relation.arity, rows.len()).unwrap();
+        write!(line, " {} {}", relation.arity(), rows.len()).unwrap();
         for row in rows {
             for value in row {
                 write!(line, " {value}").unwrap();
@@ -499,13 +610,14 @@ fn input_line(id: usize, case: &Case) -> String {
 }
 
 struct Runner {
+    duckdb: bool,
     directory: PathBuf,
     target: PathBuf,
     executable: PathBuf,
 }
 
 impl Runner {
-    fn new(root: &Path) -> Result<Self> {
+    fn new(root: &Path, duckdb: bool) -> Result<Self> {
         let parent = root.join("target/fuzz");
         std::fs::create_dir_all(&parent)?;
         let stamp = std::time::SystemTime::now()
@@ -538,6 +650,12 @@ impl Runner {
             "cq-workload-passes",
             "own-push",
         ])?);
+        manifest.push_str(&format!(
+            "rayon = \"1\"\ncq-sequence-tasks = {{ path = {:?} }}\ncq-sequence-tasks-macros = {{ path = {:?} }}\n",
+            root.join("../sequence-tasks"), root.join("../sequence-tasks/macros")
+        ));
+        // Feature unification instruments storage used by every generated route.
+        manifest = manifest.replace("cq-storage = {", "cq-storage = { features = [\"counters\"],");
         std::fs::write(directory.join("Cargo.toml"), manifest)?;
         let mut manifest = String::from(
             "[package]\nname = \"cq-fuzz-planner\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\nproc-macro = true\n[dependencies]\nsyn = { version = \"2\", features = [\"full\"] }\nquote = \"1\"\n",
@@ -546,6 +664,7 @@ impl Runner {
             "cq-stage",
             "cq-lang-cq",
             "cq-lang-ra",
+            "cq-lang-structures",
             "cq-order",
             "cq-reduce",
             "cq-elaborate",
@@ -559,6 +678,7 @@ impl Runner {
         )?;
         std::fs::write(directory.join("planner/src/lib.rs"), PLANNER)?;
         Ok(Self {
+            duckdb,
             directory,
             target,
             executable,
@@ -570,19 +690,30 @@ impl Runner {
             "#![recursion_limit = \"512\"]\n#![allow(unused_imports, unused_variables, dead_code, unused_macros, unused_parens)]\n",
         );
         source.push_str(include_str!("fuzz/harness.rs"));
-        source.push_str("\nfn dispatch(id: usize, data: &Data) -> Vec<Vec<i32>> { match id {\n");
+        let mut counter_routes = std::collections::BTreeSet::new();
+        for (_, config) in cases {
+            if !config.reference && counter_routes.insert(config.route) {
+                source.push_str(&counter_probe(config.route));
+            }
+        }
+        source.push_str("\nfn dispatch(id: usize, data: &Data) -> Vec<Vec<String>> { match id {\n");
+        let mut reference_ids = BTreeMap::new();
         for (id, (case, _)) in cases.iter().enumerate() {
-            writeln!(source, "{id} => case_{id}::run(data),").unwrap();
+            let route = cases[id].1.route.replace('-', "_");
+            writeln!(source, "{id} => {{ counter_{route}(); case_{id}::run(data) }},").unwrap();
             if case.requires_rust_oracle() {
-                writeln!(source, "{} => case_{}::run(data),", id + BATCH, id + BATCH).unwrap();
+                let reference_id = *reference_ids.entry((case.seed, cases[id].1.host))
+                    .or_insert(id + REFERENCE_OFFSET);
+                writeln!(source, "{} => case_{reference_id}::run(data),", id + REFERENCE_OFFSET).unwrap();
             }
         }
         source.push_str("_ => panic!(\"unknown case {id}\"), } }\n");
         for (id, (case, config)) in cases.iter().enumerate() {
             source.push_str(&consumer_case(id, case, *config));
-            if case.requires_rust_oracle() {
+            if case.requires_rust_oracle()
+                && reference_ids[&(case.seed, config.host)] == id + REFERENCE_OFFSET {
                 source.push_str(&consumer_case(
-                    id + BATCH,
+                    id + REFERENCE_OFFSET,
                     case,
                     Config::written_reference(),
                 ));
@@ -595,7 +726,7 @@ impl Runner {
                 "--offline",
                 "--quiet",
                 "--jobs",
-                "2",
+                "6",
                 "--manifest-path",
             ])
             .arg(self.directory.join("Cargo.toml"))
@@ -658,6 +789,9 @@ impl Runner {
                     return Err(format!("unexpected consumer id: {line}").into());
                 }
                 let status = words.next();
+                if status == Some("INVARIANT") {
+                    return Ok(Err(format!("INVARIANT {}", words.next().ok_or("missing invariant rule")?)));
+                }
                 if matches!(status, Some("PANIC" | "DUPLICATES")) {
                     return Ok(Err(status.unwrap().into()));
                 }
@@ -665,16 +799,20 @@ impl Runner {
                     return Err(format!("unknown consumer result: {line}").into());
                 }
                 let count: usize = words.next().ok_or("missing result row count")?.parse()?;
-                let values = words
-                    .map(str::parse::<i32>)
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let types = case.output_types();
+                let values = words.enumerate()
+                    .map(|(index, text)| types[index % types.len()].column.parse(text))
+                    .collect::<Vec<_>>();
                 if values.len() != count * case.output_arity() {
                     return Err(format!("invalid consumer result: {line}").into());
                 }
-                Ok(Ok(values
-                    .chunks(case.output_arity())
-                    .map(<[i32]>::to_vec)
-                    .collect()))
+                if case.output_arity() == 0 {
+                    return Ok(Ok(vec![Vec::new(); count]));
+                }
+                let mut rows = values.chunks(case.output_arity())
+                    .map(<[Value]>::to_vec).collect::<Vec<_>>();
+                rows.sort();
+                Ok(Ok(rows))
             })
             .collect()
     }
@@ -690,52 +828,95 @@ impl Runner {
     }
 
     fn reference(&self, id: usize, case: &Case) -> Result<ConsumerResult> {
+        let expected = reference(case, self.duckdb)?;
         if case.requires_rust_oracle() {
-            Ok(self.execute(std::iter::once((id + BATCH, case)))?.remove(0))
-        } else {
-            reference(case).map(Ok)
+            let written = self.execute(std::iter::once((id + REFERENCE_OFFSET, case)))?.remove(0);
+            if written.as_ref().ok() != Some(&expected) {
+                return Err(format!("reference oracles disagree: model={expected:?}, written={written:?}").into());
+            }
         }
+        Ok(Ok(expected))
     }
+}
+
+fn counter_probe(route: &str) -> String {
+    let configuration = route_configuration(route);
+    let name = route.replace('-', "_");
+    format!(r#"
+fn counter_{name}() {{
+    static COUNTS: [std::sync::atomic::AtomicUsize; 3] = [const {{ std::sync::atomic::AtomicUsize::new(0) }}; 3];
+    fn closed_value(slot: usize) -> i32 {{
+        COUNTS[slot].fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        7
+    }}
+    for count in &COUNTS {{ count.store(0, std::sync::atomic::Ordering::SeqCst); }}
+    let input = (0i32..128).map(|x| (x,)).collect::<Vec<_>>();
+    let R = input.as_slice();
+    cq_storage::counters::reset();
+    let rows: Vec<_> = ::mini_linq::compile! {{
+        {configuration}
+        struct ClosedCapture;
+        relation R(x: i32);
+        relation answer(x: i32, captured: i32, value: i32);
+        answer(x, c, closed_value(2)) :- R(x), let c: i32 = closed_value(0),
+            if closed_value(1) == 7;
+    }}.map(|(x, c, value)| (crate::integer(x), crate::integer(c), crate::integer(value))).collect();
+    assert_eq!(rows.into_iter().collect::<std::collections::BTreeSet<_>>(),
+        (0i32..128).map(|x| (x, 7, 7)).collect(), "C2-ANSWERS route={route}");
+    crate::invariant(cq_storage::counters::snapshot().index_builds == 0, "C2-ZERO-COLUMN-INDEX");
+    for count in &COUNTS {{
+        crate::invariant(count.load(std::sync::atomic::Ordering::SeqCst) == 1, "C2-CLOSED-CAPTURE");
+    }}
+}}
+"#)
 }
 
 fn consumer_case(id: usize, case: &Case, c: Config) -> String {
     let mut code = format!("\nmod case_{id} {{\n");
-    code.push_str("pub(super) fn run(data: &crate::Data) -> Vec<Vec<i32>> {\n");
+    let (cq, slots) = if c.reference { (case.written_cq(), 0) } else { captures::instrument(&case.cq()) };
+    writeln!(code, "static CAPTURES: [std::sync::atomic::AtomicUsize; {slots}] = [const {{ std::sync::atomic::AtomicUsize::new(0) }}; {slots}];\nfn count_capture<T>(slot: usize, value: T) -> T {{ CAPTURES[slot].fetch_add(1, std::sync::atomic::Ordering::Relaxed); value }}").unwrap();
+    code.push_str("pub(super) fn run(data: &crate::Data) -> Vec<Vec<String>> {\n");
+    code.push_str("for count in &CAPTURES { count.store(0, std::sync::atomic::Ordering::Relaxed); }\n");
     for (i, relation) in case.query.schema.iter().enumerate() {
-        let fields = (0..relation.arity)
-            .map(|j| format!("row[{j}],"))
+        let fields = relation.types.iter().enumerate()
+            .map(|(j, ty)| format!("row[{j}].parse::<{}>().unwrap(),", ty.rust()))
             .collect::<String>();
         if c.host == 0 {
             writeln!(code, "let input_{i} = data[{i}].iter().map(|row| ({fields})).collect::<Vec<_>>();\nlet {} = input_{i}.as_slice();", relation.name).unwrap();
         } else {
-            let tail = (1..relation.arity)
-                .map(|j| format!("row[{j}],"))
+            let keys = relation.key.len().max(1);
+            let key_types = relation.types[..keys].iter().map(|ty| format!("{},", ty.rust())).collect::<String>();
+            let key = relation.types[..keys].iter().enumerate().map(|(j, ty)| format!("row[{j}].parse::<{}>().unwrap(),", ty.rust())).collect::<String>();
+            let tail = relation.types.iter().enumerate().skip(keys)
+                .map(|(j, ty)| format!("row[{j}].parse::<{}>().unwrap(),", ty.rust()))
                 .collect::<String>();
-            writeln!(code, "let mut input_{i} = std::collections::{}::<(i32,), Vec<_>>::new();\nfor row in &data[{i}] {{ input_{i}.entry((row[0],)).or_default().push(({tail})); }}\nlet {} = &input_{i};", if c.host == 1 { "HashMap" } else { "BTreeMap" }, relation.name).unwrap();
+            writeln!(code, "let mut input_{i} = std::collections::{}::<({key_types}), Vec<_>>::new();\nfor row in &data[{i}] {{ input_{i}.entry(({key})).or_default().push(({tail})); }}\nlet {} = &input_{i};", if c.host == 1 { "HashMap" } else { "BTreeMap" }, relation.name).unwrap();
         }
     }
     for (name, value) in case.parameters() {
-        writeln!(code, "let {name}: i32 = {value};").unwrap();
+        writeln!(code, "let {name}: {} = {};", value.column_type().rust(), value.rust_literal()).unwrap();
     }
-    let fields = (0..case.output_arity())
-        .map(|i| format!("crate::integer(row.{i}),"))
+    let fields = case.output_types().iter().enumerate()
+        .map(|(i, ty)| if ty.optional { format!("row.{i}.as_ref().expect(\"nonempty aggregate group\").to_string(),") } else { format!("row.{i}.to_string(),") })
         .collect::<String>();
     let invocation = if c.reference {
         format!(
             "::mini_linq::compile! {{ pipeline {{ plan = cq_fuzz_planner::written_reference; }} {} }}",
-            case.written_cq()
+            cq
         )
     } else {
-        let source = syn::parse_str(&case.cq()).expect("preflight checked CQ");
-        let configuration = c
-            .pipeline()
-            .configuration(&source)
-            .expect("checked pipeline");
-        format!("::mini_linq::compile! {{ {configuration} {} }}", case.cq())
+        let configuration = if c.route == "advised" {
+            let source = syn::parse_str(&cq).expect("preflight checked CQ");
+            c.pipeline().configuration(&source).expect("checked pipeline")
+                .to_string().replace("structures = [", "structures = [::cq_fuzz_planner::check_indexes,")
+        } else {
+            route_configuration(c.route)
+        };
+        format!("::mini_linq::compile! {{ {configuration} {cq} }}")
     };
     writeln!(
         code,
-        "{invocation}.map(|row| vec![{fields}]).collect()\n}}\n}}"
+        "let answers = {invocation}.map(|row| vec![{fields}]).collect();\nfor count in &CAPTURES {{ crate::invariant(count.load(std::sync::atomic::Ordering::Relaxed) <= 1, \"C2-CLOSED-CAPTURE\"); }}\nanswers\n}}\n}}"
     )
     .unwrap();
 
@@ -751,6 +932,22 @@ pub fn written_reference(tokens: proc_macro::TokenStream) -> proc_macro::TokenSt
         compiler::written(source)
     }).into()
 }
+#[proc_macro]
+pub fn check_indexes(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::pass::<cq_lang_structures::Program, cq_lang_structures::Program>(
+        tokens.into(), |source, _| {
+            cq_lang_structures::contract::check(source)?;
+            for entry in &source.structures.entries {
+                if let cq_lang_structures::Structure::Built { keyed, .. } = &entry.structure {
+                    if keyed.columns().next().is_none() {
+                        return Err(syn::Error::new_spanned(&entry.name, "C2-ZERO-COLUMN-INDEX"));
+                    }
+                }
+            }
+            Ok(source.clone())
+        }
+    ).into()
+}
 "#;
 
 #[cfg(test)]
@@ -759,7 +956,7 @@ mod tests {
 
     #[test]
     fn refinement_requires_total_execution_and_set_equality() {
-        let rows = Ok(vec![vec![1]]);
+        let rows = Ok(vec![vec![Value::I32(1)]]);
         let empty = Ok(Vec::new());
         let panic = Err("PANIC".into());
         let duplicates = Err("DUPLICATES".into());
@@ -780,33 +977,18 @@ mod tests {
         let pipeline = config.pipeline();
         assert_eq!(pipeline.plan, 0);
         assert!(!pipeline.merge && !pipeline.canon && !pipeline.smallest);
-        let case = model::generate(0);
+        let case = model::generate_with(0, &model::Profile { max_rows: 3, ..model::Profile::quick() });
         assert!(case.requires_rust_oracle());
-        let source = consumer_case(BATCH, &case, config);
-        assert!(source.contains("cq_fuzz_planner::written_reference"));
-        assert!(
-            reference(&case)
-                .unwrap_err()
-                .to_string()
-                .contains("written-order")
-        );
+        assert!(reference(&case, false).is_ok());
     }
 
     #[test]
     fn total_generator_still_uses_compiled_reference_not_duckdb() {
-        let mut case = model::generate(60);
+        let mut case = model::generate_with(60, &model::Profile { max_rows: 3, ..model::Profile::quick() });
         assert!(case.query.bindings[0].generator.is_some());
         case.query.bindings[0].expression = model::Expr::Constant(2);
         assert!(case.requires_rust_oracle());
-        assert!(
-            reference(&case)
-                .unwrap_err()
-                .to_string()
-                .contains("generators")
-        );
-        let source = consumer_case(BATCH, &case, Config::written_reference());
-        assert!(source.contains("cq_fuzz_planner::written_reference"));
-        assert!(source.contains("for v3 in"));
+        assert!(reference(&case, false).is_ok());
         let query = syn::parse_str(&case.written_cq()).unwrap();
         let reference = compiler::written(&query).unwrap();
         assert!(reference.plan.definitions.iter().any(|definition| {
@@ -853,30 +1035,30 @@ mod tests {
 
     #[test]
     fn row_shrinking_keeps_only_the_witness() {
-        let mut case = model::generate(1);
+        let mut case = model::generate_with(1, &model::Profile { max_rows: 3, ..model::Profile::quick() });
         case.data[0] = vec![
-            vec![3; case.query.schema[0].arity],
-            vec![7; case.query.schema[0].arity],
+            vec![Value::I32(3); case.query.schema[0].arity()],
+            vec![Value::I32(7); case.query.schema[0].arity()],
         ];
         shrink_rows(&mut case, |candidate| {
-            candidate.data[0].iter().any(|row| row[0] == 7)
+            candidate.data[0].iter().any(|row| row[0] == Value::I32(7))
         });
         assert_eq!(case.data[0].len(), 1);
-        assert_eq!(case.data[0][0][0], 7);
+        assert_eq!(case.data[0][0][0], Value::I32(7));
         assert!(case.data.iter().skip(1).all(Vec::is_empty));
     }
 
     #[test]
     fn row_shrinking_revisits_earlier_rows_after_later_deletions() {
-        let mut case = model::generate(1);
+        let mut case = model::generate_with(1, &model::Profile { max_rows: 3, ..model::Profile::quick() });
         case.data[0] = (0..3)
-            .map(|value| vec![value; case.query.schema[0].arity])
+            .map(|value| vec![Value::I32(value); case.query.schema[0].arity()])
             .collect();
         shrink_rows(&mut case, |candidate| {
-            let contains = |value| candidate.data[0].iter().any(|row| row[0] == value);
+            let contains = |value| candidate.data[0].iter().any(|row| row[0] == Value::I32(value));
             contains(2) && (contains(0) || !contains(1))
         });
-        assert_eq!(case.data[0], vec![vec![2; case.query.schema[0].arity]]);
+        assert_eq!(case.data[0], vec![vec![Value::I32(2); case.query.schema[0].arity()]]);
     }
 
     #[test]
@@ -885,10 +1067,7 @@ mod tests {
             seed: 0,
             query: model::Query {
                 schema: (0..3)
-                    .map(|i| model::Relation {
-                        name: format!("r{i}"),
-                        arity: 1,
-                    })
+                    .map(|i| model::Relation::i32(format!("r{i}"), 1))
                     .collect(),
                 atoms: (0..3)
                     .map(|relation| model::Atom {
@@ -896,6 +1075,9 @@ mod tests {
                         terms: vec![model::Term::Var(0)],
                     })
                     .collect(),
+                negations: Vec::new(),
+                folds: Vec::new(),
+                raw_names: false,
                 bindings: Vec::new(),
                 guards: Vec::new(),
                 constraints: Vec::new(),
@@ -917,5 +1099,30 @@ mod tests {
         });
         assert_eq!(case.query.atoms.len(), 1);
         assert_eq!(case.query.atoms[0].relation, 2);
+    }
+
+    #[test]
+    fn native_unsorted_key_permutation_preserves_the_answer() {
+        use cq_testkit::values::ColumnType;
+        let case = Case {
+            seed: 0,
+            query: model::Query {
+                schema: vec![model::Relation {
+                    name: "r".into(),
+                    types: vec![ColumnType::I64, ColumnType::I32, ColumnType::I64],
+                    key: vec![2, 0],
+                }],
+                atoms: vec![model::Atom { relation: 0, terms: (0..3).map(model::Term::Var).collect() }],
+                negations: vec![], bindings: vec![], guards: vec![],
+                constraints: vec![], blocks: vec![], folds: vec![],
+                head: (0..3).map(model::Expr::Var).collect(),
+                order: vec![], raw_names: false,
+            },
+            data: vec![vec![vec![Value::I64(1 << 32), Value::I32(7), Value::I64(-3)]]],
+        };
+        let native = native_case(&case);
+        assert_eq!(native.query.schema[0].key, [0, 1]);
+        assert_eq!(native.data[0][0], [Value::I64(-3), Value::I64(1 << 32), Value::I32(7)]);
+        assert_eq!(native.reference(), case.reference());
     }
 }

@@ -119,7 +119,7 @@ class SchedulerTests(unittest.TestCase):
         for arguments, expected_count, expected_fuzz in (
                 ([], 118, False), (["--tier", "quick"], 12, False),
                 (["--changed-since", "HEAD"], 118, False),
-                (["--tier", "fuzz"], 1, True), (["cq-xtask/fuzz"], 1, True)):
+                (["--tier", "fuzz"], 3, True), (["cq-xtask/fuzz-quick"], 1, True)):
             with self.subTest(arguments=arguments):
                 output = io.StringIO()
                 fake = unittest.mock.Mock(changed_files=["source.rs"])
@@ -130,7 +130,7 @@ class SchedulerTests(unittest.TestCase):
                     self.assertEqual(runner.main(), 0)
                 selected = [line for line in output.getvalue().splitlines() if line.startswith("SELECT ")]
                 self.assertEqual(len(selected), expected_count)
-                self.assertEqual(any(line.startswith("SELECT cq-xtask/fuzz:") for line in selected),
+                self.assertEqual(any(line.startswith("SELECT cq-xtask/fuzz-") for line in selected),
                                  expected_fuzz)
 
 

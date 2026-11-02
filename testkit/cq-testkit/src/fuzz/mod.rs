@@ -1,4 +1,5 @@
-//! Seeded abstract queries and independent MiniLinq/SQL printers.
+//! Seeded abstract queries, independent MiniLinq/SQL printers, and the G3
+//! reference interpreter (`Case::reference`).
 //!
 //! This module never compiles or executes generated MiniLinq. Both lanes obey
 //! the total-Rust premise: bounded arithmetic has independent SQL semantics,
@@ -6,9 +7,15 @@
 //! reference. Placement depends only on free variables, not written-order
 //! chains. Coverage counts properties once per case.
 
+mod data;
 mod model;
+mod profile;
+mod reference;
+mod report;
 mod sql;
 pub use model::*;
+pub use profile::Profile;
+pub use report::{RouteCoverage, failure_report};
 
 /// Every feature tag emitted by the built-in generator, including size bins.
 /// Custom abstract models may emit additional size bins.
@@ -99,5 +106,38 @@ pub const FEATURE_TAGS: &[&str] = &[
     "head-arity=3",
     "relation-arity=1",
     "relation-arity=2",
+    "type-bigint",
+    "type-uinteger",
+    "declared-key",
+    "multi-column-key",
+    "unsorted-key",
+    "raw-identifier",
+    "negation",
+    "negation-self",
+    "negation-variable",
+    "negation-constant",
+    "negation-wildcard",
+    "contradictory-constraints",
+    "one-point-range",
+    "empty-range",
+    "closed-capture",
+    "closed-let",
+    "closed-guard",
+    "head-constant",
+    "aggregate",
+    "fold-count",
+    "fold-sum",
+    "fold-sum-capture",
+    "fold-min",
+    "fold-max",
+    "shape-empty",
+    "shape-single",
+    "shape-all-duplicates",
+    "shape-one-key",
+    "shape-distinct",
+    "shape-large",
+    "extreme-values",
+    "negative-values",
+    "low32-collision",
     "relation-arity=3",
 ];

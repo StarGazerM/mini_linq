@@ -43,7 +43,7 @@ fn every_planner_refines_200_rust_seeds_in_compiled_rust() {
         let case = fuzz::generate(executable.seed);
         coverage.observe(&case);
         for (planner, target) in Planner::ALL.iter().zip(executable.targets) {
-            let result = check_refinement_on(case.data.as_slice(), executable.reference, target)
+            let result = check_refinement_on(case.i32_data().as_slice(), executable.reference, target)
                 .unwrap_or_else(|error| {
                     panic!("seed {}, {planner:?}: {error}\n{}", case.seed, case.cq())
                 });

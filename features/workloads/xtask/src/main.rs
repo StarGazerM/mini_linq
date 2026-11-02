@@ -9,7 +9,6 @@ mod bench;
 mod cargo;
 mod explain;
 mod extended;
-#[cfg(feature = "oracle")]
 mod fuzz;
 #[cfg(feature = "oracle")]
 use cq_testkit::golden;
@@ -65,15 +64,14 @@ fn run() -> Result<()> {
                 rerun_with_oracle("golden", &arguments)
             }
         }
-        "fuzz" | "differential" => {
-            #[cfg(feature = "oracle")]
-            {
-                fuzz::run(arguments, &repository_root())
+        "fuzz" | "differential" | "fuzz-quick" | "fuzz-full" => {
+            let mut arguments = arguments;
+            if command == "fuzz-quick" {
+                arguments.insert(0, "--quick".into());
+            } else if command == "fuzz-full" {
+                arguments.insert(0, "--full".into());
             }
-            #[cfg(not(feature = "oracle"))]
-            {
-                rerun_with_oracle(&command, &arguments)
-            }
+            fuzz::run(arguments, &repository_root())
         }
         "explain" => explain::run(arguments, &repository_root()),
         "bench" => bench::run(arguments),
@@ -547,8 +545,8 @@ MiniLinq workload tasks
   cargo xtask list
   cargo xtask generate [all|classic|retail|extended|CASE] [tiny|medium|large] [--scenario SCENARIO]
   cargo xtask golden [SELECTION] [SCALE] [--scenario SCENARIO] [--write]
-  cargo xtask fuzz [--cases N] [--seed S]
-  cargo xtask differential [--cases N] [--seed S]
+  cargo xtask fuzz-quick|fuzz-full [--cases N] [--seed S] [--duckdb]
+  cargo xtask fuzz|differential [--quick|--full] [--cases N] [--seed S] [--duckdb]
   cargo xtask explain CASE [--through STAGE]
   cargo xtask bench [--scale N] [--seed N]
   cargo xtask bench --tpch --sf 0.1|1|10 [--runs N] [--cap-seconds N] [--query NAME] [--config NAME[,NAME...] | --reduction-comparison | --index-comparison]
@@ -571,8 +569,11 @@ The extended and typed corpora have tiny fixtures only. Typed CSV fixtures are
 authored; `golden typed --write` regenerates their Parquet copies and answers.
 
 `golden` compares DuckDB with checked-in CSV answers. `--write` is the only
-mode that changes those answers. `differential` is an alias for `fuzz`, which
-compiles seeded random CQs and compares their execution against DuckDB.
+mode that changes those answers. `fuzz-quick` (64 fixed-seed cases, four CPU
+routes) and `fuzz-full` (2,000 cases from a logged run seed, every CPU route
+and host kind) compile seeded random CQs and compare every route with the
+typed model reference; `fuzz` and `differential` default to quick. `--duckdb`
+(needs `--features oracle`) adds the DuckDB CLI as a second SQL reference.
 `explain` observes checked facade boundaries from CQ and VO through Sequence,
 decomposition, grading and final Rust; it does not execute the query."
     );

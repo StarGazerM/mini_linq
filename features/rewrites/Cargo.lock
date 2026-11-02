@@ -273,11 +273,17 @@ dependencies = [
 name = "cq-rewrites"
 version = "0.1.0"
 dependencies = [
+ "cq-elaborate",
+ "cq-index-policy",
+ "cq-lang-cq",
+ "cq-lang-ix",
  "cq-lang-physical",
  "cq-lang-structures",
  "cq-load",
+ "cq-order",
  "cq-physical-lowering",
  "cq-planners",
+ "cq-reduce",
  "cq-rewrite-passes",
  "cq-rewrite-test-driver",
  "cq-stage",
@@ -387,6 +393,7 @@ dependencies = [
  "cq-lang-vo",
  "cq-syntax",
  "hashbrown",
+ "quote",
  "rayon",
  "syn 2.0.119",
 ]

@@ -1,10 +1,12 @@
-//! Optional independent in-memory SQL oracle over non-null integer tables.
+//! Optional independent in-memory SQL oracle.
 //!
 //! Input order determines quoted table names `mini-linq/raw/0`, etc. Raw
 //! duplicates are retained. SQL controls output projection, ordering and
 //! DISTINCT; `evaluate_fuzz` additionally verifies the printer's set output.
 //! Opaque Rust operations and iterables have no SQL oracle and are rejected.
+//! Corpus SQL uses i32 tables; fuzz cases use typed BIGINT/UINTEGER/VARCHAR.
 
+use crate::values::{ColumnType, TypedRows, Value};
 use crate::{Case, Result, fuzz};
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
@@ -161,8 +163,8 @@ pub fn evaluate_case(case: &Case, sql: &str) -> Result<Vec<Vec<i32>>> {
     evaluate_sql(&relations, sql)
 }
 
-/// Evaluate the SQL-modeled fragment of a total abstract fuzz query.
-pub fn evaluate_fuzz(case: &fuzz::Case) -> Result<Vec<Vec<i32>>> {
+/// Evaluate the SQL-modeled fragment of a total abstract fuzz query, typed.
+pub fn evaluate_fuzz(case: &fuzz::Case) -> Result<TypedRows> {
     if case.requires_rust_oracle() {
         return Err(
             "opaque Rust operations and generators require the compiled written-order reference"
@@ -172,23 +174,49 @@ pub fn evaluate_fuzz(case: &fuzz::Case) -> Result<Vec<Vec<i32>>> {
     if case.query.schema.len() != case.data.len() {
         return Err("fuzz schema/data table counts differ".into());
     }
-    let relations = case
-        .query
-        .schema
-        .iter()
-        .zip(&case.data)
-        .map(|(relation, rows)| RelationData {
-            name: relation.name.clone(),
-            arity: relation.arity,
-            rows: rows.clone(),
+    let connection = Connection::open_in_memory()?;
+    for (input_index, (relation, rows)) in case.query.schema.iter().zip(&case.data).enumerate() {
+        if rows.iter().any(|row| row.len() != relation.arity()) {
+            return Err(format!("{}: raw input has invalid tuple width", relation.name).into());
+        }
+        let types = relation.types.iter().map(|ty| ty.sql()).collect::<Vec<_>>();
+        load_table(
+            &connection,
+            input_index,
+            &types,
+            rows.iter().map(|row| row.iter().map(Value::to_string)),
+        )?;
+    }
+    let output = case.output_types();
+    let rows = connection
+        .query(&case.sql())?
+        .into_iter()
+        .map(|row| {
+            if row.len() != output.len() {
+                return Err("DuckDB output width differs from the head".into());
+            }
+            row.into_iter()
+                .zip(&output)
+                .map(|(text, ty)| parse_value(ty.column, text))
+                .collect::<Result<Vec<_>>>()
         })
-        .collect::<Vec<_>>();
-    let mut rows = evaluate_sql(&relations, &case.sql())?;
-    rows.sort();
-    if rows.windows(2).any(|pair| pair[0] == pair[1]) {
+        .collect::<Result<Vec<_>>>()?;
+    let count = rows.len();
+    let rows = rows.into_iter().collect::<TypedRows>();
+    if rows.len() != count {
         return Err("independent SQL printer failed to enforce DISTINCT".into());
     }
     Ok(rows)
+}
+
+fn parse_value(column: ColumnType, text: String) -> Result<Value> {
+    Ok(match column {
+        ColumnType::I32 => Value::I32(text.parse()?),
+        ColumnType::I64 => Value::I64(text.parse()?),
+        ColumnType::U32 => Value::U32(text.parse()?),
+        ColumnType::Usize => Value::Usize(text.parse()?),
+        ColumnType::Str => Value::Str(text),
+    })
 }
 
 /// Load raw inputs through CSV and return the SQL's ordered integer rows.
@@ -201,35 +229,15 @@ pub fn evaluate_sql(relations: &[RelationData], sql: &str) -> Result<Vec<Vec<i32
         if relation.arity == 0 || relation.rows.iter().any(|row| row.len() != relation.arity) {
             return Err(format!("{}: raw input has invalid tuple width", relation.name).into());
         }
-        let raw_name = raw_table_name(input_index);
-        let columns = (0..relation.arity)
-            .map(|column| format!("c{column} INTEGER NOT NULL"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        connection.execute_batch(&format!(
-            "CREATE TABLE {} ({columns});",
-            quote_identifier(&raw_name),
-        ))?;
-        let path = connection
-            .directory
-            .path()
-            .join(format!("input-{input_index}.csv"));
-        {
-            let mut writer = csv::WriterBuilder::new()
-                .has_headers(false)
-                .from_path(&path)?;
-            for row in &relation.rows {
-                writer.write_record(row.iter().map(i32::to_string))?;
-            }
-            writer.flush()?;
-        }
-        if !relation.rows.is_empty() {
-            connection.execute_batch(&format!(
-                "COPY {} FROM '{}' (FORMAT CSV, HEADER false);",
-                quote_identifier(&raw_name),
-                path.to_string_lossy().replace('\'', "''"),
-            ))?;
-        }
+        load_table(
+            &connection,
+            input_index,
+            &vec!["INTEGER"; relation.arity],
+            relation
+                .rows
+                .iter()
+                .map(|row| row.iter().map(i32::to_string)),
+        )?;
     }
 
     connection
@@ -241,6 +249,55 @@ pub fn evaluate_sql(relations: &[RelationData], sql: &str) -> Result<Vec<Vec<i32
                 .collect()
         })
         .collect()
+}
+
+/// Create raw table `input_index` with non-null columns of the given SQL
+/// types and copy `rows` into it through CSV. Every column is FORCE_NOT_NULL,
+/// so an empty field is the empty string, never NULL.
+fn load_table<R, F>(
+    connection: &Connection,
+    input_index: usize,
+    types: &[&str],
+    rows: impl Iterator<Item = R>,
+) -> Result<()>
+where
+    R: IntoIterator<Item = F>,
+    F: AsRef<[u8]>,
+{
+    let raw_name = quote_identifier(&raw_table_name(input_index));
+    let columns = types
+        .iter()
+        .enumerate()
+        .map(|(column, ty)| format!("c{column} {ty} NOT NULL"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    connection.execute_batch(&format!("CREATE TABLE {raw_name} ({columns});"))?;
+    let path = connection
+        .directory
+        .path()
+        .join(format!("input-{input_index}.csv"));
+    let mut empty = true;
+    {
+        let mut writer = csv::WriterBuilder::new()
+            .has_headers(false)
+            .from_path(&path)?;
+        for row in rows {
+            writer.write_record(row)?;
+            empty = false;
+        }
+        writer.flush()?;
+    }
+    if !empty {
+        let not_null = (0..types.len())
+            .map(|column| format!("c{column}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        connection.execute_batch(&format!(
+            "COPY {raw_name} FROM '{}' (FORMAT CSV, HEADER false, FORCE_NOT_NULL ({not_null}));",
+            path.to_string_lossy().replace('\'', "''"),
+        ))?;
+    }
+    Ok(())
 }
 
 /// Name of the raw table corresponding to a schema ordinal.
