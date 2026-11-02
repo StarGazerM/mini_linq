@@ -105,6 +105,11 @@ pub fn evaluate(
             cq_syntax::capture::Capture::Guard(filter) => {
                 gate &= eval(&filter.condition, &env)?.truth()?;
             }
+            // Dictionary domains come from runtime storage, which this
+            // evaluator does not model.
+            cq_syntax::capture::Capture::Domain(_) => {
+                return Err(Error::Unsupported("domain capture".to_owned()));
+            }
         }
     }
     let mut definitions = BTreeMap::<String, Relation>::new();
