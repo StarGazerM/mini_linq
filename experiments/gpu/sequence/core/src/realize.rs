@@ -213,6 +213,9 @@ struct Facts<'a> {
     resident: BTreeSet<String>,
     runs: BTreeSet<String>,
     device_results: BTreeSet<String>,
+    /// Physical results of nonterminal dispatch and host-union publications:
+    /// their publication step builds the result's providers, so no source does.
+    published: BTreeSet<String>,
     codecs: crate::runs::Codecs,
 }
 
@@ -226,7 +229,7 @@ impl<'a> Facts<'a> {
             .iter()
             .map(|d| (symbol_name(&d.name), d.clone()))
             .collect();
-        let sequence = program
+        let sequence: BTreeMap<String, &Term> = program
             .sequence
             .definitions
             .iter()
@@ -299,6 +302,37 @@ impl<'a> Facts<'a> {
                     .cloned()
             })
             .collect();
+        let terminal = analysis
+            .output
+            .as_ref()
+            .map(|(name, _)| name.clone())
+            .or_else(|| program.sequence.definitions.last().map(|d| symbol_name(&d.name)));
+        let host_level = |name: &str| {
+            analysis
+                .levels
+                .get(name)
+                .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
+        };
+        let dispatched = analysis.dispatches.iter().filter_map(|dispatch| {
+            dispatch.inner_stores.iter().rev().find(|name| {
+                sequence
+                    .get(*name)
+                    .is_some_and(|term: &&Term| matches!(term, Term::Store { .. }))
+            })
+        });
+        let unions = program.sequence.definitions.iter().filter_map(|definition| {
+            let name = symbol_name(&definition.name);
+            (host_level(&name)
+                && matches!(definition.term, Term::Store { .. })
+                && host_union(&definition.term, &sequence).is_some())
+            .then_some(name)
+        });
+        let published = dispatched
+            .cloned()
+            .chain(unions)
+            .filter(|publication| Some(publication) != terminal.as_ref())
+            .filter_map(|publication| analysis.results.get(&publication).cloned())
+            .collect();
         Ok(Self {
             program,
             analysis,
@@ -308,6 +342,7 @@ impl<'a> Facts<'a> {
             resident,
             runs,
             device_results,
+            published,
             codecs,
         })
     }
@@ -590,6 +625,7 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
             )
         };
         let built = !facts.device_results.contains(name)
+            && !facts.published.contains(name)
             && analysis
                 .gpu_bindings
                 .providers
@@ -1321,6 +1357,19 @@ pub(crate) fn check(
                 if !built {
                     return Err(error("provider access without a recorded Range or Radix layout"));
                 }
+                // One owner per provider: a publication step building the
+                // same result's providers excludes a source-built provider.
+                if records.steps.iter().any(|(publication, step)| match step {
+                    Step::Dispatch { provider: Some(_) }
+                    | Step::HostUnion(HostUnion {
+                        provider: Some(_), ..
+                    }) => analysis.results.get(publication) == Some(name),
+                    _ => false,
+                }) {
+                    return Err(error(
+                        "provider access duplicates a publication's provider build",
+                    ));
+                }
                 selection.as_ref()
             }
         };
@@ -1621,4 +1670,62 @@ fn check_provider(facts: &Facts, provider: Option<&ProviderBuild>) -> syn::Resul
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The store `r` publishes the resident rename `r` below host (its inner
+    /// store result equals its outer source), and `r` records a Range provider.
+    fn republished() -> (Program, Analysis) {
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation R(a:i64,b:i64) = (&data);
+                r = let rename R@0 {a -> a,b -> b};
+                driver = pipe rename R@1 {a -> a,b -> c};
+                joined = let canon probe first [a] driver,r;
+                return joined as answer(a,b,c);
+            }
+            structures {
+                providers {
+                    device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns };
+                    packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 };
+                    range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range };
+                }
+                r host scan = @device_columns input { keys 0; columns [i64 => i64,i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+                driver host scan = @device_columns input { keys 0; columns [i64 => i64,i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+                r = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a];
+                joined rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                joined canon = rows;
+            }
+            sequence {
+                r = store rows r;
+                input = store rows driver;
+                output_rows = store canon map joined flatten lookup r [a] flatten tile 256 input;
+                output count;
+            }
+            graded gpu { r at host.device; input at host; output_rows at device; }
+        };
+        let program = crate::runs::record_representation(&program).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        (program, analysis)
+    }
+
+    #[test]
+    fn publication_step_is_the_only_provider_owner() {
+        let (program, analysis) = republished();
+        let realization = select(&program, &analysis).unwrap();
+        assert_eq!(realization.rejection, None);
+        assert!(realization.steps.iter().any(|(publication, step)| {
+            publication == "r" && matches!(step, Step::Dispatch { provider: Some(_), .. })
+        }));
+        assert!(!matches!(
+            realization.sources["r"].access,
+            SourceAccess::Provider { .. }
+        ));
+        let mut duplicated = realization;
+        duplicated.sources.get_mut("r").unwrap().access = SourceAccess::Provider { selection: None };
+        assert!(check(&program, &analysis, &duplicated).is_err());
+    }
 }
