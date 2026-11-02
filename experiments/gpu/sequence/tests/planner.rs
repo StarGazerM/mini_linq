@@ -145,7 +145,7 @@ fn evidence_retains_a_small_rooted_prefix_and_segments_its_fan_out() {
     assert_eq!(
         &trace[..4],
         [
-            "retain (rnc , 150000)",
+            "retain (rnc , 150000 , 256 , 65536)",
             "partition (__sequence_output , 256)",
             "segment (rnco , 1024 , items 4)",
             "segment (rncol , 1024 , items 4)",
@@ -154,7 +154,7 @@ fn evidence_retains_a_small_rooted_prefix_and_segments_its_fan_out() {
     let analysis = check_grading(&result.program, &machine).unwrap();
     cq_gpu_sequence::translate(&result.program, &analysis).unwrap();
     // A recorded bound that the evidence does not establish is rejected.
-    let forged: cq_sequence_plan::Advice = syn::parse_quote!(retain(rnc, 1));
+    let forged: cq_sequence_plan::Advice = syn::parse_quote!(retain(rnc, 1, 256, 65536));
     assert!(forged.apply(&source).is_err());
     // Without evidence the order keeps its single small root.
     let plain = cq_sequence_lowering::compile(&step_r()).unwrap();

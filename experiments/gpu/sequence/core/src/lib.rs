@@ -150,13 +150,14 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     // rows record. Its scan is the publication itself.
     catalog.register(providers::declaration("packed_canon"), levels.clone());
     catalog.register(providers::declaration("wide_canon"), levels.clone());
+    // `None` is the identity representation of columns without a declared codec.
     catalog.codecs = [
-        syn::parse_quote!(::cq_storage::sequence::Identity),
-        syn::parse_quote!(::cq_gpu_sequence_runtime::DenseDictionary<'_>),
+        None,
+        Some::<syn::Type>(syn::parse_quote!(::cq_gpu_sequence_runtime::DenseDictionary<'_>)),
     ]
     .into_iter()
-    .map(|ty| CodecToken {
-        ty,
+    .map(|codec| CodecToken {
+        codec,
         ordered: true,
         levels: std::iter::once(vec!["host".into()])
             .chain(levels.iter().cloned())

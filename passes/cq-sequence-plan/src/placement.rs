@@ -350,9 +350,7 @@ pub(crate) fn advise(
                     || facts
                         .results
                         .get(&symbol_name(&d.name))
-                        .is_some_and(|result| {
-                            rebuilds_native_provider(program, facts, catalog, result)
-                        })
+                        .is_some_and(|result| rebuilds_native_provider(program, facts, result))
                     || has_row_work(
                         &d.term,
                         definitions,
@@ -535,12 +533,13 @@ fn has_row_work(
     }
 }
 
-// A new index over a native descendant provider is row work, not a host
-// descriptor alias. Keep an already matching native representation at host.
+// A new index over a native host provider is row work, not a host descriptor
+// alias. Keep an already matching native representation at host. Nativeness
+// is the scanned token's declared `abi` fact (GPU-NativeAbi), never inferred
+// from catalog read levels or the provider's Rust spelling.
 fn rebuilds_native_provider(
     program: &Program,
     facts: &cq_lang_sequence::Analysis,
-    catalog: &cq_lang_sequence::Catalog,
     result: &str,
 ) -> bool {
     let Some(builds) = facts.structures.built.get(result) else {
@@ -574,10 +573,7 @@ fn rebuilds_native_provider(
                             .hosts
                             .get(&symbol_name(&entry.name))
                             == Some(&host)
-                        && catalog.providers.iter().any(|candidate| {
-                            candidate.covers(&keyed.provider)
-                                && !candidate.levels.iter().any(|level| level.len() == 1)
-                        })
+                        && facts.structures.facts(&keyed.provider).abi.is_some()
                         && builds
                             .iter()
                             .any(|(_, provider)| *provider != keyed.provider)
@@ -663,18 +659,21 @@ fn reads_at(
         }
         Term::Canon(inner) => {
             facts.obligations.iter().all(|obligation| {
+                // Placement predicts the boundary level; grading records it.
                 let Obligation::Canon {
                     result: name,
                     canonical,
+                    answer_index,
+                    ..
                 } = obligation
                 else {
                     return true;
                 };
                 result != Some(name.as_str())
                     || crate::catalog::canon_available(
-                        facts,
                         catalog,
                         canonical.as_ref(),
+                        answer_index.as_ref(),
                         |registered| registered.iter().any(|level| at(level, canon_level)),
                     )
             }) && reads_at(inner, result, facts, catalog, level, canon_level)
@@ -1134,55 +1133,106 @@ mod tests {
         ));
     }
 
+    fn native_program(abi: proc_macro2::TokenStream, ty: proc_macro2::TokenStream) -> Program {
+        let mut source: Program = syn::parse_quote! {
+            physical {
+                relation R(a:i32); relation L(a:i32);
+                consumer canonical;
+                l = pipe rename L@1 {a -> a};
+                r = let rename R@0 {a -> a};
+                answer = pipe probe first [a] l,r;
+                return answer as answer(a);
+            }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; native = Native { reads [exact, range, membership], build inferred #abi }; index = Index { reads [exact, membership], build inferred }; } l host scan = @reader as Reader []; r host scan = @native as Native []; r = #ty [a]; }
+            sequence {
+                input = store rows l;
+                r = store rows r;
+                answer = flatten lookup r [a] input;
+                result = store answer;
+            }
+        };
+        source.structures.structures.declare(&[]);
+        source
+    }
+
+    // GPU-NativeAbi: nativeness of the scanned host provider is its token's
+    // declared `abi` fact. Catalog read levels are consumption facts only.
     #[test]
-    fn rebuilding_a_native_descendant_provider_publishes_device_rows() {
-        for native in [false, true] {
-            let ty = if native {
-                quote::quote!(@native as Native)
-            } else {
-                quote::quote!(@index as Index)
-            };
-            let mut source: Program = syn::parse_quote! {
-                physical {
-                    relation R(a:i32); relation L(a:i32);
-                    consumer canonical;
-                    l = pipe rename L@1 {a -> a};
-                    r = let rename R@0 {a -> a};
-                    answer = pipe probe first [a] l,r;
-                    return answer as answer(a);
-                }
-                structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; native = Native { reads [exact, range, membership], build inferred }; index = Index { reads [exact, membership], build inferred }; } l host scan = @reader as Reader []; r host scan = @native as Native []; r = #ty [a]; }
-                sequence {
-                    input = store rows l;
-                    r = store rows r;
-                    answer = flatten lookup r [a] input;
-                    result = store answer;
-                }
-            };
-            source.structures.structures.declare(&[]);
+    fn rebuilding_a_declared_native_provider_publishes_device_rows() {
+        let descendant = vec![
+            vec!["host".into(), "device".into()],
+            vec!["host".into(), "device".into(), "block".into()],
+        ];
+        let with_host: Vec<Vec<String>> = std::iter::once(vec!["host".into()])
+            .chain(descendant.iter().cloned())
+            .collect();
+        for (abi, ty, native_levels, rebuilds) in [
+            // A rebuilt index over a declared native provider is row work.
+            (
+                quote::quote!(, abi range),
+                quote::quote!(@index as Index),
+                descendant.clone(),
+                true,
+            ),
+            // Legal alternative: a host read level does not revoke the
+            // declared fact; level shape is not a nativeness proxy.
+            (
+                quote::quote!(, abi range),
+                quote::quote!(@index as Index),
+                with_host.clone(),
+                true,
+            ),
+            // The already matching native representation stays at host.
+            (
+                quote::quote!(, abi range),
+                quote::quote!(@native as Native),
+                descendant.clone(),
+                false,
+            ),
+            // Descendant-only levels without a declared ABI are not native.
+            (
+                quote::quote!(),
+                quote::quote!(@index as Index),
+                descendant.clone(),
+                false,
+            ),
+        ] {
+            let source = native_program(abi.clone(), ty);
             let facts = cq_lang_sequence::contract::check(&source).unwrap();
-            let levels = vec![
-                vec!["host".into(), "device".into()],
-                vec!["host".into(), "device".into(), "block".into()],
-            ];
-            let mut available = catalog(levels.clone());
+            let mut available = catalog(descendant.clone());
             available.register(
-                syn::parse_quote!(native = Native { reads [exact, range, membership], build inferred };),
-                levels,
+                syn::parse_quote!(native = Native { reads [exact, range, membership], build inferred #abi };),
+                native_levels,
             );
-            assert_eq!(
-                rebuilds_native_provider(&source, &facts, &available, "r"),
-                !native
-            );
+            assert_eq!(rebuilds_native_provider(&source, &facts, "r"), rebuilds);
+            assert!(crate::catalog::check(&source, &facts, &available)
+                .err()
+                .is_none_or(|error| !error.to_string().contains("PL-Catalog")));
             let advice = advise(&source, &machine(), true, &facts, &source, &available);
-            let expected = if native {
-                vec!["host"]
-            } else {
+            let expected = if rebuilds {
                 vec!["host", "device"]
+            } else {
+                vec!["host"]
             };
             assert!(advice.iter().any(|advice| matches!(advice,
                 Advice::Grade { name, level, .. }
                     if name == "r" && level.iter().map(symbol_name).collect::<Vec<_>>() == expected)));
         }
+    }
+
+    // PL-Catalog: a program cannot drop the target's declared native ABI to
+    // change placement; the record must equal the catalog declaration.
+    #[test]
+    fn native_abi_omitted_from_a_catalog_token_is_rejected() {
+        let source = native_program(quote::quote!(), quote::quote!(@index as Index));
+        let facts = cq_lang_sequence::contract::check(&source).unwrap();
+        let levels = vec![vec!["host".into(), "device".into()]];
+        let mut available = catalog(levels.clone());
+        available.register(
+            syn::parse_quote!(native = Native { reads [exact, range, membership], build inferred, abi range };),
+            levels,
+        );
+        let error = crate::catalog::check(&source, &facts, &available).unwrap_err();
+        assert!(error.to_string().contains("PL-Catalog"), "{error}");
     }
 }

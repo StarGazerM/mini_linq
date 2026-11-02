@@ -14,10 +14,10 @@
 //! both are the existing checked `store_level` and `segment` rewrites.
 use std::collections::BTreeSet;
 
-use cq_lang_sequence::{Machine, Program, Term};
+use cq_lang_sequence::{Analysis, Machine, Program, Term};
 use cq_syntax::symbol_name;
 
-use crate::{Advice, bounds, decomposition};
+use crate::{Advice, decomposition};
 
 /// The stream root reached from `term`, recording named expansions root first.
 fn stream(program: &Program, term: &Term, path: &mut Vec<syn::Ident>) -> Option<String> {
@@ -58,11 +58,11 @@ fn expansion(term: &Term) -> bool {
 
 /// Formal rule GR-RetainPrefix: When a GPU dispatch streams a root whose evidence bound is below one root tile, retain the first expansion whose evidence bound reaches the machine's retain_prefix_rows if another expansion follows it; stop searching at the first unknown bound.
 /// Formal rule GR-SegmentFanout: After a retained prefix, segment every expansion whose lookup covers no recorded key of its provider, at the machine's distributing width times its items.
-pub(crate) fn advise(program: &Program, machine: &Machine) -> Vec<Advice> {
+pub(crate) fn advise(program: &Program, analysis: &Analysis, machine: &Machine) -> Vec<Advice> {
     let (Some(gpu), Some(tile)) = (&machine.gpu, decomposition::width(&machine.root)) else {
         return Vec::new();
     };
-    let bounds = bounds::of(program);
+    let bounds = &analysis.prefix_bounds;
     let rows = |name: &str| bounds.get(name).and_then(|bound| bound.rows);
     let fan_out = |name: &syn::Ident| {
         let Some(definition) = program
@@ -107,6 +107,8 @@ pub(crate) fn advise(program: &Program, machine: &Machine) -> Vec<Advice> {
                     advice.push(Advice::Retain {
                         name: name.clone(),
                         rows: bound,
+                        tile,
+                        minimum: gpu.retain_prefix_rows,
                     });
                     // The store consuming the rest of the chain is distributed
                     // over the retained prefix, one root tile per part.
@@ -147,10 +149,11 @@ pub(crate) fn apply_in(
     source: &Program,
     name: &syn::Ident,
     rows: u128,
+    tile: usize,
+    minimum: usize,
 ) -> syn::Result<Program> {
-    let bound = bounds::of(source)
-        .get(&symbol_name(name))
-        .and_then(|bound| bound.rows);
+    let analysis = checker.check_shared(source)?;
+    let bound = analysis.prefix_bounds.get(&symbol_name(name)).and_then(|bound| bound.rows);
     if bound != Some(rows) {
         return Err(syn::Error::new_spanned(
             name,
@@ -158,6 +161,33 @@ pub(crate) fn apply_in(
                 "GR-RetainPrefix: recorded bound {rows} differs from the evidence bound {bound:?}"
             ),
         ));
+    }
+    // Check the recorded candidate's premises, not the producer's chosen advice.
+    // Policy parameters are explicit in the trace, like tile/segment widths.
+    let valid = tile > 0 && minimum > 0 && rows >= minimum as u128
+        && source.sequence.definitions.iter().any(|definition| {
+            if !expansion(&definition.term) {
+                return false;
+            }
+            let mut path = Vec::new();
+            let Some(root) = stream(source, &Term::Ref(definition.name.clone()), &mut path) else {
+                return false;
+            };
+            if !analysis.prefix_bounds.get(&root).and_then(|bound| bound.rows)
+                .is_some_and(|rows| rows < tile as u128) {
+                return false;
+            }
+            let Some(index) = path.iter().position(|candidate| candidate == name) else {
+                return false;
+            };
+            index + 1 < path.len() && path[..index].iter().all(|earlier| {
+                analysis.prefix_bounds.get(&symbol_name(earlier)).and_then(|bound| bound.rows)
+                    .is_some_and(|rows| rows < minimum as u128)
+            })
+        });
+    if !valid {
+        return Err(syn::Error::new_spanned(name,
+            "GR-RetainPrefix: recorded prefix violates root, threshold, first-bound or following-expansion premises"));
     }
     crate::rewrites::store_level_in(checker, source, quote::quote!(#name))
 }

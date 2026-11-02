@@ -1,6 +1,5 @@
 use cq_lang_sequence::structures::{CanonSource, Capability, Provider};
 use cq_lang_sequence::{Analysis, Catalog, Obligation, Program};
-use cq_syntax::symbol_name;
 
 pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -> syn::Result<()> {
     // Formal rule PL-Catalog: a program declaration of a token the target
@@ -27,19 +26,23 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
                 instance,
                 ..
             } => provider_available(analysis, catalog, provider, capability, instance),
-            Obligation::Canon { result, canonical } => {
-                let levels = result_levels(program, analysis, result, true);
-                canon_available(analysis, catalog, canonical.as_ref(), |registered| {
-                    levels.iter().all(|level| registered.contains(level))
-                })
-            }
-            Obligation::Codec { ordered, .. } => catalog.codecs.iter().any(|token| {
-                (!ordered || token.ordered)
-                    && analysis
-                        .levels
-                        .values()
-                        .all(|level| token.levels.contains(level))
+            // The canon boundary is admitted at its recorded graded level only.
+            Obligation::Canon {
+                canonical,
+                answer_index,
+                level,
+                ..
+            } => level.as_ref().is_some_and(|level| {
+                canon_available(
+                    catalog,
+                    canonical.as_ref(),
+                    answer_index.as_ref(),
+                    |registered| registered.contains(level),
+                )
             }),
+            Obligation::Codec { ordered, codec, .. } => {
+                codec_available(analysis, catalog, codec.as_ref(), *ordered)
+            }
             Obligation::Failure { .. } => true,
         };
         if !available {
@@ -64,33 +67,58 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
 }
 
 /// Formal rule PL-Distinct: whether the target discharges a canon boundary
-/// reading `canonical` (`None`: the returned answer boundary). `admits` tells
-/// whether a registered level set covers the boundary's execution levels.
+/// reading `canonical` (`None`: the returned answer boundary, reading its
+/// recorded identity index `answer_index`). `admits` tells whether a
+/// registered level set covers the boundary's execution level.
 ///
 /// A canonical rows record, or the answer's identity index, needs a catalog
-/// entry of its recorded token declaring Distinct; an unrecorded answer index
-/// any Distinct entry. A Built reference is discharged by its own Provider
-/// obligations; a host carrier is read only at host.
+/// entry of its recorded token declaring Distinct; an answer boundary without
+/// a recorded identity index is unmet. A Built reference is discharged by its
+/// own Provider obligations; a host carrier is read only at host.
 pub(crate) fn canon_available(
-    analysis: &Analysis,
     catalog: &Catalog,
     canonical: Option<&CanonSource>,
+    answer_index: Option<&Provider>,
     admits: impl Fn(&[Vec<String>]) -> bool,
 ) -> bool {
     let provider = match canonical {
-        Some(CanonSource::Rows(provider)) => Some(provider),
+        Some(CanonSource::Rows(provider)) => provider,
         Some(CanonSource::Index(_)) => return true,
         Some(CanonSource::Host) => return admits(&[vec!["host".to_owned()]]),
-        // Structures records at most the returned result's identity index.
-        None => analysis.structures.head_dedup.values().next(),
+        None => match answer_index {
+            Some(provider) => provider,
+            None => return false,
+        },
     };
     catalog.providers.iter().any(|entry| {
-        provider.is_none_or(|provider| entry.covers(provider))
+        entry.covers(provider)
             && catalog
                 .facts(&entry.provider)
                 .is_some_and(|facts| facts.reads(&Capability::Distinct))
             && admits(&entry.levels)
     })
+}
+
+/// A BE-Code obligation needs the catalog token of its exact recorded codec
+/// (`None`: identity), which must certify monotone encoding when `ordered`
+/// and register every graded level; no other token discharges it.
+pub(crate) fn codec_available(
+    analysis: &Analysis,
+    catalog: &Catalog,
+    codec: Option<&syn::Type>,
+    ordered: bool,
+) -> bool {
+    catalog
+        .codecs
+        .iter()
+        .find(|token| token.codec.as_ref() == codec)
+        .is_some_and(|token| {
+            (!ordered || token.ordered)
+                && analysis
+                    .levels
+                    .values()
+                    .all(|level| token.levels.contains(level))
+        })
 }
 
 /// Check the complete target promise, including scheduled read levels.
@@ -137,39 +165,6 @@ pub(crate) fn provider_admitted(
             })
             && admits(&entry.levels)
     })
-}
-
-fn result_levels(
-    program: &Program,
-    analysis: &Analysis,
-    result: &str,
-    canonical: bool,
-) -> Vec<Vec<String>> {
-    let mut levels = Vec::new();
-    for definition in &program.sequence.definitions {
-        let name = symbol_name(&definition.name);
-        // Canon obligations name the owning Sequence definition, not its Physical result.
-        if name == result
-            && let Some(level) = analysis.levels.get(&name)
-        {
-            let level = if canonical {
-                analysis
-                    .dispatches
-                    .iter()
-                    .find(|dispatch| dispatch.members.contains(&name))
-                    .map_or(level, |dispatch| &dispatch.level)
-            } else {
-                level
-            };
-            if !levels.contains(level) {
-                levels.push(level.clone());
-            }
-        }
-    }
-    if levels.is_empty() {
-        levels.push(vec!["host".to_owned()]);
-    }
-    levels
 }
 
 fn provider_levels(analysis: &Analysis, provider: &str) -> Vec<Vec<String>> {
@@ -277,5 +272,137 @@ mod tests {
             &Capability::Range,
             &syn::parse_quote!(@unrelated as OpaqueNative<i32>)
         ));
+    }
+
+    /// `L` declares `codec Codec` for its i32 column; `b` is an i64 column
+    /// without a declared codec.
+    fn encoded() -> Program {
+        let structures = syn::parse_quote! {
+            physical {
+                relation L(a:i32); relation R(a:i32,b:i64);
+                l = pipe rename L@0 {a -> a};
+                r = pipe rename R@1 {a -> a,b -> b};
+                answer = let canon probe first [a] l,r;
+                return answer as answer(a,b);
+            }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; opaque_native = OpaqueNative<i32> { reads [exact, range, membership], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                l host scan = @reader input { keys 0; columns [i32 => Code codec Codec] } as Reader [];
+                r host scan = @opaque_native as OpaqueNative<i32> [];
+                r host result(answer) = @opaque_native as OpaqueNative<i32> [a];
+                answer rows = @sort as ::cq_storage::dedup::Sort;
+                answer canon = rows;
+            }
+        };
+        cq_sequence_lowering::compile(&structures).unwrap()
+    }
+
+    fn at(level: &[&str]) -> impl Fn(&[Vec<String>]) -> bool {
+        let level: Vec<String> = level.iter().map(|name| (*name).to_owned()).collect();
+        move |registered| registered.contains(&level)
+    }
+
+    #[test]
+    fn codec_obligations_record_the_declared_codec_and_admit_only_its_token() {
+        let mut analysis = cq_lang_sequence::contract::check(&encoded()).unwrap();
+        let declared: syn::Type = syn::parse_quote!(Codec);
+        let codecs: Vec<_> = analysis
+            .obligations
+            .iter()
+            .filter_map(|obligation| match obligation {
+                Obligation::Codec {
+                    columns,
+                    ordered,
+                    codec,
+                } => Some((columns.clone(), *ordered, codec.clone())),
+                _ => None,
+            })
+            .collect();
+        // The canon heading splits by the recorded codec of each column.
+        assert!(
+            codecs.contains(&(vec!["a".into()], false, Some(declared.clone()))),
+            "{codecs:?}"
+        );
+        assert!(codecs.contains(&(vec!["b".into()], false, None)), "{codecs:?}");
+        let token = |codec: Option<syn::Type>, ordered| cq_lang_sequence::CodecToken {
+            codec,
+            ordered,
+            levels: vec![vec!["host".into()]],
+        };
+        let mut catalog = Catalog {
+            codecs: vec![token(None, true)],
+            ..Catalog::default()
+        };
+        // Legal: identity columns use the identity token.
+        assert!(codec_available(&analysis, &catalog, None, true));
+        // Illegal: neither identity nor another codec discharges `Codec`.
+        assert!(!codec_available(&analysis, &catalog, Some(&declared), false));
+        catalog
+            .codecs
+            .push(token(Some(syn::parse_quote!(OtherCodec)), true));
+        assert!(!codec_available(&analysis, &catalog, Some(&declared), false));
+        // Legal: the exact token, certifying order only when it declares it.
+        catalog.codecs.push(token(Some(declared.clone()), false));
+        assert!(codec_available(&analysis, &catalog, Some(&declared), false));
+        assert!(!codec_available(&analysis, &catalog, Some(&declared), true));
+        // Illegal: a graded level the token does not register.
+        analysis
+            .levels
+            .insert("answer".into(), vec!["host".into(), "device".into()]);
+        assert!(!codec_available(&analysis, &catalog, None, true));
+    }
+
+    #[test]
+    fn canon_admission_reads_the_recorded_token_and_graded_level() {
+        let program = encoded();
+        let mut analysis = cq_lang_sequence::contract::check(&program).unwrap();
+        let sort: Declaration = syn::parse_quote!(
+            sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        );
+        let instance = sort.instance();
+        let mut catalog = Catalog::default();
+        catalog.register(sort, vec![vec!["host".into()]]);
+        // Illegal: an answer boundary without a recorded identity index is
+        // unmet although a Distinct entry exists.
+        assert!(!canon_available(&catalog, None, None, at(&["host"])));
+        // Legal: its recorded identity index at a registered level.
+        assert!(canon_available(&catalog, None, Some(&instance), at(&["host"])));
+        assert!(!canon_available(
+            &catalog,
+            None,
+            Some(&instance),
+            at(&["host", "device"])
+        ));
+        assert!(!canon_available(
+            &catalog,
+            None,
+            Some(&syn::parse_quote!(@unrelated as ::cq_storage::dedup::Sort)),
+            at(&["host"])
+        ));
+        // The final check reads the level recorded by grading, never a default.
+        analysis
+            .obligations
+            .retain(|obligation| matches!(obligation, Obligation::Canon { .. }));
+        assert!(analysis.obligations.iter().all(|obligation| matches!(
+            obligation,
+            Obligation::Canon {
+                canonical: Some(CanonSource::Rows(_)),
+                level: None,
+                ..
+            }
+        )));
+        let error = check(&program, &analysis, &catalog)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unmet catalog obligation Canon"), "{error}");
+        let mut record = |recorded: &[&str]| {
+            for obligation in &mut analysis.obligations {
+                if let Obligation::Canon { level, .. } = obligation {
+                    *level = Some(recorded.iter().map(|name| (*name).to_owned()).collect());
+                }
+            }
+            check(&program, &analysis, &catalog)
+        };
+        record(&["host"]).unwrap();
+        assert!(record(&["host", "device"]).is_err());
     }
 }

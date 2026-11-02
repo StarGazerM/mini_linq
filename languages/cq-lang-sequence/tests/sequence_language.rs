@@ -1047,11 +1047,17 @@ fn lengths_views_stores_and_output_are_derived() {
     assert_eq!(a.views.iter().cloned().collect::<Vec<_>>(), ["a", "b", "c"]);
     assert_eq!(a.output, Some(("d".into(), OutputProtocol::Count)));
     assert!(a.levels.is_empty());
-    assert!(
-        a.obligations
-            .iter()
-            .any(|o| matches!(o, Obligation::Canon { .. }))
-    );
+    // Contract checking records no canon level; grading records the graded one.
+    assert!(a.obligations.iter().any(|o| matches!(
+        o,
+        Obligation::Canon { result, level: None, .. } if result == "d"
+    )));
+    let graded = check_grading(&p, &sequential()).unwrap();
+    assert!(graded.obligations.iter().any(|o| matches!(
+        o,
+        Obligation::Canon { result, level: Some(level), .. }
+            if result == "d" && *level == graded.levels["d"]
+    )));
     assert!(
         a.obligations
             .iter()

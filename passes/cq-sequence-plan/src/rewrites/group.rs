@@ -16,9 +16,15 @@ pub fn group_without_canon_in(
     source: &Program,
     arguments: TokenStream,
 ) -> syn::Result<Program> {
-    checker.check_shared(source)?;
+    let analysis = checker.check_shared(source)?;
     let name: Ident = syn::parse2(arguments)?;
     let index = super::definition(source, &name)?;
+    if !analysis.canon_free_groups.contains(&symbol_name(&name)) {
+        return Err(syn::Error::new_spanned(
+            &name,
+            "BE-GroupKey: no recorded canon-free valuation key for this group",
+        ));
+    }
     fn group(term: &mut Term) -> Option<&mut Term> {
         match term {
             Term::Group(_, input) => Some(input),

@@ -32,6 +32,8 @@ struct Fact {
     materializes: bool,
     /// A key proved for these positions, not merely for their relational support.
     unique: Option<Vec<String>>,
+    /// Positional key preserved if valuation canonicalizers on this stream are removed.
+    canon_free_unique: Option<Vec<String>>,
     reads: BTreeSet<(String, Vec<String>)>,
     /// Routing columns whose equal values inhabit exactly one outer part.
     partition: Option<Vec<String>>,
@@ -58,6 +60,8 @@ struct StructuresProof {
     physical: BTreeMap<String, usize>,
     lookups: LookupIndex,
     queries: std::rc::Rc<lookup_semantics::Queries>,
+    /// Declared input codec of each logical type (BE-Code); one per type.
+    codecs: Vec<(syn::Type, syn::Type)>,
 }
 
 struct CheckedProof {
@@ -125,6 +129,28 @@ impl Checker {
         }
         let analysis = cq_lang_structures::contract::check(program)?;
         let queries = self.support.queries(&program.physical, &analysis.physical);
+        // BE-Code obligations name a column's codec: the one its logical type's
+        // input columns declare; differing declarations leave it ambiguous.
+        let mut codecs: Vec<(syn::Type, syn::Type)> = Vec::new();
+        for entry in &program.structures.entries {
+            let (cq_lang_structures::Structure::Host { keyed, .. }
+            | cq_lang_structures::Structure::Built { keyed, .. }) = &entry.structure
+            else {
+                continue;
+            };
+            for column in keyed.provider.input.iter().flat_map(|input| &input.columns) {
+                let Some(codec) = &column.codec else {
+                    continue;
+                };
+                match codecs.iter().find(|(logical, _)| *logical == column.logical) {
+                    Some((_, previous)) if previous != codec => {
+                        return fail(codec, "BE-Code", "conflicting codecs for one logical type");
+                    }
+                    Some(_) => {}
+                    None => codecs.push((column.logical.clone(), codec.clone())),
+                }
+            }
+        }
         let proof = std::rc::Rc::new(StructuresProof {
             program: program.clone(),
             analysis,
@@ -138,6 +164,7 @@ impl Checker {
                 .collect(),
             lookups,
             queries,
+            codecs,
         });
         let mut cache = self.structures.borrow_mut();
         // Preserve the invocation's source and the two most recent prefixes.
@@ -245,6 +272,8 @@ fn analyze_in(
             shapes: BTreeMap::new(),
             tilings: BTreeMap::new(),
             partial_groups: BTreeMap::new(),
+            prefix_bounds: crate::bounds::record(program),
+            canon_free_groups: BTreeSet::new(),
             views: BTreeSet::new(),
             stores: BTreeMap::new(),
             publications: BTreeMap::new(),
@@ -270,6 +299,7 @@ fn analyze_in(
         prefix: &prefix,
         support: &context.support,
     };
+    crate::bounds::check(program, &checker.analysis.prefix_bounds)?;
     let mut publication_facts = BTreeMap::new();
     for definition in &program.sequence.definitions {
         let name = symbol_name(&definition.name);
@@ -455,7 +485,45 @@ impl Checked<'_> {
             Meaning::Fold(_, _) => Vec::new(),
         }
     }
-    fn inferred_key(&self, name: &Ident, input: Option<&Fact>) -> Option<Vec<String>> {
+    /// Record one BE-Code obligation per exact codec over these
+    /// columns. A column's codec is the declared input codec of its recorded
+    /// logical type (`None`: no declared codec, the identity representation).
+    /// Codec injectivity and monotonicity are deliberately not claimed statically.
+    fn codec_obligations(&mut self, columns: Vec<String>, ordered: bool) {
+        let mut groups: Vec<(Option<syn::Type>, Vec<String>)> = Vec::new();
+        for column in columns {
+            let codec = self
+                .analysis
+                .structures
+                .physical
+                .rows
+                .values()
+                .find_map(|row| row.types.get(&column))
+                .and_then(|logical| {
+                    self.prefix
+                        .codecs
+                        .iter()
+                        .find(|(declared, _)| declared == logical)
+                })
+                .map(|(_, codec)| codec.clone());
+            match groups.iter_mut().find(|(recorded, _)| *recorded == codec) {
+                Some((_, columns)) => columns.push(column),
+                None => groups.push((codec, vec![column])),
+            }
+        }
+        for (codec, columns) in groups {
+            self.analysis.obligations.push(Obligation::Codec {
+                columns,
+                ordered,
+                codec,
+            });
+        }
+    }
+    fn inferred_key(
+        &self,
+        name: &Ident,
+        input: Option<(&Meaning, &Option<Vec<String>>)>,
+    ) -> Option<Vec<String>> {
         let definition = self.physical(name).ok()?;
         // Formal rule BE-GroupKey: Asserted relation keys survive renaming and inherited-key transfer.
         if let Operator::Rename(rename) = &definition.operator {
@@ -494,10 +562,10 @@ impl Checked<'_> {
             &self.program.structures.physical.program.host_sets,
             |operand| {
                 let result = symbol_name(operand);
-                if let Some(input) = input
-                    && matches!(&input.meaning, Meaning::Result(name) if *name == result)
+                if let Some((meaning, unique)) = input
+                    && matches!(meaning, Meaning::Result(name) if *name == result)
                 {
-                    return input.unique.clone();
+                    return unique.clone();
                 }
                 self.result_keys.get(&result).map(|(_, key)| key.clone())
             },
@@ -549,6 +617,7 @@ impl Checked<'_> {
                 result.meaning = meaning;
                 result.materializes = false;
                 result.unique = None;
+                result.canon_free_unique = None;
                 Ok(result)
             }
             Term::Rows(name) => {
@@ -576,8 +645,7 @@ impl Checked<'_> {
                 } else {
                     return fail(name, "BE-Alpha", "rows names no retained result or host");
                 };
-                Ok(Fact {
-                    unique: match &meaning {
+                let unique = match &meaning {
                         Meaning::Result(result) => self
                             .stored_result_keys
                             .get(result)
@@ -588,7 +656,10 @@ impl Checked<'_> {
                                 .then(|| fact.unique.clone())
                                 .flatten()
                         }),
-                    },
+                    };
+                Ok(Fact {
+                    canon_free_unique: unique.clone(),
+                    unique,
                     shape: vec![if matches!(meaning, Meaning::Result(_))
                         && matches!(self.physical(name)?.operator, Operator::Unit(_))
                     {
@@ -784,14 +855,13 @@ impl Checked<'_> {
                     }
                 }
                 for segment in segments.iter().rev() {
-                    fact.unique = self.inferred_key(segment, Some(&fact));
+                    fact.canon_free_unique =
+                        self.inferred_key(segment, Some((&fact.meaning, &fact.canon_free_unique)));
+                    fact.unique = self.inferred_key(segment, Some((&fact.meaning, &fact.unique)));
                     fact.meaning = Meaning::Result(symbol_name(segment));
                 }
                 fact.meaning = Meaning::Result(symbol_name(name));
-                self.analysis.obligations.push(Obligation::Codec {
-                    columns: self.heading(&fact.meaning),
-                    ordered,
-                });
+                self.codec_obligations(self.heading(&fact.meaning), ordered);
                 if nested {
                     fact.depth += 1;
                     fact.max_depth += 1;
@@ -941,17 +1011,20 @@ impl Checked<'_> {
                     }
                 }
                 fact.reads.insert((provider_name.clone(), names.clone()));
-                fact.unique = fact.unique.take().and_then(|mut key| {
-                    let other = self
-                        .result_keys
-                        .get(&provider_name)
-                        .map(|(_, key)| key.clone())
-                        .or_else(|| self.inferred_key(provider, None))?;
+                let other = self
+                    .result_keys
+                    .get(&provider_name)
+                    .map(|(_, key)| key.clone())
+                    .or_else(|| self.inferred_key(provider, None));
+                let combine = |key: Option<Vec<String>>| key.and_then(|mut key| {
+                    let other = other.clone()?;
                     key.extend(other);
                     key.sort();
                     key.dedup();
                     Some(key)
                 });
+                fact.unique = combine(fact.unique.take());
+                fact.canon_free_unique = combine(fact.canon_free_unique.take());
                 fact.meaning = Meaning::Lookup(provider_name, names, Box::new(fact.meaning));
                 fact.depth += 1;
                 fact.max_depth += 1;
@@ -1081,6 +1154,11 @@ impl Checked<'_> {
                     fact.shape = vec![fact.len.clone()];
                 }
                 fact.unique = Some(group.keys.iter().map(symbol_name).collect());
+                if fact.canon_free_unique.is_some() {
+                    self.analysis.canon_free_groups.insert(owner.into());
+                }
+                // Canon removal does not cross a Group boundary.
+                fact.canon_free_unique = fact.unique.clone();
                 fact.meaning = Meaning::Result(symbol_name(name));
                 fact.materializes = true;
                 self.analysis
@@ -1102,6 +1180,8 @@ impl Checked<'_> {
                 }
                 fact.meaning = Meaning::Fold(monoid.clone(), Box::new(fact.meaning));
                 fact.unique = (fact.depth == 0).then(Vec::new);
+                // Canon removal does not cross a Fold boundary.
+                fact.canon_free_unique = fact.unique.clone();
                 fact.len = match fact.shape.len() {
                     1 => Len::Lit(1),
                     2 => fact.shape[0].clone(),
@@ -1128,14 +1208,20 @@ impl Checked<'_> {
                         "a canonical host carrier requires direct source rows",
                     );
                 }
+                // The returned answer boundary reads its recorded identity index.
+                let answer_index = match (&canonical, &fact.meaning) {
+                    (None, Meaning::Result(name)) => {
+                        self.analysis.structures.head_dedup.get(name).cloned()
+                    }
+                    _ => None,
+                };
                 self.analysis.obligations.push(Obligation::Canon {
                     result: owner.into(),
                     canonical,
+                    answer_index,
+                    level: None,
                 });
-                self.analysis.obligations.push(Obligation::Codec {
-                    columns: self.heading(&fact.meaning),
-                    ordered: false,
-                });
+                self.codec_obligations(self.heading(&fact.meaning), false);
                 fact.len = Len::Scan(owner.into());
                 // Formal rule BE-KeyPartCanon: Equal complete valuations route to one part.
                 let heading = self.heading(&fact.meaning);
@@ -1212,7 +1298,10 @@ impl Checked<'_> {
                         result = Some(next);
                     }
                 }
-                Ok(result.expect("nonempty alternatives checked"))
+                let mut result = result.expect("nonempty alternatives checked");
+                // Canon removal does not cross a Choose boundary.
+                result.canon_free_unique = result.unique.clone();
+                Ok(result)
             }
         }
     }
@@ -1381,11 +1470,7 @@ impl Checked<'_> {
             capability,
             instance: ty,
         });
-        // Codec injectivity and monotonicity are deliberately not claimed statically.
-        self.analysis.obligations.push(Obligation::Codec {
-            columns: keys.to_vec(),
-            ordered,
-        });
+        self.codec_obligations(keys.to_vec(), ordered);
         Ok(())
     }
 

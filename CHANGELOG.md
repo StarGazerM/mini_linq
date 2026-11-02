@@ -7,6 +7,30 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Sequence Analysis now owns checked BE-PrefixBound row/key records and
+  BE-GroupKey canon-free group facts. Retention replay consumes these records,
+  with explicit tile/threshold parameters and checked root, first-bound and
+  following-expansion premises; it no longer reruns bound production.
+  Group canon removal is selected from the recorded fact and rewrite failures
+  propagate instead of silently becoming negative uniqueness decisions.
+
+- Sequence catalog admission no longer admits silently. `Obligation::Codec`
+  records its exact codec (the declared Structures input codec of each
+  column's logical type, `None` for identity; conflicting declarations are a
+  BE-Code error) and only that `CodecToken { codec, .. }` discharges it.
+  `Obligation::Canon` records the answer boundary's identity index
+  (`answer_index`) and the `level` grading assigns; the catalog check reads
+  them exactly instead of accepting any Distinct entry or defaulting to host.
+  `CodecToken.ty` is replaced by `codec: Option<syn::Type>`.
+
+- Sequence placement recognizes a native host provider by its token's declared
+  `abi` fact (GPU-NativeAbi) instead of inferring nativeness from catalog
+  entries without a host read level. A rebuilt index over such a scan is row
+  work published below host; level shape alone no longer confers nativeness, so
+  `abi columns` scans (e.g. `DeviceColumns`) now count even when the target
+  catalog does not register their token. Tests cover the declared, host-level
+  alternative, matching, undeclared and PL-Catalog-rejected omission records.
+
 - Fix CQ normalization of `where` predicates over hoisted closed `let` captures:
   capture binders remain in scope and both predicate operands resolve as closed
   host values, including previously canonicalized equalities. Regression tests

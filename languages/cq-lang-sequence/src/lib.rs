@@ -30,6 +30,7 @@ use syn::punctuated::Punctuated;
 use syn::{Ident, LitInt, Token, braced, bracketed, parenthesized};
 
 pub mod contract;
+pub mod bounds;
 mod evidence;
 pub mod gpu;
 mod grading;
@@ -381,10 +382,12 @@ impl Catalog {
     }
 }
 
-/// A value-refinement token; `ordered` certifies monotone encoding.
+/// A value-refinement token; `ordered` certifies monotone encoding. `codec`
+/// is the exact codec a Structures input column declares; `None` is the
+/// identity representation of a column without a declared codec.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodecToken {
-    pub ty: syn::Type,
+    pub codec: Option<syn::Type>,
     pub ordered: bool,
     pub levels: Vec<Vec<String>>,
 }
@@ -426,9 +429,12 @@ pub struct Dispatch {
 /// Runtime premises recorded for discharge by target traits and translations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Obligation {
+    /// `columns` carry the exact recorded `codec` (the codec their logical
+    /// type's Structures input columns declare; `None`: identity).
     Codec {
         columns: Vec<String>,
         ordered: bool,
+        codec: Option<syn::Type>,
     },
     Provider {
         provider: String,
@@ -437,10 +443,15 @@ pub enum Obligation {
         instance: structures::Provider,
     },
     /// The canon boundary owned by Sequence definition `result` reads this
-    /// checked canonical reference; `None` is the returned answer boundary.
+    /// checked canonical reference; `None` is the returned answer boundary,
+    /// whose recorded identity index is `answer_index` (Structures
+    /// `head_dedup`). `level` is the boundary's graded execution level,
+    /// recorded by grading (`None` before grading).
     Canon {
         result: String,
         canonical: Option<structures::CanonSource>,
+        answer_index: Option<structures::Provider>,
+        level: Option<Vec<String>>,
     },
     Failure {
         dispatch: usize,
@@ -488,6 +499,11 @@ pub struct Analysis {
     /// Checked host-merged partial-fold modes for Group constructors in preorder,
     /// grouped by owning definition. Ref uses retain their producer's entries.
     pub partial_groups: BTreeMap<String, Vec<bool>>,
+    /// BE-PrefixBound: checked cardinality/key facts, indexed by Physical result.
+    pub prefix_bounds: BTreeMap<String, bounds::Bound>,
+    /// BE-GroupKey: owners whose group valuation streams remain unique after
+    /// removal of their upstream canonicalizers.
+    pub canon_free_groups: BTreeSet<String>,
     pub views: BTreeSet<String>,
     pub stores: BTreeMap<String, Len>,
     /// Publication ownership, derived once from checked provenance and consumers.

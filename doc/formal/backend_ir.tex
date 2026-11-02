@@ -315,9 +315,14 @@ through \code{lookup} and the term records only what the read requires:
 exact bucket, contiguous range (rangeCursor), membership, order. Its type
 is an opaque token discharged by runtime traits, as Structures does today
 (STR-Key, STR-SortedRun); the same holds for codecs (BE-Code's premises
-are trait obligations, like Leibniz admissibility). Canonicalization instead
+are trait obligations, like Leibniz admissibility). A codec obligation
+records its exact codec: the codec that Structures input columns declare for
+the column's logical type, or identity when none is declared; conflicting
+declarations are rejected. Canonicalization instead
 records the checked canonical reference (a \textsc{PL-Distinct} rows provider,
-an existence-only Built index, or the host carrier); runtime order laws remain premises.
+an existence-only Built index, or the host carrier), or for the returned
+answer its recorded identity index, and grading records the boundary's level;
+runtime order laws remain premises.
 
 \subsection{Placement: a grading over a machine parameter}
 \begin{definition}[Machine model]
@@ -531,7 +536,11 @@ publication record, and the interpreter may not infer a new scheduling guard.
 A planner is an advice generator, not another interpretation of Sequence.
 Its inputs are a Sequence program $t$, a machine $M$, and an ordered catalog
 $K$ of target-supplied provider token declarations (including \code{Distinct} canonical rows providers),
-entries keyed by token id with admissible levels, and codecs.
+entries keyed by token id with admissible levels, and codec tokens keyed by
+exact codec (or identity). The catalog discharges a codec obligation only by
+the token of its recorded codec, and a canon obligation only at its recorded
+level through its recorded token; an obligation without a recorded token or
+level is unmet.
 The catalog is data: shared planning and checking
 do not depend on a target implementation, and no rule reads a provider's Rust
 spelling. A successful result is a graded
@@ -959,7 +968,12 @@ replanning or optional-filter discovery.
   \rho\text{ satisfies PL-Closure under }E_{\rm key}}
 
 \Rule{BE-PrefixBound}{\beta(\mathsf{rename}\ R)=(\mathsf{count}_E(R),\mathsf{keys}_E(R))\quad
- \beta(\sigma\,x)=\beta(\pi_{\supseteq K}x)=\beta(x\ltimes y)=\beta(x\rhd y)=\beta(x)\\
+ \beta(\mathsf{unit})=(1,\{\varnothing\})\quad
+ \beta(\sigma\,x)=\beta(\mathsf{guard}\ x)=\beta(\mathsf{scalarBind}\ x)
+ =\beta(x\ltimes y)=\beta(x\rhd y)=\beta(x)\\
+ \beta(\pi_A x)=(\beta(x).rows,\{K\in\beta(x).keys\mid K\subseteq A\})\\
+ \beta(\mathsf{group}_G x)=(\mathsf{if}\ G=\varnothing\ \mathsf{then}\ 1\
+ \mathsf{else}\ \beta(x).rows,\{G\})\\
  \beta(\mathsf{probe}[\bar k]\,x,y)={\begin{cases}\beta(x)&\exists K\in\mathsf{keys}(y).\ K\subseteq\bar k\\
  \beta(y)&\exists K\in\mathsf{keys}(x).\ K\subseteq\bar k\\
  \bot&\text{otherwise}\end{cases}}}
@@ -969,18 +983,26 @@ replanning or optional-filter discovery.
  e_1,\ldots,e_n\text{ the expansions of }d\text{ from its root}\\
  j=\min\{j\mid \beta(e_j).rows\ge M.retain\_prefix\_rows\}\quad
  \forall i\le j.\ \beta(e_i).rows\ne\bot\quad j<n}
- {\mathsf{plan}\text{ records }\mathsf{retain}(e_j,\beta(e_j).rows);\ \mathsf{partition}(\mathsf{consumer}(d),w_M)}
+ {\mathsf{plan}\text{ records }\mathsf{retain}(e_j,\beta(e_j).rows,w_M,M.retain\_prefix\_rows);\ \mathsf{partition}(\mathsf{consumer}(d),w_M)}
 
-\Rule{GR-SegmentFanout}{\mathsf{retain}(e_j,\_)\text{ recorded}\quad j<i\le n\quad
+\Rule{GR-SegmentFanout}{\mathsf{retain}(e_j,\_,\_,\_)\text{ recorded}\quad j<i\le n\quad
  \neg\exists K\in\mathsf{keys}(\mathsf{provider}(e_i)).\ K\subseteq\mathsf{lookupKeys}(e_i)}
  {\mathsf{plan}\text{ records }\mathsf{segment}(e_i,w_M\cdot M.items,\ \mathsf{items}\ M.items)}
 \end{mathpar}
 
-A recorded \code{retain(e, n)} is the checked \code{store\_level(e)} rewrite
-whose replay first requires $\beta(e).rows=n$ under the recorded evidence; a
-bound the evidence does not establish is rejected. The GR-RetainPrefix
-search stops at the first unknown bound; it never skips it to retain a later
-bounded expansion. GR-RetainPrefix and GR-SegmentFanout change only execution shape (stores, tiles and offsets
+Sequence Analysis records $\beta$ as \code{prefix\_bounds}, with explicit
+unknown rows and key sets. The checker checks each record against evidence
+and preceding recorded operands, not by invoking the planner: larger upper
+bounds, omitted keys, and either justified keyed-join side are legal.
+Merge uses the same transfer as Probe; generating binds and Union are unknown.
+A recorded \code{retain(e, n, w, R)} is the checked \code{store\_level(e)} rewrite.
+Replay consumes these checked facts and requires $\beta(e).rows=n$,
+$w,R>0$, a root bound below $w$, $n\ge R$, a following expansion, and
+known earlier bounds below $R$. Width and threshold are explicit policy
+parameters, like ordinary tile advice; replay never reruns advice selection.
+The GR-RetainPrefix search stops at the first unknown bound; it never skips
+it to retain a later bounded expansion.
+GR-RetainPrefix and GR-SegmentFanout change only execution shape (stores, tiles and offsets
 publication), never the recorded relational plan, and apply before
 placement, so ordinary decomposition, grading and PL-Cost continue from the
 result. They reproduce the authored H05 recipe R from the preserved step-R
@@ -1302,7 +1324,9 @@ The invocation-local cache is shared across capacity retries.
 \paragraph{GPU realization records.}
 Native ABI is a declared provider-token fact. Input instances record the ordered
 logical/storage column schema and optional codec explicitly; every Rust type is
-opaque. Neither constructor paths nor generic arguments confer native residency.
+opaque. Neither constructor paths nor generic arguments confer native residency,
+and neither do catalog read levels: placement treats a scanned Host provider as
+native exactly when its token declares an ABI.
 \begin{mathpar}
 \Rule{GPU-Representation}{\rho=\text{recorded provider/codec facts}\quad
  R=\mathrm{fv}(e)\cap\text{row columns}\quad R\subseteq\rho.\mathrm{identity}\quad
@@ -1521,10 +1545,13 @@ Under these asserted premises, each complete named valuation identifies at
 most one physical witness combination. RA-Group therefore folds the same bag
 without the canonical-valuation store. Renames translate keys, joins combine
 them, scalar binds and filters preserve them, and projection must retain a key.
-Expanding Rust binds and unions supply no such certificate. The checked
-\code{group\_without\_canon} rewrite removes canonicalizers only if the resulting
-group input still has proven positional uniqueness. Proof caches include
-evidence, so removing an assertion cannot reuse its proof. GPU interpretation
+Expanding Rust binds and unions supply no such certificate. Analysis records
+\code{canon\_free\_groups} by transferring positional keys independently of
+canonicalizers along each group's input stream. The planner reads that fact,
+applies \code{group\_without\_canon} only to admitted owners, and propagates
+rewrite errors; trial success is not a uniqueness decision. The rewrite
+requires this recorded premise and still checks the resulting program.
+Proof caches include evidence, so removing an assertion cannot reuse its proof. GPU interpretation
 may read resident columns directly and evaluate only the group arguments;
 it does not decide whether a key premise holds.
 

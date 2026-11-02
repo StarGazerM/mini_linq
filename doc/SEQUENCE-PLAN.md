@@ -81,8 +81,11 @@ pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bo
 /// catalog-declared token must equal it. No catalog fact is read from a Rust spelling.
 pub struct Catalog { pub declarations: Vec<cq_lang_structures::Declaration>, pub providers: Vec<CatalogEntry>, pub codecs: Vec<CodecToken> }
 pub struct CatalogEntry { pub provider: cq_lang_structures::Provider, pub levels: Vec<Vec<String>> }
-pub struct CodecToken { pub ty: syn::Type, pub ordered: bool, pub levels: Vec<Vec<String>> }
-/// Canonical rows records are typed by tokens declaring `distinct` (PL-Distinct).
+/// `codec` is the exact codec declared by Structures input columns (`None`: identity);
+/// a codec obligation is discharged only by its recorded codec's token (BE-Code).
+pub struct CodecToken { pub codec: Option<syn::Type>, pub ordered: bool, pub levels: Vec<Vec<String>> }
+/// Canonical rows records are typed by tokens declaring `distinct` (PL-Distinct); a canon
+/// obligation is admitted at its graded level through its recorded rows or answer-index token.
 
 /// Lengths as symbolic expressions (size types).
 pub enum Len { Input(String), Scan(String), Lit(usize), Add(Box<Len>, Box<Len>), CeilDiv(Box<Len>, usize), Unknown(/*capacity*/ Option<usize>) }

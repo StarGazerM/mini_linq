@@ -103,7 +103,7 @@ fn catalog(machine: &Machine) -> Catalog {
     });
     let mut catalog = Catalog {
         codecs: vec![CodecToken {
-            ty: syn::parse_quote!(Identity),
+            codec: None,
             ordered: true,
             levels: levels.clone(),
         }],
@@ -502,7 +502,7 @@ fn no_provider_catalog_still_supports_a_simple_scan() {
     for machine in machines() {
         let mut available = catalog(&machine);
         available.providers.clear();
-        assert_eq!(available.codecs[0].ty, syn::parse_quote!(Identity));
+        assert_eq!(available.codecs[0].codec, None);
         let planned = decompose(&source, &machine, &available).unwrap();
         replay(&source, &machine, &planned);
     }

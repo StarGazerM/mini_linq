@@ -10,7 +10,6 @@ mod catalog;
 pub mod cost;
 pub use cost::{Cost, cost};
 mod advice;
-mod bounds;
 mod decomposition;
 mod key_partition;
 mod placement;
@@ -34,6 +33,8 @@ pub enum Advice {
     Retain {
         name: Ident,
         rows: u128,
+        tile: usize,
+        minimum: usize,
     },
     Publish {
         name: Ident,
@@ -82,7 +83,9 @@ impl Advice {
             }
             Self::Store(name) => rewrites::store_in(checker, source, quote!(#name)),
             Self::StoreLevel(name) => rewrites::store_level_in(checker, source, quote!(#name)),
-            Self::Retain { name, rows } => retain::apply_in(checker, source, name, *rows),
+            Self::Retain { name, rows, tile, minimum } => {
+                retain::apply_in(checker, source, name, *rows, *tile, *minimum)
+            }
             Self::Publish { name, producer } => {
                 rewrites::publish_in(checker, source, name, producer)
             }
@@ -159,7 +162,7 @@ fn decompose_in(
     catalog: &Catalog,
     policies: &[KeyPartitionPolicy],
 ) -> syn::Result<Planned> {
-    checker.check_shared(program)?;
+    let analysis = checker.check_shared(program)?;
     key_partition::validate(program, policies)?;
     let mut prepared = Planned {
         program: program.clone(),
@@ -176,22 +179,23 @@ fn decompose_in(
         .sequence
         .definitions
         .iter()
-        .filter(|definition| has_group(&definition.term))
+        .filter(|definition| has_group(&definition.term)
+            && analysis.canon_free_groups.contains(&symbol_name(&definition.name)))
         .map(|definition| definition.name.clone())
         .collect();
     let mut unique_groups = std::collections::BTreeSet::new();
     for name in groups {
         let advice = Advice::GroupWithoutCanon(name.clone());
-        if let Ok(target) = advice.apply_in(checker, &prepared.program) {
-            unique_groups.insert(symbol_name(&name));
-            if target == prepared.program {
-                continue;
-            }
-            prepared.program = target;
-            prepared.trace.push(advice);
+        let target = advice.apply_in(checker, &prepared.program)?;
+        unique_groups.insert(symbol_name(&name));
+        if target == prepared.program {
+            continue;
         }
+        prepared.program = target;
+        prepared.trace.push(advice);
     }
-    for advice in retain::advise(&prepared.program, machine) {
+    let analysis = checker.check_shared(&prepared.program)?;
+    for advice in retain::advise(&prepared.program, &analysis, machine) {
         push(checker, &mut prepared, advice)?;
     }
     let program = &prepared.program;

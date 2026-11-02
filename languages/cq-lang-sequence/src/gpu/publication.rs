@@ -207,6 +207,7 @@ impl<'a> Facts<'a> {
                 crate::Obligation::Canon {
                     result,
                     canonical: Some(canonical),
+                    ..
                 } if result == publication => {
                     canonical.rows_provider().map(|provider| &provider.ty)
                 }

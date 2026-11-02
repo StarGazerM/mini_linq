@@ -192,6 +192,26 @@ pub(crate) fn check_grading_in(
         checker.roots.push(root);
     }
     analysis.dispatches = checker.dispatches()?;
+    // Formal rule PL-Distinct: record each canon boundary's graded level, the
+    // level of the dispatch publishing its owner (else the owner's own grade).
+    for obligation in &mut analysis.obligations {
+        let Obligation::Canon { result, level, .. } = obligation else {
+            continue;
+        };
+        let graded = analysis
+            .dispatches
+            .iter()
+            .find(|dispatch| dispatch.members.contains(result))
+            .map(|dispatch| &dispatch.level)
+            .or_else(|| analysis.levels.get(result.as_str()));
+        let Some(graded) = graded else {
+            return Err(syn::Error::new(
+                program.structures.physical.program.returned.span(),
+                format!("BE-Canon: canon boundary `{result}` has no graded level"),
+            ));
+        };
+        *level = Some(graded.clone());
+    }
     analysis.collectives = checker.collectives;
     analysis.tilings = checker.tilings;
     for key in checker.range_reads {

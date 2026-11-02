@@ -39,7 +39,7 @@ fn catalog() -> Catalog {
     let mut declarations = declared.declarations.into_iter();
     let mut catalog = Catalog {
         codecs: vec![CodecToken {
-            ty: syn::parse_quote!(Identity),
+            codec: None,
             ordered: true,
             levels: vec![host.clone(), device.clone(), block.clone()],
         }],

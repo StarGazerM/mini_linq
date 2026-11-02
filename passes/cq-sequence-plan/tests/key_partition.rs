@@ -56,7 +56,7 @@ fn catalog() -> Catalog {
     let [index, sharded, sort] = <[_; 3]>::try_from(declared.declarations).unwrap();
     let mut catalog = Catalog {
         codecs: vec![CodecToken {
-            ty: syn::parse_quote!(::cq_storage::sequence::Identity),
+            codec: None,
             ordered: true,
             levels: levels.clone(),
         }],
@@ -1989,4 +1989,40 @@ fn automatic_probe_chain_preserves_filtered_shared_index_contracts() {
         source.structures.physical
     );
     replay(&source, &planned);
+}
+
+#[test]
+fn group_canon_removal_consumes_recorded_valuation_uniqueness() {
+    for named in [false, true] {
+        let mut source = if named { named_grouped(true) } else { grouped(true) };
+        let absent = cq_lang_sequence::contract::check(&source).unwrap();
+        assert!(!absent.canon_free_groups.contains("result"));
+        let advice = Advice::GroupWithoutCanon(syn::parse_quote!(result));
+        assert!(advice.apply(&source).is_err());
+        // Either declared key is an independent legal proof. The checker does
+        // not require the producer's preferred key or canonicalizer spelling.
+        for key in [
+            quote!(evidence { key Lineitem [orderkey, linenumber]; }),
+            quote!(evidence { key Lineitem [orderkey, linenumber, quantity]; }),
+        ] {
+            source.evidence = syn::parse2(key).unwrap();
+            let facts = cq_lang_sequence::contract::check(&source).unwrap();
+            assert!(facts.canon_free_groups.contains("result"));
+            let target = advice.apply(&source).unwrap();
+            cq_lang_sequence::check_rewrite(&source, &target).unwrap();
+        }
+    }
+}
+
+#[test]
+fn prefix_bounds_keep_the_empty_global_group_identity() {
+    for global in [false, true] {
+        let mut source = grouped(global);
+        source.evidence = syn::parse_quote!(evidence { count Lineitem = 0; });
+        let facts = cq_lang_sequence::contract::check(&source).unwrap();
+        assert_eq!(facts.prefix_bounds["totals"].rows, Some(u128::from(global)));
+        let mut forged = facts.prefix_bounds.clone();
+        forged.get_mut("totals").unwrap().rows = Some(0);
+        assert_eq!(cq_lang_sequence::bounds::check(&source, &forged).is_err(), global);
+    }
 }
