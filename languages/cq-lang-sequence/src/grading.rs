@@ -735,8 +735,15 @@ impl<'a> Checker<'a> {
             } => {
                 let mut keys: Vec<_> = keys.iter().map(symbol_name).collect();
                 keys.sort();
-                if let Some(reader) = self.lookup_readers.get(&self.lookup_slots[&(term as *const Term)]) {
-                    self.range_lookups.insert((symbol_name(provider), reader.clone(), keys.clone()));
+                if let Some(reader) = self
+                    .lookup_readers
+                    .get(&self.lookup_slots[&(term as *const Term)])
+                {
+                    self.range_lookups.insert((
+                        symbol_name(provider),
+                        reader.clone(),
+                        keys.clone(),
+                    ));
                 }
                 self.range_reads.insert((symbol_name(provider), keys));
                 self.require_ranges(inner);

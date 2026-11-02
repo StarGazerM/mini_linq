@@ -101,11 +101,7 @@ fn variables(
 }
 
 /// The domain function of a recorded A-Domain capture named by `term`.
-fn domain_function(
-    term: &Term,
-    domain: DomainId,
-    captures: &Captures,
-) -> Option<DomainFunction> {
+fn domain_function(term: &Term, domain: DomainId, captures: &Captures) -> Option<DomainFunction> {
     let Term::Closed(syn::Expr::Path(path)) = term else {
         return None;
     };
@@ -436,7 +432,10 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
         for column in &declaration.columns {
             if let Some(domain) = &column.domain {
                 if domain.id.is_none() {
-                    return Err(error(domain, "a declared code domain has no recorded identity"));
+                    return Err(error(
+                        domain,
+                        "a declared code domain has no recorded identity",
+                    ));
                 }
             }
         }

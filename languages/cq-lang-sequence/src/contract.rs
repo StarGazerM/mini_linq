@@ -1409,11 +1409,15 @@ impl Checked<'_> {
         let name = symbol_name(provider);
         let key = (name.clone(), keys.to_vec());
         if let Some(reader) = reader {
-            let requirement = self.analysis.lookup_capabilities.entry((
-                name.clone(),
-                cq_lang_structures::ReaderRef::Result(symbol_name(reader)),
-                keys.to_vec(),
-            )).or_insert(required.clone());
+            let requirement = self
+                .analysis
+                .lookup_capabilities
+                .entry((
+                    name.clone(),
+                    cq_lang_structures::ReaderRef::Result(symbol_name(reader)),
+                    keys.to_vec(),
+                ))
+                .or_insert(required.clone());
             if *requirement == Capability::Membership && required == Capability::Exact {
                 *requirement = Capability::Exact;
             }

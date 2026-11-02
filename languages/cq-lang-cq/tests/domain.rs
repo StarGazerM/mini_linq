@@ -281,7 +281,11 @@ fn wellformedness_requires_recorded_declaration_and_capture_ids() {
     for declaration in [false, true] {
         let mut invalid = normal.clone();
         if declaration {
-            invalid.declarations[0].columns[0].domain.as_mut().unwrap().id = None;
+            invalid.declarations[0].columns[0]
+                .domain
+                .as_mut()
+                .unwrap()
+                .id = None;
         } else {
             let cq::syntax::Capture::Domain(capture) = &mut invalid.query.captures.items[0] else {
                 panic!("expected a recorded translation");

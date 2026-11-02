@@ -188,7 +188,10 @@ pub fn intern_domains(declarations: &mut [RelationDecl]) {
         .filter_map(|column| column.domain.as_ref())
     {
         if let Some(id) = domain.id {
-            identities.insert(quote::ToTokens::to_token_stream(&domain.expression).to_string(), id);
+            identities.insert(
+                quote::ToTokens::to_token_stream(&domain.expression).to_string(),
+                id,
+            );
             next = next.max(id.0 + 1);
         }
     }

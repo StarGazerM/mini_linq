@@ -212,15 +212,25 @@ pub(crate) fn lookup_slots(sequence: &Sequence) -> BTreeMap<*const Term, usize> 
             slots.insert(term, slots.len());
         }
         match term {
-            Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner)
-            | Term::Fold(_, inner) | Term::Group(_, inner) | Term::Canon(inner)
-            | Term::Tile { inner, .. } | Term::PartitionK { inner, .. }
-            | Term::Lookup { inner, .. } | Term::Store { inner, .. } => visit(inner, slots),
+            Term::Map(_, inner)
+            | Term::Compact(_, inner)
+            | Term::Flatten(inner)
+            | Term::Fold(_, inner)
+            | Term::Group(_, inner)
+            | Term::Canon(inner)
+            | Term::Tile { inner, .. }
+            | Term::PartitionK { inner, .. }
+            | Term::Lookup { inner, .. }
+            | Term::Store { inner, .. } => visit(inner, slots),
             Term::Choose(arms) => {
-                for (_, arm) in arms { visit(arm, slots); }
+                for (_, arm) in arms {
+                    visit(arm, slots);
+                }
             }
             Term::Union(arms) => {
-                for arm in arms { visit(arm, slots); }
+                for arm in arms {
+                    visit(arm, slots);
+                }
             }
             Term::Rows(_) | Term::Ref(_) => {}
         }

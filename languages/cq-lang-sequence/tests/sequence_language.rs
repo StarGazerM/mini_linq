@@ -1194,13 +1194,16 @@ fn mixed_native_exact_and_merge_fallback_keep_reader_requirements_separate() {
                 #probe
                 out = flatten lookup r [a] rows s;
             }
-        }).unwrap();
+        })
+        .unwrap();
         let analysis = check_grading(&p, &sequential()).unwrap();
-        let key = |reader: &str| (
-            "r".into(),
-            cq_lang_structures::ReaderRef::Result(reader.into()),
-            vec!["a".into()],
-        );
+        let key = |reader: &str| {
+            (
+                "r".into(),
+                cq_lang_structures::ReaderRef::Result(reader.into()),
+                vec!["a".into()],
+            )
+        };
         assert_eq!(analysis.lookup_capabilities[&key("m")], Capability::Ordered);
         if probe.is_empty() {
             assert!(!analysis.lookup_capabilities.contains_key(&key("j")));
