@@ -1131,7 +1131,7 @@ fn program_declaration_differing_from_the_catalog_is_rejected() {
         for declaration in [
             quote!(index = Index { reads [exact, range, membership], build inferred };),
             quote!(index = OtherIndex { reads [exact, range, membership, ordered], build inferred };),
-            quote!(index = Index { reads [exact, range, membership, ordered], build macro };),
+            quote!(index = Index { reads [exact, range, membership, ordered], build typed };),
         ] {
             let mut source = join();
             let index = source

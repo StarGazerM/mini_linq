@@ -764,10 +764,14 @@ mod structural;
 pub fn disjoint_unions(program: &Program) -> syn::Result<BTreeSet<String>> {
     contract::check(program)?;
     Ok(cq_syntax::algebra::disjoint_unions(
-        program.plan.definitions.iter().filter_map(|definition| match &definition.operator {
-            Operator::Union(union) => Some((&definition.result, union.origin.as_ref())),
-            _ => None,
-        }),
+        program
+            .plan
+            .definitions
+            .iter()
+            .filter_map(|definition| match &definition.operator {
+                Operator::Union(union) => Some((&definition.result, union.origin.as_ref())),
+                _ => None,
+            }),
     ))
 }
 

@@ -177,10 +177,10 @@ impl<K: Ord, V> cq_storage::ExactMembership<K> for Provider<K,V> {{
 /// the spelled types' traits.
 const CUSTOM: &str = "
     custom = Provider<_, _> {
-        reads [exact, range, membership, ordered], supports [retain, expand, keys], build macro
+        reads [exact, range, membership, ordered], supports [retain, expand, keys], build typed
     };
-    set_alias = SetAlias<_> { reads [membership], build macro };
-    keyset_alias = KeySetAlias<_> { reads [membership], build macro };
+    set_alias = SetAlias<_> { reads [membership], build typed };
+    keyset_alias = KeySetAlias<_> { reads [membership], build typed };
 ";
 
 /// Retype advice installing `provider` (`@token as Type ...`) at `selector`.
@@ -296,8 +296,9 @@ fn ordinary_read_obligations_reject_builtins_and_aliases_uniformly() {
 fn host_ordering_and_interval_summaries_require_real_runtime_traits() {
     let compiler = Compiler::new();
     let aliases = "type SetAlias<T> = std::collections::HashSet<T>;";
-    let ordered = |ty: &str, native: bool| {
-        let retype = retype("ordered", ty);
+    let ordered = |ty: Option<&str>| {
+        let native = ty.is_none();
+        let retype = ty.map(|ty| format!("{},", retype("ordered", ty))).unwrap_or_default();
         let hosts = if native {
             r#"
             let left = std::collections::BTreeMap::from([((1_i64,), vec![()])]);
@@ -306,14 +307,19 @@ fn host_ordering_and_interval_summaries_require_real_runtime_traits() {
         } else {
             ""
         };
+        let host_reads = if native {
+            "host [a] reads [exact, membership, ordered]"
+        } else {
+            ""
+        };
         format!(
             r#"{{ {hosts}
 mini_linq::passes::select! {{
-    pipeline {{ {retype},
+    pipeline {{ {retype}
         mini_linq::passes::sequence, mini_linq::passes::sequential,
         mini_linq::passes::translate_pull }};
     physical {{
-        relation L(a:i64) = (&left); relation R(a:i64,b:i64) = (&right);
+        relation L(a:i64) = (&left) {host_reads}; relation R(a:i64,b:i64) = (&right) {host_reads};
         l = pipe rename L@0 {{a -> x}};
         r = pipe rename R@1 {{a -> x,b -> y}};
         p = let canon merge [x] l,r;
@@ -326,22 +332,13 @@ mini_linq::passes::select! {{
     success(compiler.compile(
         "host_ordered",
         aliases,
-        &ordered(
-            "@btree_map_grouped as ::std::collections::BTreeMap<_, ::std::vec::Vec<_>>",
-            true,
-        ),
-    ));
-    // An unused fallback type must not impose bounds on a direct native read.
-    success(compiler.compile(
-        "host_native_with_alias",
-        aliases,
-        &ordered("@set_alias as SetAlias<_>", true),
+        &ordered(None),
     ));
     rejected(
         compiler.compile(
             "host_unordered_array",
             aliases,
-            &ordered("@set_alias as SetAlias<_>", false),
+            &ordered(Some("@set_alias as SetAlias<_>")),
         ),
         "OrderedRead",
     );
@@ -386,15 +383,15 @@ mini_linq::passes::select! {{
         "ExactIntervalMembership",
     );
     let codec_alias = "type WrongCodec = cq_storage::BorrowedI64TupleCodec;";
-    // build! selects the generic Build obligation through BuildProvider; an
-    // incompatible codec prevents that implementation from being available.
+    // The direct typed build requires Build; an incompatible codec prevents
+    // that implementation from accepting the recorded input key.
     rejected(
         compiler.compile(
             "wrong_key_codec_alias",
             codec_alias,
             &interval("@adaptive_keyset as ::cq_storage::AdaptiveKeySet<_, WrongCodec, 64>"),
         ),
-        "BuildProvider",
+        "Build<",
     );
 }
 
@@ -457,7 +454,7 @@ mini_linq::passes::sequence! {
         out = let canon project selected keep {a,b};
         return out as answer(a,b);
     }
-    structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         selected read = positional base R lineage {a -> a,b -> b}
             column a marker MarkerAlias predicate physical;
@@ -477,7 +474,7 @@ mini_linq::passes::sequence! {
                 out = let canon project joined keep {k,p,v};
                 return out as answer(k,p,v);
             }
-            structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; radix_run = ::cq_storage::RadixRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, shared }; adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build macro, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; radix_run = ::cq_storage::RadixRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, shared }; adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
                 l host scan = @host_scan as ::core::iter::Map<_,_> [];
                 r host scan = @host_scan as ::core::iter::Map<_,_> [];
                 r = @radix_run as ::cq_storage::RadixRun<_,_> [k] supports [keys];
@@ -501,5 +498,40 @@ mini_linq::passes::sequence! {
             ),
             "ColumnSlot",
         );
+    }
+}
+
+/// IF-HostDecl: a declared host read is one direct call. A host whose type
+/// lacks the declared capability, or answers another key type, is rejected by
+/// rustc naming the missing trait; no fallback tier hides the mismatch.
+#[test]
+fn declared_host_reads_require_the_declared_trait_and_key() {
+    let compiler = Compiler::new();
+    let query = |host: &str, declaration: &str, body: &str| {
+        format!(
+            r#"{{ {host}
+mini_linq::compile! {{ pipeline {{ plan = mini_linq::passes::plan(no_reduce); }}
+    struct Q; relation left(a:i64); relation right(a:i64,b:i64) {declaration};
+    {body}
+}}.map(|(a,)| *a).collect::<Vec<_>>().into_iter()
+}}"#
+        )
+    };
+    let map = "let right = std::collections::HashMap::from([((1_i64,), vec![(10_i64,)])]);";
+    let narrow = "let right = std::collections::HashMap::from([((1_i32,), vec![(10_i64,)])]);";
+    let probe = "answer(b) :- left(a), right(a,b);";
+    let semi = "answer(a) :- left(a), !right(a,_);";
+    let exact = "host [a] reads [exact, membership]";
+    success(compiler.compile("declared_map", "", &query(map, exact, probe)));
+    success(compiler.compile("declared_set", "", &query(map, exact, semi)));
+    // The slice declares no keyed read: it is scanned into a fallback.
+    success(compiler.compile("undeclared_slice", "", &query("", "", probe)));
+    for (name, host, body, obligation) in [
+        ("slice_exact", "", probe, "IndexRead"),
+        ("slice_membership", "", semi, "ExactMembership"),
+        ("narrow_key_exact", narrow, probe, "IndexRead"),
+        ("narrow_key_membership", narrow, semi, "ExactMembership"),
+    ] {
+        rejected(compiler.compile(name, "", &query(host, exact, body)), obligation);
     }
 }

@@ -35,6 +35,18 @@ impl IStr {
     }
 }
 
+/// IStr's Ord is code order, so its code is a total injective
+/// order-preserving ordinal: one-column key sets record dense membership
+/// (STR-AdaptiveMembership), whose bitmap is indexed by this code.
+impl cq_storage::OrderKey for IStr {
+    type Ordinal = u64;
+
+    #[inline]
+    fn ordinal(&self) -> u64 {
+        u64::from(self.0)
+    }
+}
+
 #[derive(Default)]
 struct Interner {
     ids: AHashMap<Arc<str>, IStr>,

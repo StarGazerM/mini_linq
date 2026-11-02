@@ -1,11 +1,13 @@
-//! Constant/parameter windows use ordered hosts or a scan, never a build.
+//! Constant/parameter windows use the recorded native range or ordered read,
+//! or a scan, never a build.
 use crate::{Context, expressions::term_reference};
 use cq_lang_structures::syntax::{self, symbol_name};
 use proc_macro2::TokenStream;
 use quote::quote;
 
 impl Context<'_> {
-    /// Formal rule IF-Range: Leading ordered host windows are direct; other reads scan/filter with no build.
+    /// Formal rule IF-Range: a recorded native `range` read seeks, a native
+    /// `ordered` read cuts a window; other reads scan/filter with no build.
     pub fn host_range(&self, name: &str, select: &syntax::algebra::Select) -> Option<TokenStream> {
         let input = symbol_name(&select.input);
         if !self.analysis.host_read(&input) {
@@ -23,17 +25,16 @@ impl Context<'_> {
         let rows = self.profile_stream(&input, self.host_scan(&input));
         let rows = self.profile_input(name, rows);
         let filtered = quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition)));
-        let access = self.host_access(&input, std::slice::from_ref(&column));
-        if !access.prefix {
+        let access = self.host_access(
+            &input,
+            Some(cq_lang_structures::ReaderRef::Result(name.into())),
+            std::slice::from_ref(&column),
+        );
+        let Some(native) = &access.native else {
             return Some(filtered);
-        }
+        };
         let ty = &self.infos[&input].types[&column];
         let host = &access.value;
-        let fallback_ty = self.fallback_type(
-            &input,
-            cq_lang_structures::ReaderRef::Result(name.into()),
-            &access.key,
-        );
         let bound = |lower: bool| {
             let mut result = quote!(::core::ops::Bound::Unbounded);
             for b in bounds.iter().filter(|b| b.lower == lower) {
@@ -61,15 +62,12 @@ impl Context<'_> {
             }
         });
         let row = self.carrier(&input, |c| self.access(&input, c));
-        let read = quote!({
-            use ::cq_storage::dispatch::RangeRead as _;
-            ::core::iter::Iterator::map(
-                (&&&::cq_storage::dispatch::RangeHost::<_, (&#ty,), _>::new(
-                    #host, move || { let __cq_scan: #fallback_ty = ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(#host), ::core::convert::identity); __cq_scan }
-                )).range(#low, #high),
-                move |(#(#fields,)*)| #row
-            )
-        });
+        let window = if native.read == syntax::HostRead::Range {
+            quote!(::cq_storage::dispatch::range::<_, (&#ty,)>(#host, #low, #high))
+        } else {
+            quote!(::cq_storage::dispatch::window::<_, (&#ty,)>(&#host, #low, #high))
+        };
+        let read = quote!(::core::iter::Iterator::map(#window, move |(#(#fields,)*)| #row));
         let read = self.profile_stream(&input, read);
         let read = self.profile_input(name, read);
         Some(

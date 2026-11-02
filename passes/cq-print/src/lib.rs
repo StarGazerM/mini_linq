@@ -14,8 +14,9 @@
 //! use [`Context::bind_columns`], [`Context::carrier`] and [`Context::forward`].
 //! Legacy `pattern`, `row`, and `borrowed_pattern` names remain equivalent
 //! carrier helpers for external printers; [`Context::heading`] is logical metadata.
-//! Provider tokens record the build protocol: explicit builds use `cq_storage::build!`
-//! for concrete capability dispatch; `Build::Inferred` uses associated builds.
+//! A recorded provider is built by one direct `<Provider as Build<_>>::build`
+//! call (or `Provider::build` for a bare `build inferred` path); the recorded
+//! spelling fixes the provider and its codec.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -169,39 +170,7 @@ pub fn index(i: usize) -> syn::Index {
 pub fn positional_bases(
     analysis: &cq_lang_structures::Analysis,
 ) -> std::collections::BTreeSet<String> {
-    analysis
-        .reads
-        .values()
-        .map(|r| symbol_name(&r.origin.base))
-        .chain(
-            analysis
-                .selections
-                .values()
-                .map(|s| symbol_name(&s.origin.base)),
-        )
-        .chain(
-            analysis
-                .keysets
-                .values()
-                .map(|s| symbol_name(&s.origin.base)),
-        )
-        .chain(
-            analysis
-                .join_filters
-                .keys()
-                .map(|scan| analysis.lineage[scan].base.clone()),
-        )
-        .chain(
-            analysis
-                .repr
-                .values()
-                .filter_map(|repr| match repr {
-                    structures::Repr::Positions { bases, .. } => Some(bases),
-                    structures::Repr::Tuples(_) => None,
-                })
-                .flat_map(|bases| bases.iter().map(|base| symbol_name(&base.base))),
-        )
-        .collect()
+    structures::positional_bases(analysis)
 }
 
 impl<'a> Context<'a> {
@@ -828,18 +797,18 @@ impl<'a> Context<'a> {
                 ::core::iter::Iterator::map(#source, |#pattern| #nested)
             };
             let pairs = self.profile_inserting(&build_name, pairs);
-            // The recorded Build::Inferred fact selects associated construction,
-            // letting Rust infer generics from the pairs; other providers dispatch
-            // capabilities at this concrete site, not by recognizing path spelling.
+            // A bare path lets Rust infer the type's generics from the pairs;
+            // a typed provider is built through its recorded spelling.
+            // The token declares which construction it uses.
             let bare = facts.build == structures::provider::Build::Inferred;
             let routed = parts
                 .as_ref()
                 .and_then(|(_, _, providers, _)| providers.get(&ordinal));
             let build = if let Some(inner) = routed {
                 let inner = &inner.ty;
-                // Each shard selects the same capabilities as a serial build.
-                // Infer the outer provider from that concrete output, while
-                // retaining the recorded routing and parallel build protocol.
+                // Each shard builds the recorded inner provider; the outer
+                // provider is inferred from it, retaining the recorded routing
+                // and parallel build protocol.
                 let (parts, routing, _, borrowed_singleton) =
                     parts.as_ref().expect("checked partition publication");
                 let stored_key = self.stored_key(name, &levels[0]);
@@ -861,7 +830,7 @@ impl<'a> Context<'a> {
                 );
                 let part_build = quote!({
                     let __cq_build_source = #part_rows;
-                    ::cq_storage::build!(#inner, __cq_build_source)
+                    <#inner as ::cq_storage::Build<_>>::build(__cq_build_source)
                 });
                 let router = quote!(|__cq_key: &(#(#key_types,)*), __cq_count| {
                     ::cq_storage::sharded::route_index(&(#(&__cq_key.#fields,)*), __cq_count)
@@ -889,7 +858,7 @@ impl<'a> Context<'a> {
                                 ::cq_storage::sharded::Sharded::<_, _>::from_parts_with_router(
                                     ::std::vec![{
                                         let __cq_build_source = #singleton_rows;
-                                        ::cq_storage::build!(#inner, __cq_build_source)
+                                        <#inner as ::cq_storage::Build<_>>::build(__cq_build_source)
                                     }],
                                     __cq_router,
                                 ),
@@ -911,11 +880,9 @@ impl<'a> Context<'a> {
             } else if bare {
                 quote!({ use ::cq_storage::Build as _; #ty::build(#pairs) })
             } else {
-                // Keep generated iterator captures visible to ownership rewriting;
-                // macro token bodies are deliberately opaque to its Rust AST walk.
                 quote!({
                     let __cq_build_source = #pairs;
-                    ::cq_storage::build!(#ty, __cq_build_source)
+                    <#ty as ::cq_storage::Build<_>>::build(__cq_build_source)
                 })
             };
             let build = self.profile_build(&build_name, build);
@@ -974,77 +941,30 @@ impl<'a> Context<'a> {
                 } else {
                     quote!({
                         let __cq_build_source = #pairs;
-                        ::cq_storage::build!(#ty, __cq_build_source)
+                        <#ty as ::cq_storage::Build<_>>::build(__cq_build_source)
                     })
                 };
                 let value = self.profile_build(&filter_name, value);
-                // Formal rule IF-JoinFilterAbandon: Construct no filter from a build keeping more than 35% of its source occurrence.
-                let population = match self.analysis.lineage.get(name) {
-                    Some(origin) if positional_bases(self.analysis).contains(&origin.base) => {
-                        let host = Self::positional_host(&origin.base);
-                        let independent = self
-                            .analysis
-                            .reads
-                            .values()
-                            .any(|read| symbol_name(&read.origin.base) == origin.base)
-                            || self.analysis.selections.values().any(|selection| {
-                                symbol_name(&selection.origin.base) == origin.base
-                            })
-                            || self
-                                .analysis
-                                .keysets
-                                .values()
-                                .any(|keys| symbol_name(&keys.origin.base) == origin.base)
-                            || self.analysis.repr.values().any(|repr| {
-                                matches!(repr, structures::Repr::Positions { bases, .. }
-                                if bases.iter().any(|base| symbol_name(&base.base) == origin.base))
-                            });
-                        if independent {
-                            quote!(::core::option::Option::Some(::cq_storage::PositionalRows::len(#host)))
-                        } else {
-                            // A disabled supplementary filter must not make an
-                            // otherwise unknown build population newly known.
-                            let policies = self
-                                .analysis
-                                .join_filters
-                                .iter()
-                                .filter(|(scan, _)| {
-                                    self.analysis.lineage[*scan].base == origin.base
-                                })
-                                .flat_map(|(_, filters)| filters)
-                                .map(|filter| {
-                                    let build = symbol_name(&filter.build);
-                                    let key = symbol_name(
-                                        filter.key.columns.first().expect("checked key"),
-                                    );
-                                    let ty = &self.infos[&build].types[&key];
-                                    quote!((&&::cq_storage::JoinFilterKey::<#ty>::new()).eligible())
-                                });
-                            quote!({
-                                use ::cq_storage::JoinFilterEligibility as _;
-                                if false #(|| #policies)* {
-                                    ::core::option::Option::Some(::cq_storage::PositionalRows::len(#host))
-                                } else {
-                                    ::core::option::Option::None
-                                }
-                            })
-                        }
-                    }
-                    _ => quote!(::core::option::Option::None),
-                };
                 statements.push(
                     syn::parse_quote!(::cq_storage::provider_contract::require_keys(#structure);),
                 );
                 let key_ty = &self.infos[name].types[&key];
+                // Formal rule IF-JoinFilterAbandon: the recorded abandon policy
+                // (Structures `abandon P of B`) is carried out, never derived.
+                let filter_value = match &filter.abandon {
+                    Some(abandon) => {
+                        let host = Self::positional_host(&symbol_name(&abandon.base));
+                        let percent = &abandon.percent;
+                        quote!(::cq_storage::selective_build(
+                            ::cq_storage::Keys::key_count(#structure),
+                            ::cq_storage::PositionalRows::len(#host),
+                            #percent,
+                        ).then(|| #value))
+                    }
+                    None => quote!(::core::option::Option::Some(#value)),
+                };
                 statements.push(syn::parse_quote! {
-                    let #id = {
-                        use ::cq_storage::JoinFilterEligibility as _;
-                        let __cq_filter_key = ::cq_storage::JoinFilterKey::<#key_ty>::new();
-                        ((&&__cq_filter_key).eligible()
-                            && ::cq_storage::selective_build(
-                                ::cq_storage::Keys::key_count(#structure), #population
-                            )).then(|| #value)
-                    };
+                    let #id = #filter_value;
                 });
                 statements.push(syn::parse_quote!(if let ::core::option::Option::Some(__cq_filter) = &#id { ::cq_storage::require::conservative::<#key_ty, _>(__cq_filter); }));
                 statements.push(
@@ -1126,7 +1046,7 @@ impl<'a> Context<'a> {
                 &build_name,
                 quote!({
                     let __cq_build_source = #pairs;
-                    ::cq_storage::build!(#ty, __cq_build_source)
+                    <#ty as ::cq_storage::Build<_>>::build(__cq_build_source)
                 }),
             );
             statements.push(syn::parse_quote!(let #id = &#build;));

@@ -86,7 +86,7 @@ fn join() {
             r = let rename R@1 {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             return j as answer(a,b);
-        } structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; } r = @sorted_run as ::cq_storage::SortedRun<_, _> [a]; }
+        } structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; } r = @sorted_run as ::cq_storage::SortedRun<_, _> [a]; }
         sequence {
             r = store rows r;
             input = store rows l;
@@ -115,7 +115,7 @@ fn chain() {
             j = pipe probe first [a] l,r;
             k = let canon probe first [b] j,s;
             return k as answer(a,b,c);
-        } structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; }
+        } structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; }
             r = @sorted_run as ::cq_storage::SortedRun<_, _> [a];
             s = @sorted_run as ::cq_storage::SortedRun<_, _> [b];
         }

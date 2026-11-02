@@ -6,36 +6,35 @@ use crate::Context;
 use cq_lang_structures::syntax::{self, symbol_name};
 
 impl Context<'_> {
-    /// Emit a host point read. Native leading-prefix capability dispatches to
-    /// lookup; unsupported layouts/types scan and filter. Non-host inputs return
-    /// `None` so the printer can consume their stream at its chain position.
+    /// Emit a host point read: the recorded native point read on the host's
+    /// declared key (STR-NativeHost), else a scan and filter. Non-host inputs
+    /// return `None` so the printer can consume their stream at its chain position.
     pub fn host_point(&self, name: &str, select: &syntax::algebra::Select) -> Option<TokenStream> {
         let input_name = symbol_name(&select.input);
         if !self.analysis.host_read(&input_name) {
             return None;
         }
-        let keys = select.condition.constant_keys();
         let condition = self.relational_condition(&select.condition);
         let columns = crate::columns_used(&select.condition)
             .into_iter()
             .collect::<Vec<_>>();
         let pattern = self.bind_columns(&input_name, &columns, true);
-        let rows = self.profile_stream(&input_name, self.host_scan(&input_name));
-        let rows = self.profile_input(name, rows);
-        let filtered = quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition)));
-        let Some(keys) = keys else {
-            return Some(filtered);
+        let native = select.condition.constant_keys().and_then(|keys| {
+            let access = self.host_access(
+                &input_name,
+                Some(cq_lang_structures::ReaderRef::Result(name.into())),
+                &keys.keys().cloned().collect::<Vec<_>>(),
+            );
+            access.native.is_some().then_some((keys, access))
+        });
+        let Some((keys, access)) = native else {
+            let rows = self.profile_stream(&input_name, self.host_scan(&input_name));
+            let rows = self.profile_input(name, rows);
+            return Some(
+                quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition))),
+            );
         };
-        let access = self.host_access(&input_name, &keys.keys().cloned().collect::<Vec<_>>());
-        if !access.prefix {
-            return Some(filtered);
-        }
         let host = &access.value;
-        let fallback_ty = self.fallback_type(
-            &input_name,
-            cq_lang_structures::ReaderRef::Result(name.into()),
-            &access.key,
-        );
         let types = access.key.iter().map(|c| &self.infos[&input_name].types[c]);
         // IF-Parameter: literal keys keep their typed constant; a key with a
         // closed operand borrows captured references, owned once per read.
@@ -47,10 +46,10 @@ impl Context<'_> {
             syntax::constraint::Term::Literal(value) if !closed => quote!(#value),
             value => value.reference(&self.parameters),
         });
-        let (dispatch, method) = if closed {
-            (quote!(BorrowedPointRead), quote!(borrowed_point))
+        let key = if closed {
+            quote!(::cq_storage::rows::OwnKey::own_key(&(#(#values,)*)))
         } else {
-            (quote!(PointRead), quote!(point))
+            quote!((#(#values,)*))
         };
         let fields = access.key.iter().chain(&access.payload).map(|c| {
             if self.carried(&input_name).contains(c) {
@@ -61,12 +60,9 @@ impl Context<'_> {
         });
         let row = self.carrier(&input_name, |c| self.access(&input_name, c));
         let looked_up = quote!({
-            use ::cq_storage::dispatch::#dispatch as _;
-            let __cq_key = (#(#values,)*);
+            let __cq_key: (#(#types,)*) = #key;
             ::core::iter::Iterator::map(
-                (&&::cq_storage::dispatch::PointHost::<_, (#(#types,)*), _, _>::new(
-                    #host, &__cq_key, move || { let __cq_scan: #fallback_ty = ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(#host), ::core::convert::identity); __cq_scan }
-                )).#method(&__cq_key),
+                ::cq_storage::dispatch::point(#host, &__cq_key),
                 move |(#(#fields,)*)| #row
             )
         });

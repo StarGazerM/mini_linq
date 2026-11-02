@@ -431,7 +431,7 @@ impl<'a> Printer<'a> {
         }
         let rows = match &definition.operator {
             Operator::Union(union) => self.union(name, union),
-            Operator::Anti(_, keyed) => self.membership(keyed, true),
+            Operator::Anti(_, keyed) => self.membership(name, keyed, true),
             Operator::Unit(_) => Ok(quote!(::core::iter::once(()))),
             Operator::Group(group) => self.group(name, group),
             Operator::Rename(_) => Ok(self.host_scan(name)),
@@ -572,7 +572,7 @@ impl<'a> Printer<'a> {
                 })
             }
             Operator::Probe(_, keyed) => self.probe(name, keyed),
-            Operator::Semi(_, keyed) => self.semi(keyed),
+            Operator::Semi(_, keyed) => self.semi(name, keyed),
             Operator::Merge(_, keyed) => self.merge(name, &definition.name, keyed),
         }?;
         let input = match &definition.operator {
@@ -603,7 +603,7 @@ impl<'a> Printer<'a> {
         let mut outer = self.scan(&keyed.left)?;
         let left = symbol_name(&keyed.left);
         let right = symbol_name(&keyed.right);
-        let access = self.keyed(&keyed.right, &columns)?;
+        let access = self.keyed(name, &keyed.right, &columns)?;
         let witness = self.forcing_witness(name, &right, &columns);
         let expand = self.analysis.expands.contains(name);
         let (lookup, payload, host): (TokenStream, Vec<String>, bool) = match &access {
@@ -802,7 +802,7 @@ impl<'a> Printer<'a> {
         let right = symbol_name(&keyed.right);
         let columns = sorted(&keyed.columns);
         let input = self.scan(&keyed.left)?;
-        let lookup = match self.keyed(&keyed.right, &columns)? {
+        let lookup = match self.keyed(name, &keyed.right, &columns)? {
             Access::Built(structure) => {
                 if self.levels_of(&right, &structure).len() != 1 {
                     return error(
@@ -853,10 +853,15 @@ impl<'a> Printer<'a> {
     }
 
     /// Keep the rows whose key the right side contains.
-    pub(super) fn semi(&mut self, keyed: &physical::Keyed) -> syn::Result<TokenStream> {
-        self.membership(keyed, false)
+    pub(super) fn semi(&mut self, name: &str, keyed: &physical::Keyed) -> syn::Result<TokenStream> {
+        self.membership(name, keyed, false)
     }
-    fn membership(&mut self, keyed: &physical::Keyed, negative: bool) -> syn::Result<TokenStream> {
+    fn membership(
+        &mut self,
+        name: &str,
+        keyed: &physical::Keyed,
+        negative: bool,
+    ) -> syn::Result<TokenStream> {
         let columns = sorted(&keyed.columns);
         let input = self.scan(&keyed.left)?;
         let left = symbol_name(&keyed.left);
@@ -866,7 +871,7 @@ impl<'a> Printer<'a> {
         {
             test
         } else {
-            match self.keyed(&keyed.right, &columns)? {
+            match self.keyed(name, &keyed.right, &columns)? {
                 Access::Host(access) => self.host_lookup(&left, &access, true, negative),
                 Access::Built(structure) => {
                     let levels = self.levels_of(&symbol_name(&keyed.right), &structure);

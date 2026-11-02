@@ -356,11 +356,14 @@ fn declare(program: &mut Program, name: &str, protocol: Option<round::storage::L
             round::storage::provider::Admission::None,
             false,
             round::storage::provider::TaskHasher::Fx,
+            &[],
+            &[],
         ),
     );
 }
 
-/// Replace a layout's provider records in Storage and its Round copy alike.
+/// Replace a layout's provider records in Storage and its Round copy alike,
+/// with the hole inputs bound to it declaring the new token's host reads.
 fn set_layout(
     program: &mut Program,
     delta: bool,
@@ -385,6 +388,23 @@ fn set_layout(
     context.provider = provider;
     context.hasher = hasher;
     context.protocol = protocol;
+    let (name, key) = (context.name.clone(), context.key);
+    let token = round::storage::provider::lookup(&program.storage.tokens, &context.provider.token)
+        .unwrap()
+        .clone();
+    for hole in &mut program.holes {
+        for declaration in hole.cq.declarations.iter_mut().filter(|d| d.name == name) {
+            let key: Vec<_> = declaration
+                .columns
+                .iter()
+                .take(key)
+                .map(|c| c.name.clone())
+                .collect();
+            declaration.hosts = round::storage::provider::host_decl(&token, &key, false)
+                .into_iter()
+                .collect();
+        }
+    }
 }
 
 #[test]

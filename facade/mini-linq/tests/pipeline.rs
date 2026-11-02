@@ -657,7 +657,7 @@ fn named_sequence_decomposition_preserves_authored_advice_and_target_delegation(
                     r = let canon rename rows@0 {x -> x};
                     return r as answer(x);
                 }
-                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
                     r host scan = @host_scan as ::core::iter::Map<_, _> [];
                     r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
                 }
@@ -708,7 +708,7 @@ fn named_sequence_decomposition_preserves_authored_advice_and_target_delegation(
             r = let canon rename rows@0 {x -> x};
             return r as answer(x);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             r host scan = @host_scan as ::core::iter::Map<_, _> [];
             r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
         }

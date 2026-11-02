@@ -114,7 +114,7 @@ fn custom_aliases_and_bare_build_provider_keep_selected_source_contracts() {
             u = pipe semi eager [x] s,t; j = pipe probe first [x] u,t;
             out = let canon project j keep {x,y}; return out as answer(x,y);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; mask = Mask<_> { reads [exact, range, membership], build macro }; keys = Keys<_> { reads [exact, range, membership], build macro }; payload = Payload { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; mask = Mask<_> { reads [exact, range, membership], build typed }; keys = Keys<_> { reads [exact, range, membership], build typed }; payload = Payload { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
             s selection = @mask as Mask<_>  base R lineage{x -> c,z -> d} summary none;

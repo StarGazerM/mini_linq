@@ -9,7 +9,7 @@ fn fold_at_noncollaborative_device_is_rejected() {
             r = let canon rename R@0 {a -> a};
             return r as answer(a);
         }
-        structures { providers { reader = Reader { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             r host scan = @reader as Reader [];
             r rows = @sort as ::cq_storage::dedup::Sort;
             r canon = rows;
@@ -33,7 +33,7 @@ fn rust_below_host_requires_identity_representation() {
             bound = let canon bind r with n:i32 = (opaque(*a));
             return bound as answer(a,n);
         }
-        structures { providers { reader = Reader { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             r host scan = @reader as Reader [];
             bound rows = @sort as ::cq_storage::dedup::Sort;
             bound canon = rows;
@@ -98,7 +98,7 @@ fn scalar_fold_host_code_parses() {
                 r = let canon rename R@0 {a -> a};
                 return r as answer(a);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
                 r host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns [];
                 r rows = @sort as ::cq_storage::dedup::Sort;
                 r canon = rows;
@@ -137,7 +137,7 @@ fn host_choice_of_expanded_rows_preserves_upstream_range_translation() {
             answer = let canon project expanded keep {a,b,c};
             return answer as output(a,b,c);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
             r host scan = @device_columns input { keys 0; columns [u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
             p host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
             q host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];

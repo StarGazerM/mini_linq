@@ -5,7 +5,7 @@ use quote::{ToTokens, quote};
 fn custom_payload() -> ir::Declaration {
     syn::parse_quote!(
         custom_payload = CustomPayload<_, _> {
-            reads [exact, range, membership], supports [retain, expand, keys], build macro
+            reads [exact, range, membership], supports [retain, expand, keys], build typed
         };
     )
 }
@@ -21,7 +21,7 @@ fn triangle_source() -> ir::Program {
         candidate = pipe probe smallest [b] pre_s,r;
         checked = let canon semi eager [a,c] candidate,s;
         return checked as answer(a,b,c);
-    } structures { providers { custom_directory = CustomDirectory { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { custom_directory = CustomDirectory { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         r = @custom_directory as CustomDirectory [b][c] supports [retain, expand];
         s = @custom_directory as CustomDirectory [a][c] supports [retain, expand];
         l host scan = @host_scan as ::core::iter::Map<_, _> [];
@@ -90,7 +90,7 @@ fn declared_host_lookup_retains_exact_snapshot_ranges() {
         s = pipe semi eager [x] l,r;
         p = let canon probe first [x] s,r;
         return p as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; snapshot = Snapshot<0> { reads [exact, range, membership], supports [retain, expand, keys], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; snapshot = Snapshot<0> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host result(s) = @snapshot as Snapshot<0> [x] supports [retain];
@@ -266,7 +266,7 @@ fn a_probe_before_the_semi_does_not_share() {
     assert_eq!(built.token, "sorted_run");
     assert_eq!(
         built.ty,
-        syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense>)
+        syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::I64Codec>)
     );
     assert_eq!(retain_lookups(&source, quote!()).unwrap(), source);
 }

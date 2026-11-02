@@ -187,7 +187,7 @@ pub fn custom_indexes(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| {
         let mut target = source.clone();
         let declarations: cq_lang_structures::Providers = syn::parse_quote!(providers {
-            sorted_index = SortedIndex<_, _> { reads [exact, membership], build macro };
+            sorted_index = SortedIndex<_, _> { reads [exact, membership], build typed };
         });
         let provider = declarations.declarations[0].instance();
         for entry in &mut target.structures.entries {

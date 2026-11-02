@@ -14,7 +14,7 @@ macro_rules! source {
                 r = let canon rename R@0 {a -> a};
                 return r as answer(a);
             }
-            structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
+            structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
             sequence { $($body)* }
         }
     };
@@ -59,7 +59,7 @@ fn authored_grade_output_and_tile_precede_facade_planning() {
             r = let canon rename R@0 {a -> a};
             return r as answer(a);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
         sequence {
             input = store rows r;
             result = store tile 7 items 3 input;

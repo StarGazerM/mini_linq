@@ -100,7 +100,8 @@ pub fn trace_publication(input: proc_macro::TokenStream) -> proc_macro::TokenStr
                 true
             };
             let mut target = program.clone();
-            // Traced maps are authored verbatim tokens with the grouped-map protocol.
+            // Traced maps are authored verbatim tokens with the grouped-map
+            // protocol; their `HashMap<K, Vec<V>, _>` answers the grouped reads.
             let traced = |name: &str| {
                 storage::provider::declared(
                     name,
@@ -109,6 +110,12 @@ pub fn trace_publication(input: proc_macro::TokenStream) -> proc_macro::TokenStr
                     storage::provider::Admission::None,
                     false,
                     storage::provider::TaskHasher::Fx,
+                    &[
+                        storage::provider::HostRead::Exact,
+                        storage::provider::HostRead::Membership,
+                        storage::provider::HostRead::Candidates,
+                    ],
+                    &[],
                 )
             };
             storage::provider::declare(&mut target.tokens, traced("traced_map"));
@@ -157,6 +164,8 @@ pub fn trace_publication(input: proc_macro::TokenStream) -> proc_macro::TokenStr
                     storage::provider::Admission::None,
                     false,
                     storage::provider::TaskHasher::Fx,
+                    &[storage::provider::HostRead::Membership],
+                    &[],
                 );
                 let map = traced("alias_map");
                 for layout in target.layouts.iter_mut().chain(&mut target.delta_layouts) {

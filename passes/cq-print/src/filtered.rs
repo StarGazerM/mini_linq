@@ -63,14 +63,24 @@ impl Context<'_> {
         columns: &[String],
     ) -> Option<TokenStream> {
         let filtered = self.analysis.filtered.get(right)?;
-        let tests: Vec<_> = filtered.constants.iter().filter_map(|binding| {
-            let column = symbol_name(&binding.column);
-            if !columns.contains(&column) { return None; }
-            let value = self.access(left, &column);
-            let value = if self.infos[left].computed.contains(&column) { quote!(&#value) } else { quote!(#value) };
-            let constant = expressions::term_reference(&binding.value, &self.parameters);
-            Some(quote!(::cq_storage::relational_eq(#value, #constant)))
-        }).collect();
+        let tests: Vec<_> = filtered
+            .constants
+            .iter()
+            .filter_map(|binding| {
+                let column = symbol_name(&binding.column);
+                if !columns.contains(&column) {
+                    return None;
+                }
+                let value = self.access(left, &column);
+                let value = if self.infos[left].computed.contains(&column) {
+                    quote!(&#value)
+                } else {
+                    quote!(#value)
+                };
+                let constant = expressions::term_reference(&binding.value, &self.parameters);
+                Some(quote!(::cq_storage::relational_eq(#value, #constant)))
+            })
+            .collect();
         (!tests.is_empty()).then(|| quote!(true #(&& #tests)*))
     }
 }

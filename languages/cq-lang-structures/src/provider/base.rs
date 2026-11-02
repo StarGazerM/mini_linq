@@ -8,59 +8,62 @@ use crate::{Declaration, Provider, Providers};
 pub fn declarations() -> Vec<Declaration> {
     let providers: Providers = syn::parse_quote!(providers {
         hash_index = ::cq_storage::HashIndex<'_, _, _> {
-            reads [exact, membership], supports [keys], build macro, join_filter
+            reads [exact, membership], supports [keys], build typed, join_filter
         };
-        trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build macro, nested 2 };
+        trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build typed, nested 2 };
         sorted_run = ::cq_storage::SortedRun<_, _> {
-            reads [exact, range, membership], supports [retain, expand, keys], build macro,
+            reads [exact, range, membership], supports [retain, expand, keys], build typed,
             join_filter, shared
         };
         radix_run = ::cq_storage::RadixRun<_, _> {
-            reads [exact, range, membership], supports [retain, expand, keys], build macro, shared
+            reads [exact, range, membership], supports [retain, expand, keys], build typed, shared
         };
         hash_set = ::cq_storage::HashSet<_> {
-            reads [membership], build macro, accounting keys, shared
+            reads [membership], build typed, accounting keys, shared
         };
         std_hash_set = ::std::collections::HashSet<_> {
-            reads [membership], build macro, accounting keys, shared
+            reads [membership], build typed, accounting keys, shared
         };
         btree_set = ::std::collections::BTreeSet<_> {
-            reads [membership, ordered], build macro, shared
+            reads [membership, ordered], build typed, shared
         };
         hash_map_grouped = ::std::collections::HashMap<_, ::std::vec::Vec<_>> {
-            reads [exact, membership], supports [keys], build macro, shared
+            reads [exact, membership], supports [keys], build typed, shared
         };
         btree_map_grouped = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> {
-            reads [exact, membership, ordered], supports [keys], build macro, shared
+            reads [exact, membership, ordered], supports [keys], build typed, shared
         };
         grouped_answers = ::cq_storage::GroupedAnswers<_, _> {
-            reads [exact, membership], build macro, shared
+            reads [exact, membership], build typed, shared
         };
         single_group = ::cq_storage::SingleGroup<_, _> {
-            reads [exact, membership], build macro, shared
+            reads [exact, membership], build typed, shared
         };
-        keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build macro };
+        keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build typed };
         adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> {
-            reads [membership], build macro, shared
+            reads [membership], build typed, shared
         };
         adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> {
-            reads [membership], build macro, shared
+            reads [membership], build typed, shared
+        };
+        dense_membership = ::cq_storage::DenseMembership<_, _> {
+            reads [membership], build typed, shared
         };
         sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
         packed = ::cq_storage::dedup::Packed { reads [distinct], build inferred, shared };
         exists = ::cq_storage::Exists { reads [distinct], build inferred, shared };
         sharded_index = ::cq_storage::sharded::Index<_, _> {
-            reads [exact, membership], supports [keys], build macro, join_filter, shared
+            reads [exact, membership], supports [keys], build typed, join_filter, shared
         };
         sharded = ::cq_storage::sharded::Sharded<_> {
-            reads [], build macro, routed 0, shared
+            reads [], build typed, routed 0, shared
         };
-        vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows };
-        host_scan = ::core::iter::Map<_, _> { reads [], build macro };
+        vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
+        host_scan = ::core::iter::Map<_, _> { reads [], build typed };
         group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> {
-            reads [], build macro
+            reads [], build typed
         };
-        selection = ::cq_storage::Selection<_> { reads [], build macro };
+        selection = ::cq_storage::Selection<_> { reads [], build typed };
     });
     providers.declarations
 }

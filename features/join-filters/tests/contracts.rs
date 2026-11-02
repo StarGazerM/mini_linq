@@ -188,7 +188,7 @@ fn routed_filter_eligibility_uses_declared_support_not_type_names() {
         provider_alias = ProviderAlias { reads [exact, membership], supports [keys], build inferred };
         membership_only = MembershipOnly { reads [membership], supports [keys], build inferred };
         nested_router = ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>> {
-            reads [exact, membership], supports [keys], build macro
+            reads [exact, membership], supports [keys], build typed
         };
     });
     for provider in [

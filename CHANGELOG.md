@@ -64,6 +64,41 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   identity after erasing added facts/module hashes. All 46 expanded-Rust targets
   match `c395fe83`; 29 require fresh CPU verification for the conservative
   `cq-sequence-tasks` runtime fingerprint change (catalog initialization only).
+- No fallback tiers (contract 7). Autoref dispatch tiers are deleted
+  (`Host`, `BorrowedHost`, `PointHost`, `RangeHost`, `build!`, `AutoDense`,
+  `BuildTarget`/`BuildProvider`, `JoinFilterKey` eligibility); every decision
+  is a recorded, checked fact printed as one direct call, and rustc reports
+  mismatches. Inputs declare keyed reads with `relation R(..) [= (e)] host
+  [k..] [borrowed] reads [exact|membership|candidates|range|ordered]
+  [supports [retain|expand]]` (IF-HostDecl); undeclared hosts are row
+  sources read through recorded fallbacks. Structures records `R native
+  <reader> = <read> [key]` in host declaration order (SEL-/STR-NativeHost),
+  Sequence binding accepts it (BE-NativeBind), and the printer emits one
+  `dispatch::*` call with a `require::native_*` guard naming the missing
+  trait. Providers build through `<T as Build<_>>::build` (`build typed`
+  replaces `build macro`); key sets and sorted runs spell `I64Codec`;
+  one-column membership records `dense_membership` (requires `OrderKey`),
+  wider keys `adaptive_membership`. Join filters (selection and the
+  `join_filter` advice) record `dense_membership` and `abandon 35 of <base>`
+  (SEL-JoinFilterAbandon). `OrderKey` gains `i8`, `i16`, `isize`, `u8`,
+  `u16`, `usize`, `char` and `bool`. Tests declare the hosts they read
+  natively; a compile-fail test checks rustc names `IndexRead`/`ExactMembership`
+  for an unsupported declared capability or key type. Ordered-read rejection
+  fixtures declare their native host contracts explicitly; undeclared maps may
+  legitimately build an ordered index. Literal native reads have no string
+  special case: the declared map fixture uses interned integer codes.
+
+- Datalog provider tokens declare CQ host reads (contract 7, no fallback
+  tiers). Storage `Token` gains `reads {[exact | membership | candidates |
+  range | ordered]}` and `supports {[retain | expand]}` (WF-DL-Storage checks
+  each listed once, supports only with `exact`). `hash_set`: membership;
+  `hash_map`, `sharded_layout`, `run_layout`: exact, membership, candidates;
+  `rows_vec` and device tokens: none; no base token declares supports (their
+  cursors are not `Copy`). Fork and Round correspondence give every layout
+  and key-set hole input one `host [leading key columns] reads [..]`
+  declaration from its token (none for key-zero layouts, deltas and scans);
+  a key set with projected columns collected by a non-batch key hole stores
+  borrowed columns and declares `borrowed reads [membership]`.
 
 - Datalog provider identity (contract 7, C7Provider C2). Storage/Round
   providers are recorded `@token as Type` instances: `Layout.provider` plus

@@ -54,7 +54,7 @@ fn full_row_positive_probes_record_membership_without_a_filtered_source() {
             .unwrap();
         assert_eq!(
             provider,
-            syn::parse_quote!(@adaptive_membership as ::cq_storage::AdaptiveMembership<_, 16777216>)
+            syn::parse_quote!(@dense_membership as ::cq_storage::DenseMembership<_, 16777216>)
         );
         check(&source, &target).unwrap();
     }
@@ -71,7 +71,7 @@ fn raw_membership_proof_rejects_unbound_payload_columns() {
             result = let canon project joined keep {x,y};
             return result as answer(x,y);
         }
-        structures { providers { adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> { reads [membership], build macro, shared }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> { reads [membership], build typed, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             r = @adaptive_membership as ::cq_storage::AdaptiveMembership<_, 64> [x] membership;
             r rows = @vec as ::std::vec::Vec<_>;
             l host scan = @host_scan as ::core::iter::Map<_, _> [];
@@ -290,7 +290,7 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
     );
     assert_eq!(
         facts.built["selected"][0].1,
-        syn::parse_quote!(@adaptive_membership as ::cq_storage::AdaptiveMembership<_, 16777216>)
+        syn::parse_quote!(@dense_membership as ::cq_storage::DenseMembership<_, 16777216>)
     );
     let mut changed = target.clone();
     let entry = changed
@@ -426,7 +426,7 @@ fn reconstructed_key_constants_do_not_disable_singleton_membership() {
     );
     assert_eq!(
         facts.built["selected"][0].1,
-        syn::parse_quote!(@adaptive_membership as ::cq_storage::AdaptiveMembership<_, 16777216>)
+        syn::parse_quote!(@dense_membership as ::cq_storage::DenseMembership<_, 16777216>)
     );
     check(&source, &target).unwrap();
 }
@@ -620,7 +620,7 @@ fn ordered_read_provider_capabilities_are_rustc_obligations() {
     let target = compile(&p).unwrap();
     assert_eq!(
         built_entries(&target),
-        syn::parse_quote!(structures { providers { btree_map_grouped = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> { reads [exact, membership, ordered], supports [keys], build macro, shared }; } r = @btree_map_grouped as ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x] supports [keys]; })
+        syn::parse_quote!(structures { providers { btree_map_grouped = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> { reads [exact, membership, ordered], supports [keys], build typed, shared }; } r = @btree_map_grouped as ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x] supports [keys]; })
     );
     let mut q = target.clone();
     q.structures.entries[0] =
@@ -777,8 +777,8 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
             built_entries(&target),
             syn::parse_str::<structures::Structures>(&format!(
                 "structures {{ providers {{
-                    trie = ::cq_storage::Trie<'_, _, _> {{ reads [exact, membership], build macro, nested 2 }};
-                    hash_set = ::cq_storage::HashSet<_> {{ reads [membership], build macro, accounting keys, shared }};
+                    trie = ::cq_storage::Trie<'_, _, _> {{ reads [exact, membership], build typed, nested 2 }};
+                    hash_set = ::cq_storage::HashSet<_> {{ reads [membership], build typed, accounting keys, shared }};
                 }}
                 {retained} = @trie(@hash_set as ::cq_storage::HashSet<_>)
                     as ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [{prefix}][c]; }}"
@@ -912,7 +912,7 @@ fn nonemptiness_and_keyed_membership_share_a_trie_with_an_empty_first_level() {
     let target = compile(&p).unwrap();
     assert_eq!(
         built_entries(&target),
-        syn::parse_quote!(structures { providers { trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build macro, nested 2 }; hash_set = ::cq_storage::HashSet<_> { reads [membership], build macro, accounting keys, shared }; }
+        syn::parse_quote!(structures { providers { trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build typed, nested 2 }; hash_set = ::cq_storage::HashSet<_> { reads [membership], build typed, accounting keys, shared }; }
             r = @trie(@hash_set as ::cq_storage::HashSet<_>) as ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [][x];
         })
     );

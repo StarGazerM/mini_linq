@@ -83,19 +83,28 @@ fn fuzz_sql_adapter_routes_opaque_rust_and_preserves_sorted_distinct_results() {
 #[test]
 fn cli_preserves_exact_csv_values_and_session_state() {
     let connection = duckdb::Connection::open_in_memory().unwrap();
-    connection.execute_batch("CREATE TABLE t AS SELECT 42 AS n; SET threads=1").unwrap();
+    connection
+        .execute_batch("CREATE TABLE t AS SELECT 42 AS n; SET threads=1")
+        .unwrap();
     assert_eq!(connection.scalar("SELECT n FROM t").unwrap(), "42");
     assert_eq!(
         connection.query("SELECT 'a,\"b' || chr(10) || 'c', ''::VARCHAR, 123456789012345678.90::DECIMAL(20,2), 18446744073709551615::UBIGINT").unwrap(),
         vec![vec!["a,\"b\nc".to_owned(), "".to_owned(), "123456789012345678.90".to_owned(), "18446744073709551615".to_owned()]]
     );
-    assert!(connection.query("SELECT n FROM t WHERE false").unwrap().is_empty());
+    assert!(
+        connection
+            .query("SELECT n FROM t WHERE false")
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(connection.scalar("SELECT NULL::INTEGER").unwrap(), "\\N");
 }
 
 #[test]
 fn cli_reports_sql_errors_instead_of_accepting_partial_output() {
     let connection = duckdb::Connection::open_in_memory().unwrap();
-    let error = connection.execute_batch("SELECT 1; SELECT * FROM missing_cq_table").unwrap_err();
+    let error = connection
+        .execute_batch("SELECT 1; SELECT * FROM missing_cq_table")
+        .unwrap_err();
     assert!(error.to_string().contains("missing_cq_table"), "{error}");
 }

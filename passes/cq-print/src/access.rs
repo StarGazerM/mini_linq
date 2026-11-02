@@ -1,14 +1,15 @@
-//! Reads of a value: hosts through declaration layout and type dispatch, built
-//! structures through their key, merge sides through their order.
+//! Reads of a value: hosts through their recorded native read or fallback,
+//! built structures through their key, merge sides through their order.
+//! Every recorded read prints as exactly one call (IF-Dispatch).
 
 use super::*;
 
 /// A host read through a rename, in the rename's attribute names.
 pub struct HostAccess {
     pub value: Ident,
-    pub prefix: bool,
-    /// Checked declaration slot for a single non-prefix key.
-    pub column: Option<usize>,
+    /// The recorded native read (STR-NativeHost); otherwise the read uses
+    /// its recorded fallback.
+    pub native: Option<structures::Native>,
     pub fallback: Ident,
     /// Checked full-row-key probes observe existence, not witness payloads.
     pub membership: bool,
@@ -18,7 +19,8 @@ pub struct HostAccess {
     pub expand: bool,
     /// Computed prefix keys cannot borrow for the lifetime of host rows.
     pub owned_key: bool,
-    /// Key columns in declaration order for an eligible prefix.
+    /// Key columns: a native read's recorded order, else declaration order
+    /// for a declaration prefix and sorted order otherwise.
     pub key: Vec<String>,
     /// Declared host key types, used when a generator's item type is inferred.
     pub key_types: Vec<syn::Type>,
@@ -65,28 +67,32 @@ impl<'a> Context<'a> {
         &self.fallback_provider(result, reader, columns).ty
     }
 
-    /// The host behind a rename, with its key and payload in the rename's
-    /// attribute names.
-    pub fn host_access(&self, result: &str, columns: &[String]) -> HostAccess {
+    /// The host behind a rename read by `reader` on `columns`, with its key
+    /// and payload in the rename's attribute names and the recorded native
+    /// read, if any.
+    pub fn host_access(
+        &self,
+        result: &str,
+        reader: Option<cq_lang_structures::ReaderRef<String>>,
+        columns: &[String],
+    ) -> HostAccess {
         let host = &self.hosts[&self.physical_analysis.hosts[result]];
         let inverse: BTreeMap<_, _> = self.physical_analysis.renames[result]
             .iter()
             .map(|(t, s)| (s, t))
             .collect();
         let layout: Vec<String> = host.layout.iter().map(|c| inverse[c].clone()).collect();
-        // Formal rule IF-Dispatch: Native reads require a declaration prefix or an explicit single-column slot.
-        let prefix = layout[..columns.len()].iter().all(|c| columns.contains(c));
-        let column = if !prefix && columns.len() == 1 {
-            Some(
-                layout
-                    .iter()
-                    .position(|c| c == &columns[0])
-                    .expect("checked host column"),
-            )
-        } else {
-            None
-        };
-        let key = if prefix {
+        let mut sorted_columns = columns.to_vec();
+        sorted_columns.sort();
+        let native = reader.and_then(|reader| {
+            self.analysis
+                .natives
+                .get(&(result.to_owned(), reader, sorted_columns))
+                .cloned()
+        });
+        let key = if let Some(native) = &native {
+            native.key.clone()
+        } else if layout[..columns.len()].iter().all(|c| columns.contains(c)) {
             layout[..columns.len()].to_vec()
         } else {
             columns.to_vec()
@@ -100,38 +106,41 @@ impl<'a> Context<'a> {
             .iter()
             .map(|column| self.infos[result].types[column].clone())
             .collect();
+        let (retained, expand) = match &native {
+            Some(native) => (
+                native.supports(structures::ProviderCapability::Retain),
+                native.supports(structures::ProviderCapability::Expand),
+            ),
+            None => {
+                let support = |capability| {
+                    self.analysis.fallbacks.keys().any(|(name, reader, key)| {
+                        name == result
+                            && key == columns
+                            && reader.result().is_some_and(|reader| {
+                                self.analysis.provider_support(
+                                    result,
+                                    columns,
+                                    Some(reader),
+                                    capability,
+                                )
+                            })
+                    })
+                };
+                (
+                    support(structures::ProviderCapability::Retain),
+                    support(structures::ProviderCapability::Expand),
+                )
+            }
+        };
         HostAccess {
             value: host.value.clone(),
-            prefix,
             membership: self
                 .analysis
                 .membership
                 .contains(&(result.to_owned(), columns.to_vec())),
-            column,
-            retained: self.analysis.fallbacks.keys().any(|(name, reader, key)| {
-                name == result
-                    && key == columns
-                    && reader.result().is_some_and(|reader| {
-                        self.analysis.provider_support(
-                            result,
-                            columns,
-                            Some(reader),
-                            structures::ProviderCapability::Retain,
-                        )
-                    })
-            }),
-            expand: self.analysis.fallbacks.keys().any(|(name, reader, key)| {
-                name == result
-                    && key == columns
-                    && reader.result().is_some_and(|reader| {
-                        self.analysis.provider_support(
-                            result,
-                            columns,
-                            Some(reader),
-                            structures::ProviderCapability::Expand,
-                        )
-                    })
-            }),
+            native,
+            retained,
+            expand,
             key,
             key_types,
             payload,
@@ -193,35 +202,35 @@ impl<'a> Context<'a> {
                         (symbol_name(&equality.left), literal)
                     })
                     .collect();
-                let prefix = host
-                    .layout
-                    .iter()
-                    .take_while(|column| literals.contains_key(*column))
-                    .count();
-                // Native capability dispatch checks the actual key representation;
-                // differently represented literals fall back to the residual scan.
-                let native_key = source.is_none() && prefix > 0;
-                let rows = if native_key {
-                    let types = &host.types[..prefix];
-                    let values = host.layout[..prefix].iter().map(|column| literals[column]);
-                    quote!({
-                        use ::cq_storage::dispatch::PointRead as _;
-                        let __cq_key = (#(#values,)*);
-                        (&&::cq_storage::dispatch::PointHost::<_, (#(#types,)*), _, _>::new(
-                            #value, &__cq_key,
-                            move || {
-                                let __cq_scan: #ty = ::core::iter::Iterator::map(
-                                    ::cq_storage::rows::Rows::rows(#value),
-                                    ::core::convert::identity
-                                );
-                                __cq_scan
-                            }
-                        )).point(&__cq_key)
-                    })
-                } else {
-                    source
-                        .clone()
-                        .unwrap_or_else(|| quote!(::cq_storage::rows::Rows::rows(#value)))
+                // A recorded native scan reads the leading literal constants by
+                // one point read; the residual filter still tests every literal.
+                let native =
+                    self.analysis
+                        .natives
+                        .iter()
+                        .find_map(|((name, reader, _), native)| {
+                            (name == result
+                                && matches!(reader, cq_lang_structures::ReaderRef::Scan))
+                            .then_some(native)
+                        });
+                let rows = match (native, source.clone()) {
+                    (Some(native), None) => {
+                        let types = native.key.iter().map(|column| {
+                            &host.types[host
+                                .layout
+                                .iter()
+                                .position(|c| c == column)
+                                .expect("checked native scan column")]
+                        });
+                        let values = native.key.iter().map(|column| literals[column]);
+                        quote!({
+                            let __cq_key: (#(#types,)*) = (#(#values,)*);
+                            ::cq_storage::dispatch::point(#value, &__cq_key)
+                        })
+                    }
+                    (_, source) => {
+                        source.unwrap_or_else(|| quote!(::cq_storage::rows::Rows::rows(#value)))
+                    }
                 };
                 return quote! {{
                     let __cq_scan: #ty = ::core::iter::Iterator::map(
@@ -243,7 +252,7 @@ impl<'a> Context<'a> {
             let ids = quote!(::cq_storage::PositionalRows::positions(#host));
             return self.positional_rows(result, ids);
         }
-        let access = self.host_access(result, &[]);
+        let access = self.host_access(result, None, &[]);
         let value = &access.value;
         let row = self.carrier(result, |c| self.access(result, c));
         let payload = access.payload.iter().map(|c| {
@@ -263,27 +272,34 @@ impl<'a> Context<'a> {
         if !self.analysis.host_read(result) {
             return;
         }
-        let mut keys = BTreeMap::new();
-        for (reader, columns) in self
-            .physical_analysis
-            .key_reads
-            .get(result)
-            .into_iter()
-            .flatten()
-        {
-            let probe = matches!(self.physical[reader].operator, Operator::Probe(..));
-            keys.entry(columns.clone())
-                .and_modify(|p| *p |= probe)
-                .or_insert(probe);
-        }
-        if self.intersect {
-            for prefix in self.candidate_reads.get(result).into_iter().flatten() {
-                keys.insert(prefix.clone(), true);
-                keys.entry(self.heading(result).to_vec()).or_insert(false);
+        self.native_guards(result);
+        // One lazy fallback per key that a recorded fallback serves; native
+        // reads (STR-NativeHost) build nothing.
+        let mut keys: BTreeMap<Vec<String>, (bool, &structures::Provider)> = BTreeMap::new();
+        for ((name, reader, columns), provider) in &self.analysis.fallbacks {
+            if name != result {
+                continue;
             }
+            let probe = match reader {
+                cq_lang_structures::ReaderRef::Scan => continue,
+                cq_lang_structures::ReaderRef::Candidates if self.intersect => true,
+                cq_lang_structures::ReaderRef::Membership if self.intersect => false,
+                cq_lang_structures::ReaderRef::Candidates
+                | cq_lang_structures::ReaderRef::Membership => continue,
+                cq_lang_structures::ReaderRef::Result(reader) => {
+                    match &self.physical[reader].operator {
+                        Operator::Merge(..) | Operator::Point(..) | Operator::Range(..) => continue,
+                        Operator::Probe(..) => true,
+                        _ => false,
+                    }
+                }
+            };
+            keys.entry(columns.clone())
+                .and_modify(|(p, _)| *p |= probe)
+                .or_insert((probe, provider));
         }
-        for (columns, probe) in keys {
-            let a = self.host_access(result, &columns);
+        for (columns, (probe, ty)) in keys {
+            let a = self.host_access(result, None, &columns);
             let fallback = a.fallback;
             let rows = self.profile_stream(result, self.host_scan(result));
             let pattern = self.bind_columns(result, self.carried(result), false);
@@ -296,26 +312,6 @@ impl<'a> Context<'a> {
                 }
             });
             let payload = a.payload.iter().map(|c| self.access(result, c));
-            let ty = self
-                .analysis
-                .fallbacks
-                .iter()
-                .find_map(|((n, rd, cs), ty)| {
-                    (n == result
-                        && cs == &columns
-                        && !matches!(rd, cq_lang_structures::ReaderRef::Scan)
-                        && !rd
-                            .result()
-                            .and_then(|name| self.physical.get(name))
-                            .is_some_and(|d| {
-                                matches!(
-                                    d.operator,
-                                    Operator::Merge(..) | Operator::Point(..) | Operator::Range(..)
-                                )
-                            }))
-                    .then_some(ty)
-                })
-                .expect("checked fallback");
             let capture = self.carries_positions(result).then(|| quote!(move));
             let pairs = quote!(::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*), (#(#payload,)*))));
             let ty = ty.ty.clone();
@@ -327,19 +323,8 @@ impl<'a> Context<'a> {
                 vec![result.into()],
             );
             let pairs = self.profile_inserting(&build_name, pairs);
-            let construct = if a.membership {
-                quote!({
-                    let __cq_build_source = #pairs;
-                    ::cq_storage::build!(#ty, __cq_build_source)
-                })
-            } else {
-                quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
-            };
-            let declared_type: syn::Type = if a.membership {
-                syn::parse_quote!(_)
-            } else {
-                ty
-            };
+            let construct = quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs));
+            let declared_type = ty;
             let build = self.profile_build(&build_name, construct);
             let mut guards = Vec::new();
             for ((name, selected, key), selected_provider) in &self.analysis.fallbacks {
@@ -353,9 +338,8 @@ impl<'a> Context<'a> {
                     ));
                 }
             }
-            // Ordinary access traits are checked on the handle actually chosen
-            // by autoref dispatch. Proving them on an unused fallback would
-            // impose Hash, ordering, or payload bounds on a native direct read.
+            // The recorded fallback's declared contracts are proved on it;
+            // native reads carry their own `require::native_*` guards.
             let build = quote!({
                 let __cq_provider = #build;
                 #(#guards)*
@@ -384,23 +368,14 @@ impl<'a> Context<'a> {
             if !merged.insert(columns.clone()) {
                 continue;
             }
-            let access = self.host_access(result, columns);
-            let value = &access.value;
             let selected = cq_lang_structures::ReaderRef::Result(reader.clone());
-            let provider = self.fallback_provider(result, selected.clone(), columns);
-            let native_guards = self.provider_guards(
-                result,
-                std::slice::from_ref(columns),
-                provider,
-                Some(&selected),
-                quote!(#value),
-            );
-            if access.prefix && access.key == *columns {
+            let access = self.host_access(result, Some(selected.clone()), columns);
+            let value = &access.value;
+            if access.native.is_some() {
                 let types = columns.iter().map(|c| &self.infos[result].types[c]);
                 self.statements.push(
                     syn::parse_quote!(::cq_storage::require::ordered_key::<(#(#types,)*),_>(&#value);),
                 );
-                self.statements.extend(native_guards);
             } else {
                 let name = format_ident!("__cq_{}_merge_{}", result, columns.join("_"));
                 let provider = self.fallback_provider(
@@ -438,9 +413,24 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// The value answering a read of `result` keyed on sorted `columns`: a
-    /// structure built on them, else a reusable host read.
-    pub fn keyed(&self, result: &Ident, columns: &[String]) -> syn::Result<Access> {
+    /// The value answering `reader`'s read of `result` keyed on sorted
+    /// `columns`: a structure built on them, else the recorded host read.
+    pub fn keyed(&self, reader: &str, result: &Ident, columns: &[String]) -> syn::Result<Access> {
+        self.keyed_by(
+            cq_lang_structures::ReaderRef::Result(reader.to_owned()),
+            result,
+            columns,
+        )
+    }
+
+    /// [`Self::keyed`] for a host reader role (intersection candidates and
+    /// membership).
+    pub fn keyed_by(
+        &self,
+        reader: cq_lang_structures::ReaderRef<String>,
+        result: &Ident,
+        columns: &[String],
+    ) -> syn::Result<Access> {
         let name = symbol_name(result);
         if let Some(structure) = self.built(&name, columns) {
             return Ok(Access::Built(structure));
@@ -450,7 +440,7 @@ impl<'a> Context<'a> {
             return Ok(Access::Prefix(self.built_ident(&name, levels), prefix));
         }
         if self.analysis.host_read(&name) {
-            return Ok(Access::Host(self.host_access(&name, columns)));
+            return Ok(Access::Host(self.host_access(&name, Some(reader), columns)));
         }
         error(
             result,
@@ -534,44 +524,66 @@ impl<'a> Context<'a> {
             })
     }
 
-    /// A native or fallback handle whose cursor borrows stable query storage,
-    /// not the temporary autoref-dispatch wrapper.
+    /// The recorded native host value: the host itself, or its explicitly
+    /// indexed declaration slot.
+    pub fn native_value(&self, access: &HostAccess) -> TokenStream {
+        let value = &access.value;
+        match access.native.as_ref().and_then(|native| native.slot) {
+            Some(slot) => quote!(::cq_storage::dispatch::ColumnHost::<_, #slot>::new(#value)),
+            None => quote!(#value),
+        }
+    }
+
+    /// The borrowed key of a native read: query columns are borrowed for the
+    /// one call; the runtime owns the key once (`OwnKey`).
+    fn native_key(&self, left: &str, access: &HostAccess) -> TokenStream {
+        if !access.owned_key {
+            return self.host_key(left, access);
+        }
+        let types: Vec<_> = self.host_key_types(left, access).collect();
+        let fields = access.key.iter().zip(&types).map(|(column, ty)| {
+            let value = self.access(left, column);
+            // Pull filters borrow computed fields; push sinks own them.
+            // Borrow fixes one logical reference in either representation.
+            quote!(::core::borrow::Borrow::<#ty>::borrow(&#value))
+        });
+        quote!(&(#(#fields,)*))
+    }
+
+    /// A retained handle whose cursor borrows stable query storage: the
+    /// recorded native read's key-normalizing handle or the shared fallback.
     pub fn host_retained_read(&self, left: &str, access: &HostAccess) -> TokenStream {
-        let value = self.host_dispatch_value(access);
         let fallback = &access.fallback;
         let types: Vec<_> = self.host_key_types(left, access).collect();
-        let receiver = if (access.prefix || access.column.is_some()) && !access.owned_key {
-            quote!(&&::cq_storage::dispatch::BorrowedHost::<_, (#(#types,)*), _, _>::new(#value, #fallback))
-        } else {
-            quote!(&::cq_storage::dispatch::BorrowedHost::<_, (#(#types,)*), _, _>::new(#value, #fallback))
-        };
-        let (dispatch, method, proof) = if access.expand {
-            (
-                quote!(ExpandedRead),
-                quote!(expanded_read),
+        let (read, proof) = match (&access.native, access.expand) {
+            (Some(_), true) => {
+                let value = self.native_value(access);
+                (
+                    quote!(::cq_storage::dispatch::expanded::<_, (#(&#types,)*)>(#value)),
+                    quote!(::cq_storage::provider_contract::require_expand(&__cq_read);),
+                )
+            }
+            (Some(_), false) => {
+                let value = self.native_value(access);
+                (
+                    quote!(::cq_storage::dispatch::retained::<_, (#(&#types,)*)>(#value)),
+                    quote!(::cq_storage::provider_contract::require_retain(&__cq_read);),
+                )
+            }
+            (None, true) => (
+                quote!(#fallback.get()),
                 quote!(::cq_storage::provider_contract::require_expand(&__cq_read);),
-            )
-        } else {
-            (
-                quote!(BorrowedRead),
-                quote!(borrowed_read),
+            ),
+            (None, false) => (
+                quote!(#fallback.get()),
                 quote!(::cq_storage::provider_contract::require_retain(&__cq_read);),
-            )
+            ),
         };
         quote!({
-            use ::cq_storage::dispatch::#dispatch as _;
-            let __cq_read = (#receiver).#method();
+            let __cq_read = #read;
             #proof
             __cq_read
         })
-    }
-
-    fn host_dispatch_value(&self, access: &HostAccess) -> TokenStream {
-        let value = &access.value;
-        match access.column.filter(|_| !access.owned_key) {
-            Some(column) => quote!(::cq_storage::dispatch::ColumnHost::<_, #column>::new(#value)),
-            None => quote!(#value),
-        }
     }
 
     pub fn host_lookup(
@@ -594,63 +606,109 @@ impl<'a> Context<'a> {
             let key = self.host_key(left, access);
             return quote!(::cq_storage::provider_contract::retain(#read, #key));
         }
-        let fallback = &access.fallback;
-        let types = self.host_key_types(left, access);
-        let types: Vec<_> = types.collect();
-        if negative && access.owned_key {
-            let fields = access.key.iter().zip(&types).map(|(column, ty)| {
-                let value = self.access(left, column);
-                // Pull filters borrow computed fields; push sinks own them.
-                // Borrow fixes one logical reference in either representation.
-                quote!(::core::borrow::Borrow::<#ty>::borrow(&#value))
-            });
-            let key = quote!(&(#(#fields,)*));
-            let receiver = if access.prefix {
-                quote!(&&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
+        let membership = contains || access.membership;
+        let test = if access.native.is_some() {
+            let value = self.native_value(access);
+            let key = self.native_key(left, access);
+            if membership && access.native.as_ref().is_some_and(|native| native.borrowed) {
+                quote!(::cq_storage::dispatch::contains_borrowed(#value, #key))
+            } else if membership {
+                quote!(::cq_storage::dispatch::contains(#value, #key))
             } else {
-                quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
-            };
-            return quote!({
-                use ::cq_storage::dispatch::ContainsOwned as _;
-                (#receiver).contains_owned(#key)
-            });
-        }
-        let value = self.host_dispatch_value(access);
-        let native = (access.prefix || access.column.is_some()) && !access.owned_key;
-        let key = self.host_key(left, access);
-        let receiver = if native && negative {
-            quote!(&&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
-        } else if native {
-            quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
-        } else {
-            quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
-        };
-        if contains || access.membership {
-            let test =
-                quote!({ use ::cq_storage::dispatch::Contains as _; (#receiver).contains(#key) });
-            if contains {
-                test
-            } else {
-                quote!(::core::iter::IntoIterator::into_iter((#test).then_some(())))
+                return quote!(::cq_storage::dispatch::seek(#value, #key));
             }
         } else {
-            quote!({ use ::cq_storage::dispatch::Seek as _; (#receiver).seek(#key) })
+            let fallback = &access.fallback;
+            if negative && access.owned_key {
+                // The fallback owns its keys; the probe borrows the query's.
+                let key = self.native_key(left, access);
+                quote!(::cq_storage::ExactMembership::contains(
+                    #fallback.get(),
+                    &::cq_storage::rows::OwnKey::own_key(#key)
+                ))
+            } else if membership {
+                let key = self.host_key(left, access);
+                quote!(::cq_storage::ExactMembership::contains(#fallback.get(), #key))
+            } else {
+                let key = self.host_key(left, access);
+                return quote!(::cq_storage::IndexRead::lookup(#fallback.get(), #key));
+            }
+        };
+        if contains {
+            test
+        } else {
+            quote!(::core::iter::IntoIterator::into_iter((#test).then_some(())))
         }
     }
 
     pub fn host_candidates(&self, left: &str, access: &HostAccess, count: bool) -> TokenStream {
-        let value = &access.value;
         let fallback = &access.fallback;
         let key = self.host_key(left, access);
-        let types = self.host_key_types(left, access);
-        let types: Vec<_> = types.collect();
-        let receiver = if access.prefix && !access.owned_key {
-            quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
-        } else {
-            quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
-        };
-        let method = if count { quote!(count) } else { quote!(keys) };
-        quote!({ use ::cq_storage::dispatch::CandidateRead as _; (#receiver).#method(#key) })
+        match (&access.native, count) {
+            (Some(_), true) => {
+                let value = self.native_value(access);
+                let key = self.native_key(left, access);
+                quote!(::cq_storage::dispatch::candidate_count(#value, #key))
+            }
+            (Some(_), false) => {
+                let value = self.native_value(access);
+                let key = self.native_key(left, access);
+                quote!(::cq_storage::dispatch::candidate_keys(#value, #key))
+            }
+            (None, true) => quote!(::cq_storage::Candidates::count(#fallback.get(), #key)),
+            (None, false) => quote!(::cq_storage::Candidates::keys(#fallback.get(), #key)),
+        }
+    }
+
+    /// One `require::native_*` guard per recorded native read of `result`,
+    /// outside all closures: a host whose type lacks the declared capability
+    /// fails here, naming the trait (IF-HostDecl).
+    pub fn native_guards(&mut self, result: &str) {
+        let natives: Vec<_> = self
+            .analysis
+            .natives
+            .iter()
+            .filter(|((name, reader, _), _)| {
+                name == result && !matches!(reader, cq_lang_structures::ReaderRef::Scan)
+            })
+            .map(|((_, reader, columns), native)| (reader.clone(), columns.clone(), native.clone()))
+            .collect();
+        let mut seen = std::collections::BTreeSet::new();
+        for (reader, columns, native) in natives {
+            let point = matches!(&reader, cq_lang_structures::ReaderRef::Result(name)
+                if matches!(self.physical[name].operator, Operator::Point(..)));
+            if !seen.insert((native.read, native.key.clone(), point)) {
+                continue;
+            }
+            let access = self.host_access(result, Some(reader), &columns);
+            let value = self.native_value(&access);
+            let types = native.key.iter().map(|c| &self.infos[result].types[c]);
+            use structures::syntax::HostRead;
+            let guard: Stmt = match native.read {
+                HostRead::Exact if point => syn::parse_quote!(
+                    ::cq_storage::require::native_point::<(#(#types,)*), _>(&#value);
+                ),
+                HostRead::Exact => syn::parse_quote!(
+                    ::cq_storage::require::native_exact::<(#(#types,)*), _>(&#value);
+                ),
+                HostRead::Membership if native.borrowed => syn::parse_quote!(
+                    ::cq_storage::require::native_membership::<(#(&#types,)*), _>(&#value);
+                ),
+                HostRead::Membership => syn::parse_quote!(
+                    ::cq_storage::require::native_membership::<(#(#types,)*), _>(&#value);
+                ),
+                HostRead::Candidates => syn::parse_quote!(
+                    ::cq_storage::require::native_candidates::<(#(#types,)*), _>(&#value);
+                ),
+                HostRead::Range => syn::parse_quote!(
+                    ::cq_storage::require::native_range::<(#(&#types,)*), _>(&#value);
+                ),
+                HostRead::Ordered => syn::parse_quote!(
+                    ::cq_storage::require::ordered_key::<(#(#types,)*), _>(&#value);
+                ),
+            };
+            self.statements.push(guard);
+        }
     }
 
     /// The cursor merging or ranging over `result` on sorted `columns`; a
@@ -666,8 +724,12 @@ impl<'a> Context<'a> {
             return Ok(Side::Built(structure));
         }
         if self.analysis.host_read(&name) {
-            let access = self.host_access(&name, columns);
-            if !access.prefix || access.key != columns {
+            let access = self.host_access(
+                &name,
+                Some(cq_lang_structures::ReaderRef::Result(symbol_name(reader))),
+                columns,
+            );
+            if access.native.is_none() {
                 return Ok(Side::Built(format_ident!(
                     "__cq_{}_merge_{}",
                     name,

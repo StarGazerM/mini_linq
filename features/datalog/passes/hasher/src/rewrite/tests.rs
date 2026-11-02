@@ -1,6 +1,12 @@
 use super::*;
 use quote::{ToTokens, quote};
 
+const GROUPED: &[provider::HostRead] = &[
+    provider::HostRead::Exact,
+    provider::HostRead::Membership,
+    provider::HostRead::Candidates,
+];
+
 fn fixture() -> storage::Program {
     let source = syn::parse_quote! {
         struct Closure;
@@ -71,6 +77,8 @@ fn verbatim_tokens_stay_opaque() {
         provider::Admission::None,
         true,
         provider::TaskHasher::Fx,
+        GROUPED,
+        &[],
     ));
     let index = source
         .layouts
@@ -96,6 +104,8 @@ fn sharded_tokens_select_hashers_without_changing_key_or_payload() {
         provider::Admission::ShardedHash,
         true,
         provider::TaskHasher::Layout,
+        GROUPED,
+        &[],
     ));
     let canonical = source.providers[2].canonical;
     let layout = &mut source.layouts[canonical];
@@ -313,6 +323,8 @@ fn run_layout_tokens_stay_opaque() {
         provider::Admission::SortedSubtract,
         false,
         provider::TaskHasher::Fx,
+        GROUPED,
+        &[],
     ));
     let canonical = source.providers[2].canonical;
     let layout = &mut source.layouts[canonical];

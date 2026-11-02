@@ -1,6 +1,6 @@
 //! Optional conservative structures, selected explicitly with
 //! `cq_rewrites::retype(providers { bloom_filter = cq_join_filters::BloomFilter<16384>
-//! { reads [membership], build macro }; } rN join_filter => @bloom_filter as
+//! { reads [membership], build typed }; } rN join_filter => @bloom_filter as
 //! cq_join_filters::BloomFilter<16384>)`.
 //! Construction uses the public `Build` protocol. A hit is never an exact
 //! membership answer: the recorded covering probe remains mandatory.

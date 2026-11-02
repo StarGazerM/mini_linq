@@ -1,5 +1,6 @@
 //! Deterministic direct-vs-built evidence: scans initialize fallback indexes,
-//! while native lookup/cursor calls identify direct reads.
+//! while native lookup/cursor calls identify direct reads. Only declared host
+//! reads (IF-HostDecl `host [..] reads [..]`) are answered natively.
 use cq_storage::rows::Rows;
 use cq_storage::{ExactMembership, IndexRead, OrderedRead};
 use std::cell::Cell;
@@ -73,11 +74,28 @@ impl<'h> OrderedRead for &'h Observed<BTreeMap<(i32,), Vec<(i32,)>>> {
         (&self.value).ordered()
     }
 }
+impl<'h> cq_storage::dispatch::SeekRangeLookup<(&'h i32,)>
+    for &'h Observed<BTreeMap<(i32,), Vec<(i32,)>>>
+{
+    type Row = <&'h BTreeMap<(i32,), Vec<(i32,)>> as cq_storage::dispatch::SeekRangeLookup<(
+        &'h i32,
+    )>>::Row;
+    type RangeCursor = <&'h BTreeMap<(i32,), Vec<(i32,)>> as cq_storage::dispatch::SeekRangeLookup<(&'h i32,)>>::RangeCursor;
+    fn seek_range_lookup(
+        self,
+        low: std::ops::Bound<(&'h i32,)>,
+        high: std::ops::Bound<(&'h i32,)>,
+    ) -> Self::RangeCursor {
+        self.reads.set(self.reads.get() + 1);
+        cq_storage::dispatch::SeekRangeLookup::seek_range_lookup(&self.value, low, high)
+    }
+}
 // These cost contracts isolate unreduced probe dispatch, not reduction materialization.
+// Trailing tokens declare the probed host's keyed reads (IF-HostDecl).
 macro_rules! probe {
-    ($l:ident,$r:ident) => {
+    ($l:ident,$r:ident $($host:tt)*) => {
         ::mini_linq::compile! { pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
-            struct Q; relation $l(a:i32); relation $r(a:i32,b:i32);
+            struct Q; relation $l(a:i32); relation $r(a:i32,b:i32) $($host)*;
             answer(a,b) :- $l(a),$r(a,b);
         }
     };
@@ -91,9 +109,9 @@ macro_rules! nonleading {
     };
 }
 macro_rules! window {
-    ($r:ident) => {
+    ($r:ident $($host:tt)*) => {
         ::mini_linq::compile! { pipeline { }
-            struct Q; relation $r(a:i32,b:i32);
+            struct Q; relation $r(a:i32,b:i32) $($host)*;
             answer(a,b) :- $r(a,b), where a >= 2 && a < 9;
         }
     };
@@ -107,7 +125,7 @@ fn leading_hash_reads_build_zero_indexes_and_nonleading_reads_build_once() {
         ((1,), vec![(7,), (8,)]),
         ((2,), vec![(7,)]),
     ]));
-    let got: Vec<_> = probe!(l, r).collect();
+    let got: Vec<_> = probe!(l, r host [a] reads [exact, membership]).collect();
     assert_eq!(got.len(), 3);
     assert_eq!((r.scans.get(), r.reads.get()), (0, l.len()));
     let r = Observed::new(rows.as_slice());
@@ -139,7 +157,7 @@ fn fallback_is_lazy_and_shared_for_membership() {
         ((2,), vec![(7,)]),
     ]));
     // Isolate membership dispatch from default semijoin materialization.
-    let got: Vec<_> = ::mini_linq::compile! { pipeline { plan = ::mini_linq::passes::plan(no_reduce); } struct Q; relation l(a:i32); relation r(a:i32,b:i32); answer(a) :- l(a),r(a,_); }.collect();
+    let got: Vec<_> = ::mini_linq::compile! { pipeline { plan = ::mini_linq::passes::plan(no_reduce); } struct Q; relation l(a:i32); relation r(a:i32,b:i32) host [a] reads [exact, membership]; answer(a) :- l(a),r(a,_); }.collect();
     assert_eq!(got.len(), 2);
     assert_eq!(r.scans.get(), 0);
     assert_eq!(r.reads.get(), 3);
@@ -148,12 +166,12 @@ fn fallback_is_lazy_and_shared_for_membership() {
 #[test]
 fn negation_reuses_native_owned_and_borrowed_key_sets_without_builds() {
     macro_rules! negative {
-        ($left:ident, $keys:ident) => {
+        ($left:ident, $keys:ident $($host:tt)*) => {
             ::mini_linq::compile! {
                 pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
                 struct Q;
                 relation $left(a: i32);
-                relation $keys(a: i32);
+                relation $keys(a: i32) $($host)*;
                 answer(a) :- $left(a), !$keys(a);
             }
         };
@@ -162,7 +180,9 @@ fn negation_reuses_native_owned_and_borrowed_key_sets_without_builds() {
     let keys = Observed::new(std::collections::HashSet::from([(1,), (3,)]));
     for _ in 0..3 {
         assert_eq!(
-            negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+            negative!(left, keys host [a] reads [membership])
+                .map(|(a,)| *a)
+                .collect::<Vec<_>>(),
             [2, 4]
         );
     }
@@ -175,7 +195,9 @@ fn negation_reuses_native_owned_and_borrowed_key_sets_without_builds() {
     ]));
     for _ in 0..3 {
         assert_eq!(
-            negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+            negative!(left, keys host [a] borrowed reads [membership])
+                .map(|(a,)| *a)
+                .collect::<Vec<_>>(),
             [2, 4]
         );
     }
@@ -192,7 +214,7 @@ fn negation_reuses_native_owned_and_borrowed_key_sets_without_builds() {
 #[test]
 fn lazy_negation_uses_native_membership_and_builds_scan_fallback_once() {
     macro_rules! negative {
-        ($left:ident, $keys:ident) => {
+        ($left:ident, $keys:ident $($host:tt)*) => {
             ::mini_linq::compile! {
                 pipeline {
                     plan = ::mini_linq::passes::plan(no_reduce);
@@ -200,7 +222,7 @@ fn lazy_negation_uses_native_membership_and_builds_scan_fallback_once() {
                 }
                 struct Q;
                 relation $left(a: i32);
-                relation $keys(a: i32);
+                relation $keys(a: i32) $($host)*;
                 answer(a) :- $left(a), !$keys(a);
             }
         };
@@ -213,7 +235,9 @@ fn lazy_negation_uses_native_membership_and_builds_scan_fallback_once() {
     ]));
     for _ in 0..3 {
         assert_eq!(
-            negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+            negative!(left, keys host [a] borrowed reads [membership])
+                .map(|(a,)| *a)
+                .collect::<Vec<_>>(),
             [2, 4]
         );
     }
@@ -229,12 +253,12 @@ fn lazy_negation_uses_native_membership_and_builds_scan_fallback_once() {
 #[test]
 fn computed_negation_keys_still_probe_owned_and_borrowed_hosts_in_place() {
     macro_rules! negative {
-        ($left:ident, $keys:ident) => {
+        ($left:ident, $keys:ident $($host:tt)*) => {
             ::mini_linq::compile! {
                 pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
                 struct Q;
                 relation $left(a: i32);
-                relation $keys(y: Vec<i32>);
+                relation $keys(y: Vec<i32>) $($host)*;
                 answer(a) :- $left(a), let y: Vec<i32> = vec![*a], !$keys(y);
             }
         };
@@ -247,7 +271,9 @@ fn computed_negation_keys_still_probe_owned_and_borrowed_hosts_in_place() {
     ]));
     cq_storage::counters::reset();
     assert_eq!(
-        negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+        negative!(left, keys host [y] reads [membership])
+            .map(|(a,)| *a)
+            .collect::<Vec<_>>(),
         [2]
     );
     assert_eq!((keys.scans.get(), keys.reads.get()), (0, 3));
@@ -258,7 +284,9 @@ fn computed_negation_keys_still_probe_owned_and_borrowed_hosts_in_place() {
     ]));
     cq_storage::counters::reset();
     assert_eq!(
-        negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+        negative!(left, keys host [y] borrowed reads [membership])
+            .map(|(a,)| *a)
+            .collect::<Vec<_>>(),
         [2]
     );
     assert_eq!((keys.scans.get(), keys.reads.get()), (0, 3));
@@ -285,7 +313,7 @@ fn generator_negation_keys_use_native_borrowed_membership_without_builds() {
     let answers: Vec<_> = ::mini_linq::compile! {
         pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
         struct Q;
-        relation left(a:i32); relation keys(y:Vec<i32>);
+        relation left(a:i32); relation keys(y:Vec<i32>) host [y] borrowed reads [membership];
         answer(a) :- left(a), for y in Some(vec![*a]), !keys(y);
     }
     .map(|(a,)| *a)
@@ -307,7 +335,7 @@ fn first_host_answer_streams_and_owns_unused_dispatch_state() {
             .map(|a| ((a,), vec![(a,)]))
             .collect::<HashMap<_, _>>(),
     );
-    let mut answers = probe!(l, r);
+    let mut answers = probe!(l, r host [a] reads [exact, membership]);
     assert_eq!((l.rows.get(), r.scans.get(), r.reads.get()), (0, 0, 0));
     assert_eq!(answers.next(), Some((&0, &0)));
     assert_eq!((l.rows.get(), r.scans.get(), r.reads.get()), (1, 0, 1));
@@ -350,7 +378,7 @@ fn relational_range_iterators_survive_the_generated_block() {
             .map(|&(a, b)| ((a,), vec![(b,)]))
             .collect::<BTreeMap<_, _>>(),
     );
-    let mut answers = window!(r);
+    let mut answers = window!(r host [a] reads [exact, membership, range, ordered]);
     assert_eq!((r.scans.get(), r.reads.get()), (0, 1));
     assert_eq!(answers.next(), Some((&2, &2)));
     assert_eq!((r.scans.get(), r.reads.get()), (0, 1));
@@ -370,7 +398,7 @@ fn rust_comparison_windows_seek_ordered_hosts_and_scan_slices() {
         ((8,), vec![(1,)]),
         ((9,), vec![(1,)]),
     ]));
-    let got: Vec<_> = window!(r).collect();
+    let got: Vec<_> = window!(r host [a] reads [exact, membership, range, ordered]).collect();
     assert_eq!(got.len(), 3);
     assert_eq!((r.scans.get(), r.reads.get()), (0, 1));
     let rows = [(1, 0), (2, 5), (2, 6), (8, 1), (9, 1)];
@@ -385,7 +413,7 @@ fn rust_comparison_windows_seek_ordered_hosts_and_scan_slices() {
 fn a_different_prefix_length_falls_back_even_when_the_host_has_a_key() {
     let l = [(1, 7)];
     let r = Observed::new(HashMap::from([((1,), vec![(7,), (8,)])]));
-    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation l(a:i32,b:i32); relation r(a:i32,b:i32); answer(a,b) :- l(a,b),r(a,b); }.collect();
+    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation l(a:i32,b:i32); relation r(a:i32,b:i32) host [a] reads [exact, membership]; answer(a,b) :- l(a,b),r(a,b); }.collect();
     assert_eq!(got.len(), 1);
     assert_eq!((r.scans.get(), r.reads.get()), (1, 0));
 }
@@ -396,9 +424,9 @@ fn ordered_key_types_need_no_hash_implementation_on_direct_reads() {
     struct Key(i32);
     let l = [(Key(1),), (Key(2),)];
     let r = BTreeMap::from([((Key(1),), vec![(7,)]), ((Key(2),), Vec::<(i32,)>::new())]);
-    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation l(a:Key); relation r(a:Key,b:i32); answer(a,b) :- l(a),r(a,b); }.collect();
+    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation l(a:Key); relation r(a:Key,b:i32) host [a] reads [exact, membership, range, ordered]; answer(a,b) :- l(a),r(a,b); }.collect();
     assert_eq!(got.len(), 1);
-    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation l(a:Key); relation r(a:Key,b:i32); answer(a) :- l(a),r(a,_); }.collect();
+    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation l(a:Key); relation r(a:Key,b:i32) host [a] reads [exact, membership, range, ordered]; answer(a) :- l(a),r(a,_); }.collect();
     assert_eq!(got.len(), 1, "an empty map group has no witness");
 }
 
@@ -409,7 +437,7 @@ fn relational_comparisons_follow_the_declared_numeric_type() {
         ((2,), vec![(5,)]),
         ((9,), vec![(1,)]),
     ]);
-    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation r(a:u64,b:i32); answer(a,b) :- r(a,b),where a < 9; }.collect();
+    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation r(a:u64,b:i32) host [a] reads [exact, membership, range, ordered]; answer(a,b) :- r(a,b),where a < 9; }.collect();
     assert_eq!(got.len(), 2);
     let r = [(1_u64, 0), (2, 5), (9, 1)];
     let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation r(a:u64,b:i32); answer(a,b) :- r(a,b),where a >= 2 && a < 9; }.collect();
@@ -447,11 +475,11 @@ fn ordinary_hashmap_counters_separate_native_lookups_from_build_hashes() {
             self.0.hash(h);
         }
     }
-    macro_rules! run { ($l:ident,$r:ident) => { ::mini_linq::compile! { pipeline { } struct Q; relation $l(a:Key); relation $r(a:Key,b:i32); answer(a,b) :- $l(a),$r(a,b); } }; }
+    macro_rules! run { ($l:ident,$r:ident $($host:tt)*) => { ::mini_linq::compile! { pipeline { } struct Q; relation $l(a:Key); relation $r(a:Key,b:i32) $($host)*; answer(a,b) :- $l(a),$r(a,b); } }; }
     let l = [(Key(1, false),), (Key(1, false),), (Key(2, false),)];
     let r = HashMap::from([((Key(1, true),), vec![(7,)])]);
     HASHES.with(|h| h.set((0, 0)));
-    assert_eq!(run!(l, r).count(), 1);
+    assert_eq!(run!(l, r host [a] reads [exact, membership]).count(), 1);
     // Three payload probes; unfiltered membership reducers are omitted.
     assert_eq!(HASHES.with(Cell::get), (0, 3));
     let rows = [(Key(1, true), 7)];
@@ -467,12 +495,12 @@ fn ordinary_hashmap_counters_separate_native_lookups_from_build_hashes() {
 fn composite_prefix_uses_declaration_order_and_shorter_keys_build() {
     let l = [(1, 2)];
     let r = Observed::new(HashMap::from([((2, 1), vec![(3,)])]));
-    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation l(a:i32,b:i32); relation r(b:i32,a:i32,c:i32); answer(a,b,c) :- l(a,b),r(b,a,c); }.collect();
+    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation l(a:i32,b:i32); relation r(b:i32,a:i32,c:i32) host [b, a] reads [exact, membership]; answer(a,b,c) :- l(a,b),r(b,a,c); }.collect();
     assert_eq!(got, [(&1, &2, &3)]);
     // One native payload probe uses the full declared key.
     assert_eq!((r.scans.get(), r.reads.get()), (0, 1));
     let l = [(2,)];
-    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation l(b:i32); relation r(b:i32,a:i32,c:i32); answer(a,b,c) :- l(b),r(b,a,c); }.collect();
+    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation l(b:i32); relation r(b:i32,a:i32,c:i32) host [b, a] reads [exact, membership]; answer(a,b,c) :- l(b),r(b,a,c); }.collect();
     assert_eq!(got, [(&1, &2, &3)]);
     // The shorter key scans once; prior full-key native reads remain counted.
     assert_eq!((r.scans.get(), r.reads.get()), (1, 1));
@@ -484,7 +512,7 @@ fn direct_merge_requires_ordered_read_without_requiring_payload_lookup() {
     let r = std::collections::BTreeSet::from([(2,), (3,)]);
     let got: Vec<_> = ::mini_linq::passes::select! { pipeline { ::mini_linq::passes::sequence, ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
         physical {
-            relation l(a:i32); relation r(a:i32);
+            relation l(a:i32) host [a] reads [membership, ordered]; relation r(a:i32) host [a] reads [membership, ordered];
             left = pipe rename l@0 {a -> a}; right = pipe rename r@1 {a -> a};
             j = let canon merge[a] left,right; return j as answer(a);
         }
@@ -496,7 +524,7 @@ fn direct_merge_requires_ordered_read_without_requiring_payload_lookup() {
 #[test]
 fn ordered_key_sets_support_relational_comparison_windows() {
     let r = std::collections::BTreeSet::from([(1,), (2,), (9,)]);
-    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation r(a:i32); answer(a) :- r(a), where a >= 2 && a < 9; }.collect();
+    let got: Vec<_> = ::mini_linq::compile! { pipeline { } struct Q; relation r(a:i32) host [a] reads [membership, ordered]; answer(a) :- r(a), where a >= 2 && a < 9; }.collect();
     assert_eq!(got, [(&2,)]);
 }
 
@@ -515,7 +543,7 @@ fn retained_opaque_guards_preserve_unsigned_comparisons() {
 
 #[test]
 #[allow(non_snake_case)]
-fn literal_point_reads_scan_slices_and_directly_read_leading_map_keys() {
+fn literal_point_reads_scan_slices_and_directly_read_declared_code_keys() {
     let segments = cq_load::StringDictionary::new(["AUTOMOBILE", "BUILDING"]);
     let code = |text: &str| cq_storage::domain::exact(&segments, text);
     let Customer = Observed::new(vec![
@@ -544,15 +572,15 @@ fn literal_point_reads_scan_slices_and_directly_read_leading_map_keys() {
     cq_storage::counters::reset();
     let rows: std::collections::BTreeSet<_> = ::mini_linq::compile! { pipeline { }
         struct LiteralMap;
-        relation Customer(segment:cq_load::StringCode in (segments), id:i32);
+        relation Customer(segment:cq_load::StringCode in (segments), id:i32) host [segment] reads [exact, membership];
         answer(c) :- Customer("BUILDING", c);
     }
     .map(|(c,)| *c)
     .collect();
     assert_eq!(rows, [1, 3].into());
     assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
-    // A-Domain makes the literal a closed code capture; an equality against a
-    // capture is a point key, read directly at the leading map key.
+    // A-Domain makes the literal a closed code capture; the declared native
+    // point read probes that code directly.
     assert_eq!(Customer.scans.get(), 0);
     assert_eq!(Customer.reads.get(), 1);
 }
@@ -570,7 +598,7 @@ fn string_literals_at_domain_columns_are_closed_code_point_reads() {
     let result: std::collections::BTreeSet<_> = ::mini_linq::compile! {
         pipeline { }
         struct CodeLiteralMap;
-        relation rows(segment:cq_load::StringCode in (segments),id:i32);
+        relation rows(segment:cq_load::StringCode in (segments),id:i32) host [segment] reads [exact, membership];
         answer(id) :- rows("BUILDING",id);
     }
     .map(|(id,)| *id)
@@ -581,7 +609,7 @@ fn string_literals_at_domain_columns_are_closed_code_point_reads() {
     let result: std::collections::BTreeSet<_> = ::mini_linq::compile! {
         pipeline { }
         struct CodePointMap;
-        relation rows(segment:cq_load::StringCode in (segments),id:i32);
+        relation rows(segment:cq_load::StringCode in (segments),id:i32) host [segment] reads [exact, membership];
         answer(id) :- rows(segment,id), where segment == "BUILDING";
     }
     .map(|(id,)| *id)
@@ -592,7 +620,7 @@ fn string_literals_at_domain_columns_are_closed_code_point_reads() {
     let result: Vec<_> = ::mini_linq::compile! {
         pipeline { }
         struct AbsentLiteral;
-        relation rows(segment:cq_load::StringCode in (segments),id:i32);
+        relation rows(segment:cq_load::StringCode in (segments),id:i32) host [segment] reads [exact, membership];
         answer(id) :- rows("MACHINERY",id);
     }
     .collect();
@@ -600,15 +628,18 @@ fn string_literals_at_domain_columns_are_closed_code_point_reads() {
 }
 
 /// IF-Parameter: a closed host operand is a once-bound key. Equality with a
-/// leading map key reads it directly; an owned non-Copy key is cloned once.
+/// declared map key reads it directly; an owned non-Copy key is cloned once.
 #[test]
-fn closed_parameters_point_read_leading_map_keys() {
-    let rows = Observed::new(HashMap::from([((1_i32,), vec![(10_i32,)]), ((2,), vec![(20,), (21,)])]));
+fn closed_parameters_point_read_declared_map_keys() {
+    let rows = Observed::new(HashMap::from([
+        ((1_i32,), vec![(10_i32,)]),
+        ((2,), vec![(20,), (21,)]),
+    ]));
     let wanted = 2;
     let result: std::collections::BTreeSet<_> = ::mini_linq::compile! {
         pipeline { }
         struct ClosedPoint;
-        relation rows(key:i32,id:i32);
+        relation rows(key:i32,id:i32) host [key] reads [exact, membership];
         answer(id) :- rows(key,id), where key == wanted;
     }
     .map(|(id,)| *id)
@@ -624,7 +655,7 @@ fn closed_parameters_point_read_leading_map_keys() {
     let result: Vec<_> = ::mini_linq::compile! {
         pipeline { }
         struct OwnedClosedPoint;
-        relation paths(path:Vec<i64>,id:i32);
+        relation paths(path:Vec<i64>,id:i32) host [path] reads [exact, membership];
         answer(id) :- paths(path,id), where path == wanted;
     }
     .map(|(id,)| *id)
@@ -640,7 +671,7 @@ fn relational_range_reads_seek_ordered_hosts_and_scan_slices_without_builds() {
     let high = 9_998;
     cq_storage::counters::reset();
     let rows: Vec<_> = ::mini_linq::mini_linq! {
-        struct Range; relation map(key:i32,value:i32);
+        struct Range; relation map(key:i32,value:i32) host [key] reads [exact, membership, range, ordered];
         answer(x,y) :- map(x,y), where x >= low, where x < high;
     }
     .map(|(x, y)| (*x, *y))
@@ -669,7 +700,7 @@ fn relational_range_reads_seek_ordered_hosts_and_scan_slices_without_builds() {
     // Empty windows are total, including the bounds that BTreeMap::range rejects.
     for (low, high) in [(5, 5), (9, 2)] {
         let rows: Vec<_> = ::mini_linq::mini_linq! {
-            struct EmptyRange; relation map(key:i32,value:i32);
+            struct EmptyRange; relation map(key:i32,value:i32) host [key] reads [exact, membership, range, ordered];
             answer(x) :- map(x,_), where x > low, where x < high;
         }
         .collect();
@@ -717,7 +748,7 @@ fn an_ordered_host_and_non_copy_parameter_need_no_cloning_or_scan_fallback() {
     ]));
     let cutoff = 2;
     let got: Vec<_> = ::mini_linq::mini_linq! {
-        struct OrderedHost; relation r(k:i32,v:i32);
+        struct OrderedHost; relation r(k:i32,v:i32) host [k] reads [exact, membership, range, ordered];
         answer(x,y) :- r(x,y), where x >= cutoff;
     }
     .map(|(x, y)| (*x, *y))
@@ -738,7 +769,7 @@ fn an_ordered_host_and_non_copy_parameter_need_no_cloning_or_scan_fallback() {
     let map = BTreeMap::from([((Value(1),), vec![(10,)]), ((Value(3),), vec![(30,)])]);
     let cutoff = Value(2);
     let got: Vec<_> = ::mini_linq::mini_linq! {
-        struct BorrowedBounds; relation map(k:Value,v:i32);
+        struct BorrowedBounds; relation map(k:Value,v:i32) host [k] reads [exact, membership, ordered];
         answer(y) :- map(x,y), where x > cutoff;
     }
     .map(|(y,)| *y)
@@ -886,7 +917,7 @@ fn compiled_declared_column_reads_native_source_rows_without_fallback() {
     let result: Vec<_> = ::mini_linq::compile! {
         pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
         struct ColumnProbe;
-        relation left(q:i32); relation right(a:i32,b:i32,c:i32);
+        relation left(q:i32); relation right(a:i32,b:i32,c:i32) host [b] reads [exact, membership];
         answer(x,k,z) :- left(k), right(x,k,z),
             if { visits.borrow_mut().push((*x,*k,*z)); true };
     }
@@ -909,13 +940,13 @@ fn compiled_declared_column_reads_native_source_rows_without_fallback() {
 }
 
 #[test]
-fn compiled_same_typed_wrong_slot_and_computed_keys_keep_fallback() {
+fn compiled_wrong_slot_keeps_fallback_and_computed_keys_read_the_declared_slot() {
     let left = [(100,), (999,), (200,)];
     let right = IndexedRows::new(vec![(10, 7, 100), (20, 8, 200), (11, 7, 101), (10, 7, 100)]);
     let result: Vec<_> = ::mini_linq::compile! {
         pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
         struct WrongSlot;
-        relation left(q:i32); relation right(a:i32,b:i32,c:i32);
+        relation left(q:i32); relation right(a:i32,b:i32,c:i32) host [b] reads [exact, membership];
         answer(x,y,k) :- left(k), right(x,y,k);
     }
     .map(|(x, y, k)| (*x, *y, *k))
@@ -928,13 +959,14 @@ fn compiled_same_typed_wrong_slot_and_computed_keys_keep_fallback() {
     let result: Vec<_> = ::mini_linq::compile! {
         pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
         struct ComputedColumn;
-        relation left(q:i32); relation right(a:i32,b:i32,c:i32);
+        relation left(q:i32); relation right(a:i32,b:i32,c:i32) host [b] reads [exact, membership];
         answer(x,k,z) :- left(q), let k:i32 = *q, right(x,k,z);
     }
     .map(|(x, k, z)| (*x, k, *z))
     .collect();
     assert_eq!(result, [(10, 7, 100), (20, 8, 200)]);
-    assert_eq!((right.scans.get(), right.reads.get()), (1, 0));
+    // A computed key reads the declared slot natively: one owned-key read per row.
+    assert_eq!((right.scans.get(), right.reads.get()), (0, left.len()));
 }
 
 #[test]
@@ -944,7 +976,7 @@ fn compiled_nonprefix_multikey_does_not_use_a_single_column_index() {
     let result: Vec<_> = ::mini_linq::compile! {
         pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
         struct MultiColumn;
-        relation left(q:i32,r:i32); relation right(a:i32,b:i32,c:i32);
+        relation left(q:i32,r:i32); relation right(a:i32,b:i32,c:i32) host [b] reads [exact, membership];
         answer(x,k,z) :- left(k,z), right(x,k,z);
     }
     .map(|(x, k, z)| (*x, *k, *z))
@@ -960,7 +992,7 @@ fn compiled_explicit_column_membership_uses_only_the_matching_slot() {
     let result: Vec<_> = ::mini_linq::compile! {
         pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
         struct ColumnMembership;
-        relation left(q:i32); relation right(a:i32,b:i32,c:i32);
+        relation left(q:i32); relation right(a:i32,b:i32,c:i32) host [b] reads [exact, membership];
         answer(k) :- left(k), !right(_,k,_);
     }
     .map(|(k,)| *k)
@@ -977,7 +1009,7 @@ fn compiled_retained_column_cursor_expands_once_in_source_chronology() {
     let result: Vec<_> = ::mini_linq::passes::sequence! {
         pipeline { ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
         physical {
-            relation L(q:i32) = (&left); relation R(a:i32,b:i32,c:i32) = (&right);
+            relation L(q:i32) = (&left); relation R(a:i32,b:i32,c:i32) = (&right) host [b] reads [exact, membership] supports [expand];
             l = pipe rename L@0 {q -> k};
             r = pipe rename R@1 {a -> x,b -> k,c -> z};
             s = pipe semi eager [k] l,r;
@@ -986,11 +1018,11 @@ fn compiled_retained_column_cursor_expands_once_in_source_chronology() {
             out = let canon project observed keep {x,k,z};
             return out as answer(x,k,z);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; radix_run = ::cq_storage::RadixRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
-            r host result(s) = @radix_run as ::cq_storage::RadixRun<_,_> [k] supports [expand];
-            r host result(p) = @radix_run as ::cq_storage::RadixRun<_,_> [k] supports [expand];
+            r native result(s) = exact [k] supports [expand];
+            r native result(p) = exact [k] supports [expand];
             s share = lookup r [k] first s force p;
             s repr = tuples witness { r [k] at s as _ };
             p stage = batch 2 expand;

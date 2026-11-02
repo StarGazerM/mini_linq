@@ -55,16 +55,27 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     let lookup_host = &context.layouts[1].host;
     let keys = &stratum.keys[0].name;
     let binding = &stratum.steps[0].scan.as_ref().unwrap().binding;
+    assert_eq!(context.layouts[1].key, 1);
+    // The grouped `hash_map` lookup and the `hash_set` key set declare their
+    // tokens' host reads on their recorded keys; the pull key hole collects
+    // borrowed key columns, so the key set answers borrowed membership only.
+    // The scan declares none.
     let expected: cq_lang_cq::Program = syn::parse2(quote! {
         struct #name;
-        relation #lookup(x:i32,y:i32) = (&#lookup_host);
-        relation #keys(x:i32) = (#keys);
+        relation #lookup(x:i32,y:i32) = (&#lookup_host)
+            host [x] reads [exact, membership, candidates];
+        relation #keys(x:i32) = (#keys) host [x] borrowed reads [membership];
         relation #binding(x:i32,y:i32) = (#binding);
         relation #name(x:i32,y:i32);
         #name(*x,*z) :- #binding(x,y), #lookup(y,z), !#keys(z);
     })
     .unwrap();
     assert_eq!(hole, &expected);
+    // Dropping a declared host read is a misbound input.
+    let mut changed = target.clone();
+    let hole = stratum.steps[0].hole;
+    changed.holes[hole].cq.declarations[0].hosts.clear();
+    assert!(cq_lang_datalog_round::check_storage(&source, &changed).is_err());
 }
 
 #[test]
@@ -825,8 +836,9 @@ fn fork_preserves_generators_and_generated_join_values() {
 #[test]
 fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
     let mut source = authored();
-    // Authored providers are declared verbatim tokens.
-    let custom = |name: &str, protocol, hashed| {
+    // Authored providers are declared verbatim tokens; a key-set token
+    // declares membership, so hole inputs are unchanged by the key swap.
+    let custom = |name: &str, protocol, hashed, reads: &[storage::provider::HostRead]| {
         storage::provider::declared(
             name,
             storage::provider::Spelling::Verbatim,
@@ -834,13 +846,20 @@ fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
             storage::provider::Admission::None,
             hashed,
             storage::provider::TaskHasher::Fx,
+            reads,
+            &[],
         )
     };
     let protocol = source.layouts[0].protocol;
     source.tokens.extend([
-        custom("custom_rows", None, false),
-        custom("custom_index", Some(protocol), true),
-        custom("custom_keys", None, true),
+        custom("custom_rows", None, false, &[]),
+        custom("custom_index", Some(protocol), true, &[]),
+        custom(
+            "custom_keys",
+            None,
+            true,
+            &[storage::provider::HostRead::Membership],
+        ),
     ]);
     source.providers[2].delta = syn::parse_quote!(@custom_rows as custom::Rows<(i32, i32)>);
     source.providers[2].next = syn::parse_quote!(@custom_rows as custom::Rows<(i32, i32)>);

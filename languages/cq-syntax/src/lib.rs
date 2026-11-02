@@ -50,6 +50,9 @@ pub mod capture;
 pub mod rust;
 pub use capture::{Capture, Captures};
 
+pub mod host;
+pub use host::{HostDecl, HostRead, HostSupport};
+
 /// One named, typed column in a declared input relation.
 ///
 /// ```text
@@ -90,12 +93,13 @@ impl CodeDomain {
 ///
 /// CQ atom arguments remain positional against this declaration order.
 ///
-/// Declaration order is the host layout. A grouped host stores a leading
-/// prefix as its key; Rust traits decide which operations its type supports.
+/// Declaration order is the host layout. A host is a plain row source unless
+/// it declares keyed reads ([`HostDecl`], IF-HostDecl); only declared reads
+/// are answered natively.
 ///
 /// ```text
 /// RelationDecl ::= "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")"
-///                  ["=" "(" Expr ")"] ";"
+///                  ["=" "(" Expr ")"] HostDecl* ";"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct RelationDecl {
@@ -108,6 +112,9 @@ pub struct RelationDecl {
     pub columns: CommaList<ColumnDecl>,
     #[syn(optional, peek = Token![=])]
     pub value: Option<LeafValue>,
+    #[parse(host::parse_hosts)]
+    #[to_tokens(|tokens, hosts| quote::TokenStreamExt::append_all(tokens, hosts))]
+    pub hosts: Vec<HostDecl>,
     pub semi_token: Token![;],
 }
 
@@ -123,6 +130,12 @@ impl RelationDecl {
             return Err(syn::Error::new_spanned(
                 self,
                 "result declarations cannot bind a host value",
+            ));
+        }
+        if let Some(host) = self.hosts.first() {
+            return Err(syn::Error::new_spanned(
+                host,
+                "result declarations cannot declare host reads",
             ));
         }
         Ok(())
@@ -308,7 +321,7 @@ pub fn check_input_declarations<'a>(
                 ));
             }
         }
-
+        input.check_hosts()?;
         if schema.insert(symbol_name(&input.name), input).is_some() {
             return Err(syn::Error::new_spanned(
                 &input.name,

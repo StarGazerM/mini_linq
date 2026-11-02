@@ -2,12 +2,16 @@ use super::*;
 use cq_datalog_support::{Fresh, columns, equalities, filters};
 
 // Independently derive the exact input schema from the hole's relational reads.
-// Do not use the fork producer's declaration builder here.
+// Do not use the fork producer's declaration builder here. Layout and key-set
+// inputs declare their token's host reads on their recorded key (IF-HostDecl);
+// a key set collected by a non-batch key hole stores borrowed key columns.
 fn required_inputs(
+    tokens: &[storage::provider::Token],
+    holes: &[Hole],
     context: &RoundContext,
     keys: &[KeySet],
     query: &cq::Query,
-) -> Vec<RelationDecl> {
+) -> syn::Result<Vec<RelationDecl>> {
     let required: BTreeSet<_> = query
         .body
         .iter()
@@ -27,6 +31,7 @@ fn required_inputs(
             declaration.name = delta.clone();
             let host = relation.delta_host.as_ref().expect("checked delta host");
             declaration.value = Some(syn::parse_quote!(= (&#host)));
+            declaration.hosts = Vec::new();
             declarations.push(declaration);
         }
     }
@@ -43,6 +48,8 @@ fn required_inputs(
             .collect();
         let host = &layout.host;
         declaration.value = Some(syn::parse_quote!(= (&#host)));
+        declaration.hosts =
+            declared_hosts(tokens, &layout.provider, &declaration, layout.key, false)?;
         declarations.push(declaration);
     }
     for key in keys {
@@ -62,9 +69,35 @@ fn required_inputs(
         };
         let host = &key.name;
         declaration.value = Some(syn::parse_quote!(= (#host)));
+        // A unit key (no projected columns) stores an owned `()`.
+        let borrowed = !key.columns.is_empty()
+            && holes
+                .get(key.hole)
+                .is_some_and(|hole| hole.interface != HoleInterface::Batch);
+        let arity = declaration.arity();
+        declaration.hosts = declared_hosts(tokens, &key.provider, &declaration, arity, borrowed)?;
         declarations.push(declaration);
     }
-    declarations
+    Ok(declarations)
+}
+
+fn declared_hosts(
+    tokens: &[storage::provider::Token],
+    provider: &storage::Provider,
+    declaration: &RelationDecl,
+    key: usize,
+    borrowed: bool,
+) -> syn::Result<Vec<cq_syntax::HostDecl>> {
+    let token = storage::provider::lookup(tokens, &provider.token)?;
+    let key: Vec<Ident> = declaration
+        .columns
+        .iter()
+        .take(key)
+        .map(|c| c.name.clone())
+        .collect();
+    Ok(storage::provider::host_decl(token, &key, borrowed)
+        .into_iter()
+        .collect())
 }
 
 // Layouts change only positional host representation, never Rust-step order.
@@ -137,6 +170,7 @@ pub fn use_scan(
     let binding = &scan.binding;
     declaration.name = binding.clone();
     declaration.value = Some(syn::parse_quote!(= (#binding)));
+    declaration.hosts = Vec::new();
     let BodyItem::Positive { atom } = &mut query.body[0] else {
         unreachable!("checked scan source")
     };
@@ -401,7 +435,8 @@ pub(crate) fn check_storage_with_analysis(
                     .collect();
                 key.columns.iter().map(|&i| args[i].clone()).collect()
             };
-            let mut expected_declarations = required_inputs(context, &[], &hole.query);
+            let mut expected_declarations =
+                required_inputs(&source.tokens, &target.holes, context, &[], &hole.query)?;
             expected_declarations.push(output);
             let name = &hole.name;
             let selections = key.filters.iter().map(|(column, expression)| {
@@ -515,7 +550,13 @@ pub(crate) fn check_storage_with_analysis(
                 if rule.known == Admission::InPlan {
                     admission_suffix(&mut query, hole, context, rule.head, &mut add_name)?;
                 }
-                let mut expected_declarations = required_inputs(context, &stratum.keys, &query);
+                let mut expected_declarations = required_inputs(
+                    &source.tokens,
+                    &target.holes,
+                    context,
+                    &stratum.keys,
+                    &query,
+                )?;
                 expected_declarations.extend(scan_declaration);
                 expected_declarations.push(output);
                 ensure(

@@ -557,7 +557,7 @@ fn ordered_canon_consumes_verified_source_without_hashing() {
             r = pipe canon rename R@0 {a -> x,b -> y};
             return r as answer(x,y);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
             r canon = host;
         }

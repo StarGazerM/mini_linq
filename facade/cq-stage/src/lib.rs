@@ -36,7 +36,7 @@
 //! A printer consumes these decisions through the checked pass queue.
 //!
 //! ```text
-//! structures { providers { hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build macro }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; }
+//! structures { providers { hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build typed }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; }
 //!   result = @hash_index as ::cq_storage::HashIndex<'_, _, _> [key];
 //!   host_result host result(reader) = @keyset as ::cq_storage::dispatch::KeySet<_> [key];
 //!   host_result host scan = @host_scan as ::core::iter::Map<_, _> [];

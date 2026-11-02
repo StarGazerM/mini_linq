@@ -50,7 +50,7 @@ fn catalog() -> Catalog {
     ];
     let declared: structures::Providers = syn::parse_quote!(providers {
         index = Index { reads [exact], build inferred };
-        sharded = ::cq_storage::sharded::Sharded<_> { reads [], build macro, routed 0, shared };
+        sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared };
         sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
     });
     let [index, sharded, sort] = <[_; 3]>::try_from(declared.declarations).unwrap();
@@ -127,7 +127,7 @@ fn grouped(global: bool) -> Program {
             };
             return totals as answer(#head sum_qty, sum_base_price, count_order);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
             lineitem host scan = @reader as Reader [];
             lineitem rows = @sort as ::cq_storage::dedup::Sort;
             lineitem canon = rows;
@@ -1180,7 +1180,7 @@ fn provider_rewrite_preserves_shared_flat_rows_and_published_length_guards() {
             final_rows = let canon semi eager [a] joined,selected;
             return final_rows as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             r = @index as Index [a]; selected = @index as Index [a];
             final_rows rows = @sort as ::cq_storage::dedup::Sort; final_rows canon = rows;

@@ -122,7 +122,12 @@ fn domain_function(term: &Term, domain: &CodeDomain, captures: &Captures) -> Opt
         let syn::Expr::Path(callee) = &*call.func else {
             return None;
         };
-        let segments: Vec<_> = callee.path.segments.iter().map(|s| s.ident.to_string()).collect();
+        let segments: Vec<_> = callee
+            .path
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect();
         let [crate_name, module, function] = segments.as_slice() else {
             return None;
         };
@@ -172,14 +177,18 @@ struct Translation<'a> {
 impl Translation<'_> {
     /// Record `let k: T = ::cq_storage::domain::f(&(D), &(operand));`.
     fn code(&mut self, column: &Column, operand: &syn::Expr, function: &str) -> Term {
-        let domain = &column.domain.as_ref().expect("a code-domain column").expression;
+        let domain = &column
+            .domain
+            .as_ref()
+            .expect("a code-domain column")
+            .expression;
         let function = Ident::new(function, proc_macro2::Span::call_site());
         let name = normal::fresh_capture(self.names);
         let expression: syn::Expr =
             syn::parse_quote!(::cq_storage::domain::#function(&(#domain), &(#operand)));
-        self.captures
-            .items
-            .push(normal::capture(normal::binding(&name, &column.ty, expression)));
+        self.captures.items.push(normal::capture(normal::binding(
+            &name, &column.ty, expression,
+        )));
         Term::Closed(normal::path(&name))
     }
 
@@ -236,7 +245,9 @@ impl Translation<'_> {
                     (Term::Variable(left), right) if self.logical.contains(&symbol_name(&left)) => {
                         (left, comparison, right)
                     }
-                    (left, Term::Variable(right)) if self.logical.contains(&symbol_name(&right)) => {
+                    (left, Term::Variable(right))
+                        if self.logical.contains(&symbol_name(&right)) =>
+                    {
                         (right, flip(comparison), left)
                     }
                     (left, right) => {
@@ -247,7 +258,10 @@ impl Translation<'_> {
                         }]);
                     }
                 };
-                let Some(column) = self.column(&Term::Variable(variable.clone())).filter(|c| c.domain.is_some()) else {
+                let Some(column) = self
+                    .column(&Term::Variable(variable.clone()))
+                    .filter(|c| c.domain.is_some())
+                else {
                     return Ok(vec![Constraint::Compare {
                         left: Term::Variable(variable),
                         comparison,
@@ -354,18 +368,25 @@ impl Translation<'_> {
                 }
                 BodyItem::Negation(mut negation) => {
                     let declaration = self.declarations[&symbol_name(&negation.atom.relation)];
-                    for (argument, column) in negation.atom.args.iter_mut().zip(&declaration.columns) {
+                    for (argument, column) in
+                        negation.atom.args.iter_mut().zip(&declaration.columns)
+                    {
                         let column = Column::of(column);
                         if matches!(argument, syn::Expr::Infer(_)) {
                             continue;
                         }
                         if let Some(variable) = rust::variable(argument) {
                             if self.logical.contains(&symbol_name(variable)) {
-                                let seen = self.variables.get(&symbol_name(variable)).and_then(Column::key);
+                                let seen = self
+                                    .variables
+                                    .get(&symbol_name(variable))
+                                    .and_then(Column::key);
                                 if seen != column.key() {
                                     return Err(error(
                                         &*argument,
-                                        format!("`{variable}` occupies columns of different code domains"),
+                                        format!(
+                                            "`{variable}` occupies columns of different code domains"
+                                        ),
                                     ));
                                 }
                                 continue;
@@ -399,7 +420,10 @@ impl Translation<'_> {
                         translated.push(BodyItem::Equality(equality));
                     }
                     EqualityValue::Literal(value) => {
-                        match self.column(&Term::Variable(equality.left.clone())).filter(|c| c.domain.is_some()) {
+                        match self
+                            .column(&Term::Variable(equality.left.clone()))
+                            .filter(|c| c.domain.is_some())
+                        {
                             Some(column) => {
                                 let right = self.code(&column, value, "exact");
                                 translated.push(BodyItem::Constraint(Constraint::Compare {
@@ -436,14 +460,21 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
     let logical: BTreeSet<String> = super::blocks::bound(body).into_keys().collect();
     let captures = &module.query.captures;
     let key = |name: &Ident| columns.get(&symbol_name(name)).and_then(Column::key);
-    let domain = |name: &Ident| columns.get(&symbol_name(name)).and_then(|c| c.domain.clone());
+    let domain = |name: &Ident| {
+        columns
+            .get(&symbol_name(name))
+            .and_then(|c| c.domain.clone())
+    };
     let operand = |variable: &Ident, comparison: Comparison, term: &Term| -> syn::Result<()> {
         if let Term::Variable(other) = term {
             if logical.contains(&symbol_name(other)) {
                 return if key(variable) == key(other) {
                     Ok(())
                 } else {
-                    Err(error(variable, format!("`{variable}` and `{other}` are compared across code domains")))
+                    Err(error(
+                        variable,
+                        format!("`{variable}` and `{other}` are compared across code domains"),
+                    ))
                 };
             }
         }
@@ -461,7 +492,9 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
         } else {
             Err(error(
                 variable,
-                format!("the operand compared with code-domain variable `{variable}` is not its A-Domain translation"),
+                format!(
+                    "the operand compared with code-domain variable `{variable}` is not its A-Domain translation"
+                ),
             ))
         }
     };
@@ -471,19 +504,28 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
         operand: &dyn Fn(&Ident, Comparison, &Term) -> syn::Result<()>,
     ) -> syn::Result<()> {
         match constraint {
-            Constraint::Compare { left: Term::Variable(variable), comparison, right } => {
-                operand(variable, *comparison, right)
-            }
-            Constraint::Compare { left, comparison, right: Term::Variable(variable) } => {
-                operand(variable, flip(*comparison), left)
-            }
+            Constraint::Compare {
+                left: Term::Variable(variable),
+                comparison,
+                right,
+            } => operand(variable, *comparison, right),
+            Constraint::Compare {
+                left,
+                comparison,
+                right: Term::Variable(variable),
+            } => operand(variable, flip(*comparison), left),
             Constraint::Compare { .. } => Ok(()),
-            Constraint::Between { term: Term::Variable(variable), .. }
-            | Constraint::In { term: Term::Variable(variable), .. }
-                if domain(variable).is_some() =>
-            {
-                Err(error(variable, "a code-domain range or literal membership is translated into comparisons"))
+            Constraint::Between {
+                term: Term::Variable(variable),
+                ..
             }
+            | Constraint::In {
+                term: Term::Variable(variable),
+                ..
+            } if domain(variable).is_some() => Err(error(
+                variable,
+                "a code-domain range or literal membership is translated into comparisons",
+            )),
             Constraint::Between { .. } | Constraint::In { .. } => Ok(()),
             Constraint::Or(branches) => branches
                 .iter()
@@ -497,7 +539,13 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
                 let declaration = declarations[&symbol_name(&atom.relation)];
                 for (argument, column) in atom.args.iter().zip(&declaration.columns) {
                     if column.domain.is_some() && rust::variable(argument).is_none() {
-                        return Err(error(argument, format!("the closed operand at code-domain column `{}` is not translated", column.name)));
+                        return Err(error(
+                            argument,
+                            format!(
+                                "the closed operand at code-domain column `{}` is not translated",
+                                column.name
+                            ),
+                        ));
                     }
                 }
             }
@@ -507,15 +555,29 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
                     if matches!(argument, syn::Expr::Infer(_)) {
                         continue;
                     }
-                    if let Some(variable) = rust::variable(argument).filter(|v| logical.contains(&symbol_name(v))) {
+                    if let Some(variable) =
+                        rust::variable(argument).filter(|v| logical.contains(&symbol_name(v)))
+                    {
                         if key(variable) != column.domain.as_ref().map(CodeDomain::key) {
-                            return Err(error(argument, format!("`{variable}` occupies columns of different code domains")));
+                            return Err(error(
+                                argument,
+                                format!("`{variable}` occupies columns of different code domains"),
+                            ));
                         }
                         continue;
                     }
                     if let Some(domain) = &column.domain {
-                        if domain_function(&Term::Closed(argument.clone()), domain, captures).as_deref() != Some("exact") {
-                            return Err(error(argument, format!("the closed operand at code-domain column `{}` is not translated", column.name)));
+                        if domain_function(&Term::Closed(argument.clone()), domain, captures)
+                            .as_deref()
+                            != Some("exact")
+                        {
+                            return Err(error(
+                                argument,
+                                format!(
+                                    "the closed operand at code-domain column `{}` is not translated",
+                                    column.name
+                                ),
+                            ));
                         }
                     }
                 }
@@ -524,11 +586,20 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
             BodyItem::Equality(equality) => match &equality.right {
                 EqualityValue::Variable(right) => {
                     if key(&equality.left) != key(right) {
-                        return Err(error(&equality.left, format!("`{}` and `{right}` are compared across code domains", equality.left)));
+                        return Err(error(
+                            &equality.left,
+                            format!(
+                                "`{}` and `{right}` are compared across code domains",
+                                equality.left
+                            ),
+                        ));
                     }
                 }
                 EqualityValue::Literal(_) if domain(&equality.left).is_some() => {
-                    return Err(error(&equality.left, "a literal equality on a code-domain variable is translated"));
+                    return Err(error(
+                        &equality.left,
+                        "a literal equality on a code-domain variable is translated",
+                    ));
                 }
                 EqualityValue::Literal(_) => {}
             },
@@ -537,11 +608,18 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
     }
     if let Some(output) = module.output() {
         for (argument, column) in module.query.head.args.iter().zip(&output.columns) {
-            let (Some(declared), Some(variable)) = (&column.domain, rust::variable(argument)) else {
+            let (Some(declared), Some(variable)) = (&column.domain, rust::variable(argument))
+            else {
                 continue;
             };
             if key(variable).is_some_and(|key| key != declared.key()) {
-                return Err(error(argument, format!("output column `{}` declares a different code domain", column.name)));
+                return Err(error(
+                    argument,
+                    format!(
+                        "output column `{}` declares a different code domain",
+                        column.name
+                    ),
+                ));
             }
         }
     }

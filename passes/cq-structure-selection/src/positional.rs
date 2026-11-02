@@ -83,7 +83,7 @@ pub(super) fn choose(
             let origin = origin(name)?;
             let keyset = cq_lang_structures::provider::base::instance(
                 "adaptive_keyset",
-                syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::AutoDense, 67108864>),
+                syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::I64Codec, 67108864>),
             );
             extra.push(syn::parse2(
                 quote!(#ident keyset = #keyset [#column] owned #origin;),
@@ -292,7 +292,7 @@ pub(super) fn choose(
         .structures
         .entries
         .retain(|entry| match &entry.structure {
-            Structure::Host { reader, .. }
+            Structure::Host { reader, .. } | Structure::Native { reader, .. }
                 if reader
                     .result()
                     .is_some_and(|name| reads.contains(&symbol_name(name))) =>
@@ -333,6 +333,7 @@ pub(super) fn choose(
         .structures
         .declare(&cq_lang_structures::provider::base::declarations());
     choose_join_filters(target, bases)?;
+    structures::record_join_filter_abandon(target)?;
     structures::contract::check(target)?;
     Ok(())
 }
@@ -422,9 +423,11 @@ fn choose_join_filters(
             let build = named(&candidate.build);
             let key = &facts.physical.rows[&candidate.build].bindings[&candidate.key];
             let covering = &d.name;
+            // One key column: the recorded dense provider requires its key's
+            // OrderKey (STR-AdaptiveMembership); rustc rejects other keys.
             let ty = cq_lang_structures::provider::base::instance(
-                "adaptive_membership",
-                syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 67108864>),
+                "dense_membership",
+                syn::parse_quote!(::cq_storage::DenseMembership<_, 67108864>),
             );
             entries.push(syn::parse2(quote!(#scan join_filter = #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;))?);
         }

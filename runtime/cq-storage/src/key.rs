@@ -73,6 +73,37 @@ impl OrderKey for u128 {
     }
 }
 
+/// Signed integers: flip the sign bit of the 64-bit two's-complement value.
+macro_rules! signed_order_key {
+    ($($t:ty),*) => {$(
+        impl OrderKey for $t {
+            type Ordinal = u64;
+
+            #[inline]
+            fn ordinal(&self) -> u64 {
+                *self as i64 as u64 ^ (1 << 63)
+            }
+        }
+    )*};
+}
+signed_order_key!(i8, i16, isize);
+
+/// Unsigned integers, `char` (code point order) and `bool` (`false < true`)
+/// widen losslessly to `u64`.
+macro_rules! unsigned_order_key {
+    ($($t:ty),*) => {$(
+        impl OrderKey for $t {
+            type Ordinal = u64;
+
+            #[inline]
+            fn ordinal(&self) -> u64 {
+                *self as u64
+            }
+        }
+    )*};
+}
+unsigned_order_key!(u8, u16, usize, char, bool);
+
 impl<T: OrderKey + ?Sized> OrderKey for &T {
     type Ordinal = T::Ordinal;
 
@@ -175,6 +206,14 @@ mod tests {
         check(&[0u32, 1, 63, 64, u32::MAX - 1, u32::MAX]);
         check(&[0u64, 1, 63, 64, u64::MAX - 1, u64::MAX]);
         check(&[0u128, 1, u64::MAX as u128, 1 << 64, 1 << 80, u128::MAX]);
+        check(&[i8::MIN, -1, 0, 1, i8::MAX]);
+        check(&[i16::MIN, -1, 0, 1, i16::MAX]);
+        check(&[isize::MIN, -1, 0, 1, isize::MAX]);
+        check(&[0u8, 1, u8::MAX]);
+        check(&[0u16, 1, u16::MAX]);
+        check(&[0usize, 1, usize::MAX]);
+        check(&['\0', 'a', 'z', '\u{10FFFF}']);
+        check(&[false, true]);
         assert_eq!(i32::MIN.ordinal(), 0);
         assert_eq!(i32::MAX.ordinal(), u64::from(u32::MAX));
         assert_eq!(i64::MIN.ordinal(), 0);

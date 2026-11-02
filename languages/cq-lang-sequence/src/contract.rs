@@ -1325,7 +1325,43 @@ impl Checked<'_> {
                     .map(|keyset| keyset.provider.clone())
             });
         let Some(ty) = ty else {
-            return fail(provider, "BE-Bind", "lookup has no provider for these keys");
+            // Formal rule BE-NativeBind: a read recorded as native
+            // (STR-NativeHost) is discharged by the declared host capability;
+            // the host owns its keys, so no provider or codec premise arises.
+            // A native record whose declared read is weaker than the required
+            // capability is rejected rather than silently substituted.
+            let mut natives = self
+                .analysis
+                .structures
+                .natives
+                .iter()
+                .filter(|((result, reader, columns), _)| {
+                    *result == name
+                        && columns == keys
+                        && !matches!(reader, cq_lang_structures::ReaderRef::Scan)
+                })
+                .peekable();
+            if natives.peek().is_none() {
+                return fail(provider, "BE-Bind", "lookup has no provider for these keys");
+            }
+            use cq_syntax::host::HostRead;
+            let covers = |read: HostRead| match required {
+                Capability::Membership => true,
+                Capability::Exact => matches!(read, HostRead::Exact | HostRead::Candidates),
+                Capability::Range => matches!(read, HostRead::Range | HostRead::Ordered),
+                Capability::Ordered => read == HostRead::Ordered,
+                Capability::Candidates => read == HostRead::Candidates,
+                Capability::Resident | Capability::Distinct => false,
+            };
+            if !natives.any(|(_, native)| covers(native.read)) {
+                return fail(
+                    provider,
+                    "BE-NativeBind",
+                    "recorded native host read does not declare the required capability",
+                );
+            }
+            self.analysis.capabilities.insert(key, required);
+            return Ok(());
         };
         let capability = match (self.analysis.capabilities.get(&key), &required) {
             (Some(Capability::Ordered), _) | (_, Capability::Ordered) => Capability::Ordered,
@@ -1532,7 +1568,7 @@ mod tests {
                 grouped = let group r by [k] { n: usize = count(); };
                 return grouped as answer(k,n);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; rows = Rows { reads [exact, range, membership], build inferred }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; rows = Rows { reads [exact, range, membership], build inferred }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
                 r host scan = @reader as Reader [];
                 r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
                 grouped rows = @rows as Rows;

@@ -6,21 +6,24 @@
 //! verbatim. Layouts and key sets also record their [`Hasher`] state. The
 //! program's `tokens` table declares each token once with the facts later
 //! passes read: maintenance protocol, canonical admission strategy, whether
-//! the provider accepts a hasher state, the task-candidate hasher, and the
+//! the provider accepts a hasher state, the task-candidate hasher, the
 //! spelling function that produces its Rust type from the recorded key/payload
-//! schema and hasher state. No pass inspects a provider spelling; the contract
-//! checks each recorded spelling against its token's spelling function.
+//! schema and hasher state, and the CQ host reads (IF-HostDecl) its instances
+//! answer on their recorded key. No pass inspects a provider spelling; the
+//! contract checks each recorded spelling against its token's spelling function.
 //! ```text
 //! Provider ::= "@" Ident "as" RustType
 //! Token    ::= token {Ident} spelling {std_set | std_map | rows | sharded | runs | verbatim}
 //!              protocol {[set | grouped_map | bulk]} admission {sharded_hash | sorted_subtract | none}
 //!              hashed {bool} task_hasher {layout | fx}
+//!              reads {[HostRead,*]} supports {[(retain | expand),*]}
 //! ```
 // DESIGN datalog-provider-token
 // Contract 7: selection records a token id; facts travel in the program's
 // `tokens` table. Forbidden: matching a provider's Rust path, segments or
 // generic arguments to recover its family, hasher, protocol or admission.
 use crate::{LayoutProtocol, text::Text};
+pub use cq_syntax::{HostRead, HostSupport};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Ident, Type, parse::ParseStream};
@@ -146,6 +149,11 @@ pub struct Token {
     /// The provider accepts a hasher state (its instances record fx or keyed).
     pub hashed: bool,
     pub task_hasher: TaskHasher,
+    /// CQ host reads every instance answers natively on its recorded key
+    /// (the layout's key columns); `[]` for row buffers and opaque hosts.
+    pub reads: Vec<HostRead>,
+    /// Cursor contracts of the declared `exact` read.
+    pub supports: Vec<HostSupport>,
 }
 crate::record!(Token {
     token: Ident,
@@ -153,7 +161,9 @@ crate::record!(Token {
     protocol: Option<LayoutProtocol>,
     admission: Admission,
     hashed: bool,
-    task_hasher: TaskHasher
+    task_hasher: TaskHasher,
+    reads: Vec<HostRead>,
+    supports: Vec<HostSupport>
 });
 
 /// Base Storage tokens, declared by the Storage pass.
@@ -167,6 +177,7 @@ fn token(
     protocol: Option<LayoutProtocol>,
     admission: Admission,
     task_hasher: TaskHasher,
+    reads: &[HostRead],
 ) -> Token {
     Token {
         token: Ident::new(name, proc_macro2::Span::call_site()),
@@ -175,9 +186,12 @@ fn token(
         admission,
         hashed: spelling.hashed().unwrap_or(false),
         task_hasher,
+        reads: reads.to_vec(),
+        supports: Vec::new(),
     }
 }
 /// A payload-free key set of all-column keys (also negation key sets).
+/// `HashSet<K, S>` answers `ExactMembership<K>`; it has no `IndexRead`.
 pub fn hash_set() -> Token {
     token(
         HASH_SET,
@@ -185,9 +199,12 @@ pub fn hash_set() -> Token {
         Some(LayoutProtocol::Set),
         Admission::None,
         TaskHasher::Fx,
+        &[HostRead::Membership],
     )
 }
-/// Payload rows grouped by key.
+/// Payload rows grouped by key. `HashMap<K, Vec<V>, S>` answers
+/// `IndexRead`/`PointLookup`, `ExactMembership<K>` and `Candidates`; its
+/// slice cursor is not `Copy`, so it declares no cursor contracts.
 pub fn hash_map() -> Token {
     token(
         HASH_MAP,
@@ -195,9 +212,10 @@ pub fn hash_map() -> Token {
         Some(LayoutProtocol::GroupedMap),
         Admission::None,
         TaskHasher::Fx,
+        &[HostRead::Exact, HostRead::Membership, HostRead::Candidates],
     )
 }
-/// Delta/next row buffers.
+/// Delta/next row buffers: plain row sources.
 pub fn rows_vec() -> Token {
     token(
         ROWS_VEC,
@@ -205,9 +223,11 @@ pub fn rows_vec() -> Token {
         None,
         Admission::None,
         TaskHasher::Fx,
+        &[],
     )
 }
 /// A declaration with explicit facts: authored, extension or device tokens.
+#[allow(clippy::too_many_arguments)]
 pub fn declared(
     name: &str,
     spelling: Spelling,
@@ -215,11 +235,40 @@ pub fn declared(
     admission: Admission,
     hashed: bool,
     task_hasher: TaskHasher,
+    reads: &[HostRead],
+    supports: &[HostSupport],
 ) -> Token {
     Token {
         hashed,
-        ..token(name, spelling, protocol, admission, task_hasher)
+        supports: supports.to_vec(),
+        ..token(name, spelling, protocol, admission, task_hasher, reads)
     }
+}
+
+/// The CQ host declaration of an input bound to an instance of `declaration`
+/// whose recorded key is `key` (its leading declared columns): one surface
+/// with the token's reads and supports, or none for an empty key or a token
+/// declaring no reads. A `borrowed` instance stores borrowed key columns and
+/// answers only the token's membership read, through the query's borrowed key.
+pub fn host_decl(
+    declaration: &Token,
+    key: &[Ident],
+    borrowed: bool,
+) -> Option<cq_syntax::HostDecl> {
+    if borrowed {
+        let membership = declaration.reads.contains(&HostRead::Membership);
+        return (!key.is_empty() && membership)
+            .then(|| syn::parse_quote!(host [#(#key),*] borrowed reads [membership]));
+    }
+    if key.is_empty() || declaration.reads.is_empty() {
+        return None;
+    }
+    let reads = declaration.reads.iter().map(Text::text);
+    let supports = (!declaration.supports.is_empty()).then(|| {
+        let supports = declaration.supports.iter().map(Text::text);
+        quote!(supports [#(#supports),*])
+    });
+    Some(syn::parse_quote!(host [#(#key),*] reads [#(#reads),*] #supports))
 }
 
 /// Add a declaration unless its token is already declared.
@@ -273,7 +322,8 @@ pub fn check_instance<'a>(
     Ok(declaration)
 }
 
-/// Well-formed table: unique ids; spelled tokens agree with their function.
+/// Well-formed table: unique ids; spelled tokens agree with their function;
+/// host reads and supports are listed once, and supports need an exact read.
 pub fn check_table(tokens: &[Token]) -> syn::Result<()> {
     for (index, declaration) in tokens.iter().enumerate() {
         crate::ensure(
@@ -302,8 +352,24 @@ pub fn check_table(tokens: &[Token]) -> syn::Result<()> {
             &declaration.token,
             "a layout task hasher requires a hashed provider token",
         )?;
+        crate::ensure(
+            distinct(&declaration.reads) && distinct(&declaration.supports),
+            &declaration.token,
+            "a provider token lists each host read and support once",
+        )?;
+        crate::ensure(
+            declaration.supports.is_empty() || declaration.reads.contains(&HostRead::Exact),
+            &declaration.token,
+            "provider token cursor supports require an exact host read",
+        )?;
     }
     Ok(())
+}
+fn distinct<T: PartialEq>(items: &[T]) -> bool {
+    items
+        .iter()
+        .enumerate()
+        .all(|(index, item)| !items[..index].contains(item))
 }
 
 macro_rules! keyword_text { ($ty:ident, $what:literal, $($name:ident => $variant:ident),* $(,)?) => {
@@ -324,3 +390,5 @@ keyword_text!(Hasher, "hasher state", fx => Fx, keyed => Keyed, none => None);
 keyword_text!(Admission, "admission strategy", sharded_hash => ShardedHash, sorted_subtract => SortedSubtract, none => None);
 keyword_text!(TaskHasher, "task hasher", layout => Layout, fx => Fx);
 keyword_text!(Spelling, "spelling function", std_set => StdSet, std_map => StdMap, rows => Rows, sharded => Sharded, runs => Runs, verbatim => Verbatim);
+keyword_text!(HostRead, "host read", exact => Exact, membership => Membership, candidates => Candidates, range => Range, ordered => Ordered);
+keyword_text!(HostSupport, "host support", retain => Retain, expand => Expand);

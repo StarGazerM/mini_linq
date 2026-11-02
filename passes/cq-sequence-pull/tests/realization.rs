@@ -323,7 +323,8 @@ fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
                     | Structure::JoinFilter { .. }
                     | Structure::Repr { .. }
                     | Structure::Stage { .. }
-                    | Structure::Share { .. } => continue,
+                    | Structure::Share { .. }
+                    | Structure::Native { .. } => continue,
                 };
                 respell(provider, ty);
             }
@@ -669,7 +670,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         p = pipe probe first [x] l,r;
         j = let canon project p keep {x,y};
         return j as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];
@@ -799,9 +800,10 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
         .join("../../runtime/cq-storage/src/lib.rs");
     let runtime = cq_testkit::rustc::Runtime::new(&runtime, false);
     runtime.run(&source.to_string());
-    // Direct merge premises are deliberately left to rustc, with the trait diagnostic.
+    // Direct merge premises are deliberately left to rustc, with the trait
+    // diagnostic: the hosts declare ordered reads that slices lack.
     let unordered: structures::Program = syn::parse_quote!(physical {
-        relation L(a:i32); relation R(a:i32);
+        relation L(a:i32) host [a] reads [ordered]; relation R(a:i32) host [a] reads [ordered];
         l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a};
         j = let canon merge[a] l,r; return j as answer(a);
     } structures { providers {  }});
@@ -825,14 +827,14 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
 #[test]
 fn point_prints_build_free_dispatch_and_canonical_lets_use_sort() {
     let p: structures::Program = syn::parse_quote!(physical {
-        relation R(a:i32,b:i32); r = pipe rename R@0 {a -> x,b -> y};
+        relation R(a:i32,b:i32) host [a] reads [exact]; r = pipe rename R@0 {a -> x,b -> y};
         w = let canon point select r if (x = 2);
         p = pipe project w keep {x,y}; return p as answer(y,x);
     } structures { providers {  }});
     let text = program(&p);
     assert_eq!(text.matches("Lazy :: new").count(), 0);
-    assert!(text.contains("dispatch :: PointHost"));
-    assert!(text.contains(". point ("));
+    // The declared exact read is one direct point call.
+    assert!(text.contains("dispatch :: point ("), "{text}");
     assert!(text.contains("cq_storage :: dedup :: Sort > :: sort"));
     assert!(text.contains("(y , x ,)"));
 }

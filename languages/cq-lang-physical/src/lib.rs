@@ -1214,12 +1214,13 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             }
         }
     }
-    analysis.disjoint = cq_syntax::algebra::disjoint_unions(program.definitions.iter().filter_map(
-        |definition| match &definition.operator {
-            Operator::Union(union) => Some((&definition.name, union.origin.as_ref())),
-            _ => None,
-        },
-    ));
+    analysis.disjoint =
+        cq_syntax::algebra::disjoint_unions(program.definitions.iter().filter_map(|definition| {
+            match &definition.operator {
+                Operator::Union(union) => Some((&definition.name, union.origin.as_ref())),
+                _ => None,
+            }
+        }));
     for definition in &program.definitions {
         if definition.canon.is_some()
             && matches!(definition.operator, Operator::Union(_))

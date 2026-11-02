@@ -36,7 +36,10 @@ fn closed_operands_at_domain_columns_become_translation_captures() {
         ]
     );
     let body = normal.query.body.to_token_stream().to_string();
-    assert!(body.contains("R (a , __cq_0_1) , where __cq_0_1 == (__cq_c_0)"), "{body}");
+    assert!(
+        body.contains("R (a , __cq_0_1) , where __cq_0_1 == (__cq_c_0)"),
+        "{body}"
+    );
     assert!(body.contains("where m != (__cq_c_3)"), "{body}");
     cq::normal::check(&normal).unwrap();
     // Normalization is idempotent: translated operands stay translated.
@@ -56,13 +59,25 @@ fn ordered_comparisons_and_ranges_use_order_preserving_bounds() {
     let normal = cq::normal::normalize(&source).unwrap();
     let functions: Vec<_> = captures(&normal)
         .iter()
-        .map(|capture| capture.split(" :: ").nth(3).unwrap().split(' ').next().unwrap().to_owned())
+        .map(|capture| {
+            capture
+                .split(" :: ")
+                .nth(3)
+                .unwrap()
+                .split(' ')
+                .next()
+                .unwrap()
+                .to_owned()
+        })
         .collect();
     assert_eq!(functions, ["upper", "upper", "lower", "upper"]);
     let body = normal.query.body.to_token_stream().to_string();
     assert!(body.contains("m < (__cq_c_0)"), "{body}");
     assert!(body.contains("m >= (__cq_c_1)"), "{body}");
-    assert!(body.contains("m >= (__cq_c_2)") && body.contains("m < (__cq_c_3)"), "{body}");
+    assert!(
+        body.contains("m >= (__cq_c_2)") && body.contains("m < (__cq_c_3)"),
+        "{body}"
+    );
     cq::normal::check(&normal).unwrap();
 }
 

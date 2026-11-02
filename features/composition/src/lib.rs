@@ -212,8 +212,8 @@ mod tests {
             }
             struct Native;
             relation L(a: i32);
-            relation R(a: i32, b: OrderedKey);
-            relation S(b: OrderedKey, c: i32);
+            relation R(a: i32, b: OrderedKey) host [a] reads [exact, membership];
+            relation S(b: OrderedKey, c: i32) host [b] reads [exact, membership, ordered];
             answer(a, c) :- L(a), R(a, b), S(b, c);
         }
         .map(|(a, c)| vec![*a, *c])

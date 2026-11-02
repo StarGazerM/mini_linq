@@ -36,7 +36,7 @@ fn decisions_roundtrip_and_physical_is_identical() {
         target
             .to_token_stream()
             .to_string()
-            .contains("AdaptiveKeySet < _ , :: cq_storage :: AutoDense , 67108864 >")
+            .contains("AdaptiveKeySet < _ , :: cq_storage :: I64Codec , 67108864 >")
     );
     assert_eq!(facts.reads.len(), 3);
     assert_eq!(
@@ -244,7 +244,7 @@ fn join_filters_preserve_coverage_and_lineage() {
         let filter = &facts.join_filters["l"][0];
         assert_eq!(
             filter.provider,
-            syn::parse_quote!(@adaptive_membership as ::cq_storage::AdaptiveMembership<_, 67108864>)
+            syn::parse_quote!(@dense_membership as ::cq_storage::DenseMembership<_, 67108864>)
         );
         assert_eq!(filter.covering, "j");
         assert_eq!(
@@ -298,7 +298,7 @@ fn membership_provider_selection_is_type_blind_and_has_no_redundant_filter() {
         );
         assert_eq!(
             facts.built["selected"][0].1,
-            syn::parse_quote!(@adaptive_membership as ::cq_storage::AdaptiveMembership<_, 16777216>)
+            syn::parse_quote!(@dense_membership as ::cq_storage::DenseMembership<_, 16777216>)
         );
         assert!(facts.join_filters.is_empty());
     }

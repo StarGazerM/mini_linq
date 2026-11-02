@@ -54,7 +54,7 @@ fn explicit_providers_dispatch_build_capabilities_without_type_recognition() {
         ),
         (
             syn::parse_quote!(selected_provider = ::user::SelectedProvider<_> {
-                reads [exact, range, membership], build macro
+                reads [exact, range, membership], build typed
             };),
             syn::parse_quote!(::user::SelectedProvider<_>),
         ),
@@ -89,10 +89,15 @@ fn explicit_providers_dispatch_build_capabilities_without_type_recognition() {
         let statements = &context.statements;
         let printed = quote!(#(#statements)*).to_string();
         assert!(printed.contains(&provider.to_token_stream().to_string()));
+        // Every recorded provider is built by one direct call: a typed build
+        // through `Build`, an inferred build through its own constructor.
         if provider == syn::parse_quote!(::user::ProviderAlias) {
-            assert!(printed.contains("ProviderAlias :: build"));
+            assert!(printed.contains("ProviderAlias :: build"), "{printed}");
         } else {
-            assert!(printed.contains("cq_storage :: build !"));
+            assert!(
+                printed.contains("as :: cq_storage :: Build < _ > > :: build"),
+                "{printed}"
+            );
         }
         assert!(!printed.contains("join_filter"));
         assert!(!printed.contains("distinct_keys"));
@@ -136,13 +141,21 @@ fn raw_membership_fallback_dispatches_build_with_inferred_provider_output() {
         context.prepare_host("r");
         let statements = &context.statements;
         let printed = quote!(#(#statements)*).to_string();
-        assert!(printed.contains("cq_storage :: build !"), "{printed}");
-        assert!(printed.contains("Lazy < _ , _ >"), "{printed}");
+        // One direct typed build; the fallback cell spells the recorded provider.
+        assert!(
+            printed.contains("as :: cq_storage :: Build < _ > > :: build"),
+            "{printed}"
+        );
+        let ty = &provider.ty;
+        assert!(
+            printed.contains(&format!("Lazy < {} , _ >", quote!(#ty))),
+            "{printed}"
+        );
     }
 }
 
 #[test]
-fn join_filters_emit_adaptive_builds_and_provider_independent_identity_predicates() {
+fn join_filters_emit_dense_builds_and_provider_independent_identity_predicates() {
     use quote::quote;
     let source = syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
@@ -160,7 +173,7 @@ fn join_filters_emit_adaptive_builds_and_provider_independent_identity_predicate
     let statements = &context.statements;
     let identity = quote!(#(#statements)*).to_string();
     assert!(identity.contains("cq_storage :: NoJoinFilter"));
-    assert!(!identity.contains("AdaptiveMembership"));
+    assert!(!identity.contains("DenseMembership"));
     assert!(!identity.contains("Option :: None"));
     assert!(!identity.contains("conservative"));
     // Task grading can select a provider with independent key and payload
@@ -189,12 +202,17 @@ fn join_filters_emit_adaptive_builds_and_provider_independent_identity_predicate
     let printed = quote!(#(#statements)*).to_string();
     assert!(
         printed.contains(
-            "cq_storage :: build ! (:: cq_storage :: AdaptiveMembership < _ , 67108864 >"
-        )
+            "< :: cq_storage :: DenseMembership < _ , 67108864 > as :: cq_storage :: Build < _ > > :: build"
+        ),
+        "{printed}"
     );
     assert!(printed.contains("distinct_keys"));
-    assert!(printed.contains("JoinFilterKey :: < i64 > :: new"));
-    assert!(printed.contains("eligible () && :: cq_storage :: selective_build"));
+    // Every recorded filter is built; the recorded abandon policy is printed.
+    assert!(!printed.contains("JoinFilterKey"));
+    assert!(
+        printed.contains(":: cq_storage :: selective_build"),
+        "{printed}"
+    );
     assert!(!printed.contains("NoDense"));
 }
 
@@ -202,7 +220,7 @@ fn join_filters_emit_adaptive_builds_and_provider_independent_identity_predicate
 fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
     use cq_lang_structures::provider::base::{declaration, instance};
     use quote::{ToTokens, quote};
-    let providers: [cq_lang_structures::Provider; 4] = [
+    let providers: [cq_lang_structures::Provider; 3] = [
         instance(
             "adaptive_membership",
             syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
@@ -214,10 +232,6 @@ fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
         instance(
             "sorted_run",
             syn::parse_quote!(::cq_storage::SortedRun<_, _>),
-        ),
-        instance(
-            "sorted_run",
-            syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense>),
         ),
     ];
     for inner in providers {
@@ -255,8 +269,7 @@ fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
             assert!(printed.contains("Sharded :: < _ , _ > :: build_from_parts_with_router"));
             assert!(printed.contains("route_index"));
             assert!(printed.contains(&inner.ty.to_token_stream().to_string()));
-            assert!(printed.contains("cq_storage :: build !"));
-            assert!(!printed.contains("as :: cq_storage :: Build < _ >"));
+            assert!(printed.contains("as :: cq_storage :: Build < _ > > :: build"));
             assert_eq!(
                 printed.matches("let __cq_build_source").count(),
                 if borrowed_singleton { 2 } else { 1 },

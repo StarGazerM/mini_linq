@@ -11,13 +11,13 @@ pub fn declarations() -> Vec<Declaration> {
             reads [exact, range, membership], build inferred, abi range, contiguous_range
         };
         device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> {
-            reads [exact, range, membership, resident], build macro, abi runs
+            reads [exact, range, membership, resident], build typed, abi runs
         };
         radix_layout = ::gpu_datalog_runtime::RadixLayout<_, _, _, _, _> {
-            reads [exact, range, membership, candidates], build macro, abi radix
+            reads [exact, range, membership, candidates], build typed, abi radix
         };
         device_columns = ::cq_gpu_runtime::DeviceColumns<_> {
-            reads [], build macro, abi columns, bounds resident_columns
+            reads [], build typed, abi columns, bounds resident_columns
         };
         packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon {
             reads [distinct], build inferred, packed_bits 128

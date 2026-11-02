@@ -614,6 +614,8 @@ fn verbatim(name: &str, protocol: storage::LayoutProtocol) -> storage::provider:
         storage::provider::Admission::None,
         false,
         storage::provider::TaskHasher::Fx,
+        &[],
+        &[],
     )
 }
 

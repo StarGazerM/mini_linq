@@ -18,7 +18,7 @@
 //! Fact ::= "reads" "[" ("exact" | "range" | "membership" | "ordered"
 //!              | "distinct" | "resident" | "candidates"),* "]"
 //!        | "supports" "[" ("retain" | "expand" | "keys"),* "]"
-//!        | "build" ("inferred" | "macro") | "accounting" ("rows" | "keys")
+//!        | "build" ("inferred" | "typed") | "accounting" ("rows" | "keys")
 //!        | ("nested" | "routed") Integer | "join_filter" | "shared"
 //!        | "packed_bits" Integer | "abi" ("range" | "runs" | "columns" | "radix")
 //!        | "contiguous_range" | "bounds" "resident_columns"
@@ -40,6 +40,7 @@ pub mod kw {
     syn::custom_keyword!(supports);
     syn::custom_keyword!(build);
     syn::custom_keyword!(inferred);
+    syn::custom_keyword!(typed);
     syn::custom_keyword!(accounting);
     syn::custom_keyword!(rows);
     syn::custom_keyword!(keys);
@@ -116,8 +117,9 @@ impl Capability {
 pub enum Build {
     /// `Type::build(pairs)`: the spelling is a bare path whose generics Rust infers.
     Inferred,
-    /// `cq_storage::build!(Type, pairs)`: explicit providers dispatch at the call site.
-    Macro,
+    /// `<Type as cq_storage::Build<_>>::build(pairs)`: one direct call on the
+    /// recorded spelling, which fixes the provider and its codec.
+    Typed,
 }
 
 /// Allocation accounting of a retained instance (`cq_storage::retention`).
@@ -562,7 +564,7 @@ impl syn::parse::Parse for Declaration {
         let mut facts = Facts {
             reads: Vec::new(),
             supports: Vec::new(),
-            build: Build::Macro,
+            build: Build::Typed,
             accounting: Accounting::None,
             composition: None,
             join_filter: false,
@@ -610,7 +612,7 @@ impl syn::parse::Parse for Declaration {
                     body.parse::<kw::inferred>()?;
                     facts.build = Build::Inferred;
                 } else {
-                    body.parse::<syn::Token![macro]>()?;
+                    body.parse::<kw::typed>()?;
                 }
             } else if lookahead.peek(kw::accounting) {
                 body.parse::<kw::accounting>()?;
@@ -700,7 +702,7 @@ impl ToTokens for Declaration {
         }
         facts.push(match build {
             Build::Inferred => quote::quote!(build inferred),
-            Build::Macro => quote::quote!(build macro),
+            Build::Typed => quote::quote!(build typed),
         });
         match accounting {
             Accounting::None => {}

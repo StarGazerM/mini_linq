@@ -248,14 +248,13 @@ enum MembershipForm<K: OrderKey, const B: usize> {
     Hash(AdaptiveMembership<K, B>),
 }
 
-/// Contains-only exact membership factory with a bounded dense bitmap.
+/// Contains-only exact hash membership, requiring only `Eq + Hash`, without a
+/// sorted copy or shared cells.
 ///
-/// [`crate::build!`] returns [`DenseMembership`] when the callsite proves
-/// [`OrderKey`], allowing ordinal calls to inline into probes. Otherwise it
-/// returns this exact hash provider. The ordinary [`Build`] implementation also
-/// uses hashing, requiring only `Eq + Hash`, without a sorted copy or shared cells.
-///
-/// Formal rule STR-AdaptiveMembership: Rust capability dispatch selects dense storage only with the total order-preserving key law; generic equality/hash keys retain exact hash membership.
+/// Formal rule STR-AdaptiveMembership: structure selection records
+/// [`DenseMembership`] (bounded dense bitmap over the total order-preserving
+/// [`OrderKey`] law) for a one-column key and this hash provider for wider keys;
+/// a dense key lacking `OrderKey` is a rustc error, never a hash fallback.
 pub struct AdaptiveMembership<K, const MAX_BITS: usize> {
     keys: HashSet<K>,
     bytes: usize,
@@ -293,7 +292,9 @@ impl<K: Eq + Hash, const B: usize> AdaptiveMembership<K, B> {
     }
 }
 
-/// Dense-capable result of [`crate::build!`] for [`AdaptiveMembership`] factories.
+/// Recorded dense membership (`dense_membership`): a bounded bitmap over
+/// [`OrderKey`] ordinals, kept as exact hash membership when the span exceeds
+/// `MAX_BITS`.
 ///
 /// Both the bitmap and sparse hash forms use static ordinal capability bounds;
 /// no function pointer or runtime key-type inspection is needed by a probe.

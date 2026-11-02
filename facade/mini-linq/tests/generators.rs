@@ -22,10 +22,7 @@ fn ranges_fan_out_and_keep_borrowed_prefix_columns() {
 
 #[test]
 fn vec_columns_borrow_items_and_empty_iterators_remove_rows() {
-    let rows = [
-        (1_i32, vec![vec![1_i64], vec![2_i64]]),
-        (2, vec![]),
-    ];
+    let rows = [(1_i32, vec![vec![1_i64], vec![2_i64]]), (2, vec![])];
     let actual: Vec<(&i32, &Vec<i64>)> = mini_linq::mini_linq! {
         struct Q; relation rows(key:i32,values:Vec<Vec<i64>>);
         relation answer(key:i32,value:&Vec<i64>);
@@ -68,11 +65,7 @@ fn captured_collections_remain_borrowed_and_duplicates_are_unobservable() {
 #[test]
 fn generated_values_join_host_keys_and_feed_opaque_suffixes() {
     let limits = [(3_i32,)];
-    let labels = [
-        (0_i32, vec![0_i64]),
-        (2, vec![2_i64]),
-        (4, vec![4_i64]),
-    ];
+    let labels = [(0_i32, vec![0_i64]), (2, vec![2_i64]), (4, vec![4_i64])];
     let actual: BTreeSet<_> = mini_linq::mini_linq! {
         struct Q; relation limits(n:i32); relation labels(key:i32,label:Vec<i64>);
         relation answer(value:i32,label:Vec<i64>,next:i32);

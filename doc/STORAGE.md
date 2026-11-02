@@ -961,8 +961,9 @@ as strings only within the same column dictionary, not across columns.
 sealed directory policies delegate to that same stored ordinal. Dense membership stores
 and probes bounds in that declared word width; custom wide ordinal domains
 may explicitly use `u128`. `STR-FullKey` records existence-only reads when a positive probe
-binds every column of a set relation; `build!` then selects bounded bitmap
-membership using ordinary Rust trait dispatch. Input uniqueness is not
+binds every column of a set relation; selection then records `dense_membership`
+(bounded bitmap over the key's `OrderKey`) for one stored key column, built by
+one typed `Build` call. Input uniqueness is not
 assumed: constructing the membership set handles duplicate witnesses.
 
 The loader-side `interned_relation_loaders!` opt-in uses ordinary Rust
@@ -1083,3 +1084,38 @@ The runtime contract requires each appended run to be sorted, unique and
 disjoint from accepted rows (`experiments/gpu/datalog-runtime/src/runs.rs`,
 `DeviceRuns::fresh` and `DeviceRuns::append_sorted`). This is no longer the
 old fused device admission path.
+
+### 13.3 Host reads and dispatch (no fallback tiers)
+
+Every runtime representation choice is a recorded Structures fact printed as
+one direct call; there are no autoref dispatch tiers and no silent fallbacks.
+
+- **Host capabilities are declared.** An input relation answers keyed reads
+  only through `relation R(..) [= (expr)] host [k..] [borrowed] reads [exact |
+  membership | candidates | range | ordered] [supports [retain | expand]];`
+  (IF-HostDecl). The key is a declaration prefix or one indexed column;
+  `borrowed` keys (`HashSet<(&T,)>`) declare membership only. An undeclared
+  host is a plain row source.
+- **One record per read.** Selection records `R native <reader> = <read>
+  [key]` when the declaration has a read the reader needs on exactly that key
+  (key listed in declaration order), otherwise a fallback provider
+  (SEL-NativeHost, STR-NativeHost). Sequence binding accepts the native record
+  as discharging the lookup (BE-NativeBind).
+- **Printing.** A native read is `dispatch::{seek, contains,
+  contains_borrowed, candidate_count, candidate_keys, retained, expanded,
+  point, range, window}` plus one `require::native_*` guard outside all
+  closures; a fallback is a `Lazy` cell built once by
+  `<T as Build<_>>::build`. A host type lacking the declared capability, or
+  keyed by another type, is a rustc error naming the trait (`IndexRead`,
+  `PointLookup`, `ExactMembership`, `Candidates`, `SeekRangeLookup`,
+  `OrderedRead`).
+- **Codecs and membership.** Key sets and sorted runs spell their codec
+  (`I64Codec`) in the recorded provider type. One-column membership stores
+  record `dense_membership` (requires `OrderKey`), wider keys hash
+  `adaptive_membership`; a dense key without `OrderKey` is a rustc error, not a
+  hash fallback.
+- **Join filters.** Positional selection and the `join_filter` advice record
+  `dense_membership` filters and the abandon policy `abandon 35 of <base>`
+  (SEL-JoinFilterAbandon); every recorded filter is built, subject only to the
+  recorded policy. A filter that regresses is removed by not selecting it, not
+  by a runtime eligibility check.

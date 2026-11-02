@@ -181,6 +181,8 @@ fn scan_input(
     let binding = &scan.binding;
     declaration.name = binding.clone();
     declaration.value = Some(syn::parse_quote!(= (#binding)));
+    // A scan is a whole, unkeyed input (a delta or key-zero layout bucket).
+    declaration.hosts = Vec::new();
     let BodyItem::Positive { atom } = &mut query.body[0] else {
         unreachable!("scan source is a positive read")
     };
@@ -188,11 +190,16 @@ fn scan_input(
     declaration
 }
 // Each hole owns only the CQ inputs it reads, including completed borrowed keys.
+// Layout and key-set inputs declare their token's host reads on their recorded
+// key (IF-HostDecl); delta row buffers declare none. Key sets collected by
+// non-batch key holes store borrowed key columns (`borrowed_keys`).
 fn hole_inputs<'a>(
+    tokens: &[storage::provider::Token],
     context: &RoundContext,
     keys: &[KeySet],
+    borrowed_keys: bool,
     names: impl Iterator<Item = &'a Ident>,
-) -> Vec<cq_syntax::RelationDecl> {
+) -> syn::Result<Vec<cq_syntax::RelationDecl>> {
     let names: std::collections::BTreeSet<_> = names.map(symbol_name).collect();
     let mut inputs = Vec::new();
     for relation in &context.relations {
@@ -202,6 +209,7 @@ fn hole_inputs<'a>(
                 declaration.name = delta.clone();
                 let host = relation.delta_host.as_ref().expect("checked delta host");
                 declaration.value = Some(syn::parse_quote!(= (&#host)));
+                declaration.hosts = Vec::new();
                 inputs.push(declaration);
             }
         }
@@ -217,6 +225,8 @@ fn hole_inputs<'a>(
                 .collect();
             let host = &layout.host;
             declaration.value = Some(syn::parse_quote!(= (&#host)));
+            declaration.hosts =
+                host_decls(tokens, &layout.provider, &declaration, layout.key, false)?;
             inputs.push(declaration);
         }
     }
@@ -235,10 +245,33 @@ fn hole_inputs<'a>(
             };
             let host = &key.name;
             declaration.value = Some(syn::parse_quote!(= (#host)));
+            // A unit key (no projected columns) stores an owned `()`.
+            let borrowed = borrowed_keys && !key.columns.is_empty();
+            let arity = declaration.columns.len();
+            declaration.hosts = host_decls(tokens, &key.provider, &declaration, arity, borrowed)?;
             inputs.push(declaration);
         }
     }
-    inputs
+    Ok(inputs)
+}
+/// The token's declared host reads on the leading `key` columns of `declaration`.
+fn host_decls(
+    tokens: &[storage::provider::Token],
+    provider: &storage::Provider,
+    declaration: &cq_syntax::RelationDecl,
+    key: usize,
+    borrowed: bool,
+) -> syn::Result<Vec<cq_syntax::HostDecl>> {
+    let token = storage::provider::lookup(tokens, &provider.token)?;
+    let key: Vec<Ident> = declaration
+        .columns
+        .iter()
+        .take(key)
+        .map(|column| column.name.clone())
+        .collect();
+    Ok(storage::provider::host_decl(token, &key, borrowed)
+        .into_iter()
+        .collect())
 }
 /// Lower variants and key projections, retaining the recorded schedule.
 fn construct(
@@ -526,7 +559,13 @@ fn construct(
                         selections.push(quote!(where #first == #repeated));
                     }
                     let arguments = canonical.columns.iter().map(|&column| &arguments[column]);
-                    let declarations = hole_inputs(&context, &[], std::iter::once(source_name));
+                    let declarations = hole_inputs(
+                        &source.tokens,
+                        &context,
+                        &[],
+                        false,
+                        std::iter::once(source_name),
+                    )?;
                     holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#arguments),*) #(, #selections)*;))?);
                     authored_orders.push(None);
                     known_options.push(None);
@@ -582,14 +621,16 @@ fn construct(
                 known_option = Some(quote!(known(#canonical @ #clause at #level)));
             }
             let declarations = hole_inputs(
+                &source.tokens,
                 &context,
                 &stratum.keys,
+                interface != HoleInterface::Batch,
                 query.body.iter().filter_map(|item| match item {
                     BodyItem::Positive { atom } => Some(&atom.relation),
                     BodyItem::Negation(negative) => Some(&negative.atom.relation),
                     _ => None,
                 }),
-            );
+            )?;
             let hole = holes.len();
             holes.push(syn::parse2(
                 quote!(struct #name; #(#declarations)* #scan_declaration #output #query),

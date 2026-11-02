@@ -166,6 +166,7 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                                 | Structure::Share { .. }
                                 | Structure::Dedup { .. }
                                 | Structure::HeadDedup { .. }
+                                | Structure::Native { .. }
                         )
                 }
                 Selector::Result(ref result) => {
@@ -184,7 +185,8 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                     Structure::Read { .. }
                     | Structure::Repr { .. }
                     | Structure::Stage { .. }
-                    | Structure::Share { .. } => false,
+                    | Structure::Share { .. }
+                    | Structure::Native { .. } => false,
                     Structure::JoinFilter { .. } => matches!(kind, Kind::JoinFilter),
                     Structure::Host { reader, .. } => {
                         matches!(kind, Kind::Membership)
@@ -245,7 +247,8 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 | Structure::Stage { .. }
                 | Structure::Dedup { .. }
                 | Structure::HeadDedup { .. }
-                | Structure::Share { .. } => {
+                | Structure::Share { .. }
+                | Structure::Native { .. } => {
                     unreachable!("read, repr, stage and share entries carry no provider type")
                 }
             }

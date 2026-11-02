@@ -15,6 +15,107 @@ pub struct JoinFilter {
     pub covering: Ident,
     pub marker_token: kw::marker,
     pub marker: syn::Type,
+    #[parse(parse_abandon)]
+    pub abandon: Option<Abandon>,
+}
+
+/// Formal rule IF-JoinFilterAbandon, recorded: construct no filter from a
+/// build keeping more than `percent`% of the rows of `base`, the positional
+/// base of the build's occurrence lineage (its population). Absent, the
+/// filter is always built.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Abandon {
+    pub abandon_token: kw::abandon,
+    pub percent: syn::LitInt,
+    pub of_token: kw::of,
+    pub base: Ident,
+}
+
+impl Abandon {
+    pub fn percent(&self) -> usize {
+        self.percent.base10_parse().expect("checked percent")
+    }
+}
+
+fn parse_abandon(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<Abandon>> {
+    if input.peek(kw::abandon) {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// The abandon threshold join-filter selection records (RPT+'s creation
+/// threshold): a build keeping more than this percent of its population
+/// rarely rejects probe-side rows.
+pub const JOIN_FILTER_ABANDON_PERCENT: usize = 35;
+
+/// Formal rule SEL-JoinFilterAbandon: record every join filter's abandon
+/// policy from the final positional bases. A filter whose build has a
+/// positional lineage base abandons above [`JOIN_FILTER_ABANDON_PERCENT`] of
+/// that base's rows; otherwise its population is unknown and it is always
+/// built. Selecting passes call this after their last join-filter or
+/// positional decision.
+pub fn record_join_filter_abandon(program: &mut Program) -> syn::Result<()> {
+    for entry in &mut program.structures.entries {
+        if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
+            filter.abandon = None;
+        }
+    }
+    let facts = contract::check(program)?;
+    let positional = positional_bases(&facts);
+    let percent = proc_macro2::Literal::usize_unsuffixed(JOIN_FILTER_ABANDON_PERCENT);
+    for entry in &mut program.structures.entries {
+        let Structure::JoinFilter { filter, .. } = &mut entry.structure else {
+            continue;
+        };
+        let Some(origin) = facts.lineage.get(&symbol_name(&filter.build)) else {
+            continue;
+        };
+        if positional.contains(&origin.base) {
+            let base = Ident::new(&origin.base, proc_macro2::Span::call_site());
+            filter.abandon = Some(syn::parse_quote!(abandon #percent of #base));
+        }
+    }
+    Ok(())
+}
+
+/// Bases read positionally: the bases of recorded reads, selections, key
+/// sets, join-filtered scans and position representations.
+pub fn positional_bases(analysis: &Analysis) -> BTreeSet<String> {
+    analysis
+        .reads
+        .values()
+        .map(|r| symbol_name(&r.origin.base))
+        .chain(
+            analysis
+                .selections
+                .values()
+                .map(|s| symbol_name(&s.origin.base)),
+        )
+        .chain(
+            analysis
+                .keysets
+                .values()
+                .map(|s| symbol_name(&s.origin.base)),
+        )
+        .chain(
+            analysis
+                .join_filters
+                .keys()
+                .map(|scan| analysis.lineage[scan].base.clone()),
+        )
+        .chain(
+            analysis
+                .repr
+                .values()
+                .filter_map(|repr| match repr {
+                    Repr::Positions { bases, .. } => Some(bases),
+                    Repr::Tuples(_) => None,
+                })
+                .flat_map(|bases| bases.iter().map(|base| symbol_name(&base.base))),
+        )
+        .collect()
 }
 
 /// One admissible filter of a covering operator. `filtered` reports a
@@ -198,6 +299,22 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
                 );
             }
             concrete_type(&filter.marker)?;
+            if let Some(abandon) = &filter.abandon {
+                let percent: usize = abandon.percent.base10_parse()?;
+                let population = facts
+                    .lineage
+                    .get(&symbol_name(&filter.build))
+                    .map(|origin| &origin.base);
+                if !(1..=100).contains(&percent)
+                    || population != Some(&symbol_name(&abandon.base))
+                    || !positional_bases(facts).contains(&symbol_name(&abandon.base))
+                {
+                    return error(
+                        abandon,
+                        "a join filter abandons at a percent of its build's positional lineage base",
+                    );
+                }
+            }
         }
     }
     Ok(())
@@ -232,6 +349,7 @@ pub(crate) fn coalesce_join_filters(program: &Program, facts: &mut Analysis) {
                     && previous.provider.same_token(&filter.provider)
                     && ungroup_type(&previous.provider.ty) == ungroup_type(&filter.provider.ty)
                     && ungroup_type(&previous.marker) == ungroup_type(&filter.marker)
+                    && previous.abandon == filter.abandon
                     && layouts[&symbol_name(&previous.covering)]
                         == layouts[&symbol_name(&filter.covering)]
             }) {

@@ -8,4 +8,5 @@ publish = false
 
 [dependencies]
 ahash = "0.8"
+cq-storage = { path = "../../../../runtime/cq-storage" }
 libc = "0.2"

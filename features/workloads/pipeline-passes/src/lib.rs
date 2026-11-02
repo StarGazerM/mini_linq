@@ -7,7 +7,7 @@
 fn sorted_index() -> cq_lang_structures::Declaration {
     syn::parse_quote!(
         sorted_index = ::cq_workloads::SortedIndex<_, _> {
-            reads [exact, membership], supports [keys], build macro
+            reads [exact, membership], supports [keys], build typed
         };
     )
 }

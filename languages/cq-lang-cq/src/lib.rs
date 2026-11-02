@@ -20,9 +20,9 @@
 //! All folds consume that same DISTINCT valuation set.
 //!
 pub mod blocks;
+mod domain;
 pub mod group;
 pub mod hypergraph;
-mod domain;
 pub mod normal;
 pub use blocks::{Block, Branch};
 mod sugar;

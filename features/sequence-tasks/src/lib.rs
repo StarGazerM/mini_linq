@@ -168,6 +168,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         "hash_set",
         "adaptive_keyset",
         "adaptive_membership",
+        "dense_membership",
         "std_hash_set",
         "sharded_index",
         "sorted_run",

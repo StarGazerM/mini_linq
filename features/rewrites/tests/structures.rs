@@ -12,7 +12,7 @@ fn custom(token: &str, ty: proc_macro2::TokenStream, build: &str) -> ir::Declara
 
 /// Advice declaring the `replacement` token spelled `ty`.
 fn replacement(ty: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
-    quote!(providers { replacement = #ty { reads [exact, range, membership], build macro }; })
+    quote!(providers { replacement = #ty { reads [exact, range, membership], build typed }; })
 }
 
 #[test]
@@ -23,7 +23,7 @@ fn membership_advice_preserves_a_fully_bound_physical_probe() {
         r = let rename R@1 {a -> x,b -> y};
         joined = let canon probe first [x,y] l,r;
         return joined as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x,y] supports [keys];
@@ -56,7 +56,7 @@ fn membership_advice_cannot_discard_a_demanded_payload() {
         r = let rename R@1 {a -> x,b -> y};
         joined = let canon probe first [x] l,r;
         return joined as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];
@@ -74,7 +74,7 @@ fn smallest_expand_source() -> ir::Program {
         candidate = pipe probe smallest [b] l,r;
         checked = let canon probe first [a,c] candidate,s;
         return checked as answer(a,b,c);
-    } structures { providers { custom_directory = CustomDirectory { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { custom_directory = CustomDirectory { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         r = @custom_directory as CustomDirectory [b][c] supports [expand];
         s = @custom_directory as CustomDirectory [a][c] supports [expand];
         l host scan = @host_scan as ::core::iter::Map<_, _> [];
@@ -194,7 +194,7 @@ fn membership_bridge_source() -> ir::Program {
         last = pipe probe first [c] after,t;
         out = let canon project last keep {a,b,c,d,tag};
         return out as answer(a,b,c,d,tag);
-    } structures { providers { adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build macro, shared }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build macro, join_filter, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         selected = @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64> [b] membership payload [b] constants {tag = 7};
         r = @sorted_run as ::cq_storage::SortedRun<_,_> [a] supports [expand];
         s = @sorted_run as ::cq_storage::SortedRun<_,_> [b] supports [expand];
@@ -356,7 +356,7 @@ fn every_selector_has_a_pinned_ir_and_independent_mutation_checks() {
         ),
         (
             quote!(
-                providers { vec_deque = ::std::collections::VecDeque<_> { reads [], build macro }; }
+                providers { vec_deque = ::std::collections::VecDeque<_> { reads [], build typed }; }
                 rows => @vec_deque as ::std::collections::VecDeque<_>
             ),
             include_str!("fixtures/retype_rows.structures"),
@@ -408,7 +408,7 @@ fn selectors_are_by_recorded_reads_and_levels_not_old_type_spelling() {
         retype(&original, quote!(#result r#r => @replacement as Replacement<'_, _, _>)).unwrap(),
         fixture(include_str!("fixtures/retype_result.structures"))
     );
-    let alias = custom("alias", quote!(Alias<'_, _, _>), "macro");
+    let alias = custom("alias", quote!(Alias<'_, _, _>), "typed");
     let renamed = retype(
         &original,
         quote!(providers { #alias } trie => @alias as Alias<'_, _, _>),
@@ -436,7 +436,7 @@ fn selectors_are_by_recorded_reads_and_levels_not_old_type_spelling() {
         retype(
             &original,
             quote!(
-                providers { vec_deque = ::std::collections::VecDeque<_> { reads [], build macro }; }
+                providers { vec_deque = ::std::collections::VecDeque<_> { reads [], build typed }; }
                 kind(rows) => @vec_deque as ::std::collections::VecDeque<_>
             )
         )
@@ -494,7 +494,7 @@ fn computed_head_uses_sort_without_touching_physical() {
             relation R(a:i32); r = let canon rename R@0 {a -> x};
             return r as answer(*x % 2);
         }
-        structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build macro }; }
+        structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
             r canon = rows; r rows = @sort as ::cq_storage::dedup::Sort;
             r host scan = @host_scan as ::core::iter::Map<_, _> [];
             r head = @sort as ::cq_storage::dedup::Sort;
@@ -513,7 +513,7 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
         p = let canon probe first [x] s,r; return p as answer(x);
     });
     let source = cq_structure_selection::compile(&source).unwrap();
-    let shared_index = custom("shared_index", quote!(Shared<'_, _, _>), "macro");
+    let shared_index = custom("shared_index", quote!(Shared<'_, _, _>), "typed");
     assert!(
         retype(
             &source,
@@ -536,8 +536,8 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
         structures {
             providers {
                 sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
-                host_scan = ::core::iter::Map<_, _> { reads [], build macro };
-                shared_index = Shared<'_, _, _> { reads [exact, membership], build macro };
+                host_scan = ::core::iter::Map<_, _> { reads [], build typed };
+                shared_index = Shared<'_, _, _> { reads [exact, membership], build typed };
             }
             l host scan = @host_scan as ::core::iter::Map<_, _> [];
             r host scan = @host_scan as ::core::iter::Map<_, _> [];
@@ -578,7 +578,7 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
     );
     let target = retype(
         &source,
-        quote!(providers { mask = Mask<_> { reads [], build macro }; } kind(selection) => @mask as Mask<_>),
+        quote!(providers { mask = Mask<_> { reads [], build typed }; } kind(selection) => @mask as Mask<_>),
     )
     .unwrap();
     assert_eq!(source.physical, target.physical);
@@ -695,7 +695,7 @@ fn sorted_runs_records_owned_singleton_probe_as_automatic_codec_request() {
     let target = cq_rewrite_passes::sorted_runs(&source, quote!()).unwrap();
     let text = target.to_token_stream().to_string();
     assert!(
-        text.contains("SortedRun < _ , _ , :: cq_storage :: AutoDense > [x]"),
+        text.contains("SortedRun < _ , _ , :: cq_storage :: I64Codec > [x]"),
         "{text}"
     );
     assert_eq!(

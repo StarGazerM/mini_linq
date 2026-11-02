@@ -62,6 +62,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         "keyset",
         "adaptive_keyset",
         "adaptive_membership",
+        "dense_membership",
         // Formal rule PL-Distinct: canonical rows records. Exists is the
         // 0-ary set, whose build already yields the distinct rows.
         "sort",
@@ -718,7 +719,13 @@ impl<'a> Emitter<'a> {
         self.register(&result);
         let context = self.context();
         let mut setup = TokenStream::new();
-        let (lookup, payload) = match context.keyed(provider, &columns)? {
+        let (lookup, payload) = match context.keyed(&result, provider, &columns)? {
+            Access::Host(access) if access.native.is_some() && *capability == Capability::Range => {
+                return Err(syn::Error::new_spanned(
+                    provider,
+                    "a Sequence range lookup reads a recorded fallback, not a native host read",
+                ));
+            }
             Access::Host(access) if *capability == Capability::Range => {
                 let fallback = &access.fallback;
                 let key = context.host_key(left, &access);

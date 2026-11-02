@@ -350,29 +350,27 @@ mod tests {
     }
 
     #[test]
-    fn code_capabilities_select_dense_membership_and_ordered_keysets() {
+    fn codes_build_dense_membership_and_ordered_keysets() {
         use cq_storage::{
-            AdaptiveKeySet, AdaptiveMembership, AutoDense, ExactIntervalMembership, ExactMembership,
+            AdaptiveKeySet, Build, DenseMembership, ExactIntervalMembership, ExactMembership,
+            I64Codec,
         };
 
         type Code = StringCode;
         let codes: [Code; 3] = [StringCode(0), StringCode(2), StringCode(2)];
-        let membership = cq_storage::build!(
-            AdaptiveMembership<_, 64>,
-            codes.iter().map(|code| ((code,), ())),
-        );
-        let membership: cq_storage::DenseMembership<(&Code,), 64> = membership;
+        let membership =
+            <DenseMembership<_, 64> as Build<_>>::build(codes.iter().map(|code| ((code,), ())));
+        let membership: DenseMembership<(&Code,), 64> = membership;
         assert!(membership.is_dense());
         assert!(membership.contains(&(&StringCode(0),)));
         assert!(membership.contains(&(&StringCode(2),)));
         assert!(!membership.contains(&(&StringCode(1),)));
         assert!(!membership.contains(&(&StringCode::MAX,)));
 
-        let ordered = cq_storage::build!(
-            AdaptiveKeySet<_, AutoDense, 64>,
+        let ordered = <AdaptiveKeySet<_, I64Codec, 64> as Build<_>>::build(
             codes.into_iter().map(|code| (code, ())),
         );
-        let ordered: AdaptiveKeySet<Code, cq_storage::I64Codec, 64> = ordered;
+        let ordered: AdaptiveKeySet<Code, I64Codec, 64> = ordered;
         assert_eq!(ordered.retained_bytes(), std::mem::size_of::<u64>());
         assert!(ordered.any_in(&StringCode(1), &StringCode(2)));
         assert!(!ordered.any_in(&StringCode(1), &StringCode(1)));
@@ -413,7 +411,10 @@ mod tests {
         assert_eq!(exact(dictionaries.domain("name"), ""), StringCode(0));
         assert_eq!(exact(dictionaries.domain("name"), "a"), StringCode(1));
         assert_eq!(exact(dictionaries.domain("other"), "a"), StringCode(0));
-        assert_eq!(exact(dictionaries.domain("name"), "missing"), StringCode::MAX);
+        assert_eq!(
+            exact(dictionaries.domain("name"), "missing"),
+            StringCode::MAX
+        );
         assert_eq!(exact(dictionaries.domain("absent"), "a"), StringCode::MAX);
         dictionaries.insert("name", ["a", "z", ""]);
         // DECODE R: the dictionary diagnostic borrows a stored string for its exact-value assertion.
@@ -454,7 +455,10 @@ mod tests {
         });
         assert_eq!(visited, ["blue", "green", "red"]);
         assert_eq!(selected, [(StringCode(0),)]);
-        assert_eq!(cq_storage::domain::exact(dictionaries.domain("type"), "missing"), StringCode::MAX);
+        assert_eq!(
+            cq_storage::domain::exact(dictionaries.domain("type"), "missing"),
+            StringCode::MAX
+        );
         assert_eq!(dictionaries.select("type", |_| true).len(), 3);
         assert!(
             dictionaries
@@ -467,7 +471,10 @@ mod tests {
                 .select("empty", |_| panic!("no values"))
                 .is_empty()
         );
-        assert_eq!(cq_storage::domain::exact(dictionaries.domain("empty"), ""), StringCode::MAX);
+        assert_eq!(
+            cq_storage::domain::exact(dictionaries.domain("empty"), ""),
+            StringCode::MAX
+        );
     }
 
     #[test]

@@ -205,7 +205,7 @@ mod tests {
                 answer = let canon probe first [a] l,r;
                 return answer as answer(a,b);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; opaque_native = OpaqueNative<i32> { reads [exact, range, membership], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; opaque_native = OpaqueNative<i32> { reads [exact, range, membership], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
                 l host scan = @reader as Reader [];
                 r host scan = @opaque_native as OpaqueNative<i32> [];
                 r host result(answer) = @opaque_native as OpaqueNative<i32> [a];
@@ -223,7 +223,7 @@ mod tests {
         }
         let instance = syn::parse_quote!(@opaque_native as OpaqueNative<i32>);
         let declaration: Declaration = syn::parse_quote!(
-            opaque_native = OpaqueNative<_> { reads [exact, range, membership], build macro };
+            opaque_native = OpaqueNative<_> { reads [exact, range, membership], build typed };
         );
         let mut catalog = Catalog::default();
         catalog.register(declaration, vec![level]);

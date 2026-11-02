@@ -110,7 +110,7 @@ fn borrowed_keysets_preserve_positive_and_negative_membership() {
                     out = let canon $operator eager [x] l,s;
                     return out as answer(x);
                 }
-                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build macro, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
                     l host scan = @host_scan as ::core::iter::Map<_,_> [];
                     r host scan = @host_scan as ::core::iter::Map<_,_> [];
                     s rows = @vec as ::std::vec::Vec<_>;
@@ -192,7 +192,7 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
                     last = let range select second if (x < 4);
                     return last as answer(x,y);
                 }
-                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; selection = ::cq_storage::Selection<_> { reads [], build macro }; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; selection = ::cq_storage::Selection<_> { reads [], build typed }; }
                     r host scan = @host_scan as ::core::iter::Map<_,_> [];
                     first read = positional base R lineage{x -> a,y -> b} column a marker ::cq_load::ColumnAt<0> predicate physical;
                     second read = positional base R lineage{x -> a,y -> b} column b marker ::cq_load::ColumnAt<1> predicate physical;

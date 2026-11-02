@@ -90,7 +90,9 @@ pub fn alternate_storage(source: &storage::Program) -> syn::Result<storage::Prog
 pub fn ordered_storage(source: &storage::Program) -> syn::Result<storage::Program> {
     let analysis = storage::contract::check(source)?;
     let mut target = source.clone();
-    let ordered = |name: &str, protocol| {
+    // `BTreeSet<K>` answers membership and ordered reads; `BTreeMap<K, Vec<V>>`
+    // also the grouped exact and candidate reads.
+    let ordered = |name: &str, protocol, reads: &[storage::provider::HostRead]| {
         storage::provider::declared(
             name,
             storage::provider::Spelling::Verbatim,
@@ -98,10 +100,21 @@ pub fn ordered_storage(source: &storage::Program) -> syn::Result<storage::Progra
             storage::provider::Admission::None,
             false,
             storage::provider::TaskHasher::Fx,
+            reads,
+            &[],
         )
     };
-    let set = ordered("ordered_set", storage::LayoutProtocol::Set);
-    let map = ordered("ordered_map", storage::LayoutProtocol::GroupedMap);
+    use storage::provider::HostRead::{Candidates, Exact, Membership, Ordered};
+    let set = ordered(
+        "ordered_set",
+        storage::LayoutProtocol::Set,
+        &[Membership, Ordered],
+    );
+    let map = ordered(
+        "ordered_map",
+        storage::LayoutProtocol::GroupedMap,
+        &[Exact, Membership, Candidates, Ordered],
+    );
     for layout in target.layouts.iter_mut().chain(&mut target.delta_layouts) {
         let declaration = &source.incremental.strata.source.declarations
             [analysis.positions[&symbol_name(&layout.relation)]];

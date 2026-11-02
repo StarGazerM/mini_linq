@@ -82,7 +82,11 @@ impl Printer<'_> {
         for ((key, prefix), levels) in keys.iter().zip(&prefixes).zip(&levels) {
             let right = symbol_name(&key.right);
             let (count, candidates) = if self.analysis.host_read(&right) {
-                let access = self.host_access(&right, prefix);
+                let access = self.host_access(
+                    &right,
+                    Some(cq_lang_structures::ReaderRef::Candidates),
+                    prefix,
+                );
                 (
                     self.host_candidates(&left, &access, true),
                     self.host_candidates(&left, &access, false),
@@ -100,13 +104,19 @@ impl Printer<'_> {
             };
             counts.push(count);
             enumerators.push(candidates);
-            tests.push(match self.keyed(&key.right, self.heading(&right))? {
-                Access::Host(access) => self.host_lookup(&first_name, &access, true, false),
-                Access::Built(s) => {
-                    self.chained_contains(&first_name, &s, &right, &self.levels_of(&right, &s))
-                }
-                Access::Prefix(s, l) => self.chained_contains(&first_name, &s, &right, &l),
-            });
+            tests.push(
+                match self.keyed_by(
+                    cq_lang_structures::ReaderRef::Membership,
+                    &key.right,
+                    self.heading(&right),
+                )? {
+                    Access::Host(access) => self.host_lookup(&first_name, &access, true, false),
+                    Access::Built(s) => {
+                        self.chained_contains(&first_name, &s, &right, &self.levels_of(&right, &s))
+                    }
+                    Access::Prefix(s, l) => self.chained_contains(&first_name, &s, &right, &l),
+                },
+            );
         }
         // Preserve the established binary emission byte-for-byte. The k-way
         // extension is additive; existing two-provider plans keep their code.

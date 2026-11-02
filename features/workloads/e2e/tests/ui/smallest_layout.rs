@@ -20,7 +20,7 @@ fn main() {
             checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_, _> [];
             r0 host scan = @host_scan as ::core::iter::Map<_, _> [];
             r rows = @vec as ::std::vec::Vec<_>;

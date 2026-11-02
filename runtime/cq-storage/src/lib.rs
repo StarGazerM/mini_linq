@@ -11,18 +11,18 @@
 //! is available only through the operation traits; a user type implementing
 //! [`Build`] plus the access traits a plan uses is a first-class structure,
 //! and the compiler names it without inspecting it.
-//! [`build!`] preserves this protocol while selecting optional representation
-//! capabilities through ordinary Rust bounds at the concrete callsite.
-//! [`AdaptiveMembership`] factories return [`DenseMembership`] for
-//! [`OrderKey`] keys and exact hash membership for all other `Eq + Hash`
-//! keys, without an `Ord` bound.
+//! Generated code constructs a recorded provider with one direct
+//! `<Provider as Build<_>>::build` call: the codec and the provider type are
+//! recorded Structures facts, so a key lacking the provider's bound (for
+//! example [`OrderKey`] for [`DenseMembership`] or [`I64Codec`]) is a rustc
+//! error, never a silent change of representation.
 //!
 //! [`Answers`], [`GroupedAnswers`] and allocation-free [`SingleGroup`] compose
 //! query outputs as inputs. Grouped keys occupy the leading declared columns.
-//! [`dispatch`] selects direct reads
-//! by type, with one lazy fallback per query read. Host uniqueness is never a
-//! language premise; the canonical index recorded by index selection establishes
-//! distinct outputs.
+//! [`dispatch`] holds the direct native host reads a host declaration states
+//! and the lazy fallback storage of every other recorded host read. Host
+//! uniqueness is never a language premise; the canonical index recorded by
+//! index selection establishes distinct outputs.
 //!
 //! # Abstraction functions
 //!
@@ -95,17 +95,14 @@ pub(crate) use count;
 pub mod counters;
 pub mod dedup;
 pub mod dispatch;
-pub mod scan;
-pub use dispatch::AutoDense;
 mod hash_index;
 mod hash_state;
 mod item_columns;
+pub mod scan;
 pub use item_columns::{ColumnRow, ItemColumns, TupleColumns};
 mod join_filter;
 mod key;
-pub use join_filter::{
-    JoinFilterEligibility, JoinFilterKey, JoinFilterPredicate, NoJoinFilter, selective_build,
-};
+pub use join_filter::{JoinFilterPredicate, NoJoinFilter, selective_build};
 mod host;
 mod instrument;
 mod membership;
@@ -150,6 +147,13 @@ pub mod require {
     pub fn seek<T: super::IndexRead>(_: T) {}
     pub fn candidates<T: super::Candidates>(_: T) {}
     pub fn contains<K: ?Sized, T: super::ExactMembership<K>>(_: T) {}
+    /// A recorded native host read (IF-HostDecl) on declared key `K`: a host
+    /// whose type lacks the declared capability fails here, naming the trait.
+    pub fn native_exact<K, T: super::IndexRead<Key = K>>(_: &T) {}
+    pub fn native_point<K, T: super::PointLookup<Key = K>>(_: &T) {}
+    pub fn native_membership<K, T: super::ExactMembership<K>>(_: &T) {}
+    pub fn native_candidates<K, T: super::Candidates<Key = K>>(_: &T) {}
+    pub fn native_range<Q, T: super::dispatch::SeekRangeLookup<Q>>(_: &T) {}
     pub fn conservative<K: ?Sized, T: super::ConservativeMembership<K>>(_: &T) {}
     pub fn ordered<T: super::OrderedRead>(_: T) {}
     /// A direct ordered read must use the leading declared key type.
@@ -332,28 +336,6 @@ mod misuse;
 
 pub mod retention;
 pub use retention::{Retention, residual, retain_keys, retain_rows};
-
-/// Build a provider using capabilities available at this concrete Rust callsite.
-///
-/// Providers without a supported specialization delegate to `S: Build<I>`.
-/// [`AdaptiveMembership`] returns [`DenseMembership`] when its key implements
-/// [`OrderKey`], keeping ordinal dispatch static in the probe loop.
-/// [`SortedRun`] and [`AdaptiveKeySet`] with [`AutoDense`] select
-/// [`BorrowedI64TupleCodec`] and [`I64Codec`], respectively, when those codecs
-/// implement [`KeyCodec`] for their keys, otherwise returning [`NoDense`]
-/// providers. Explicit codecs, including default `NoDense`, are unchanged.
-/// Dense-capable outputs retain their ordinary sparse/span-budget fallbacks.
-/// In generic code only capabilities present in the generic bounds participate.
-/// The iterator expression is evaluated exactly once.
-#[macro_export]
-macro_rules! build {
-    ($provider:ty, $source:expr $(,)?) => {{
-        use $crate::dispatch::BuildProvider as _;
-        let source = $source;
-        let target = $crate::dispatch::BuildTarget::<$provider, _>::new(&source);
-        (&&&target).build_provider(source)
-    }};
-}
 
 /// Select printer output using the runtime's counters feature. The unselected
 /// tokens are discarded before type checking; the plain branch expands verbatim.

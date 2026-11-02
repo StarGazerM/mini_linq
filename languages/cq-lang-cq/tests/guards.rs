@@ -234,9 +234,7 @@ fn opaque_membership_remains_in_its_written_rust_conjunction() {
     };
     assert_eq!(
         filter.condition,
-        syn::parse_quote!(
-            !kind.starts_with(&[7]) && [49, 14, 23, 45, 19, 3, 36, 9].contains(size)
-        )
+        syn::parse_quote!(!kind.starts_with(&[7]) && [49, 14, 23, 45, 19, 3, 36, 9].contains(size))
     );
     assert_eq!(cq::normal::normalize(&source).unwrap(), source);
 }

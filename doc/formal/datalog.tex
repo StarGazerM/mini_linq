@@ -230,7 +230,9 @@ all-column key makes it a key set of complete rows in its column permutation.
  D\text{ records complete providers, usable reads and maintained layouts}\\
  \forall p=(\tau,\sigma,h).\ \tau\in D.\mathrm{tokens}\quad
  \mathrm{hashed}(\tau)\iff h\neq\mathrm{none}\quad
- \mathrm{spell}_\tau\text{ defined}\Rightarrow\sigma=\mathrm{spell}_\tau(K,V,h)}
+ \mathrm{spell}_\tau\text{ defined}\Rightarrow\sigma=\mathrm{spell}_\tau(K,V,h)\\
+ \mathrm{reads}(\tau),\ \mathrm{supports}(\tau)\text{ list each entry once}\quad
+ \mathrm{supports}(\tau)\neq\emptyset\Rightarrow\mathrm{exact}\in\mathrm{reads}(\tau)}
  {\mathrm{WF}_{\mathrm{Storage}}(I,D)}
 \end{mathpar}
 \paragraph{Provider tokens.} Every provider-bearing field (layouts, delta and
@@ -240,7 +242,24 @@ printed Rust spelling $\sigma$; layouts and key sets also record a hasher state
 $h\in\{\mathrm{fx},\mathrm{keyed},\mathrm{none}\}$. A declaration records the
 token's spelling function, maintenance protocol, canonical admission strategy
 (\code{sharded\_hash}, \code{sorted\_subtract} or none), whether it accepts a
-hasher state, and its task-candidate hasher (the layout's own state or Fx).
+hasher state, its task-candidate hasher (the layout's own state or Fx), and
+the CQ host reads its instances answer on their recorded key:
+\code{reads \{[}$r,\ldots$\code{]\}} with $r\in\{$\code{exact},
+\code{membership}, \code{candidates}, \code{range}, \code{ordered}$\}$ and
+\code{supports \{[}\code{retain}$\mid$\code{expand}$,\ldots$\code{]\}} (IF-HostDecl).
+Base tokens declare \code{hash\_set}: membership; \code{hash\_map}: exact,
+membership, candidates; \code{rows\_vec}: none; partition's
+\code{sharded\_layout} and \code{run\_layout}: exact, membership, candidates;
+none declares supports. Each Round hole input bound to a layout or key set
+carries one \code{host [}$k$\code{] reads [}\ldots\code{] supports [}\ldots\code{]}
+declaration with its token's facts, where $k$ is the layout's leading
+$\ell.\mathrm{key}$ columns (every column of a key set); a key-zero layout,
+delta buffer or scan binding carries none. A key set with projected columns
+collected by a non-batch key hole stores borrowed columns and declares
+\code{host [}$k$\code{] borrowed reads [membership]} when its token declares
+membership. Fork and Round correspondence derive
+these declarations independently; nothing inspects a Rust type, and a
+declared read the provider does not implement is a Rust trait error.
 Spelling functions build $\sigma$ from the instance's recorded key/payload
 schema $K,V$ (relation column types under the layout's permutation) and $h$;
 verbatim (authored or device) tokens carry $\sigma$ unchanged. No pass inspects

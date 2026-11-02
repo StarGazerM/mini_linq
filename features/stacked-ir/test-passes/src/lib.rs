@@ -104,7 +104,7 @@ pub fn custom_indexes(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, args| {
         no_arguments(args)?;
         let sorted_index: cq_lang_structures::Declaration = syn::parse_quote!(
-            sorted_index = SortedIndex<_, _> { reads [exact, membership], build macro };
+            sorted_index = SortedIndex<_, _> { reads [exact, membership], build typed };
         );
         let mut target = source.clone();
         for entry in &mut target.structures.entries {

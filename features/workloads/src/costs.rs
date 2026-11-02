@@ -62,7 +62,7 @@ configuration!(keep, {
     pub(super) fn range_map(r: &std::collections::BTreeMap<(i32,), Vec<(i32,)>>) -> Answers {
         ::mini_linq::mini_linq! {
             struct Range;
-            relation r(a:i32,b:i32);
+            relation r(a:i32,b:i32) = (*r) host [a] reads [exact, membership, range, ordered];
             answer(a,b) :- r(a,b), where a >= 2, where a < 6;
         }
         .map(|(a, b)| vec![*a, *b])
@@ -83,7 +83,7 @@ configuration!(keep, {
     ) -> Answers {
         ::mini_linq::mini_linq! {
             struct Probe;
-            relation l(a:i32); relation r(a:i32,b:i32);
+            relation l(a:i32); relation r(a:i32,b:i32) = (*r) host [a] reads [exact, membership];
             answer(a,b) :- l(a),r(a,b);
         }
         .map(|(a, b)| vec![*a, *b])

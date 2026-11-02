@@ -151,6 +151,8 @@ fn device_tokens() -> [provider::Token; 1] {
             provider::Admission::None,
             false,
             provider::TaskHasher::Fx,
+            &[],
+            &[],
         ),
     ]
 }
@@ -543,7 +545,7 @@ mod tests {
             Some(LayoutProtocol::Bulk) => "custom_bulk",
         };
         provider::declare(&mut program.tokens, provider::declared(
-            name, provider::Spelling::Verbatim, protocol, provider::Admission::None, false, provider::TaskHasher::Fx,
+            name, provider::Spelling::Verbatim, protocol, provider::Admission::None, false, provider::TaskHasher::Fx, &[], &[],
         ));
         instance(name, syn::parse_quote!(Custom))
     }

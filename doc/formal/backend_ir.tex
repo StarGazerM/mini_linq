@@ -120,6 +120,10 @@ one part; a separated store publishes the concatenation of its outer parts.
 \Rule{BE-OrderedFallback}{\mathsf{host}(r)\quad\text{reader }c\text{ of }r\text{ is a merge}\quad\mathsf{fallback}(r,c)=T}
  {\text{the ordered read of }r\text{ is typed }T\text{, not by another reader's fallback}}
 
+\Rule{BE-NativeBind}{\mathsf{host}(r)\quad\mathsf{native}(r,c,K)=(\rho,\ldots)\quad
+ \mathsf{required}(c)\sqsubseteq\rho}
+ {\text{the lookup of }r\text{ on }K\text{ is discharged by the host; no provider or codec premise}}
+
 \Rule{BE-Partition}{\{P_k\}\text{ disjoint}\quad\textstyle\bigcup_kP_k=[0,|t|)\quad
  (\oplus,e)\text{ commutative}}
  {\mathsf{fold}_{(\oplus,e)}(\mathsf{map}\,f\,t)=\textstyle\bigoplus_k\mathsf{fold}_{(\oplus,e)}(\mathsf{map}\,f\,t|_{P_k})}

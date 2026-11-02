@@ -70,7 +70,7 @@ impl<K, V> cq_storage::Keys for CustomProvider<K, V> {
 fn declared() -> proc_macro2::TokenStream {
     quote!(providers {
         custom_provider = CustomProvider<_, _> {
-            reads [exact, membership], supports [retain, expand, keys], build macro
+            reads [exact, membership], supports [retain, expand, keys], build typed
         };
     })
 }
@@ -233,7 +233,7 @@ macro_rules! query {
                 cq_rewrites::retype(
                     providers {
                         custom_provider = CustomProvider<_, _> {
-                            reads [exact, membership], supports [retain, expand, keys], build macro
+                            reads [exact, membership], supports [retain, expand, keys], build typed
                         };
                     }
                     r => @custom_provider as $provider<_, _> supports [expand, keys]
@@ -283,7 +283,7 @@ macro_rules! execution_case {
                                     custom_provider = CustomProvider<_, _> {
                                         reads [exact, membership],
                                         supports [retain, expand, keys],
-                                        build macro
+                                        build typed
                                     };
                                 }
                                 payload => @custom_provider as $provider<_, _> supports [expand, keys]
@@ -328,7 +328,7 @@ fn unit_key_support_preserves_cartesian_occurrences() {
             out = let canon project observed keep {x,y};
             return out as answer(x,y);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; custom_provider = CustomProvider<_, _> { reads [exact, membership], supports [retain, expand, keys], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; custom_provider = CustomProvider<_, _> { reads [exact, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
             r = @custom_provider as ProviderAlias<_,_> [] supports [expand];

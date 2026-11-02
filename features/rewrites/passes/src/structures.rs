@@ -48,10 +48,12 @@ pub fn membership(source: &ir::Program, arguments: TokenStream) -> syn::Result<i
 }
 
 /// Add every admissible covered scalar filter to the named scan occurrence
-/// that is not already recorded. The default token is `adaptive_membership`;
-/// a later `retype(scan join_filter => @token as T)` chooses its representation. This is
-/// explicit positional-host advice, including when selection was not given
-/// positional hosts. The same Structures contract checks the result.
+/// that is not already recorded, as the `dense_membership` token positional
+/// selection records; a later `retype(scan join_filter => @token as T)`
+/// chooses another representation. Every filter's abandon policy is then
+/// recorded (SEL-JoinFilterAbandon). This is explicit positional-host advice,
+/// including when selection was not given positional hosts. The same
+/// Structures contract checks the result.
 pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let scan: Ident = syn::parse2(arguments)?;
     let facts = ir::contract::check(source)?;
@@ -112,12 +114,16 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
             .find(|d| symbol_name(&d.name) == candidate.build)
             .map(|d| &d.name)
             .expect("checked build");
+        let ty = providers::instance(
+            "dense_membership",
+            syn::parse_quote!(::cq_storage::DenseMembership<_, 67108864>),
+        );
         target.structures.entries.push(syn::parse_quote! {
-            #scan join_filter = @adaptive_membership as ::cq_storage::AdaptiveMembership<_, 67108864>
-                build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
+            #scan join_filter = #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
         });
     }
     target.structures.declare(&providers::declarations());
+    ir::record_join_filter_abandon(&mut target)?;
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }
@@ -246,12 +252,12 @@ fn select_runs(
             }
             continue;
         }
-        // Request codec selection at the concrete Rust build callsite without
-        // inspecting column types. Unsupported keys retain NoDense storage.
+        // The recorded codec is spelled in the provider: one stored column
+        // records `I64Codec`, whose `OrderKey` bound rustc checks at the build.
         if stored.len() == 1 {
             keyed.provider = providers::instance(
                 "sorted_run",
-                syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::AutoDense>),
+                syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::I64Codec>),
             );
             keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
         }
@@ -308,7 +314,7 @@ fn split_payload(
 /// The exact hashed-bucket run token `hashed_runs` records.
 fn hashed_run() -> ir::Declaration {
     syn::parse_quote!(
-        hashed_run = ::cq_gpu_runtime::HashedRun<_, _> { reads [exact, membership], build macro };
+        hashed_run = ::cq_gpu_runtime::HashedRun<_, _> { reads [exact, membership], build typed };
     )
 }
 

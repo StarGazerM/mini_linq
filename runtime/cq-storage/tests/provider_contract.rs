@@ -125,8 +125,8 @@ fn generic_proofs_do_no_lookup_and_cursor_types_preserve_occurrences() {
 }
 
 #[test]
-fn borrowed_host_dispatch_preserves_native_and_fallback_cursor_lifetimes() {
-    use cq_storage::dispatch::{BorrowedHost, BorrowedRead, ExpandedRead, Lazy};
+fn native_and_fallback_retained_reads_borrow_stable_storage() {
+    use cq_storage::dispatch::{Lazy, expanded};
     let key = 2i64;
     let values = [(11i64,), (11,), (12,)];
     let native = Ledger {
@@ -138,46 +138,20 @@ fn borrowed_host_dispatch_preserves_native_and_fallback_cursor_lifetimes() {
         builds.set(builds.get() + 1);
         SortedRun::<_, _>::build(values.iter().map(|value| ((&key,), (&value.0,))))
     });
-    // The wrapper is temporary; both returned handles borrow stable storage.
-    let direct = (&&BorrowedHost::<_, (i64,), _, _>::new(&native, &fallback)).expanded_read();
+    // A recorded native read: one direct call on the declared host.
+    let direct = expanded::<_, (&i64,)>(&native);
     require_expand(&direct);
     let cursor = retain(direct, &(&key,));
     assert_eq!(cursor.map(|(v,)| *v).collect::<Vec<_>>(), [11, 11, 12]);
     assert_eq!(builds.get(), 0);
     assert_eq!(native.lookups.get(), 1);
-    let indirect = (&BorrowedHost::<_, (i64,), _, _>::new((), &fallback)).borrowed_read();
+    // A recorded fallback: built once, on first use, and shared.
+    let indirect = fallback.get();
     require_expand(indirect);
     let cursor = retain(indirect, &(&key,));
     assert_eq!(cursor.map(|(v,)| *v).collect::<Vec<_>>(), [11, 11, 12]);
     assert_eq!(builds.get(), 1);
-    assert_eq!(retain(indirect, &(&key,)).len(), 3);
-    assert_eq!(builds.get(), 1);
-}
-
-#[test]
-fn a_native_noncopy_cursor_uses_the_declared_retained_fallback() {
-    use cq_storage::dispatch::{BorrowedHost, BorrowedRead, ExpandedRead, Lazy};
-    let key = 2i64;
-    let values = [(11i64,), (11,), (12,)];
-    let native = std::collections::BTreeMap::from([((key,), values.to_vec())]);
-    let builds = Cell::new(0);
-    let fallback = Lazy::new(|| {
-        builds.set(builds.get() + 1);
-        SortedRun::<_, _>::build(values.iter().map(|value| ((&key,), (&value.0,))))
-    });
-    let read = {
-        let receiver = &&BorrowedHost::<_, (i64,), _, _>::new(&native, &fallback);
-        receiver.borrowed_read()
-    };
-    let cursor = retain(read, &(&key,));
-    assert_eq!(cursor.map(|(v,)| *v).collect::<Vec<_>>(), [11, 11, 12]);
-    assert_eq!(builds.get(), 1);
-    let read = {
-        let receiver = &&BorrowedHost::<_, (i64,), _, _>::new(&native, &fallback);
-        receiver.expanded_read()
-    };
-    require_expand(read);
-    assert_eq!(retain(read, &(&key,)).len(), 3);
+    assert_eq!(retain(fallback.get(), &(&key,)).len(), 3);
     assert_eq!(builds.get(), 1);
 }
 
@@ -193,8 +167,8 @@ impl<H: IndexRead> cq_storage::dispatch::IndexedColumn<1> for NonLeading<H> {
 }
 
 #[test]
-fn explicit_column_dispatch_retains_source_borrows_and_requires_exact_membership() {
-    use cq_storage::dispatch::{BorrowedHost, ColumnHost, Contains, ExpandedRead, Host, Lazy};
+fn explicit_column_reads_retain_source_borrows() {
+    use cq_storage::dispatch::{ColumnHost, Lazy, expanded};
     let key = 2i64;
     let values = [(11i64,), (11,), (12,)];
     let native = Ledger {
@@ -208,11 +182,9 @@ fn explicit_column_dispatch_retains_source_borrows_and_requires_exact_membership
         builds.set(builds.get() + 1);
         SortedRun::<_, _>::build(values.iter().map(|value| ((&key,), (&value.0,))))
     });
-    // Both temporary wrappers are gone before the selected cursor is consumed.
+    // The temporary slot handle is gone before the cursor is consumed.
     // Forwarding through &&host exercises generated borrowed host bindings.
-    let read =
-        (&&BorrowedHost::<_, (i64,), _, _>::new(ColumnHost::<_, 1>::new(&borrowed), &fallback))
-            .expanded_read();
+    let read = expanded::<_, (&i64,)>(ColumnHost::<_, 1>::new(&borrowed));
     let cursor = retain(read, &(&key,));
     assert_eq!(cursor.len(), 3);
     assert_eq!(
@@ -226,22 +198,10 @@ fn explicit_column_dispatch_retains_source_borrows_and_requires_exact_membership
     );
     assert_eq!((builds.get(), native.lookups.get()), (0, 1));
 
-    // IndexRead alone must never be taken as evidence for exact membership.
-    let contains = {
-        let receiver = &&&Host::<_, (i64,), _, _>::new(ColumnHost::<_, 1>::new(&host), &fallback);
-        receiver.contains(&(&key,))
-    };
-    assert!(contains);
-    assert_eq!((builds.get(), native.lookups.get()), (1, 1));
-
-    // The same key type at another declaration slot cannot select that index.
-    let wrong = {
-        let receiver =
-            &&BorrowedHost::<_, (i64,), _, _>::new(ColumnHost::<_, 2>::new(&host), &fallback);
-        receiver.expanded_read()
-    };
-    assert_eq!(retain(wrong, &(&key,)).len(), 3);
-    let absent = 99i64;
-    assert_eq!(retain(wrong, &(&absent,)).len(), 0);
+    // A slot declared only `exact` answers membership through its recorded fallback.
+    assert!(cq_storage::ExactMembership::contains(
+        fallback.get(),
+        &(&key,)
+    ));
     assert_eq!((builds.get(), native.lookups.get()), (1, 1));
 }

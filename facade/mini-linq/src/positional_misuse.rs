@@ -23,7 +23,7 @@
 //!         t = pipe semi eager [x] l,s;
 //!         out = let canon project t keep {x}; return out as answer(x);
 //!     }
-//!     structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; no_interval = NoInterval<_> { reads [exact, range, membership], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+//!     structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; no_interval = NoInterval<_> { reads [exact, range, membership], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
 //!         l host scan = @host_scan as ::core::iter::Map<_,_> [];
 //!         r host scan = @host_scan as ::core::iter::Map<_,_> [];
 //!         r host result(s) = @host_scan as ::core::iter::Map<_,_> [z];

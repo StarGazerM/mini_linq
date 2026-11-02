@@ -42,7 +42,7 @@ its token id $x$, the inner instance of a nested or routed token, and the Rust
 spelling printers emit verbatim. The \code{providers} table declares each
 referenced token once: its read capabilities, the strongest support an
 instance may declare, its construction (\code{inferred}: a bare path built by
-\code{Build::build}; \code{macro}: \code{cq\_storage::build!}), allocation
+\code{Build::build}; \code{typed}: \code{<T as cq\_storage::Build<\_>>::build}), allocation
 accounting, composition with the inner's generic argument index, supplementary
 join-filter eligibility, sharing with pool and task readers, a packed-key
 width limit, native ABI, contiguous-range eligibility and bounds source.
@@ -260,25 +260,30 @@ Window translation handles open endpoints with checked successor/predecessor;
 absent constants and empty intersections do not introduce matches. Filtering
 returns ascending occurrence positions, including duplicate occurrences.
 
-\paragraph{Adaptive membership representation law.}
-\code{AdaptiveMembership<K,B>} denotes exactly the supplied set of keys.
-Its \code{OrderKey} capability supplies a total order-preserving ordinal:
-$\mathsf{ord}(x)=\mathsf{ord}(y)\iff x=y$. Ordinary Rust trait resolution
-at \code{cq_storage::build!} selects a statically specialized dense-capable
-result when this capability is available; neither selection nor printing
-inspects Rust types. The associated result carries the ordinal capability in
-its Rust type, so each membership probe has no indirect codec call.
+\paragraph{Membership representation law.}
+Selection records the \code{dense\_membership} token
+\code{DenseMembership<K,B>} for a membership store with one stored key column
+(counted after filtering) and \code{adaptive\_membership}
+(\code{AdaptiveMembership<K,B>}, exact hash membership for every
+\code{Eq + Hash} key) for wider keys; neither selection nor printing inspects
+Rust types. Both denote exactly the supplied set of keys. The dense provider
+requires \code{K: OrderKey}, a total order-preserving ordinal:
+$\mathsf{ord}(x)=\mathsf{ord}(y)\iff x=y$. A recorded dense key lacking the
+capability is a rustc error at its one typed build, never a hash fallback;
+integer aliases and user implementations obey the same capability law. The
+provider's Rust type carries the ordinal capability, so each membership probe
+has no indirect codec call.
 The capability also records an associated unsigned word type: ordinary
 integer and string-code ordinals use \code{u64}; wide custom ordinals may use
 \code{u128}. Bounds and offsets use that word without a universal widening.
 A checked conversion of the complete span to \code{usize}, followed by the
 budget check, precedes bitmap allocation and every bounded offset conversion.
-The provider uses a bitmap only when its observed ordinal span fits the
-recorded bound $B$. Otherwise, and for arbitrary equality/hash keys without
-the capability, it uses exact hash membership. Contains-only fallback does
-not construct a sorted interval index or require \code{Ord}.
-The compiler records the provider and budget, not a guessed codec;
-integer aliases and user implementations obey the same capability law.
+The dense provider uses a bitmap only when its observed ordinal span fits the
+recorded bound $B$; otherwise it keeps exact hash membership. Contains-only
+membership does not construct a sorted interval index.
+The compiler records the provider and budget; key sets and sorted runs record
+their codec in the provider spelling (for example \code{I64Codec}), never a
+guessed or trait-selected codec.
 \[
 \Rule{STR-AdaptiveMembership}{
  \mathsf{OrderKey}(K)\quad
@@ -290,6 +295,28 @@ integer aliases and user implementations obey the same capability law.
 \]
 The hash alternative has the same abstraction for every \code{Eq + Hash} key.
 Existing explicit providers retain their ordinary \code{Build} implementation.
+
+\paragraph{Native host reads.}
+An entry \code{r native }$c$\code{ = }$\rho$\code{ [}$\vec K$\code{] [supports [}$S$\code{]]}
+records that reader $c$ of host rename $r$ reads its host value directly
+with declared read $\rho$ on key $\vec K$, built nothing. The checker verifies
+it against the host declaration (\textsc{IF-HostDecl}) without rerunning
+selection: $r$ is a reusable host rename (or a host scan), the renamed key is
+a declared host key in declaration order whose reads include $\rho$, $c$ reads
+$r$ on exactly that key, $\rho$ is a read $c$'s operator needs, and the
+recorded supports are declared and belong to an exact keyed read. A keyed read
+has at most one record: a native read or a fallback, never both.
+\[
+\Rule{STR-NativeHost}{
+ r=\mathsf{rename}(R)\quad\mathsf{renames}(\vec K)=\mathsf{declOrder}_R(K)\quad
+ \rho\in\mathsf{hostReads}(R,K)\cap\mathsf{need}(c)\\
+ \mathsf{reads}(c,r)=K\quad S\subseteq\mathsf{hostSupports}(R,K)\quad
+ S\neq\emptyset\Rightarrow\rho=\code{exact}\quad
+ \neg\mathsf{fallback}(r,c,K)
+}{
+ \mathsf{native}(r,c,K)=(\rho,\vec K,S)
+}
+\]
 
 \paragraph{Sorted runs.}
 \code{SortedRun} stably clusters payload occurrences by key. Its directory
@@ -370,8 +397,8 @@ providers, not host fallbacks or smallest-intersection candidate providers.
 Their independent checker preserves Physical and rederives coverage.
 The key-shape premises concern recorded columns, not their Rust types.
 Rust proves the selected provider's ordering and \code{OrderKey} obligations;
-\code{AutoDense} selects a supported codec at the build callsite and otherwise
-uses \code{NoDense}. No compiler type inspection establishes these capabilities.
+the recorded provider spelling names its codec (\code{NoDense} or an explicit
+codec); no trait-selected codec exists. No compiler type inspection establishes these capabilities.
 RadixRun declares Exact, Range, and Membership at the Sequential host level;
 it does not assert Ordered reads, already-sorted probes, or a GPU implementation.
 The sorted-indexes rewrite records which lexicographic layouts serve a built

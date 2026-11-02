@@ -124,14 +124,14 @@ fn membership_trie_and_rows_retypes_execute_their_trait_obligations() {
             cq_rewrites::retype(ordered => @btree_map_grouped as Ordered<_, Vec<_>>),
             cq_rewrites::retype(r => @hash_index as Payload<'_, _, _>),
             cq_rewrites::retype(
-                providers { membership = Membership<_> { reads [membership], build macro }; }
+                providers { membership = Membership<_> { reads [membership], build typed }; }
                 s => @membership as Membership<_>
             ),
             cq_rewrites::retype(
                 trie => @trie(@hash_index as Payload<'_, _, _>) as Curried<'_, _, Payload<'_, _, _>>
             ),
             // Entry 10 is p's ordinary rows; out's canonical rows remain Sort.
-            cq_rewrites::retype(providers { buffer = Buffer<_> { reads [], build macro }; } entry(10) => @buffer as Buffer<_>),
+            cq_rewrites::retype(providers { buffer = Buffer<_> { reads [], build typed }; } entry(10) => @buffer as Buffer<_>),
             mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         };
         physical {

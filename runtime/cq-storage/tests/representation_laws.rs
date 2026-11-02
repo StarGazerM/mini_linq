@@ -267,13 +267,15 @@ fn filter_by_membership_commutes_with_alpha_on_every_read() {
 }
 
 #[test]
-fn adaptive_membership_dispatch_retains_only_the_dense_bitmap() {
+fn dense_membership_retains_only_the_dense_bitmap() {
     use cq_storage::{
         AdaptiveMembership, ConservativeMembership, ExactMembership, JoinFilterPredicate,
         NoJoinFilter, ReadPredicate,
     };
 
-    let dense = cq_storage::build!(AdaptiveMembership<_, 16777216>, (0i64..4096).map(|k| (k, ())));
+    let dense = <cq_storage::DenseMembership<_, 16777216> as Build<_>>::build(
+        (0i64..4096).map(|k| (k, ())),
+    );
     let hash = AdaptiveMembership::<_, 16777216>::build((0i64..4096).map(|k| (k, ())));
     assert!(dense.is_dense());
     assert!(!hash.is_dense());
@@ -283,8 +285,9 @@ fn adaptive_membership_dispatch_retains_only_the_dense_bitmap() {
         assert_eq!(dense.contains(&key), hash.contains(&key));
         assert_eq!(dense.test(&key), (0..4096).contains(&key));
     }
-    let large_budget =
-        cq_storage::build!(AdaptiveMembership<_, 67108864>, (0i64..4096).map(|k| (k, ())));
+    let large_budget = <cq_storage::DenseMembership<_, 67108864> as Build<_>>::build(
+        (0i64..4096).map(|k| (k, ())),
+    );
     assert!(large_budget.is_dense());
     assert_eq!(large_budget.retained_bytes(), 512);
 
@@ -307,9 +310,10 @@ fn adaptive_membership_accepts_non_ord_non_clone_hash_keys() {
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct Key(u8);
 
-    let set = cq_storage::build!(
-        AdaptiveMembership<_, 16777216>,
-        [Key(1), Key(3), Key(1)].into_iter().map(|key| (key, "ignored")),
+    let set = <AdaptiveMembership<_, 16777216> as Build<_>>::build(
+        [Key(1), Key(3), Key(1)]
+            .into_iter()
+            .map(|key| (key, "ignored")),
     );
     assert!(!set.is_dense());
     for key in 0..=4 {
@@ -323,8 +327,7 @@ fn adaptive_membership_dense_and_hash_commute_with_alpha() {
 
     let universe = [-65i64, -64, -1, 0, 63, 64, 65];
     for keys in subsets(&universe) {
-        let dense = cq_storage::build!(
-            AdaptiveMembership<_, 131>,
+        let dense = <cq_storage::DenseMembership<_, 131> as Build<_>>::build(
             keys.iter().flat_map(|&key| [(key, ()), (key, ())]),
         );
         let hash = AdaptiveMembership::<_, 131>::build(
@@ -340,10 +343,9 @@ fn adaptive_membership_dense_and_hash_commute_with_alpha() {
 
 #[test]
 fn adaptive_membership_respects_span_budget_and_integer_boundaries() {
-    use cq_storage::{AdaptiveMembership, ExactMembership};
+    use cq_storage::ExactMembership;
 
-    let exact = cq_storage::build!(
-        AdaptiveMembership<_, 64>,
+    let exact = <cq_storage::DenseMembership<_, 64> as Build<_>>::build(
         [-32i64, 31, -32].into_iter().map(|key| (key, ())),
     );
     assert!(exact.is_dense());
@@ -353,8 +355,7 @@ fn adaptive_membership_respects_span_budget_and_integer_boundaries() {
     assert!(!exact.contains(&0));
     assert!(!exact.contains(&32));
 
-    let over = cq_storage::build!(
-        AdaptiveMembership<_, 64>,
+    let over = <cq_storage::DenseMembership<_, 64> as Build<_>>::build(
         [-32i64, 32].into_iter().map(|key| (key, ())),
     );
     assert!(!over.is_dense());
@@ -362,17 +363,17 @@ fn adaptive_membership_respects_span_budget_and_integer_boundaries() {
     assert!(over.contains(&32));
     assert!(!over.contains(&0));
 
-    let sparse = cq_storage::build!(
-        AdaptiveMembership<_, 67108864>,
-        [i64::MIN, i64::MAX, i64::MIN].into_iter().map(|key| (key, ())),
+    let sparse = <cq_storage::DenseMembership<_, 67108864> as Build<_>>::build(
+        [i64::MIN, i64::MAX, i64::MIN]
+            .into_iter()
+            .map(|key| (key, ())),
     );
     assert!(!sparse.is_dense());
     assert!(sparse.contains(&i64::MIN));
     assert!(sparse.contains(&i64::MAX));
     assert!(!sparse.contains(&0));
     for keys in [[i64::MIN, i64::MIN + 63], [i64::MAX - 63, i64::MAX]] {
-        let set = cq_storage::build!(
-            AdaptiveMembership<_, 64>,
+        let set = <cq_storage::DenseMembership<_, 64> as Build<_>>::build(
             keys.into_iter().map(|key| (key, ())),
         );
         assert!(set.is_dense());
@@ -383,14 +384,12 @@ fn adaptive_membership_respects_span_budget_and_integer_boundaries() {
         assert!(!set.contains(&0));
     }
 
-    let empty = cq_storage::build!(
-        AdaptiveMembership<i64, 64>,
-        std::iter::empty::<(i64, ())>(),
-    );
+    let empty =
+        <cq_storage::DenseMembership<i64, 64> as Build<_>>::build(std::iter::empty::<(i64, ())>());
     assert!(!empty.is_dense());
     assert_eq!(empty.retained_bytes(), 0);
     assert!(!empty.contains(&0));
-    let disabled = cq_storage::build!(AdaptiveMembership<_, 0>, [(0i64, ())].into_iter());
+    let disabled = <cq_storage::DenseMembership<_, 0> as Build<_>>::build([(0i64, ())].into_iter());
     assert!(!disabled.is_dense());
     assert!(disabled.contains(&0));
     assert!(!disabled.contains(&1));
@@ -398,7 +397,7 @@ fn adaptive_membership_respects_span_budget_and_integer_boundaries() {
 
 #[test]
 fn adaptive_membership_supports_integer_and_borrowed_singleton_keys() {
-    use cq_storage::{AdaptiveMembership, ExactMembership, OrderKey};
+    use cq_storage::{ExactMembership, OrderKey};
 
     fn native_word<K: OrderKey<Ordinal = u64>>() {}
     native_word::<i64>();
@@ -410,12 +409,10 @@ fn adaptive_membership_supports_integer_and_borrowed_singleton_keys() {
     assert_eq!(i64::MAX.ordinal(), u64::MAX);
 
     fn check<K: OrderKey + std::hash::Hash>(keys: [K; 2], absent: K) {
-        let scalar = cq_storage::build!(
-            AdaptiveMembership<_, 64>,
+        let scalar = <cq_storage::DenseMembership<_, 64> as Build<_>>::build(
             keys.iter().map(|key| (key, ())),
         );
-        let tuple = cq_storage::build!(
-            AdaptiveMembership<_, 64>,
+        let tuple = <cq_storage::DenseMembership<_, 64> as Build<_>>::build(
             keys.iter().map(|key| ((key,), ())),
         );
         assert!(scalar.is_dense());
@@ -432,12 +429,10 @@ fn adaptive_membership_supports_integer_and_borrowed_singleton_keys() {
     check([-32i64, 31], 0);
     check([i32::MIN, i32::MIN + 63], i32::MAX);
     check([u32::MAX - 63, u32::MAX], 0);
-    let i32_set = cq_storage::build!(
-        AdaptiveMembership<_, 64>,
+    let i32_set = <cq_storage::DenseMembership<_, 64> as Build<_>>::build(
         [(i32::MIN, ()), (i32::MIN + 63, ())].into_iter(),
     );
-    let u32_set = cq_storage::build!(
-        AdaptiveMembership<_, 64>,
+    let u32_set = <cq_storage::DenseMembership<_, 64> as Build<_>>::build(
         [(u32::MAX - 63, ()), (u32::MAX, ())].into_iter(),
     );
     assert!(i32_set.is_dense());
@@ -448,7 +443,7 @@ fn adaptive_membership_supports_integer_and_borrowed_singleton_keys() {
 
 #[test]
 fn adaptive_membership_custom_ordinal_preserves_order_and_full_width() {
-    use cq_storage::{AdaptiveMembership, ExactMembership, OrderKey};
+    use cq_storage::{ExactMembership, OrderKey};
 
     #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
     struct Key(u128);
@@ -459,8 +454,7 @@ fn adaptive_membership_custom_ordinal_preserves_order_and_full_width() {
             self.0
         }
     }
-    let dense = cq_storage::build!(
-        AdaptiveMembership<_, 64>,
+    let dense = <cq_storage::DenseMembership<_, 64> as Build<_>>::build(
         [Key(0), Key(63), Key(0)].into_iter().map(|key| (key, ())),
     );
     assert!(dense.is_dense());
@@ -470,8 +464,7 @@ fn adaptive_membership_custom_ordinal_preserves_order_and_full_width() {
     assert!(!dense.contains(&Key(u128::MAX)));
 
     // A full-width ordinal span cannot wrap into a deceptively small bitmap.
-    let overflow = cq_storage::build!(
-        AdaptiveMembership<_, 64>,
+    let overflow = <cq_storage::DenseMembership<_, 64> as Build<_>>::build(
         [Key(0), Key(u128::MAX)].into_iter().map(|key| (key, ())),
     );
     assert!(!overflow.is_dense());
@@ -486,8 +479,7 @@ fn adaptive_membership_custom_ordinal_preserves_order_and_full_width() {
         (u128::MAX - 63, u128::MAX),
     ] {
         let keys = [Key(low), Key(high)];
-        let set = cq_storage::build!(
-            AdaptiveMembership<_, 64>,
+        let set = <cq_storage::DenseMembership<_, 64> as Build<_>>::build(
             keys.into_iter().map(|key| (key, ())),
         );
         assert!(set.is_dense());
@@ -500,7 +492,7 @@ fn adaptive_membership_custom_ordinal_preserves_order_and_full_width() {
 }
 
 #[test]
-fn build_dispatch_preserves_arbitrary_custom_build_and_generic_fallback() {
+fn recorded_build_calls_custom_and_generic_builds_once() {
     use cq_storage::{AdaptiveMembership, ExactMembership};
     use std::cell::Cell;
 
@@ -511,10 +503,10 @@ fn build_dispatch_preserves_arbitrary_custom_build_and_generic_fallback() {
         }
     }
     fn generic<S: Build<I>, I: Iterator>(source: I) -> S {
-        cq_storage::build!(S, source)
+        <S as Build<_>>::build(source)
     }
     let evaluations = Cell::new(0);
-    let custom = cq_storage::build!(Custom, {
+    let custom = <Custom as Build<_>>::build({
         evaluations.set(evaluations.get() + 1);
         [3, 1, 3].into_iter()
     });
@@ -529,27 +521,22 @@ fn build_dispatch_preserves_arbitrary_custom_build_and_generic_fallback() {
 }
 
 #[test]
-fn dense_codec_build_dispatch_resolves_aliases_and_preserves_exact_reads() {
-    use cq_storage::{
-        AdaptiveKeySet, AutoDense, BorrowedI64TupleCodec, ExactIntervalMembership, ExactMembership,
-        I64Codec,
-    };
+fn recorded_dense_codecs_resolve_aliases_and_preserve_exact_reads() {
+    use cq_storage::{AdaptiveKeySet, ExactIntervalMembership, ExactMembership, I64Codec};
 
     macro_rules! check {
         ($key:ty) => {{
             type Key = $key;
             let keys: [Key; 3] = [1, 3, 1];
-            let run = cq_storage::build!(
-                SortedRun<_, _, AutoDense>,
+            let run = <SortedRun<_, _, I64Codec> as Build<_>>::build(
                 keys.iter().enumerate().map(|(i, key)| ((key,), i)),
             );
-            let run: SortedRun<(&Key,), usize, BorrowedI64TupleCodec> = run;
+            let run: SortedRun<(&Key,), usize, I64Codec> = run;
             assert_eq!((&run).lookup(&(&1,)).collect::<Vec<_>>(), [0, 2]);
             assert_eq!((&run).lookup(&(&3,)).collect::<Vec<_>>(), [1]);
             assert!((&run).lookup(&(&2,)).next().is_none());
 
-            let set = cq_storage::build!(
-                AdaptiveKeySet<_, AutoDense, 64>,
+            let set = <AdaptiveKeySet<_, I64Codec, 64> as Build<_>>::build(
                 keys.into_iter().map(|key| (key, ())),
             );
             let set: AdaptiveKeySet<Key, I64Codec, 64> = set;
@@ -566,49 +553,36 @@ fn dense_codec_build_dispatch_resolves_aliases_and_preserves_exact_reads() {
 }
 
 #[test]
-fn dense_codec_dispatch_preserves_unsupported_keys_and_explicit_codecs() {
-    use cq_storage::{AdaptiveKeySet, AutoDense, ExactMembership, I64Codec, NoDense};
+fn recorded_no_dense_codec_serves_keys_without_order_key() {
+    use cq_storage::{AdaptiveKeySet, ExactMembership, I64Codec, NoDense};
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     struct Key(u8);
     let keys = [Key(1), Key(3)];
-    let run = cq_storage::build!(
-        SortedRun<_, _, AutoDense>,
-        keys.iter().map(|key| ((key,), key.0)),
-    );
+    let run = <SortedRun<_, _, NoDense> as Build<_>>::build(keys.iter().map(|key| ((key,), key.0)));
     let run: SortedRun<(&Key,), u8, NoDense> = run;
     assert_eq!((&run).lookup(&(&Key(1),)).collect::<Vec<_>>(), [1]);
-    let set = cq_storage::build!(
-        AdaptiveKeySet<_, AutoDense, 64>,
-        keys.into_iter().map(|key| (key, ())),
-    );
+    let set =
+        <AdaptiveKeySet<_, NoDense, 64> as Build<_>>::build(keys.into_iter().map(|key| (key, ())));
     let set: AdaptiveKeySet<Key, NoDense, 64> = set;
     assert!(set.contains(&Key(3)));
     assert!(!set.contains(&Key(2)));
 
-    let explicit = cq_storage::build!(
-        SortedRun<_, _, I64Codec>,
-        [(1i64, 'a'), (1, 'b')].into_iter(),
-    );
+    let explicit =
+        <SortedRun<_, _, I64Codec> as Build<_>>::build([(1i64, 'a'), (1, 'b')].into_iter());
     let explicit: SortedRun<i64, char, I64Codec> = explicit;
     assert_eq!((&explicit).lookup(&1).collect::<Vec<_>>(), ['a', 'b']);
     fn generic<K: Ord + Copy, V: Copy, I: Iterator<Item = (K, V)>>(
         source: I,
     ) -> SortedRun<K, V, NoDense> {
-        cq_storage::build!(SortedRun<K, V, AutoDense>, source)
+        <SortedRun<K, V, NoDense> as Build<_>>::build(source)
     }
     let fallback = generic([((&1i64,), 'a')].into_iter());
     assert_eq!((&fallback).lookup(&(&1,)).collect::<Vec<_>>(), ['a']);
-    let explicit = cq_storage::build!(
-        SortedRun<_, _, NoDense>,
-        [((&1i64,), 'a')].into_iter(),
-    );
+    let explicit = <SortedRun<_, _, NoDense> as Build<_>>::build([((&1i64,), 'a')].into_iter());
     let explicit: SortedRun<(&i64,), char, NoDense> = explicit;
     assert_eq!((&explicit).lookup(&(&1,)).collect::<Vec<_>>(), ['a']);
-    let set = cq_storage::build!(
-        AdaptiveKeySet<_, NoDense, 64>,
-        [(1i64, ())].into_iter(),
-    );
+    let set = <AdaptiveKeySet<_, NoDense, 64> as Build<_>>::build([(1i64, ())].into_iter());
     let set: AdaptiveKeySet<i64, NoDense, 64> = set;
     assert!(set.contains(&1));
 }
@@ -616,7 +590,7 @@ fn dense_codec_dispatch_preserves_unsupported_keys_and_explicit_codecs() {
 #[test]
 fn routed_sorted_builds_retain_dense_codecs_and_partition_order() {
     use cq_storage::sharded::{Sharded, route_index};
-    use cq_storage::{AutoDense, BorrowedI64TupleCodec, NoDense};
+    use cq_storage::{I64Codec, NoDense};
 
     let keys = [1i64, 3, 1, 2];
     for count in [1, 4] {
@@ -626,17 +600,17 @@ fn routed_sorted_builds_retain_dense_codecs_and_partition_order() {
         }
         let run = Sharded::build_from_parts_with_router(
             &parts,
-            |part| cq_storage::build!(SortedRun<_, _, AutoDense>, part.iter().copied()),
+            |part| <SortedRun<_, _, I64Codec> as Build<_>>::build(part.iter().copied()),
             |key: &(&i64,), count| route_index(key, count),
         );
-        let run: Sharded<SortedRun<(&i64,), usize, BorrowedI64TupleCodec>, _> = run;
+        let run: Sharded<SortedRun<(&i64,), usize, I64Codec>, _> = run;
         assert_eq!((&run).lookup(&(&1,)).collect::<Vec<_>>(), [0, 2]);
         assert_eq!((&run).lookup(&(&3,)).collect::<Vec<_>>(), [1]);
         assert_eq!((&run).lookup(&(&2,)).collect::<Vec<_>>(), [3]);
         assert!((&run).lookup(&(&4,)).next().is_none());
         let default_run = Sharded::build_from_parts_with_router(
             &parts,
-            |part| cq_storage::build!(SortedRun<_, _>, part.iter().copied()),
+            |part| <SortedRun<_, _> as Build<_>>::build(part.iter().copied()),
             |key: &(&i64,), count| route_index(key, count),
         );
         let default_run: Sharded<SortedRun<(&i64,), usize, NoDense>, _> = default_run;

@@ -1,5 +1,5 @@
-// D85's accepted Written/Coarse merge+HashMap witness exposes a native
-// unordered unary host read with LE. Both callers must retain OrderedRead.
+// D85's LE merge requests native ordered reads explicitly. HashMap does not
+// implement that recorded contract, with or without the sorted-runs rewrite.
 macro_rules! d85_unordered_merge {
     ($($runs:path,)*) => {
         fn main() {
@@ -18,13 +18,13 @@ macro_rules! d85_unordered_merge {
                     structures = [$($runs,)* cq_workload_passes::sorted_payload];
                 }
                 pub struct RetailD85Program;
-                relation RetailD85WebSales(c0: i32, c1: i32, c2: i32, c3: i32);
-                relation RetailD85WebReturns(c0: i32, c1: i32, c2: i32, c3: i32, c4: i32, c5: i32);
-                relation RetailD85WebPage(c0: i32);
-                relation RetailD85CustomerDemo(c0: i32);
-                relation RetailD85CustomerAddress(c0: i32);
-                relation RetailD85DateDim(c0: i32);
-                relation RetailD85Reason(c0: i32);
+                relation RetailD85WebSales(c0: i32, c1: i32, c2: i32, c3: i32) host [c0] reads [exact, membership, ordered];
+                relation RetailD85WebReturns(c0: i32, c1: i32, c2: i32, c3: i32, c4: i32, c5: i32) host [c0] reads [exact, membership, ordered];
+                relation RetailD85WebPage(c0: i32) host [c0] reads [exact, membership, ordered];
+                relation RetailD85CustomerDemo(c0: i32) host [c0] reads [exact, membership, ordered];
+                relation RetailD85CustomerAddress(c0: i32) host [c0] reads [exact, membership, ordered];
+                relation RetailD85DateDim(c0: i32) host [c0] reads [exact, membership, ordered];
+                relation RetailD85Reason(c0: i32) host [c0] reads [exact, membership, ordered];
                 retail_d85_result(order_number, item_key, reason_key) :-
                     RetailD85WebSales(order_number, item_key, web_page, sold_date),
                     RetailD85WebReturns(order_number, item_key, refunded_demo, returning_demo, address_key, reason_key),

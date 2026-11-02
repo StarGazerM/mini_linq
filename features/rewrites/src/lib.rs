@@ -14,9 +14,9 @@
 //! used as smallest-intersection candidates are unchanged. The replacement
 //! requires Ord + Copy keys and Copy items (Leibniz admissibility is a premise);
 //! rustc checks Build, IndexRead and ExactMembership at the existing guards.
-//! A single stored column is eligible. AutoDense selects the codec through
-//! trait dispatch at the concrete Rust callsite; unsupported dense codecs use
-//! exact binary search. Multi-column keys remain `hash_index`.
+//! A single stored column is eligible and records `I64Codec`; rustc checks its
+//! `OrderKey` bound at the build (no trait-selected codec). Multi-column keys
+//! remain `hash_index`.
 //! Eligible rank spans exceeding 1,048,576 bits still fall back to binary
 //! search at runtime. No default selection changes.
 //! Use `pipeline { structures = [cq_rewrites::sorted_runs]; }`.
@@ -60,7 +60,7 @@
 //! Sorted/radix selection records `supports [retain, expand, keys]`. Native
 //! payload selection records `supports [keys]` where distinct-key enumeration is
 //! implemented. `retype(providers { my_provider = MyProvider<_, _> { reads [exact,
-//! membership], supports [expand, keys], build macro }; } r => @my_provider as
+//! membership], supports [expand, keys], build typed }; } r => @my_provider as
 //! MyProvider<_, _> supports [expand, keys])` replaces a provider token, its
 //! spelling and its declarations together; bare `retype` clears declarations.
 //! Retyping a live retained/staged plan must preserve its required support.
@@ -214,7 +214,7 @@
 //! let right = [(1, 2)];
 //! let _: Vec<_> = mini_linq::compile! {
 //!     pipeline { structures = [cq_rewrites::retype(
-//!         providers { not_an_index = NotAnIndex<_> { reads [exact, membership], build macro }; }
+//!         providers { not_an_index = NotAnIndex<_> { reads [exact, membership], build typed }; }
 //!         payload => @not_an_index as NotAnIndex<_>
 //!     )]; }
 //!     struct MissingBuild;

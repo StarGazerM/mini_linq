@@ -22,23 +22,38 @@ pub(crate) fn forwarding(operator: &Operator) -> bool {
     )
 }
 
-/// An explicitly retained immutable host read. Both demands must record the
-/// same provider and level layout over the same host occurrence.
+/// The retained read of a host reader on `keys`: its recorded fallback
+/// layout or a recorded native exact read, either declaring `retain`.
+/// Two readers share one retained read iff these are equal.
+#[derive(Clone, Copy, Debug)]
+pub enum RetainedHost<'a> {
+    Fallback(&'a Keyed),
+    Native,
+}
+
+impl PartialEq for RetainedHost<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Fallback(left), Self::Fallback(right)) => {
+                left.provider == right.provider
+                    && left
+                        .levels
+                        .iter()
+                        .map(|level| &level.columns)
+                        .eq(right.levels.iter().map(|level| &level.columns))
+            }
+            (Self::Native, Self::Native) => true,
+            _ => false,
+        }
+    }
+}
+
 pub fn retained_host_read<'a>(
     program: &'a Program,
     build: &str,
     reader: &str,
     keys: &[String],
-) -> Option<&'a Provider> {
-    retained_host_keyed(program, build, reader, keys).map(|keyed| &keyed.provider)
-}
-
-fn retained_host_keyed<'a>(
-    program: &'a Program,
-    build: &str,
-    reader: &str,
-    keys: &[String],
-) -> Option<&'a Keyed> {
+) -> Option<RetainedHost<'a>> {
     if keys.is_empty() {
         return None;
     }
@@ -48,24 +63,45 @@ fn retained_host_keyed<'a>(
         return None;
     }
     program.structures.entries.iter().find_map(|entry| {
-        let Structure::Host {
-            keyed,
-            reader: demand,
-            ..
-        } = &entry.structure
-        else {
+        if symbol_name(&entry.name) != build {
             return None;
+        }
+        let (demand, recorded, retained) = match &entry.structure {
+            Structure::Host {
+                keyed,
+                reader: demand,
+                ..
+            } => (
+                demand,
+                keyed.columns().map(symbol_name).collect::<Vec<_>>(),
+                (keyed.levels.iter().all(|level| !level.columns.is_empty())
+                    && keyed.supports(ProviderCapability::Retain))
+                .then_some(RetainedHost::Fallback(keyed.as_ref())),
+            ),
+            Structure::Native {
+                read,
+                reader: demand,
+                ..
+            } => (
+                demand,
+                read.key.columns.iter().map(symbol_name).collect(),
+                (read.read.read == cq_syntax::HostRead::Exact
+                    && read
+                        .supports
+                        .as_ref()
+                        .is_some_and(|support| support.supports(ProviderCapability::Retain)))
+                .then_some(RetainedHost::Native),
+            ),
+            _ => return None,
         };
-        let mut recorded = keyed.columns().map(symbol_name).collect::<Vec<_>>();
+        let mut recorded = recorded;
         recorded.sort();
-        (symbol_name(&entry.name) == build
-            && demand
-                .result()
-                .is_some_and(|name| symbol_name(name) == reader)
-            && recorded == wanted
-            && keyed.levels.iter().all(|level| !level.columns.is_empty())
-            && keyed.supports(ProviderCapability::Retain))
-        .then_some(keyed.as_ref())
+        (demand
+            .result()
+            .is_some_and(|name| symbol_name(name) == reader)
+            && recorded == wanted)
+            .then_some(retained)
+            .flatten()
     })
 }
 
@@ -111,21 +147,14 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         ) else {
             return Err(fail());
         };
-        let retained_host = retained_host_keyed(program, &share.build, &share.first, &share.keys)
-            .zip(retained_host_keyed(
+        let retained_host = retained_host_read(program, &share.build, &share.first, &share.keys)
+            .zip(retained_host_read(
                 program,
                 &share.build,
                 &share.force,
                 &share.keys,
             ))
-            .is_some_and(|(first, force)| {
-                first.provider == force.provider
-                    && first
-                        .levels
-                        .iter()
-                        .map(|level| &level.columns)
-                        .eq(force.levels.iter().map(|level| &level.columns))
-            })
+            .is_some_and(|(first, force)| first == force)
             && facts.physical.hosts.contains_key(&share.build)
             && matches!(definitions[b].operator, Operator::Rename(_));
         if name != share.first

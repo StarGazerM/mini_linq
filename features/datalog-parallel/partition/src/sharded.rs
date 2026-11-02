@@ -751,7 +751,9 @@ pub const SHARDED_LAYOUT: &str = "sharded_layout";
 pub const RUN_LAYOUT: &str = "run_layout";
 
 /// Hash-sharded bulk layout: admission routes candidates by hash and task-local
-/// deduplication reuses the layout's own hasher state.
+/// deduplication reuses the layout's own hasher state. `ShardedLayout` answers
+/// `IndexRead`/`PointLookup`, `ExactMembership` and `Candidates` on its key;
+/// its slice cursor is not `Copy`.
 pub fn sharded_layout() -> storage::provider::Token {
     storage::provider::declared(
         SHARDED_LAYOUT,
@@ -760,10 +762,13 @@ pub fn sharded_layout() -> storage::provider::Token {
         storage::provider::Admission::ShardedHash,
         true,
         storage::provider::TaskHasher::Layout,
+        GROUPED_READS,
+        &[],
     )
 }
 
 /// Sorted-run bulk layout: admission subtracts sorted candidate runs.
+/// `RunLayout` answers the same reads; its `RunValues` cursor is not `Copy`.
 pub fn run_layout() -> storage::provider::Token {
     storage::provider::declared(
         RUN_LAYOUT,
@@ -772,8 +777,16 @@ pub fn run_layout() -> storage::provider::Token {
         storage::provider::Admission::SortedSubtract,
         false,
         storage::provider::TaskHasher::Fx,
+        GROUPED_READS,
+        &[],
     )
 }
+
+const GROUPED_READS: &[storage::provider::HostRead] = &[
+    storage::provider::HostRead::Exact,
+    storage::provider::HostRead::Membership,
+    storage::provider::HostRead::Candidates,
+];
 
 impl cq_stage::Language for ShardedProgram {
     fn check(&self) -> syn::Result<()> {

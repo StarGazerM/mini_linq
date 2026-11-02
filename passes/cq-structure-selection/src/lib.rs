@@ -1,9 +1,13 @@
-//! Select provider types for built let reads, independently of host capabilities.
+//! Select provider types for built let reads. Host reads are native only where
+//! the input declares the capability on exactly the read's key
+//! (SEL-NativeHost); every other host read records its fallback provider.
 //! Compatible membership prefixes share trie levels; ordered reads retain their own structure.
 //! Smallest intersections select candidate levels independently for each retained
 //! side; reusable hosts retain their candidate and membership fallbacks.
-//! Membership-only projections use Rust's dense-ordinal capability at construction;
-//! ordinary key providers retain enumeration for scan filters. Rust key types are opaque.
+//! Membership-only projections with a one-column stored key record dense
+//! membership (rustc requires its `OrderKey`); wider keys record hash
+//! membership. Ordinary key providers retain enumeration for scan filters.
+//! Rust key types are opaque.
 //! The denotation is `bottom + Set`: Rust chain positions are preserved. A
 //! const supply is one fixed key, answered directly or by scan and filter;
 //! only stream supplies can justify building reusable keyed storage.
@@ -72,6 +76,62 @@ fn trie(mut provider: structures::Provider, depth: usize) -> structures::Provide
 /// The base instance of `token` spelled `ty`.
 fn instance(token: &str, ty: syn::Type) -> structures::Provider {
     providers::instance(token, ty)
+}
+
+/// Formal rule STR-AdaptiveMembership (selection): a membership-only store
+/// over a one-column stored key records dense ordinal membership, whose
+/// `OrderKey` bound rustc checks; wider keys record exact hash membership.
+fn membership_provider(stored_arity: usize) -> structures::Provider {
+    if stored_arity == 1 {
+        instance(
+            "dense_membership",
+            syn::parse_quote!(::cq_storage::DenseMembership<_, 16777216>),
+        )
+    } else {
+        instance(
+            "adaptive_membership",
+            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
+        )
+    }
+}
+
+/// Formal rule SEL-NativeHost: the first of `wanted` that the host input of
+/// rename `name` declares on exactly `columns` (result attributes), IF-HostDecl,
+/// with the key columns in host declaration order (the host's key layout).
+/// Only the declaration decides; the host's Rust type is never inspected.
+fn native_read(
+    source: &physical::Program,
+    analysis: &physical::Analysis,
+    name: &str,
+    columns: &[String],
+    wanted: &[physical::syntax::HostRead],
+) -> Option<(physical::syntax::HostRead, Vec<String>)> {
+    let input = analysis.hosts.get(name)?;
+    let declaration = source
+        .inputs()
+        .find(|declaration| symbol_name(&declaration.name) == *input)?;
+    let renames = &analysis.renames[name];
+    let mut key = columns
+        .iter()
+        .map(|column| renames.get(column).cloned())
+        .collect::<Option<Vec<_>>>()?;
+    key.sort();
+    let host = declaration.host(&key)?;
+    let read = wanted.iter().copied().find(|read| host.reads(*read))?;
+    let ordered = declaration
+        .columns
+        .iter()
+        .map(|column| symbol_name(&column.name))
+        .filter(|column| key.contains(column))
+        .map(|column| {
+            columns
+                .iter()
+                .find(|attribute| renames[*attribute] == column)
+                .expect("renamed key column")
+                .clone()
+        })
+        .collect();
+    Some((read, ordered))
 }
 
 fn sorted(columns: &[String]) -> Vec<String> {
@@ -279,10 +339,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             let membership = needs.iter().max() == Some(&Need::Contains)
                 && full_key_probes.contains(&(name.clone(), columns.to_vec()));
             let ty = if membership {
-                instance(
-                    "adaptive_membership",
-                    syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
-                )
+                membership_provider(columns.len())
             } else {
                 needs.iter().max().expect("nonempty").provider()
             };
@@ -325,6 +382,37 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         if analysis.hosts.contains_key(&name) {
             let scan = providers::declaration("host_scan").instance();
             entries.extend(quote!(#ident host scan = #scan [];));
+            // Leading constants of the occurrence: one native point read
+            // when the input declares `exact` on exactly that prefix.
+            if let Operator::Rename(rename) = &definition.operator
+                && let Some(constants) = &rename.constants
+            {
+                let literals: BTreeSet<String> = constants
+                    .equalities
+                    .iter()
+                    .map(|equality| symbol_name(&equality.left))
+                    .collect();
+                let input = &analysis.hosts[&name];
+                if let Some(declaration) = source
+                    .inputs()
+                    .find(|declaration| symbol_name(&declaration.name) == *input)
+                {
+                    let prefix: Vec<&syn::Ident> = declaration
+                        .columns
+                        .iter()
+                        .map(|column| &column.name)
+                        .take_while(|column| literals.contains(&symbol_name(column)))
+                        .collect();
+                    let key = sorted(&prefix.iter().map(|c| symbol_name(c)).collect::<Vec<_>>());
+                    if !key.is_empty()
+                        && declaration
+                            .host(&key)
+                            .is_some_and(|host| host.reads(physical::syntax::HostRead::Exact))
+                    {
+                        entries.extend(quote!(#ident native scan = exact [#(#prefix),*];));
+                    }
+                }
+            }
         }
         if analysis.hosts.contains_key(&name) && analysis.modes[&name] == ModeKind::Pipe {
             for (reader, columns, supply) in analysis.keyed_reads.get(&name).into_iter().flatten() {
@@ -335,14 +423,76 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                     .expect("checked reader")
                     .name;
                 let membership = full_key_probes.contains(&(name.clone(), columns.clone()));
+                use physical::syntax::HostRead;
+                let native = match (supply, operators[reader]) {
+                    (SupplyKind::Const, Operator::Point(_, select)) => select
+                        .condition
+                        .constant_keys()
+                        .filter(|keys| keys.keys().cloned().collect::<Vec<_>>() == *columns)
+                        .and_then(|_| {
+                            native_read(source, &analysis, &name, columns, &[HostRead::Exact])
+                        }),
+                    (SupplyKind::Range, Operator::Range(_, select)) => select
+                        .condition
+                        .range_bounds()
+                        .filter(|(column, _)| [column.clone()] == *columns.as_slice())
+                        .and_then(|_| {
+                            native_read(
+                                source,
+                                &analysis,
+                                &name,
+                                columns,
+                                &[HostRead::Range, HostRead::Ordered],
+                            )
+                        }),
+                    (SupplyKind::Stream, Operator::Merge(..)) => {
+                        // The host enumerates in declaration order; a merge
+                        // compares in sorted key order.
+                        let input = &analysis.hosts[&name];
+                        let ordered = source
+                            .inputs()
+                            .find(|declaration| symbol_name(&declaration.name) == *input)
+                            .is_some_and(|declaration| {
+                                declaration
+                                    .columns
+                                    .iter()
+                                    .take(columns.len())
+                                    .map(|column| {
+                                        analysis.renames[&name]
+                                            .iter()
+                                            .find(|(_, host)| **host == symbol_name(&column.name))
+                                            .map(|(target, _)| target.clone())
+                                    })
+                                    .eq(columns.iter().cloned().map(Some))
+                            });
+                        ordered
+                            .then(|| {
+                                native_read(source, &analysis, &name, columns, &[HostRead::Ordered])
+                            })
+                            .flatten()
+                    }
+                    (SupplyKind::Stream, Operator::Probe(..)) if membership => {
+                        native_read(source, &analysis, &name, columns, &[HostRead::Membership])
+                    }
+                    (SupplyKind::Stream, Operator::Probe(..)) => {
+                        native_read(source, &analysis, &name, columns, &[HostRead::Exact])
+                    }
+                    (SupplyKind::Stream, Operator::Semi(..) | Operator::Anti(..)) => {
+                        native_read(source, &analysis, &name, columns, &[HostRead::Membership])
+                    }
+                    _ => None,
+                };
+                if let Some((read, key)) = native {
+                    let read = syn::Ident::new(read.name(), proc_macro2::Span::call_site());
+                    let columns = key.iter().map(|c| &analysis.rows[&name].bindings[c]);
+                    entries.extend(quote!(#ident native result(#rd) = #read [#(#columns),*];));
+                    continue;
+                }
                 let ty = match supply {
                     SupplyKind::Const | SupplyKind::Range => {
                         providers::declaration("host_scan").instance()
                     }
-                    SupplyKind::Stream if membership => instance(
-                        "adaptive_membership",
-                        syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
-                    ),
+                    SupplyKind::Stream if membership => membership_provider(columns.len()),
                     SupplyKind::Stream if matches!(operators[reader], Operator::Merge(..)) => {
                         Need::Ordered.provider()
                     }
@@ -390,6 +540,17 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                 ),
             ] {
                 if !extra.insert((name.clone(), reader.key(), cols.clone())) {
+                    continue;
+                }
+                let wanted = if matches!(reader, structures::ReaderRef::Candidates) {
+                    physical::syntax::HostRead::Candidates
+                } else {
+                    physical::syntax::HostRead::Membership
+                };
+                if let Some((read, key)) = native_read(source, &analysis, &name, &cols, &[wanted]) {
+                    let read = syn::Ident::new(read.name(), proc_macro2::Span::call_site());
+                    let columns = key.iter().map(|c| &analysis.rows[&name].bindings[c]);
+                    entries.extend(quote!(#ident native #reader = #read [#(#columns),*];));
                     continue;
                 }
                 let columns = cols.iter().map(|c| &analysis.rows[&name].bindings[c]);
@@ -567,10 +728,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                             .all(|(_, columns, _)| columns == &key[0])
                     {
                         keyed.membership = Some(Default::default());
-                        keyed.provider = instance(
-                            "adaptive_membership",
-                            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
-                        );
+                        keyed.provider = membership_provider(1);
                     }
                 }
             }
@@ -585,6 +743,31 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             entry.name != definition.name
                 || !matches!(entry.structure, structures::Structure::Rows { .. })
         });
+    }
+    // The membership provider follows the stored key after filtering:
+    // reconstructed constants occupy no key storage.
+    for entry in &mut selected.entries {
+        let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+            continue;
+        };
+        if keyed.membership.is_none()
+            || !["adaptive_membership", "dense_membership"]
+                .iter()
+                .any(|token| keyed.provider.token == token)
+        {
+            continue;
+        }
+        let constants: BTreeSet<String> = keyed
+            .filtered
+            .iter()
+            .flat_map(|filtered| &filtered.constants)
+            .map(|binding| symbol_name(&binding.column))
+            .collect();
+        let stored = keyed
+            .columns()
+            .filter(|column| !constants.contains(&symbol_name(column)))
+            .count();
+        keyed.provider = membership_provider(stored);
     }
     selected.declare(&providers::declarations());
     // Built providers are actually constructed. Do not impose unused fallback

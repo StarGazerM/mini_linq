@@ -159,7 +159,7 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
             out = let canon project p keep {k,v};
             return out as answer(k,v);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; foreign_index = ForeignIndex<_,_> { reads [exact, range, membership], supports [expand, keys], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; foreign_index = ForeignIndex<_,_> { reads [exact, range, membership], supports [expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
             r = @foreign_index as ForeignIndex<_,_> [k] supports [expand, keys];
@@ -236,7 +236,7 @@ fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected()
             candidate = pipe probe smallest [b] pre_s,r;
             checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
-        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; foreign_directory = ForeignDirectory { reads [exact, range, membership], supports [retain, expand], build inferred }; vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; foreign_directory = ForeignDirectory { reads [exact, range, membership], supports [retain, expand], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_, _> [];
             r host scan = @host_scan as ::core::iter::Map<_, _> [];
             s host scan = @host_scan as ::core::iter::Map<_, _> [];
@@ -300,7 +300,7 @@ fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected()
 }
 
 #[test]
-fn retained_host_uses_borrowed_dispatch_and_consumes_the_same_cursor() {
+fn retained_host_fallback_is_shared_and_consumes_the_same_cursor() {
     let program: cq_lang_structures::Program = syn::parse_quote! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
@@ -309,7 +309,7 @@ fn retained_host_uses_borrowed_dispatch_and_consumes_the_same_cursor() {
             s = pipe semi eager [x] l,r;
             p = let canon probe first [x] s,r;
             return p as answer(x,y);
-        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; snapshot_alias = SnapshotAlias<_,_> { reads [exact, range, membership], supports [expand, keys], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; snapshot_alias = SnapshotAlias<_,_> { reads [exact, range, membership], supports [expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host result(s) = @snapshot_alias as SnapshotAlias<_,_> [x] supports [expand, keys];
@@ -321,8 +321,9 @@ fn retained_host_uses_borrowed_dispatch_and_consumes_the_same_cursor() {
         }
     };
     let printed = source_tokens(&program).unwrap().to_string();
-    assert!(printed.contains("BorrowedHost"), "{printed}");
-    assert!(printed.contains("expanded_read"), "{printed}");
+    // No native read is recorded: both readers use the one recorded fallback.
+    assert!(!printed.contains("dispatch :: retained ("), "{printed}");
+    assert!(printed.contains("__cq_r_fallback_x"), "{printed}");
     assert!(printed.contains("let __cq_witness_s : _"), "{printed}");
     assert_eq!(
         printed.matches("provider_contract :: retain (").count(),

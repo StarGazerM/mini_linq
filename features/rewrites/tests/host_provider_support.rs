@@ -55,11 +55,11 @@ impl<'a> cq_storage::IndexRead for &'a NativeHost {
 }
 
 macro_rules! query {
-    ($left:expr, $right:expr, $visits:ident) => {
+    ($left:expr, $right:expr, $visits:ident, [$($host:tt)*], [$($providers:tt)*], [$($reads:tt)*]) => {
         mini_linq::passes::sequence! {
             pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
             physical {
-                relation L(a:i64) = ($left); relation R(a:i64,b:i64) = ($right);
+                relation L(a:i64) = ($left); relation R(a:i64,b:i64) = ($right) $($host)*;
                 l = pipe rename L@0 {a -> x};
                 r = pipe rename R@1 {a -> x,b -> y};
                 s = pipe semi eager [x] l,r;
@@ -68,11 +68,10 @@ macro_rules! query {
                 out = let canon project observed keep {x,y};
                 return out as answer(x,y);
             }
-            structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; snapshot_alias = SnapshotAlias<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; $($providers)* sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
                 l host scan = @host_scan as ::core::iter::Map<_,_> [];
                 r host scan = @host_scan as ::core::iter::Map<_,_> [];
-                r host result(s) = @snapshot_alias as SnapshotAlias<_,_> [x] supports [expand];
-                r host result(p) = @snapshot_alias as SnapshotAlias<_,_> [x] supports [expand];
+                $($reads)*
                 s share = lookup r [x] first s force p;
                 s repr = tuples witness { r [x] at s as _ };
                 p stage = batch 2 expand;
@@ -96,7 +95,10 @@ fn retained_host_alias_uses_native_copy_cursor_without_rebuilding_or_reprobing()
         (1, 10),
     ];
     let visits = &RefCell::new(Vec::new());
-    let answers: BTreeSet<_> = query!(&left, &right, visits)
+    let answers: BTreeSet<_> = query!(&left, &right, visits,
+        [host [a] reads [exact] supports [expand]], [],
+        [r native result(s) = exact [x] supports [expand];
+         r native result(p) = exact [x] supports [expand];])
         .map(|(key, value)| (*key, *value))
         .collect();
     assert_eq!(answers, expected.iter().copied().collect());
@@ -122,7 +124,10 @@ fn noncopy_native_cursor_uses_declared_snapshot_fallback_and_preserves_duplicate
         (1, 10),
     ];
     let visits = &RefCell::new(Vec::new());
-    let answers: BTreeSet<_> = query!(&left, &right, visits)
+    let answers: BTreeSet<_> = query!(&left, &right, visits, [],
+        [snapshot_alias = SnapshotAlias<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build typed };],
+        [r host result(s) = @snapshot_alias as SnapshotAlias<_,_> [x] supports [expand];
+         r host result(p) = @snapshot_alias as SnapshotAlias<_,_> [x] supports [expand];])
         .map(|(key, value)| (*key, *value))
         .collect();
     assert_eq!(answers, expected.iter().copied().collect());

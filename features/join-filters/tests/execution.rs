@@ -116,7 +116,7 @@ fn filter_corpus_agrees_with_independent_exact_join() {
                 left,
                 right,
                 bloom_filter = BloomFilter<2>,
-                macro,
+                typed,
                 mini_linq::passes::sequence,
                 mini_linq::passes::sequential,
                 mini_linq::passes::translate_pull

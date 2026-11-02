@@ -194,7 +194,7 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
             result = pipe project joined keep {x,z};
             return result as answer(x,z);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; }
             d host scan = @host_scan as ::core::iter::Map<_,_> [];
             e host scan = @host_scan as ::core::iter::Map<_,_> [];
             e host result(joined) = @hash_index as ::cq_storage::HashIndex<'_,_,_> [y];

@@ -61,6 +61,7 @@ pub fn declarations(inputs: &[Relation]) -> Vec<cq_syntax::RelationDecl> {
                 })
                 .collect(),
             value: None,
+            hosts: Vec::new(),
             semi_token: Default::default(),
         })
         .collect()

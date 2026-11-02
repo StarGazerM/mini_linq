@@ -420,7 +420,7 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
     // The replacement deliberately has neither inherent keys() nor len().
     let custom_index: cq_lang_structures::Declaration = syn::parse_quote!(
         custom_index = CustomIndex<'_, _, _> {
-            reads [exact, membership], supports [keys], build macro, join_filter
+            reads [exact, membership], supports [keys], build typed, join_filter
         };
     );
     fn retype(
@@ -601,6 +601,14 @@ fn run_cases(cases: &[TokenStream]) {
         #![allow(non_snake_case, unused_variables, unused_macros)]
         #[derive(Clone,Debug,PartialEq,Eq,Hash,PartialOrd,Ord)]
         struct Key { id:i32, flag:bool }
+        // A one-column key set is recorded as dense membership, whose key
+        // must state its order-preserving ordinal (STR-AdaptiveMembership).
+        impl ::cq_storage::OrderKey for Key {
+            type Ordinal = u64;
+            fn ordinal(&self) -> u64 {
+                (u64::from(self.id as u32 ^ (1 << 31)) << 1) | u64::from(self.flag)
+            }
+        }
         fn main() { #(#cases)* }
     };
     let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

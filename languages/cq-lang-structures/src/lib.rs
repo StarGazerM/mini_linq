@@ -1,5 +1,6 @@
 //! Structures records providers, retained rows or positions, and read adapters.
-//! Ordinary host reads keep their recorded native/lazy fallback path. Explicit
+//! Host reads record either a native read the input declares (`native`,
+//! STR-NativeHost) or a lazily built fallback provider (`host`). Explicit
 //! positional decisions name a base, total column lineage, marker and summary;
 //! generated Rust checks the asserted host and provider capabilities.
 //! Every provider is a declared token (STR-Provider, `provider.rs`): entries
@@ -25,6 +26,7 @@
 //! Structures ::= "structures" "{" Providers Entry* "}"
 //! Entry ::= Ident ("=" Provider ("[" Ident,* "]")+ [Support] [Items]
 //!                | "host" ReaderRef "=" Provider ("[" Ident,* "]")+ [Support]
+//!                | "native" ReaderRef "=" HostRead "[" Ident,* "]" [Support]
 //!                | ("rows" | "head" | "group") "=" Provider
 //!                | "canon" "=" ("rows" | "[" Ident,* "]" | "host")
 //!                | "selection" "=" Provider Origin "summary" Summary
@@ -72,6 +74,7 @@ pub use cq_syntax::{CommaList, symbol_name};
 pub mod kw {
     syn::custom_keyword!(structures);
     syn::custom_keyword!(host);
+    syn::custom_keyword!(native);
     syn::custom_keyword!(scan);
     syn::custom_keyword!(candidates);
     syn::custom_keyword!(result);
@@ -102,6 +105,8 @@ pub mod kw {
     syn::custom_keyword!(join_filter);
     syn::custom_keyword!(build);
     syn::custom_keyword!(covering);
+    syn::custom_keyword!(abandon);
+    syn::custom_keyword!(of);
     syn::custom_keyword!(repr);
     syn::custom_keyword!(positions);
     syn::custom_keyword!(tuples);
@@ -319,6 +324,13 @@ pub enum Structure {
         marker: syn::Type,
         predicate_token: kw::predicate,
         predicate: ReadPredicate,
+    },
+    #[parse(peek = kw::native)]
+    Native {
+        native_token: kw::native,
+        reader: ReaderRef,
+        eq_token: Token![=],
+        read: NativeRead,
     },
     #[parse(peek = kw::host)]
     Host {
@@ -573,6 +585,7 @@ impl Structure {
             | Structure::Repr { .. }
             | Structure::Stage { .. }
             | Structure::Read { .. }
+            | Structure::Native { .. }
             | Structure::Dedup { .. } => None,
         }
     }
@@ -593,6 +606,7 @@ impl Structure {
             | Structure::Repr { .. }
             | Structure::Stage { .. }
             | Structure::Read { .. }
+            | Structure::Native { .. }
             | Structure::Dedup { .. } => None,
         }
     }
@@ -668,6 +682,9 @@ pub struct Analysis {
     pub built: BTreeMap<String, Vec<Built>>,
     /// Exact fallback per host rename, typed reader role/identity, and key.
     pub fallbacks: BTreeMap<(String, ReaderRef<String>, Vec<String>), Provider>,
+    /// Declared native host reads per host rename, reader and sorted key
+    /// (STR-NativeHost); such reads build no fallback.
+    pub natives: BTreeMap<(String, ReaderRef<String>, Vec<String>), Native>,
     /// Concrete accumulator tables for keyed Group results.
     pub groups: BTreeMap<String, Provider>,
     built_support: BTreeMap<(String, Vec<Vec<String>>), ProviderSupport>,
@@ -696,7 +713,8 @@ impl Analysis {
             .expect("STR-Provider: every recorded token is declared")
     }
 
-    /// Reusable host reads are selected by runtime type dispatch.
+    /// A pipe host rename is read in place: natively where recorded, else
+    /// through its recorded fallback.
     pub fn host_read(&self, result: &str) -> bool {
         self.physical.hosts.contains_key(result) && self.physical.modes[result] == ModeKind::Pipe
     }
@@ -869,6 +887,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         join_filters: BTreeMap::new(),
         built: BTreeMap::new(),
         fallbacks: BTreeMap::new(),
+        natives: BTreeMap::new(),
         groups: BTreeMap::new(),
         built_support: BTreeMap::new(),
         host_support: BTreeMap::new(),
@@ -892,12 +911,16 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         if positional::entry(program, entry, &mut analysis)? {
             continue;
         }
+        if native::entry(program, entry, &mut analysis)? {
+            continue;
+        }
         let keyed = match &entry.structure {
             Structure::Repr { .. } | Structure::Stage { .. } | Structure::Share { .. } => continue,
             Structure::JoinFilter { .. }
             | Structure::Selection { .. }
             | Structure::KeySet { .. }
-            | Structure::Read { .. } => {
+            | Structure::Read { .. }
+            | Structure::Native { .. } => {
                 unreachable!()
             }
             Structure::Built { keyed, .. } => keyed,
@@ -1202,6 +1225,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         .collect();
     filtered::check(program, &analysis)?;
     analysis.layouts = filtered::layouts(program, &analysis);
+    native::check(&analysis)?;
     let mut shared: BTreeMap<(String, Vec<String>, bool), &Provider> = BTreeMap::new();
     for ((name, reader, columns), provider) in &analysis.fallbacks {
         if matches!(reader, ReaderRef::Scan)
@@ -1236,9 +1260,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                         analysis.physical.headings[&name].clone(),
                     ),
                 ] {
-                    if !analysis
-                        .fallbacks
-                        .contains_key(&(name.clone(), reader, key))
+                    let read = (name.clone(), reader, key);
+                    if !analysis.fallbacks.contains_key(&read)
+                        && !analysis.natives.contains_key(&read)
                     {
                         return error(candidate.reader, "missing intersection host fallback type");
                     }
@@ -1463,11 +1487,13 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 if !analysis.host_read(&name) || analysis.reads.contains_key(reader) {
                     continue;
                 }
-                if !analysis.fallbacks.contains_key(&(
+                let read = (
                     name.clone(),
                     ReaderRef::Result(reader.clone()),
                     columns.clone(),
-                )) {
+                );
+                if !analysis.fallbacks.contains_key(&read) && !analysis.natives.contains_key(&read)
+                {
                     return error(
                         &definition.name,
                         format!("missing host fallback for `{reader}`"),
@@ -1727,11 +1753,18 @@ pub fn check_retention_rewrite(source: &Program, target: &Program) -> syn::Resul
         {
             continue;
         }
-        if let Structure::Host { reader, keyed, .. } = &entry.structure
-            && !matches!(reader, ReaderRef::Scan)
+        let replaced = match &entry.structure {
+            Structure::Host { reader, keyed, .. } if !matches!(reader, ReaderRef::Scan) => {
+                Some(keyed.level_names().concat())
+            }
+            Structure::Native { reader, read, .. } if !matches!(reader, ReaderRef::Scan) => {
+                Some(read.key.columns.iter().map(symbol_name).collect())
+            }
+            _ => None,
+        };
+        if let Some(mut keys) = replaced
             && facts.physical.modes.get(&symbol_name(&entry.name)) == Some(&physical::ModeKind::Let)
         {
-            let mut keys = keyed.level_names().concat();
             keys.sort();
             if facts.built_on(&symbol_name(&entry.name), &keys).is_some() {
                 continue;
@@ -1760,6 +1793,8 @@ pub fn check_retention_rewrite(source: &Program, target: &Program) -> syn::Resul
 }
 
 pub mod demand;
+mod native;
+pub use native::{Native, NativeRead};
 pub mod positional;
 pub use positional::*;
 mod join_filter;
@@ -1768,7 +1803,7 @@ mod repr;
 pub use repr::Witness;
 pub use repr::{Repr, ReprBase, representation_bases};
 mod share;
-pub use share::{Share, retained_host_read};
+pub use share::{RetainedHost, Share, retained_host_read};
 mod stage;
 
 mod filtered;

@@ -1,110 +1,17 @@
-//! Stable autoref dispatch. Membership first tries the borrowed query key
-//! through a triple-reference receiver; double-reference receivers try native
-//! reads at a declared prefix or explicitly indexed column. Single-reference
-//! receivers build once.
+//! Direct host reads and lazy fallback storage.
+//!
+//! Structure selection records, for every keyed read of a host, either a
+//! native read the host's declaration states (IF-HostDecl) or a fallback
+//! provider. Generated code makes exactly one call for that record: a native
+//! function below on the host value, or a read of the fallback built once on
+//! first use ([`Lazy`]). There is no capability ranking: a host whose Rust type
+//! lacks the declared capability is a rustc trait error at that call.
 use crate::rows::{Columns, Concat, OwnKey};
 use crate::{Candidates, ExactMembership, IndexRead, OrderedCursor, OrderedRead};
 use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeMap;
 use std::ops::Bound;
 use std::rc::Rc;
-
-/// Build-only request for a supported dense codec, otherwise [`crate::NoDense`].
-/// Unlike `NoDense`, this marker opts into type-directed codec selection.
-pub struct AutoDense;
-
-/// A type-directed build target used by `build!`. Keeping the iterator type on
-/// the receiver fixes its key type before autoref capability selection at the
-/// macro callsite.
-pub struct BuildTarget<S, I>(std::marker::PhantomData<fn(I) -> S>);
-
-impl<S, I> BuildTarget<S, I> {
-    pub fn new(_: &I) -> Self {
-        Self(std::marker::PhantomData)
-    }
-}
-
-/// Autoref-ranked build capability behind `build!`: the most specific
-/// implementation (dense codec, then generic `Build`) wins at the callsite.
-pub trait BuildProvider<I: Iterator> {
-    type Output;
-    fn build_provider(self, source: I) -> Self::Output;
-}
-
-impl<S: crate::Build<I>, I: Iterator> BuildProvider<I> for &BuildTarget<S, I> {
-    type Output = S;
-    #[inline]
-    fn build_provider(self, source: I) -> S {
-        S::build(source)
-    }
-}
-
-impl<K, V, I, const B: usize> BuildProvider<I> for &&BuildTarget<crate::AdaptiveMembership<K, B>, I>
-where
-    K: crate::OrderKey + std::hash::Hash,
-    I: Iterator<Item = (K, V)>,
-{
-    type Output = crate::DenseMembership<K, B>;
-    #[inline]
-    fn build_provider(self, source: I) -> Self::Output {
-        crate::count!(index_builds);
-        crate::DenseMembership::from_dense_keys(source.map(|(key, _)| key))
-    }
-}
-
-impl<K, V, I> BuildProvider<I> for &&BuildTarget<crate::SortedRun<K, V, AutoDense>, I>
-where
-    K: Ord + Copy,
-    V: Copy,
-    I: Iterator<Item = (K, V)>,
-{
-    type Output = crate::SortedRun<K, V, crate::NoDense>;
-    #[inline]
-    fn build_provider(self, source: I) -> Self::Output {
-        <Self::Output as crate::Build<I>>::build(source)
-    }
-}
-
-impl<K, V, I> BuildProvider<I> for &&&BuildTarget<crate::SortedRun<K, V, AutoDense>, I>
-where
-    K: Ord + Copy,
-    V: Copy,
-    I: Iterator<Item = (K, V)>,
-    crate::BorrowedI64TupleCodec: crate::KeyCodec<K>,
-{
-    type Output = crate::SortedRun<K, V, crate::BorrowedI64TupleCodec>;
-    #[inline]
-    fn build_provider(self, source: I) -> Self::Output {
-        <Self::Output as crate::Build<I>>::build(source)
-    }
-}
-
-impl<K, V, I, const B: usize> BuildProvider<I>
-    for &&BuildTarget<crate::AdaptiveKeySet<K, AutoDense, B>, I>
-where
-    K: Ord + std::hash::Hash,
-    I: Iterator<Item = (K, V)>,
-{
-    type Output = crate::AdaptiveKeySet<K, crate::NoDense, B>;
-    #[inline]
-    fn build_provider(self, source: I) -> Self::Output {
-        <Self::Output as crate::Build<I>>::build(source)
-    }
-}
-
-impl<K, V, I, const B: usize> BuildProvider<I>
-    for &&&BuildTarget<crate::AdaptiveKeySet<K, AutoDense, B>, I>
-where
-    K: Ord + std::hash::Hash,
-    I: Iterator<Item = (K, V)>,
-    crate::I64Codec: crate::KeyCodec<K>,
-{
-    type Output = crate::AdaptiveKeySet<K, crate::I64Codec, B>;
-    #[inline]
-    fn build_provider(self, source: I) -> Self::Output {
-        <Self::Output as crate::Build<I>>::build(source)
-    }
-}
 
 /// An immutable native index on one explicit, zero-based declaration slot.
 ///
@@ -127,8 +34,8 @@ impl<H: IndexedColumn<COLUMN>, const COLUMN: usize> IndexedColumn<COLUMN> for &H
     }
 }
 
-/// Select an explicitly indexed declaration slot without inferring it from
-/// a key type. Unsupported slots remain eligible for ordinary host fallback.
+/// Read an explicitly indexed declaration slot, recorded from a host
+/// declaration whose key is one non-leading column.
 #[derive(Clone)]
 pub struct ColumnHost<H, const COLUMN: usize>(H);
 
@@ -155,79 +62,6 @@ where
 {
     fn contains(&self, key: &K) -> bool {
         self.0.indexed_column().contains(key)
-    }
-}
-
-/// A one-probe host read. Its fallback enumerates rows without building an index.
-/// A differently represented literal key may use that fallback; native dispatch
-/// requires the declared key representation exactly. Callers retain the predicate
-/// to filter fallback rows through the representation's comparison law.
-pub struct PointHost<H, K, Q, F>(H, F, std::marker::PhantomData<fn() -> (K, Q)>);
-impl<H, K, Q, F> PointHost<H, K, Q, F> {
-    pub fn new(host: H, _: &Q, fallback: F) -> Self {
-        Self(host, fallback, std::marker::PhantomData)
-    }
-}
-
-pub trait PointRead<K> {
-    type Item;
-    type Cursor: Iterator<Item = Self::Item>;
-    fn point(self, key: &K) -> Self::Cursor;
-}
-impl<H, K, Q: Eq, F: Fn() -> I, I: Iterator> PointRead<Q> for &PointHost<H, K, Q, F> {
-    type Item = I::Item;
-    type Cursor = I;
-    fn point(self, _: &Q) -> I {
-        (self.1)()
-    }
-}
-impl<H: crate::PointLookup<Key = K>, K: Eq, F> PointRead<K> for &&PointHost<H, K, K, F> {
-    type Item = H::Row;
-    type Cursor = H::Cursor;
-    fn point(self, key: &K) -> Self::Cursor {
-        self.0.point_lookup(key)
-    }
-}
-
-/// A one-probe read keyed by borrowed closed operands (captured references).
-/// Native dispatch owns the borrowed key once per read through [`OwnKey`];
-/// a key whose owned form is not the declared key falls back to the scan.
-pub trait BorrowedPointRead<Q> {
-    type Item;
-    type Cursor: Iterator<Item = Self::Item>;
-    fn borrowed_point(self, key: &Q) -> Self::Cursor;
-}
-impl<H, K, Q, F: Fn() -> I, I: Iterator> BorrowedPointRead<Q> for &PointHost<H, K, Q, F> {
-    type Item = I::Item;
-    type Cursor = I;
-    fn borrowed_point(self, _: &Q) -> I {
-        (self.1)()
-    }
-}
-impl<H, K, Q, F> BorrowedPointRead<Q> for &&PointHost<H, K, Q, F>
-where
-    H: crate::PointLookup<Key = K>,
-    K: Eq,
-    Q: OwnKey<Owned = K>,
-{
-    type Item = H::Row;
-    type Cursor = H::Cursor;
-    fn borrowed_point(self, key: &Q) -> Self::Cursor {
-        self.0.point_lookup(&key.own_key())
-    }
-}
-
-/// The key and fallback types are fixed before method resolution, so an
-/// unsupported key type falls back even when another keyed read is implemented.
-pub struct Host<H, K, T, F>(pub H, Lazy<T, F>, std::marker::PhantomData<fn() -> K>);
-impl<H, K, T, F> Host<H, K, T, F> {
-    pub fn new(host: H, fallback: &Lazy<T, F>) -> Self {
-        Self(host, fallback.clone(), std::marker::PhantomData)
-    }
-}
-impl<H: Clone, K, T, F> Clone for Host<H, K, T, F> {
-    fn clone(&self) -> Self {
-        Self::new(self.0.clone(), &self.1)
     }
 }
 
@@ -264,103 +98,6 @@ impl<T, F> Clone for Lazy<T, F> {
         Self {
             state: Rc::clone(&self.state),
         }
-    }
-}
-
-pub trait Seek<Q> {
-    type Item: Copy;
-    type Cursor: Iterator<Item = Self::Item>;
-    fn seek(self, key: &Q) -> Self::Cursor;
-}
-impl<H, Q, K, T, F: FnOnce() -> T> Seek<Q> for &Host<H, K, T, F>
-where
-    T: IndexRead<Key = Q>,
-{
-    type Item = T::Item;
-    type Cursor = T::Cursor;
-    fn seek(self, key: &Q) -> Self::Cursor {
-        self.1.get().lookup(key)
-    }
-}
-impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> Seek<Q> for &&Host<H, K, T, F>
-where
-    H: IndexRead<Key = K>,
-    H::Item: Columns,
-{
-    type Item = <H::Item as Columns>::Row;
-    type Cursor = std::iter::Map<H::Cursor, fn(H::Item) -> Self::Item>;
-    fn seek(self, key: &Q) -> Self::Cursor {
-        self.0.lookup(&key.own_key()).map(Columns::columns)
-    }
-}
-
-/// Host dispatch whose fallback borrow survives the temporary dispatch wrapper.
-/// Unlike `Host`, constructing this wrapper does not clone a shared handle.
-pub struct BorrowedHost<'a, H, K, T, F>(H, &'a Lazy<T, F>, std::marker::PhantomData<fn() -> K>);
-
-impl<'a, H, K, T, F> BorrowedHost<'a, H, K, T, F> {
-    pub fn new(host: H, fallback: &'a Lazy<T, F>) -> Self {
-        Self(host, fallback, std::marker::PhantomData)
-    }
-}
-
-/// Select the actual read handle before proving its retained cursor obligations.
-pub trait BorrowedRead<Q> {
-    type Read: IndexRead<Key = Q>;
-    fn borrowed_read(self) -> Self::Read;
-}
-
-impl<'a, H, Q, K, T, F: FnOnce() -> T> BorrowedRead<Q> for &BorrowedHost<'a, H, K, T, F>
-where
-    &'a T: IndexRead<Key = Q>,
-{
-    type Read = &'a T;
-
-    fn borrowed_read(self) -> Self::Read {
-        self.1.get()
-    }
-}
-
-impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> BorrowedRead<Q> for &&BorrowedHost<'_, H, K, T, F>
-where
-    H: IndexRead<Key = K>,
-    H::Item: Columns,
-    H::Cursor: Copy,
-{
-    type Read = ColumnRead<H, Q>;
-
-    fn borrowed_read(self) -> Self::Read {
-        ColumnRead(self.0.clone(), std::marker::PhantomData)
-    }
-}
-
-/// Expansion dispatch skips a native read that cannot supply exact cursor lengths.
-pub trait ExpandedRead<Q> {
-    type Read: IndexRead<Key = Q>;
-    fn expanded_read(self) -> Self::Read;
-}
-
-impl<'a, H, Q, K, T, F: FnOnce() -> T> ExpandedRead<Q> for &BorrowedHost<'a, H, K, T, F>
-where
-    &'a T: IndexRead<Key = Q>,
-{
-    type Read = &'a T;
-
-    fn expanded_read(self) -> Self::Read {
-        self.1.get()
-    }
-}
-
-impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> ExpandedRead<Q> for &&BorrowedHost<'_, H, K, T, F>
-where
-    H: IndexRead<Key = K>,
-    H::Item: Columns,
-    H::Cursor: Copy + ExactSizeIterator,
-{
-    type Read = ColumnRead<H, Q>;
-
-    fn expanded_read(self) -> Self::Read {
-        ColumnRead(self.0.clone(), std::marker::PhantomData)
     }
 }
 
@@ -412,78 +149,125 @@ where
 
 impl<I: ExactSizeIterator> ExactSizeIterator for ColumnCursor<I> where I::Item: Columns {}
 
-pub trait Contains<Q> {
-    fn contains(self, key: &Q) -> bool;
-}
-impl<H, Q, K, T: ExactMembership<Q>, F: FnOnce() -> T> Contains<Q> for &Host<H, K, T, F> {
-    fn contains(self, key: &Q) -> bool {
-        self.1.get().contains(key)
-    }
-}
-impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> Contains<Q> for &&Host<H, K, T, F>
+/// Formal rule IF-Dispatch: a recorded native `exact` read on the host's
+/// declared key. The borrowed query key is owned once for the lookup and
+/// native items are normalized to borrowed columns.
+#[inline]
+pub fn seek<H, Q>(host: H, key: &Q) -> ColumnCursor<H::Cursor>
 where
-    H: ExactMembership<K>,
+    Q: OwnKey,
+    H: IndexRead<Key = Q::Owned>,
+    H::Item: Columns,
 {
-    fn contains(self, key: &Q) -> bool {
-        self.0.contains(&key.own_key())
-    }
+    ColumnCursor(host.lookup(&key.own_key()))
 }
 
-// Borrowed key sets can answer the query's references directly, without
-// cloning the key into the declared owned type or initializing the fallback.
-impl<H, Q: OwnKey<Owned = K>, K, T, F> Contains<Q> for &&&Host<H, K, T, F>
+/// A recorded native `membership` read on the host's declared key.
+#[inline]
+pub fn contains<H, Q>(host: H, key: &Q) -> bool
+where
+    Q: OwnKey,
+    H: ExactMembership<Q::Owned>,
+{
+    host.contains(&key.own_key())
+}
+
+/// A recorded native `membership` read on a `borrowed` host declaration:
+/// the host stores borrowed key columns and takes the query key unchanged.
+#[inline]
+pub fn contains_borrowed<H, Q>(host: H, key: &Q) -> bool
 where
     H: ExactMembership<Q>,
 {
-    fn contains(self, key: &Q) -> bool {
-        self.0.contains(key)
-    }
+    host.contains(key)
 }
 
-/// Membership with an owned fallback key. A computed query binding may be
-/// borrowed for the native probe even though retained fallback keys must own it.
-pub trait ContainsOwned<Q> {
-    fn contains_owned(self, key: &Q) -> bool;
-}
-impl<H, Q: OwnKey<Owned = K>, K, T: ExactMembership<K>, F: FnOnce() -> T> ContainsOwned<Q>
-    for &Host<H, K, T, F>
+/// The number of candidates under a prefix of a recorded native `candidates` read.
+#[inline]
+pub fn candidate_count<H, Q>(host: H, key: &Q) -> usize
+where
+    Q: OwnKey,
+    H: Candidates<Key = Q::Owned>,
 {
-    fn contains_owned(self, key: &Q) -> bool {
-        self.1.get().contains(&key.own_key())
-    }
+    host.count(&key.own_key())
 }
-impl<H: ExactMembership<K>, Q: OwnKey<Owned = K>, K, T, F> ContainsOwned<Q> for &&Host<H, K, T, F> {
-    fn contains_owned(self, key: &Q) -> bool {
-        self.0.contains(&key.own_key())
-    }
-}
-impl<H: ExactMembership<Q>, Q: OwnKey<Owned = K>, K, T, F> ContainsOwned<Q>
-    for &&&Host<H, K, T, F>
+
+/// The candidates under a prefix of a recorded native `candidates` read.
+#[inline]
+pub fn candidate_keys<H, Q>(host: H, key: &Q) -> ColumnCursor<H::Iter>
+where
+    Q: OwnKey,
+    H: Candidates<Key = Q::Owned>,
+    H::Item: Columns,
 {
-    fn contains_owned(self, key: &Q) -> bool {
-        self.0.contains(key)
-    }
+    ColumnCursor(host.keys(&key.own_key()))
 }
 
-/// A constant window never builds a fallback index. Bounds contain borrowed
-/// columns and can outlive the query block without copying captured values.
-pub struct RangeHost<H, Q, F>(H, F, std::marker::PhantomData<fn() -> Q>);
-impl<H, Q, F> RangeHost<H, Q, F> {
-    pub fn new(host: H, fallback: F) -> Self {
-        Self(host, fallback, std::marker::PhantomData)
-    }
+/// A recorded native `exact` read retained across probes: the key-normalizing
+/// handle whose cursor is `Copy` (`supports [retain]`).
+#[inline]
+pub fn retained<H, Q>(host: H) -> ColumnRead<H, Q>
+where
+    Q: OwnKey,
+    H: IndexRead<Key = Q::Owned>,
+    H::Item: Columns,
+    H::Cursor: Copy,
+{
+    ColumnRead(host, std::marker::PhantomData)
 }
 
-pub trait RangeRead<Q> {
-    type Item;
-    type Cursor: Iterator<Item = Self::Item>;
-    fn range(self, low: Bound<Q>, high: Bound<Q>) -> Self::Cursor;
+/// A recorded native `exact` read expanded by exact cursor lengths
+/// (`supports [expand]`).
+#[inline]
+pub fn expanded<H, Q>(host: H) -> ColumnRead<H, Q>
+where
+    Q: OwnKey,
+    H: IndexRead<Key = Q::Owned>,
+    H::Item: Columns,
+    H::Cursor: Copy + ExactSizeIterator,
+{
+    ColumnRead(host, std::marker::PhantomData)
 }
-impl<H, Q, F: Fn() -> I, I: Iterator> RangeRead<Q> for &RangeHost<H, Q, F> {
-    type Item = I::Item;
-    type Cursor = I;
-    fn range(self, _: Bound<Q>, _: Bound<Q>) -> I {
-        (self.1)()
+
+/// A recorded native constant point read (`exact` on the declared key).
+#[inline]
+pub fn point<H, K>(host: H, key: &K) -> H::Cursor
+where
+    H: crate::PointLookup<Key = K>,
+{
+    host.point_lookup(key)
+}
+
+/// A recorded native `range` read: a seek to the lower bound of a window on
+/// the host's one-column declared prefix.
+#[inline]
+pub fn range<H, Q>(host: H, low: Bound<Q>, high: Bound<Q>) -> H::RangeCursor
+where
+    H: SeekRangeLookup<Q>,
+{
+    host.seek_range_lookup(low, high)
+}
+
+/// A recorded native `ordered` window: the host's key-ordered cursor from its
+/// start, cut to the bounds.
+#[inline]
+pub fn window<'a, H, Q>(
+    host: &'a H,
+    low: Bound<Q>,
+    high: Bound<Q>,
+) -> RelationalWindow<H::Cursor<'a>, Q>
+where
+    H: OrderedRead + 'a,
+    H::Cursor<'a>: OrderedCursor,
+    <H::Cursor<'a> as OrderedCursor>::Key: Columns<Row = Q>,
+    <H::Cursor<'a> as OrderedCursor>::Value: Columns,
+    Q: Ord + Copy + Concat<<<H::Cursor<'a> as OrderedCursor>::Value as Columns>::Row>,
+{
+    RelationalWindow {
+        cursor: host.ordered(),
+        low,
+        high,
+        done: false,
     }
 }
 
@@ -493,32 +277,6 @@ pub trait SeekRangeLookup<Q>: OrderedRead + Copy {
     type RangeCursor: Iterator<Item = Self::Row>;
     fn seek_range_lookup(self, low: Bound<Q>, high: Bound<Q>) -> Self::RangeCursor;
 }
-impl<'a, H: OrderedRead + 'a, Q: Ord + Copy, F> RangeRead<Q> for &&'a RangeHost<H, Q, F>
-where
-    H::Cursor<'a>: OrderedCursor,
-    <H::Cursor<'a> as OrderedCursor>::Key: Columns<Row = Q>,
-    <H::Cursor<'a> as OrderedCursor>::Value: Columns,
-    Q: Concat<<<H::Cursor<'a> as OrderedCursor>::Value as Columns>::Row>,
-{
-    type Item = <Q as Concat<<<H::Cursor<'a> as OrderedCursor>::Value as Columns>::Row>>::Row;
-    type Cursor = RelationalWindow<H::Cursor<'a>, Q>;
-    fn range(self, low: Bound<Q>, high: Bound<Q>) -> Self::Cursor {
-        RelationalWindow {
-            cursor: self.0.ordered(),
-            low,
-            high,
-            done: false,
-        }
-    }
-}
-impl<H: SeekRangeLookup<Q>, Q, F> RangeRead<Q> for &&&RangeHost<H, Q, F> {
-    type Item = H::Row;
-    type Cursor = H::RangeCursor;
-    fn range(self, low: Bound<Q>, high: Bound<Q>) -> Self::Cursor {
-        self.0.seek_range_lookup(low, high)
-    }
-}
-
 /// A total fused ordered window. Inverted/exclusive-equal bounds yield no rows;
 /// unlike a two-sided BTreeMap::range, this never panics on such bounds.
 pub struct RelationalWindow<C, Q> {
@@ -593,40 +351,6 @@ where
             high,
             done: false,
         }
-    }
-}
-
-pub trait CandidateRead<Q> {
-    type Item;
-    type Cursor: Iterator<Item = Self::Item>;
-    fn count(self, key: &Q) -> usize;
-    fn keys(self, key: &Q) -> Self::Cursor;
-}
-impl<H, Q, K, T, F: FnOnce() -> T> CandidateRead<Q> for &Host<H, K, T, F>
-where
-    T: Candidates<Key = Q>,
-{
-    type Item = T::Item;
-    type Cursor = T::Iter;
-    fn count(self, key: &Q) -> usize {
-        Candidates::count(self.1.get(), key)
-    }
-    fn keys(self, key: &Q) -> Self::Cursor {
-        Candidates::keys(self.1.get(), key)
-    }
-}
-impl<H, Q: OwnKey<Owned = K>, K, T, F> CandidateRead<Q> for &&Host<H, K, T, F>
-where
-    H: Candidates<Key = K>,
-    H::Item: Columns,
-{
-    type Item = <H::Item as Columns>::Row;
-    type Cursor = std::iter::Map<H::Iter, fn(H::Item) -> Self::Item>;
-    fn count(self, key: &Q) -> usize {
-        self.0.count(&key.own_key())
-    }
-    fn keys(self, key: &Q) -> Self::Cursor {
-        self.0.keys(&key.own_key()).map(Columns::columns)
     }
 }
 

@@ -46,7 +46,11 @@ impl Connection {
         let input = child.stdin.take().expect("piped stdin");
         let output = BufReader::new(child.stdout.take().expect("piped stdout"));
         Ok(Self {
-            process: RefCell::new(CliProcess { child, input, output }),
+            process: RefCell::new(CliProcess {
+                child,
+                input,
+                output,
+            }),
             directory,
         })
     }
@@ -58,9 +62,12 @@ impl Connection {
         // -bail exits on SQL errors before the completion marker can be emitted.
         let command = format!(
             ".headers off\n.mode csv\n.nullvalue \\\\N\n.output '{}'\n{}\n;\n.output stdout\n.print __CQ_DUCKDB_COMPLETE__\n",
-            path.display(), sql
+            path.display(),
+            sql
         );
-        let sent = process.input.write_all(command.as_bytes())
+        let sent = process
+            .input
+            .write_all(command.as_bytes())
             .and_then(|()| process.input.flush());
         let mut line = String::new();
         if sent.is_ok() {
@@ -75,7 +82,10 @@ impl Connection {
             }
         }
         let errors = std::fs::read_to_string(self.directory.path().join("stderr"))?;
-        Err(std::io::Error::other(format!("DuckDB CLI failed: {errors}{}", sent.err().map(|e| e.to_string()).unwrap_or_default())))
+        Err(std::io::Error::other(format!(
+            "DuckDB CLI failed: {errors}{}",
+            sent.err().map(|e| e.to_string()).unwrap_or_default()
+        )))
     }
 
     pub fn execute_batch(&self, sql: &str) -> std::io::Result<()> {
@@ -86,16 +96,27 @@ impl Connection {
     /// Exact textual values in projection order, including quoted CSV strings.
     pub fn query(&self, sql: &str) -> std::io::Result<Vec<Vec<String>>> {
         let path = self.run(sql)?;
-        csv::ReaderBuilder::new().has_headers(false).from_path(path).map_err(std::io::Error::other)?
+        csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_path(path)
+            .map_err(std::io::Error::other)?
             .records()
-            .map(|record| Ok(record.map_err(std::io::Error::other)?.iter().map(str::to_owned).collect()))
+            .map(|record| {
+                Ok(record
+                    .map_err(std::io::Error::other)?
+                    .iter()
+                    .map(str::to_owned)
+                    .collect())
+            })
             .collect()
     }
 
     pub fn scalar(&self, sql: &str) -> std::io::Result<String> {
         let mut rows = self.query(sql)?;
         if rows.len() != 1 || rows[0].len() != 1 {
-            return Err(std::io::Error::other("DuckDB scalar query did not return exactly one value"));
+            return Err(std::io::Error::other(
+                "DuckDB scalar query did not return exactly one value",
+            ));
         }
         Ok(rows.remove(0).remove(0))
     }
@@ -189,9 +210,14 @@ pub fn evaluate_sql(relations: &[RelationData], sql: &str) -> Result<Vec<Vec<i32
             "CREATE TABLE {} ({columns});",
             quote_identifier(&raw_name),
         ))?;
-        let path = connection.directory.path().join(format!("input-{input_index}.csv"));
+        let path = connection
+            .directory
+            .path()
+            .join(format!("input-{input_index}.csv"));
         {
-            let mut writer = csv::WriterBuilder::new().has_headers(false).from_path(&path)?;
+            let mut writer = csv::WriterBuilder::new()
+                .has_headers(false)
+                .from_path(&path)?;
             for row in &relation.rows {
                 writer.write_record(row.iter().map(i32::to_string))?;
             }
@@ -206,9 +232,15 @@ pub fn evaluate_sql(relations: &[RelationData], sql: &str) -> Result<Vec<Vec<i32
         }
     }
 
-    connection.query(sql)?.into_iter().map(|row| {
-        row.into_iter().map(|value| value.parse::<i32>().map_err(Into::into)).collect()
-    }).collect()
+    connection
+        .query(sql)?
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|value| value.parse::<i32>().map_err(Into::into))
+                .collect()
+        })
+        .collect()
 }
 
 /// Name of the raw table corresponding to a schema ordinal.

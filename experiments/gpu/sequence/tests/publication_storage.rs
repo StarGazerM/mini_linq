@@ -28,7 +28,7 @@ fn recorded_for_order_survives_packed_flat_and_terminal_publications() -> Result
                 r = let canon rename R@0 {a -> a,b -> b};
                 return r as answer(b,a);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
                 r host scan = @device_columns input { keys 0; columns [i64 => i64, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,u32)> [];
                 r rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 r canon = rows;

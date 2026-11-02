@@ -379,6 +379,8 @@ fn opaque_providers_and_initializers_are_not_whitelisted() {
                 cq_lang_datalog_storage::provider::Admission::None,
                 false,
                 cq_lang_datalog_storage::provider::TaskHasher::Fx,
+                &[],
+                &[],
             ));
     }
     let provider = &mut alternate.providers[2];

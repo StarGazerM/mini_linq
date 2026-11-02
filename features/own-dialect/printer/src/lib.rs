@@ -475,7 +475,7 @@ impl Push<'_> {
                 }
                 Ok(body)
             }
-            Operator::Anti(_, keyed) => self.membership(keyed, sink, true),
+            Operator::Anti(_, keyed) => self.membership(result, keyed, sink, true),
             Operator::Unit(_) => Ok(sink),
             Operator::Rename(_) => {
                 let rows = self.host_scan(result);
@@ -566,7 +566,7 @@ impl Push<'_> {
                 let left = symbol_name(&keyed.left);
                 let right = symbol_name(&keyed.right);
                 let columns = sorted(&keyed.columns);
-                let (lookup, payload) = match self.keyed(&keyed.right, &columns)? {
+                let (lookup, payload) = match self.keyed(result, &keyed.right, &columns)? {
                     Access::Host(access) => (
                         self.host_lookup(&left, &access, false, false),
                         access.payload,
@@ -616,7 +616,7 @@ impl Push<'_> {
                     },
                 )
             }
-            Operator::Semi(_, keyed) => self.membership(keyed, sink, false),
+            Operator::Semi(_, keyed) => self.membership(result, keyed, sink, false),
             Operator::Merge(..) => error(&definition.name, "own_push: merge is unsupported"),
         }
     }
@@ -635,7 +635,7 @@ impl Push<'_> {
                 _ => unreachable!("chunked stages are plain selection chains"),
             }
         }
-        let host = self.host_access(&current, &[]).value;
+        let host = self.host_access(&current, None, &[]).value;
         let chunk = temporary("chunk", result);
         let id = temporary("position", result);
         let mut predicates = Vec::new();
@@ -694,6 +694,7 @@ impl Push<'_> {
 
     fn membership(
         &mut self,
+        reader: &str,
         keyed: &physical::Keyed,
         sink: Tokens,
         negative: bool,
@@ -704,7 +705,7 @@ impl Push<'_> {
         let test = if let Some(test) = self.keyset_contains(&left, &right, &columns) {
             test
         } else {
-            match self.keyed(&keyed.right, &columns)? {
+            match self.keyed(reader, &keyed.right, &columns)? {
                 Access::Host(access) => self.host_lookup(&left, &access, true, negative),
                 Access::Built(structure) => self.chained_contains(
                     &left,
@@ -748,7 +749,7 @@ mod tests {
                     r = pipe rename R@0 {a -> a};
                     return r as answer(a);
                 }
-                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
             })
             .unwrap();
             let printed = compile(&module, None)
@@ -777,7 +778,7 @@ mod tests {
                     #projection
                     return #returned as answer(#head);
                 }
-                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build macro }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
             })
             .unwrap();
             let callback = syn::parse_quote!(consume);

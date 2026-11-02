@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Reject handpicked invalid programs; pin each construct/trait obligation."""
+"""Reject invalid recorded contracts; pin each construct/trait obligation.
+
+Host container types do not select native reads. Ordering fixtures declare
+their host reads explicitly so rustc checks the promised capability/key,
+rather than expecting an undeclared host to bypass index construction.
+"""
 import json
 import os
 from pathlib import Path

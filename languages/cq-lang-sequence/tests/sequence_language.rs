@@ -113,7 +113,7 @@ fn routed_publication_checks_native_representation_and_stored_key_coverage() {
         @sharded(@provider as Provider) as ::cq_storage::sharded::Sharded<Provider, _>
     );
     p.structures.structures.declare(&[syn::parse_quote!(
-        sharded = ::cq_storage::sharded::Sharded<_> { reads [], build macro, routed 0, shared };
+        sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared };
     )]);
     let analysis = contract::check(&p).unwrap();
     assert_eq!(
@@ -162,7 +162,7 @@ fn a_non_routed_token_is_not_a_routed_provider() {
     };
     keyed.provider = syn::parse_quote!(@custom_sharded as ::custom::Sharded<Provider>);
     p.structures.structures.declare(&[syn::parse_quote!(
-        custom_sharded = ::custom::Sharded<_> { reads [exact, membership], build macro };
+        custom_sharded = ::custom::Sharded<_> { reads [exact, membership], build typed };
     )]);
     let analysis = contract::check(&p).unwrap();
     assert!(analysis.routed_providers.is_empty());
@@ -182,7 +182,7 @@ fn deferred_publication_program(body: proc_macro2::TokenStream) -> Program {
             out = let canon probe first [a] probe,selected;
             return out as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; sharded = ::cq_storage::sharded::Sharded<_> { reads [], build macro, routed 0, shared }; provider = Provider { reads [exact, range, membership], build inferred }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; provider = Provider { reads [exact, range, membership], build inferred }; }
             r host scan = @reader as Reader [];
             r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
             selected = @sharded(@provider as Provider) as ::cq_storage::sharded::Sharded<Provider> [a];
@@ -532,7 +532,7 @@ fn deferred_rows_reject_support_equal_source_and_consumer_reheading() {
                 out = let canon probe first [a,b] first,alias;
                 return out as answer(a,b);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; sharded = ::cq_storage::sharded::Sharded<_> { reads [], build macro, routed 0, shared }; provider = Provider { reads [exact, range, membership], build inferred }; rows = Rows { reads [exact, range, membership], build inferred }; alias_provider = AliasProvider { reads [exact, range, membership], build inferred }; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; provider = Provider { reads [exact, range, membership], build inferred }; rows = Rows { reads [exact, range, membership], build inferred }; alias_provider = AliasProvider { reads [exact, range, membership], build inferred }; }
                 r host scan = @reader as Reader [];
                 r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
                 probe host scan = @reader as Reader [];
@@ -577,7 +577,7 @@ fn deferred_rows_pin_sources_with_shadowed_join_filter_bindings() {
             out = let canon probe first [a] probe,selected;
             return out as answer(a);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build macro, join_filter }; filter = Filter { reads [exact, range, membership], build inferred }; sharded = ::cq_storage::sharded::Sharded<_> { reads [], build macro, routed 0, shared }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; filter = Filter { reads [exact, range, membership], build inferred }; sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             b = @hash_index as ::cq_storage::HashIndex<'_, _, _> [a] supports [keys];
@@ -2013,7 +2013,7 @@ fn grouped_program(keys: proc_macro2::TokenStream, body: proc_macro2::TokenStrea
     })
     .unwrap();
     program.structures.structures.declare(&[syn::parse_quote!(
-        group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro };
+        group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed };
     )]);
     program
 }
@@ -2158,7 +2158,7 @@ fn shared_checker_retains_source_analysis_across_candidate_exploration() {
 #[test]
 fn shared_checker_rechecks_evidence_and_complete_opaque_prefix_syntax() {
     let mut source = program(quote!(out = store rows r;));
-    source.structures.structures = syn::parse_quote!(structures { providers { reader = Reader<{ opaque!(left) }> { reads [exact, range, membership], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    source.structures.structures = syn::parse_quote!(structures { providers { reader = Reader<{ opaque!(left) }> { reads [exact, range, membership], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         r host scan = @reader as Reader<{ opaque!(left) }> [];
         r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
     });
@@ -2174,7 +2174,7 @@ fn shared_checker_rechecks_evidence_and_complete_opaque_prefix_syntax() {
     assert!(checker.check_shared(&advice).is_err());
 
     let mut changed = source.clone();
-    changed.structures.structures = syn::parse_quote!(structures { providers { reader = Reader<{ opaque!(right) }> { reads [exact, range, membership], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    changed.structures.structures = syn::parse_quote!(structures { providers { reader = Reader<{ opaque!(right) }> { reads [exact, range, membership], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         r host scan = @reader as Reader<{ opaque!(right) }> [];
         r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
     });
@@ -2565,7 +2565,7 @@ fn partial_group_metadata_uses_constructor_preorder_and_definition_ownership() {
             all_rows = pipe group by_key by [] { grand_total:i64 = sum(subtotal); };
             return all_rows as answer(grand_total);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build macro }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
             r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
             by_key rows = @sort as ::cq_storage::dedup::Sort; by_key canon = rows;
             by_key group = @group_map as ::std::collections::HashMap<_, (i64,)>;

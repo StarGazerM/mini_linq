@@ -512,7 +512,10 @@ mod parquet_tests {
         assert_eq!(error.line, 2);
         assert_eq!(error.value, "<NULL>");
         assert!(dictionaries.get("name").is_none());
-        assert_eq!(::cq_storage::domain::exact(dictionaries.domain("retained"), "value"), StringCode(0));
+        assert_eq!(
+            ::cq_storage::domain::exact(dictionaries.domain("retained"), "value"),
+            StringCode(0)
+        );
     }
 
     #[test]
@@ -554,7 +557,10 @@ mod parquet_tests {
             ]
         );
         assert_eq!(rows[0], rows[3]);
-        assert_eq!(::cq_storage::domain::exact(dictionaries.domain("name"), "missing"), StringCode::MAX);
+        assert_eq!(
+            ::cq_storage::domain::exact(dictionaries.domain("name"), "missing"),
+            StringCode::MAX
+        );
         assert_eq!(
             dictionaries.select("name", |value| value.is_empty()),
             [(StringCode(0),)]
@@ -595,7 +601,10 @@ mod parquet_tests {
         .unwrap_err();
         assert_eq!(error.column, "other");
         assert!(dictionaries.get("name").is_none());
-        assert_eq!(::cq_storage::domain::exact(dictionaries.domain("retained"), "value"), StringCode(0));
+        assert_eq!(
+            ::cq_storage::domain::exact(dictionaries.domain("retained"), "value"),
+            StringCode(0)
+        );
     }
 
     #[test]

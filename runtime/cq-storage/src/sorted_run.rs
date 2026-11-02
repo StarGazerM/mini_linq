@@ -507,22 +507,17 @@ mod tests {
 
     #[test]
     fn borrowed_integer_keys_and_disabled_codecs() {
-        use crate::BorrowedI64TupleCodec;
+        use crate::{BorrowedI64TupleCodec, Build, I64Codec};
         let keys = [-65i64, -1, 0, 65];
-        let run = crate::build!(
-            SortedRun<_, _, crate::AutoDense>,
-            keys.iter().map(|k| ((k,), *k)),
-        );
-        let run: SortedRun<(&i64,), i64, BorrowedI64TupleCodec> = run;
+        let run = <SortedRun<_, _, I64Codec> as Build<_>>::build(keys.iter().map(|k| ((k,), *k)));
+        let run: SortedRun<(&i64,), i64, I64Codec> = run;
         assert!(run.rank.is_some());
         assert_eq!((&run).lookup(&(&-1,)).collect::<Vec<_>>(), [-1]);
         assert!(!run.contains(&(&1,)));
-        let default_run = crate::build!(SortedRun<_, _>, keys.iter().map(|k| ((k,), *k)));
+        let default_run = <SortedRun<_, _> as Build<_>>::build(keys.iter().map(|k| ((k,), *k)));
         assert!(default_run.rank.is_none());
-        let explicit_run = crate::build!(
-            SortedRun<_, _, NoDense>,
-            keys.iter().map(|k| ((k,), *k)),
-        );
+        let explicit_run =
+            <SortedRun<_, _, NoDense> as Build<_>>::build(keys.iter().map(|k| ((k,), *k)));
         assert!(explicit_run.rank.is_none());
         let run = SortedRun::from_pairs([((&-1i32,), 'a'), ((&65,), 'b')], BorrowedI64TupleCodec);
         assert!(run.rank.is_some());

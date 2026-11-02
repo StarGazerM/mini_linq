@@ -745,38 +745,59 @@ copy it; nothing is allocated), any other value is moved once into an
 \code{Arc}. The printer emits the same tokens for every capture and inspects
 no type; a lazy answer is never collected because of a capture.
 
-\Rule{IF-Range}{C=\{d_1\}\quad H:\code{OrderedRead}\text{ at the matching key type}}
- {\mathsf{window}(H,C)\text{ is an ordered read; otherwise scan/filter, no build}}
+\Rule{IF-Range}{\mathsf{native}(r,c,\{d\})=\rho\quad\rho\in\{\code{range},\code{ordered}\}}
+ {\mathsf{window}(H,d)\longmapsto\code{dispatch::range}/\code{window}(H,\ldots)\text{; unrecorded: scan/filter, no build}}
 
 \Rule{IF-Leaf}{d=\code{relation R(...)=}(e)\quad b\text{ fresh}\quad
  \Gamma_H\vdash_{Rust}e}
  {d\longmapsto\code{let b = \&(e);}\quad R\mapsto b}
 
-\Rule{IF-Dispatch}{\mathsf{nativeEligible}(H,C)\quad H:\mathsf{ReadAt}(C)}
- {\mathsf{read}(H,C)\longmapsto\mathsf{nativeRead}(H,C)}
+\Rule{IF-HostDecl}{\code{relation R(}d_1,\ldots,d_n\code{) host [}K\code{] [borrowed] reads [}P\code{] [supports [}S\code{]]}\\
+ K\neq\emptyset\text{ distinct declared columns}\quad
+ K=\{d_1,\ldots,d_{|K|}\}\ \lor\ |K|=1\\
+ \{\code{candidates},\code{range},\code{ordered}\}\cap P\neq\emptyset\Rightarrow K\text{ prefix}\quad
+ \code{range}\in P\Rightarrow|K|=1\\
+ \code{borrowed}\Rightarrow P=\{\code{membership}\}\quad
+ S\neq\emptyset\Rightarrow\code{exact}\in P}
+ {\mathsf{hostReads}(R,K)=P\quad\mathsf{hostSupports}(R,K)=S}
 
-\Rule{IF-Fallback}{\neg\mathsf{nativeEligible}(H,C)\ \lor\ H\not:\mathsf{ReadAt}(C)}
- {\mathsf{read}(H,C)\longmapsto\mathsf{lazyOnce}(\mathsf{build}(\alpha(H),C))}
+\Rule{IF-Dispatch}{\mathsf{native}(r,c,C)=(\rho,\vec K)\quad\mathsf{hostReads}(R,K)\ni\rho}
+ {\mathsf{read}(H,C)\longmapsto\code{dispatch::}\rho(H,\vec K)\quad
+  \code{require::native\_}\rho\code{::<}\vec\tau_K\code{,\_>(\&}H\code{)}\text{ once}}
+
+\Rule{IF-Fallback}{\mathsf{fallback}(r,c,C)=T}
+ {\mathsf{read}(H,C)\longmapsto\mathsf{lazyOnce}(\code{<}T\code{ as Build<\_>>::build}(\alpha(H)))}
 \end{mathpar}
-For keyed host reads, $\mathsf{nativeEligible}(H,C)$ holds at a leading
-declaration prefix, or at a single nonleading borrowed-key column
-$C=\{d_{j+1}\}$ when $H:\code{IndexedColumn<j>}$. The zero-based slot is derived
-from the checked declaration and rename, not inferred from matching Rust types.
-The explicit read's key is the one-field tuple of that column's declared owned
-type; its payload supplies every other column in declaration order, with exact
-source occurrences and chronology. Its cursor borrows or pins that same
-immutable source, not a temporary dispatch wrapper. Exact membership requires
-its separate Rust trait; retention and expansion still require Copy and
-Copy plus ExactSizeIterator respectively. An unsupported slot or capability
-uses the ordinary fallback. Computed keys, multicolumn nonleading keys,
-candidate enumeration and PointLookup retain their existing paths.
-A point read's key is every conjunct of its selection that equates a column
-with a constant: a literal keeps its typed constant, and a closed operand
-(IF-Parameter, including every A-Domain capture) keeps its captured
-reference; a key with a closed operand dispatches through
-\code{BorrowedPointRead}, owning the borrowed key once per read
-(\code{OwnKey}), and falls back to the scan when that owned key is not the
-declared key type.
+A host is a plain row source unless its relation declares keyed reads
+(\textsc{IF-HostDecl}): a \code{host [}$K$\code{]} clause names a nonempty
+key, which is a leading declaration prefix or one indexed column, the reads
+$P\subseteq\{\code{exact},\code{membership},\code{candidates},\code{range},
+\code{ordered}\}$ its value answers on that key, and optionally the
+\code{retain}/\code{expand} cursor contracts of its exact read. A
+\code{borrowed} key stores borrowed columns (\code{(\&T,\ldots)}) and declares
+membership only. Only the declaration decides; Rust types are never
+inspected. Every keyed host read has exactly one Structures record: a native
+read (\textsc{STR-NativeHost}), or a fallback provider. \textsc{IF-Dispatch}
+prints one direct call for a native record on its key $\vec K$, listed in
+host declaration order, and one \code{require::native\_}$\rho$ guard outside
+all closures: a host whose type lacks the declared capability or answers
+another key type fails there, with rustc naming the missing trait
+(\code{IndexRead}, \code{PointLookup}, \code{ExactMembership},
+\code{Candidates}, \code{SeekRangeLookup} or \code{OrderedRead}). There is no
+autoref tier and no silent fallback. A nonprefix one-column key reads the
+explicitly indexed declaration slot through \code{ColumnHost<\_,j>}, whose
+zero-based slot is derived from the checked declaration and rename; its
+payload supplies every other column in declaration order, with exact source
+occurrences and chronology. Computed and generated keys own their key once
+(\code{OwnKey}) for the native call. Retention and expansion of a native
+exact read require the declared support and still require Copy and Copy plus
+ExactSizeIterator respectively. Every other read uses its recorded fallback,
+built once by one direct typed \code{Build} call (\textsc{IF-Fallback}).
+A point key includes every equality constant: literals keep their typed value,
+and closed operands, including A-Domain captures, keep their captured
+reference (\textsc{IF-Parameter}). \code{OwnKey} owns a captured key once per
+read; a mismatch with the declared native key is a Rust trait error, not a
+scan fallback.
 
 \begin{mathpar}
 \Rule{IF-Positional}{r\text{ has a checked positional read }(H,C,P)}
@@ -1078,11 +1099,12 @@ exclusive spine reaches; this is the bitmap a build side pushes to the deepest
 probe-side scan. A scan may therefore carry filters from several builds.
 Every eligible payload-index build whose selected token declares
 \code{join\_filter} (payload-directory key enumeration; a routed token
-inherits its inner's fact) selects an exact
-\code{AdaptiveMembership<K,67108864>}. A membership-only build already answers
+inherits its inner's fact) records the \code{dense\_membership} token
+\code{DenseMembership<K,67108864>}. A membership-only build already answers
 the same exact key test and receives no redundant supplementary filter.
-Rust's \code{OrderKey} capability selects the dense representation under
-\textsc{STR-AdaptiveMembership}; other keys keep exact hash membership.
+The dense provider requires \code{K: OrderKey} (\textsc{STR-AdaptiveMembership});
+a key without it is a rustc error at the one typed build, never a hash
+fallback. Explicit \code{retype} advice records another filter provider.
 Selection does not sample cardinalities or assume keys or foreign keys.
 Approximate structures live in an external feature and require explicit
 \code{cq_rewrites::retype} advice; the printer has no algorithm-specific branch.
@@ -1093,8 +1115,8 @@ require another filter. First-witness order supplies scan-local identities, also
 used to distinguish profile labels.
 \textsc{IF-JoinFilter} requires recorded \code{keys} support on the selected index
 layout and constructs each distinct checked provider from that index's
-\code{Keys::distinct_keys}, projected to the filtered key column, through
-\code{cq_storage::build!} on $(k,())$ pairs. Rust proves the marker's
+\code{Keys::distinct_keys}, projected to the filtered key column, through one
+typed \code{<T as Build<\_>>::build} on $(k,())$ pairs. Rust proves the marker's
 \code{ColumnSlot} and \code{require::conservative::<K,T>} obligations, then realization
 filters positions before fetching payloads: the first filter through the
 block-skipping read, the others on its surviving positions, in decision order.
@@ -1105,20 +1127,24 @@ A scan read before some covering provider is built (for example a retained
 host publication ordered ahead of that build) applies only the filters already
 built: an omitted filter is the trivial conservative filter that passes every
 key, so the covering exact operators still decide membership.
-\textsc{IF-JoinFilterAbandon} decides at runtime whether to construct the
-filters of a build at all: a build whose \code{Keys::key_count} exceeds 35\% of the rows
-of its positional source occurrence constructs none (the creation threshold of
-dynamic predicate transfer, RPT+), and its abandoned filters pass every key,
-which the one-sided conservative law permits. A build without a single
-positional source occurrence always constructs its filters. Only the covering
-exact operators decide membership either way.
+\textsc{SEL-JoinFilterAbandon} records every filter's abandon policy
+\code{abandon 35 of }$B$ from the final positional bases, where $B$ is its
+build's positional lineage base; a filter whose build has none records no
+policy and is always built. The Structures checker verifies the recorded
+base and percentage without rerunning selection.
+\textsc{IF-JoinFilterAbandon} carries out the recorded policy at runtime: a
+build whose \code{Keys::key_count} exceeds the recorded percentage of the rows
+of $B$ constructs no filter (the creation threshold of dynamic predicate
+transfer, RPT+), and its abandoned filters pass every key, which the
+one-sided conservative law permits. The printer derives no policy. Only the
+covering exact operators decide membership either way.
 \begin{mathpar}
 \Rule{SEL-JoinFilter}{
  \mathsf{eligibleCoveredScan}(s,b,k,j)\quad
  \mathsf{filteredBuild}(b)\quad\neg\mathsf{membershipOnly}(b)\quad
  \mathsf{facts}(b).\mathsf{join\_filter}\quad
  \mathsf{positionalHost}(s)\\
- T=\code{AdaptiveMembership<K,67108864>}
+ T=\code{DenseMembership<K,67108864>}
 }{
  \mathsf{select}(s,b,k,j)=
  \mathsf{joinFilter}(T,b,k,j,\mathsf{marker}(s,k))
@@ -1136,11 +1162,26 @@ exact operators decide membership either way.
  (\mathsf{staticRead}_{\mathsf{keepBlock}}(s))
 }
 
+\Rule{SEL-JoinFilterAbandon}{
+ \mathsf{joinFilter}(F,b,\ldots)\quad\mathsf{lineageBase}(b)=B\quad
+ B\in\mathsf{positionalBases}
+}{
+ \mathsf{abandon}(F)=(35,B)
+}
+
 \Rule{IF-JoinFilterAbandon}{
- \mathsf{source}(b)=s'\quad
- 20\,|\mathsf{keys}(\mathsf{index}_b)| > 7\,|s'|
+ \mathsf{abandon}(F)=(p,B)\quad
+ 100\,|\mathsf{keys}(\mathsf{index}_b)| > p\,|B|
 }{
  F=\top\quad(\forall x.\ F.\mathsf{test}(x))
+}
+
+\Rule{SEL-NativeHost}{
+ r=\mathsf{rename}(R)\text{ read by }c\text{ on }C\quad
+ \rho=\min_{\mathsf{need}(c)}\{\rho\in\mathsf{hostReads}(R,\mathsf{renames}(C))\}
+}{
+ \mathsf{native}(r,c,C)=(\rho,\mathsf{declOrder}_R(C))\quad
+ \text{otherwise }\mathsf{fallback}(r,c,C)\text{ is recorded}
 }
 \end{mathpar}
 Absent bounds make the corresponding block test true. The emitted filter and

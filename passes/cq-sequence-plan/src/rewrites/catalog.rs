@@ -318,6 +318,7 @@ fn select(
             // A canonical reference names an index typed by its own entry.
             Structure::Dedup { .. } => continue,
             Structure::Host { .. }
+            | Structure::Native { .. }
             | Structure::Group { .. }
             | Structure::Read { .. }
             | Structure::Repr { .. }
@@ -625,7 +626,7 @@ mod tests {
                     answer = pipe probe first [a] l,r;
                     return answer as answer(a,b);
                 }
-                structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; native = Native<_, _> { reads [exact, range, membership], build macro }; }
+                structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; native = Native<_, _> { reads [exact, range, membership], build typed }; }
                     l host scan = @host_columns as HostColumns [];
                     r host scan = @native as Native<(i32,), (i32,)> [];
                     #entry
@@ -633,7 +634,7 @@ mod tests {
             };
             let declared: structures::Providers = syn::parse_quote!(providers {
                 index = Index { reads [exact, range, membership], build inferred };
-                native = Native<_, _> { reads [exact, range, membership], build macro };
+                native = Native<_, _> { reads [exact, range, membership], build typed };
             });
             let mut catalog = Catalog::default();
             for declaration in declared.declarations {
