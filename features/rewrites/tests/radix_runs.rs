@@ -318,7 +318,8 @@ fn composite_membership_trie_and_smallest_providers_are_not_retyped() {
         .push(syn::parse_quote!(r rows = @vec as ::std::vec::Vec<_>;));
     smallest
         .structures
-        .declare(&cq_lang_structures::provider::base::declarations());
+        .declare(&cq_lang_structures::provider::base::declarations())
+        .unwrap();
     ir::contract::check(&smallest).unwrap();
     assert_eq!(radix_runs(&smallest, quote!()).unwrap(), smallest);
     assert_eq!(retain_lookups(&smallest, quote!()).unwrap(), smallest);

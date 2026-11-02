@@ -17,6 +17,38 @@
 
 use crate::{IndexRead, KeyCodec, OrderKey, RadixRun, SortedRun};
 
+/// An allocation-free choice between streams with the same item type.
+/// Only the selected iterator is constructed and advanced.
+pub enum Choice<L, R> {
+    Left(L),
+    Right(R),
+}
+
+impl<L: Iterator, R: Iterator<Item = L::Item>> Iterator for Choice<L, R> {
+    type Item = L::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Left(rows) => rows.next(),
+            Self::Right(rows) => rows.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Left(rows) => rows.size_hint(),
+            Self::Right(rows) => rows.size_hint(),
+        }
+    }
+
+    fn fold<B, F: FnMut(B, Self::Item) -> B>(self, init: B, f: F) -> B {
+        match self {
+            Self::Left(rows) => rows.fold(init, f),
+            Self::Right(rows) => rows.fold(init, f),
+        }
+    }
+}
+
 /// A provider whose bucket for `key` is the contiguous range
 /// `range(key)` of `items()`. Implementations keep items in key order.
 pub trait RangeCursor<K: ?Sized> {
@@ -170,6 +202,33 @@ where
 mod tests {
     use super::*;
     use crate::NoDense;
+
+    #[test]
+    fn choice_streams_are_lazy_and_preserve_nested_parts() {
+        for left in [true, false] {
+            let visits = std::cell::Cell::new(0);
+            let rows = if left {
+                Choice::Left((0..4).inspect(|_| visits.set(visits.get() + 1)))
+            } else {
+                Choice::Right((0..8).step_by(2).inspect(|_| visits.set(visits.get() + 1)))
+            };
+            assert_eq!(visits.get(), 0);
+            assert_eq!(rows.size_hint(), (4, Some(4)));
+            assert_eq!(rows.take(1).count(), 1);
+            assert_eq!(visits.get(), 1);
+
+            let parts = if left {
+                Choice::Left([0..2, 2..4].into_iter().map(Choice::Left))
+            } else {
+                Choice::Right(
+                    [0..4]
+                        .into_iter()
+                        .map(|part| Choice::Right(part.step_by(1))),
+                )
+            };
+            assert_eq!(parts.flatten().sum::<i32>(), 6);
+        }
+    }
 
     #[test]
     fn sorted_run_range_equals_lookup_including_absent_keys() {

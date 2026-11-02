@@ -90,6 +90,61 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 runner.save_baseline(source, destination, "1234567890abcdef", [{"status": 0}])
 
+    def test_save_baseline_rejects_self_copy_before_creating_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "run"
+            source.mkdir()
+            (source / "case.log").write_text("passed")
+            alias = root / "alias"
+            alias.symlink_to(source, target_is_directory=True)
+            cases = [
+                (source, "abc"),
+                (source / "baselines", "abc"),
+                (alias / "baselines", "abc"),
+                (root / "outside" / ".." / "run" / "baselines", "abc"),
+                (root, "run"),
+            ]
+            for directory, revision in cases:
+                with self.subTest(directory=directory, revision=revision):
+                    with self.assertRaisesRegex(ValueError, "outside the run log directory"):
+                        runner.save_baseline(source, directory, revision, [{"status": 0}])
+                    self.assertEqual(list(source.iterdir()), [source / "case.log"])
+            self.assertFalse((root / "outside").exists())
+
+    def test_save_baseline_rejects_revision_symlink_into_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "run"
+            source.mkdir()
+            directory = root / "baselines"
+            directory.mkdir()
+            (directory / "abc").symlink_to(source, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "outside the run log directory"):
+                runner.save_baseline(source, directory, "abc", [{"status": 0}])
+            self.assertEqual(list(source.iterdir()), [])
+
+    def test_cli_rejects_nested_baseline_before_running_targets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "run"
+            alias = root / "alias"
+            alias.symlink_to(source, target_is_directory=True)
+            for destination in (source, source / "baselines", alias / "baselines"):
+                error = io.StringIO()
+                with self.subTest(destination=destination), \
+                        patch.object(sys, "argv", ["runner", "--output", str(source),
+                                                  "--save-baseline", str(destination)]), \
+                        patch.object(runner, "run") as run, \
+                        contextlib.redirect_stdout(io.StringIO()), \
+                        contextlib.redirect_stderr(error):
+                    with self.assertRaises(SystemExit) as exited:
+                        runner.main()
+                    self.assertEqual(exited.exception.code, 2)
+                    self.assertIn("outside the run log directory", error.getvalue())
+                    run.assert_not_called()
+                    self.assertFalse(source.exists())
+
     def test_list_latest_checks_identities_and_explains_missing_records(self):
         # Take the real inventory row so this test follows source relocations.
         import csv

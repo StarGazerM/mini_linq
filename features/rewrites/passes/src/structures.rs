@@ -120,7 +120,7 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
                 build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
         });
     }
-    target.structures.declare(&providers::declarations());
+    target.structures.declare(&providers::declarations())?;
     ir::record_join_filter_abandon(&mut target)?;
     ir::check_rewrite(source, &target)?;
     Ok(target)
@@ -168,7 +168,7 @@ pub fn packed_canon(source: &ir::Program, arguments: TokenStream) -> syn::Result
             *provider = providers::declaration("packed").instance();
         }
     }
-    target.structures.declare(&providers::declarations());
+    target.structures.declare(&providers::declarations())?;
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }
@@ -251,7 +251,7 @@ fn select_runs(
             keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
         }
     }
-    target.structures.declare(&providers::declarations());
+    target.structures.declare(&providers::declarations())?;
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }
@@ -346,7 +346,7 @@ pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
             keyed.supports = None;
         }
     }
-    target.structures.declare(&[hashed_run()]);
+    target.structures.declare(&[hashed_run()])?;
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

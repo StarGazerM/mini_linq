@@ -469,7 +469,7 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
             .any(|filter| { single_level_builds.contains(&filter.build.to_string()) }),
         "a join filter must enumerate a retyped single-level provider"
     );
-    custom.structures.declare(&[custom_index]);
+    custom.structures.declare(&[custom_index]).unwrap();
     cq_lang_structures::check_rewrite(&selected, &custom).unwrap();
     cq_structure_selection::check(&smallest, &custom).unwrap();
     let sequence = cq_sequence_lowering::compile(&custom).unwrap();

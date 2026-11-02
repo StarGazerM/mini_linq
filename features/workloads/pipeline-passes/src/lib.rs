@@ -53,7 +53,7 @@ pub fn sorted_payload(input: proc_macro::TokenStream) -> proc_macro::TokenStream
                 _ => {}
             }
         }
-        target.structures.declare(&[sorted_index()]);
+        target.structures.declare(&[sorted_index()])?;
         Ok(target)
     })
     .into()

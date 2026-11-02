@@ -195,7 +195,8 @@ fn ordered_host_fallback_capabilities_are_rustc_obligations() {
         .structures
         .declare(&[cq_lang_structures::provider::base::declaration(
             "std_hash_set",
-        )]);
+        )])
+        .unwrap();
     // The record preserves the ordered read and key. Rust, not syn::Type
     // inspection, checks whether the chosen provider implements that access.
     cq_lang_structures::check_rewrite(&structured, &alternate_provider).unwrap();

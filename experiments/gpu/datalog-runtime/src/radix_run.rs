@@ -1338,6 +1338,166 @@ impl<K, V, W: LayoutCarrier<O, C>, O: OffsetWord, C: DeviceItemColumns> Clone
     }
 }
 
+thread_local! {
+    // A lane's pool identity includes its stream: scratch is never borrowed
+    // across unordered streams, and results never retain any of these buffers.
+    static SET_SCRATCH: std::cell::RefCell<Vec<SetScratch>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Release this thread's reusable set-building scratch, not published results.
+/// Frees are ordered after the last use on each retained pool's stream.
+pub fn release_set_scratch() {
+    SET_SCRATCH.with(|cache| cache.borrow_mut().clear());
+}
+
+// As in Sequence's scan cache, the final Arc keeps RCCL's borrowed resource
+// and stream stable. Borrowing fields are dropped before that owner; none of
+// their extended references escape this private cache.
+struct SetScratch {
+    compact: Option<
+        rccl_cub::thrust_integration::CompactionWorkspace<
+            'static,
+            &'static gpu_device_columns::MemoryResource,
+        >,
+    >,
+    compact_rows: usize,
+    count: Native<u64>,
+    scalar: Option<runs::KeySortScratch>,
+    wide: Option<runs::RowSortScratch>,
+    cub: rccl_cub::cuda::Program<'static>,
+    module: Option<runs::run_kernels::LoadedModule>,
+    pool: Arc<Pool>,
+}
+
+impl SetScratch {
+    fn new(pool: &Arc<Pool>) -> Result<Self> {
+        let owner = pool.clone();
+        // SAFETY: owner is retained in the last field, including on failure.
+        let retained: &'static Pool = unsafe { &*Arc::as_ptr(&owner) };
+        Ok(Self {
+            compact: None,
+            compact_rows: 0,
+            count: Native::new(pool, 1)?,
+            scalar: None,
+            wide: None,
+            cub: rccl_cub::cuda::Program::load(retained.context())?,
+            module: None,
+            pool: owner,
+        })
+    }
+
+    fn prepare(&mut self, rows: usize, lanes: usize) -> Result<()> {
+        // SAFETY: the stable-owner/drop-order invariant in new() still holds.
+        let retained: &'static Pool = unsafe { &*Arc::as_ptr(&self.pool) };
+        let launch = self.cub.on(retained.stream())?;
+        if self.compact_rows < rows {
+            drop(self.compact.take());
+            self.compact_rows = 0;
+            self.compact = Some(rccl_cub::thrust_integration::compaction_workspace_in(
+                retained.resource(),
+                &launch,
+                rows,
+            )?);
+            self.compact_rows = rows;
+        }
+        if lanes == 1 {
+            if self
+                .scalar
+                .as_ref()
+                .is_none_or(|scratch| scratch.capacity() < rows)
+            {
+                drop(self.scalar.take());
+                self.scalar = Some(runs::KeySortScratch::new(&self.pool, &launch, rows)?);
+            }
+        } else {
+            if self.module.is_none() {
+                self.module = Some(unsafe { runs::run_kernels::load(retained.context())? });
+            }
+            if self
+                .wide
+                .as_ref()
+                .is_none_or(|scratch| scratch.capacity() < rows)
+            {
+                drop(self.wide.take());
+                self.wide = Some(runs::RowSortScratch::new(&self.pool, &launch, rows)?);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod set_scratch_tests {
+    use super::*;
+
+    #[test]
+    fn set_workspace_reuses_capacity_and_releases_only_scratch() -> Result<()> {
+        release_set_scratch();
+        let pool = Pool::new(0, 0, 0)?;
+        let mut scratch = SetScratch::new(&pool)?;
+        scratch.prepare(4097, 1)?;
+        scratch.prepare(4097, 3)?;
+        let count = scratch.count.get().cu_deviceptr();
+        let compact_bytes = scratch.compact.as_ref().unwrap().allocation_bytes();
+        let launch = scratch.cub.on(pool.stream())?;
+        let scalar_input = Buffer::<u64>::zeroed(pool.clone(), 4097)?;
+        let wide_input = Buffer::<u64>::zeroed(pool.clone(), 4097 * 3)?;
+        let scalar_pointer =
+            scratch
+                .scalar
+                .as_mut()
+                .unwrap()
+                .sort(&pool, &launch, scalar_input.ptr(), 4097, 64)?;
+        let wide_pointer = scratch.wide.as_mut().unwrap().sort(
+            &pool,
+            scratch.module.as_ref().unwrap(),
+            &launch,
+            wide_input.ptr(),
+            4097,
+            129,
+            false,
+            256,
+        )?;
+        drop(launch);
+        for rows in [17, 1, 4097] {
+            scratch.prepare(rows, 1)?;
+            scratch.prepare(rows, 3)?;
+            assert_eq!(scratch.count.get().cu_deviceptr(), count);
+            assert_eq!(scratch.compact_rows, 4097);
+            assert_eq!(
+                scratch.compact.as_ref().unwrap().allocation_bytes(),
+                compact_bytes
+            );
+            assert_eq!(scratch.scalar.as_ref().unwrap().capacity(), 4097);
+            assert_eq!(scratch.wide.as_ref().unwrap().capacity(), 4097);
+        }
+        let launch = scratch.cub.on(pool.stream())?;
+        assert_eq!(
+            scratch
+                .scalar
+                .as_mut()
+                .unwrap()
+                .sort(&pool, &launch, scalar_input.ptr(), 4097, 64)?,
+            scalar_pointer
+        );
+        assert_eq!(
+            scratch.wide.as_mut().unwrap().sort(
+                &pool,
+                scratch.module.as_ref().unwrap(),
+                &launch,
+                wide_input.ptr(),
+                4097,
+                129,
+                false,
+                256,
+            )?,
+            wide_pointer
+        );
+        Ok(())
+    }
+}
+
 impl RadixLayout<EncodedRow, (), PackedRow, u64, ()> {
     pub fn key_lanes(bits: u32) -> Result<usize> {
         Ok(usize::try_from(bits.div_ceil(64).max(1))?)
@@ -1366,6 +1526,10 @@ impl RadixLayout<EncodedRow, (), PackedRow, u64, ()> {
 
     /// Sort and deduplicate complete encoded rows without downloading a count.
     /// Items and offsets are implicit units: row `i` has item interval `[i,i+1)`.
+    /// Scratch grows per thread/pool and is reused on that pool's stream.
+    /// Each publication separately owns its keys and count, so later builds
+    /// cannot overwrite retained results. [`release_set_scratch`] releases
+    /// cached workspaces at query teardown without a host synchronization.
     ///
     /// # Safety
     /// The first `rows * key_lanes(key_bits)` words must be initialized and
@@ -1409,68 +1573,85 @@ impl RadixLayout<EncodedRow, (), PackedRow, u64, ()> {
                     )?;
                 }
             } else {
-                let cub = rccl_cub::cuda::Program::load(pool.context())?;
-                let launch = cub.on(pool.stream())?;
-                let mut count = Native::<u64>::new(pool, 1)?;
-                let mut compact = rccl_cub::thrust_integration::compaction_workspace_in(
-                    pool.resource(),
-                    &launch,
-                    rows,
-                )?;
-                if lanes == 1 {
-                    let sorted = runs::stable_keys(pool, &launch, input.ptr(), rows, key_bits)?;
-                    rccl_cub::thrust_integration::device_unique_copy_by(
-                        &launch,
-                        DeviceSliceRead::new(sorted.get().cu_deviceptr() as *const u64),
-                        DeviceSliceWrite::new(keys.ptr()),
-                        count.get_mut(),
-                        |a: u64, b: u64| a == b,
-                        rows,
-                        &mut compact,
-                    )?;
-                } else {
-                    let module = unsafe { runs::run_kernels::load(pool.context())? };
-                    let order = runs::stable_row_order(
-                        pool,
-                        &module,
-                        &launch,
-                        input.ptr(),
-                        rows,
-                        key_bits,
-                        false,
-                        params.block_threads,
-                    )?;
-                    let source = input.ptr() as *const u64;
-                    let output = keys.ptr();
-                    rccl_cub::thrust_integration::device_unique_copy_by(
-                        &launch,
-                        DeviceSliceRead::new(order.get().cu_deviceptr() as *const u32),
-                        rccl_cub::DeviceIndexedWrite::new(move |index, row: u32| unsafe {
-                            for lane in 0..lanes {
-                                *output.add(index * lanes + lane) =
-                                    *source.add(row as usize * lanes + lane);
-                            }
-                        }),
-                        count.get_mut(),
-                        move |a: u32, b: u32| unsafe {
-                            (0..lanes).all(|lane| {
-                                *source.add(a as usize * lanes + lane)
-                                    == *source.add(b as usize * lanes + lane)
-                            })
-                        },
-                        rows,
-                        &mut compact,
-                    )?;
-                }
-                unsafe {
-                    // OutputCount's first word is length; errors/padding stay zero.
-                    cuda_core::simt::memory::memcpy_dtod_async(
-                        metadata.cu_deviceptr(),
-                        count.get().cu_deviceptr(),
-                        8,
-                        pool.stream().cu_stream(),
-                    )?;
-                }
+                pool.context().bind_to_thread()?;
+                SET_SCRATCH.with(|cache| -> Result<()> {
+                    let mut cache = cache.borrow_mut();
+                    let index = match cache
+                        .iter()
+                        .position(|cached| Arc::ptr_eq(&cached.pool, pool))
+                    {
+                        Some(index) => index,
+                        None => {
+                            cache.push(SetScratch::new(pool)?);
+                            cache.len() - 1
+                        }
+                    };
+                    let scratch = &mut cache[index];
+                    scratch.prepare(rows, lanes)?;
+                    let launch = scratch.cub.on(pool.stream())?;
+                    let count = &mut scratch.count;
+                    let compact = scratch.compact.as_mut().unwrap();
+                    if lanes == 1 {
+                        let sorted = scratch.scalar.as_mut().unwrap().sort(
+                            pool,
+                            &launch,
+                            input.ptr(),
+                            rows,
+                            key_bits,
+                        )?;
+                        rccl_cub::thrust_integration::device_unique_copy_by(
+                            &launch,
+                            DeviceSliceRead::new(sorted),
+                            DeviceSliceWrite::new(keys.ptr()),
+                            count.get_mut(),
+                            |a: u64, b: u64| a == b,
+                            rows,
+                            compact,
+                        )?;
+                    } else {
+                        let order = scratch.wide.as_mut().unwrap().sort(
+                            pool,
+                            scratch.module.as_ref().unwrap(),
+                            &launch,
+                            input.ptr(),
+                            rows,
+                            key_bits,
+                            false,
+                            params.block_threads,
+                        )?;
+                        let source = input.ptr() as *const u64;
+                        let output = keys.ptr();
+                        rccl_cub::thrust_integration::device_unique_copy_by(
+                            &launch,
+                            DeviceSliceRead::new(order),
+                            rccl_cub::DeviceIndexedWrite::new(move |index, row: u32| unsafe {
+                                for lane in 0..lanes {
+                                    *output.add(index * lanes + lane) =
+                                        *source.add(row as usize * lanes + lane);
+                                }
+                            }),
+                            count.get_mut(),
+                            move |a: u32, b: u32| unsafe {
+                                (0..lanes).all(|lane| {
+                                    *source.add(a as usize * lanes + lane)
+                                        == *source.add(b as usize * lanes + lane)
+                                })
+                            },
+                            rows,
+                            compact,
+                        )?;
+                    }
+                    unsafe {
+                        // OutputCount's first word is length; errors/padding stay zero.
+                        cuda_core::simt::memory::memcpy_dtod_async(
+                            metadata.cu_deviceptr(),
+                            count.get().cu_deviceptr(),
+                            8,
+                            pool.stream().cu_stream(),
+                        )?;
+                    }
+                    Ok(())
+                })?;
             }
         }
         Ok(Self {

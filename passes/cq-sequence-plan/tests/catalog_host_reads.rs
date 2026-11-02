@@ -74,9 +74,12 @@ fn code_reader(retained: bool) -> structures::Program {
         source.physical.program.definitions[1].mode =
             structures::physical::Mode::Let(Default::default());
         source.structures.entries[2] = syn::parse_quote!(r = @authored as Authored [a];);
-        source.structures.declare(&[syn::parse_quote!(
-            authored = Authored { reads [exact, range, membership], build inferred };
-        )]);
+        source
+            .structures
+            .declare(&[syn::parse_quote!(
+                authored = Authored { reads [exact, range, membership], build inferred };
+            )])
+            .unwrap();
     }
     source
 }
@@ -266,9 +269,12 @@ fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
             *provider = syn::parse_quote!(@native_canon as NativeCanon);
         }
     }
-    selected.structures.declare(&[syn::parse_quote!(
-        native_canon = NativeCanon { reads [distinct], build inferred };
-    )]);
+    selected
+        .structures
+        .declare(&[syn::parse_quote!(
+            native_canon = NativeCanon { reads [distinct], build inferred };
+        )])
+        .unwrap();
     // The ordinary Structures-only contract remains exact.
     assert!(structures::check_rewrite(&source, &selected).is_err());
     structures::check_retention_rewrite(&source, &selected).unwrap();
@@ -283,9 +289,12 @@ fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
     {
         keyed.provider = syn::parse_quote!(@different_reader as DifferentReader);
     }
-    changed_reader.structures.declare(&[syn::parse_quote!(
-        different_reader = DifferentReader { reads [exact, range, membership], build inferred };
-    )]);
+    changed_reader
+        .structures
+        .declare(&[syn::parse_quote!(
+            different_reader = DifferentReader { reads [exact, range, membership], build inferred };
+        )])
+        .unwrap();
     assert!(structures::check_retention_rewrite(&source, &changed_reader).is_err());
     let mut changed_order = selected.clone();
     changed_order.physical.program.definitions.swap(0, 1);

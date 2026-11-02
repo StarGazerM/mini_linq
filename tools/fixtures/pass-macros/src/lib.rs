@@ -142,7 +142,7 @@ pub fn ordered_indexes(input: TokenStream) -> TokenStream {
             .structures
             .declare(&[cq_lang_structures::provider::base::declaration(
                 "btree_map_grouped",
-            )]);
+            )])?;
         Ok(target)
     })
     .into()
@@ -196,7 +196,7 @@ pub fn custom_indexes(input: TokenStream) -> TokenStream {
                 keyed.supports = None;
             }
         }
-        target.structures.declare(&declarations.declarations);
+        target.structures.declare(&declarations.declarations)?;
         Ok(target)
     })
     .into()

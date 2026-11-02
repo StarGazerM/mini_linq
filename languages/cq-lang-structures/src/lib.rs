@@ -157,7 +157,7 @@ impl syn::parse::Parse for Structures {
             publications,
             entries,
         };
-        structures.intern_codecs();
+        structures.intern_codecs()?;
         Ok(structures)
     }
 }
@@ -641,7 +641,8 @@ impl Structures {
     /// Intern opaque codec spellings once at the input declaration boundary.
     /// Explicit identities survive printing and distinguish otherwise identical
     /// spellings. Unnumbered declarations of one spelling share one identity.
-    pub fn intern_codecs(&mut self) {
+    /// Returns a parse error when a fresh identity would exceed `u32::MAX`.
+    pub fn intern_codecs(&mut self) -> syn::Result<()> {
         fn collect<'a>(
             provider: &'a mut Provider,
             columns: &mut Vec<&'a mut provider::InputColumn>,
@@ -659,12 +660,13 @@ impl Structures {
                 collect(provider, &mut columns);
             }
         }
-        provider::intern_codecs(columns);
+        provider::intern_codecs(columns)
     }
 
     /// Declare `declared` tokens that entries reference and drop every
     /// unreferenced declaration, keeping table order (STR-Provider).
-    pub fn declare(&mut self, declared: &[Declaration]) {
+    /// Interns input codecs and reports exhausted identity space to the caller.
+    pub fn declare(&mut self, declared: &[Declaration]) -> syn::Result<()> {
         for declaration in declared {
             self.providers.declare(declaration);
         }
@@ -677,7 +679,7 @@ impl Structures {
         self.providers
             .declarations
             .retain(|declaration| referenced.contains(&declaration.token.to_string()));
-        self.intern_codecs();
+        self.intern_codecs()
     }
 }
 

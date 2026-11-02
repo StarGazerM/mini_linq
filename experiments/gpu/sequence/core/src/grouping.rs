@@ -28,7 +28,7 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
     }
     target
         .structures
-        .declare(&[cq_lang_structures::provider::base::declaration("group_map")]);
+        .declare(&[cq_lang_structures::provider::base::declaration("group_map")])?;
     let analysis = cq_lang_structures::contract::check(&target)?;
     check(&target, &analysis)?;
     Ok(target)
@@ -149,7 +149,8 @@ mod tests {
             .structures
             .declare(&[cq_lang_structures::provider::base::declaration(
                 "sorted_run",
-            )]);
+            )])
+            .unwrap();
         for entry in &mut foreign.structures.entries {
             if let Structure::Group {
                 provider: recorded, ..

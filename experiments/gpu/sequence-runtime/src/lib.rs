@@ -253,6 +253,7 @@ impl Drop for QueryScope {
         TEMP_U32.with(|cache| cache.borrow_mut().take());
         TEMP_U64.with(|cache| cache.borrow_mut().take());
         canon::release_query_cache();
+        gpu_datalog_runtime::radix_run::release_set_scratch();
         BUILD_MODULE.with(|cache| cache.borrow_mut().take());
         gpu_device_columns::release_cached_kernels();
         NUMERIC_UPLOAD_SCRATCH.with(|cache| cache.borrow_mut().clear());

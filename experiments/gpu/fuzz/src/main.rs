@@ -1,5 +1,6 @@
 //! Slow-tier only: `cargo run -p cq-gpu-fuzz -- [seed] [count]` on a CUDA host.
-//! All generated device execution is serialized by the shared GPU flock.
+//! Source publication, build, and execution share one GPU flock guard, so another
+//! harness cannot replace the shared binary between compilation and execution.
 use std::{fmt::Write as _, path::Path, process::Command};
 #[allow(dead_code)]
 #[path = "../../../../features/datalog/oracle/src/random_programs.rs"]
@@ -101,6 +102,7 @@ fn cq_source(seed: u64, count: usize) -> String {
 }
 
 fn run(root: &Path, lane: &str, seed: u64, source: String) -> bool {
+    let _lock = gpu_lock(Path::new("/tmp/mini_linq-gpu.lock"));
     let directory = root
         .join("experiments/gpu/target/fuzz")
         .join(format!("{lane}-{seed}"));
@@ -160,10 +162,22 @@ fn run(root: &Path, lane: &str, seed: u64, source: String) -> bool {
     success
 }
 
+fn gpu_lock(path: &Path) -> std::fs::File {
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    lock.lock().unwrap();
+    lock
+}
+
 fn gpu_command(root: &Path) -> Command {
-    let mut command = Command::new("flock");
+    let mut command = Command::new("nice");
     command
-        .args(["/tmp/mini_linq-gpu.lock", "nice", "-n", "10"])
+        .args(["-n", "10"])
         .current_dir(root.join("experiments/gpu"))
         .env(
             "CARGO_TARGET_DIR",
@@ -208,4 +222,43 @@ fn main() {
         datalog::batch_source(seed, count, &[("gpu", GPU_DL)]),
     );
     assert!(cq_passed && datalog_passed, "GPU fuzz lane failure");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gpu_lock_survives_child_exit_until_guard_is_dropped() {
+        let path = std::env::temp_dir().join(format!("cq-gpu-fuzz-{}.lock", std::process::id()));
+        let guard = gpu_lock(&path);
+        let contender = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        for _ in 0..2 {
+            // Model the build and execution children without Cargo or CUDA.
+            assert!(Command::new("true").status().unwrap().success());
+            assert!(matches!(
+                contender.try_lock(),
+                Err(std::fs::TryLockError::WouldBlock)
+            ));
+            // The parent guard must also exclude existing flock-based GPU tools.
+            assert_eq!(
+                Command::new("flock")
+                    .arg("-n")
+                    .arg(&path)
+                    .arg("true")
+                    .status()
+                    .unwrap()
+                    .code(),
+                Some(1),
+            );
+        }
+        drop(guard);
+        contender.try_lock().unwrap();
+        drop(contender);
+        std::fs::remove_file(path).unwrap();
+    }
 }

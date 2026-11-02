@@ -227,36 +227,46 @@ pub struct InputColumn {
 }
 
 /// Intern authored codec spellings once; already recorded identities are opaque.
-pub fn intern_codecs<'a>(columns: impl IntoIterator<Item = &'a mut InputColumn>) {
+/// Exhausting the declaration identity space is a parse error, never wraparound.
+pub fn intern_codecs<'a>(
+    columns: impl IntoIterator<Item = &'a mut InputColumn>,
+) -> syn::Result<()> {
     let mut columns: Vec<_> = columns.into_iter().collect();
     if columns
         .iter()
         .all(|column| column.codec.is_none() || column.codec_id.is_some())
     {
-        return;
+        return Ok(());
     }
     let mut identities = std::collections::BTreeMap::new();
-    let mut next = 0u32;
+    let mut next = Some(0u32);
     for column in &columns {
         if let (Some(codec), Some(id)) = (&column.codec, column.codec_id) {
             identities
                 .entry(codec.to_token_stream().to_string())
                 .or_insert(id);
-            next = next.max(id.0.saturating_add(1));
+            next = next.and_then(|next| id.0.checked_add(1).map(|after| next.max(after)));
         }
     }
     for column in &mut columns {
         if column.codec_id.is_none() {
             if let Some(codec) = &column.codec {
                 let spelling = codec.to_token_stream().to_string();
-                column.codec_id = Some(*identities.entry(spelling).or_insert_with(|| {
-                    let id = CodecId(next);
-                    next += 1;
-                    id
-                }));
+                let id = match identities.entry(spelling) {
+                    std::collections::btree_map::Entry::Occupied(entry) => *entry.get(),
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        let value = next.ok_or_else(|| {
+                            syn::Error::new_spanned(codec, "codec identity space exhausted")
+                        })?;
+                        next = value.checked_add(1);
+                        *entry.insert(CodecId(value))
+                    }
+                };
+                column.codec_id = Some(id);
             }
         }
     }
+    Ok(())
 }
 
 /// The generic arguments of `ty`'s last path segment when the spelling ends

@@ -61,7 +61,7 @@ fn candidate_retention_uses_directory_support_not_complete_payload_support() {
     source.structures.entries.push(syn::parse_quote!(
         r = @custom_payload as CustomPayload [b];
     ));
-    source.structures.declare(&[custom_payload()]);
+    source.structures.declare(&[custom_payload()]).unwrap();
     let target = retain_lookups(&source, quote!()).unwrap();
     let facts = ir::contract::check(&target).unwrap();
     assert!(facts.witnesses.contains_key("pre_r"));
@@ -236,7 +236,7 @@ fn a_custom_provider_with_declared_support_is_eligible() {
             keyed.provider = custom_payload().instance();
         }
     }
-    source.structures.declare(&[custom_payload()]);
+    source.structures.declare(&[custom_payload()]).unwrap();
     let target = retain_lookups(&source, quote!()).unwrap();
     assert_eq!(ir::contract::check(&target).unwrap().witnesses.len(), 1);
 }
@@ -287,7 +287,8 @@ fn retained_rows_and_canon_are_not_witness_escape_paths() {
     });
     retained
         .structures
-        .declare(&cq_lang_structures::provider::base::declarations());
+        .declare(&cq_lang_structures::provider::base::declarations())
+        .unwrap();
     ir::contract::check(&retained).unwrap();
     assert_eq!(retain_lookups(&retained, quote!()).unwrap(), retained);
 
@@ -307,7 +308,8 @@ fn retained_rows_and_canon_are_not_witness_escape_paths() {
     ]);
     canonical
         .structures
-        .declare(&cq_lang_structures::provider::base::declarations());
+        .declare(&cq_lang_structures::provider::base::declarations())
+        .unwrap();
     ir::contract::check(&canonical).unwrap();
     assert_eq!(retain_lookups(&canonical, quote!()).unwrap(), canonical);
 }

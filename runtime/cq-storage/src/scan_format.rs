@@ -326,6 +326,8 @@ impl<'a> CheckedScanView<'a> {
         }
         Ok(())
     }
+    /// Filter only the live prefix without allocating block-local predicate
+    /// storage. An empty prefix returns after validating domain and output size.
     pub fn filter_mask(
         self,
         domain: DomainId,
@@ -335,6 +337,9 @@ impl<'a> CheckedScanView<'a> {
         self.check_predicate(domain, predicate)?;
         if out.len() != self.metadata.live_count {
             return Err(FormatError::Count);
+        }
+        if out.is_empty() {
+            return Ok(());
         }
         let mut row = 0;
         for h in self.metadata.headers {

@@ -131,7 +131,8 @@ fn keyset_provider_and_codec_capabilities_are_rustc_obligations() {
         *provider = cq_lang_structures::provider::base::instance(token, ty);
         target
             .structures
-            .declare(&[cq_lang_structures::provider::base::declaration(token)]);
+            .declare(&[cq_lang_structures::provider::base::declaration(token)])
+            .unwrap();
         // Lineage, ownership and demand are checked here; provider/codec
         // implementations for those recorded keys are checked by Rust.
         ir::contract::check(&target).unwrap();
@@ -206,10 +207,13 @@ fn eager_semi_with_joined_support_admits_left_positional_keyset() {
             @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_, ::cq_storage::NoDense, 67108864>
             [x] owned base L lineage { x -> a };
     ));
-    target.structures.declare(&[
-        cq_lang_structures::provider::base::declaration("vec"),
-        cq_lang_structures::provider::base::declaration("adaptive_keyset"),
-    ]);
+    target
+        .structures
+        .declare(&[
+            cq_lang_structures::provider::base::declaration("vec"),
+            cq_lang_structures::provider::base::declaration("adaptive_keyset"),
+        ])
+        .unwrap();
     ir::contract::check(&target).unwrap();
 }
 
@@ -457,7 +461,7 @@ fn equivalent_filter_witnesses_share_checked_runtime_work() {
     }
     different_type.structures.declare(&[syn::parse_quote!(
         other_conservative_filter = OtherConservativeFilter { reads [membership], build inferred };
-    )]);
+    )]).unwrap();
     assert_eq!(
         ir::contract::check(&different_type).unwrap().join_filters["l"].len(),
         2

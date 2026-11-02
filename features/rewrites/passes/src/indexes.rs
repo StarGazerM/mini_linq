@@ -380,7 +380,7 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             "sorted_indexes choice matched no built result",
         ));
     }
-    target.structures.declare(&providers::declarations());
+    target.structures.declare(&providers::declarations())?;
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

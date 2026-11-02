@@ -158,7 +158,7 @@ fn arena_hole(
         }
         structures
             .structures
-            .declare(&cq_gpu_sequence_core::providers::declarations());
+            .declare(&cq_gpu_sequence_core::providers::declarations())?;
     }
     let structures = cq_gpu_sequence_core::runs::bind(&structures)?;
     let source = cq_sequence_lowering::compile(&structures)?;

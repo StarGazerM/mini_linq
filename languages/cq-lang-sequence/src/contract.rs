@@ -1700,11 +1700,11 @@ impl Checked<'_> {
                 }
                 Guard::Statistic(read) => {
                     self.statistic(read)?;
-                    if !matches!(alternatives.last(), Some((Guard::Else, _))) {
+                    if !matches!(alternatives.get(index + 1), Some((Guard::Else, _))) {
                         return fail(
                             guard,
                             "BE-StatsRead",
-                            "statistic reads require an explicit fallback",
+                            "statistic reads must be immediately followed by else",
                         );
                     }
                 }

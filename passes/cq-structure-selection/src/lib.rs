@@ -567,7 +567,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     // realization. Readers on one key share a single filtered build.
     let mut selected: structures::Structures =
         syn::parse2(quote!(structures { providers {} #entries }))?;
-    selected.declare(&providers::declarations());
+    selected.declare(&providers::declarations())?;
     let required = structures::required_columns(source, &analysis);
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
@@ -761,7 +761,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             .count();
         keyed.provider = membership_provider(stored);
     }
-    selected.declare(&providers::declarations());
+    selected.declare(&providers::declarations())?;
     // Built providers are actually constructed. Do not impose unused fallback
     // bounds on native host reads (for example Ord-only keys need not be Hash).
     // A one-level keyed payload build records the key enumeration its token declares.

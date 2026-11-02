@@ -1750,7 +1750,7 @@ fn host_rows(
         .iter()
         .map(|token| cq_lang_structures::provider::base::declaration(token))
         .collect();
-    host_structures.structures.declare(&declarations);
+    host_structures.structures.declare(&declarations)?;
     cq_lang_structures::check_rewrite(&program.structures, &host_structures)?;
     let host_analysis = cq_lang_structures::contract::check(&host_structures)?;
     let inputs = host_structures

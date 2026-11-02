@@ -18,7 +18,7 @@ fn program(mut program: Program) -> Program {
     program
         .structures
         .structures
-        .declare(&authored.providers.declarations);
+        .declare(&authored.providers.declarations).unwrap();
     program
 }
 

@@ -98,7 +98,10 @@ fn entry_retype_changes_only_one_provider_and_checks_the_result() {
     let mut expected = source.clone();
     expected.structures.entries[4] =
         syn::parse_quote!(s host scan = @device_columns as DeviceColumns [];);
-    expected.structures.declare(&[device_columns.clone()]);
+    expected
+        .structures
+        .declare(&[device_columns.clone()])
+        .unwrap();
     assert_eq!(target, expected);
     ir::check_rewrite(&source, &target).unwrap();
     for selector in [quote!(entry(100)), quote!(entry(4, 5))] {
@@ -153,7 +156,7 @@ fn expand_lookups_skips_unrecorded_range_capabilities_without_retyping() {
     ] {
         let mut source = smallest_expand_source();
         source.structures.entries[index] = entry;
-        source.structures.declare(&declared);
+        source.structures.declare(&declared).unwrap();
         ir::contract::check(&source).unwrap();
         assert_eq!(
             cq_rewrite_passes::expand_lookups(&source, quote!(256)).unwrap(),
@@ -166,7 +169,7 @@ fn expand_lookups_skips_unrecorded_range_capabilities_without_retyping() {
         .structures
         .entries
         .push(syn::parse_quote!(r = @sorted_run as ::cq_storage::SortedRun<_, _> [b];));
-    mixed.structures.declare(&declared);
+    mixed.structures.declare(&declared).unwrap();
     ir::contract::check(&mixed).unwrap();
     assert_eq!(
         cq_rewrite_passes::expand_lookups(&mixed, quote!(256)).unwrap(),
@@ -269,7 +272,8 @@ fn expand_lookups_stops_at_uncertified_payload_probe_bridges() {
     );
     source
         .structures
-        .declare(&cq_lang_structures::provider::base::declarations());
+        .declare(&cq_lang_structures::provider::base::declarations())
+        .unwrap();
     ir::contract::check(&source).unwrap();
     let target = cq_rewrite_passes::expand_lookups(&source, quote!(256)).unwrap();
     let mut expected = source.clone();

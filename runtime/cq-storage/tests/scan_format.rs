@@ -339,3 +339,40 @@ fn declared_narrow_carriers_and_boundary_widths() {
         .unwrap();
     assert_eq!(out, [u32::MAX as u64, 0, 1 << 31]);
 }
+
+#[test]
+fn membership_live_prefix_crosses_block_frames_and_can_be_empty() {
+    let mut values = vec![-20; 1024];
+    values.extend((0..1024).map(|row| 1000 + row % 256));
+    values.extend([i64::MAX - 1, i64::MAX]);
+    let column = declared::<i64, Bytes>(&values, 1024, domain());
+    let predicate = Predicate::Membership(
+        [-21i64, -20, 999, 1000, 1255, 1256, i64::MAX, i64::MAX]
+            .map(|value| value.ordinal())
+            .to_vec(),
+    );
+    let expected: Vec<u8> = values
+        .iter()
+        .map(|value| oracle(&predicate, value.ordinal()) as u8)
+        .collect();
+    for live in [0, 1, 1023, 1024, 1025, 2048, 2049, values.len()] {
+        let view = column.checked_view(domain(), live).unwrap();
+        let imported = CheckedScanView::import(view.metadata(), view.payload()).unwrap();
+        let mut mask = vec![9; live];
+        imported
+            .filter_mask(domain().id, &predicate, &mut mask)
+            .unwrap();
+        assert_eq!(mask, expected[..live]);
+    }
+    let empty = column.checked_view(domain(), 0).unwrap();
+    let mut wrong_domain = domain().id;
+    wrong_domain.version += 1;
+    assert_eq!(
+        empty.filter_mask(wrong_domain, &predicate, &mut []),
+        Err(FormatError::Domain)
+    );
+    assert_eq!(
+        empty.filter_mask(domain().id, &predicate, &mut [0]),
+        Err(FormatError::Count)
+    );
+}

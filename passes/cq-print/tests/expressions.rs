@@ -105,7 +105,7 @@ fn explicit_providers_dispatch_build_capabilities_without_type_recognition() {
                 };
             }
         }
-        program.structures.declare(&[declaration]);
+        program.structures.declare(&[declaration]).unwrap();
         let facts = cq_lang_structures::contract::check(&program).unwrap();
         assert!(facts.join_filters.is_empty());
         let mut context = cq_print::Context::new(&program, &facts);
@@ -154,12 +154,15 @@ fn raw_membership_fallback_dispatches_build_with_inferred_provider_output() {
                 keyed.provider = provider.clone();
             }
         }
-        program.structures.declare(&[
-            cq_lang_structures::provider::base::declaration("adaptive_membership"),
-            syn::parse_quote!(exact_set_alias = ::user::ExactSetAlias {
+        program
+            .structures
+            .declare(&[
+                cq_lang_structures::provider::base::declaration("adaptive_membership"),
+                syn::parse_quote!(exact_set_alias = ::user::ExactSetAlias {
                 reads [exact, membership], build inferred
             };),
-        ]);
+            ])
+            .unwrap();
         let facts = cq_lang_structures::contract::check(&program).unwrap();
         let mut context = cq_print::Context::new(&program, &facts);
         context.register("r");
@@ -216,7 +219,8 @@ fn join_filters_emit_dense_builds_and_provider_independent_identity_predicates()
         .structures
         .declare(&[cq_lang_structures::provider::base::declaration(
             "sharded_index",
-        )]);
+        )])
+        .unwrap();
     let task_facts = cq_lang_structures::contract::check(&task_provider).unwrap();
     let task_context = cq_print::Context::new(&task_provider, &task_facts);
     let task_statements = &task_context.statements;
@@ -269,10 +273,13 @@ fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
                     keyed.provider = declaration("sharded").compose(inner.clone()).unwrap();
                 }
             }
-            program.structures.declare(&[
-                declaration("sharded"),
-                declaration(&inner.token.to_string()),
-            ]);
+            program
+                .structures
+                .declare(&[
+                    declaration("sharded"),
+                    declaration(&inner.token.to_string()),
+                ])
+                .unwrap();
             let facts = cq_lang_structures::contract::check(&program).unwrap();
             let mut context = cq_print::Context::new(&program, &facts);
             context.register("selected");

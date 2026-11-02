@@ -60,7 +60,9 @@ pub fn bind_inputs(
             keyed.provider = provider.clone();
         }
     }
-    target.structures.declare(&bindings.providers.declarations);
+    target
+        .structures
+        .declare(&bindings.providers.declarations)?;
     cq_lang_structures::contract::check(&target)?;
     Ok(target)
 }

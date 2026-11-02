@@ -127,11 +127,12 @@ fn set_params(
         let ratio = build.ratio;
         let radix_bits = build.radix_bits;
         let merge_tile_rows = build.merge_tile_rows;
+        let block_threads = build.block_threads;
         quote!(::gpu_datalog_runtime::radix_run::RadixRunParams {
             ratio: #ratio,
             radix_bits: #radix_bits,
             merge_tile_rows: #merge_tile_rows,
-            block_threads: __cq_auxiliary.canon.block_threads,
+            block_threads: #block_threads,
         })
     })
 }
@@ -4392,13 +4393,31 @@ mod tests {
                 .as_mut()
                 .unwrap();
             match mutation {
-                0 => set.width = cq_lang_sequence::gpu::publication::PackedRowWidth::DeclaredFields,
+                0 => set.block_threads = 128,
                 1 => set.ratio = 1,
                 2 => set.radix_bits = 1,
                 _ => set.merge_tile_rows = 0,
             }
             rejects(corrupt);
         }
+        // Valid non-default policy parameters are obligations, not a replay
+        // of the selector's defaults, and the printer consumes their values.
+        let mut alternate = analysis.clone();
+        let record = alternate.gpu_publications.get_mut("packed").unwrap();
+        let set = record.set_build.as_mut().unwrap();
+        set.ratio = 8;
+        set.merge_tile_rows = 512;
+        let printed = set_params(record).unwrap().to_string();
+        assert!(printed.contains("ratio : 8"));
+        assert!(printed.contains("merge_tile_rows : 512"));
+        assert!(printed.contains("block_threads : 256"));
+        assert!(!printed.contains("__cq_auxiliary"));
+        cq_lang_sequence::gpu::publication::check(
+            &program,
+            &alternate,
+            &alternate.gpu_publications,
+        )
+        .unwrap();
         let mut no_build = records.clone();
         no_build.get_mut("packed").unwrap().set_build = None;
         rejects(no_build);

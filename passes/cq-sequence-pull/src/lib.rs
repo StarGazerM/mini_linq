@@ -1446,22 +1446,29 @@ fn translate_with_profile(
                     .expect("checked nonempty choice");
                 let result = values[0].2.result.clone();
                 let stored = values.iter().any(|(_, _, value, _)| value.stored);
-                let mut selected =
-                    quote!(::core::unreachable!("checked exhaustive Sequence choice"));
+                let mut selected = None;
                 for (guard, condition, mut value, statements) in values.into_iter().rev() {
                     while value.depth > depth {
                         value = emitter.flatten(value);
                     }
-                    let rows = collect_choice_rows(value.rows, depth);
+                    let rows = value.rows;
                     let branch = quote!({ #(#statements)* #rows });
-                    selected = if *guard == Guard::Else {
+                    // Each dimension is a sum iterator, so unlike collecting
+                    // nested Vecs this preserves streaming and part boundaries.
+                    selected = Some(if *guard == Guard::Else {
                         branch
+                    } else if let Some(rest) = selected {
+                        let branch = choice_rows(branch, depth, true);
+                        let rest = choice_rows(rest, depth, false);
+                        quote!(if #condition { #branch } else { #rest })
                     } else {
-                        quote!(if #condition { #branch } else { #selected })
-                    };
+                        quote!(if #condition { #branch } else {
+                            ::core::unreachable!("checked exhaustive Sequence choice")
+                        })
+                    });
                 }
                 Value {
-                    rows: choice_rows(selected, depth),
+                    rows: selected.expect("checked nonempty choice"),
                     result,
                     depth,
                     stored,
@@ -1527,24 +1534,21 @@ fn translate_with_profile(
     )
 }
 
-fn collect_choice_rows(rows: TokenStream, depth: usize) -> TokenStream {
-    if depth == 0 {
-        quote!((#rows).collect::<::std::vec::Vec<_>>())
+fn choice_rows(rows: TokenStream, depth: usize, left: bool) -> TokenStream {
+    let rows = if depth == 0 {
+        rows
     } else {
-        let part = collect_choice_rows(
+        let part = choice_rows(
             quote!(::core::iter::IntoIterator::into_iter(__cq_choice_part)),
             depth - 1,
+            left,
         );
-        quote!((#rows).map(|__cq_choice_part| #part).collect::<::std::vec::Vec<_>>())
-    }
-}
-
-fn choice_rows(rows: TokenStream, depth: usize) -> TokenStream {
-    if depth == 0 {
-        quote!((#rows).into_iter())
+        quote!((#rows).map(|__cq_choice_part| #part))
+    };
+    if left {
+        quote!(::cq_storage::sequence::Choice::Left(#rows))
     } else {
-        let part = choice_rows(quote!(__cq_choice_part), depth - 1);
-        quote!((#rows).into_iter().map(|__cq_choice_part| #part))
+        quote!(::cq_storage::sequence::Choice::Right(#rows))
     }
 }
 

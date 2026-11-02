@@ -112,9 +112,12 @@ fn routed_publication_checks_native_representation_and_stored_key_coverage() {
     keyed.provider = syn::parse_quote!(
         @sharded(@provider as Provider) as ::cq_storage::sharded::Sharded<Provider, _>
     );
-    p.structures.structures.declare(&[syn::parse_quote!(
-        sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared };
-    )]);
+    p.structures
+        .structures
+        .declare(&[syn::parse_quote!(
+            sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared };
+        )])
+        .unwrap();
     let analysis = contract::check(&p).unwrap();
     assert_eq!(
         analysis.publications["r"],
@@ -143,7 +146,7 @@ fn routed_publication_checks_native_representation_and_stored_key_coverage() {
         unreachable!()
     };
     keyed.provider = syn::parse_quote!(@sharded as ::cq_storage::sharded::Sharded);
-    p.structures.structures.declare(&[]);
+    p.structures.structures.declare(&[]).unwrap();
     reject(&p, "a composite provider records its inner instance");
 }
 
@@ -161,9 +164,12 @@ fn a_non_routed_token_is_not_a_routed_provider() {
         unreachable!()
     };
     keyed.provider = syn::parse_quote!(@custom_sharded as ::custom::Sharded<Provider>);
-    p.structures.structures.declare(&[syn::parse_quote!(
-        custom_sharded = ::custom::Sharded<_> { reads [exact, membership], build typed };
-    )]);
+    p.structures
+        .structures
+        .declare(&[syn::parse_quote!(
+            custom_sharded = ::custom::Sharded<_> { reads [exact, membership], build typed };
+        )])
+        .unwrap();
     let analysis = contract::check(&p).unwrap();
     assert!(analysis.routed_providers.is_empty());
     assert_eq!(
@@ -485,7 +491,8 @@ fn deferred_rows_reject_retained_rows_and_multiple_native_builds() {
         p.structures.structures.entries.extend(additional.entries);
         p.structures
             .structures
-            .declare(&additional.providers.declarations);
+            .declare(&additional.providers.declarations)
+            .unwrap();
         if multiple {
             *p.structures
                 .physical
@@ -609,7 +616,7 @@ fn deferred_rows_pin_sources_with_shadowed_join_filter_bindings() {
         .structures
         .entries
         .retain(|entry| !matches!(entry.structure, structures::Structure::JoinFilter { .. }));
-    p.structures.structures.declare(&[]);
+    p.structures.structures.declare(&[]).unwrap();
     assert_eq!(
         contract::check(&p).unwrap().publications["input"],
         Publication::DeferredRows {
@@ -1482,9 +1489,13 @@ fn rewrites_preserve_support_and_structures() {
     let mut changed = target.clone();
     changed.structures.structures.entries[0] =
         syn::parse_quote!(r host scan = @other as Other [] ;);
-    changed.structures.structures.declare(&[syn::parse_quote!(
-        other = Other { reads [exact, range, membership], build inferred };
-    )]);
+    changed
+        .structures
+        .structures
+        .declare(&[syn::parse_quote!(
+            other = Other { reads [exact, range, membership], build inferred };
+        )])
+        .unwrap();
     assert!(check_rewrite(&source, &changed).is_err());
 }
 
@@ -2304,7 +2315,7 @@ fn grouped_program(keys: proc_macro2::TokenStream, body: proc_macro2::TokenStrea
     .unwrap();
     program.structures.structures.declare(&[syn::parse_quote!(
         group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed };
-    )]);
+    )]).unwrap();
     program
 }
 
@@ -2976,16 +2987,20 @@ fn storage_type_rewrites_preserve_adapters_and_key_layouts() {
     target.structures.structures.declare(&[
         syn::parse_quote!(native_provider = NativeProvider { reads [exact, range, membership], build inferred };),
         syn::parse_quote!(native_canon = NativeCanon { reads [distinct], build inferred };),
-    ]);
+    ]).unwrap();
     contract::check_rewrite(&source, &target).unwrap();
     for entry in &mut target.structures.structures.entries {
         if let structures::Structure::Host { keyed, .. } = &mut entry.structure {
             keyed.provider = syn::parse_quote!(@different_reader as DifferentReader);
         }
     }
-    target.structures.structures.declare(&[syn::parse_quote!(
-        different_reader = DifferentReader { reads [exact, range, membership], build inferred };
-    )]);
+    target
+        .structures
+        .structures
+        .declare(&[syn::parse_quote!(
+            different_reader = DifferentReader { reads [exact, range, membership], build inferred };
+        )])
+        .unwrap();
     assert!(contract::check_rewrite(&source, &target).is_err());
 }
 

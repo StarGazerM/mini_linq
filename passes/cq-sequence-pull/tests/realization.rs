@@ -85,6 +85,15 @@ fn recorded_statistic_reads_use_completed_provider_and_missing_value_fallback() 
         },
     )
     .unwrap();
+    let printed = expression.to_token_stream().to_string();
+    assert!(
+        printed.contains("cq_storage :: sequence :: Choice :: Left"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("cq_storage :: sequence :: Choice :: Right"),
+        "{printed}"
+    );
     let source = quote! {
         use std::cell::Cell;
         thread_local! {
@@ -154,7 +163,7 @@ fn ordered_merge_uses_selected_fallback_and_rejects_authored_native() {
         }
     }
     assert_eq!(replaced, 2);
-    selected.structures.declare(&[]);
+    selected.structures.declare(&[]).unwrap();
     structures::contract::check(&selected).unwrap();
     assert!(sequence_rows(&selected).is_err());
 }
@@ -359,7 +368,8 @@ fn projected_membership_probes_keep_flat_rows_inside_outer_tiles() {
                     .structures
                     .declare(&[cq_lang_structures::provider::base::declaration(
                         "sorted_run",
-                    )]);
+                    )])
+                    .unwrap();
             }
             let mut program = cq_sequence_lowering::compile(&structures).unwrap();
             if tiled {
@@ -704,7 +714,8 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
                         .structures
                         .declare(&[cq_lang_structures::provider::base::declaration(
                             "btree_map_grouped",
-                        )]);
+                        )])
+                        .unwrap();
                 }
                 let expression = sequence_rows(&target).unwrap();
                 assert!(!text(&expression).contains("__cq_f_rows"));

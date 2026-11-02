@@ -60,7 +60,7 @@ impl syn::parse::Parse for Symbols {
         if !input.is_empty() {
             return Err(input.error("unexpected device_storage arguments"));
         }
-        intern_codecs(&mut columns);
+        intern_codecs(&mut columns)?;
         Ok(Self(
             columns
                 .into_iter()

@@ -180,6 +180,24 @@ fn host_opaque_read_preserves_other_carriers_and_round_trips() {
 }
 
 #[test]
+fn unrelated_declared_provider_cannot_supply_representation_guarantees() {
+    let mut program = fixture();
+    program
+        .encoded
+        .obligations
+        .declarations
+        .get_mut(&DeclarationId(1))
+        .unwrap()
+        .provider = "sort".into();
+    assert!(
+        check(&program)
+            .unwrap_err()
+            .to_string()
+            .contains("declaration provider does not serve this representation")
+    );
+}
+
+#[test]
 fn ordinary_program_has_no_encoded_tokens_or_default_choices() {
     let mut program = fixture();
     program.encoded = Contract::default();
@@ -648,6 +666,47 @@ fn index_role_requires_existing_byte_addressable_layout() {
         .unwrap();
     declaration.family = Family::IndexByteAddressable;
     declaration.layout = Layout::ProviderIndex;
+    assert!(check(&program).is_err());
+    program.physical = syn::parse_quote! {
+        physical {
+            relation L(a: u32 in [7] (symbols));
+            relation R(a: u32 in [7] (symbols), b: u32 in [7] (symbols));
+            l = pipe rename L@1 {a -> x};
+            r = let rename R@0 {a -> x, b -> y};
+            s = pipe probe first [x] l,r;
+            return canon s as answer(x,y);
+        }
+    };
+    program.structures.entries.push(syn::parse_quote!(
+        l host scan = @input as ArbitraryName [];
+    ));
+    program
+        .structures
+        .providers
+        .declarations
+        .push(syn::parse_quote!(
+            index = Index { reads [exact, range, membership], build typed };
+        ));
+    program
+        .structures
+        .entries
+        .push(syn::parse_quote!(r = @index as Index [x];));
+    program
+        .encoded
+        .obligations
+        .declarations
+        .get_mut(&DeclarationId(1))
+        .unwrap()
+        .provider = "index".into();
+    let read = program
+        .encoded
+        .obligations
+        .reads
+        .get_mut(&ReadId(1))
+        .unwrap();
+    read.consumer = Consumer::Relational("s".into());
+    read.purpose = ReadPurpose::PreserveCarrier;
+    program.encoded.records.reads = program.encoded.obligations.reads.clone();
     check(&program).unwrap();
 }
 

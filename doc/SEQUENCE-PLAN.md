@@ -187,7 +187,7 @@ with `host`; an empty list admits no levels. Provider type patterns allow `_`
 type/const arguments and `'_` lifetimes while retaining the author's actual type.
 Native catalogs describe the storage providers, identity codec and set
 canonicalizers; the GPU catalog describes resident `RangeProvider`, identity
-codes and publication-level `PackedCanon`/`WideCanon`. There are no builtin
+codes and publication-level `radix_set` full-row sets. There are no builtin
 syntactic `Dense` codec tokens: a target cannot authorize an arbitrary
 declaration-local codec id by recognizing its type.
 
@@ -412,9 +412,10 @@ storage-law tests check each implementation's abstraction obligations.
 The GPU implementations are `RangeBuilder`/`RangeProvider` (stable RCCL
 radix ordering, dense-code lower-bound offsets and gathered packed payload),
 `DenseDictionary` (gpu-compress domain adapter), `SelectedRows` (stable
-flagged selection for scan-only sources), and `canon::PackedCanon` (packed
-keys sorted and uniqued). `canon::packed_columns` preserves duplicates when
-no canon is recorded. Device scan/owner/membership helpers share gpu-tiles
+flagged selection for scan-only sources), and `radix_set`
+(`RadixLayout<EncodedRow, (), PackedRow, u64, ()>`, complete packed keys sorted
+and uniqued). Non-set column publications preserve duplicates.
+Device scan/owner/membership helpers share gpu-tiles
 and device-columns; selected sources do not invent an unused index key.
 
 ## [8] facade
@@ -1230,9 +1231,9 @@ preprocessing and terminal counts/zeros union are preserved. Stage timings are
 summed, and the same-Physical Sequential reference executes the complete graph.
 Device-planning failures remain explicit on host-planned stage artifacts.
 H14/H19 retain opaque String-valued witnesses and are rejected when opaque values
-lack a supported device encoding. The `WideCanon` catalog provider removes H10's
-former 128-bit complete-valuation limit; no witness projection or truncated
-equality key is substituted.
+lack a supported device encoding. The `radix_set` catalog provider supports
+arbitrary-width complete valuations, including H10's former 128-bit limit;
+no witness projection or truncated equality key is substituted.
 
 Host row codecs now support sixteen columns (H10 requires fifteen). Downloaded
 host publications map their carried layout to the downstream consumer's demand;
@@ -1241,8 +1242,8 @@ A terminal stored group followed by a stored alias emits one GPU grouped
 collective, not a redundant CPU group and host reupload. The ten Sequence core
 and six device-column unit tests passed in release CUDA builds.
 
-The unrestricted advised GPU executable builds. Final exact grouped timings
-(one warmup, median of five, milliseconds) are:
+Historical pre-`radix_set` evidence: the unrestricted advised GPU executable
+built, with these exact grouped timings (one warmup, median of five, milliseconds):
 
 | Query | SF1 total | SF10 total | Exact at both scales |
 |---|---:|---:|---|
@@ -1346,27 +1347,27 @@ and scoped formatting/clippy/API/formal checks.
 
 ### Box 12c arbitrary-width GPU canon
 
-`WideCanon` follows `PackedCanon` in the target catalog. A bounded canon requires
-recorded codec bounds, not widths inferred from Rust scalar type syntax or data
-estimates. Structures-only selection has no such bounds and selects an unbounded
-canon. Runtime packing uses the recorded actual codec bounds to allocate N
-low-first u64 lanes. Stable least-significant-lane radix passes carry row indices,
-then adjacent complete-row equality retains one row in deterministic ascending
-packed-key order.
+The target catalog's `radix_set` provider uses the ordinary full-row
+`RadixLayout<EncodedRow, (), PackedRow, u64, ()>` form. Packing requires recorded
+codec bounds, not widths inferred from Rust scalar type syntax or data estimates.
+Declared and resident bounds support arbitrary-width complete keys in low-first
+u64 lanes. Stable least-significant-lane radix passes carry row indices, then
+adjacent complete-row equality retains one row in deterministic ascending
+packed-key order. Equality includes every lane; no truncated key is substituted.
 
-Both providers publish the same device count and decode through the same
-column adapter. Intermediate providers, host downloads, grouped inputs and
-union consumers all decode arbitrary-width fields, including lane crossings.
-The formal `GPU-WideCanon` instance cites `BE-Canon`; runtime tests cover
-three-lane duplicates, repeated calls and empty input. Catalog tests require
-unbounded selection without codec bounds and rejection when none is available.
+The set publishes a resident device count and implicit unit occurrence offsets.
+Intermediate providers, host downloads, grouped inputs and union consumers decode
+arbitrary-width fields, including lane crossings. The formal `GPU-RadixSet`
+instance cites `BE-Canon`; runtime coverage includes three-lane duplicates,
+repeated calls and empty input.
 
-Acceptance on the release sm_89 build: all eight runtime provider tests and
-all ten catalog-selection tests passed. The formal inventory check passed
-(241 rules). H10's one warmup and all five measured runs matched the exported
-dbgen answers exactly; SF1 also passed Sequential-of-the-same-Physical
-conformance. GPU timing includes build, kernels and final publication work;
-DuckDB is the exported t24 median (not a new CPU measurement).
+Historical acceptance for the removed PackedCanon/WideCanon implementation,
+not validation or measurements of `radix_set`: on the release sm_89 build all
+eight runtime provider tests and ten catalog-selection tests passed, as did the
+then-current formal inventory (241 rules). H10's one warmup and five measured
+runs matched the exported dbgen answers; SF1 passed Sequential-of-the-same-
+Physical conformance. GPU timing included build, kernels and final publication
+work; DuckDB was the exported t24 median.
 
 | H10 advised | Exact rows | GPU total ms | Build ms | Kernels ms | Final publication ms | DuckDB t24 ms |
 |---|---:|---:|---:|---:|---:|---:|

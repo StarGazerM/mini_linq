@@ -102,6 +102,8 @@ identities; expansion checks can compile even though test targets are not execut
 `--save-baseline DIR` enables identity recording and copies the complete evidence
 directory only for a nonempty, fully passing run to `DIR/<12-digit HEAD SHA>`.
 Existing baseline directories are never overwritten, and failed runs are not saved.
+The baseline destination must be outside the run's log directory (`--output`),
+including after resolving symlinks; copying a run into itself is rejected.
 A selected target is marked `reused BASELINE-RUN-ID` only when a
 recorded, actually executed passing target has an intact hashed log and its current
 identity is equal. Identities use actual expanded Rust normalized by

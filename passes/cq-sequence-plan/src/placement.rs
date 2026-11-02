@@ -1165,7 +1165,7 @@ mod tests {
                 result = store answer;
             }
         };
-        source.structures.structures.declare(&[]);
+        source.structures.structures.declare(&[]).unwrap();
         source
     }
 

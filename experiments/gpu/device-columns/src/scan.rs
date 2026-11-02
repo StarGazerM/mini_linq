@@ -1,13 +1,32 @@
 //! Explicit host-encoded S1 uploads. This path has no default compiler selector
 //! and never aliases the legacy FastLanes header/codec interpretation.
+//!
+//! Uploads use pool-owned pinned staging and publish readiness by event; mask
+//! membership uploads and launches are ordered on the view's execution lane.
+//! Neither path synchronizes the host. The fixed mask kernel contract is 256
+//! threads per block, one S1 vector (1024 rows) per tile, no dynamic shared
+//! memory, and `min(ceil(live_count / 1024), 568)` blocks. Zero live rows launch
+//! nothing; capped grids traverse the remaining tiles by grid stride. The cap
+//! is a declared kernel constant, not a device/occupancy-dependent choice.
 use crate::{Buffer, Pool, Result};
 use cq_storage::scan::format::{CheckedScanView, Domain, SnapshotId};
 use cq_storage::scan::{
     BlockHeader, CodeConstraint, CodecId, Family, MinMax, OrdinalDecode, Predicate, ScanColumn,
-    TranslatedPredicate, Width,
+    TranslatedPredicate, Width, VECTOR_ROWS,
 };
 use cuda_core::{CudaEvent, DeviceCopy, LaunchConfig1D};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
+
+const MASK_TILE_ROWS: usize = VECTOR_ROWS;
+const MASK_BLOCK_THREADS: u32 = 256;
+const MASK_GRID_CAP: u32 = 568;
+
+fn mask_grid_blocks(live_count: usize) -> u32 {
+    live_count
+        .div_ceil(MASK_TILE_ROWS)
+        .min(MASK_GRID_CAP as usize) as u32
+}
+
 thread_local! {
     static MODULE: RefCell<Option<(Arc<cuda_core::CudaContext>, Rc<kernels::shared_scan::LoadedModule>)>> = const { RefCell::new(None) };
 }
@@ -57,10 +76,10 @@ impl<T: OrdinalDecode, F: Family> DeviceScanColumn<T, F> {
         live_count: usize,
     ) -> Result<Arc<Self>> {
         let view = source.checked_view(domain, live_count)?;
-        let payload = Buffer::from_host(pool.clone(), view.payload())?;
-        let headers = Buffer::from_host(pool.clone(), view.header_bytes())?;
+        let payload = Buffer::from_host_async(pool.clone(), view.payload())?;
+        let headers = Buffer::from_host_async(pool.clone(), view.header_bytes())?;
         let upload_summary = |s: Option<&[MinMax]>| -> Result<Option<Buffer<u8>>> {
-            s.map(|s| Buffer::from_host(pool.clone(), CheckedScanView::summary_bytes(s)))
+            s.map(|s| Buffer::from_host_async(pool.clone(), CheckedScanView::summary_bytes(s)))
                 .transpose()
         };
         let block_summaries = upload_summary(view.metadata().block_summaries)?;
@@ -144,6 +163,10 @@ impl<T: OrdinalDecode, F: Family> DeviceScanView<T, F> {
         if matches!(predicate, Predicate::Window { .. }) && !self.owner.domain.order {
             return Err(cq_storage::scan::format::FormatError::Predicate.into());
         }
+        let output = unsafe { Buffer::uninitialized(self.lane.clone(), self.owner.live_count)? };
+        if self.owner.live_count == 0 {
+            return Ok(output);
+        }
         // Constants enter once in their declared ordinal domain. Block frames
         // derive saturated residual bounds; no logical Rust inverse is used.
         let global = BlockHeader {
@@ -163,14 +186,14 @@ impl<T: OrdinalDecode, F: Family> DeviceScanView<T, F> {
                 TranslatedPredicate::Range(CodeConstraint::Range { lo, hi }) => {
                     (1, lo, hi, &[][..])
                 }
-                TranslatedPredicate::Membership(_) => unreachable!(),
+                TranslatedPredicate::Membership { .. } => unreachable!(),
             }
         };
         let key_count = keys.len() as u64;
         let keys = if keys.is_empty() {
             None
         } else {
-            Some(Buffer::from_host(self.lane.clone(), keys)?)
+            Some(Buffer::from_host_async(self.lane.clone(), keys)?)
         };
         let predicate = ScanPredicate {
             kind,
@@ -180,20 +203,20 @@ impl<T: OrdinalDecode, F: Family> DeviceScanView<T, F> {
             keys: keys.as_ref().map_or(std::ptr::null(), |b| b.ptr()),
             key_count,
         };
-        let output = unsafe { Buffer::uninitialized(self.lane.clone(), self.owner.live_count)? };
-        if self.owner.live_count != 0 {
-            let module = module(&self.lane)?;
-            let tiles = self.owner.live_count.div_ceil(1024);
-            let launch = module.prepare_mask(LaunchConfig1D::new(tiles.min(568) as u32, 256, 0))?;
-            unsafe {
-                module.mask(
-                    self.lane.stream(),
-                    &launch,
-                    self.abi(),
-                    predicate,
-                    output.ptr(),
-                )?;
-            }
+        let module = module(&self.lane)?;
+        let launch = module.prepare_mask(LaunchConfig1D::new(
+            mask_grid_blocks(self.owner.live_count),
+            MASK_BLOCK_THREADS,
+            0,
+        ))?;
+        unsafe {
+            module.mask(
+                self.lane.stream(),
+                &launch,
+                self.abi(),
+                predicate,
+                output.ptr(),
+            )?;
         }
         Ok(output)
     }
@@ -270,7 +293,9 @@ unsafe impl DeviceCopy for ScanPredicate {}
 mod kernels {
     #[cuda_device::cuda_module]
     pub(crate) mod shared_scan {
-        use super::super::{ScanDeviceDescriptor, ScanPredicate};
+        use super::super::{
+            ScanDeviceDescriptor, ScanPredicate, MASK_BLOCK_THREADS, MASK_TILE_ROWS,
+        };
         use cuda_device::{device, kernel, launch_bounds, launch_contract, thread};
 
         #[device]
@@ -311,17 +336,20 @@ mod kernels {
             }
             false
         }
+        // The module-level contract fixes tile size and the 568-block cap;
+        // prepare_mask checks the block shape, and the host realizes the
+        // declared grid formula from the live extent without device queries.
         #[kernel]
         #[launch_bounds(256)]
         #[launch_contract(domain = 1, block = (256, 1, 1))]
         pub unsafe fn mask(view: ScanDeviceDescriptor, predicate: ScanPredicate, output: *mut u8) {
             let mut vector = thread::blockIdx_x() as u64;
             let lane = thread::threadIdx_x() as u64;
-            while vector < view.live_count.div_ceil(1024) {
-                let start = vector * 1024;
+            while vector < view.live_count.div_ceil(MASK_TILE_ROWS as u64) {
+                let start = vector * MASK_TILE_ROWS as u64;
                 let block = start / view.block_rows;
                 let header = unsafe { view.headers.add(block as usize).read() };
-                let rows = (view.live_count - start).min(1024);
+                let rows = (view.live_count - start).min(MASK_TILE_ROWS as u64);
                 let mut possible = predicate.kind != 0;
                 if possible && !view.block_summaries.is_null() {
                     let bounds = unsafe { view.block_summaries.add(block as usize).read() };
@@ -350,7 +378,7 @@ mod kernels {
                             unsafe {
                                 output.add((start + local) as usize).write(selected as u8);
                             }
-                            local += 256;
+                            local += MASK_BLOCK_THREADS as u64;
                         }
                     }};
                 }
@@ -366,12 +394,37 @@ mod kernels {
                             unsafe {
                                 output.add((start + local) as usize).write(selected as u8);
                             }
-                            local += 256;
+                            local += MASK_BLOCK_THREADS as u64;
                         }
                     }
                 }
                 vector += thread::gridDim_x() as u64;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_grid_obeys_fixed_kernel_contract() {
+        assert_eq!(MASK_TILE_ROWS, 1024);
+        assert_eq!(MASK_BLOCK_THREADS, 256);
+        assert_eq!(MASK_GRID_CAP, 568);
+        for (rows, blocks) in [
+            (0, 0),
+            (1, 1),
+            (1024, 1),
+            (1025, 2),
+            (568 * 1024 - 1, 568),
+            (568 * 1024, 568),
+            (568 * 1024 + 1, 568),
+            (2 * 568 * 1024 + 17, 568),
+            (usize::MAX, 568),
+        ] {
+            assert_eq!(mask_grid_blocks(rows), blocks, "live rows: {rows}");
         }
     }
 }

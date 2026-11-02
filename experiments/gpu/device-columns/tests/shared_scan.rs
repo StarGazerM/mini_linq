@@ -199,3 +199,74 @@ fn narrow_upload_width_boundaries() {
     }
     gpu_device_columns::release_cached_kernels();
 }
+
+fn queued_membership_masks<F: Family>(pool: &Arc<Pool>, summaries: bool) {
+    // More than two complete capped-grid waves, plus a partial vector.
+    let capacity = 2 * 568 * VECTOR_ROWS + 17;
+    let values: Vec<i64> = (0..capacity)
+        .map(|row| (row / VECTOR_ROWS * 1000 + row % 251) as i64)
+        .collect();
+    let mut builder = ScanColumnBuilder::<i64, F>::with_domain(
+        BlockRows::new(3072).unwrap(),
+        summaries,
+        summaries,
+        domain(),
+    )
+    .unwrap();
+    builder.extend(values.iter().copied());
+    let host = Arc::new(builder.finish());
+    let selected = [
+        values[0].ordinal(),
+        values[568 * VECTOR_ROWS].ordinal(),
+        values[capacity - 1].ordinal(),
+    ];
+    for live in [
+        0,
+        1,
+        VECTOR_ROWS - 1,
+        VECTOR_ROWS,
+        VECTOR_ROWS + 1,
+        568 * VECTOR_ROWS - 1,
+        568 * VECTOR_ROWS,
+        568 * VECTOR_ROWS + 1,
+        capacity,
+    ] {
+        // No readback between upload, cross-lane lease and kernel submission.
+        let publication =
+            DeviceScanColumn::upload(pool.clone(), host.clone(), domain(), live).unwrap();
+        let view = publication.view_on(pool.lane().unwrap()).unwrap();
+        let mask = {
+            let mut predicate = Predicate::Membership(selected.to_vec());
+            let mask = view.filter_mask(domain().id, &predicate).unwrap();
+            let Predicate::Membership(keys) = &mut predicate else {
+                unreachable!()
+            };
+            keys.fill(u64::MAX);
+            mask
+        };
+        // A second queued upload must not overwrite the first one's staging.
+        let absent = view
+            .filter_mask(domain().id, &Predicate::Membership(vec![u64::MAX]))
+            .unwrap();
+        drop(view);
+        drop(publication);
+        let actual = mask.to_host().unwrap();
+        assert_eq!(
+            actual,
+            values[..live]
+                .iter()
+                .map(|value| selected.contains(&value.ordinal()) as u8)
+                .collect::<Vec<_>>(),
+            "live rows: {live}"
+        );
+        assert_eq!(absent.to_host().unwrap(), vec![0; live]);
+    }
+}
+
+#[test]
+fn async_membership_uploads_and_capped_grid_stride() {
+    let pool = Pool::new(0, 1 << 20, 256 << 20).unwrap();
+    queued_membership_masks::<Plain>(&pool, false);
+    queued_membership_masks::<Bytes>(&pool, true);
+    gpu_device_columns::release_cached_kernels();
+}

@@ -113,7 +113,7 @@ pub fn custom_indexes(input: TokenStream) -> TokenStream {
                 keyed.supports = None;
             }
         }
-        target.structures.declare(&[sorted_index]);
+        target.structures.declare(&[sorted_index])?;
         Ok(target)
     })
     .into()

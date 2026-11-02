@@ -612,6 +612,181 @@ impl Drop for RadixScratch {
         release(&self.pool, counters);
     }
 }
+
+/// A live prefix of exclusively borrowed scratch. Capacity is not sort length.
+struct SortPrefix<'a, T: DeviceCopy> {
+    buffer: &'a mut DeviceBuffer<T>,
+    rows: usize,
+}
+impl<'a, T: DeviceCopy> SortPrefix<'a, T> {
+    fn new(buffer: &'a mut Native<T>, rows: usize) -> Self {
+        assert!(rows <= buffer.get().len());
+        Self {
+            buffer: buffer.get_mut(),
+            rows,
+        }
+    }
+    fn ptr(&self) -> u64 {
+        self.buffer.cu_deviceptr()
+    }
+}
+impl<T: DeviceCopy> rccl_cub::DeviceRange for SortPrefix<'_, T> {
+    fn len(&self) -> usize {
+        self.rows
+    }
+}
+// SAFETY: the checked prefix retains an exclusive borrow of its live owner.
+unsafe impl<T: DeviceCopy> cuda_host::KernelSliceArg for SortPrefix<'_, T> {
+    type Elem = T;
+    fn cu_deviceptr(&self) -> u64 {
+        self.ptr()
+    }
+    fn len(&self) -> usize {
+        self.rows
+    }
+}
+unsafe impl<T: DeviceCopy> cuda_host::KernelSliceArgMut for SortPrefix<'_, T> {}
+
+pub(crate) struct KeySortScratch {
+    first: Native<u64>,
+    alternate: Native<u64>,
+    controls: RadixScratch,
+}
+impl KeySortScratch {
+    pub(crate) fn new(
+        pool: &Arc<Pool>,
+        launch: &rccl_cub::cuda::Launch<'_, '_>,
+        rows: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            first: Native::new(pool, rows)?,
+            alternate: Native::new(pool, rows)?,
+            controls: RadixScratch {
+                workspace: rccl_cub::device_radix_sort_keys_buffer_workspace::<u64>(launch, rows)?,
+                pool: pool.clone(),
+            },
+        })
+    }
+    pub(crate) fn capacity(&self) -> usize {
+        self.first.get().len()
+    }
+
+    pub(crate) fn sort(
+        &mut self,
+        pool: &Arc<Pool>,
+        launch: &rccl_cub::cuda::Launch<'_, '_>,
+        input: *const u64,
+        rows: usize,
+        bits: u32,
+    ) -> Result<*const u64> {
+        unsafe {
+            cuda_core::simt::memory::memcpy_dtod_async(
+                self.first.get().cu_deviceptr(),
+                input as u64,
+                rows * 8,
+                pool.stream().cu_stream(),
+            )?;
+        }
+        let mut first = SortPrefix::new(&mut self.first, rows);
+        let mut alternate = SortPrefix::new(&mut self.alternate, rows);
+        let mut buffers = rccl_cub::DoubleBuffer::new(&mut first, &mut alternate)
+            .ok_or("unequal scalar radix buffers")?;
+        rccl_cub::device_radix_sort_keys_buffer(
+            launch,
+            &mut buffers,
+            0..bits,
+            &mut self.controls.workspace,
+        )?;
+        Ok(buffers.current().ptr() as *const u64)
+    }
+}
+
+pub(crate) struct RowSortScratch {
+    first: Native<u64>,
+    alternate: Native<u64>,
+    indices: Native<u32>,
+    alternate_indices: Native<u32>,
+    controls: RadixScratch,
+}
+impl RowSortScratch {
+    pub(crate) fn new(
+        pool: &Arc<Pool>,
+        launch: &rccl_cub::cuda::Launch<'_, '_>,
+        rows: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            first: Native::new(pool, rows)?,
+            alternate: Native::new(pool, rows)?,
+            indices: Native::new(pool, rows)?,
+            alternate_indices: Native::new(pool, rows)?,
+            controls: RadixScratch {
+                workspace: rccl_cub::device_radix_sort_pairs_buffer_workspace::<u64, u32>(
+                    launch, rows,
+                )?,
+                pool: pool.clone(),
+            },
+        })
+    }
+    pub(crate) fn capacity(&self) -> usize {
+        self.first.get().len()
+    }
+
+    pub(crate) fn sort(
+        &mut self,
+        pool: &Arc<Pool>,
+        module: &run_kernels::LoadedModule,
+        launch: &rccl_cub::cuda::Launch<'_, '_>,
+        input: *const u64,
+        rows: usize,
+        bits: u32,
+        ms_first: bool,
+        block_threads: u32,
+    ) -> Result<*const u32> {
+        if rows > u32::MAX as usize || bits == 0 || block_threads != 256 {
+            return Err("invalid stable row sort dimensions or launch width".into());
+        }
+        let lanes = bits.div_ceil(64);
+        let mut first = SortPrefix::new(&mut self.first, rows);
+        let mut alternate = SortPrefix::new(&mut self.alternate, rows);
+        let mut indices = SortPrefix::new(&mut self.indices, rows);
+        let mut alternate_indices = SortPrefix::new(&mut self.alternate_indices, rows);
+        let mut buffers = rccl_cub::DoubleBuffer::paired(
+            (&mut first, &mut indices),
+            (&mut alternate, &mut alternate_indices),
+        )
+        .ok_or("unequal lane radix buffers")?;
+        let initial = module.prepare_gather_lane(LaunchConfig1D::new(1, block_threads, 0))?;
+        let grid = cq_gpu_runtime::launch_grid_for_kernel(
+            initial.function(),
+            rows.div_ceil(block_threads as usize),
+            block_threads,
+            0,
+        )?;
+        let prepared = module.prepare_gather_lane(LaunchConfig1D::new(grid, block_threads, 0))?;
+        // Stable least-significant-lane passes retain full-row order.
+        for lane in 0..lanes {
+            let (values, order) = buffers.current_mut();
+            module.gather_lane(
+                pool.stream(),
+                &prepared,
+                input,
+                rows as u32,
+                lane,
+                lanes,
+                ms_first,
+                values.ptr() as *mut u64,
+                order.ptr() as *mut u32,
+            )?;
+            rccl_cub::device_radix_sort_pairs_buffer(
+                launch,
+                &mut buffers,
+                0..(bits - lane * 64).min(64),
+                &mut self.controls.workspace,
+            )?;
+        }
+        Ok(buffers.current().1.ptr() as *const u32)
+    }
+}
 pub(crate) fn read_count(pool: &Pool, buffer: &DeviceBuffer<u64>) -> Result<usize> {
     let mut count = 0_u64;
     // SAFETY: preceding compaction initialized one u64; stack storage survives synchronization.
@@ -665,60 +840,21 @@ pub(crate) fn stable_row_order(
     ms_first: bool,
     block_threads: u32,
 ) -> Result<Native<u32>> {
-    if rows > u32::MAX as usize || bits == 0 || block_threads != 256 {
-        return Err("invalid stable row sort dimensions or launch width".into());
-    }
-    let lanes = bits.div_ceil(64);
-    let mut first = Native::<u64>::new(pool, rows)?;
-    let mut alternate = Native::<u64>::new(pool, rows)?;
-    let mut indices = Native::<u32>::new(pool, rows)?;
-    let mut alternate_indices = Native::<u32>::new(pool, rows)?;
-    let mut controls = RadixScratch {
-        workspace: rccl_cub::device_radix_sort_pairs_buffer_workspace::<u64, u32>(launch, rows)?,
-        pool: pool.clone(),
-    };
-    let current = {
-        let mut buffers = rccl_cub::DoubleBuffer::paired(
-            (first.get_mut(), indices.get_mut()),
-            (alternate.get_mut(), alternate_indices.get_mut()),
-        )
-        .ok_or("unequal lane radix buffers")?;
-        let initial = module.prepare_gather_lane(LaunchConfig1D::new(1, block_threads, 0))?;
-        let grid = cq_gpu_runtime::launch_grid_for_kernel(
-            initial.function(),
-            rows.div_ceil(block_threads as usize),
-            block_threads,
-            0,
-        )?;
-        let prepared = module.prepare_gather_lane(LaunchConfig1D::new(grid, block_threads, 0))?;
-        // Stable least-significant-lane passes retain full-row order.
-        for lane in 0..lanes {
-            let (values, order) = buffers.current_mut();
-            module.gather_lane(
-                pool.stream(),
-                &prepared,
-                input,
-                rows as u32,
-                lane,
-                lanes,
-                ms_first,
-                values.cu_deviceptr() as *mut u64,
-                order.cu_deviceptr() as *mut u32,
-            )?;
-            rccl_cub::device_radix_sort_pairs_buffer(
-                launch,
-                &mut buffers,
-                0..(bits - lane * 64).min(64),
-                &mut controls.workspace,
-            )?;
-        }
-        buffers.current().1.cu_deviceptr()
-    };
-    // Scratch frees below are ordered after the sort on the pool stream.
-    Ok(if current == indices.get().cu_deviceptr() {
-        indices
+    let mut scratch = RowSortScratch::new(pool, launch, rows)?;
+    let current = scratch.sort(
+        pool,
+        module,
+        launch,
+        input,
+        rows,
+        bits,
+        ms_first,
+        block_threads,
+    )?;
+    Ok(if current as u64 == scratch.indices.get().cu_deviceptr() {
+        scratch.indices
     } else {
-        alternate_indices
+        scratch.alternate_indices
     })
 }
 
@@ -730,35 +866,12 @@ pub(crate) fn stable_keys(
     rows: usize,
     bits: u32,
 ) -> Result<Native<u64>> {
-    let mut first = Native::<u64>::new(pool, rows)?;
-    let mut alternate = Native::<u64>::new(pool, rows)?;
-    unsafe {
-        cuda_core::simt::memory::memcpy_dtod_async(
-            first.get().cu_deviceptr(),
-            input as u64,
-            rows * 8,
-            pool.stream().cu_stream(),
-        )?;
-    }
-    let mut controls = RadixScratch {
-        workspace: rccl_cub::device_radix_sort_keys_buffer_workspace::<u64>(launch, rows)?,
-        pool: pool.clone(),
-    };
-    let current = {
-        let mut buffers = rccl_cub::DoubleBuffer::new(first.get_mut(), alternate.get_mut())
-            .ok_or("unequal scalar radix buffers")?;
-        rccl_cub::device_radix_sort_keys_buffer(
-            launch,
-            &mut buffers,
-            0..bits,
-            &mut controls.workspace,
-        )?;
-        buffers.current().cu_deviceptr()
-    };
-    Ok(if current == first.get().cu_deviceptr() {
-        first
+    let mut scratch = KeySortScratch::new(pool, launch, rows)?;
+    let current = scratch.sort(pool, launch, input, rows, bits)?;
+    Ok(if current as u64 == scratch.first.get().cu_deviceptr() {
+        scratch.first
     } else {
-        alternate
+        scratch.alternate
     })
 }
 

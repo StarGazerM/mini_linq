@@ -14,7 +14,7 @@ fn codec_declarations_intern_once_and_preserve_explicit_identity() {
             D => Code codec [8] Other
         ]
     });
-    intern_codecs(&mut input.columns);
+    intern_codecs(&mut input.columns).unwrap();
     assert_eq!(input.columns[0].codec_id, input.columns[1].codec_id);
     assert_eq!(input.columns[2].codec_id, Some(CodecId(7)));
     assert_eq!(input.columns[3].codec_id, Some(CodecId(8)));
@@ -23,8 +23,48 @@ fn codec_declarations_intern_once_and_preserve_explicit_identity() {
     assert_eq!(input, printed);
     let id = input.columns[0].codec_id;
     input.columns[0].codec = Some(syn::parse_quote!(RenamedOpaqueCodec));
-    intern_codecs(&mut input.columns);
+    intern_codecs(&mut input.columns).unwrap();
     assert_eq!(input.columns[0].codec_id, id);
+}
+
+#[test]
+fn codec_identity_exhaustion_is_a_parse_error() {
+    use structures::provider::{CodecId, InputSchema, intern_codecs};
+    let mut input: InputSchema = syn::parse_quote!(input {
+        keys 0;
+        columns [u32 => u32 codec [4294967295] Existing, u32 => u32 codec Fresh]
+    });
+    assert!(
+        intern_codecs(&mut input.columns)
+            .unwrap_err()
+            .to_string()
+            .contains("codec identity space exhausted")
+    );
+    input.columns[1].codec = Some(syn::parse_quote!(Existing));
+    intern_codecs(&mut input.columns).unwrap();
+    assert_eq!(input.columns[1].codec_id, Some(CodecId(u32::MAX)));
+
+    let mut last: InputSchema = syn::parse_quote!(input {
+        keys 0;
+        columns [u32 => u32 codec [4294967294] Existing, u32 => u32 codec Last]
+    });
+    intern_codecs(&mut last.columns).unwrap();
+    assert_eq!(last.columns[1].codec_id, Some(CodecId(u32::MAX)));
+
+    let parsed = syn::parse_str::<structures::Structures>(
+        "structures {
+            providers {}
+            r host scan = @input input { keys 0; columns [
+                u32 => u32 codec [4294967295] Existing, u32 => u32 codec Fresh
+            ] } as Input [];
+        }",
+    );
+    assert!(
+        parsed
+            .unwrap_err()
+            .to_string()
+            .contains("codec identity space exhausted")
+    );
 }
 
 /// Provider tokens that entry rewrites in these tests introduce (STR-Provider).
@@ -76,7 +116,7 @@ fn declarations() -> Vec<structures::Declaration> {
 /// Declares the tokens entry rewrites introduced and prunes replaced ones.
 fn declared(program: &structures::Program) -> structures::Program {
     let mut program = program.clone();
-    program.structures.declare(&declarations());
+    program.structures.declare(&declarations()).unwrap();
     program
 }
 
@@ -526,7 +566,7 @@ fn only_built_lets_have_entries_and_host_reads_make_no_claims() {
             }} {entries} }}"
         ))
         .unwrap();
-        q.structures.declare(&[]);
+        q.structures.declare(&[]).unwrap();
         assert!(check(&q).is_err(), "{entries}");
     }
     let mut q = p;

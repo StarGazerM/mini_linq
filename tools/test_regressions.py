@@ -93,11 +93,17 @@ def latest_evidence(directory):
     return max(paths, key=lambda path: (path.stat().st_mtime_ns, str(path)))
 
 
+def check_baseline_destination(logdir, destination):
+    if destination.resolve().is_relative_to(logdir.resolve()):
+        raise ValueError("--save-baseline destination must be outside the run log directory")
+
+
 def save_baseline(logdir, directory, revision, records):
     """Never publish failed, empty, or revisionless runs as baselines."""
     if not revision or not records or any(record["status"] != 0 for record in records):
         return None
     destination = directory / revision[:12]
+    check_baseline_destination(logdir, destination)
     directory.mkdir(parents=True, exist_ok=True)
     # Refuse to mix evidence from separate runs at the same revision.
     shutil.copytree(logdir, destination)
@@ -371,6 +377,11 @@ def main():
         return 0
     run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:8]
     logdir = (args.output or ROOT / "target/regression-logs" / run_id).resolve()
+    if args.save_baseline:
+        try:
+            check_baseline_destination(logdir, args.save_baseline)
+        except ValueError as error:
+            parser.error(str(error))
     if (logdir / "results.tsv").exists():
         parser.error(f"refusing to overwrite an existing run: {logdir}")
     logdir.mkdir(parents=True, exist_ok=True)
@@ -406,7 +417,7 @@ def main():
         try:
             destination = save_baseline(logdir, args.save_baseline.resolve(),
                                         evidence["revision"], evidence["targets"])
-        except OSError as error:
+        except (OSError, ValueError) as error:
             parser.error(f"cannot save baseline: {error}")
         print(f"Saved baseline: {destination}" if destination else
               "Baseline not saved: empty selection or unavailable HEAD")

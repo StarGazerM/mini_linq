@@ -21,7 +21,7 @@ fn source(decision: &str) -> structures::Program {
             #decision
         }
     };
-    program.structures.declare(&[]);
+    program.structures.declare(&[]).unwrap();
     program
 }
 fn catalog(supports: Vec<Support>) -> Catalog {

@@ -151,7 +151,7 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
         }
         keyed.provider = provider.clone();
     }
-    target.structures.declare(&[]);
+    target.structures.declare(&[])?;
     cq_lang_structures::contract::check(&target)?;
     Ok(target)
 }

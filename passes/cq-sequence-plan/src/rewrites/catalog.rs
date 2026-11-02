@@ -395,7 +395,7 @@ fn select(
             {
                 *slot = provider;
             }
-            target.structures.declare(&catalog.declarations);
+            target.structures.declare(&catalog.declarations)?;
             continue;
         }
         match cq_structure_selection::retype(
@@ -596,7 +596,7 @@ fn retain_host_index(
         !retained.contains(&symbol_name(&entry.name))
             || !matches!(&entry.structure, Structure::Host { reader, .. } if !matches!(reader, structures::ReaderRef::Scan))
     });
-    target.structures.declare(&catalog.declarations);
+    target.structures.declare(&catalog.declarations)?;
     structures::contract::check(&target)?;
     Ok(target)
 }

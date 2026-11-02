@@ -420,6 +420,8 @@ impl<T: OrdinalDecode, F: Family> ScanColumn<T, F> {
     }
     /// Write one selection byte per occurrence (0 or 1), without logical decode.
     /// Width and predicate dispatch occur once per block, outside the tight loop.
+    /// Membership borrows the predicate's ordinal keys; no block-local key
+    /// buffer is allocated.
     pub fn filter_mask(&self, predicate: &Predicate, out: &mut [u8])
     where
         F: EncodedPoint + EncodedWindow,
@@ -441,7 +443,7 @@ impl<T: OrdinalDecode, F: Family> ScanColumn<T, F> {
         }
     }
 
-    fn block_mask(&self, h: &BlockHeader, predicate: &TranslatedPredicate, out: &mut [u8]) {
+    fn block_mask(&self, h: &BlockHeader, predicate: &TranslatedPredicate<'_>, out: &mut [u8]) {
         let bytes = &self.payload()
             [h.offset as usize..h.offset as usize + h.rows as usize * h.width as usize];
         macro_rules! range {
@@ -464,9 +466,9 @@ impl<T: OrdinalDecode, F: Family> ScanColumn<T, F> {
                 Width::W32 => range!(4, u32, *lo, *hi),
                 Width::W64 => range!(8, u64, *lo, *hi),
             },
-            TranslatedPredicate::Membership(keys) => {
+            TranslatedPredicate::Membership { keys, base, .. } => {
                 self.visit_codes(h, 0, h.rows as usize, |i, code| {
-                    out[i] = keys.contains(&code) as u8
+                    out[i] = keys.contains(&(*base + code)) as u8
                 });
             }
         }
@@ -502,9 +504,13 @@ impl<T: OrdinalDecode, F: Family> ScanColumn<T, F> {
                         }
                     });
                 }
-                TranslatedPredicate::Membership(keys) => {
+                TranslatedPredicate::Membership {
+                    keys,
+                    base: ordinal_base,
+                    ..
+                } => {
                     self.visit_codes(h, 0, h.rows as usize, |row, code| {
-                        if keys.contains(&code) {
+                        if keys.contains(&(ordinal_base + code)) {
                             emit(base + row);
                         }
                     });
@@ -564,7 +570,9 @@ impl Predicate {
     }
     /// Formal rule RT-Translate: residual tests iff the logical predicate holds,
     /// including absent constants and open endpoints at the ordinal extremes.
-    pub fn translate(&self, h: &BlockHeader) -> TranslatedPredicate {
+    /// Membership retains borrowed global ordinals and the block frame instead
+    /// of allocating a residual-key vector for each block.
+    pub fn translate(&self, h: &BlockHeader) -> TranslatedPredicate<'_> {
         let max = match h.width {
             Width::W0 => 0,
             Width::W8 => u8::MAX as u64,
@@ -586,11 +594,11 @@ impl Predicate {
             }
         };
         match self {
-            Self::Membership(keys) => TranslatedPredicate::Membership(
-                keys.iter()
-                    .filter_map(|k| k.checked_sub(h.base).filter(|v| *v <= max))
-                    .collect(),
-            ),
+            Self::Membership(keys) => TranslatedPredicate::Membership {
+                keys,
+                base: h.base,
+                max,
+            },
             _ => TranslatedPredicate::Range(
                 self.range()
                     .map_or(CodeConstraint::Empty, |(lo, hi)| translate_range(lo, hi)),
@@ -598,16 +606,26 @@ impl Predicate {
         }
     }
 }
+/// A block-relative test borrowing the predicate's membership keys.
 #[derive(Clone, Debug)]
-pub enum TranslatedPredicate {
+pub enum TranslatedPredicate<'a> {
     Range(CodeConstraint),
-    Membership(Vec<u64>),
+    Membership {
+        keys: &'a [u64],
+        base: u64,
+        max: u64,
+    },
 }
-impl TranslatedPredicate {
+impl TranslatedPredicate<'_> {
     pub fn matches(&self, code: u64) -> bool {
         match self {
             Self::Range(r) => r.matches(code),
-            Self::Membership(keys) => keys.contains(&code),
+            Self::Membership { keys, base, max } => {
+                code <= *max
+                    && base
+                        .checked_add(code)
+                        .is_some_and(|key| keys.contains(&key))
+            }
         }
     }
 }

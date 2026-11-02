@@ -74,7 +74,8 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
     smallest
         .structures
         .structures
-        .declare(&cq_gpu_sequence::providers::declarations());
+        .declare(&cq_gpu_sequence::providers::declarations())
+        .unwrap();
     let analysis = check_grading(&smallest, &cq_gpu_sequence::machine()).unwrap();
     let error = cq_gpu_sequence::translate(&smallest, &analysis).unwrap_err();
     assert!(

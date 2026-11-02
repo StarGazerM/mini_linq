@@ -199,3 +199,63 @@ fn runtime_scalar_inverse_laws() {
     ]);
     laws(&[StringCode(0), StringCode(255), StringCode::MAX]);
 }
+
+#[test]
+fn membership_translation_borrows_keys_and_checks_block_frame() {
+    let predicate = Predicate::Membership(vec![0, 9, 10, 12, 265, 266, u64::MAX - 1, u64::MAX]);
+    let Predicate::Membership(original) = &predicate else {
+        unreachable!()
+    };
+    for base in [0, 10, u64::MAX - 2, u64::MAX] {
+        for (width, max) in [
+            (Width::W0, 0),
+            (Width::W8, u8::MAX as u64),
+            (Width::W16, u16::MAX as u64),
+            (Width::W32, u32::MAX as u64),
+            (Width::W64, u64::MAX),
+        ] {
+            let header = BlockHeader {
+                offset: 0,
+                base,
+                rows: 1,
+                width,
+                codec: CodecId::For,
+                reserved: [0; 2],
+            };
+            let translated = predicate.translate(&header);
+            let TranslatedPredicate::Membership {
+                keys,
+                base: recorded_base,
+                max: recorded_max,
+            } = &translated
+            else {
+                panic!("membership changed predicate kind");
+            };
+            assert!(std::ptr::eq(*keys, original.as_slice()));
+            assert_eq!((*recorded_base, *recorded_max), (base, max));
+            for code in [
+                0,
+                1,
+                2,
+                9,
+                10,
+                255,
+                256,
+                65535,
+                65536,
+                u32::MAX as u64,
+                u64::MAX,
+            ] {
+                let expected = code <= max
+                    && base
+                        .checked_add(code)
+                        .is_some_and(|k| original.contains(&k));
+                assert_eq!(
+                    translated.matches(code),
+                    expected,
+                    "{header:?}, code {code}"
+                );
+            }
+        }
+    }
+}

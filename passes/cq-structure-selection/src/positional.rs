@@ -329,7 +329,7 @@ pub(super) fn choose(
     target.structures.entries.extend(extra);
     target
         .structures
-        .declare(&cq_lang_structures::provider::base::declarations());
+        .declare(&cq_lang_structures::provider::base::declarations())?;
     choose_join_filters(target, bases)?;
     structures::record_join_filter_abandon(target)?;
     structures::contract::check(target)?;
@@ -429,6 +429,6 @@ fn choose_join_filters(
     target.structures.entries.extend(entries);
     target
         .structures
-        .declare(&cq_lang_structures::provider::base::declarations());
+        .declare(&cq_lang_structures::provider::base::declarations())?;
     Ok(())
 }

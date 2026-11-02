@@ -112,6 +112,8 @@ pub struct Domain {
 }
 
 /// Binder/provider catalog facts, owned once and referenced by decisions.
+/// A used declaration must name the actual source scan or publication index
+/// provider; another declared token cannot lend its representation guarantees.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Declaration {
     pub provider: String,
@@ -372,6 +374,29 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
                 "unknown representation declaration",
             )?;
             let source = get(&o.sources, &demand.source, "unknown source")?;
+            let serving_provider = match declaration.role {
+                Role::ScanColumn => {
+                    facts
+                        .fallbacks
+                        .iter()
+                        .any(|((occurrence, reader, key), provider)| {
+                            occurrence == &source.occurrence
+                                && matches!(reader, crate::ReaderRef::Scan)
+                                && key.is_empty()
+                                && symbol_name(&provider.token) == declaration.provider
+                        })
+                }
+                Role::IndexRun => facts
+                    .built
+                    .get(&expected.producer)
+                    .into_iter()
+                    .flatten()
+                    .any(|(_, provider)| symbol_name(&provider.token) == declaration.provider),
+            };
+            require(
+                serving_provider,
+                "declaration provider does not serve this representation",
+            )?;
             require(
                 representation.source == demand.source && representation.column == demand.column,
                 "changed source column",

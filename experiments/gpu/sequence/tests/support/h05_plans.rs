@@ -115,7 +115,8 @@ pub fn a() -> Program {
     program
         .structures
         .structures
-        .declare(&cq_gpu_sequence::providers::declarations());
+        .declare(&cq_gpu_sequence::providers::declarations())
+        .unwrap();
     program.sequence = syn::parse_quote! {
         sequence {
             R1 = store map r1 compact region_selected rows region_base;

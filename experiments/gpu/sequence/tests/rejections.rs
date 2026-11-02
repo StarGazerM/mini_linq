@@ -71,7 +71,8 @@ fn rust_below_host_requires_identity_representation() {
     program
         .structures
         .structures
-        .declare(&cq_gpu_sequence::providers::declarations());
+        .declare(&cq_gpu_sequence::providers::declarations())
+        .unwrap();
     let native = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
     assert!(native.representation.identity.contains("a"));
     assert!(!native.representation.encoded.contains("a"));

@@ -237,7 +237,7 @@ fn join_filter_requires_a_recorded_single_level_exact_layout() {
             .find(|entry| entry.name == "b" && matches!(entry.structure, Structure::Built { .. }))
             .unwrap();
         *slot = replacement;
-        changed.structures.declare(&[provider_alias()]);
+        changed.structures.declare(&[provider_alias()]).unwrap();
         assert!(ir::contract::check(&changed).is_err());
     }
 }

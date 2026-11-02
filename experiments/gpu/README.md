@@ -1450,11 +1450,15 @@ Domain and sentinel sizes are checked, and payload values remain signed.
 Canonical publication uses ordinary full-row/unit-item `RadixLayout` sets.
 The constrained `radix_set` token promises Distinct, unlike the generic
 occurrence-preserving family. Shared stable radix ordering compares every
-lane, including headings beyond 128 bits. `SetBuild` records declared scalar
-widths or explicitly runtime-sized FOR rows, whose resident codec domains
-determine the lane extent at setup. No schema narrowing, type-syntax
+lane, including headings beyond 128 bits. `SetBuild` records checked construction
+parameters, including block width; the consumed FOR codec's scalar or resident
+domains determine the lane extent at setup. No schema narrowing, type-syntax
 recognition, ID remapping or alternate query plan is substituted. Counts stay
 resident; sorted unique owned prefixes can be adopted without a sort/copy.
+Per-thread/pool sort, permutation, compaction and count scratch is reused on the
+pool stream; immutable publications own separate keys and metadata. Smaller
+calls sort only their live prefix. `QueryScope` releases cached scratch without
+a host wait; direct runtime callers can call `radix_run::release_set_scratch`.
 
 ## Historical device-store and i64 acceptance
 

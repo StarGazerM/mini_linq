@@ -139,7 +139,7 @@ fn grouped(global: bool) -> Program {
             result = store group totals canon input;
         }
     };
-    program.structures.structures.declare(&[]);
+    program.structures.structures.declare(&[]).unwrap();
     program
 }
 
@@ -1845,9 +1845,13 @@ fn expanding_provider_join_requires_exact_count_without_a_host_shortcut() {
         .structures
         .entries
         .push(syn::parse_quote!(l host result(joined) = @ordered as Ordered [a];));
-    merged.structures.structures.declare(&[syn::parse_quote!(
-        ordered = Ordered { reads [exact, range, membership, ordered], build inferred };
-    )]);
+    merged
+        .structures
+        .structures
+        .declare(&[syn::parse_quote!(
+            ordered = Ordered { reads [exact, range, membership, ordered], build inferred };
+        )])
+        .unwrap();
     for source in [source, mapped, merged] {
         let routed = key_partition(
             &source,
@@ -1915,9 +1919,13 @@ fn support_equal_duplicate_rows_never_supply_a_host_cardinality_bound() {
         .structures
         .entries
         .push(syn::parse_quote!(duplicates = @index as Index [a,b];));
-    source.structures.structures.declare(&[syn::parse_quote!(
-        rows = Rows { reads [], build inferred, accounting rows };
-    )]);
+    source
+        .structures
+        .structures
+        .declare(&[syn::parse_quote!(
+            rows = Rows { reads [], build inferred, accounting rows };
+        )])
+        .unwrap();
     source.sequence.definitions[0].term = syn::parse_quote!(store r);
     source
         .sequence

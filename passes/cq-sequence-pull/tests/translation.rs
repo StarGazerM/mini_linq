@@ -321,6 +321,52 @@ fn constructors_execute_and_choose_uses_the_else_arm() {
 }
 
 #[test]
+fn worker_choices_stream_flat_and_nested_alternatives() {
+    let mut checks = Vec::new();
+    for bound in [1usize, 2] {
+        for body in [
+            quote!(out = store canon choose [
+                workers < #bound => rows r, else => flatten tile 2 rows r
+            ];),
+            quote!(out = store canon flatten choose [
+                workers < #bound => tile 1 rows r, else => tile 2 rows r
+            ];),
+            quote!(out = store canon flatten flatten choose [
+                workers < #bound => tile 1 tile 2 rows r,
+                workers < 3 => tile 2 tile 1 rows r,
+                else => tile 3 tile 2 rows r
+            ];),
+        ] {
+            let program = simple(body);
+            let analysis = contract::check(&program).unwrap();
+            for pull in [true, false] {
+                assert!(analysis.task_execution.staging(pull).all(|(_, staging)| {
+                    matches!(
+                        staging,
+                        cq_lang_sequence::task_execution::Staging::TileInput
+                    )
+                }));
+            }
+            let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
+            let printed = output.to_token_stream().to_string();
+            assert!(
+                printed.contains("cq_storage :: sequence :: Choice :: Left"),
+                "{printed}"
+            );
+            assert!(
+                printed.contains("cq_storage :: sequence :: Choice :: Right"),
+                "{printed}"
+            );
+            checks.push(quote!({
+                let R = vec![(1i32,), (1,), (2,)];
+                assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&1i32,), (&2i32,)]);
+            }));
+        }
+    }
+    run(quote!(fn main() { #(#checks)* }));
+}
+
+#[test]
 fn translation_requires_host_grades_but_does_not_recheck_the_program() {
     let program = simple(quote!(out = store canon rows r;));
     let mut analysis = contract::check(&program).unwrap();
@@ -362,7 +408,8 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
         .structures
         .declare(&[cq_lang_structures::provider::base::declaration(
             "sorted_run",
-        )]);
+        )])
+        .unwrap();
     let program = Program {
         structures,
         sequence: syn::parse_quote!(sequence {

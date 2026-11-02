@@ -106,23 +106,14 @@ pub struct ArenaRows {
     pub columns: Vec<ArenaColumn>,
 }
 
-/// The source of a packed row's lane extent. Declared fields use their
-/// recorded scalar trait bounds; resident fields use publication-time domains.
-/// Neither case permits inspecting a Rust type spelling to choose a width.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PackedRowWidth {
-    DeclaredFields,
-    RuntimeSizedPackedRow,
-}
-
 /// Ordinary complete-key/unit-item set construction at a publication boundary.
 /// The FOR codec owns field order and widths; these facts own construction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetBuild {
-    pub width: PackedRowWidth,
     pub ratio: usize,
     pub radix_bits: u32,
     pub merge_tile_rows: u32,
+    pub block_threads: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -492,21 +483,10 @@ pub fn derive(
             })
             .transpose()?;
         let set_build = storage.canonical_provider().map(|_| SetBuild {
-            width: if storage.codec().is_some_and(|codec| {
-                codec.fields().iter().any(|field| {
-                    matches!(
-                        field.bounds,
-                        FieldBounds::Column(ColumnBounds::Resident { .. })
-                    )
-                })
-            }) {
-                PackedRowWidth::RuntimeSizedPackedRow
-            } else {
-                PackedRowWidth::DeclaredFields
-            },
             ratio: 4,
             radix_bits: 0,
             merge_tile_rows: 1024,
+            block_threads: 256,
         });
         records.insert(
             name.clone(),
@@ -647,27 +627,17 @@ pub fn check(
         if device && !grouped && local_canon && record.storage.canonical_provider().is_none() {
             return Err(error("publication drops its Canon boundary"));
         }
-        // Formal rule GPU-RadixSet: complete-key set construction is explicit,
-        // including whether the FOR width depends on resident data domains.
+        // Formal rule GPU-RadixSet: check the recorded construction contract.
+        // The consumed FOR codec, checked below, owns width provenance.
         match (&record.set_build, record.storage.canonical_provider()) {
             (None, None) => {}
             (Some(build), Some(_)) => {
-                let runtime = record.storage.codec().is_some_and(|codec| {
-                    codec.fields().iter().any(|field| {
-                        matches!(
-                            field.bounds,
-                            FieldBounds::Column(ColumnBounds::Resident { .. })
-                        )
-                    })
-                });
-                if (build.width == PackedRowWidth::RuntimeSizedPackedRow) != runtime
-                    || build.ratio < 2
+                if build.ratio < 2
                     || build.radix_bits != 0
                     || build.merge_tile_rows == 0
+                    || build.block_threads != 256
                 {
-                    return Err(error(
-                        "set construction contradicts its width or runtime contract",
-                    ));
+                    return Err(error("set construction contradicts its runtime contract"));
                 }
             }
             _ => {

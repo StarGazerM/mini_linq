@@ -14,7 +14,7 @@ pub struct TermId {
 pub enum Staging {
     /// A non-borrowable distributing driver's complete input is retained once.
     TileInput,
-    /// Only the selected arm is retained, recursively preserving its dimensions.
+    /// Only the selected arm runs, streamed through sum iterators at each dimension.
     Choice { pull_runtime: bool },
 }
 
@@ -208,20 +208,12 @@ impl Execution {
         out
     }
 
-    /// Conservative retained-row traffic: at most one complete driver input,
-    /// or exactly the selected arm's rows. Borrowed drivers incur zero traffic.
+    /// Conservative retained-row traffic for non-borrowed task drivers.
+    /// Choices stream their selected arm and incur no carrier copies.
     pub fn staging(&self, pull: bool) -> impl Iterator<Item = (&Node, &Staging)> {
         self.definitions.values().flatten().filter_map(move |node| {
             let staging = node.staging.as_ref()?;
-            if pull
-                && matches!(
-                    staging,
-                    Staging::TileInput
-                        | Staging::Choice {
-                            pull_runtime: false
-                        }
-                )
-            {
+            if pull || matches!(staging, Staging::Choice { .. }) {
                 None
             } else {
                 Some((node, staging))

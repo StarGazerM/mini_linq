@@ -382,16 +382,21 @@ Provider choices are recorded upstream, never by type name.
   live count. It shares stable row ordering with the occurrence engine;
   equality compares every lane, including middle/high lanes beyond 128 bits.
   The generic occurrence family does not claim Distinct. `SetBuild` owns
-  ratio, directory resolution and merge tile; the existing auxiliary launch
-  record owns the block width. A checked `DeclaredFields` width uses scalar
-  trait domains. `RuntimeSizedPackedRow` explicitly means the immutable
-  resident FOR domains determine the exact lane count at setup, not a hidden
-  runtime provider choice. Fields and lanes retain CQ's low-first equality
+  ratio, directory resolution, merge tile and compiled block width; the
+  checker validates those obligations without replaying selection defaults.
+  The consumed FOR codec directly records scalar trait or immutable resident
+  domains, which determine the exact lane count at setup without a redundant
+  width classification or hidden provider choice. Fields and lanes retain CQ's low-first equality
   encoding; it is not the typed layout's lexicographic encoding. Count-gated
   consumers do not download a host count to construct the publication.
   Certified sorted unique owned prefixes are adopted without a sort/copy;
   owners survive later publication and query-cache release. An empty heading
   stores one zero lane and yields zero or one distinct key.
+  Sorting, permutation, compaction and count scratch grows per thread/pool
+  and is reused on that pool's stream; smaller calls sort only their live
+  prefix. Publications own separate keys and metadata. Query-scope teardown
+  releases scratch with stream-ordered frees, without downloading a count or
+  waiting on the host; direct runtime callers can use `release_set_scratch`.
 
 - **Key law.** `W: Word` (`u64`, `u128`, `[u64; L]`) is the DL-DevicePacking
   word: most-significant-first lanes are the one `OrderKey` embedding. Keys are
@@ -451,7 +456,8 @@ Provider choices are recorded upstream, never by type name.
   the resident count pointer) and carries no item pointers;
   `item_column::<T>(i)` is narrow access to one value field whose lane must be
   `T`. `count_ptr()` gives count-gated consumers the resident count without a
-  host download (CanonicalKeys parity); `logical_count()` is an explicit
+  host download, including full-row `radix_set` publications (GPU-RadixSet);
+  `logical_count()` is an explicit
   synchronizing diagnostic. `owner()` retains runs, descriptors and fields
   for every stream user; `prefix_interval` gives the packed inclusive interval
   of a key prefix.
@@ -858,10 +864,14 @@ Decimal and StringCode in cq-load; dictionaries retain their domain law.
 Encoding collects ordinals and extrema together in one input pass per block,
 then emits the chosen width from reusable block scratch: summaries never scan
 a decoded copy. Vector decode writes into caller-owned storage. Point,
-open/closed window and membership filtering compares residuals after host
+open/closed window and membership filtering compares ordinal codes after host
 constant translation, prunes only when summaries were requested, and emits
-ascending occurrence positions or caller-owned selection bytes. Width and
-predicate variant dispatch are outside the row loop; byte/word range masks use
+ascending occurrence positions or caller-owned selection bytes. Membership
+translation borrows the original ordinal keys plus the block frame: readers
+test `base + residual` without allocating or copying keys per block. The checked
+reader returns immediately for an empty live prefix after validating the domain
+and output length. Width and predicate variant dispatch are outside the row
+loop; byte/word range masks use
 branch-free native-width comparisons (release x86-64 assembly contains packed
 byte min/max and packed word comparison/pack loops). RT-ScanCodec,
 RT-ScanSummary and RT-Translate also check masks against decoded oracles.
@@ -882,9 +892,22 @@ column afterward. Metadata validation checks the recorded descriptor and
 extents independently of the encoder; metadata validity is not a proof of
 arbitrary imported payload integrity.
 
-The device path uploads initialized bytes and needed metadata, retaining
-owners and readiness ordering for safe snapshot-bound views. Runtime facts
-do not grant permission to reconstruct authored Rust values: Structures read
+The device path enqueues initialized bytes and needed metadata through
+pool-owned pinned staging (`from_host_async`), retains owners, and records
+readiness after the last upload. A cross-lane view waits on that event;
+membership-key uploads and the consuming mask kernel are ordered on its
+execution lane. Neither upload nor filtering synchronizes the host, and
+short-lived predicate keys may be changed or dropped after submission.
+
+The shared mask kernel has a fixed, declared launch contract: 256 threads,
+1024-row S1 vector tiles, no dynamic shared memory, and
+`min(ceil(live_count / 1024), 568)` grid blocks. Zero live rows launch nothing.
+Capped grids cover subsequent vectors by grid stride, including a partial
+last vector. The 568-block cap is a kernel constant, not an occupancy query
+or an unrecorded runtime selector; this contract does not add compiler scan
+selection or a general tile scheduler.
+
+Runtime facts do not grant permission to reconstruct authored Rust values: Structures read
 records own consumer, lineage and purpose. `contract::check` always checks
 the encoded envelope when present; no pipeline carries unchecked packets.
 Preserving a carrier, an opaque Rust read and a final host answer are distinct

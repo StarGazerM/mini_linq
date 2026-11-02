@@ -819,6 +819,52 @@ fn packed_row_sets_deduplicate_complete_runtime_sized_keys() -> Result {
 }
 
 #[test]
+fn packed_row_scratch_reuse_keeps_live_prefixes_and_result_owners_separate() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let lane = pool.lane()?;
+    let mut retained = Vec::new();
+    // Reuse both sort families, shrink their live prefixes, grow them, and
+    // switch streams without dropping any previous result owner.
+    for (index, rows) in [4097, 17, 4097, 8193, 1, 2049].into_iter().enumerate() {
+        for bits in [64, 129, 257] {
+            let lanes = PackedSet::key_lanes(bits)?;
+            let execution = if index % 2 == 0 { &pool } else { &lane };
+            let mut expected: Vec<Vec<u64>> = (0..rows)
+                .map(|row| {
+                    let mut key = vec![0; lanes];
+                    key[(row / 5) % lanes] = (row % 23) as u64;
+                    if bits % 64 != 0 {
+                        key[lanes - 1] &= (1 << (bits % 64)) - 1;
+                    }
+                    key
+                })
+                .collect();
+            let input = Buffer::from_host_async(
+                execution.clone(),
+                &expected.iter().flatten().copied().collect::<Vec<_>>(),
+            )?;
+            let before = readback_count();
+            let set = unsafe { PackedSet::build_set(execution, &input, rows, bits, set_params())? };
+            assert_eq!(readback_count(), before);
+            expected.sort_by(|a, b| a.iter().rev().cmp(b.iter().rev()));
+            expected.dedup();
+            retained.push((set, expected));
+        }
+    }
+    // Teardown frees scratch only, while all immutable outputs remain readable.
+    gpu_datalog_runtime::radix_run::release_set_scratch();
+    for (set, expected) in retained {
+        let count = set.logical_count()?;
+        assert_eq!(count, expected.len());
+        assert_eq!(
+            set.keys().to_host_prefix(count * set.lanes())?,
+            expected.into_iter().flatten().collect::<Vec<_>>(),
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn packed_row_empty_heading_and_empty_input_are_sets() -> Result {
     let pool = Pool::new(0, 0, 0)?;
     for bits in [0, 64, 257] {

@@ -12,7 +12,7 @@ fn declared(program: &structures::Program) -> structures::Program {
         custom = Custom { reads [exact, range, membership], build inferred };
     ));
     let mut program = program.clone();
-    program.structures.declare(&declarations);
+    program.structures.declare(&declarations).unwrap();
     program
 }
 
@@ -236,7 +236,8 @@ fn global_group_is_unique_by_the_empty_key() {
         .push(syn::parse_quote!(grouped group = @group_map as SomeMap<_,_>;));
     extra
         .structures
-        .declare(&[cq_lang_structures::provider::base::declaration("group_map")]);
+        .declare(&[cq_lang_structures::provider::base::declaration("group_map")])
+        .unwrap();
     assert!(
         contract(&extra)
             .unwrap_err()
@@ -369,7 +370,8 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
     );
     alternate_provider
         .structures
-        .declare(&[cq_lang_structures::provider::base::declaration("selection")]);
+        .declare(&[cq_lang_structures::provider::base::declaration("selection")])
+        .unwrap();
     // Provider capabilities are Rust obligations, not inferred from its name.
     check(&source, &alternate_provider).unwrap();
     let mut changed = target;
@@ -880,7 +882,8 @@ fn smallest_candidate_let_levels_keep_independent_mutation_checks() {
         .structures
         .declare(&[cq_lang_structures::provider::base::declaration(
             "std_hash_set",
-        )]);
+        )])
+        .unwrap();
     // The two recorded levels are authoritative; Rust checks the provider's
     // implementation of the required candidate access.
     check(&source, &changed).unwrap();
@@ -1062,7 +1065,7 @@ fn built_entries(target: &structures::Program) -> structures::Structures {
     entries
         .entries
         .retain(|e| matches!(e.structure, structures::Structure::Built { .. }));
-    entries.declare(&[]);
+    entries.declare(&[]).unwrap();
     entries
 }
 

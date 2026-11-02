@@ -664,9 +664,11 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   full-row/unit-item `radix_set` token and ordinary resident `RadixLayout`.
   Complete-key uniqueness shares stable ordering with occurrence builds;
   resident count and sorted-prefix adoption avoid a synchronizing snapshot.
-  `SetBuild` records declared-field versus runtime-sized FOR width provenance
-  and construction parameters (GPU-RadixSet); the old packed/wide canonical
-  implementations are removed. The h06 keyless fold is unchanged.
+  `SetBuild` records checked construction parameters including block width;
+  the consumed FOR codec owns domain/width provenance (GPU-RadixSet).
+  Per-thread/pool scratch grows and is reused separately from result owners.
+  The old packed/wide canonical implementations are removed. The h06 keyless
+  fold is unchanged.
 - **P5 Scan columns (CPU).** Measured rules only (§12.4): plain default;
   byte truncation for scans; bit-packing only for bandwidth-bound parallel
   scans; encoded execution on dictionary codes first. Block format, codec trait, summaries built with

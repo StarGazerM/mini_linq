@@ -344,7 +344,8 @@ fn run_binding_rejects_nonleading_lookup_key() {
         syn::parse_quote!(e = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [z][y];);
     source
         .structures
-        .declare(&cq_gpu_sequence::providers::declarations());
+        .declare(&cq_gpu_sequence::providers::declarations())
+        .unwrap();
     assert!(cq_gpu_sequence_core::runs::bind(&source).is_err());
 }
 
@@ -354,7 +355,8 @@ fn run_binding_rejects_lookup_key_outside_recorded_layout() {
     source.structures.entries[2] = syn::parse_quote!(e = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [missing][z];);
     source
         .structures
-        .declare(&cq_gpu_sequence::providers::declarations());
+        .declare(&cq_gpu_sequence::providers::declarations())
+        .unwrap();
     assert!(cq_gpu_sequence_core::runs::bind(&source).is_err());
 }
 
@@ -391,7 +393,8 @@ fn native_host_lookup_accepts_a_leading_value_column() {
     source.structures.entries[2] = syn::parse_quote!(e host result(joined) = @device_layout input { keys 0; columns [i32 => i32, u32 => u32] } as ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [y];);
     source
         .structures
-        .declare(&cq_gpu_sequence::providers::declarations());
+        .declare(&cq_gpu_sequence::providers::declarations())
+        .unwrap();
     let bound = cq_gpu_sequence_core::runs::bind(&source).unwrap();
     let sequence = cq_sequence_lowering::compile(&bound).unwrap();
     let machine = cq_gpu_sequence::machine();

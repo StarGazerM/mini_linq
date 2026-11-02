@@ -124,6 +124,26 @@ fn statistic_read_requires_prior_flat_publication_and_explicit_fallback() {
 }
 
 #[test]
+fn statistic_missing_value_cannot_fall_through_to_another_guard() {
+    for intervening in [Guard::WorkersLt(2), Guard::Ge(sequence::Len::Lit(0), 0)] {
+        let mut changed = program();
+        let Term::Choose(arms) = &mut changed.sequence.definitions[1].term else {
+            panic!()
+        };
+        arms.insert(1, (intervening, arms[0].1.clone()));
+        let error = sequence::contract::check(&changed).unwrap_err().to_string();
+        assert!(error.contains("BE-StatsRead"), "{error}");
+        assert!(error.contains("immediately followed by else"), "{error}");
+    }
+    let mut changed = program();
+    let Term::Choose(arms) = &mut changed.sequence.definitions[1].term else {
+        panic!()
+    };
+    arms.insert(1, arms[0].clone());
+    reject(&changed);
+}
+
+#[test]
 fn estimates_select_checked_shapes_but_are_not_length_or_capacity_operands() {
     let mut program = program();
     program.structures.structures.providers.declarations[1]

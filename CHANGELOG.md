@@ -122,10 +122,13 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   full-row/unit-item `RadixLayout` construction and the constrained `radix_set`
   Distinct token. Complete-key uniqueness shares stable ordering with the
   occurrence engine; device count publication and sorted owned-prefix
-  adoption avoid a synchronizing snapshot. Checked `SetBuild` records
-  declared-field versus runtime-sized FOR width provenance and explicit
-  parameters. Canonical grouping, union and chained callers use this one
-  protocol; h06's keyless fold and CPU provider selection are unchanged.
+  adoption avoid a synchronizing snapshot. Checked `SetBuild` records explicit
+  construction parameters including block width; the consumed FOR codec owns
+  domain/width provenance, without a redundant classification. Set construction
+  reuses growing per-thread/pool sort, permutation, compaction and count scratch,
+  separate from immutable result owners; query teardown releases it in stream
+  order. Canonical grouping, union and chained callers use this one protocol;
+  h06's keyless fold and CPU provider selection are unchanged.
 
 - P6 slice A adds an opt-in shared S1 Plain/Bytes format/runtime boundary
   and checked per-consumer carrier-read facts. Explicit domain/layout/family/

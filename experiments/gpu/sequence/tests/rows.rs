@@ -59,9 +59,13 @@ fn primitive_host_provider_uploads_columns_without_tuple_reencoding() {
     let mut program = filtered_probe(quote!(value > 0));
     program.structures.structures.entries[1] =
         syn::parse_quote!(provider host scan = @host_scan as ::core::iter::Map<_, _> [];);
-    program.structures.structures.declare(&[syn::parse_quote!(
-        host_scan = ::core::iter::Map<_, _> { reads [], build typed };
-    )]);
+    program
+        .structures
+        .structures
+        .declare(&[syn::parse_quote!(
+            host_scan = ::core::iter::Map<_, _> { reads [], build typed };
+        )])
+        .unwrap();
     let generated = translate(&program);
     assert!(generated.contains("upload_numeric_columns"));
     assert!(generated.contains("__cq_host_column_0"));

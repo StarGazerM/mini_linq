@@ -490,7 +490,7 @@ fn segment_program() -> Program {
     }
     structures
         .structures
-        .declare(&provider.structures.structures.providers.declarations);
+        .declare(&provider.structures.structures.providers.declarations).unwrap();
     syn::parse_quote! {
         #structures
         sequence {
@@ -934,7 +934,7 @@ fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Pr
     }
     structures
         .structures
-        .declare(&authored.structures.structures.providers.declarations);
+        .declare(&authored.structures.structures.providers.declarations).unwrap();
     let (provider, grade) = if named {
         (
             quote::quote! {
@@ -1583,7 +1583,7 @@ fn deferred_provider_program(tiled: bool, host_bound: bool) -> Program {
     }
     structures
         .structures
-        .declare(&authored.structures.structures.providers.declarations);
+        .declare(&authored.structures.structures.providers.declarations).unwrap();
     let (source, source_grade) = if tiled {
         (
             quote::quote! {
@@ -2122,7 +2122,7 @@ fn covering_filters_leave_provider_capabilities_to_the_rust_boundary() {
             }
             let mut declared = vec![opaque.clone()];
             declared.extend(declarations());
-            candidate.structures.structures.declare(&declared);
+            candidate.structures.structures.declare(&declared).unwrap();
             // Structure checks validate the covering relation, key and declared
             // support, not the opaque provider spelling. Emitted Keys/lookup
             // obligations are Rust's.
@@ -2235,7 +2235,7 @@ fn routed_provider_projects_the_stored_key_after_constant_elision() {
     program
         .structures
         .structures
-        .declare(&cq_lang_sequence::structures::provider::base::declarations());
+        .declare(&cq_lang_sequence::structures::provider::base::declarations()).unwrap();
     program.sequence = syn::parse_quote! {
         sequence {
             provider_input = store map r rows raw;
@@ -2578,7 +2578,7 @@ fn expansion_counters_preserve_profile_handles_in_nested_tasks() {
     }
     structures
         .structures
-        .declare(&cq_lang_sequence::structures::provider::base::declarations());
+        .declare(&cq_lang_sequence::structures::provider::base::declarations()).unwrap();
     let program: Program = syn::parse_quote! {
         #structures
         sequence {
