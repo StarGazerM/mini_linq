@@ -31,7 +31,7 @@ fn selection_records_consumer_and_discharged_host_facts() {
         physical {
             relation rows(x:i32);
             r = pipe rename rows@0 {x -> x};
-            return r as answer(*x % 2);
+            return dedup r as answer(*x % 2);
         }
     }
     .inspect(|_| visits.set(visits.get() + 1))
