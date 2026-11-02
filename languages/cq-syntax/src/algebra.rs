@@ -784,31 +784,31 @@ pub fn disjoint_unions<'a>(
 #[derive(Default)]
 pub struct UnionSchema {
     heading: Option<std::collections::BTreeSet<String>>,
-    types: std::collections::BTreeMap<String, syn::Type>,
+    logical_type_ids: std::collections::BTreeMap<String, crate::LogicalTypeId>,
 }
 impl UnionSchema {
     pub fn include<'a>(
         &mut self,
         heading: impl IntoIterator<Item = &'a String>,
-        types: &std::collections::BTreeMap<String, syn::Type>,
+        logical_type_ids: &std::collections::BTreeMap<String, crate::LogicalTypeId>,
         computed: &std::collections::BTreeSet<String>,
     ) -> Result<(), String> {
         let heading = heading.into_iter().cloned().collect();
         if self.heading.as_ref().is_some_and(|h| h != &heading) {
             return Err("union operand headings must be identical".into());
         }
-        for (column, ty) in types {
+        for (column, id) in logical_type_ids {
             if !computed.contains(column) {
                 if self
-                    .types
+                    .logical_type_ids
                     .get(column)
-                    .is_some_and(|previous| previous != ty)
+                    .is_some_and(|previous| previous != id)
                 {
                     return Err(format!(
                         "union interface `{column}` has different declared types"
                     ));
                 }
-                self.types.insert(column.clone(), ty.clone());
+                self.logical_type_ids.insert(column.clone(), *id);
             }
         }
         self.heading = Some(heading);

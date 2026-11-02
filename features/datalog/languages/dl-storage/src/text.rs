@@ -115,6 +115,7 @@ syntax_text!(
     cq_lang_cq::Program,
     cq_lang_structures::Declaration,
     cq_lang_structures::CodecId,
+    cq_syntax::LogicalTypeId,
     cq_lang_structures::provider::InputSchema,
     cq_stage::Pipeline,
     cq_stage::Context,

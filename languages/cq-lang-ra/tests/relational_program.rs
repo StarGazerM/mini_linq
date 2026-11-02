@@ -127,6 +127,28 @@ fn natural_join_infers_union_heading_without_resolving_rust_types() {
 }
 
 #[test]
+fn cross_type_join_drops_ambiguous_codec_identity() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a: HostType [7], b: HostType [8]);
+        relation S(a: OtherType [9], c: OtherType [10]);
+        r = rename R@0 {a -> x, b -> y};
+        s = rename S@1 {a -> x, c -> z};
+        joined = natural_join r with s;
+        output joined as answer(x, y, z);
+    }};
+    let facts = ra::contract::check(&source).unwrap();
+    assert!(!facts["joined"].logical_type_ids.contains_key("x"));
+    assert_eq!(
+        facts["joined"].logical_type_ids["y"],
+        ra::syntax::LogicalTypeId(8)
+    );
+    assert_eq!(
+        facts["joined"].logical_type_ids["z"],
+        ra::syntax::LogicalTypeId(10)
+    );
+}
+
+#[test]
 fn natural_join_with_disjoint_headings_is_a_cartesian_product() {
     check(quote! {
             relational {
@@ -1038,6 +1060,48 @@ fn occurrence_constants_roundtrip_drop_columns_and_preserve_source_types() {
         output r as answer();
     }};
     assert!(ra::contract::check(&all).unwrap()["r"].heading.is_empty());
+}
+
+#[test]
+fn logical_identity_survives_rename_projection_and_payload_mutation() {
+    let mut source: ra::Program = syn::parse_quote! { relational {
+        relation R(a: HostType [7], b: HostType [9]);
+        r = rename R@0 {a -> x, b -> y};
+        p = project r keep {x};
+        output p as answer(x);
+    }};
+    source.plan.declarations[0].columns[0].ty = syn::parse_quote!(ChangedPayload);
+    let facts = ra::contract::check(&source).unwrap();
+    assert_eq!(
+        facts["r"].logical_type_ids["x"],
+        ra::syntax::LogicalTypeId(7)
+    );
+    assert_eq!(
+        facts["r"].logical_type_ids["y"],
+        ra::syntax::LogicalTypeId(9)
+    );
+    assert_eq!(facts["p"].logical_type_ids.len(), 1);
+    assert_eq!(
+        facts["p"].logical_type_ids["x"],
+        ra::syntax::LogicalTypeId(7)
+    );
+}
+
+#[test]
+fn union_compares_declared_identities_not_rust_type_payloads() {
+    let mut source: ra::Program = syn::parse_quote! { relational {
+        relation R(a: HostType [7], b: HostType [9]);
+        r = rename R@0 {a -> x, b -> unused_r};
+        rp = project r keep {x};
+        s = rename R@1 {a -> unused_s, b -> x};
+        sp = project s keep {x};
+        u = union rp, sp;
+        output u as answer(x);
+    }};
+    assert!(ra::contract::check(&source).is_err());
+    source.plan.declarations[0].columns[1].logical_type_id = Some(ra::syntax::LogicalTypeId(7));
+    source.plan.declarations[0].columns[1].ty = syn::parse_quote!(DifferentPayload);
+    ra::contract::check(&source).unwrap();
 }
 
 #[test]

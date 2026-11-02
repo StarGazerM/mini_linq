@@ -18,7 +18,7 @@ pub struct Relation {
 }
 
 pub fn declarations(inputs: &[Relation]) -> Vec<cq_syntax::RelationDecl> {
-    inputs
+    let mut declarations: Vec<_> = inputs
         .iter()
         .map(|input| cq_syntax::RelationDecl {
             relation_token: Default::default(),
@@ -57,6 +57,7 @@ pub fn declarations(inputs: &[Relation]) -> Vec<cq_syntax::RelationDecl> {
                             }
                         },
                     }),
+                    logical_type_id: None,
                     domain: None,
                 })
                 .collect(),
@@ -64,7 +65,10 @@ pub fn declarations(inputs: &[Relation]) -> Vec<cq_syntax::RelationDecl> {
             hosts: Vec::new(),
             semi_token: Default::default(),
         })
-        .collect()
+        .collect();
+    cq_syntax::intern_logical_types(&mut declarations)
+        .expect("the workload schema has only five logical types");
+    declarations
 }
 
 /// Construct only after schema, manifest and provenance validation have passed.

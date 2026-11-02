@@ -560,6 +560,7 @@ pub struct Row {
     pub bindings: BTreeMap<String, Ident>,
     pub computed: BTreeSet<String>,
     pub types: BTreeMap<String, syn::Type>,
+    pub logical_type_ids: BTreeMap<String, cq_syntax::LogicalTypeId>,
 }
 
 impl Program {
@@ -608,8 +609,25 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
     if program.consumer_canonical.is_some() && program.return_canon.is_some() {
         return error(&program.returned, "consumer canonical forbids return canon");
     }
+    let mut output_logical_type_ids = BTreeMap::new();
     if let Some(output) = declarations.get(&symbol_name(&program.head.relation)) {
         output.check_result()?;
+        for (argument, column) in program.head.args.iter().zip(&output.columns) {
+            if let (Some(variable), Some(id)) =
+                (cq_syntax::rust::variable(argument), column.logical_type_id)
+            {
+                let name = symbol_name(&variable);
+                if output_logical_type_ids
+                    .insert(name, id)
+                    .is_some_and(|previous| previous != id)
+                {
+                    return error(
+                        argument,
+                        "one output column has conflicting logical type identities",
+                    );
+                }
+            }
+        }
     }
     let logical: BTreeSet<String> = program
         .definitions
@@ -683,11 +701,15 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 let mut schema = cq_syntax::algebra::UnionSchema::default();
                 for operand in &union.operands {
                     let other = of(operand)?;
-                    if let Err(message) =
-                        schema.include(other.bindings.keys(), &other.types, &other.computed)
-                    {
+                    if let Err(message) = schema.include(
+                        other.bindings.keys(),
+                        &other.logical_type_ids,
+                        &other.computed,
+                    ) {
                         return error(operand, message);
                     }
+                    row.logical_type_ids
+                        .retain(|column, _| other.logical_type_ids.contains_key(column));
                     row.computed.extend(other.computed);
                     deps.push(symbol_name(operand));
                     analysis.scanned.insert(symbol_name(operand));
@@ -765,6 +787,9 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         return error(m, format!("rename `{name}` must be one-to-one"));
                     }
                     row.types.insert(target.clone(), column.ty.clone());
+                    if let Some(id) = column.logical_type_id {
+                        row.logical_type_ids.insert(target.clone(), id);
+                    }
                     mapping.insert(target, source);
                 }
                 if let Some(constants) = &r.constants {
@@ -819,8 +844,16 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         "probe requires first/smallest; semi requires eager/lazy; merge requires a nonempty ordered key",
                     );
                 }
-                let left = of(&k.left)?;
-                let right = of(&k.right)?;
+                let mut left = of(&k.left)?;
+                let mut right = of(&k.right)?;
+                left.logical_type_ids.retain(|column, id| {
+                    !right.bindings.contains_key(column)
+                        || right.logical_type_ids.get(column) == Some(id)
+                });
+                right.logical_type_ids.retain(|column, id| {
+                    !left.bindings.contains_key(column)
+                        || left.logical_type_ids.get(column) == Some(id)
+                });
                 let lh = left.bindings.keys().cloned().collect::<Vec<_>>();
                 let rh = right.bindings.keys().cloned().collect::<Vec<_>>();
                 let columns = if matches!(definition.operator, Operator::Anti(..)) {
@@ -869,6 +902,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     row.bindings.extend(left.bindings);
                     row.computed.extend(left.computed);
                     row.types.extend(left.types);
+                    row.logical_type_ids.extend(left.logical_type_ids);
                     row
                 }
             }
@@ -954,6 +988,9 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         return error(b, format!("bind `{name}` repeats attribute `{c}`"));
                     }
                     row.computed.insert(c.clone());
+                    if let Some(id) = output_logical_type_ids.get(&c) {
+                        row.logical_type_ids.insert(c.clone(), *id);
+                    }
                     row.types.insert(c, ty);
                 }
                 deps.push(symbol_name(&b.input));
@@ -977,6 +1014,9 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         .insert(column.clone(), input.bindings[&column].clone());
                     row.types
                         .insert(column.clone(), input.types[&column].clone());
+                    if let Some(id) = input.logical_type_ids.get(&column) {
+                        row.logical_type_ids.insert(column.clone(), *id);
+                    }
                     if input.computed.contains(&column) {
                         row.computed.insert(column);
                     }
@@ -985,6 +1025,9 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     let column = symbol_name(&aggregate.name);
                     row.bindings.insert(column.clone(), aggregate.name.clone());
                     row.types.insert(column.clone(), aggregate.ty.clone());
+                    if let Some(id) = output_logical_type_ids.get(&column) {
+                        row.logical_type_ids.insert(column.clone(), *id);
+                    }
                     row.computed.insert(column);
                 }
                 deps.push(symbol_name(&group.input));
@@ -1004,6 +1047,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 }
                 row.bindings.retain(|c, _| kept.contains(c));
                 row.types.retain(|c, _| kept.contains(c));
+                row.logical_type_ids.retain(|c, _| kept.contains(c));
                 row.computed.retain(|c| kept.contains(c));
                 deps.push(symbol_name(&p.input));
                 row

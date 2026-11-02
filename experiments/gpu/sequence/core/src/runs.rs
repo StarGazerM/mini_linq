@@ -5,26 +5,41 @@ use quote::quote;
 use std::collections::BTreeMap;
 use syn::Type;
 
-/// Compared columns share one checked encoding for each logical Rust type.
+/// Compared columns share one checked encoding for each declared logical identity.
 #[derive(Default)]
-pub(crate) struct Codecs(Vec<(Type, Option<CodecId>, Option<Type>)>);
+pub(crate) struct Codecs {
+    declarations: BTreeMap<cq_syntax::LogicalTypeId, (Option<CodecId>, Option<Type>)>,
+    columns: BTreeMap<String, cq_syntax::LogicalTypeId>,
+}
 
 impl Codecs {
-    pub fn get(&self, logical: &Type) -> Option<&Type> {
-        self.0
-            .iter()
-            .find(|(ty, _, _)| ty == logical)
-            .and_then(|(_, _, codec)| codec.as_ref())
+    pub fn get(&self, logical: Option<cq_syntax::LogicalTypeId>) -> Option<&Type> {
+        self.declarations
+            .get(&logical?)
+            .and_then(|(_, codec)| codec.as_ref())
+    }
+
+    pub fn codec_id(&self, logical: Option<cq_syntax::LogicalTypeId>) -> Option<CodecId> {
+        self.declarations.get(&logical?).and_then(|(id, _)| *id)
+    }
+
+    pub fn logical_type_id(&self, column: &str) -> Option<cq_syntax::LogicalTypeId> {
+        self.columns.get(column).copied()
+    }
+
+    pub fn column(&self, column: &str) -> Option<&Type> {
+        self.get(self.logical_type_id(column))
     }
 
     /// Formal rule GPU-CodecIdentity: conflicting encodings of a logical symbol type are rejected before capture lowering.
     pub fn record(
         &mut self,
         logical: &Type,
+        logical_type_id: cq_syntax::LogicalTypeId,
         codec_id: Option<CodecId>,
         codec: Option<&Type>,
     ) -> syn::Result<()> {
-        if let Some((_, previous, _)) = self.0.iter().find(|(ty, _, _)| ty == logical) {
+        if let Some((previous, _)) = self.declarations.get(&logical_type_id) {
             if *previous != codec_id {
                 return Err(syn::Error::new_spanned(
                     logical,
@@ -32,13 +47,24 @@ impl Codecs {
                 ));
             }
         } else {
-            self.0.push((logical.clone(), codec_id, codec.cloned()));
+            self.declarations
+                .insert(logical_type_id, (codec_id, codec.cloned()));
         }
         Ok(())
     }
 
-    pub fn check(program: &Program) -> syn::Result<Self> {
+    pub fn check(
+        program: &Program,
+        rows: &BTreeMap<String, cq_lang_structures::physical::Row>,
+    ) -> syn::Result<Self> {
         let mut codecs = Self::default();
+        for row in rows.values() {
+            codecs.columns.extend(
+                row.logical_type_ids
+                    .iter()
+                    .map(|(column, id)| (column.clone(), *id)),
+            );
+        }
         for entry in &program.structures.entries {
             let keyed = match &entry.structure {
                 Structure::Host { keyed, .. } | Structure::Built { keyed, .. } => keyed,
@@ -46,7 +72,13 @@ impl Codecs {
             };
             if let Some(input) = &keyed.provider.input {
                 for column in &input.columns {
-                    codecs.record(&column.logical, column.codec_id, column.codec.as_ref())?;
+                    let id = column.logical_type_id.ok_or_else(|| {
+                        syn::Error::new_spanned(
+                            &column.logical,
+                            "GPU-CodecIdentity: missing logical type identity",
+                        )
+                    })?;
+                    codecs.record(&column.logical, id, column.codec_id, column.codec.as_ref())?;
                 }
             }
         }
@@ -98,14 +130,14 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
                 "GPU-Runs: declared packed arity differs from input",
             ));
         }
-        for (column, ty) in &row.types {
+        for column in row.types.keys() {
             if let Some(source) = origin.columns.get(column) {
                 let position = layout.iter().position(|name| name == source).unwrap();
-                let logical = &types[position].logical;
-                if ty != logical {
+                let logical = types[position].logical_type_id;
+                if logical.is_none() || row.logical_type_ids.get(column).copied() != logical {
                     return Err(syn::Error::new_spanned(
                         entry,
-                        "GPU-Runs: declared packed column type differs from input",
+                        "GPU-Runs: declared packed logical type id differs from input",
                     ));
                 }
             }
@@ -243,10 +275,13 @@ pub fn record_representation(
             }
         }
     }
-    let codecs = Codecs::check(&source.structures)?;
+    let codecs = Codecs::check(&source.structures, &analysis.physical.rows)?;
     for row in analysis.physical.rows.values() {
-        for (column, logical) in &row.types {
-            if codecs.get(logical).is_some() {
+        for column in row.types.keys() {
+            if codecs
+                .get(row.logical_type_ids.get(column).copied())
+                .is_some()
+            {
                 target.representation.identity.remove(column);
                 target.representation.encoded.insert(column.clone());
             }
@@ -299,30 +334,86 @@ mod tests {
         let logical = syn::parse_quote!(Logical);
         let codec = syn::parse_quote!(Codec);
         let alias = syn::parse_quote!(AnotherSpelling);
+        let id = cq_syntax::LogicalTypeId(3);
         let mut codecs = Codecs::default();
         codecs
-            .record(&logical, Some(CodecId(7)), Some(&codec))
+            .record(&logical, id, Some(CodecId(7)), Some(&codec))
             .unwrap();
         codecs
-            .record(&logical, Some(CodecId(7)), Some(&alias))
+            .record(
+                &syn::parse_quote!(RenamedLogical),
+                id,
+                Some(CodecId(7)),
+                Some(&alias),
+            )
             .unwrap();
-        assert_eq!(codecs.get(&logical), Some(&codec));
+        assert_eq!(codecs.get(Some(id)), Some(&codec));
         assert!(
             codecs
-                .record(&logical, Some(CodecId(8)), Some(&codec))
+                .record(&logical, id, Some(CodecId(8)), Some(&codec))
                 .is_err()
         );
-        assert!(codecs.record(&logical, None, None).is_err());
+        assert!(codecs.record(&logical, id, None, None).is_err());
+        let distinct = cq_syntax::LogicalTypeId(4);
+        codecs
+            .record(&logical, distinct, Some(CodecId(8)), Some(&alias))
+            .unwrap();
+        assert_eq!(codecs.get(Some(distinct)), Some(&alias));
+        assert_eq!(codecs.get(Some(id)), Some(&codec));
 
         let mut identity = Codecs::default();
-        identity.record(&logical, None, None).unwrap();
-        identity.record(&logical, None, None).unwrap();
-        assert_eq!(identity.get(&logical), None);
+        identity.record(&logical, id, None, None).unwrap();
+        identity.record(&logical, id, None, None).unwrap();
+        assert_eq!(identity.get(Some(id)), None);
         assert!(
             identity
-                .record(&logical, Some(CodecId(7)), Some(&codec))
+                .record(&logical, id, Some(CodecId(7)), Some(&codec))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn declared_logical_ids_drive_representation_and_reject_mismatches() {
+        let program: cq_lang_sequence::Program = syn::parse_quote! {
+            physical {
+                relation R(a: Logical [5], b: Logical [6]) = (&data.r);
+                r = pipe rename R@0 {a -> x, b -> y};
+                result = let canon project r keep {x,y};
+                return result as answer(x,y);
+            }
+            structures {
+                providers {
+                    device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns };
+                    packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 };
+                }
+                r host scan = @device_columns input { keys 0; columns [
+                    [5] Logical => u32 codec [1] First,
+                    [6] Logical => u32 codec [2] Second
+                ] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result canon = rows;
+            }
+            sequence {
+                input = store rows r;
+                result_rows = store canon map result flatten tile 256 input;
+                output count;
+            }
+        };
+        let recorded = record_representation(&program).unwrap();
+        assert!(recorded.representation.encoded.contains("x"));
+        assert!(recorded.representation.encoded.contains("y"));
+        let analysis = cq_lang_structures::contract::check(&program.structures).unwrap();
+        let codecs = Codecs::check(&program.structures, &analysis.physical.rows).unwrap();
+        assert_eq!(codecs.column("x"), Some(&syn::parse_quote!(First)));
+        assert_eq!(codecs.column("y"), Some(&syn::parse_quote!(Second)));
+        let mut changed = program.clone();
+        let Structure::Host { keyed, .. } = &mut changed.structures.structures.entries[0].structure
+        else {
+            unreachable!()
+        };
+        keyed.provider.input.as_mut().unwrap().columns[0].logical_type_id =
+            Some(cq_syntax::LogicalTypeId(6));
+        assert!(record_representation(&changed).is_err());
     }
 
     #[test]

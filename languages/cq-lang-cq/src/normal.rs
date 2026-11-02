@@ -127,6 +127,7 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
     super::contract::check(module)?;
     let mut normal = module.clone();
     cq_syntax::intern_domains(&mut normal.declarations)?;
+    cq_syntax::intern_logical_types(&mut normal.declarations)?;
     let declarations: BTreeMap<_, _> = normal
         .declarations
         .iter()

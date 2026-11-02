@@ -693,6 +693,7 @@ fn compile_stage(
                     .iter()
                     .map(|column| cq_lang_structures::provider::InputColumn {
                         logical: column.ty.clone(),
+                        logical_type_id: column.logical_type_id,
                         storage: column.ty.clone(),
                         codec_id: None,
                         codec: None,

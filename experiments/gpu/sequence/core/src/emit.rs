@@ -1938,7 +1938,7 @@ fn publish_host(
                 quote!(__cq_downloaded_codes[__position * #width + #slot])
             };
             // DECODE V: P6 intermediate host fallback resolves symbols and logical values before more engine operators, not final answers.
-            values.push(if let Some(codec) = codecs.get(ty) {
+            values.push(if let Some(codec) = codecs.column(column) {
                 quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(
                     u32::try_from(#code).map_err(|_| "GPU symbol code exceeds u32")?
                 ))
@@ -2046,7 +2046,8 @@ fn translate_observed(
         })?;
     }
     let rows = Rows::new(program, analysis)?;
-    let codecs = crate::runs::Codecs::check(&program.structures)?;
+    let codecs =
+        crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
     let mut compiler = Compiler {
         program,
         analysis,

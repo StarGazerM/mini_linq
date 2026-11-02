@@ -202,7 +202,7 @@ pub fn compile(source: &Source) -> syn::Result<Context> {
             &declarations,
             query,
             Some(output(source, &name)),
-        );
+        )?;
         if recursive {
             let mut input = output(source, &delta);
             input.value = Some(syn::parse_quote!(= (& #delta)));

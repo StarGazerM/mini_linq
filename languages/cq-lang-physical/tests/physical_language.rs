@@ -1,6 +1,27 @@
 use cq_lang_physical as physical;
 use quote::ToTokens;
 #[test]
+fn computed_outputs_use_the_declared_logical_identity() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a: Logical [7]);
+        relation answer(value: Logical [8]);
+        r = pipe rename R@0 {a -> x};
+        b = pipe bind r with y: Logical = (*x);
+        p = let canon project b keep {y};
+        return p as answer(y);
+    }};
+    let facts = physical::contract::check(&source).unwrap();
+    assert_eq!(
+        facts.rows["b"].logical_type_ids["x"],
+        cq_syntax::LogicalTypeId(7)
+    );
+    assert_eq!(
+        facts.rows["b"].logical_type_ids["y"],
+        cq_syntax::LogicalTypeId(8)
+    );
+}
+
+#[test]
 fn constant_occurrences_drop_source_columns_and_require_retention() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a:i32,b:i32);

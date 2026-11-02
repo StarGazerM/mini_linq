@@ -255,6 +255,7 @@ fn hole_inputs<'a>(
     tokens: &[storage::provider::Token],
     context: &RoundContext,
     keys: &[KeySet],
+    holes: &[round::cq::Program],
     borrowed_keys: bool,
     names: impl Iterator<Item = &'a Ident>,
 ) -> syn::Result<Vec<cq_syntax::RelationDecl>> {
@@ -294,7 +295,13 @@ fn hole_inputs<'a>(
             declaration.name = key.name.clone();
             declaration.columns = if key.columns.is_empty() {
                 let column = &declaration.columns[0].name;
-                syn::parse_quote!(#column: ())
+                let logical_type_id = holes[key.hole]
+                    .declarations
+                    .last()
+                    .expect("key output declaration")
+                    .columns[0]
+                    .logical_type_id;
+                syn::parse_quote!(#column: () #logical_type_id)
             } else {
                 key.columns
                     .iter()
@@ -440,6 +447,7 @@ fn construct(
         round_name: fresh.id("round"),
     };
     let mut holes: Vec<round::cq::Program> = Vec::new();
+    let mut unit_type_id = None;
     let mut planning = Vec::new();
     for members in &analysis.components {
         let mut stratum = Stratum {
@@ -553,8 +561,15 @@ fn construct(
                         .map(|_| fresh.id("column"))
                         .collect();
                     let (selected, output_columns): (Vec<_>, Vec<_>) = if key.columns.is_empty() {
+                        if unit_type_id.is_none() {
+                            let mut declarations =
+                                source.incremental.strata.source.declarations.clone();
+                            declarations.push(syn::parse_quote!(relation __cq_unit_key(unit: ());));
+                            cq_syntax::intern_logical_types(&mut declarations)?;
+                            unit_type_id = declarations.last().unwrap().columns[0].logical_type_id;
+                        }
                         let column = &variables[0];
-                        (vec![quote!(())], vec![quote!(#column: ())])
+                        (vec![quote!(())], vec![quote!(#column: () #unit_type_id)])
                     } else {
                         (
                             // Key columns are projected variables on every
@@ -574,13 +589,14 @@ fn construct(
                                         [relation]
                                         .columns[i];
                                     let (ty, domain) = (&column.ty, &column.domain);
+                                    let logical_type_id = &column.logical_type_id;
                                     // Batch arenas own their scalar key columns;
                                     // host key sets retain borrowed projections.
                                     // A key column keeps its authored code domain.
                                     if interface == HoleInterface::Batch {
-                                        quote!(#variable: #ty #domain)
+                                        quote!(#variable: #ty #logical_type_id #domain)
                                     } else {
-                                        quote!(#variable: &#ty #domain)
+                                        quote!(#variable: &#ty #logical_type_id #domain)
                                     }
                                 })
                                 .collect(),
@@ -607,6 +623,7 @@ fn construct(
                         &source.tokens,
                         &context,
                         &[],
+                        &holes,
                         false,
                         std::iter::once(source_name),
                     )?;
@@ -665,6 +682,7 @@ fn construct(
                 &source.tokens,
                 &context,
                 &stratum.keys,
+                &holes,
                 interface != HoleInterface::Batch,
                 query.body.iter().filter_map(|item| match item {
                     BodyItem::Positive { atom } => Some(&atom.relation),

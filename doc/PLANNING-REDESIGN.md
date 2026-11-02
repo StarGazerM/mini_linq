@@ -80,6 +80,11 @@ planned in this baseline.
      identity. The declaration boundary interns omitted ids once by opaque
      token spelling: the same automatically interned spelling shares an id,
      while explicit different ids remain distinct even for the same spelling.
+     Logical declarations likewise carry `cq_syntax::LogicalTypeId(pub u32)`;
+     relation syntax is `column: Type [id] in [domain] (expr)` and provider
+     columns use `[id] Logical => Storage codec [id] Codec` (ids optional).
+     Declaration interning preserves explicit ids and shares omitted equal
+     spellings once; subsequent codec lookup uses logical ids, not Rust types.
      Source syntax accepts `codec Type` or `codec [0] Type`. Later checking,
      GPU compatibility and catalog admission compare recorded ids, never
      codec types; the type is only retained for printing. Catalogs provide
@@ -858,15 +863,20 @@ Paths and lines refer to that tree; later cutovers below supersede resolved item
    assertions separately from intentional public API, expanded-Rust and
    Round fixture goldens; retain semantic assertions where spelling is not
    itself the contract.
-7. **Declaration identity owners — logical-type ids (contract 7).**
-   CodecId closes codec identity comparison, but locating the codec declaration
-   for a logical type still compares `syn::Type`: Sequence `StructuresProof`
-   construction and `codec_obligations`
-   (`languages/cq-lang-sequence/src/contract.rs`), GPU `Codecs::get` / `record`
-   (`experiments/gpu/sequence/core/src/runs.rs`), and GPU Datalog `Symbols`
-   (`experiments/gpu/datalog/src/storage.rs`). Intern logical-type ids once at
-   their declaration table and propagate those ids to these lookups; codec-id
-   admission alone does not close this separate type-identity gap.
+7. **Resolved: declaration identity owners — logical-type ids (contract 7).**
+   `cq_syntax::LogicalTypeId(pub u32)` records logical declaration identity.
+   Relation and provider declaration boundaries intern omitted ids once by
+   opaque spelling, preserve explicit ids, and keep explicitly different ids
+   distinct even for equal spellings. RA/Physical rows carry sparse
+   `logical_type_ids`; Physical computed outputs use their result declaration's
+   id, while computed opaque types without a declaration remain unknown.
+   Sequence `StructuresProof` / `codec_obligations`, GPU `Codecs::get` /
+   `record`, and GPU Datalog `Symbols` consume those ids for codec lookup.
+   Source/provider logical-id mismatches and conflicting codec ids for one
+   logical id reject; Rust types are printing payloads after interning.
+   Datalog advice uses `symbols([logical_id] Logical => [codec_id] Codec)`,
+   with optional ids resolved at the declaration boundary. Runtime encoding
+   laws remain premises; this resolution records no fresh gate evidence.
 
 ## Progress
 

@@ -67,6 +67,82 @@ fn codec_identity_exhaustion_is_a_parse_error() {
     );
 }
 
+#[test]
+fn logical_declarations_intern_once_and_preserve_explicit_identity() {
+    use structures::provider::{InputSchema, LogicalTypeId, intern_logical_types};
+    let mut input: InputSchema = syn::parse_quote!(input {
+        keys 0;
+        columns [
+            A => Code,
+            A => Code,
+            [7] B => Code,
+            [8] B => Code
+        ]
+    });
+    intern_logical_types(&mut input.columns).unwrap();
+    assert_eq!(
+        input.columns[0].logical_type_id,
+        input.columns[1].logical_type_id
+    );
+    assert_eq!(input.columns[2].logical_type_id, Some(LogicalTypeId(7)));
+    assert_eq!(input.columns[3].logical_type_id, Some(LogicalTypeId(8)));
+    assert_ne!(
+        input.columns[2].logical_type_id,
+        input.columns[3].logical_type_id
+    );
+    let printed: InputSchema = syn::parse2(input.to_token_stream()).unwrap();
+    assert_eq!(input, printed);
+    let id = input.columns[0].logical_type_id;
+    input.columns[0].logical = syn::parse_quote!(RenamedOpaqueLogical);
+    intern_logical_types(&mut input.columns).unwrap();
+    assert_eq!(input.columns[0].logical_type_id, id);
+}
+
+#[test]
+fn logical_identity_exhaustion_is_a_declaration_error() {
+    use structures::provider::{InputSchema, intern_logical_types};
+    let mut complete: InputSchema = syn::parse_quote!(input {
+        keys 0; columns [[4294967295] Logical => Carrier]
+    });
+    assert!(intern_logical_types(&mut complete.columns).is_ok());
+    let mut exhausted: InputSchema = syn::parse_quote!(input {
+        keys 0; columns [[4294967295] Logical => Carrier, Other => Carrier]
+    });
+    assert!(intern_logical_types(&mut exhausted.columns).is_err());
+    let mut allocation: InputSchema = syn::parse_quote!(input {
+        keys 0; columns [[4294967294] Logical => Carrier, Other => Carrier]
+    });
+    assert!(intern_logical_types(&mut allocation.columns).is_err());
+}
+
+#[test]
+fn input_declarations_share_the_relation_identity_namespace() {
+    let program: structures::Program = syn::parse_quote! {
+        physical {
+            relation R(a: First, b: Second);
+            r = pipe rename R@0 {a -> a, b -> b};
+            return r as answer(a,b);
+        }
+        structures {
+            providers { reader = Reader { reads [], build typed }; }
+            r host scan = @reader input {
+                keys 0; columns [Second => Second, First => First]
+            } as Reader [];
+        }
+    };
+    let input = program.structures.entries[0]
+        .structure
+        .provider()
+        .unwrap()
+        .0
+        .input
+        .as_ref()
+        .unwrap();
+    let columns = &program.physical.program.declarations[0].columns;
+    assert_eq!(input.columns[0].logical_type_id, columns[1].logical_type_id);
+    assert_eq!(input.columns[1].logical_type_id, columns[0].logical_type_id);
+}
+
 /// Provider tokens that entry rewrites in these tests introduce (STR-Provider).
 fn declarations() -> Vec<structures::Declaration> {
     let base: structures::Providers = syn::parse_quote!(providers {
@@ -1745,28 +1821,31 @@ fn native_host_schema_mutations_are_checked_without_type_recognition() {
                 "{error}"
             );
         }
-        for wrong_type in [false, true] {
+        for wrong_identity in [false, true] {
             let mut mutated = program.clone();
             for entry in &mut mutated.structures.entries {
                 if let Some(provider) = entry.structure.provider_mut()
                     && provider.token == "native"
                 {
                     let input = provider.input.as_mut().unwrap();
-                    if wrong_type {
-                        input.columns[0].logical = syn::parse_quote!(Other);
+                    if wrong_identity {
+                        input.columns[0].logical_type_id = Some(structures::LogicalTypeId(99));
                     } else {
                         input.columns.pop();
                     }
                 }
             }
-            let error = structures::contract::check(&mutated)
-                .unwrap_err()
-                .to_string();
-            assert!(
-                error.contains("recorded input schema differs from the relation"),
-                "{error}"
-            );
+            assert!(structures::contract::check(&mutated).is_err());
         }
+        let mut renamed = program.clone();
+        for entry in &mut renamed.structures.entries {
+            if let Some(provider) = entry.structure.provider_mut()
+                && provider.token == "native"
+            {
+                provider.input.as_mut().unwrap().columns[0].logical = syn::parse_quote!(Other);
+            }
+        }
+        assert!(structures::contract::check(&renamed).is_ok());
     }
 }
 

@@ -332,16 +332,35 @@ pub fn types(
     body: &CommaList<BodyItem>,
     prefix: &BTreeMap<String, syn::Type>,
 ) -> syn::Result<BTreeMap<String, syn::Type>> {
+    type_facts(schema, body, prefix, &BTreeMap::new()).map(|(types, _)| types)
+}
+
+fn type_facts(
+    schema: &BTreeMap<String, &crate::RelationDecl>,
+    body: &CommaList<BodyItem>,
+    prefix: &BTreeMap<String, syn::Type>,
+    inherited_ids: &BTreeMap<String, cq_syntax::LogicalTypeId>,
+) -> syn::Result<(
+    BTreeMap<String, syn::Type>,
+    BTreeMap<String, cq_syntax::LogicalTypeId>,
+)> {
     let mut result = prefix.clone();
+    let mut logical_type_ids = inherited_ids.clone();
     for item in body {
         match item {
             BodyItem::Positive { atom } => {
                 let declaration = crate::check_input_atom(schema, atom)?;
                 for (argument, column) in atom.args.iter().zip(&declaration.columns) {
                     if let Some(id) = rust::variable(argument) {
-                        result
-                            .entry(symbol_name(id))
-                            .or_insert_with(|| column.ty.clone());
+                        let name = symbol_name(id);
+                        if result.contains_key(&name) {
+                            if logical_type_ids.get(&name).copied() != column.logical_type_id {
+                                logical_type_ids.remove(&name);
+                            }
+                        } else if let Some(logical_id) = column.logical_type_id {
+                            logical_type_ids.insert(name.clone(), logical_id);
+                        }
+                        result.entry(name).or_insert_with(|| column.ty.clone());
                     }
                 }
             }
@@ -363,9 +382,13 @@ pub fn types(
                 let branches = block
                     .branches
                     .iter()
-                    .map(|b| types(schema, &b.body, &result))
+                    .map(|b| type_facts(schema, &b.body, &result, &logical_type_ids))
                     .collect::<syn::Result<Vec<_>>>()?;
                 for (name, id) in &facts.interface {
+                    let declared_ids: Vec<_> = branches
+                        .iter()
+                        .filter_map(|(_, ids)| ids.get(name).copied())
+                        .collect();
                     let declared: Vec<_> = branches
                         .iter()
                         .zip(&block.branches)
@@ -376,10 +399,10 @@ pub fn types(
                                 .flat_map(crate::Atom::variables)
                                 .any(|id| symbol_name(id) == *name)
                         })
-                        .filter_map(|(b, _)| b.get(name))
+                        .filter_map(|((types, _), _)| types.get(name))
                         .filter(|ty| !matches!(ty, syn::Type::Infer(_)))
                         .collect();
-                    if declared.windows(2).any(|pair| pair[0] != pair[1]) {
+                    if declared_ids.windows(2).any(|pair| pair[0] != pair[1]) {
                         return Err(syn::Error::new_spanned(
                             id,
                             format!(
@@ -387,12 +410,22 @@ pub fn types(
                             ),
                         ));
                     }
+                    if declared_ids.len() == branches.len() {
+                        if let Some(logical_id) = declared_ids.first() {
+                            logical_type_ids.insert(name.clone(), *logical_id);
+                        }
+                    }
                     result.insert(
                         name.clone(),
                         declared
                             .first()
                             .map(|ty| (*ty).clone())
-                            .or_else(|| branches.first().and_then(|b| b.get(name)).cloned())
+                            .or_else(|| {
+                                branches
+                                    .first()
+                                    .and_then(|(types, _)| types.get(name))
+                                    .cloned()
+                            })
                             .unwrap_or_else(|| syn::parse_quote!(_)),
                     );
                 }
@@ -400,5 +433,5 @@ pub fn types(
             _ => (),
         }
     }
-    Ok(result)
+    Ok((result, logical_type_ids))
 }

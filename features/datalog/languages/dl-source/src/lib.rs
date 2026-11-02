@@ -145,6 +145,7 @@ impl Parse for Program {
             declarations.push(input.parse()?);
         }
         cq_syntax::intern_domains(&mut declarations)?;
+        cq_syntax::intern_logical_types(&mut declarations)?;
         let mut models: BTreeMap<String, Ident> = declarations
             .iter()
             .map(|d: &RelationDecl| (symbol_name(&d.name), syn::parse_quote!(set)))

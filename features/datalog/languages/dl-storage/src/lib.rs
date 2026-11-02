@@ -67,11 +67,13 @@ pub struct DeviceStorage {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolCodec {
     pub logical: Type,
+    pub logical_type_id: Option<cq_syntax::LogicalTypeId>,
     pub codec_id: cq_lang_structures::CodecId,
     pub codec: Type,
 }
 record!(SymbolCodec {
     logical: Type,
+    logical_type_id: Option<cq_syntax::LogicalTypeId>,
     codec_id: cq_lang_structures::CodecId,
     codec: Type
 });
@@ -500,11 +502,11 @@ pub mod contract {
                 "device maintenance ratio must be at least two",
             )?;
             for (index, symbol) in device.symbols.iter().enumerate() {
-                let ty = &symbol.logical;
                 ensure(
-                    !device.symbols[..index]
-                        .iter()
-                        .any(|previous| previous.logical == *ty),
+                    symbol.logical_type_id.is_some()
+                        && !device.symbols[..index]
+                            .iter()
+                            .any(|previous| previous.logical_type_id == symbol.logical_type_id),
                     program,
                     "duplicate logical symbol type",
                 )?;
@@ -516,7 +518,10 @@ pub mod contract {
                         .declarations
                         .iter()
                         .any(|declaration| {
-                            declaration.columns.iter().any(|column| column.ty == *ty)
+                            declaration
+                                .columns
+                                .iter()
+                                .any(|column| column.logical_type_id == symbol.logical_type_id)
                         }),
                     program,
                     "symbol type does not occur in a relation",
@@ -559,26 +564,22 @@ pub mod contract {
                     .iter()
                     .any(|declaration| declaration.token == *token)
             };
-            let schema_matches = |input: &InputSchema, columns: &[&Type], keys: usize| {
-                input.key_count == keys
-                    && input.columns.len() == columns.len()
-                    && input
-                        .columns
-                        .iter()
-                        .zip(columns)
-                        .all(|(input, logical)| input.logical == **logical)
-            };
+            let schema_matches =
+                |input: &InputSchema, columns: &[&cq_syntax::ColumnDecl], keys: usize| {
+                    input.key_count == keys
+                        && input.columns.len() == columns.len()
+                        && input.columns.iter().zip(columns).all(|(input, logical)| {
+                            input.logical_type_id.is_some()
+                                && input.logical_type_id == logical.logical_type_id
+                        })
+                };
             for (index, (relation, declaration)) in device
                 .relations
                 .iter()
                 .zip(&program.incremental.strata.source.declarations)
                 .enumerate()
             {
-                let columns = declaration
-                    .columns
-                    .iter()
-                    .map(|column| &column.ty)
-                    .collect::<Vec<_>>();
+                let columns = declaration.columns.iter().collect::<Vec<_>>();
                 ensure(
                     schema_matches(&relation.input, &columns, columns.len()),
                     program,
@@ -611,7 +612,7 @@ pub mod contract {
                 let columns = layout
                     .columns
                     .iter()
-                    .filter_map(|&column| relation.columns.get(column).map(|column| &column.ty))
+                    .filter_map(|&column| relation.columns.get(column))
                     .collect::<Vec<_>>();
                 ensure(
                     declared(&state.token)
@@ -635,7 +636,7 @@ pub mod contract {
                 let columns = negative
                     .columns
                     .iter()
-                    .filter_map(|&column| relation.columns.get(column).map(|column| &column.ty))
+                    .filter_map(|&column| relation.columns.get(column))
                     .collect::<Vec<_>>();
                 ensure(
                     declared(&state.token)

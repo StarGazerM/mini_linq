@@ -56,7 +56,7 @@ pub use host::{HostDecl, HostRead, HostSupport};
 /// One named, typed column in a declared input relation.
 ///
 /// ```text
-/// ColumnDecl ::= Ident ":" Type ["in" ["[" DomainId "]"] "(" Expr ")"]
+/// ColumnDecl ::= Ident ":" Type ["[" LogicalTypeId "]"] ["in" ["[" DomainId "]"] "(" Expr ")"]
 /// ```
 ///
 /// The optional `in (D)` is the column's authored code domain: a query-closed
@@ -68,8 +68,36 @@ pub struct ColumnDecl {
     pub name: Ident,
     pub colon_token: Token![:],
     pub ty: Type,
+    #[syn(optional, peek = token::Bracket)]
+    pub logical_type_id: Option<LogicalTypeId>,
     #[syn(optional, peek = Token![in])]
     pub domain: Option<CodeDomain>,
+}
+
+/// Declaration-table identity of an opaque logical type spelling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LogicalTypeId(pub u32);
+
+impl syn::parse::Parse for LogicalTypeId {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let content;
+        syn::bracketed!(content in input);
+        let value: syn::LitInt = content.parse()?;
+        let id = Self(value.base10_parse()?);
+        if !content.is_empty() {
+            return Err(content.error("a logical type identity is one integer"));
+        }
+        Ok(id)
+    }
+}
+
+impl quote::ToTokens for LogicalTypeId {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let value = syn::Index::from(self.0 as usize);
+        token::Bracket::default().surround(tokens, |tokens| {
+            quote::ToTokens::to_tokens(&value, tokens);
+        });
+    }
 }
 
 /// Declaration-table identity of an opaque code-domain spelling.
@@ -164,6 +192,52 @@ impl RelationDecl {
         }
         Ok(())
     }
+}
+
+/// Intern authored logical type spellings once at the declaration boundary.
+///
+/// Existing identities are recorded facts, independent of their Rust payload.
+pub fn intern_logical_types(declarations: &mut [RelationDecl]) -> syn::Result<()> {
+    if declarations
+        .iter()
+        .flat_map(|declaration| &declaration.columns)
+        .all(|column| column.logical_type_id.is_some())
+    {
+        return Ok(());
+    }
+    let mut identities = BTreeMap::new();
+    let mut next = 0;
+    for column in declarations
+        .iter()
+        .flat_map(|declaration| &declaration.columns)
+    {
+        if let Some(id) = column.logical_type_id {
+            identities.insert(quote::ToTokens::to_token_stream(&column.ty).to_string(), id);
+            next = next.max(id.0.checked_add(1).ok_or_else(|| {
+                syn::Error::new_spanned(&column.ty, "logical type ids exhausted")
+            })?);
+        }
+    }
+    for column in declarations
+        .iter_mut()
+        .flat_map(|declaration| &mut declaration.columns)
+    {
+        if column.logical_type_id.is_none() {
+            let spelling = quote::ToTokens::to_token_stream(&column.ty).to_string();
+            let id = match identities.entry(spelling) {
+                std::collections::btree_map::Entry::Occupied(entry) => *entry.get(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    let id = LogicalTypeId(next);
+                    next = next.checked_add(1).ok_or_else(|| {
+                        syn::Error::new_spanned(&column.ty, "logical type ids exhausted")
+                    })?;
+                    *entry.insert(id)
+                }
+            };
+            column.logical_type_id = Some(id);
+        }
+    }
+    Ok(())
 }
 
 /// Intern authored domain spellings once in this declaration table.
@@ -420,6 +494,7 @@ pub fn parse_declarations(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec
     while input.peek(kw::relation) {
         declarations.push(input.parse()?);
     }
+    intern_logical_types(&mut declarations)?;
     Ok(declarations)
 }
 

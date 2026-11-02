@@ -11,6 +11,7 @@ impl Parse for Declarations {
             while !input.is_empty() {
                 declarations.push(input.parse()?);
             }
+            cq_lang_cq::syntax::intern_logical_types(&mut declarations)?;
             Ok(Self(declarations))
         } else {
             let program: cq_lang_cq::Program = input.parse()?;

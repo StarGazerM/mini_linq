@@ -48,6 +48,15 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   Grouped publication with an answer gate remains explicitly unsupported and
   is rejected before printing. Minimized cases are default-tier regressions.
 
+- Resolve planning issue 7 with declaration-owned `cq_syntax::LogicalTypeId`:
+  relation and provider schemas preserve explicit identities and intern omitted
+  identities once. Sequence codec obligations, GPU codec registries and Datalog
+  symbols look up logical IDs rather than Rust types; mismatched schema IDs and
+  conflicting codec IDs reject, while equal spellings with explicitly different
+  IDs remain distinct. GPU Value captures also record `CodecId`; their checker
+  rejects identity drift, and capture/device-input codec payloads must match
+  their declarations before printing. Runtime codec laws remain premises.
+
 - Documentation audit: distinguish current compiler/runtime contracts from
   historical mechanisms and benchmark snapshots; add report provenance and
   same-workload supersession links without changing measured data. The GPU

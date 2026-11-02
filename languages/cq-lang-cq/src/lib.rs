@@ -91,6 +91,7 @@ fn parse_declarations(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Rel
         declarations.push(input.parse()?);
     }
     cq_syntax::intern_domains(&mut declarations)?;
+    cq_syntax::intern_logical_types(&mut declarations)?;
     Ok(declarations)
 }
 

@@ -47,8 +47,8 @@ fn head_types(program: &Program) -> Vec<(String, &syn::Type)> {
 
 /// The device carrier of a logical column type: the u32 code of its
 /// declared codec, otherwise the type itself (GPU-Representation).
-fn device_carrier(codecs: &crate::runs::Codecs, logical: &syn::Type) -> syn::Type {
-    if codecs.get(logical).is_some() {
+fn device_carrier(codecs: &crate::runs::Codecs, column: &str, logical: &syn::Type) -> syn::Type {
+    if codecs.column(column).is_some() {
         syn::parse_quote!(u32)
     } else {
         logical.clone()
@@ -61,7 +61,8 @@ pub(crate) fn carriers(
     program: &Program,
     analysis: &Analysis,
 ) -> syn::Result<BTreeMap<String, syn::Type>> {
-    let codecs = crate::runs::Codecs::check(&program.structures)?;
+    let codecs =
+        crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
     let mut carriers = BTreeMap::new();
     let head = head_types(program);
     for row in analysis.structures.physical.rows.values() {
@@ -73,11 +74,12 @@ pub(crate) fn carriers(
             } else {
                 ty
             };
-            carriers.insert(column.clone(), device_carrier(&codecs, ty));
+            carriers.insert(column.clone(), device_carrier(&codecs, column, ty));
         }
     }
     for (column, ty) in capture_types(program) {
-        carriers.insert(column, device_carrier(&codecs, &ty));
+        let carrier = device_carrier(&codecs, &column, &ty);
+        carriers.insert(column, carrier);
     }
     Ok(carriers)
 }
@@ -85,7 +87,8 @@ pub(crate) fn carriers(
 /// Every recorded carrier is its column's representation in every row (and
 /// capture binder) that types it, and every typed column has one.
 fn check_carriers(program: &Program, analysis: &Analysis, records: &Bindings) -> syn::Result<()> {
-    let codecs = crate::runs::Codecs::check(&program.structures)?;
+    let codecs =
+        crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
     let mut typed: BTreeMap<&String, Vec<&syn::Type>> = BTreeMap::new();
     for row in analysis.structures.physical.rows.values() {
         for (column, ty) in &row.types {
@@ -122,7 +125,7 @@ fn check_carriers(program: &Program, analysis: &Analysis, records: &Bindings) ->
             .ok_or_else(|| error("GPU-Representation: incomplete carrier records"))?;
         // A codec column's device carrier is its u32 code; any other column
         // is carried as its logical type.
-        let legal = |logical: &&syn::Type| match codecs.get(logical) {
+        let legal = |logical: &&syn::Type| match codecs.column(column) {
             Some(_) => *carrier == syn::parse_quote!(u32),
             None => carrier == *logical,
         };

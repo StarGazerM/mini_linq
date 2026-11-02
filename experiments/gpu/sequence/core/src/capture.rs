@@ -85,6 +85,7 @@ pub(crate) fn print(records: &[Capture]) -> Printed {
                 expression,
                 logical,
                 codec,
+                ..
             } => {
                 let name = format_ident!("__cq_capture_{index}");
                 let cache = format_ident!("__cq_capture_cache_{index}");
@@ -179,10 +180,14 @@ pub(crate) fn print_query(
     setup
 }
 
-fn value_key(expression: &Expr, logical: &Type) -> String {
+fn value_key(
+    expression: &Expr,
+    logical_type_id: Option<cq_syntax::LogicalTypeId>,
+    column: Option<&str>,
+) -> String {
     format!(
-        "{}:{}",
-        logical.to_token_stream(),
+        "{logical_type_id:?}:{:?}:{}",
+        column.filter(|_| logical_type_id.is_none()),
         expression.to_token_stream()
     )
 }
@@ -217,8 +222,11 @@ pub(crate) fn check(
         match capture {
             Capture::Value {
                 expression,
-                logical,
+                logical: _,
+                logical_type_id,
                 codec,
+                codec_id,
+                ..
             } => {
                 if !rust::free_variables(expression)
                     .dependencies(&columns)
@@ -226,9 +234,14 @@ pub(crate) fn check(
                 {
                     return Err(error("closed value reads a row column"));
                 }
-                if codec.as_ref() != codecs.get(logical) {
+                if *codec_id != codecs.codec_id(*logical_type_id) {
                     return Err(error(
                         "closed value codec differs from its column codec identity",
+                    ));
+                }
+                if codec.as_ref() != codecs.get(*logical_type_id) {
+                    return Err(error(
+                        "closed value codec payload differs from its declaration",
                     ));
                 }
             }
@@ -266,7 +279,14 @@ pub(crate) fn check(
                     _ => unreachable!(),
                 };
                 let row = &rows[&symbol_name(input)];
-                check_row_function(records, device, expression, row, &output)
+                let output_id = match &definition.operator {
+                    Operator::Bind(bind) => rust::bindings(&bind.pattern)
+                        .first()
+                        .and_then(|column| rows[name].logical_type_ids.get(&symbol_name(column)))
+                        .copied(),
+                    _ => None,
+                };
+                check_row_function(records, device, expression, row, &output, output_id, name)
                     .map_err(|message| error(message))?;
                 let index =
                     capture_reference(device).ok_or_else(|| error("unrecorded row function"))?;
@@ -357,6 +377,8 @@ fn check_row_function(
     expression: &Expr,
     row: &cq_lang_structures::physical::Row,
     output: &Type,
+    output_id: Option<cq_syntax::LogicalTypeId>,
+    output_column: &str,
 ) -> Result<(), &'static str> {
     let index = capture_reference(device).ok_or("row function names no capture")?;
     let scope: BTreeSet<_> = row.types.keys().cloned().collect();
@@ -365,12 +387,17 @@ fn check_row_function(
         (
             Some(Capture::Value {
                 expression: value,
-                logical,
+                logical_type_id,
+                logical_column,
                 ..
             }),
             Expr::Path(_),
         ) => {
-            if !reads.is_empty() || value != expression || logical != output {
+            if !reads.is_empty()
+                || value != expression
+                || *logical_type_id != output_id
+                || (output_id.is_none() && logical_column.as_deref() != Some(output_column))
+            {
                 return Err("closed row function is not its expression's value");
             }
         }
@@ -456,9 +483,13 @@ impl Captures {
             .filter_map(|(index, capture)| match capture {
                 Capture::Value {
                     expression,
-                    logical,
+                    logical_type_id,
+                    logical_column,
                     ..
-                } => Some((value_key(expression, logical), index)),
+                } => Some((
+                    value_key(expression, *logical_type_id, logical_column.as_deref()),
+                    index,
+                )),
                 Capture::Callable { .. } => None,
             })
             .collect();
@@ -475,9 +506,11 @@ impl Captures {
         &mut self,
         expression: &Expr,
         logical: &Type,
+        logical_type_id: Option<cq_syntax::LogicalTypeId>,
+        logical_column: Option<&str>,
         codecs: &crate::runs::Codecs,
     ) -> usize {
-        let key = value_key(expression, logical);
+        let key = value_key(expression, logical_type_id, logical_column);
         let index = match self.values.get(&key) {
             Some(&index) => index,
             None if self.frozen => {
@@ -488,7 +521,10 @@ impl Captures {
                 self.records.push(Capture::Value {
                     expression: expression.clone(),
                     logical: logical.clone(),
-                    codec: codecs.get(logical).cloned(),
+                    logical_type_id,
+                    logical_column: logical_column.map(str::to_owned),
+                    codec: codecs.get(logical_type_id).cloned(),
+                    codec_id: codecs.codec_id(logical_type_id),
                 });
                 let index = self.records.len() - 1;
                 self.values.insert(key, index);
@@ -505,9 +541,11 @@ impl Captures {
         &mut self,
         expression: &Expr,
         logical: &Type,
+        logical_type_id: Option<cq_syntax::LogicalTypeId>,
+        logical_column: Option<&str>,
         codecs: &crate::runs::Codecs,
     ) -> Expr {
-        let index = self.value_index(expression, logical, codecs);
+        let index = self.value_index(expression, logical, logical_type_id, logical_column, codecs);
         let name = format_ident!("__cq_capture_{index}");
         syn::parse_quote!(#name)
     }
@@ -521,13 +559,17 @@ impl Captures {
             captures: &mut Captures,
             value: &mut Expr,
             ty: &Type,
+            logical_type_id: Option<cq_syntax::LogicalTypeId>,
+            logical_column: &str,
             codecs: &crate::runs::Codecs,
         ) {
-            let index = captures.value_index(value, ty, codecs);
+            let index =
+                captures.value_index(value, ty, logical_type_id, Some(logical_column), codecs);
             let Some(Capture::Value {
                 expression,
                 logical,
                 codec,
+                ..
             }) = captures.records.get(index)
             else {
                 return;
@@ -539,11 +581,17 @@ impl Captures {
             captures: &mut Captures,
             value: &mut Term,
             ty: &Type,
+            logical_type_id: Option<cq_syntax::LogicalTypeId>,
+            logical_column: &str,
             codecs: &crate::runs::Codecs,
         ) {
             match value {
-                Term::Closed(value) => bound(captures, value, ty, codecs),
-                Term::Literal(value) => bound(captures, value, ty, codecs),
+                Term::Closed(value) => {
+                    bound(captures, value, ty, logical_type_id, logical_column, codecs)
+                }
+                Term::Literal(value) => {
+                    bound(captures, value, ty, logical_type_id, logical_column, codecs)
+                }
                 Term::Variable(_) => {}
             }
         }
@@ -557,11 +605,13 @@ impl Captures {
                 let tokens =
                     cq_print::expressions::relational_constraint(value, &captures.parameters);
                 let expression = syn::parse_quote!(#tokens);
-                let index = captures.value_index(&expression, &syn::parse_quote!(bool), codecs);
+                let index =
+                    captures.value_index(&expression, &syn::parse_quote!(bool), None, None, codecs);
                 if let Some(Capture::Value {
                     expression,
                     logical,
                     codec,
+                    ..
                 }) = captures.records.get(index)
                 {
                     let host = host_value(index, expression, logical, codec.as_ref());
@@ -579,23 +629,58 @@ impl Captures {
                         (Term::Variable(name), _) | (_, Term::Variable(name)) => name.to_string(),
                         _ => return,
                     };
-                    term(captures, left, &types[&column], codecs);
-                    term(captures, right, &types[&column], codecs);
+                    term(
+                        captures,
+                        left,
+                        &types[&column],
+                        codecs.logical_type_id(&column),
+                        &column,
+                        codecs,
+                    );
+                    term(
+                        captures,
+                        right,
+                        &types[&column],
+                        codecs.logical_type_id(&column),
+                        &column,
+                        codecs,
+                    );
                 }
                 Constraint::Between {
                     term: Term::Variable(name),
                     low,
                     high,
                 } => {
-                    term(captures, low, &types[&name.to_string()], codecs);
-                    term(captures, high, &types[&name.to_string()], codecs);
+                    term(
+                        captures,
+                        low,
+                        &types[&name.to_string()],
+                        codecs.logical_type_id(&name.to_string()),
+                        &name.to_string(),
+                        codecs,
+                    );
+                    term(
+                        captures,
+                        high,
+                        &types[&name.to_string()],
+                        codecs.logical_type_id(&name.to_string()),
+                        &name.to_string(),
+                        codecs,
+                    );
                 }
                 Constraint::In {
                     term: Term::Variable(name),
                     literals,
                 } => {
                     for value in literals.iter_mut() {
-                        bound(captures, value, &types[&name.to_string()], codecs);
+                        bound(
+                            captures,
+                            value,
+                            &types[&name.to_string()],
+                            codecs.logical_type_id(&name.to_string()),
+                            &name.to_string(),
+                            codecs,
+                        );
                     }
                 }
                 Constraint::Or(branches) => {
@@ -608,7 +693,14 @@ impl Captures {
         }
         for equality in &mut theta.equalities {
             if let EqualityValue::Literal(value) = &mut equality.right {
-                bound(self, value, &types[&equality.left.to_string()], codecs);
+                bound(
+                    self,
+                    value,
+                    &types[&equality.left.to_string()],
+                    codecs.logical_type_id(&equality.left.to_string()),
+                    &equality.left.to_string(),
+                    codecs,
+                );
             }
         }
         for value in &mut theta.constraints {
@@ -625,6 +717,8 @@ impl Captures {
         types: &BTreeMap<String, Type>,
         bindings: &BTreeMap<String, Ident>,
         output: &Type,
+        output_id: Option<cq_syntax::LogicalTypeId>,
+        output_column: &str,
         codecs: &crate::runs::Codecs,
     ) -> Expr {
         struct Locals(BTreeSet<String>);
@@ -667,7 +761,7 @@ impl Captures {
         let scope: BTreeSet<_> = types.keys().cloned().collect();
         let reads = rust::free_variables(expression).dependencies(&scope);
         if reads.is_empty() {
-            return self.value(expression, output, codecs);
+            return self.value(expression, output, output_id, Some(output_column), codecs);
         }
         let mut body = expression.clone();
         let mut locals = Locals(scope);
@@ -704,13 +798,17 @@ impl Captures {
             let left = &equality.left;
             let right = match &equality.right {
                 EqualityValue::Variable(right) => quote!(*#right),
-                EqualityValue::Literal(value)
-                    if codecs.get(&types[&left.to_string()]).is_none() =>
-                {
+                EqualityValue::Literal(value) if codecs.column(&left.to_string()).is_none() => {
                     quote!(#value)
                 }
                 EqualityValue::Literal(value) => {
-                    let value = self.value(value, &types[&left.to_string()], codecs);
+                    let value = self.value(
+                        value,
+                        &types[&left.to_string()],
+                        codecs.logical_type_id(&left.to_string()),
+                        Some(&left.to_string()),
+                        codecs,
+                    );
                     quote!(#value)
                 }
             };
@@ -737,11 +835,17 @@ impl Captures {
                 &self.parameters,
             ))?;
             return Ok(self
-                .value(&expression, &syn::parse_quote!(bool), codecs)
+                .value(&expression, &syn::parse_quote!(bool), None, None, codecs)
                 .into_token_stream());
         }
         let context = |term: &Term| match term {
-            Term::Variable(name) => types.get(&name.to_string()),
+            Term::Variable(name) => types.get(&name.to_string()).map(|ty| {
+                (
+                    ty,
+                    codecs.logical_type_id(&name.to_string()),
+                    name.to_string(),
+                )
+            }),
             _ => None,
         };
         match constraint {
@@ -750,14 +854,15 @@ impl Captures {
                 comparison,
                 right,
             } => {
-                let ty = context(left).or_else(|| context(right)).ok_or_else(|| {
-                    syn::Error::new_spanned(
-                        constraint,
-                        "GPU-Capture: relational comparison requires a column",
-                    )
-                })?;
-                let left = self.term(left, ty, codecs);
-                let right = self.term(right, ty, codecs);
+                let (ty, id, column) =
+                    context(left).or_else(|| context(right)).ok_or_else(|| {
+                        syn::Error::new_spanned(
+                            constraint,
+                            "GPU-Capture: relational comparison requires a column",
+                        )
+                    })?;
+                let left = self.term(left, ty, id, &column, codecs);
+                let right = self.term(right, ty, id, &column, codecs);
                 let op = match comparison {
                     Comparison::Eq(_) => quote!(==),
                     Comparison::Ne(_) => quote!(!=),
@@ -769,26 +874,26 @@ impl Captures {
                 Ok(quote!(#left #op #right))
             }
             Constraint::Between { term, low, high } => {
-                let ty = context(term).ok_or_else(|| {
+                let (ty, id, column) = context(term).ok_or_else(|| {
                     syn::Error::new_spanned(term, "GPU-Capture: range requires a column")
                 })?;
-                let term = self.term(term, ty, codecs);
-                let low = self.term(low, ty, codecs);
-                let high = self.term(high, ty, codecs);
+                let term = self.term(term, ty, id, &column, codecs);
+                let low = self.term(low, ty, id, &column, codecs);
+                let high = self.term(high, ty, id, &column, codecs);
                 Ok(quote!((#term) >= (#low) && (#term) <= (#high)))
             }
             Constraint::In { term, literals } => {
-                let ty = context(term).ok_or_else(|| {
+                let (ty, id, column) = context(term).ok_or_else(|| {
                     syn::Error::new_spanned(term, "GPU-Capture: membership requires a column")
                 })?;
-                let term = self.term(term, ty, codecs);
+                let term = self.term(term, ty, id, &column, codecs);
                 let values: Vec<_> = literals
                     .iter()
                     .map(|value| {
-                        if codecs.get(ty).is_none() {
+                        if codecs.get(id).is_none() {
                             value.clone()
                         } else {
-                            self.value(value, ty, codecs)
+                            self.value(value, ty, id, Some(&column), codecs)
                         }
                     })
                     .collect();
@@ -810,12 +915,23 @@ impl Captures {
         }
     }
 
-    fn term(&mut self, term: &Term, ty: &Type, codecs: &crate::runs::Codecs) -> TokenStream {
+    fn term(
+        &mut self,
+        term: &Term,
+        ty: &Type,
+        id: Option<cq_syntax::LogicalTypeId>,
+        column: &str,
+        codecs: &crate::runs::Codecs,
+    ) -> TokenStream {
         match term {
             Term::Variable(name) => quote!(*#name),
-            Term::Closed(value) => self.value(value, ty, codecs).into_token_stream(),
-            Term::Literal(value) if codecs.get(ty).is_none() => quote!(#value),
-            Term::Literal(value) => self.value(value, ty, codecs).into_token_stream(),
+            Term::Closed(value) => self
+                .value(value, ty, id, Some(column), codecs)
+                .into_token_stream(),
+            Term::Literal(value) if codecs.get(id).is_none() => quote!(#value),
+            Term::Literal(value) => self
+                .value(value, ty, id, Some(column), codecs)
+                .into_token_stream(),
         }
     }
 }
@@ -844,12 +960,18 @@ mod tests {
                 expression,
                 logical,
                 codec,
+                logical_type_id,
+                logical_column,
+                codec_id,
             } = &captures.records[0]
             else {
                 panic!("a closed restriction must not become a device callable");
             };
             assert_eq!(*logical, syn::parse_quote!(bool));
             assert!(codec.is_none());
+            assert!(logical_type_id.is_none());
+            assert!(logical_column.is_none());
+            assert!(codec_id.is_none());
             let host = expression.to_token_stream().to_string();
             assert!(host.contains("relational_"), "{host}");
             assert!(
@@ -892,6 +1014,7 @@ mod tests {
         codecs
             .record(
                 &syn::parse_quote!(TestSymbol),
+                cq_syntax::LogicalTypeId(0),
                 Some(cq_lang_structures::provider::CodecId(0)),
                 Some(&syn::parse_quote!(TestCodec)),
             )
@@ -899,6 +1022,8 @@ mod tests {
         captures.value(
             &syn::parse_quote!(sym("x")),
             &syn::parse_quote!(TestSymbol),
+            Some(cq_syntax::LogicalTypeId(0)),
+            Some("x"),
             &codecs,
         );
         let printed = print(&captures.records);
@@ -910,6 +1035,137 @@ mod tests {
                 .contains("SymbolCodec < TestSymbol >")
         );
     }
+
+    #[test]
+    fn capture_identity_distinguishes_equal_spelling_ids_and_untyped_columns() {
+        let logical = syn::parse_quote!(Logical);
+        let expression = syn::parse_quote!(closed());
+        let mut codecs = crate::runs::Codecs::default();
+        codecs
+            .record(
+                &logical,
+                cq_syntax::LogicalTypeId(1),
+                Some(cq_lang_structures::provider::CodecId(1)),
+                Some(&syn::parse_quote!(First)),
+            )
+            .unwrap();
+        codecs
+            .record(
+                &logical,
+                cq_syntax::LogicalTypeId(2),
+                Some(cq_lang_structures::provider::CodecId(2)),
+                Some(&syn::parse_quote!(Second)),
+            )
+            .unwrap();
+        let mut captures = Captures::default();
+        let first = captures.value(
+            &expression,
+            &logical,
+            Some(cq_syntax::LogicalTypeId(1)),
+            Some("a"),
+            &codecs,
+        );
+        let second = captures.value(
+            &expression,
+            &logical,
+            Some(cq_syntax::LogicalTypeId(2)),
+            Some("b"),
+            &codecs,
+        );
+        assert_ne!(first, second);
+        let same = captures.value(
+            &expression,
+            &syn::parse_quote!(Renamed),
+            Some(cq_syntax::LogicalTypeId(1)),
+            Some("c"),
+            &codecs,
+        );
+        assert_eq!(first, same);
+        let unknown_a = captures.value(&expression, &logical, None, Some("computed_a"), &codecs);
+        let unknown_b = captures.value(&expression, &logical, None, Some("computed_b"), &codecs);
+        assert_ne!(unknown_a, unknown_b);
+        let Capture::Value {
+            logical_type_id, ..
+        } = &mut captures.records[0]
+        else {
+            unreachable!()
+        };
+        *logical_type_id = Some(cq_syntax::LogicalTypeId(9));
+        let mut frozen = Captures::frozen(&captures.records, &Default::default());
+        frozen.value(
+            &expression,
+            &logical,
+            Some(cq_syntax::LogicalTypeId(1)),
+            Some("a"),
+            &codecs,
+        );
+        assert!(frozen.missing);
+    }
+    #[test]
+    fn capture_checker_rejects_codec_identity_and_payload_mutations() {
+        let logical = syn::parse_quote!(Logical);
+        let mut codecs = crate::runs::Codecs::default();
+        codecs
+            .record(
+                &logical,
+                cq_syntax::LogicalTypeId(0),
+                Some(cq_lang_structures::CodecId(7)),
+                Some(&syn::parse_quote!(Codec)),
+            )
+            .unwrap();
+        let mut captures = Captures::default();
+        captures.value(
+            &syn::parse_quote!(closed()),
+            &logical,
+            Some(cq_syntax::LogicalTypeId(0)),
+            Some("x"),
+            &codecs,
+        );
+        let records = cq_lang_sequence::gpu::realization::Captures {
+            captures: captures.records,
+            ..Default::default()
+        };
+        let definitions = BTreeMap::new();
+        let program: cq_lang_sequence::Program = syn::parse_quote! {
+            physical {
+                relation R(a:i32);
+                r = pipe rename R@0 {a -> a};
+                result = let canon project r keep {a};
+                return result as answer(a);
+            }
+            structures { providers {
+                scan = Scan { reads [], build typed };
+                sort = Sort { reads [distinct], build inferred };
+            }
+                r host scan = @scan as Scan [];
+                result rows = @sort as Sort;
+                result canon = rows;
+            }
+            sequence {
+                input = store rows r;
+                result_rows = store canon map result flatten tile 256 input;
+                output count;
+            }
+        };
+        let analysis = cq_lang_sequence::contract::check(&program).unwrap();
+        assert!(check(&records, &definitions, &analysis, &codecs).is_ok());
+        for change_identity in [true, false] {
+            let mut changed = records.clone();
+            let Capture::Value {
+                codec_id, codec, ..
+            } = &mut changed.captures[0]
+            else {
+                unreachable!()
+            };
+            if change_identity {
+                *codec_id = Some(cq_lang_structures::CodecId(8));
+            } else {
+                *codec = Some(syn::parse_quote!(DifferentPayload));
+            }
+            assert!(check(&changed, &definitions, &analysis, &codecs).is_err());
+        }
+    }
+
     #[test]
     fn rust_callable_preserves_arbitrary_operations_and_local_scope() {
         let mut captures = Captures::default();
@@ -922,6 +1178,8 @@ mod tests {
             &types,
             &BTreeMap::from([("x".into(), syn::parse_quote!(x))]),
             &syn::parse_quote!(i64),
+            None,
+            "result",
             &crate::runs::Codecs::default(),
         );
         let printed = print(&captures.records);

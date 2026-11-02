@@ -397,7 +397,7 @@ mod tests {
             .provider_mut()
             .unwrap()
             .input = Some(syn::parse_quote!(input {
-            keys 0; columns [i32 => Code codec [0] Codec, i64 => i64]
+            keys 0; columns [[0] i32 => Code codec [0] Codec, [1] i64 => i64]
         }));
         assert!(cq_lang_sequence::contract::check(&program).is_ok());
         let input = program.structures.structures.entries[1]
@@ -414,6 +414,38 @@ mod tests {
     }
 
     #[test]
+    fn equal_logical_spellings_with_distinct_ids_select_distinct_codecs() {
+        let structures = syn::parse_quote! {
+            physical {
+                relation L(a:i32 [0]); relation R(a:i32 [0],b:i32 [1]);
+                l = pipe rename L@0 {a -> a};
+                r = pipe rename R@1 {a -> a,b -> b};
+                answer = let canon probe first [a] l,r;
+                return answer as answer(a,b);
+            }
+            structures { providers {
+                reader = Reader { reads [exact, range, membership], build inferred };
+                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+            }
+                l host scan = @reader input { keys 0; columns [[0] i32 => Code codec [0] Codec] } as Reader [];
+                r host scan = @reader input { keys 0; columns [[0] i32 => Code codec [0] Codec, [1] i32 => Code codec [1] Codec] } as Reader [];
+                r host result(answer) = @reader as Reader [a];
+                answer rows = @sort as ::cq_storage::dedup::Sort;
+                answer canon = rows;
+            }
+        };
+        let program = cq_sequence_lowering::compile(&structures).unwrap();
+        let analysis = cq_lang_sequence::contract::check(&program).unwrap();
+        for (column, id) in [("a", 0), ("b", 1)] {
+            assert!(analysis.obligations.iter().any(|obligation| matches!(
+                obligation,
+                Obligation::Codec { columns, codec_id: Some(recorded), .. }
+                    if columns == &[column.to_owned()] && recorded.0 == id
+            )));
+        }
+    }
+
+    #[test]
     fn codec_declarations_require_recorded_ids_after_parsing() {
         let mut program = encoded();
         let input = program
@@ -425,6 +457,22 @@ mod tests {
             .unwrap();
         input.columns[0].codec_id = None;
         assert!(cq_lang_sequence::contract::check(&program).is_err());
+    }
+
+    #[test]
+    fn logical_type_identity_mutations_are_rejected() {
+        for logical_type_id in [None, Some(cq_lang_sequence::structures::LogicalTypeId(99))] {
+            let mut program = encoded();
+            let input = program
+                .structures
+                .structures
+                .entries
+                .iter_mut()
+                .find_map(|entry| entry.structure.provider_mut()?.input.as_mut())
+                .unwrap();
+            input.columns[0].logical_type_id = logical_type_id;
+            assert!(cq_lang_sequence::contract::check(&program).is_err());
+        }
     }
 
     #[test]

@@ -62,7 +62,11 @@ struct StructuresProof {
     lookups: LookupIndex,
     queries: std::rc::Rc<lookup_semantics::Queries>,
     /// Declared input codec of each logical type (BE-Code); one per type.
-    codecs: Vec<(syn::Type, cq_lang_structures::CodecId, syn::Type)>,
+    codecs: Vec<(
+        cq_lang_structures::LogicalTypeId,
+        cq_lang_structures::CodecId,
+        syn::Type,
+    )>,
 }
 
 struct CheckedProof {
@@ -132,7 +136,11 @@ impl Checker {
         let queries = self.support.queries(&program.physical, &analysis.physical);
         // BE-Code obligations name a column's codec: the one its logical type's
         // input columns declare; differing declarations leave it ambiguous.
-        let mut codecs: Vec<(syn::Type, cq_lang_structures::CodecId, syn::Type)> = Vec::new();
+        let mut codecs: Vec<(
+            cq_lang_structures::LogicalTypeId,
+            cq_lang_structures::CodecId,
+            syn::Type,
+        )> = Vec::new();
         for entry in &program.structures.entries {
             let (cq_lang_structures::Structure::Host { keyed, .. }
             | cq_lang_structures::Structure::Built { keyed, .. }) = &entry.structure
@@ -144,10 +152,10 @@ impl Checker {
                     continue;
                 };
                 let id = column.codec_id.expect("Structures checks codec identities");
-                match codecs
-                    .iter()
-                    .find(|(logical, _, _)| *logical == column.logical)
-                {
+                let logical_id = column
+                    .logical_type_id
+                    .expect("Structures checks logical type identities");
+                match codecs.iter().find(|(logical, _, _)| *logical == logical_id) {
                     Some((_, previous, _)) if *previous != id => {
                         return fail(
                             codec,
@@ -156,7 +164,7 @@ impl Checker {
                         );
                     }
                     Some(_) => {}
-                    None => codecs.push((column.logical.clone(), id, codec.clone())),
+                    None => codecs.push((logical_id, id, codec.clone())),
                 }
             }
         }
@@ -550,7 +558,7 @@ impl Checked<'_> {
                 .physical
                 .rows
                 .values()
-                .find_map(|row| row.types.get(&column))
+                .find_map(|row| row.logical_type_ids.get(&column))
                 .and_then(|logical| {
                     self.prefix
                         .codecs

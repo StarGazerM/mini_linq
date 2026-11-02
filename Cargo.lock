@@ -223,6 +223,7 @@ dependencies = [
  "cq-lang-structures",
  "cq-physical-realization",
  "cq-print",
+ "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

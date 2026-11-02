@@ -253,7 +253,10 @@ pub enum Capture {
     Value {
         expression: syn::Expr,
         logical: syn::Type,
+        logical_type_id: Option<cq_syntax::LogicalTypeId>,
+        logical_column: Option<String>,
         codec: Option<syn::Type>,
+        codec_id: Option<cq_lang_structures::CodecId>,
     },
     /// Verbatim device Rust: row reads are callable arguments; closed
     /// subexpressions are host-evaluated when the callable is enabled.

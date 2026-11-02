@@ -389,7 +389,8 @@ impl Rows {
                     })
             })
             .collect::<syn::Result<Vec<_>>>()?;
-        let codecs = crate::runs::Codecs::check(&program.structures)?;
+        let codecs =
+            crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
         let realization = &analysis.gpu_bindings.realization;
         if let Some(rejection) = &realization.rejection {
             return Err(error(rejection));
@@ -399,8 +400,11 @@ impl Rows {
         let capture_uses = realization.captures.uses.clone();
         let mut physical_rows = analysis.structures.physical.rows.clone();
         for row in physical_rows.values_mut() {
-            for ty in row.types.values_mut() {
-                if codecs.get(ty).is_some() {
+            for (column, ty) in &mut row.types {
+                if codecs
+                    .get(row.logical_type_ids.get(column).copied())
+                    .is_some()
+                {
                     *ty = syn::parse_quote!(u32);
                 }
             }
@@ -433,7 +437,7 @@ impl Rows {
                         "T-Gpu: a capture answer column needs a recorded type",
                     ));
                 }
-                let (value, carrier): (TokenStream, Type) = match codecs.get(&ty) {
+                let (value, carrier): (TokenStream, Type) = match codecs.column(&column) {
                     Some(codec) => (
                         quote!((<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::code(#binder) as i64)),
                         syn::parse_quote!(u32),
@@ -1854,13 +1858,14 @@ fn host_rows(
     let rows = output.ok_or_else(|| error("T-Gpu: missing host boundary"))?;
     let context = emitter.context();
     let pattern = context.pattern(name);
-    let codecs = crate::runs::Codecs::check(&program.structures)?;
+    let codecs =
+        crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
     let values: Vec<_> = analysis.structures.layouts[name]
         .iter()
         .map(|column| {
             let value = context.key_field(name, column, true);
             let ty = &analysis.structures.physical.rows[name].types[column];
-            let value = match codecs.get(ty) {
+            let value = match codecs.column(column) {
                 Some(codec) => {
                     quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::code(&(#value)))
                 }
@@ -2610,7 +2615,7 @@ mod tests {
                 result_rows at host.device;
             }
         };
-        assert!(crate::runs::Codecs::check(&program.structures).is_err());
+        assert!(crate::runs::Codecs::check(&program.structures, &BTreeMap::new()).is_err());
         assert!(cq_lang_sequence::check_grading(&program, &crate::machine()).is_err());
     }
 

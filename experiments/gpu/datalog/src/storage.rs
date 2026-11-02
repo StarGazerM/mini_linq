@@ -9,7 +9,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Expr, Ident, Type};
 
-/// Explicit, syntactically matched logical-type to host-codec declarations.
+/// Authored logical identities and their host-codec declarations.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Symbols(pub Vec<SymbolCodec>);
 
@@ -29,6 +29,17 @@ impl syn::parse::Parse for Symbols {
         syn::parenthesized!(content in input);
         let mut columns: Vec<InputColumn> = Vec::new();
         while !content.is_empty() {
+            let logical_type_id = if content.peek(syn::token::Bracket) {
+                let id;
+                syn::bracketed!(id in content);
+                let value = id.parse::<syn::LitInt>()?.base10_parse::<u32>()?;
+                if !id.is_empty() {
+                    return Err(id.error("expected one logical type id"));
+                }
+                Some(cq_syntax::LogicalTypeId(value))
+            } else {
+                None
+            };
             let ty: Type = content.parse()?;
             content.parse::<syn::Token![=>]>()?;
             let codec_id = if content.peek(syn::token::Bracket) {
@@ -43,12 +54,17 @@ impl syn::parse::Parse for Symbols {
                 None
             };
             let codec: Type = content.parse()?;
-            if columns.iter().any(|column| column.logical == ty) {
+            if logical_type_id.is_some()
+                && columns
+                    .iter()
+                    .any(|column| column.logical_type_id == logical_type_id)
+            {
                 return Err(syn::Error::new_spanned(ty, "duplicate symbol type"));
             }
             columns.push(InputColumn {
                 storage: ty.clone(),
                 logical: ty,
+                logical_type_id,
                 codec_id,
                 codec: Some(codec),
             });
@@ -66,6 +82,7 @@ impl syn::parse::Parse for Symbols {
                 .into_iter()
                 .map(|column| SymbolCodec {
                     logical: column.logical,
+                    logical_type_id: column.logical_type_id,
                     codec_id: column.codec_id.expect("declared codec was interned"),
                     codec: column.codec.expect("symbol declarations have codecs"),
                 })
@@ -124,38 +141,74 @@ impl syn::parse::Parse for Advice {
 }
 
 impl Symbols {
-    fn declaration(&self, ty: &Type) -> Option<&SymbolCodec> {
-        self.0.iter().find(|symbol| &symbol.logical == ty)
+    fn declaration(&self, id: Option<cq_syntax::LogicalTypeId>) -> Option<&SymbolCodec> {
+        let id = id?;
+        self.0
+            .iter()
+            .find(|symbol| symbol.logical_type_id == Some(id))
     }
 
-    pub fn codec(&self, ty: &Type) -> Option<&Type> {
-        self.declaration(ty).map(|symbol| &symbol.codec)
+    pub fn codec(&self, id: Option<cq_syntax::LogicalTypeId>) -> Option<&Type> {
+        self.declaration(id).map(|symbol| &symbol.codec)
     }
 
-    pub fn device_type(&self, ty: &Type) -> Type {
-        match self.codec(ty) {
+    pub fn device_type(&self, column: &cq_syntax::ColumnDecl) -> Type {
+        let ty = &column.ty;
+        match self.codec(column.logical_type_id) {
             Some(codec) => syn::parse_quote!(::gpu_datalog_runtime::Symbol<#ty, #codec>),
             None => ty.clone(),
         }
     }
 
-    fn input(&self, logical: &[&Type], key_count: usize) -> InputSchema {
+    fn input(&self, logical: &[&cq_syntax::ColumnDecl], key_count: usize) -> InputSchema {
         InputSchema {
             key_count,
             columns: logical
                 .iter()
-                .map(|ty| InputColumn {
-                    logical: (*ty).clone(),
-                    storage: self.device_type(ty),
-                    codec_id: self.declaration(ty).map(|symbol| symbol.codec_id),
-                    codec: self.codec(ty).cloned(),
+                .map(|column| InputColumn {
+                    logical: column.ty.clone(),
+                    logical_type_id: column.logical_type_id,
+                    storage: self.device_type(column),
+                    codec_id: self
+                        .declaration(column.logical_type_id)
+                        .map(|symbol| symbol.codec_id),
+                    codec: self.codec(column.logical_type_id).cloned(),
                 })
                 .collect(),
         }
     }
 
+    /// Resolve authored, unnumbered advice against the declaration table once.
+    fn intern(&mut self, program: &Program) -> syn::Result<()> {
+        if self.0.iter().any(|symbol| symbol.logical_type_id.is_none()) {
+            let mut declarations = program.incremental.strata.source.declarations.clone();
+            let mut advice: cq_syntax::RelationDecl = syn::parse_quote!(relation __cq_symbols(););
+            for symbol in &self.0 {
+                let ty = &symbol.logical;
+                let mut column: cq_syntax::ColumnDecl = syn::parse_quote!(__cq_symbol: #ty);
+                column.logical_type_id = symbol.logical_type_id;
+                advice.columns.push(column);
+            }
+            declarations.push(advice);
+            cq_syntax::intern_logical_types(&mut declarations)?;
+            for (symbol, column) in self.0.iter_mut().zip(&declarations.last().unwrap().columns) {
+                symbol.logical_type_id = column.logical_type_id;
+            }
+        }
+        self.validate(program)
+    }
+
     fn validate(&self, program: &Program) -> syn::Result<()> {
-        for symbol in &self.0 {
+        for (index, symbol) in self.0.iter().enumerate() {
+            if self.0[..index]
+                .iter()
+                .any(|previous| previous.logical_type_id == symbol.logical_type_id)
+            {
+                return Err(syn::Error::new_spanned(
+                    &symbol.logical,
+                    "symbol declarations require unique logical types",
+                ));
+            }
             let ty = &symbol.logical;
             if !program
                 .incremental
@@ -163,11 +216,16 @@ impl Symbols {
                 .source
                 .declarations
                 .iter()
-                .any(|declaration| declaration.columns.iter().any(|column| column.ty == *ty))
+                .any(|declaration| {
+                    declaration.columns.iter().any(|column| {
+                        symbol.logical_type_id.is_some()
+                            && column.logical_type_id == symbol.logical_type_id
+                    })
+                })
             {
                 return Err(syn::Error::new_spanned(
                     ty,
-                    "symbol type does not occur in a relation; use its declared type spelling",
+                    "symbol logical type id does not occur in a relation",
                 ));
             }
         }
@@ -182,17 +240,6 @@ impl Symbols {
             .as_ref()
             .ok_or_else(|| syn::Error::new_spanned(program, "missing device storage advice"))?;
         let symbols = Self(advice.symbols.clone());
-        for (index, symbol) in symbols.0.iter().enumerate() {
-            if symbols.0[..index]
-                .iter()
-                .any(|previous| previous.logical == symbol.logical)
-            {
-                return Err(syn::Error::new_spanned(
-                    &symbol.logical,
-                    "symbol declarations require unique logical types",
-                ));
-            }
-        }
         symbols.validate(program)?;
         Ok(symbols)
     }
@@ -387,7 +434,7 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
     let device_types = |relation: usize, columns: &[usize]| -> Vec<Type> {
         columns
             .iter()
-            .map(|&column| symbols.device_type(&declarations[relation].columns[column].ty))
+            .map(|&column| symbols.device_type(&declarations[relation].columns[column]))
             .collect()
     };
     let mut target = source.clone();
@@ -411,7 +458,10 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
             declaration.value.is_some(),
             provider.canonical,
         )?;
-        relations.push(device_relation(symbols.input(&logical, logical.len()))?);
+        relations.push(device_relation(symbols.input(
+            &declaration.columns.iter().collect::<Vec<_>>(),
+            logical.len(),
+        ))?);
     }
     let mut states = [Vec::new(), Vec::new()];
     for (states, layouts) in states
@@ -424,7 +474,7 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
             let logical = layout
                 .columns
                 .iter()
-                .map(|&column| &declaration.columns[column].ty)
+                .map(|&column| &declaration.columns[column])
                 .collect::<Vec<_>>();
             let input = symbols.input(&logical, layout.key);
             let types = input
@@ -447,7 +497,7 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
             let logical = negative
                 .columns
                 .iter()
-                .map(|&column| &declaration.columns[column].ty)
+                .map(|&column| &declaration.columns[column])
                 .collect::<Vec<_>>();
             let input = symbols.input(&logical, logical.len());
             let types = input
@@ -514,8 +564,8 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
 }
 
 pub fn compile_with(source: &Program, args: TokenStream) -> syn::Result<Program> {
-    let Advice { symbols, ratio } = syn::parse2(args)?;
-    symbols.validate(source)?;
+    let Advice { mut symbols, ratio } = syn::parse2(args)?;
+    symbols.intern(source)?;
     let target = realize(source, &symbols, ratio)?;
     check(source, &target)?;
     Ok(target)
@@ -591,11 +641,7 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
         .zip(declarations)
         .zip(&program.providers)
     {
-        let logical = declaration
-            .columns
-            .iter()
-            .map(|column| &column.ty)
-            .collect::<Vec<_>>();
+        let logical = declaration.columns.iter().collect::<Vec<_>>();
         check_input(&relation.input, &logical, logical.len(), &symbols, program)?;
         let types = relation
             .input
@@ -660,7 +706,7 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
         let logical = layout
             .columns
             .iter()
-            .map(|&column| &declaration.columns[column].ty)
+            .map(|&column| &declaration.columns[column])
             .collect::<Vec<_>>();
         ensure(
             layout.provider.token == DEVICE_LAYOUT
@@ -685,7 +731,7 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
         let logical = negative
             .columns
             .iter()
-            .map(|&column| &declaration.columns[column].ty)
+            .map(|&column| &declaration.columns[column])
             .collect::<Vec<_>>();
         check_input(&state.input, &logical, logical.len(), &symbols, program)?;
         check_state(state, advice.ratio, program)?;
@@ -696,7 +742,7 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
 
 fn check_input(
     input: &InputSchema,
-    logical: &[&Type],
+    logical: &[&cq_syntax::ColumnDecl],
     key: usize,
     symbols: &Symbols,
     program: &Program,
@@ -707,11 +753,12 @@ fn check_input(
         "device input schema has an incorrect key boundary or column count",
     )?;
     for (column, ty) in input.columns.iter().zip(logical) {
-        let declared = symbols.declaration(ty);
+        let declared = symbols.declaration(ty.logical_type_id);
         ensure(
-            column.logical == **ty
+            column.logical_type_id.is_some()
+                && column.logical_type_id == ty.logical_type_id
                 && column.codec_id == declared.map(|symbol| symbol.codec_id)
-                && column.codec.is_some() == declared.is_some(),
+                && column.codec.as_ref() == declared.map(|symbol| &symbol.codec),
             program,
             "device column disagrees with its logical schema or declared codec",
         )?;
@@ -773,16 +820,16 @@ mod tests {
     #[test]
     fn parses_explicit_symbol_codecs_and_rejects_ambiguous_arguments() {
         let symbols: Symbols =
-            syn::parse_quote!(symbols(String => TextCodec, SymbolId => ids::Codec,));
+            syn::parse_quote!(symbols([3] String => TextCodec, [4] SymbolId => ids::Codec,));
         assert_eq!(
-            symbols.codec(&syn::parse_quote!(String)),
+            symbols.codec(Some(cq_syntax::LogicalTypeId(3))),
             Some(&syn::parse_quote!(TextCodec))
         );
         assert_eq!(
-            symbols.codec(&syn::parse_quote!(SymbolId)),
+            symbols.codec(Some(cq_syntax::LogicalTypeId(4))),
             Some(&syn::parse_quote!(ids::Codec))
         );
-        assert!(syn::parse2::<Symbols>(quote!(symbols(String => A, String => B))).is_err());
+        assert!(syn::parse2::<Symbols>(quote!(symbols([0] String => A, [0] String => B))).is_err());
         assert!(syn::parse2::<Symbols>(quote!(symbols(u32 => A))).is_ok());
         assert!(syn::parse2::<Symbols>(quote!(symbols(String))).is_err());
         assert!(syn::parse2::<Symbols>(quote!(symbols(String => A) extra)).is_err());
@@ -794,25 +841,66 @@ mod tests {
     #[test]
     fn symbol_advice_interns_once_and_preserves_explicit_ids() {
         let symbols: Symbols = syn::parse_quote!(symbols(
-            First => Codec,
-            Second => Codec,
-            Third => [7] Codec,
-            Fourth => [8] Codec,
+            [0] First => Codec,
+            [1] Second => Codec,
+            [2] Third => [7] Codec,
+            [3] Fourth => [8] Codec,
         ));
         assert_eq!(symbols.0[0].codec_id, symbols.0[1].codec_id);
         assert_eq!(symbols.0[2].codec_id, CodecId(7));
         assert_eq!(symbols.0[3].codec_id, CodecId(8));
-        let input = symbols.input(
-            &symbols
-                .0
-                .iter()
-                .map(|symbol| &symbol.logical)
-                .collect::<Vec<_>>(),
-            0,
-        );
+        let declaration: cq_syntax::RelationDecl = syn::parse_quote! {
+            relation R(a: First [0], b: Second [1], c: Third [2], d: Fourth [3]);
+        };
+        let input = symbols.input(&declaration.columns.iter().collect::<Vec<_>>(), 0);
         for (column, symbol) in input.columns.iter().zip(&symbols.0) {
             assert_eq!(column.codec_id, Some(symbol.codec_id));
         }
+    }
+
+    #[test]
+    fn equal_spellings_with_distinct_logical_ids_keep_distinct_codecs() {
+        let source = cq_datalog_storage::compile(&syn::parse_quote! {
+            struct Distinct;
+            relation E(a: String [7], b: String [8]) = (input);
+            output E;
+            strata {}
+            incremental { scheme seminaive_covering; }
+        })
+        .unwrap();
+        let target = compile_with(
+            &source,
+            quote!(symbols(
+                [7] String => [2] FirstCodec,
+                [8] String => [3] SecondCodec
+            )),
+        )
+        .unwrap();
+        let symbols = Symbols::from_program(&target).unwrap();
+        assert_eq!(
+            symbols.codec(Some(cq_syntax::LogicalTypeId(7))),
+            Some(&syn::parse_quote!(FirstCodec))
+        );
+        assert_eq!(
+            symbols.codec(Some(cq_syntax::LogicalTypeId(8))),
+            Some(&syn::parse_quote!(SecondCodec))
+        );
+        let mut changed = target.clone();
+        changed.device.as_mut().unwrap().relations[0].input.columns[0].logical_type_id =
+            Some(cq_syntax::LogicalTypeId(8));
+        assert!(check(&source, &changed).is_err());
+        let mut changed = target.clone();
+        changed.device.as_mut().unwrap().symbols[0].logical_type_id =
+            Some(cq_syntax::LogicalTypeId(99));
+        assert!(check(&source, &changed).is_err());
+        let mut changed = target.clone();
+        changed.device.as_mut().unwrap().symbols[0].logical = syn::parse_quote!(AnotherSpelling);
+        assert!(Symbols::from_program(&changed).is_ok());
+        let inferred = compile_with(&source, quote!(symbols(String => Codec))).unwrap();
+        assert_eq!(
+            inferred.device.unwrap().symbols[0].logical_type_id,
+            Some(cq_syntax::LogicalTypeId(8))
+        );
     }
 
     #[test]
@@ -825,6 +913,7 @@ mod tests {
         }
         let source = cq_datalog_storage::compile(&incremental).unwrap();
         let target = compile_with(&source, quote!(symbols(String => TextCodec))).unwrap();
+        assert!(compile_with(&source, quote!(symbols(String => A, String => B))).is_err());
         assert_eq!(source.incremental, target.incremental);
         let ty: Type = syn::parse_quote!(::gpu_datalog_runtime::Symbol<String, TextCodec>);
         let word = word_type([&ty, &ty]).unwrap();
@@ -839,7 +928,7 @@ mod tests {
         assert_eq!(
             Symbols::from_program(&target)
                 .unwrap()
-                .codec(&syn::parse_quote!(String)),
+                .codec(source.incremental.strata.source.declarations[0].columns[0].logical_type_id),
             Some(&syn::parse_quote!(TextCodec))
         );
         assert_eq!(
@@ -886,6 +975,35 @@ mod tests {
             |device| device.delta_layouts[0].input.columns[0].codec_id = Some(CodecId(99)),
             |device| device.negations[0].input.columns[0].codec_id = Some(CodecId(99)),
             |device| device.layouts[0].input.columns[0].codec_id = None,
+            |device| device.symbols[0].logical_type_id = Some(cq_syntax::LogicalTypeId(99)),
+            |device| {
+                device.relations[0].input.columns[0].logical_type_id =
+                    Some(cq_syntax::LogicalTypeId(99))
+            },
+            |device| {
+                device.layouts[0].input.columns[0].logical_type_id =
+                    Some(cq_syntax::LogicalTypeId(99))
+            },
+            |device| {
+                device.delta_layouts[0].input.columns[0].logical_type_id =
+                    Some(cq_syntax::LogicalTypeId(99))
+            },
+            |device| device.negations[0].input.columns[0].logical_type_id = None,
+            |device| {
+                device.relations[0].input.columns[0].codec =
+                    Some(syn::parse_quote!(DifferentPayload))
+            },
+            |device| {
+                device.layouts[0].input.columns[0].codec = Some(syn::parse_quote!(DifferentPayload))
+            },
+            |device| {
+                device.delta_layouts[0].input.columns[0].codec =
+                    Some(syn::parse_quote!(DifferentPayload))
+            },
+            |device| {
+                device.negations[0].input.columns[0].codec =
+                    Some(syn::parse_quote!(DifferentPayload))
+            },
         ] {
             let mut changed = target.clone();
             mutate(changed.device.as_mut().unwrap());
@@ -923,7 +1041,7 @@ mod tests {
         let types = source.incremental.strata.source.declarations[0]
             .columns
             .iter()
-            .map(|column| schema.device_type(&column.ty))
+            .map(|column| schema.device_type(column))
             .collect::<Vec<_>>();
         let word = word_type(&types).unwrap();
         assert_eq!(quote!(#word).to_string().matches("Scalar").count(), 10);
@@ -1187,7 +1305,10 @@ mod tests {
             |d| {
                 d.relations[0].input.columns.pop();
             },
-            |d| d.negations[0].input.columns[0].logical = syn::parse_quote!(Wrong),
+            |d| {
+                d.negations[0].input.columns[0].logical_type_id =
+                    Some(cq_syntax::LogicalTypeId(999))
+            },
             |d| d.layouts[0].input.columns[0].codec = Some(syn::parse_quote!(WrongCodec)),
             |d| {
                 d.layouts[0].input.columns[0].codec_id =

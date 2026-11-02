@@ -8,7 +8,7 @@ token trees~\cite{host-synmacro}.
 \begin{lstlisting}
 Program ::= struct Name; Decl* Rule+
 Decl    ::= relation R(ColumnDecl, ...) [= (Expr)];
-ColumnDecl ::= c ":" Type ["in" ["[" DomainId "]"] "(" Expr ")"]
+ColumnDecl ::= c ":" Type ["[" LogicalTypeId "]"] ["in" ["[" DomainId "]"] "(" Expr ")"]
 Rule    ::= h(Expr, ...) :- Clause, ... ;
 Clause  ::= R(Arg, ...) | !R(NegArg, ...) | Guard | where P
           | let Pat [: Type] = Expr | for Pat in Expr | Block
@@ -21,6 +21,10 @@ Bare single-segment paths bind logical variables; other arguments compute.
 Several rules for one head are sugar for one rule whose body is a top-level
 union over fresh positional head columns; each rule gets fresh local names,
 opaque syntax receives lexical aliases rather than token substitution.
+The declaration table interns logical type spellings once into
+\code{LogicalTypeId}; explicit ids survive printing and are never reinterpreted.
+Equal spellings with explicitly different ids are distinct logical declarations.
+Downstream codec lookup uses the recorded id, not the opaque \code{Type} payload.
 A trailing \code{= (Expr)} supplies the host value. An optional column
 \code{in (D)} records the column's code domain: a query-closed host value
 implementing \code{cq\_storage::CodeDomain} whose codes the column stores.

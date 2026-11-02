@@ -325,7 +325,7 @@ pub fn with_query(
     declarations: &[RelationDecl],
     query: Query,
     output: Option<RelationDecl>,
-) -> Program {
+) -> syn::Result<Program> {
     let mut hole = source.clone();
     hole.declarations = declarations
         .iter()
@@ -335,8 +335,9 @@ pub fn with_query(
     if let Some(output) = output {
         hole.declarations.push(output);
     }
+    cq_syntax::intern_logical_types(&mut hole.declarations)?;
     hole.query = query;
-    hole
+    Ok(hole)
 }
 
 #[cfg(test)]

@@ -66,7 +66,7 @@ fn rust_below_host_requires_identity_representation() {
     );
     assert!(unknown.representation.encoded.is_empty());
     program.structures.structures.entries[0] = syn::parse_quote!(
-        r host scan = @device_layout input { keys 1; columns [i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,), ()> [];
+        r host scan = @device_layout input { keys 1; columns [[0] i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,), ()> [];
     );
     program
         .structures
@@ -77,7 +77,7 @@ fn rust_below_host_requires_identity_representation() {
     assert!(native.representation.identity.contains("a"));
     assert!(!native.representation.encoded.contains("a"));
     program.structures.structures.entries[0] = syn::parse_quote!(
-        r host scan = @device_layout input { keys 1; columns [i32 => ::gpu_datalog_runtime::Symbol<i32, TestCodec> codec [0] TestCodec] } as ::gpu_datalog_runtime::DeviceLayout<
+        r host scan = @device_layout input { keys 1; columns [[0] i32 => ::gpu_datalog_runtime::Symbol<i32, TestCodec> codec [0] TestCodec] } as ::gpu_datalog_runtime::DeviceLayout<
             (::gpu_datalog_runtime::Symbol<i32, TestCodec>,), ()
         > [];
     );

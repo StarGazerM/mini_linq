@@ -389,8 +389,8 @@ fn native_host_lookup_uses_supplied_runs_without_building() -> Result {
 #[test]
 fn native_host_lookup_accepts_a_leading_value_column() {
     let mut source = fixtures::fixture("native_linear");
-    source.structures.entries[1] = syn::parse_quote!(e host scan = @device_layout input { keys 0; columns [i32 => i32, u32 => u32] } as ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [];);
-    source.structures.entries[2] = syn::parse_quote!(e host result(joined) = @device_layout input { keys 0; columns [i32 => i32, u32 => u32] } as ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [y];);
+    source.structures.entries[1] = syn::parse_quote!(e host scan = @device_layout input { keys 0; columns [[0] i32 => i32, [1] u32 => u32] } as ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [];);
+    source.structures.entries[2] = syn::parse_quote!(e host result(joined) = @device_layout input { keys 0; columns [[0] i32 => i32, [1] u32 => u32] } as ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [y];);
     source
         .structures
         .declare(&cq_gpu_sequence::providers::declarations())

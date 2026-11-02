@@ -343,13 +343,21 @@ exact bucket, contiguous range (rangeCursor), membership, order. Its type
 is an opaque token discharged by runtime traits, as Structures does today
 (STR-Key, STR-SortedRun); the same holds for codecs (BE-Code's premises
 are trait obligations, like Leibniz admissibility). A codec obligation
-records \code{codec\_id: Option<CodecId>} from Structures input columns for
-the column's logical type, with \code{None} denoting identity. The declaration
-boundary interns missing ids once by opaque token spelling; automatic equal
-spellings share an id, while explicitly different ids remain distinct.
-Conflicting recorded ids for one logical type are rejected even if the codec
-types have the same spelling. The accompanying \code{codec: Option<syn::Type>}
-is only a printing payload, never the identity comparison. Canonicalization instead
+records \code{codec\_id: Option<CodecId>} from Structures input columns,
+looked up by the column's recorded \code{LogicalTypeId}, with \code{None}
+denoting identity encoding. Declaration boundaries intern missing logical
+and codec ids once by opaque spelling; automatic equal spellings share an id,
+while explicitly different ids remain distinct. Source/provider logical-id
+mismatches and conflicting codec ids for one logical id are rejected even
+when type spellings agree. Sparse row \code{logical\_type\_ids} carry declared
+identities, including declared Physical result identities for computed outputs;
+computed opaque types without a declaration remain unknown. Logical and codec
+types are printing payloads, never lookup keys after interning.
+GPU Value captures retain \code{codec\_id: Option<CodecId>} independently of
+their printing payload. The checker compares ids for identity and requires the
+payload to equal the selected declaration, preventing a different printed
+implementation from being substituted under an unchanged id.
+Canonicalization instead
 records the checked canonical reference (a \textsc{PL-Distinct} rows provider,
 an existence-only Built index, or the host carrier), or for the returned
 answer its recorded identity index, and grading records the boundary's level;
@@ -1450,8 +1458,8 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  I=p.\mathrm{input}\quad I\ne\bot\Longrightarrow I.\mathrm{keys}\leq |I.\mathrm{columns}|}
  {\mathrm{abi}(p)=a\quad\mathrm{schema}(p)=I\quad
  \mathrm{encoded}(I_i)\iff I_i.\mathrm{codecId}\ne\varnothing}
-\Rule{GPU-CodecIdentity}{\forall (T,i,c),(T,i',c')\in\mathrm{declaredSymbols}.\ i=i'}
- {\mathrm{codecId}(T)=i\quad\mathrm{captureCodecId}(x:T)=\mathrm{codecId}(T)}
+\Rule{GPU-CodecIdentity}{\forall(\ell,T,i,c),(\ell,T',i',c')\in\mathrm{declaredSymbols}.\ i=i'}
+ {\mathrm{codecId}(\ell)=i\quad\mathrm{captureCodecId}(x:\ell)=\mathrm{codecId}(\ell)}
 \Rule{GPU-ProviderLayout}{T=\text{recorded built provider}\quad
  a=\text{checked catalog ABI of }T\quad K=\mathrm{concat}(\mathrm{levels})\quad
  P=\text{recorded complete scan or reconstructed lookup payload}}
@@ -1486,13 +1494,14 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  \text{each field names its bounds provenance}}
  {\mathsf{publish}_{\rm gpu}\text{ consumes }(S,C)\text{ without selecting storage, codec or canonicality}}
 \end{mathpar}
-Native run and column Host scans require an input schema whose arity and opaque
-logical type tokens equal the source relation's ordered declaration; catalog
-templates may omit it. Contiguous ranges require the range ABI and range read capability;
-resident-column bounds require the columns ABI. Codec identities are compared
-by recorded \code{CodecId} across input schemas before translating expressions;
-a conflict is rejected, never overwritten. The codec type $c$ is only the
-printing payload; equal spelling does not equate explicitly different ids.
+Native run and column Host scans require an input schema whose arity and
+recorded logical-type ids match the source relation's ordered declaration;
+catalog templates may omit it. Contiguous ranges require the range ABI and range read capability;
+resident-column bounds require the columns ABI. Codec lookup uses recorded
+\code{LogicalTypeId}; codec identities are compared by recorded \code{CodecId}
+across input schemas before translating expressions. A mismatch or conflict
+is rejected, never overwritten. Logical and codec types are printing payloads;
+equal spelling does not equate explicitly different ids.
 Thus a compared column and its closed capture use the same declared encoding.
 The GPU binding pass records one catalog-backed provider realization for both
 resident and computed paths; the checker validates supplied records without

@@ -327,7 +327,8 @@ impl<'a> Facts<'a> {
             .iter()
             .map(|d| (symbol_name(&d.name), &d.term))
             .collect();
-        let codecs = crate::runs::Codecs::check(&program.structures)?;
+        let codecs =
+            crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
         let carriers = &analysis.gpu_bindings.carriers;
         let mut resident = BTreeSet::new();
         let mut runs = BTreeSet::new();
@@ -549,6 +550,8 @@ fn captures(facts: &Facts) -> syn::Result<Captures> {
                     &row.types,
                     &row.bindings,
                     &syn::parse_quote!(bool),
+                    None,
+                    name,
                     &facts.codecs,
                 )
             }
@@ -562,6 +565,11 @@ fn captures(facts: &Facts) -> syn::Result<Captures> {
                     &row.types,
                     &row.bindings,
                     output,
+                    analysis.structures.physical.rows[name]
+                        .logical_type_ids
+                        .get(&symbol_name(&names[0]))
+                        .copied(),
+                    name,
                     &facts.codecs,
                 )
             }

@@ -196,7 +196,7 @@ fn inner(
     spec: &Spec,
     outer: &[Ident],
     fresh: &mut Fresh,
-) -> (Program, Vec<(Ident, Ident)>) {
+) -> syn::Result<(Program, Vec<(Ident, Ident)>)> {
     let name = fresh.id("correlated_rows");
     let (head, output): (Atom, RelationDecl) = match spec {
         Spec::Exists(_) => (
@@ -238,7 +238,7 @@ fn inner(
         body.push(syn::parse_quote!(where #local == #external));
     }
     let query = syn::parse_quote!(#head :- #body;);
-    (with_query(source, declarations, query, Some(output)), links)
+    Ok((with_query(source, declarations, query, Some(output))?, links))
 }
 
 fn clause(
@@ -289,7 +289,7 @@ pub fn compile(source: &Program, pipeline: &cq_stage::Pipeline) -> syn::Result<C
     main.declarations = declarations.clone();
     let mut subqueries = Vec::new();
     for (position, spec, outer) in specs {
-        let (hole, links) = inner(source, &declarations, &spec, &outer, &mut fresh);
+        let (hole, links) = inner(source, &declarations, &spec, &outer, &mut fresh)?;
         main.query.body[position] = clause(&spec, &hole, &mut fresh, pipeline)?;
         subqueries.push(Subquery {
             position,
@@ -433,7 +433,7 @@ pub fn check(source: &Program, target: &Context, pipeline: &cq_stage::Pipeline) 
             &target.main.declarations,
             subquery.hole.query.clone(),
             Some(output),
-        );
+        )?;
         ensure(
             subquery.hole == expected,
             &subquery.hole,

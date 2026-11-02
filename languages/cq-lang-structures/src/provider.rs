@@ -194,6 +194,8 @@ pub struct InputSchema {
     pub columns: Vec<InputColumn>,
 }
 
+pub use cq_syntax::LogicalTypeId;
+
 /// Declaration-table identity; Rust spelling is never an admission key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CodecId(pub u32);
@@ -221,9 +223,72 @@ impl ToTokens for CodecId {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InputColumn {
     pub logical: syn::Type,
+    pub logical_type_id: Option<LogicalTypeId>,
     pub storage: syn::Type,
     pub codec: Option<syn::Type>,
     pub codec_id: Option<CodecId>,
+}
+
+/// Intern logical spellings at the input declaration table, preserving recorded ids.
+pub fn intern_logical_types<'a>(
+    columns: impl IntoIterator<Item = &'a mut InputColumn>,
+) -> syn::Result<()> {
+    intern_declared_logical_types(columns, &[])
+}
+
+pub(crate) fn intern_declared_logical_types<'a>(
+    columns: impl IntoIterator<Item = &'a mut InputColumn>,
+    declarations: &[cq_syntax::RelationDecl],
+) -> syn::Result<()> {
+    let mut columns: Vec<_> = columns.into_iter().collect();
+    if columns
+        .iter()
+        .all(|column| column.logical_type_id.is_some())
+    {
+        return Ok(());
+    }
+    let mut identities = std::collections::BTreeMap::new();
+    let mut next = 0u32;
+    for column in declarations
+        .iter()
+        .flat_map(|declaration| &declaration.columns)
+    {
+        if let Some(id) = column.logical_type_id {
+            identities
+                .entry(column.ty.to_token_stream().to_string())
+                .or_insert(id);
+            next = next.max(id.0.checked_add(1).ok_or_else(|| {
+                syn::Error::new_spanned(&column.ty, "logical type ids exhausted")
+            })?);
+        }
+    }
+    for column in &columns {
+        if let Some(id) = column.logical_type_id {
+            identities
+                .entry(column.logical.to_token_stream().to_string())
+                .or_insert(id);
+            next = next.max(id.0.checked_add(1).ok_or_else(|| {
+                syn::Error::new_spanned(&column.logical, "logical type ids exhausted")
+            })?);
+        }
+    }
+    for column in &mut columns {
+        if column.logical_type_id.is_none() {
+            let spelling = column.logical.to_token_stream().to_string();
+            let id = match identities.entry(spelling) {
+                std::collections::btree_map::Entry::Occupied(entry) => *entry.get(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    let id = LogicalTypeId(next);
+                    next = next.checked_add(1).ok_or_else(|| {
+                        syn::Error::new_spanned(&column.logical, "logical type ids exhausted")
+                    })?;
+                    *entry.insert(id)
+                }
+            };
+            column.logical_type_id = Some(id);
+        }
+    }
+    Ok(())
 }
 
 /// Intern authored codec spellings once; already recorded identities are opaque.
@@ -640,6 +705,11 @@ impl ToTokens for RadixAdvice {
 
 impl syn::parse::Parse for InputColumn {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let logical_type_id = if input.peek(syn::token::Bracket) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
         let logical = input.parse()?;
         input.parse::<Token![=>]>()?;
         let storage = input.parse()?;
@@ -656,6 +726,7 @@ impl syn::parse::Parse for InputColumn {
         };
         Ok(Self {
             logical,
+            logical_type_id,
             storage,
             codec,
             codec_id,
@@ -675,11 +746,12 @@ impl ToTokens for InputColumn {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         let Self {
             logical,
+            logical_type_id,
             storage,
             codec,
             codec_id,
         } = self;
-        tokens.extend(quote::quote!(#logical => #storage));
+        tokens.extend(quote::quote!(#logical_type_id #logical => #storage));
         if let Some(codec) = codec {
             tokens.extend(quote::quote!(codec #codec_id #codec));
         }
@@ -1158,6 +1230,16 @@ fn check_instance(providers: &Providers, provider: &Provider, in_routed: bool) -
         check_slot(provider, index, rule)?;
     }
     if let Some(input) = &provider.input {
+        if input
+            .columns
+            .iter()
+            .any(|column| column.logical_type_id.is_none())
+        {
+            return error(
+                &provider.token,
+                "logical type identity must accompany its declared spelling",
+            );
+        }
         if input
             .columns
             .iter()

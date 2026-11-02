@@ -342,7 +342,7 @@ fn decoders(
                 && matches!(aggregate.kind, AggregateKind::Min | AggregateKind::Max)
         });
         // DECODE P: grouped answer decoder resolves symbols, nullable extrema and scalars only when the host requests logical rows.
-        decoded.push(if let Some(codec) = codecs.get(ty) {
+        decoded.push(if let Some(codec) = codecs.column(column) {
             quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(
                 u32::try_from(values[#slot]).map_err(|_| "GPU symbol code exceeds u32")?
             ))

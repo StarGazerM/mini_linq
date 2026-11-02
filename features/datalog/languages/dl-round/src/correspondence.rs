@@ -60,7 +60,14 @@ fn required_inputs(
         declaration.name = key.name.clone();
         declaration.columns = if key.columns.is_empty() {
             let column = &declaration.columns[0].name;
-            syn::parse_quote!(#column: ())
+            let logical_type_id = holes[key.hole]
+                .cq
+                .declarations
+                .last()
+                .expect("checked key output")
+                .columns[0]
+                .logical_type_id;
+            syn::parse_quote!(#column: () #logical_type_id)
         } else {
             key.columns
                 .iter()
@@ -347,7 +354,9 @@ pub(crate) fn check_storage_with_analysis(
             output.value = None;
             let expected_args: Vec<Expr> = if key.columns.is_empty() {
                 let column = &hole.declarations.last().expect("checked output").columns[0].name;
-                output.columns = syn::parse_quote!(#column: ());
+                let logical_type_id =
+                    hole.declarations.last().expect("checked output").columns[0].logical_type_id;
+                output.columns = syn::parse_quote!(#column: () #logical_type_id);
                 vec![syn::parse_quote!(())]
             } else {
                 output.columns = key

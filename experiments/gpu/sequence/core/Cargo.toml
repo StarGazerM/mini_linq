@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 cq-lang-sequence = { path = "../../../../languages/cq-lang-sequence" }
 cq-lang-structures = { path = "../../../../languages/cq-lang-structures" }
+cq-syntax = { path = "../../../../languages/cq-syntax" }
 cq-print = { path = "../../../../passes/cq-print" }
 cq-physical-realization = { path = "../../../../passes/cq-physical-realization" }
 proc-macro2 = "1"

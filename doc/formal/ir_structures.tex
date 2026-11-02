@@ -61,6 +61,22 @@ Explicit \code{codec [0] Type} and \code{codec [1] Type} remain distinct even
 with the same spelling; explicit ids are preserved. \code{None} is identity.
 Later passes compare recorded ids, never codec types; the type is only a
 printing payload after interning. Codec-id presence records encoding.
+Logical declaration identity is separately recorded as
+\code{logical\_type\_id: Option<cq\_syntax::LogicalTypeId>}, whose id wraps
+\code{u32}. Relation syntax is \code{column: Type [id] in [domain] (expr)};
+provider columns use \code{[id] Logical => Storage codec [id] Codec}.
+Ids may be omitted at declaration boundaries: interning preserves explicit
+ids and shares automatically interned equal spellings once, without merging
+explicitly different ids. Source/provider logical-id mismatches are rejected.
+Parsing a complete Structures program seeds its input declaration table with
+the Physical relation identities, so input encounter order cannot renumber
+logical types. Standalone Structures declarations intern in their own table;
+programmatic producers copy the source declaration identities.
+RA and Physical rows carry a sparse \code{logical\_type\_ids} map.
+Physical computed output columns receive their result declaration's id;
+computed opaque types without such a declaration remain unknown. Later codec lookup is keyed by
+logical id, not by the printing-only logical type. Neither logical identity
+nor codec identity proves the runtime codec laws.
 Comparing token ids is identity, not recognition.
 \begin{mathpar}
 \Rule{STR-Provider}{\mathsf{tokens}(t)=\mathrm{dom}(\mathsf{decls}(t))\quad

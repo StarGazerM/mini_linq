@@ -63,7 +63,7 @@ pub use cq_lang_physical as physical;
 
 pub mod encoded;
 pub mod provider;
-pub use provider::{Capability, CodecId, Declaration, Facts, Provider, Providers};
+pub use provider::{Capability, CodecId, Declaration, Facts, LogicalTypeId, Provider, Providers};
 pub mod stats;
 
 use quote::ToTokens;
@@ -144,6 +144,15 @@ pub struct Structures {
 
 impl syn::parse::Parse for Structures {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        Self::parse_declared(input, &[])
+    }
+}
+
+impl Structures {
+    fn parse_declared(
+        input: syn::parse::ParseStream<'_>,
+        declarations: &[cq_syntax::RelationDecl],
+    ) -> syn::Result<Self> {
         let structures_token = input.parse()?;
         let content;
         let brace = syn::braced!(content in input);
@@ -157,7 +166,7 @@ impl syn::parse::Parse for Structures {
             publications,
             entries,
         };
-        structures.intern_codecs()?;
+        structures.intern_input_declarations(declarations)?;
         Ok(structures)
     }
 }
@@ -638,11 +647,18 @@ impl Structure {
 }
 
 impl Structures {
-    /// Intern opaque codec spellings once at the input declaration boundary.
+    /// Intern opaque logical and codec spellings once at the input declaration boundary.
     /// Explicit identities survive printing and distinguish otherwise identical
     /// spellings. Unnumbered declarations of one spelling share one identity.
     /// Returns a parse error when a fresh identity would exceed `u32::MAX`.
     pub fn intern_codecs(&mut self) -> syn::Result<()> {
+        self.intern_input_declarations(&[])
+    }
+
+    fn intern_input_declarations(
+        &mut self,
+        declarations: &[cq_syntax::RelationDecl],
+    ) -> syn::Result<()> {
         fn collect<'a>(
             provider: &'a mut Provider,
             columns: &mut Vec<&'a mut provider::InputColumn>,
@@ -660,6 +676,10 @@ impl Structures {
                 collect(provider, &mut columns);
             }
         }
+        provider::intern_declared_logical_types(
+            columns.iter_mut().map(|column| &mut **column),
+            declarations,
+        )?;
         provider::intern_codecs(columns)
     }
 
@@ -684,14 +704,26 @@ impl Structures {
 }
 
 /// Physical execution paired with all required storage choices.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Program {
     pub physical: physical::Program,
     pub structures: Structures,
     /// Optional encoded facts travel with the program and are always checked.
     /// The empty contract emits no tokens and changes no default selection.
-    #[parse(encoded::Contract::parse_optional)]
     pub encoded: encoded::Contract,
+}
+
+impl syn::parse::Parse for Program {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let physical: physical::Program = input.parse()?;
+        let structures = Structures::parse_declared(input, &physical.program.declarations)?;
+        let encoded = encoded::Contract::parse_optional(input)?;
+        Ok(Self {
+            physical,
+            structures,
+            encoded,
+        })
+    }
 }
 
 pub mod contract {
@@ -1038,7 +1070,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                             .columns
                             .iter()
                             .zip(&source.columns)
-                            .any(|(recorded, column)| recorded.logical != column.ty)
+                            .any(|(recorded, column)| {
+                                recorded.logical_type_id != column.logical_type_id
+                            })
                     {
                         return error(
                             keyed,

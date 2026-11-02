@@ -656,7 +656,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let fields = relation.declaration.columns.iter().enumerate().map(|(column, declared)| {
             let field = syn::Index::from(column);
             let ty = &declared.ty;
-            match symbols.codec(ty) {
+            match symbols.codec(declared.logical_type_id) {
                 Some(codec) => quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::code(row.#field) as i128),
                 None => quote!(*row.#field as i128),
             }
@@ -807,7 +807,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let at = reorder(&canonical.columns, &(0..relation.declaration.arity()).collect::<Vec<_>>());
         let fields = relation.declaration.columns.iter().zip(at).map(|(declared, position)| {
             let ty = &declared.ty;
-            match symbols.codec(ty) {
+            match symbols.codec(declared.logical_type_id) {
                 // DECODE P: generated SymbolCodec inverse resolves final datalog host output fields.
                 Some(codec) => quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(row[#position] as u32)),
                 // DECODE P: generated numeric carrier inversion constructs final host output fields.

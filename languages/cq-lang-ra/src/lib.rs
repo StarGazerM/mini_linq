@@ -224,6 +224,7 @@ pub struct RelationInfo {
     pub bindings: BTreeMap<String, Ident>,
     pub heading: Heading,
     pub types: BTreeMap<String, syn::Type>,
+    pub logical_type_ids: BTreeMap<String, cq_syntax::LogicalTypeId>,
     /// Columns introduced by Bind or Group. This records provenance, not the ownership
     /// mode chosen by a realization when subsequent expressions read the column.
     pub computed: BTreeSet<String>,
@@ -314,7 +315,7 @@ fn check_in<'a>(
                 for operand in &union.operands {
                     let (name, info) = earlier_relation(operand, &relations)?;
                     schema
-                        .include(&info.heading, &info.types, &info.computed)
+                        .include(&info.heading, &info.logical_type_ids, &info.computed)
                         .map_err(|message| syn::Error::new_spanned(operand, message))?;
                     heading = Some(info.heading.clone());
                     operands.push(name);
@@ -526,6 +527,7 @@ fn check_in<'a>(
         };
 
         let mut types = BTreeMap::new();
+        let mut logical_type_ids = BTreeMap::new();
         if let Operator::Rename(rename) = &definition.operator {
             let declaration = declarations[&symbol_name(&rename.relation)];
             for mapping in &rename.mapping {
@@ -535,6 +537,9 @@ fn check_in<'a>(
                     .find(|c| symbol_name(&c.name) == symbol_name(&mapping.source))
                     .unwrap();
                 types.insert(symbol_name(&mapping.target), column.ty.clone());
+                if let Some(id) = column.logical_type_id {
+                    logical_type_ids.insert(symbol_name(&mapping.target), id);
+                }
             }
         } else {
             for operand in &operands {
@@ -543,8 +548,19 @@ fn check_in<'a>(
                         types.entry(name.clone()).or_insert_with(|| ty.clone());
                     }
                 }
+                for (name, id) in &relations[operand].logical_type_ids {
+                    if heading.contains(name) {
+                        logical_type_ids.entry(name.clone()).or_insert(*id);
+                    }
+                }
             }
         }
+        logical_type_ids.retain(|column, id| {
+            operands.iter().all(|operand| {
+                let input = &relations[operand];
+                !input.heading.contains(column) || input.logical_type_ids.get(column) == Some(id)
+            })
+        });
         let mut computed: BTreeSet<_> = operands
             .iter()
             .flat_map(|r| {
@@ -558,12 +574,14 @@ fn check_in<'a>(
         if let Operator::Bind(bind) = &definition.operator {
             for (name, ty) in bind.binding_types() {
                 types.insert(symbol_name(&name), ty);
+                logical_type_ids.remove(&symbol_name(&name));
                 computed.insert(symbol_name(&name));
             }
         }
         if let Operator::Group(group) = &definition.operator {
             for aggregate in &group.aggregates {
                 types.insert(symbol_name(&aggregate.name), aggregate.ty.clone());
+                logical_type_ids.remove(&symbol_name(&aggregate.name));
                 computed.insert(symbol_name(&aggregate.name));
             }
         }
@@ -599,6 +617,7 @@ fn check_in<'a>(
                 bindings,
                 heading,
                 types,
+                logical_type_ids,
                 computed,
                 operands,
             },
