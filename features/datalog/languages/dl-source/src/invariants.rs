@@ -135,7 +135,10 @@ pub fn check(program: &Program) -> syn::Result<()> {
         // DL-AnswerOwnership realizes the declared-owned result downstream.
         // Formal rule DL-InvariantProjection: preserve positive-input variables
         // in column order, as relational head variables rather than Rust copies.
-        let expected_head = input.args.iter().filter(|arg| rust::variable(arg).is_some());
+        let expected_head = input
+            .args
+            .iter()
+            .filter(|arg| rust::variable(arg).is_some());
         ensure(
             definition.head.args.iter().eq(expected_head),
             program,

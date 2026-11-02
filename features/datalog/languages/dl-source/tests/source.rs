@@ -11,14 +11,19 @@ fn source_interns_domains_once_and_preserves_recorded_identities() {
         output Output;
         Output(*x) :- Input(x);
     };
-    let ids: Vec<_> = source.declarations.iter()
+    let ids: Vec<_> = source
+        .declarations
+        .iter()
         .map(|relation| relation.columns[0].domain.as_ref().unwrap().id)
         .collect();
-    assert_eq!(ids, [
-        Some(cq_syntax::DomainId(0)),
-        Some(cq_syntax::DomainId(1)),
-        Some(cq_syntax::DomainId(1)),
-    ]);
+    assert_eq!(
+        ids,
+        [
+            Some(cq_syntax::DomainId(0)),
+            Some(cq_syntax::DomainId(1)),
+            Some(cq_syntax::DomainId(1)),
+        ]
+    );
     let mut reordered = source.clone();
     reordered.declarations.swap(0, 1);
     let parsed: Program = syn::parse2(reordered.to_token_stream()).unwrap();

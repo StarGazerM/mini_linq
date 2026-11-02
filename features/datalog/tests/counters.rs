@@ -416,3 +416,40 @@ fn in_plan_admission_prunes_known_heads_before_the_trailing_expansion() {
         "in-plan admission {in_plan_work} vs admission-time {admit_work}"
     );
 }
+
+use std::collections::BTreeSet;
+
+#[test]
+fn push_zero_key_reads_scan_host_and_retained_operands() {
+    let left = [(1_i32,), (2,)];
+    for right in [vec![], vec![(3_i32,), (4,)]] {
+        macro_rules! run {
+            ($mode:ident) => {{
+                cq_storage::counters::reset();
+                let rows: BTreeSet<_> = mini_linq::passes::select! {
+                    pipeline { own_push::push };
+                    physical {
+                        relation L(x:i32) = (&left);
+                        relation R(y:i32) = (&right);
+                        l = pipe rename L@0 {x -> x};
+                        r = $mode rename R@1 {y -> y};
+                        nonempty = pipe semi eager [] l,r;
+                        product = pipe probe first [] nonempty,r;
+                        out = let canon project product keep {x,y};
+                        return out as answer(x,y);
+                    }
+                }
+                .map(|(x, y)| (*x, *y))
+                .collect();
+                assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
+                rows
+            }};
+        }
+        let expected: BTreeSet<_> = left
+            .iter()
+            .flat_map(|&(x,)| right.iter().map(move |&(y,)| (x, y)))
+            .collect();
+        assert_eq!(run!(pipe), expected);
+        assert_eq!(run!(let), expected);
+    }
+}

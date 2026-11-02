@@ -46,13 +46,20 @@ fn hole_declarations_preserve_source_domain_ids_in_subsets() {
             delta Reach = Recent;
             variant 0 seed { Reach(*x,*y) :- Edge(x,y), !Blocked(y); }
         }
-    }).unwrap();
+    })
+    .unwrap();
     let target = compile(&source).unwrap();
     let domain = source.incremental.strata.source.declarations[1].columns[0]
-        .domain.as_ref().unwrap().id;
+        .domain
+        .as_ref()
+        .unwrap()
+        .id;
     assert_eq!(domain, Some(cq_syntax::DomainId(1)));
     for hole in &target.holes {
-        let domains: Vec<_> = hole.cq.declarations.iter()
+        let domains: Vec<_> = hole
+            .cq
+            .declarations
+            .iter()
             .flat_map(|declaration| &declaration.columns)
             .filter_map(|column| column.domain.as_ref())
             .collect();
@@ -63,8 +70,11 @@ fn hole_declarations_preserve_source_domain_ids_in_subsets() {
     assert_eq!(parsed, target);
     check(&source, &parsed).unwrap();
     let mut changed = target.clone();
-    changed.holes[0].cq.declarations[0].columns[0].domain.as_mut().unwrap().id =
-        Some(cq_syntax::DomainId(0));
+    changed.holes[0].cq.declarations[0].columns[0]
+        .domain
+        .as_mut()
+        .unwrap()
+        .id = Some(cq_syntax::DomainId(0));
     assert!(check(&source, &changed).is_err());
 }
 

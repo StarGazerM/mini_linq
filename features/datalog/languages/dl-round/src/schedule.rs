@@ -433,7 +433,11 @@ pub fn check(program: &Program, analysis: &storage::Analysis) -> syn::Result<()>
         schedule,
         "schedule must cover every component exactly once",
     )?;
-    ensure(schedule.streams >= 1, schedule, "a schedule needs at least one stream")?;
+    ensure(
+        schedule.streams >= 1,
+        schedule,
+        "a schedule needs at least one stream",
+    )?;
     for (entry, stratum) in schedule.strata.iter().zip(&program.context.strata) {
         let derived = derive_reads(&program.storage, analysis, stratum)?;
         ensure(
@@ -679,7 +683,9 @@ mod tests {
         check_lanes(&[lanes(1, &[&[0, 2], &[1]])], &waves, 2).unwrap();
         check_lanes(&[], &waves, 1).unwrap();
         let rejected = |entries: &[WaveLanes], streams| {
-            check_lanes(entries, &waves, streams).unwrap_err().to_string()
+            check_lanes(entries, &waves, streams)
+                .unwrap_err()
+                .to_string()
         };
         assert!(rejected(&[lanes(1, &[&[0, 2], &[1]])], 1).contains("lane count"));
         assert!(rejected(&[lanes(1, &[&[0, 2]])], 2).contains("partition"));

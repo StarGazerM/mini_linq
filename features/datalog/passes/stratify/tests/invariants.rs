@@ -39,7 +39,15 @@ fn frozen_filter_roundtrips_and_erases_independently() {
 
 #[test]
 fn helper_projection_is_relational_and_type_blind() {
-    for ty in ["i64", "::core::primitive::u32", "bool", "char", "&'static str", "String", "UserType"] {
+    for ty in [
+        "i64",
+        "::core::primitive::u32",
+        "bool",
+        "char",
+        "&'static str",
+        "String",
+        "UserType",
+    ] {
         let mut source = source();
         for declaration in &mut source.declarations {
             for column in &mut declaration.columns {
@@ -52,7 +60,11 @@ fn helper_projection_is_relational_and_type_blind() {
         assert_eq!(helper.head.args[0], syn::parse_quote!(y));
         assert_eq!(helper.head.args[1], syn::parse_quote!(z));
         invariants::check(&before, &after).unwrap();
-        for expression in [syn::parse_quote!(*y), syn::parse_quote!((*y).clone()), syn::parse_quote!(z)] {
+        for expression in [
+            syn::parse_quote!(*y),
+            syn::parse_quote!((*y).clone()),
+            syn::parse_quote!(z),
+        ] {
             let mut forged = after.clone();
             forged.source.rules.last_mut().unwrap().head.args[0] = expression;
             assert!(contract::check(&forged).is_err());
@@ -77,7 +89,11 @@ fn helper_projection_preserves_each_selected_code_domain() {
     assert_eq!(after.source.invariants.len(), 1);
     let helper = after.source.declarations.last().unwrap();
     assert_eq!(helper.columns.len(), 2);
-    for (column, input) in helper.columns.iter().zip(source.declarations[1].columns.iter().skip(1)) {
+    for (column, input) in helper
+        .columns
+        .iter()
+        .zip(source.declarations[1].columns.iter().skip(1))
+    {
         assert_eq!(column.ty, input.ty);
         assert_eq!(column.domain, input.domain);
     }

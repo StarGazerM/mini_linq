@@ -140,12 +140,24 @@ fn known_advice_parses_known_only_and_rejects_conflicts() {
     assert_eq!(planned.plans[2].known, Some(Known::At(1)));
     assert_eq!(planned.plans[2].smallest.len(), 1);
     for (invalid, message) in [
-        (quote!(plan(Cast, known(admit), known(admit));), "duplicate or conflicting known"),
-        (quote!(plan(Cast, known(admit), known(at(level 1)));), "duplicate or conflicting known"),
-        (quote!(plan(Cast, known(at(level 0)));), "counts positive reads from 1"),
+        (
+            quote!(plan(Cast, known(admit), known(admit));),
+            "duplicate or conflicting known",
+        ),
+        (
+            quote!(plan(Cast, known(admit), known(at(level 1)));),
+            "duplicate or conflicting known",
+        ),
+        (
+            quote!(plan(Cast, known(at(level 0)));),
+            "counts positive reads from 1",
+        ),
         (quote!(plan(Cast, known(at(2)));), "expected `level`"),
         (quote!(plan(Cast, known(somewhere));), "expected `at`"),
-        (quote!(plan(Cast, smallest(R, S), known(admit));), "requires order"),
+        (
+            quote!(plan(Cast, smallest(R, S), known(admit));),
+            "requires order",
+        ),
         (quote!(plan(Cast,);), "needs order(...) or known(...)"),
     ] {
         let error = match incremental_arguments.parse2(invalid.clone()) {

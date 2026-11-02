@@ -100,7 +100,10 @@ impl Program {
             return Vec::new();
         };
         let name = symbol_name(relation);
-        let Some(declaration) = self.declarations.iter().find(|d| symbol_name(&d.name) == name)
+        let Some(declaration) = self
+            .declarations
+            .iter()
+            .find(|d| symbol_name(&d.name) == name)
         else {
             return Vec::new();
         };

@@ -485,11 +485,18 @@ fn known_only_advice_keeps_driver_order_and_round_trips() {
         assert_eq!(advised.known, expected, "{advised:?}");
     }
     // A level beyond the rule's positive reads is rejected by the contract.
-    let beyond = vec![known(syn::parse_quote!(Step), None, incremental::Known::At(4))];
+    let beyond = vec![known(
+        syn::parse_quote!(Step),
+        None,
+        incremental::Known::At(4),
+    )];
     let error =
         seminaive::compile_with_advice(&strata, seminaive::DriverPolicy::WrittenOrder, &beyond)
             .unwrap_err();
-    assert!(error.to_string().contains("names no positive read"), "{error}");
+    assert!(
+        error.to_string().contains("names no positive read"),
+        "{error}"
+    );
     // One version accepts one plan, so duplicate known advice is rejected.
     let duplicate = vec![
         known(syn::parse_quote!(Step), None, incremental::Known::Admit),

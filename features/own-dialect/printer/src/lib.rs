@@ -721,10 +721,7 @@ impl Push<'_> {
         let right = symbol_name(&keyed.right);
         let columns = sorted(&keyed.columns);
         let test = if columns.is_empty() {
-            let label = syn::Lifetime::new(
-                &format!("'__cq_nonempty_{reader}"),
-                Span::mixed_site(),
-            );
+            let label = syn::Lifetime::new(&format!("'__cq_nonempty_{reader}"), Span::mixed_site());
             let rows = self.emit(&right, quote!(break #label true;))?;
             quote!(#label: { #rows false })
         } else if let Some(test) = self.keyset_contains(&left, &right, &columns) {

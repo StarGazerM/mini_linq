@@ -262,7 +262,11 @@ pub(crate) fn body(
         let named = rust::variable(value).is_some_and(|v| {
             named.contains_key(&symbol_name(v)) || scope.contains_key(&symbol_name(v))
         });
-        if !named && rust::free_variables(value).dependencies(&logical).is_empty() {
+        if !named
+            && rust::free_variables(value)
+                .dependencies(&logical)
+                .is_empty()
+        {
             let id = fresh.id("reference_capture");
             hoisted.push(BodyItem::Let(Box::new(
                 syn::parse_quote!(let #id = ::std::clone::Clone::clone(&(#value))),
@@ -286,7 +290,9 @@ pub(crate) fn body(
         .collect();
     let heads: Vec<&syn::Expr> = owned.iter().collect();
     let variables = variable_domains(&ordered, inputs.domains);
-    nested(&ordered, &heads, candidates, inputs, &variables, scope, fresh)
+    nested(
+        &ordered, &heads, candidates, inputs, &variables, scope, fresh,
+    )
 }
 
 // Scope values record borrowed atom/generator columns (true) versus native
@@ -536,7 +542,9 @@ fn constraint(
         }
         Constraint::Or(branches) => {
             let branches = branches.iter().map(|branch| {
-                let terms = branch.iter().map(|value| constraint(value, scope, variables));
+                let terms = branch
+                    .iter()
+                    .map(|value| constraint(value, scope, variables));
                 quote!(true #(&& (#terms))*)
             });
             quote!(false #(|| (#branches))*)

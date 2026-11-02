@@ -112,11 +112,7 @@ fn check_constants(data: &Data) {
             )
         })
         .collect();
-    let edges: Vec<_> = data
-        .edge
-        .iter()
-        .map(|&(x, y)| (name(x), name(y)))
-        .collect();
+    let edges: Vec<_> = data.edge.iter().map(|&(x, y)| (name(x), name(y))).collect();
     let mut modifiers: Vec<_> = data
         .nodes
         .iter()

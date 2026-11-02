@@ -107,12 +107,18 @@ fn both_printers_preserve_fused_union_fallback_and_suffix_rust() {
 #[allow(non_snake_case)]
 fn both_printers_keep_owned_non_copy_fallback_interfaces() {
     let R = [(1_i32,), (2,)];
-    macro_rules! run { ($endpoint:ident, $printer:path) => { mini_linq::compile! {
-        pipeline {print_input = $endpoint; print = $printer;}
-        struct Q; relation R(x:i32);
-        answer(y) :- R(x), {if std::convert::identity(*x)==1, let y:Vec<i64>=vec![1]}
-            else {let y:Vec<i64>=vec![2]};
-    }.map(|(y,)|y).collect::<BTreeSet<_>>() }; }
+    macro_rules! run {
+        ($endpoint:ident, $printer:path) => {
+            mini_linq::compile! {
+                pipeline {print_input = $endpoint; print = $printer;}
+                struct Q; relation R(x:i32);
+                answer(y) :- R(x), {if std::convert::identity(*x)==1, let y:Vec<i64>=vec![1]}
+                    else {let y:Vec<i64>=vec![2]};
+            }
+            .map(|(y,)| y)
+            .collect::<BTreeSet<_>>()
+        };
+    }
     assert_eq!(
         run!(structures, own_push::push),
         run!(sequence, mini_linq::passes::translate_pull)

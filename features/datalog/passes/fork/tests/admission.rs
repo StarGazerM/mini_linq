@@ -81,7 +81,10 @@ fn default_admission_follows_the_recorded_fanout() {
             .arguments
             .to_string();
         assert!(arguments.is_empty(), "{arguments}");
-        assert_eq!(target.holes[rule.hole].planning.as_ref().unwrap().known, None);
+        assert_eq!(
+            target.holes[rule.hole].planning.as_ref().unwrap().known,
+            None
+        );
     }
     let reparsed: round::Program = syn::parse2(target.to_token_stream()).unwrap();
     assert_eq!(reparsed, target);
@@ -528,10 +531,7 @@ fn advised_in_plan_requires_a_planning_owner() {
 fn recorded_planning_preserves_only_explicit_known_pins() {
     let (storage, original) = unadvised(quote!());
     let hole = rule(&original, "Flag").hole;
-    assert_eq!(
-        original.holes[hole].planning.as_ref().unwrap().known,
-        None
-    );
+    assert_eq!(original.holes[hole].planning.as_ref().unwrap().known, None);
     let mut alternative = original.clone();
     alternative.holes[hole].planning.as_mut().unwrap().known = Some(2);
     assert!(check(&storage, &alternative).is_err());

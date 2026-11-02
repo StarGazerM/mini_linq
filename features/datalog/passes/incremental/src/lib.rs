@@ -1,8 +1,8 @@
 //! Record the exact Boolean semi-naive cover without storage decisions.
 use cq_datalog_support::{Fresh, ensure};
-use cq_lang_datalog_incremental::{AdviceStep, Delta, Program, Variant, contract};
 /// ADM-InPlan advice carried by [`RulePlan::known`].
 pub use cq_lang_datalog_incremental::Known;
+use cq_lang_datalog_incremental::{AdviceStep, Delta, Program, Variant, contract};
 use cq_lang_datalog_strata as strata;
 /// CQ `plan(order(...))` atom selectors, shared by rule plan advice.
 pub use cq_order::OrderAtom;
