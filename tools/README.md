@@ -34,6 +34,13 @@ requires them. Do not rerun behavioral gates for a docs-only rebase.
 An explicitly named selector narrows even an impact-selected run; omit selectors
 for the final gate. Unknown selectors are errors, not successful empty gates.
 
+The regression inventory contains no GPU targets. When a merge batch can affect
+GPU code (any shared compiler crate, `experiments/gpu`, or the Datalog
+pipelines), Main also runs `bash tools/gpu_gate.sh` once for the batch: the GPU
+Datalog, Sequence and TPC-H crate suites, the `doop-gpu`/`srd-doop-gpu` builds,
+and `doop-gpu` on Cassandra, which compares all 26 complete output tuple sets
+against `doop-mini`. It holds `/tmp/mini_linq-gpu.lock` for the whole run.
+
 Verification follows what a change can break: docs-only changes run nothing;
 test tooling runs its own unit tests; an oracle/infrastructure swap checks only
 that the oracle is unchanged; compiler/runtime changes run the track gate above.
