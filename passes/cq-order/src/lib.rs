@@ -11,7 +11,9 @@
 //! Ordering plans each block recursively.
 //! A Rust-free block is one hyperedge over its free/interface heading at its CQ clause index.
 //! A Rust block requires its free variables and provides its interface after all arms.
-//! A Rust-free block that takes a finite prefix domain also requires its free variables.
+//! A Rust-free block that takes a finite prefix domain also requires its free variables,
+//! provided by the scope's seed or its earlier clauses: a hoisted arm without a finite
+//! domain sees its free columns but no seed provides them.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
@@ -241,26 +243,32 @@ fn ready(clauses: &[Clause<'_>], bound: &BTreeSet<String>, clause: usize) -> boo
 type Rank = (bool, bool, usize, usize);
 
 /// Place the clauses one at a time, each the least ready clause by `rank`.
+/// Ranks see the whole visible `context`; readiness sees only what `seed`
+/// and earlier clauses provide (a hoisted arm without a finite domain sees
+/// its free columns but no seed provides them).
 fn schedule(
     query: &cq::Query,
     clauses: &[Clause<'_>],
     context: &BTreeSet<String>,
+    seed: &BTreeSet<String>,
     rank: impl Fn(usize, &BTreeSet<String>) -> Rank,
 ) -> syn::Result<Vec<usize>> {
     let mut bound = context.clone();
+    let mut provided = seed.clone();
     let mut pending: Vec<usize> = (0..clauses.len()).collect();
     let mut sequence = Vec::with_capacity(clauses.len());
     while !pending.is_empty() {
         let choice = pending
             .iter()
             .copied()
-            .filter(|&c| ready(clauses, &bound, c))
+            .filter(|&c| ready(clauses, &provided, c))
             .min_by_key(|&c| rank(c, &bound));
         let Some(choice) = choice else {
             return Err(syn::Error::new_spanned(query, "no clause is ready"));
         };
         pending.retain(|&c| c != choice);
         bound.extend(clauses[choice].provides.iter().cloned());
+        provided.extend(clauses[choice].provides.iter().cloned());
         sequence.push(choice);
     }
     Ok(sequence)
@@ -333,6 +341,7 @@ fn elimination(
     source: &cq::Program,
     clauses: &[Clause<'_>],
     context: &BTreeSet<String>,
+    seed: &BTreeSet<String>,
 ) -> syn::Result<(Vec<usize>, Vec<String>)> {
     let order = cq::hypergraph::Analysis::of(source).elimination_order;
     let mut earliest = vec![order.len(); clauses.len()];
@@ -347,7 +356,7 @@ fn elimination(
             earliest[clause] = earliest[clause].min(position);
         }
     }
-    let sequence = schedule(&source.query, clauses, context, |clause, _| {
+    let sequence = schedule(&source.query, clauses, context, seed, |clause, _| {
         if clauses[clause].is_atom() {
             (true, false, earliest[clause], clause)
         } else {
@@ -427,10 +436,12 @@ fn coarse(clauses: &[Clause<'_>], sequence: &[usize]) -> Vec<valuation::Step> {
 }
 
 /// The steps of a fine plan under construction: guards and bindings are
-/// placed as soon as their variables are bound.
+/// placed as soon as their variables are provided.
 struct Fine<'a> {
     clauses: &'a [Clause<'a>],
     bound: BTreeSet<String>,
+    /// What the seed and the emitted steps provide; see [`schedule`].
+    provided: BTreeSet<String>,
     /// Guards and bindings not yet placed, in query order.
     waiting: Vec<usize>,
     steps: Vec<valuation::Step>,
@@ -443,7 +454,7 @@ impl Fine<'_> {
                 .waiting
                 .iter()
                 .copied()
-                .filter(|&c| ready(self.clauses, &self.bound, c))
+                .filter(|&c| ready(self.clauses, &self.provided, c))
                 .min_by_key(|&c| {
                     (
                         usize::from(!matches!(
@@ -458,6 +469,8 @@ impl Fine<'_> {
             };
             self.waiting.retain(|&c| c != clause);
             self.bound
+                .extend(self.clauses[clause].provides.iter().cloned());
+            self.provided
                 .extend(self.clauses[clause].provides.iter().cloned());
             self.steps.push(match self.clauses[clause].item {
                 BodyItem::Equality(equality) => {
@@ -485,6 +498,10 @@ impl Fine<'_> {
     /// The clause's subatom over its bound columns.
     fn subatom(&mut self, clause: usize, atom: &cq::Atom) {
         let step = subatom(clause, atom, |v| self.bound.contains(v));
+        if let valuation::Step::Atom(subatom, _) = &step {
+            self.provided
+                .extend(subatom.variables().map(|(_, v)| symbol_name(v)));
+        }
         self.steps.push(step);
     }
 }
@@ -499,6 +516,7 @@ fn fine(
     sequence: &[usize],
     variables: &[String],
     context: &BTreeSet<String>,
+    seed: &BTreeSet<String>,
 ) -> syn::Result<Vec<valuation::Step>> {
     let atoms: Vec<usize> = sequence
         .iter()
@@ -513,6 +531,7 @@ fn fine(
     let mut plan = Fine {
         clauses,
         bound: context.clone(),
+        provided: seed.clone(),
         waiting: (0..clauses.len())
             .filter(|&c| !clauses[c].is_atom())
             .collect(),
@@ -612,7 +631,7 @@ pub fn compile_unrestricted(
     options: &Options,
 ) -> syn::Result<valuation::Program> {
     cq::normal::check(source)?;
-    let steps = compile_body(source, options, &BTreeSet::new(), None)?;
+    let steps = compile_body(source, options, &BTreeSet::new(), &BTreeSet::new(), None)?;
     let program = valuation::Program {
         cq: source.clone(),
         valuation: valuation::Valuation {
@@ -788,7 +807,7 @@ pub fn compile_explicit(
             ));
         }
     }
-    let sequence = schedule(&source.query, &clauses, &context, |clause, _| {
+    let sequence = schedule(&source.query, &clauses, &context, &context, |clause, _| {
         (
             clauses[clause].is_atom(),
             false,
@@ -1027,10 +1046,14 @@ fn place_ready_advice(
 }
 
 /// Formal rule O-BlockPlacement: Ordinary ordering hoists Rust-free blocks and correlates blocks containing Rust steps.
+/// `context` is the scope's visible lexical context; `seed` the columns its
+/// seed provides (all of `context`, except in a hoisted arm without a finite
+/// domain, which starts from none).
 fn compile_body(
     source: &cq::Program,
     options: &Options,
     context: &BTreeSet<String>,
+    seed: &BTreeSet<String>,
     parent: Option<(valuation::Occurrence, usize)>,
 ) -> syn::Result<Vec<valuation::Step>> {
     let query = &source.query;
@@ -1046,7 +1069,13 @@ fn compile_body(
                     .iter()
                     .flat_map(cq::hypergraph::LocalPredicate::restrictions),
             );
-            let sequence = schedule(query, &clauses, context, filtered_rank(&clauses, &filters))?;
+            let sequence = schedule(
+                query,
+                &clauses,
+                context,
+                seed,
+                filtered_rank(&clauses, &filters),
+            )?;
             let variables = binding_order(&clauses, &sequence);
             (sequence, variables)
         }
@@ -1056,11 +1085,17 @@ fn compile_body(
             (sequence, variables)
         }
         Heuristic::Prefix(ranking) => {
-            let sequence = schedule(query, &clauses, context, prefix_rank(&clauses, ranking))?;
+            let sequence = schedule(
+                query,
+                &clauses,
+                context,
+                seed,
+                prefix_rank(&clauses, ranking),
+            )?;
             let variables = binding_order(&clauses, &sequence);
             (sequence, variables)
         }
-        Heuristic::Elimination => elimination(source, &clauses, context)?,
+        Heuristic::Elimination => elimination(source, &clauses, context, seed)?,
     };
     // Elimination removes leaves first. Enumerating in that direction joins
     // their independent projections before any connecting variable is bound.
@@ -1097,7 +1132,7 @@ fn compile_body(
     let steps = match options.split {
         Split::Coarse => coarse(&clauses, &sequence),
         Split::Fine if options.heuristic == Heuristic::Written => written_fine(&clauses, context),
-        Split::Fine => fine(query, &clauses, &sequence, &variables, context)?,
+        Split::Fine => fine(query, &clauses, &sequence, &variables, context, seed)?,
     };
     let mut prefix = context.clone();
     let mut written_contexts = Vec::new();
@@ -1119,6 +1154,11 @@ fn compile_body(
         if let BodyItem::Block(block) = clauses[clause].item {
             let facts = block.analyze(&written_contexts[clause]);
             let context = facts.free.keys().cloned().collect();
+            let seed = if facts.rust || block.needs_domain(&facts) {
+                &context
+            } else {
+                &BTreeSet::new()
+            };
             let mut branches = Vec::new();
             for (j, branch) in block.branches.iter().enumerate() {
                 let mut branch_source = source.clone();
@@ -1129,6 +1169,7 @@ fn compile_body(
                         &branch_source,
                         options,
                         &context,
+                        seed,
                         Some((atom.clause.clone(), j)),
                     )?,
                 });
@@ -1330,6 +1371,12 @@ fn check_steps(
                     .flat_map(cq::hypergraph::LocalPredicate::restrictions),
             );
             let mut bound = context;
+            // Readiness sees what the scope's seed provides (VO records it).
+            let mut provided = analysis
+                .provided_before
+                .first()
+                .cloned()
+                .unwrap_or_default();
             let mut pending = placed;
             for clause in written {
                 // Independently check the greedy choice, not compiler output equality.
@@ -1337,7 +1384,7 @@ fn check_steps(
                 if pending
                     .iter()
                     .copied()
-                    .filter(|&c| ready(&facts, &bound, c))
+                    .filter(|&c| ready(&facts, &provided, c))
                     .any(|c| rank(c, &bound) < rank(clause, &bound))
                 {
                     return Err(syn::Error::new_spanned(
@@ -1349,6 +1396,7 @@ fn check_steps(
                 }
                 pending.retain(|&c| c != clause);
                 bound.extend(facts[clause].provides.iter().cloned());
+                provided.extend(facts[clause].provides.iter().cloned());
             }
         }
     }

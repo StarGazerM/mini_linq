@@ -40,7 +40,9 @@ the reduction graph need not be acyclic;
 (5)~blocks recursively check kind, paths, interface coverage, arm schedules and
 the required placement field. Hoisted blocks contain no Rust steps, and one
 taking a finite prefix domain (an arm lacks a generator for a free column)
-follows its free columns; correlated
+follows its free columns as provided by the scope (a correlated arm's prefix,
+a hoisted arm's finite domain, or the scope's own earlier steps; a hoisted
+arm without a finite domain provides none of its free columns up front); correlated
 blocks require every free prefix variable. Repeated reads retain placement;
 (6)~a restriction (WF-Restrict) names a positive atom occurrence of its scope,
 carries a written relational predicate other than a variable identity (a

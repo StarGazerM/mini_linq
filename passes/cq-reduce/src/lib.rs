@@ -399,7 +399,7 @@ fn compile_steps(
         .collect();
     if !required.is_empty() {
         let position = analysis
-            .bound_before
+            .provided_before
             .iter()
             .position(|names| required.iter().all(|name| names.contains(name)))
             .ok_or_else(|| {

@@ -200,11 +200,15 @@ impl Subatom {
 pub struct Analysis {
     pub branches: BTreeMap<usize, Vec<Analysis>>,
     /// For each hoisted block that takes a finite prefix domain: its free
-    /// columns not bound by the scope context. VO binds them before the block
-    /// and before any reduction that reads it.
+    /// columns the scope's seed does not provide. VO provides them before the
+    /// block and before any reduction that reads it.
     pub domain_requires: BTreeMap<usize, BTreeSet<String>>,
     /// Variables bound before each step, in binding order.
     pub bound_before: Vec<Vec<String>>,
+    /// Variables the scope's seed and its earlier steps provide before each
+    /// step. It equals `bound_before` except in a hoisted arm without a finite
+    /// domain, whose free columns are visible but provided by no seed.
+    pub provided_before: Vec<BTreeSet<String>>,
     /// For atom steps: the variables the step newly binds.
     pub introduces: Vec<Vec<String>>,
     /// Clause index → the full atom of the normal-form query.
@@ -242,6 +246,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         &program.cq.query.body,
         &program.valuation.steps,
         Vec::new(),
+        BTreeSet::new(),
         None,
         &schema,
         &BTreeMap::new(),
@@ -254,6 +259,7 @@ fn analyze_steps(
     body: &cq_syntax::CommaList<cq::BodyItem>,
     steps: &[Step],
     context: Vec<String>,
+    seed: BTreeSet<String>,
     parent: Option<(Occurrence, usize)>,
     schema: &BTreeMap<String, &cq::RelationDecl>,
     inherited_types: &BTreeMap<String, syn::Type>,
@@ -311,7 +317,7 @@ fn analyze_steps(
                     let required: BTreeSet<_> = facts
                         .free
                         .keys()
-                        .filter(|name| !context.contains(*name))
+                        .filter(|name| !seed.contains(*name))
                         .cloned()
                         .collect();
                     if !required.is_empty() {
@@ -370,6 +376,7 @@ fn analyze_steps(
         Ok(variables)
     };
     let mut bound = context;
+    let mut provided = seed;
     let mut seen_atoms = BTreeSet::new();
     let mut complete = BTreeSet::new();
     let mut placed_equalities = BTreeSet::new();
@@ -379,6 +386,7 @@ fn analyze_steps(
     let mut started = false;
     for step in steps {
         analysis.bound_before.push(bound.clone());
+        analysis.provided_before.push(provided.clone());
         if let Step::Restrict(restriction, _) = step {
             let expected_path = match &parent {
                 Some((path, branch)) => path.child(*branch, restriction.clause()),
@@ -424,11 +432,19 @@ fn analyze_steps(
                 if analysis
                     .domain_requires
                     .get(&clause)
-                    .is_some_and(|names| names.iter().any(|name| !bound.contains(name)))
+                    .is_some_and(|names| names.iter().any(|name| !provided.contains(name)))
                 {
                     return error(block, "hoisted block precedes its finite prefix domain");
                 }
                 let branch_context: Vec<_> = facts.free.keys().cloned().collect();
+                // A correlated arm runs over the prefix and a domain-taking
+                // hoisted arm over its finite domain; any other hoisted arm
+                // starts from no seed.
+                let branch_seed: BTreeSet<String> = if correlated || written.needs_domain(facts) {
+                    facts.free.keys().cloned().collect()
+                } else {
+                    BTreeSet::new()
+                };
                 let mut branches = Vec::new();
                 for (j, (branch, source_branch)) in
                     block.branches.iter().zip(&written.branches).enumerate()
@@ -437,6 +453,7 @@ fn analyze_steps(
                         &source_branch.body,
                         &branch.steps,
                         branch_context.clone(),
+                        branch_seed.clone(),
                         Some((expected_path.clone(), j)),
                         schema,
                         &types,
@@ -680,7 +697,7 @@ fn analyze_steps(
                         .domain_requires
                         .values()
                         .flatten()
-                        .all(|name| bound.contains(name));
+                        .all(|name| provided.contains(name));
                 if seen_atoms.contains(&clause) && !domain_ready {
                     return error(
                         reduce,
@@ -703,7 +720,7 @@ fn analyze_steps(
                     if analysis
                         .domain_requires
                         .get(&dependent)
-                        .is_some_and(|names| names.iter().any(|name| !bound.contains(name)))
+                        .is_some_and(|names| names.iter().any(|name| !provided.contains(name)))
                     {
                         return error(reduce, "reduction precedes its block context domain");
                     }
@@ -746,6 +763,17 @@ fn analyze_steps(
                 analysis.introduces.push(Vec::new());
             }
         }
+        // Every column the step reads is now provided by this scope.
+        match step {
+            Step::Atom(subatom, _) => {
+                provided.extend(subatom.variables().map(|(_, v)| symbol_name(v)))
+            }
+            Step::Block(block, _) => {
+                provided.extend(block.source.variables().map(|(_, v)| symbol_name(v)))
+            }
+            _ => (),
+        }
+        provided.extend(analysis.introduces.last().into_iter().flatten().cloned());
     }
     for (clause, atom) in &analysis.atoms {
         if !complete.contains(clause) {

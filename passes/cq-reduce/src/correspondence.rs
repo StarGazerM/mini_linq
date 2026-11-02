@@ -344,9 +344,9 @@ fn check_masks(
             .position(|step| matches!(step, Step::Atom(..) | Step::Block(..)))
     } else {
         source_info
-            .bound_before
+            .provided_before
             .iter()
-            .position(|bound| required.iter().all(|name| bound.contains(name)))
+            .position(|provided| required.iter().all(|name| provided.contains(*name)))
     };
     let mut consumed = 0;
     let mut actual = BTreeMap::new();

@@ -13,6 +13,15 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Fix (DriftWatch5 #1): a hoisted arm without a finite domain sees its free
+  columns but no seed provides them. VO records `provided_before` per step
+  (the scope's seed plus its earlier steps), so a nested domain-taking block's
+  free columns enter `domain_requires` and WF-BlockPlacement, the reducers'
+  domain boundary and cq-order readiness (schedule, Fine and the Filtered
+  check) wait for the arm's own generator instead of lowering
+  `project Unit keep {x}`. Regression:
+  `a_nested_domain_block_in_an_unseeded_hoisted_arm_follows_its_generator`.
+
 - Elaboration redesign slice 5 (pure rename): `cq-elaborate` is now
   `cq-relational-lowering` (`cq_relational_lowering::{compile, check}`), and
   its rules use the `RL-` prefix: E-Emit→RL-Emit, E-Relation→RL-Occurrence,
