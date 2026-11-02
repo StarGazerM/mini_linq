@@ -39,6 +39,11 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   wiring CK-Elaborate states, so `stage_differential -- --ignored` passes for
   seeds 557/877/941 (regression test in `pass_contracts`).
 
+- The opt-in GPU fuzz harness selects the GPU catalog, downloads device CQ
+  answers explicitly, and builds generated consumers with the pinned oxide
+  materialized-cubin release path. It attempts both CQ and Datalog lanes and
+  reports each outcome instead of letting the first failure hide the second.
+
 - F5: task decomposition recognizes independent union arms beneath unary
   consumers (including the canonicalization of lowered set union), publishes
   each arm separately, and concatenates/canonicalizes at host. The dispatch

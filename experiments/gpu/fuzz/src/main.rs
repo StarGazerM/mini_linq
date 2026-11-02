@@ -6,7 +6,7 @@ use std::{fmt::Write as _, path::Path, process::Command};
 mod datalog;
 
 const GPU_DL: &str = "incremental = cq_datalog::passes::incremental(driver(delta_first);); storage_rewrites = [cq_gpu_datalog::device_storage]; cq = pipeline { physical = [cq_gpu_sequence::capture_constants]; structures = [cq_gpu_datalog::bind_inputs, cq_gpu_sequence::bind_runs]; sequence = mini_linq::passes::sequence; stage = cq_gpu_sequence::stage; decompose = [cq_gpu_sequence::decompose]; grade = cq_gpu_sequence::machine_grade; print = cq_gpu_sequence::translate_arena; }; terminals = [cq_gpu_sequence::translate_arena => batch]; round = [cq_gpu_datalog::bind_round(binding = 5)]; print = cq_gpu_datalog::print_rounds;";
-const GPU_CQ: &str = "physical = [cq_gpu_sequence::capture_constants]; structures = [cq_gpu_sequence::bind_runs]; sequence = mini_linq::passes::sequence; stage = cq_gpu_sequence::stage; decompose = [cq_gpu_sequence::decompose]; grade = cq_gpu_sequence::machine_grade; print = cq_gpu_sequence::translate;";
+const GPU_CQ: &str = "physical = [cq_gpu_sequence::capture_constants]; structures = [cq_gpu_sequence::bind_runs, cq_gpu_sequence::select_catalog]; sequence = mini_linq::passes::sequence; stage = cq_gpu_sequence::stage; decompose = [cq_gpu_sequence::decompose]; grade = cq_gpu_sequence::machine_grade; print = cq_gpu_sequence::translate;";
 
 fn cq_source(seed: u64, count: usize) -> String {
     use cq_testkit::fuzz::{Profile, generate_with};
@@ -73,21 +73,26 @@ fn cq_source(seed: u64, count: usize) -> String {
             .map(|t| format!("{},", t.rust()))
             .collect::<String>();
         writeln!(source, "let expected: std::collections::BTreeSet<({types})> = [{expected}].into_iter().collect();").unwrap();
+        let owned = (0..outputs.len())
+            .map(|index| format!("row.{index}.to_owned(),"))
+            .collect::<String>();
+        let cpu_rows = format!(".into_iter().map(|row| ({owned}))");
         // Both routes run identical CQ-to-Physical passes, including captured
         // constants. Only Structures selection and the backend differ.
-        for (route, pipeline) in [
+        for (route, pipeline, rows) in [
             (
                 "cpu-physical",
                 "physical = [cq_gpu_sequence::capture_constants];",
+                cpu_rows.as_str(),
             ),
-            ("gpu", GPU_CQ),
+            ("gpu", GPU_CQ, ".to_host().unwrap().into_iter()"),
         ] {
             let context = format!(
                 "FUZZ FAILURE seed={} route={route} stage=execute data={:?}",
-                seed + offset as u64,
+                seed.wrapping_add(offset as u64),
                 case.data
             );
-            writeln!(source, "let actual: std::collections::BTreeSet<_> = mini_linq::compile! {{ pipeline {{ {pipeline} }} {} }}.into_iter().collect(); assert_eq!(actual, expected, {:?});", case.cq(), context).unwrap();
+            writeln!(source, "let actual: std::collections::BTreeSet<({types})> = mini_linq::compile! {{ pipeline {{ {pipeline} }} {} }}{rows}.collect(); assert_eq!(actual, expected, {:?});", case.cq(), context).unwrap();
         }
         source.push_str("}\n");
     }
@@ -95,7 +100,7 @@ fn cq_source(seed: u64, count: usize) -> String {
     source
 }
 
-fn run(root: &Path, lane: &str, seed: u64, source: String) {
+fn run(root: &Path, lane: &str, seed: u64, source: String) -> bool {
     let directory = root
         .join("experiments/gpu/target/fuzz")
         .join(format!("{lane}-{seed}"));
@@ -120,19 +125,45 @@ fn run(root: &Path, lane: &str, seed: u64, source: String) {
     for name in ["cuda-device", "cuda-core", "cuda-host"] {
         writeln!(manifest, "{name} = {{ git = \"https://github.com/StarGazerM/cuda-oxide.git\", rev = \"299eda41b287642ef3323144d8fef8f16fe4fbe1\" }}").unwrap();
     }
+    manifest.push_str("\n[profile.release.build-override]\nopt-level = 3\n");
     std::fs::write(directory.join("Cargo.toml"), manifest).unwrap();
     std::fs::write(directory.join("src/main.rs"), source).unwrap();
-    let status = Command::new("flock")
+    let start = std::time::Instant::now();
+    let build = gpu_command(root)
         .args([
-            "/tmp/mini_linq-gpu.lock",
-            "nice",
-            "-n",
-            "10",
             "cargo",
-            "run",
+            "+1.99.1",
+            "oxide",
+            "build",
+            "--arch",
+            "sm_89",
+            "--materialize-cubin",
+            "--",
+            "--release",
             "--manifest-path",
         ])
         .arg(directory.join("Cargo.toml"))
+        .status()
+        .unwrap();
+    let success = build.success()
+        && gpu_command(root)
+            .arg(root.join("experiments/gpu/target/fuzz-build/release/datalog-generated-batch"))
+            .status()
+            .unwrap()
+            .success();
+    eprintln!(
+        "GPU FUZZ route={lane} seed={seed} {} source={} Gate time: {:.2} s",
+        if success { "PASS" } else { "FAIL" },
+        directory.display(),
+        start.elapsed().as_secs_f64(),
+    );
+    success
+}
+
+fn gpu_command(root: &Path) -> Command {
+    let mut command = Command::new("flock");
+    command
+        .args(["/tmp/mini_linq-gpu.lock", "nice", "-n", "10"])
         .current_dir(root.join("experiments/gpu"))
         .env(
             "CARGO_TARGET_DIR",
@@ -157,14 +188,8 @@ fn run(root: &Path, lane: &str, seed: u64, source: String) {
         .env(
             "LD_LIBRARY_PATH",
             "/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/math_libs/13.0/targets/x86_64-linux/lib",
-        )
-        .status()
-        .unwrap();
-    assert!(
-        status.success(),
-        "FUZZ FAILURE seed={seed} route={lane} stage=batch source={}",
-        directory.display()
-    );
+        );
+    command
 }
 
 fn main() {
@@ -175,11 +200,12 @@ fn main() {
         .join("../../..")
         .canonicalize()
         .unwrap();
-    run(&root, "r3", seed, cq_source(seed, count));
-    run(
+    let cq_passed = run(&root, "r3", seed, cq_source(seed, count));
+    let datalog_passed = run(
         &root,
         "d2",
         seed,
         datalog::batch_source(seed, count, &[("gpu", GPU_DL)]),
     );
+    assert!(cq_passed && datalog_passed, "GPU fuzz lane failure");
 }

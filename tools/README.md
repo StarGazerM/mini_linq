@@ -211,10 +211,16 @@ cargo test -p mini-linq --test stage_differential -- --ignored
 cargo test -p mini-linq --test checker_mutants -- --include-ignored
 cargo test --manifest-path features/datalog/oracle/Cargo.toml --test random_programs random_programs_quick -- --ignored
 cargo test -p cq-testkit --features duckdb -- --ignored
-flock /tmp/mini_linq-gpu.lock cargo run --manifest-path experiments/gpu/Cargo.toml -p cq-gpu-fuzz -- SEED CASES
+cargo run --manifest-path experiments/gpu/Cargo.toml -p cq-gpu-fuzz -- SEED CASES
 ```
 
-The GPU lane needs CUDA and stays a manual command.
+The GPU lane needs CUDA and stays a manual command. The harness takes the GPU
+lock itself; do not wrap it in `flock`. Generated consumers build through
+`cargo +1.99.1 oxide build --arch sm_89 --materialize-cubin -- --release`,
+then execute under the same GPU lock. CQ compares both the CPU Physical route
+and explicitly downloaded GPU rows with the source oracle. Datalog is attempted
+even when CQ fails, and each lane reports its result, generated source directory,
+and gate time before the harness returns failure if either lane failed.
 
 ## Warm shared-directory indicator
 
