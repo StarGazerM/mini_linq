@@ -19,6 +19,29 @@ The inventory covers `experiments/gpu/**`, `runtime/cq-load`, `runtime/cq-storag
 
 `DECODE-SITES.tsv` is the authoritative four-column registry: path, exact marker, class, reason. `formal/check.py` requires a one-to-one correspondence between registry rows and flagged comments, validates classes and V plan steps, and prints counts. It checks **marker coverage, not semantic completeness or correctness of classifications**. The file:line entries below identify comment lines in this audit snapshot; exact marker text survives unrelated line movement.
 
+### P4-GPU slice D inventory cutover (2026-11-02)
+
+The live registry retires the removed `DeviceLayout` host-download,
+decoded-prefix comparison and obsolete diagnostic markers in `layout.rs`.
+Encoded radix prefix bounds replace the old Sequence membership/lookup
+decode-then-compare sites. This retires those exact sites, not all relational
+decoding and not the separate FOR-key comparison/source-build violations.
+
+`radix_run::device::decode_key` remains a mixed-use **?** primitive.
+Demanded fields do not by themselves prove an opaque Rust read: Sequence
+radix relation scans and payload reconstruction remain **V** (P6) when they
+feed relational consumers. Existing checked opaque Bind/Guard reads retain
+their **R** classification; the cutover does not broaden that authorization.
+`RadixLayout::to_rows` is likewise **?**, because both final answers and
+intermediate host fallback call it. The Datalog printer's final canonical
+output call is **P**; the intermediate Sequence fallback remains **V**.
+Diagnostic host exposure remains **P**, while the diagnostic prefix
+decode/re-encode probe is explicitly **I** and avoidable with encoded bounds.
+
+The historical tables/counts below are intentionally not rewritten as a live
+recount. This registry update records source changes and classifications only;
+no formal check, tests, GPU execution or timing was run for it.
+
 ## Sites that are not logical decodes
 
 * Sequence `capture.rs` encodes closed operands and supplies opaque callables; its free-variable dependencies feed the identity-representation gate and R bindings in `rows.rs`. No independent code-to-value operation occurs in the capture implementation.

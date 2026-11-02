@@ -153,6 +153,18 @@ fn prune_kernel_parameters(
             syn::visit::visit_expr_path(self, path);
         }
     }
+    // These are generated ABI parameter types. Discover only identifiers
+    // already present in the recorded witness table, including nested `W`
+    // in `RadixLayoutView<W, u64>`; never classify user type spellings.
+    struct TypeUses(BTreeSet<String>);
+    impl<'ast> Visit<'ast> for TypeUses {
+        fn visit_type_path(&mut self, path: &'ast syn::TypePath) {
+            if let Some(name) = path.path.get_ident() {
+                self.0.insert(name.to_string());
+            }
+            syn::visit::visit_type_path(self, path);
+        }
+    }
     let mut live = BTreeMap::new();
     let mut preparations = BTreeMap::new();
     for tokens in kernels {
@@ -161,7 +173,7 @@ fn prune_kernel_parameters(
         uses.visit_block(&kernel.block);
         let mut keep = Vec::new();
         let mut layouts = Vec::new();
-        let mut functions = BTreeSet::new();
+        let mut type_uses = TypeUses(BTreeSet::new());
         let mut inputs = syn::punctuated::Punctuated::new();
         for input in kernel.sig.inputs {
             let syn::FnArg::Typed(argument) = &input else {
@@ -178,17 +190,13 @@ fn prune_kernel_parameters(
                     bytes = bytes.next_multiple_of(::core::mem::align_of::<#ty>())
                         + ::core::mem::size_of::<#ty>();
                 });
-                if let syn::Type::Path(path) = ty.as_ref() {
-                    if let Some(name) = path.path.get_ident() {
-                        functions.insert(name.to_string());
-                    }
-                }
+                type_uses.visit_type(ty);
                 inputs.push(input);
             }
         }
         let mut witnesses = Vec::new();
         for (ty, bound, argument) in rust_functions {
-            if functions.contains(&ty.to_string()) {
+            if type_uses.0.contains(&ty.to_string()) {
                 kernel
                     .sig
                     .generics
@@ -1120,42 +1128,37 @@ impl<'a> Compiler<'a> {
             });
         }
         if self.rows.run_provider(provider) {
-            if order.len() < keys.len() || order[..keys.len()].iter().any(|key| !keys.contains(key))
-            {
-                return Err(error(
-                    "GPU-Runs: lookup keys are not a checked leading prefix",
-                ));
-            }
+            let probe = self.radix_probe(provider, keys, None)?;
             let run = format_ident!("__cq_run_{provider}");
-            let parts = order
-                .iter()
-                .take(keys.len())
-                .map(|key| {
-                    let slot = self.slot(key)?;
-                    Ok(quote!(__row[#slot]))
-                })
-                .collect::<syn::Result<Vec<_>>>()?;
-            let count = keys.len() as u32;
-            let prefix = quote!(let __prefix: [i64; #count as usize] = [#(#parts),*];);
             return Ok(if membership {
                 quote! {
-                    #prefix
                     let mut __member_found = false;
                     if __live {
-                        for #run in 0..#view.run_count {
-                            // DECODE V: P4 run membership prefix_range reconstructs packed signed fields through compare_prefix solely for key comparison.
-                            let (__begin, __end) = ::gpu_datalog_runtime::device::prefix_range(#view, #run, __prefix.as_ptr(), #count);
-                            __member_found |= __begin < __end;
+                        #probe
+                        if __fits {
+                            for #run in 0..#view.keys.run_count {
+                                let (__begin, __end) = ::gpu_datalog_runtime::radix_run::device::interval(
+                                    ::gpu_datalog_runtime::radix_run::device::run(#view.keys, #run), __low, __high);
+                                __member_found |= __begin < __end;
+                            }
                         }
                     }
                 }
             } else {
                 quote! {
-                    #prefix
-                    let (__begin, __end) = if __live {
-                        // DECODE V: P4 run lookup prefix_range reconstructs packed signed fields through compare_prefix instead of comparing encoded keys.
-                        ::gpu_datalog_runtime::device::prefix_range(#view, #run, __prefix.as_ptr(), #count)
-                    } else { (0u32, 0u32) };
+                    let (mut __begin, mut __end) = (0u32, 0u32);
+                    if __live {
+                        #probe
+                        if __fits {
+                            let (__first, __last) = ::gpu_datalog_runtime::radix_run::device::interval(
+                                ::gpu_datalog_runtime::radix_run::device::run(#view.keys, #run), __low, __high);
+                            if __last > u32::MAX as u64 {
+                                ::cq_gpu_sequence_runtime::device::flag_overflow(__meta.add(2));
+                            } else {
+                                (__begin, __end) = (__first as u32, __last as u32);
+                            }
+                        }
+                    }
                 }
             });
         }
@@ -1271,15 +1274,17 @@ impl<'a> Compiler<'a> {
         }
         if self.rows.run_provider(provider) {
             let run = format_ident!("__cq_run_{provider}");
-            // DECODE V: P4 run-provider payload unpack widens keys and code-only fields before relational consumers.
+            // Full-key set rows are decoded from key descriptors, never item lanes.
+            // DECODE V: P6 radix relation payload reconstructs demanded key fields for relational consumers without opaque-Rust read authorization.
             let assignments = payload
                 .iter()
                 .enumerate()
+                .filter(|(_, column)| !bound.contains(column))
                 .map(|(index, column)| {
                     let slot = self.slot(column)?;
                     Ok(quote! {
-                        __row[#slot] = ::gpu_datalog_runtime::device::decode(
-                            #view, #run, (#position) as u32, #index as u32);
+                        __row[#slot] = ::gpu_datalog_runtime::radix_run::device::decode_key(
+                            #view, #run, (#position) as u64, #index as u32);
                     })
                 })
                 .collect::<syn::Result<Vec<_>>>()?;
@@ -1741,7 +1746,7 @@ impl Kernel<'_, '_> {
                     let run = format_ident!("__cq_run_{provider}");
                     // Run bounds are uniform descriptor metadata: every lane
                     // executes every run's existing segmented collective.
-                    Ok(quote! { for #run in 0..#view.run_count { #expansion } })
+                    Ok(quote! { for #run in 0..#view.keys.run_count { #expansion } })
                 } else if smallest.is_none()
                     && self.compiler.rows.radix_provider(provider).is_some()
                 {
@@ -3888,9 +3893,9 @@ fn translate_observed(
     launches.push(
         output.ok_or_else(|| error("checked GPU output has no recorded publication adapter"))?,
     );
-    prune_kernel_parameters(&mut kernels, &mut launches, &compiler.rows.rust_functions)?;
+    prune_kernel_parameters(&mut kernels, &mut launches, &compiler.rows.type_witnesses)?;
     let program_helpers = program_launch_helpers(
-        &kernels, &mut launches, &module_name, &program_preparations, &compiler.rows.rust_functions,
+        &kernels, &mut launches, &module_name, &program_preparations, &compiler.rows.type_witnesses,
     )?;
     let output = launches.pop().expect("output launch");
     let setup = &compiler.rows.setup;
@@ -4033,10 +4038,10 @@ mod tests {
                 result = let canon project joined keep {a,b};
                 return result as answer(a,b);
             }
-            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build typed, abi runs }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
-                d host scan = @device_layout input { keys 1; columns [i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
-                r host scan = @device_layout input { keys 2; columns [i32 => i32, i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
-                r = @device_layout input { keys 2; columns [i32 => i32, i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
+            structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+                d host scan = @radix_relation input { keys 1; columns [i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,),(),u64,u64,()> [];
+                r host scan = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u64,u64,()> [];
+                r = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u64,u64,()> [b];
                 result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 result canon = rows;
             }
@@ -4055,6 +4060,13 @@ mod tests {
         let plain = quote::quote!(#plain).to_string();
         let observed = quote::quote!(#observed).to_string();
         assert!(!plain.contains("__cq_expansions"));
+        assert!(plain.contains("RadixLayoutView"));
+        assert!(plain.contains("view_on"));
+        assert!(plain.contains("locate_key"));
+        assert!(plain.contains("encode_prefix"));
+        assert!(plain.contains("decode_key"));
+        assert!(!plain.contains("prefix_range"));
+        assert!(!plain.contains("interval_items"));
         assert!(observed.contains("if __tid == 0 { :: cuda_device :: atomic :: DeviceAtomicU64"));
         assert!(
             observed.find("DeviceAtomicU64").unwrap()
@@ -4457,6 +4469,39 @@ mod tests {
             }
             .to_string()
         );
+    }
+
+    #[test]
+    fn nested_radix_word_generics_share_the_preparation_witness_abi() {
+        let mut kernels = vec![quote! {
+            fn kernel(view: ::gpu_datalog_runtime::radix_run::RadixLayoutView<Word0, u64>,
+                unused: ::gpu_datalog_runtime::radix_run::RadixLayoutView<Word1, u64>) {
+                let _ = view.keys.run_count;
+            }
+        }];
+        let witnesses = vec![
+            (format_ident!("Word0"), quote!(::gpu_datalog_runtime::Word), format_ident!("word0")),
+            (format_ident!("Word1"), quote!(::gpu_datalog_runtime::Word), format_ident!("word1")),
+        ];
+        let mut launches = vec![quote! {
+            let prepared = module.__cq_cached_kernel(cache)?;
+            module.kernel(stream, &prepared, view, unused)?;
+        }];
+        prune_kernel_parameters(&mut kernels, &mut launches, &witnesses).unwrap();
+        let function: syn::ItemFn = syn::parse2(kernels[0].clone()).unwrap();
+        assert_eq!(function.sig.generics.to_token_stream().to_string(),
+            quote!(<Word0: Copy + ::gpu_datalog_runtime::Word>).to_string());
+        let helpers = program_launch_helpers(
+            &kernels, &mut launches, &format_ident!("module"),
+            &[(format_ident!("kernel"), Launch::ProgramOccupancy, 64)], &witnesses,
+        ).unwrap();
+        let helpers = quote!(#(#helpers)*).to_string();
+        assert!(helpers.contains("kernel_ptx_name :: < Word0 >"));
+        assert!(!helpers.contains("Word1"));
+        assert_eq!(launches[0].to_string(), quote! {
+            let prepared = __cq_prepare_program_kernel(module, cache, &word0)?;
+            unsafe { __cq_launch_program_kernel(stream, &prepared, __cq_grid, view) }?;
+        }.to_string());
     }
 
     #[test]
@@ -4952,9 +4997,9 @@ mod tests {
                 quote!(host_scan = ::core::iter::Map<_, _> { reads [], build typed };),
             ),
             (
-                quote!(@device_layout input { keys 1; columns [i64 => i64, i32 => ::gpu_datalog_runtime::Symbol<i32, TestCodec> codec TestCodec] } as ::gpu_datalog_runtime::DeviceLayout<
-                    (i64,), (::gpu_datalog_runtime::Symbol<i32, TestCodec>,)>),
-                quote!(device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build typed, abi runs };),
+                quote!(@radix_relation input { keys 2; columns [i64 => i64, i32 => ::gpu_datalog_runtime::Symbol<i32, TestCodec> codec TestCodec] } radix { word u128; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<
+                    (i64, ::gpu_datalog_runtime::Symbol<i32, TestCodec>), (), u128, u64, ()>),
+                quote!(radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation };),
             ),
         ] {
             let program: Program = syn::parse2(quote! {

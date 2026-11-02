@@ -1,7 +1,7 @@
 //! Catalog-backed GPU provider realization; printers only consume these facts.
 use cq_lang_sequence::gpu::bindings::{
     Bindings, DirectoryPolicy, Materialization, NativeLookup, ProviderAbi, ProviderLayout,
-    RadixParams, RadixRead, RadixRealization, RunParams,
+    RadixParams, RadixRead, RadixRealization, RadixRelationRead, RadixWordCapture,
 };
 use cq_lang_sequence::{Analysis, Program};
 use cq_lang_structures::provider::NativeAbi;
@@ -20,15 +20,24 @@ fn carrier(carriers: &BTreeMap<String, syn::Type>, column: &str) -> syn::Result<
         .ok_or_else(|| error("GPU-RadixProvider: column lacks a recorded device carrier"))
 }
 
-/// Run parameters of a materialized permutation. It is built once by a
-/// complete sort and never appended to, so ratio and merge tile only meet the
-/// run constructor's contract; its kernels use the collective block width.
-fn materialized_params() -> RunParams {
-    RunParams {
-        ratio: 4,
-        merge_tile_rows: 32,
-        block_threads: crate::BLOCK_THREADS,
+fn relation_read(provider: &cq_lang_structures::Provider, host: &str) -> syn::Result<RadixRelationRead> {
+    let input = provider.input.as_ref().ok_or_else(|| error("GPU-RadixRelation: missing input schema"))?;
+    let advice = provider.radix.as_ref().ok_or_else(|| error("GPU-RadixRelation: missing radix advice"))?;
+    if input.key_count != input.columns.len() || advice.offset != syn::parse_quote!(u64) {
+        return Err(error("GPU-RadixRelation: full-key set reads require all columns and u64 offsets"));
     }
+    Ok(RadixRelationRead {
+        provider: provider.clone(),
+        key_types: input.columns.iter().map(|column| column.storage.clone()).collect(),
+        word: advice.word.clone(),
+        word_capture: RadixWordCapture::InputView { host: host.to_owned() },
+        offset: advice.offset.clone(),
+        params: RadixParams {
+            ratio: advice.ratio, radix_bits: advice.radix_bits,
+            merge_tile_rows: advice.merge_tile, block_threads: crate::BLOCK_THREADS,
+        },
+        fields: (0..input.columns.len()).collect(),
+    })
 }
 
 /// Whether the Sequence lookup `(name, keys)` is the bound-prefix read of a
@@ -264,7 +273,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         for (levels, provider) in layouts {
             let keys: Vec<_> = levels.iter().flatten().cloned().collect();
             let (abi, directory) = match analysis.structures.facts(provider).abi {
-                Some(native @ (NativeAbi::Range | NativeAbi::Runs)) => {
+                Some(native @ (NativeAbi::Range | NativeAbi::RadixRelation)) => {
                     catalog
                         .providers
                         .iter()
@@ -279,7 +288,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                                 terminal_entries: 1,
                             }),
                         ),
-                        NativeAbi::Runs => (ProviderAbi::Runs, None),
+                        NativeAbi::RadixRelation => (ProviderAbi::RadixRelation, None),
                         _ => unreachable!(),
                     }
                 }
@@ -337,7 +346,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         };
         if matches!(
             analysis.structures.facts(provider).abi,
-            Some(NativeAbi::Range | NativeAbi::Runs | NativeAbi::Radix)
+            Some(NativeAbi::Range | NativeAbi::RadixRelation | NativeAbi::Radix)
         ) {
             result.host_materializations.insert(
                 index,
@@ -360,13 +369,19 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         };
         let name = symbol_name(&entry.name);
         if let Some(host) = analysis.structures.physical.hosts.get(&name) {
-            if analysis.structures.facts(&keyed.provider).abi == Some(NativeAbi::Runs) {
+            if analysis.structures.facts(&keyed.provider).abi == Some(NativeAbi::RadixRelation) {
                 native_hosts.insert(host.clone());
+                if matches!(reader, ReaderRef::Scan) {
+                    let fact = relation_read(&keyed.provider, host)?;
+                    if result.relation_inputs.insert(host.clone(), fact.clone()).is_some_and(|prior| prior != fact) {
+                        return Err(error("GPU-RadixRelation: inconsistent input snapshots"));
+                    }
+                }
             }
             if matches!(reader, ReaderRef::Scan)
                 && matches!(
                     analysis.structures.facts(&keyed.provider).abi,
-                    Some(NativeAbi::Runs | NativeAbi::Columns)
+                    Some(NativeAbi::RadixRelation | NativeAbi::Columns)
                 )
             {
                 result.downloads.insert(
@@ -379,13 +394,13 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
     for name in definitions.keys() {
         let native_lookup = analysis.structures.built.get(name).is_some_and(|layouts| {
             layouts.iter().any(|(_, provider)| {
-                analysis.structures.facts(provider).abi == Some(NativeAbi::Runs)
+                analysis.structures.facts(provider).abi == Some(NativeAbi::RadixRelation)
             })
         }) || analysis.structures.fallbacks.iter().any(
             |((owner, reader, _), provider)| {
                 owner == name
                     && !matches!(reader, ReaderRef::Scan)
-                    && analysis.structures.facts(provider).abi == Some(NativeAbi::Runs)
+                    && analysis.structures.facts(provider).abi == Some(NativeAbi::RadixRelation)
             },
         );
         if !native_lookup {
@@ -405,12 +420,12 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                     .iter()
                     .find(|(_, original)| *original == column)
                     .map(|(name, _)| name.clone())
-                    .ok_or_else(|| error("GPU-Runs: supplied layout lost a packed column"))
+                    .ok_or_else(|| error("GPU-RadixRelation: supplied layout lost a packed column"))
             })
             .collect::<syn::Result<Vec<_>>>()?;
         let mut record = |id: String, keys: Vec<String>| -> syn::Result<()> {
             if keys.len() > source.len() || keys.iter().any(|key| !source.contains(key)) {
-                return Err(error("GPU-Runs: native key absent from source"));
+                return Err(error("GPU-RadixRelation: native key absent from source"));
             }
             let leading = source[..keys.len()].iter().all(|key| keys.contains(key));
             let payload = if leading {
@@ -426,14 +441,21 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                     )
                     .collect()
             };
-            let materialization = (!leading).then(|| Materialization {
-                permutation: payload
-                    .iter()
-                    .map(|column| source.iter().position(|c| c == column).unwrap())
-                    .collect(),
-                provider: crate::providers::packed_provider().instance(),
-                params: materialized_params(),
-                permutation_threads: crate::BLOCK_THREADS,
+            let materialization = (!leading).then(|| {
+                let input = &result.relation_inputs[&origin.host];
+                let permutation: Vec<_> = payload.iter()
+                    .map(|column| source.iter().position(|c| c == column).unwrap()).collect();
+                let mut provider = input.provider.clone();
+                let schema = provider.input.as_mut().expect("recorded relation schema");
+                schema.columns = permutation.iter().map(|&index| schema.columns[index].clone()).collect();
+                let types = permutation.iter().map(|&index| &input.key_types[index]);
+                let word = &input.word;
+                let offset = &input.offset;
+                provider.ty = syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(#(#types,)*), (), #word, #offset, ()>);
+                Materialization {
+                    permutation, provider, params: input.params.clone(),
+                    permutation_threads: crate::BLOCK_THREADS,
+                }
             });
             result.native.insert(
                 id,
@@ -441,6 +463,11 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                     host: origin.host.clone(),
                     source: source.clone(),
                     keys,
+                    radix: {
+                        let mut fact = result.relation_inputs[&origin.host].clone();
+                        fact.fields = payload.iter().map(|column| source.iter().position(|c| c == column).unwrap()).collect();
+                        fact
+                    },
                     payload,
                     materialization,
                 },
@@ -450,7 +477,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         if let Some(layouts) = analysis.structures.built.get(name) {
             if layouts.len() == 1
                 && layouts[0].1.input.is_some()
-                && analysis.structures.facts(&layouts[0].1).abi == Some(NativeAbi::Runs)
+                && analysis.structures.facts(&layouts[0].1).abi == Some(NativeAbi::RadixRelation)
             {
                 record(name.clone(), layouts[0].0.concat())?;
             }
@@ -458,7 +485,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
             for ((owner, reader, keys), provider) in &analysis.structures.fallbacks {
                 if owner != name
                     || matches!(reader, ReaderRef::Scan)
-                    || analysis.structures.facts(provider).abi != Some(NativeAbi::Runs)
+                    || analysis.structures.facts(provider).abi != Some(NativeAbi::RadixRelation)
                     || provider.input.is_none()
                 {
                     continue;
@@ -479,6 +506,36 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
     let catalog = crate::catalog();
     crate::domains::check(program, analysis, records)?;
     let context = cq_print::Context::new(&program.structures, &analysis.structures);
+    let mut input_hosts = BTreeSet::new();
+    for entry in &program.structures.structures.entries {
+        let Structure::Host { reader: ReaderRef::Scan, keyed, .. } = &entry.structure else { continue };
+        if analysis.structures.facts(&keyed.provider).abi != Some(NativeAbi::RadixRelation) { continue; }
+        let host = analysis.structures.physical.hosts.get(&symbol_name(&entry.name))
+            .ok_or_else(|| error("GPU-RadixRelation: input has no host provenance"))?;
+        input_hosts.insert(host.clone());
+        let read = records.relation_inputs.get(host)
+            .ok_or_else(|| error("GPU-RadixRelation: missing retained input read"))?;
+        let input = keyed.provider.input.as_ref()
+            .ok_or_else(|| error("GPU-RadixRelation: missing input schema"))?;
+        let advice = keyed.provider.radix.as_ref()
+            .ok_or_else(|| error("GPU-RadixRelation: missing radix advice"))?;
+        if read.provider != keyed.provider
+            || input.key_count != input.columns.len()
+            || read.key_types != input.columns.iter().map(|column| column.storage.clone()).collect::<Vec<_>>()
+            || read.fields != (0..input.columns.len()).collect::<Vec<_>>()
+            || read.word != advice.word || read.offset != advice.offset
+            || !matches!(&read.word_capture, RadixWordCapture::InputView { host: source } if source == host)
+            || read.offset != syn::parse_quote!(u64)
+            || read.params.ratio != advice.ratio || read.params.radix_bits != advice.radix_bits
+            || read.params.merge_tile_rows != advice.merge_tile
+            || read.params.block_threads != crate::BLOCK_THREADS
+        {
+            return Err(error("GPU-RadixRelation: stale full-key input read facts"));
+        }
+    }
+    if records.relation_inputs.keys().cloned().collect::<BTreeSet<_>>() != input_hosts {
+        return Err(error("GPU-RadixRelation: extraneous input read facts"));
+    }
     if records.providers.len() != analysis.structures.built.len() {
         return Err(error("GPU-ProviderLayout: incomplete provider records"));
     }
@@ -538,8 +595,8 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                             terminal_entries: 1,
                         })
                 }
-                ProviderAbi::Runs => {
-                    analysis.structures.facts(provider).abi == Some(NativeAbi::Runs)
+                ProviderAbi::RadixRelation => {
+                    analysis.structures.facts(provider).abi == Some(NativeAbi::RadixRelation)
                         && provider.input.is_some()
                         && catalog
                             .providers
@@ -570,7 +627,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                     layout.directory.is_none()
                         && !matches!(
                             analysis.structures.facts(provider).abi,
-                            Some(NativeAbi::Range | NativeAbi::Runs | NativeAbi::Radix)
+                            Some(NativeAbi::Range | NativeAbi::RadixRelation | NativeAbi::Radix)
                         )
                 }
             };
@@ -584,7 +641,58 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
             }
         }
     }
+    let definitions: BTreeMap<_, _> = program.structures.physical.program.definitions.iter()
+        .map(|definition| (symbol_name(&definition.name), definition.clone())).collect();
+    let mut required_native = BTreeSet::new();
+    let mut check_lookup = |name: &str, id: String, keys: Vec<String>| -> syn::Result<()> {
+        let Some(origin) = crate::rows::origin(name, &definitions)? else { return Ok(()) };
+        if !records.relation_inputs.contains_key(&origin.host) || origin.selection.is_some() {
+            return Ok(());
+        }
+        let lookup = records.native.get(&id)
+            .ok_or_else(|| error("GPU-RadixRelation: missing native prefix read"))?;
+        let physical = &analysis.structures.host_layouts[&origin.host];
+        if lookup.keys != keys || lookup.host != origin.host
+            || lookup.source.len() != physical.len()
+            || lookup.source.iter().zip(physical)
+                .any(|(column, original)| origin.columns.get(column) != Some(original))
+        {
+            return Err(error("GPU-RadixRelation: prefix read differs from recorded source provenance"));
+        }
+        required_native.insert(id);
+        Ok(())
+    };
+    for (name, layouts) in &analysis.structures.built {
+        if layouts.len() == 1
+            && analysis.structures.facts(&layouts[0].1).abi == Some(NativeAbi::RadixRelation)
+        {
+            check_lookup(name, name.clone(), layouts[0].0.concat())?;
+        }
+    }
+    for ((name, reader, keys), provider) in &analysis.structures.fallbacks {
+        if analysis.structures.built.contains_key(name) || matches!(reader, ReaderRef::Scan)
+            || analysis.structures.facts(provider).abi != Some(NativeAbi::RadixRelation) { continue; }
+        let mut sorted = keys.clone();
+        sorted.sort();
+        check_lookup(name, format!("{name}__{}", sorted.join("__")), keys.clone())?;
+    }
+    if records.native.keys().cloned().collect::<BTreeSet<_>>() != required_native {
+        return Err(error("GPU-RadixRelation: extraneous native prefix read"));
+    }
     for lookup in records.native.values() {
+        let source = records.relation_inputs.get(&lookup.host)
+            .ok_or_else(|| error("GPU-RadixRelation: lookup has no retained input"))?;
+        if lookup.radix.provider != source.provider || lookup.radix.key_types != source.key_types
+            || lookup.radix.word != source.word || lookup.radix.offset != source.offset
+            || lookup.radix.word_capture != source.word_capture
+            || lookup.radix.params != source.params
+            || lookup.radix.fields.len() != lookup.payload.len()
+            || lookup.source.len() != source.key_types.len()
+            || lookup.radix.fields.iter().zip(&lookup.payload)
+                .any(|(field, column)| lookup.source.get(*field) != Some(column))
+        {
+            return Err(error("GPU-RadixRelation: stale key-field read mapping"));
+        }
         if lookup.source.len() != lookup.payload.len()
             || lookup.keys.len() > lookup.payload.len()
             || lookup.payload[..lookup.keys.len()]
@@ -595,18 +703,20 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
         }
         if let Some(materialization) = &lookup.materialization {
             let order = &materialization.permutation;
-            let RunParams {
-                ratio,
-                merge_tile_rows,
-                block_threads,
+            let RadixParams {
+                ratio, radix_bits, merge_tile_rows, block_threads,
             } = materialization.params;
             if !materialization
                 .provider
-                .same_token(&crate::providers::packed_provider().instance())
+                .same_token(&crate::providers::declaration("radix_relation").instance())
                 || ratio < 2
+                || radix_bits > 32
                 || merge_tile_rows == 0
                 || block_threads != crate::BLOCK_THREADS
                 || materialization.permutation_threads != crate::BLOCK_THREADS
+                || materialization.provider.radix != source.provider.radix
+                || materialization.params != source.params
+                || materialization.permutation != lookup.radix.fields
             {
                 return Err(error(
                     "GPU-NativeAbi: materialization names an undeclared provider or unsupported run parameters",
@@ -621,6 +731,19 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                     .any(|(index, column)| &lookup.source[*index] != column)
             {
                 return Err(error("GPU-NativeAbi: incomplete provider permutation"));
+            }
+            let input = source.provider.input.as_ref().expect("checked source schema");
+            let mut schema = input.clone();
+            schema.columns = order.iter().map(|&index| input.columns[index].clone()).collect();
+            let types = order.iter().map(|&index| &source.key_types[index]);
+            let word = &source.word;
+            let offset = &source.offset;
+            let expected: syn::Type = syn::parse_quote!(
+                ::gpu_datalog_runtime::RadixLayout<(#(#types,)*), (), #word, #offset, ()>);
+            if materialization.provider.input.as_ref() != Some(&schema)
+                || materialization.provider.ty != expected
+            {
+                return Err(error("GPU-RadixRelation: permutation schema differs from its full-key provider"));
             }
         } else if lookup.source != lookup.payload {
             return Err(error(
@@ -642,7 +765,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                     ..
                 } if matches!(
                     analysis.structures.facts(&keyed.provider).abi,
-                    Some(NativeAbi::Runs | NativeAbi::Columns)
+                    Some(NativeAbi::RadixRelation | NativeAbi::Columns)
                 ))
         })
     };
@@ -671,7 +794,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
         };
         if !matches!(
             analysis.structures.facts(provider).abi,
-            Some(NativeAbi::Range | NativeAbi::Runs | NativeAbi::Radix)
+            Some(NativeAbi::Range | NativeAbi::RadixRelation | NativeAbi::Radix)
         ) {
             continue;
         }

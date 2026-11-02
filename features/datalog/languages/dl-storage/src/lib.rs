@@ -98,16 +98,21 @@ pub struct DeviceRelation {
 /// The maintained backing state of one device provider and its empty view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceState {
-    /// Physical layout order and key boundary, recorded by device storage.
+    /// Complete-key physical row order; logical lookup prefixes remain in Layout.
     pub input: InputSchema,
     pub token: Ident,
     pub provider: Type,
     pub word: Type,
+    pub offset: Type,
+    /// Ordinary full-key set construction and encoded key-prefix reads.
+    pub construction: Ident,
+    pub read: Ident,
     pub packing: Expr,
     pub state: Type,
     /// Resolved maintenance and auxiliary launch parameters, consumed verbatim.
     pub ratio: usize,
-    pub merge_tile_rows: usize,
+    pub radix_bits: u32,
+    pub merge_tile_rows: u32,
     pub block_threads: u32,
     pub permutation_threads: u32,
     pub state_init: Expr,
@@ -146,10 +151,14 @@ record!(DeviceState {
     token: Ident,
     provider: Type,
     word: Type,
+    offset: Type,
+    construction: Ident,
+    read: Ident,
     packing: Expr,
     state: Type,
     ratio: usize,
-    merge_tile_rows: usize,
+    radix_bits: u32,
+    merge_tile_rows: u32,
     block_threads: u32,
     permutation_threads: u32,
     state_init: Expr,
@@ -618,9 +627,9 @@ pub mod contract {
                     declared(&state.token)
                         && state.token == layout.provider.token
                         && columns.len() == layout.columns.len()
-                        && schema_matches(&state.input, &columns, layout.key),
+                        && schema_matches(&state.input, &columns, columns.len()),
                     program,
-                    "device layout input and token must match its recorded logical layout",
+                    "device full-key input and token must match its recorded logical layout",
                 )?;
             }
             for (state, negative) in device.negations.iter().zip(&program.negations) {

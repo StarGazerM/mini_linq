@@ -259,18 +259,18 @@ pub fn word_type<'a>(types: impl IntoIterator<Item = &'a Type>) -> syn::Result<T
     > as ::gpu_datalog_runtime::pack::NativeWord>::Word))
 }
 
-/// Build a CQ binding in its recorded physical order; callers supply a checked key.
-pub fn layout_type(types: &[&Type], key: usize) -> Type {
-    let (keys, values) = types.split_at(key);
-    syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(#(#keys,)*), (#(#values,)*)>)
+/// Ordinary complete-row key index in its recorded physical column order.
+pub fn layout_type(types: &[&Type]) -> Type {
+    let word = word_type(types.iter().copied()).expect("scalar word quotation");
+    syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(#(#types,)*), (), #word, u64, ()>)
 }
 
 /// The device layout token covers maintained layouts and relation-order views.
-pub const DEVICE_LAYOUT: &str = "device_layout";
+pub const RADIX_RELATION: &str = "radix_relation";
 
 fn device_tokens() -> [provider::Token; 1] {
     [provider::declared(
-        DEVICE_LAYOUT,
+        RADIX_RELATION,
         provider::Spelling::Verbatim,
         Some(LayoutProtocol::Bulk),
         provider::Admission::None,
@@ -323,13 +323,14 @@ fn device_provider(
     device: &[&Type],
     edb: bool,
     canonical: usize,
+    ratio: usize,
 ) -> syn::Result<Providers> {
     if edb {
         return Ok(default_provider(logical, canonical));
     }
-    let view = layout_type(device, device.len());
-    let init = empty_view(&view, &word_type(device.iter().copied())?);
-    let view = instance(DEVICE_LAYOUT, view);
+    let view = layout_type(device);
+    let init = empty_view(&view, ratio, 0, 32, 256);
+    let view = instance(RADIX_RELATION, view);
     Ok(Providers {
         canonical,
         delta: view.clone(),
@@ -368,12 +369,16 @@ fn default_layout(types: &[&Type], key: usize) -> (Provider, Hasher, LayoutProto
     )
 }
 
-fn empty_view(provider: &Type, word: &Type) -> Expr {
-    syn::parse_quote!(<#provider>::from_runs::<#word>(
-        __cq_gpu_pool.clone(), <#provider>::derive_packing()?, ::std::vec::Vec::new())?)
+fn empty_view(provider: &Type, ratio: usize, radix_bits: u32, merge_tile_rows: u32, block_threads: u32) -> Expr {
+    syn::parse_quote!(<#provider>::empty(
+        __cq_gpu_pool.clone(), <#provider>::derive_packing()?,
+        ::gpu_datalog_runtime::RadixRunParams {
+            ratio: #ratio, radix_bits: #radix_bits,
+            merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
+        })?)
 }
 
-/// A device view maintained as sorted packed runs in its own column order.
+/// A full-key set in recorded physical order, with encoded-prefix reads.
 fn device_state(provider: Type, input: InputSchema, ratio: usize) -> syn::Result<DeviceState> {
     let types = input
         .columns
@@ -381,20 +386,25 @@ fn device_state(provider: Type, input: InputSchema, ratio: usize) -> syn::Result
         .map(|column| &column.storage)
         .collect::<Vec<_>>();
     let word = word_type(types.iter().copied())?;
-    let state: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>);
-    let (merge_tile_rows, block_threads, permutation_threads) = (32usize, 256u32, 256u32);
+    let state: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>);
+    let radix_bits = 0u32;
+    let (merge_tile_rows, block_threads, permutation_threads) = (32u32, 256u32, 256u32);
     Ok(DeviceState {
-        token: Ident::new(DEVICE_LAYOUT, proc_macro2::Span::call_site()),
+        token: Ident::new(RADIX_RELATION, proc_macro2::Span::call_site()),
         input,
         packing: syn::parse_quote!(<#provider>::derive_packing()?),
-        state_init: syn::parse_quote!(<#state>::new(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RunParams {
-            ratio: #ratio, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
+        state_init: syn::parse_quote!(<#state>::new(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RadixRunParams {
+            ratio: #ratio, radix_bits: #radix_bits, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
         })?),
-        init: empty_view(&provider, &word),
+        init: syn::parse_quote!(<#provider>::publish(&__cq_gpu_state, __cq_gpu_packing.clone())?),
         provider,
         word,
+        offset: syn::parse_quote!(u64),
+        construction: syn::parse_quote!(full_key_set),
+        read: syn::parse_quote!(key_prefix),
         state,
         ratio,
+        radix_bits,
         merge_tile_rows,
         block_threads,
         permutation_threads,
@@ -426,7 +436,7 @@ fn device_relation(input: InputSchema) -> syn::Result<DeviceRelation> {
 }
 
 /// Realize a default Storage program on the device: every layout becomes a
-/// bulk-maintained `DeviceLayout` view over its own sorted runs, and every
+/// bulk-maintained full-key `RadixLayout` set, and every
 /// relation, layout and negative key set records its state and initializers.
 fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Program> {
     let analysis = storage::contract::check(source)?;
@@ -457,6 +467,7 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
             &device,
             declaration.value.is_some(),
             provider.canonical,
+            ratio,
         )?;
         relations.push(device_relation(symbols.input(
             &declaration.columns.iter().collect::<Vec<_>>(),
@@ -476,13 +487,13 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
                 .iter()
                 .map(|&column| &declaration.columns[column])
                 .collect::<Vec<_>>();
-            let input = symbols.input(&logical, layout.key);
+            let input = symbols.input(&logical, logical.len());
             let types = input
                 .columns
                 .iter()
                 .map(|column| &column.storage)
                 .collect::<Vec<_>>();
-            layout.provider = instance(DEVICE_LAYOUT, layout_type(&types, layout.key));
+            layout.provider = instance(RADIX_RELATION, layout_type(&types));
             layout.hasher = Hasher::None;
             layout.protocol = LayoutProtocol::Bulk;
             states.push(device_state(layout.provider.ty.clone(), input, ratio)?);
@@ -505,15 +516,15 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
                 .iter()
                 .map(|column| &column.storage)
                 .collect::<Vec<_>>();
-            device_state(layout_type(&types, types.len()), input, ratio)
+            device_state(layout_type(&types), input, ratio)
         })
         .collect::<syn::Result<Vec<_>>>()?;
     for (negative, state) in target.negations.iter_mut().zip(&negations) {
-        negative.provider = instance(DEVICE_LAYOUT, state.provider.clone());
+        negative.provider = instance(RADIX_RELATION, state.provider.clone());
         negative.hasher = Hasher::None;
     }
     target.device = Some(DeviceStorage {
-        providers: vec![cq_gpu_sequence_core::providers::declaration(DEVICE_LAYOUT)],
+        providers: vec![cq_gpu_sequence_core::providers::declaration(RADIX_RELATION)],
         symbols: symbols.0.clone(),
         ratio,
         relations,
@@ -534,7 +545,7 @@ fn restore(target: &Program) -> syn::Result<Program> {
     let declarations = &target.incremental.strata.source.declarations;
     let mut source = target.clone();
     source.device = None;
-    source.tokens.retain(|token| token.token != DEVICE_LAYOUT);
+    source.tokens.retain(|token| token.token != RADIX_RELATION);
     for (provider, declaration) in source.providers.iter_mut().zip(declarations) {
         let types = declaration
             .columns
@@ -618,7 +629,7 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
     let token = program
         .tokens
         .iter()
-        .find(|token| token.token == DEVICE_LAYOUT)
+        .find(|token| token.token == RADIX_RELATION)
         .ok_or_else(|| syn::Error::new_spanned(program, "missing device layout token"))?;
     ensure(
         token.protocol == Some(LayoutProtocol::Bulk)
@@ -631,7 +642,7 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
     )?;
     ensure(
         advice.providers.len() == 1
-            && advice.providers[0] == cq_gpu_sequence_core::providers::declaration(DEVICE_LAYOUT),
+            && advice.providers[0] == cq_gpu_sequence_core::providers::declaration(RADIX_RELATION),
         program,
         "device read token facts differ from its declared ABI",
     )?;
@@ -669,14 +680,13 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
             "inconsistent relation storage ABI or initializer",
         )?;
         if declaration.value.is_none() {
-            let ty: Type =
-                syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(#(#types,)*), ()>);
             let word = &relation.word;
-            let init: Expr = syn::parse_quote!(<#ty>::from_runs::<#word>(
-                __cq_gpu_pool.clone(), <#ty>::derive_packing()?, ::std::vec::Vec::new())?);
+            let ty: Type = syn::parse_quote!(
+                ::gpu_datalog_runtime::RadixLayout<(#(#types,)*), (), #word, u64, ()>);
+            let init = empty_view(&ty, advice.ratio, 0, 32, 256);
             ensure(
-                providers.delta.token == DEVICE_LAYOUT
-                    && providers.next.token == DEVICE_LAYOUT
+                providers.delta.token == RADIX_RELATION
+                    && providers.next.token == RADIX_RELATION
                     && providers.delta.ty == ty
                     && providers.next.ty == ty
                     && providers.delta_init == init
@@ -709,20 +719,20 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
             .map(|&column| &declaration.columns[column])
             .collect::<Vec<_>>();
         ensure(
-            layout.provider.token == DEVICE_LAYOUT
+            layout.provider.token == RADIX_RELATION
                 && layout.provider.ty == state.provider
                 && layout.protocol == LayoutProtocol::Bulk
                 && layout.hasher == Hasher::None,
             program,
             "every device layout must use its declared bulk provider",
         )?;
-        check_input(&state.input, &logical, layout.key, &symbols, program)?;
+        check_input(&state.input, &logical, logical.len(), &symbols, program)?;
         check_state(state, advice.ratio, program)?;
     }
     for (negative, state) in program.negations.iter().zip(&advice.negations) {
         let declaration = &declarations[negative.relation];
         ensure(
-            negative.provider.token == DEVICE_LAYOUT
+            negative.provider.token == RADIX_RELATION
                 && negative.provider.ty == state.provider
                 && negative.hasher == Hasher::None,
             program,
@@ -775,9 +785,13 @@ fn check_input(
 
 fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program) -> syn::Result<()> {
     ensure(
-        record.token == DEVICE_LAYOUT
+        record.token == RADIX_RELATION
             && record.ratio == advice_ratio
             && record.ratio >= 2
+            && record.radix_bits <= 32
+            && record.offset == syn::parse_quote!(u64)
+            && record.construction == "full_key_set"
+            && record.read == "key_prefix"
             && record.merge_tile_rows >= 1
             && record.block_threads == 256
             && record.permutation_threads == 256,
@@ -790,7 +804,7 @@ fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program) -> 
         .iter()
         .map(|column| &column.storage)
         .collect::<Vec<_>>();
-    let (keys, values) = types.split_at(record.input.key_count);
+    let radix_bits = record.radix_bits;
     let provider = &record.provider;
     let word = &record.word;
     let state = &record.state;
@@ -798,16 +812,15 @@ fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program) -> 
         (record.ratio, record.merge_tile_rows, record.block_threads);
     ensure(
         *provider
-            == syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(#(#keys,)*), (#(#values,)*)>)
+            == syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(#(#types,)*), (), #word, u64, ()>)
             && *word == word_type(types.iter().copied())?
-            && *state == syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>)
+            && *state == syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>)
             && record.packing == syn::parse_quote!(<#provider>::derive_packing()?)
             && record.state_init
-                == syn::parse_quote!(<#state>::new(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RunParams {
-            ratio: #ratio, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
+                == syn::parse_quote!(<#state>::new(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RadixRunParams {
+            ratio: #ratio, radix_bits: #radix_bits, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
         })?) && record.init
-            == syn::parse_quote!(<#provider>::from_runs::<#word>(
-            __cq_gpu_pool.clone(), <#provider>::derive_packing()?, ::std::vec::Vec::new())?),
+            == syn::parse_quote!(<#provider>::publish(&__cq_gpu_state, __cq_gpu_packing.clone())?),
         program,
         "device state ABI and initializers disagree with its recorded schema or parameters",
     )
@@ -921,7 +934,7 @@ mod tests {
         assert_eq!(
             device.layouts[target.providers[0].canonical].state,
             syn::parse_quote!(
-                ::gpu_datalog_runtime::DeviceRuns<#word>
+                ::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>
             )
         );
         assert_eq!(device.relations[0].word, word);
@@ -933,7 +946,7 @@ mod tests {
         );
         assert_eq!(
             device.providers,
-            vec![cq_gpu_sequence_core::providers::declaration(DEVICE_LAYOUT)]
+            vec![cq_gpu_sequence_core::providers::declaration(RADIX_RELATION)]
         );
         for input in device
             .relations
@@ -1016,7 +1029,7 @@ mod tests {
         assert!(check_device(&changed).is_err());
         let mut changed = target.clone();
         changed.layouts[0].provider.ty =
-            syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(), (u32, u32,)>);
+            syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(u32, u32,), (), #word, u64, ()>);
         assert!(check(&source, &changed).is_err());
     }
 
@@ -1082,26 +1095,19 @@ mod tests {
     }
 
     #[test]
-    fn packing_boundaries_and_layout_keys() {
+    fn packing_boundaries_and_complete_row_layout_keys() {
         let empty = word_type(std::iter::empty::<&Type>()).unwrap();
         assert!(matches!(empty, Type::Path(_)));
         let types: Vec<Type> = vec![syn::parse_quote!(i16), syn::parse_quote!(u32)];
         let types: Vec<_> = types.iter().collect();
+        let word = word_type(types.iter().copied()).unwrap();
         assert_eq!(
-            layout_type(&types, 0),
-            syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(), (i16, u32,)>)
+            layout_type(&types),
+            syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(i16, u32,), (), #word, u64, ()>)
         );
         assert_eq!(
-            layout_type(&types, 1),
-            syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(i16,), (u32,)>)
-        );
-        assert_eq!(
-            layout_type(&types, 2),
-            syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(i16, u32,), ()>)
-        );
-        assert_eq!(
-            layout_type(&[], 0),
-            syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(), ()>)
+            layout_type(&[]),
+            syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(), (), #empty, u64, ()>)
         );
     }
 
@@ -1116,7 +1122,7 @@ mod tests {
         assert_eq!(target.negations.len(), source.negations.len());
         for (before, after) in source.negations.iter().zip(&target.negations) {
             assert!(before.same_projection(after));
-            assert_eq!(after.provider.token, DEVICE_LAYOUT);
+            assert_eq!(after.provider.token, RADIX_RELATION);
             assert_eq!(after.hasher, Hasher::None);
         }
         assert_eq!(target.certificates, source.certificates);
@@ -1125,7 +1131,7 @@ mod tests {
         let word = word_type([&ty, &ty]).unwrap();
         // EDB relations keep the defaults of their unused IDB fields.
         assert_eq!(target.providers[0], source.providers[0]);
-        let view: Provider = syn::parse_quote!(@device_layout as ::gpu_datalog_runtime::DeviceLayout<(i32, i32,), ()>);
+        let view: Provider = syn::parse_quote!(@radix_relation as ::gpu_datalog_runtime::RadixLayout<(i32, i32,), (), #word, u64, ()>);
         let idb = &target.providers[2];
         assert_eq!(
             (&idb.delta, &idb.next, idb.canonical),
@@ -1135,15 +1141,29 @@ mod tests {
         let device = target.device.as_ref().unwrap();
         assert_eq!(
             device.layouts[idb.canonical].state,
-            syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>)
+            syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>)
         );
         assert_eq!(device.layouts.len(), target.layouts.len());
         assert_eq!(device.delta_layouts.len(), target.delta_layouts.len());
         assert_eq!(device.negations.len(), target.negations.len());
+        let negative_word = word_type([&ty]).unwrap();
         assert_eq!(
             device.negations[0].provider,
-            syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(i32,), ()>)
+            syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(i32,), (), #negative_word, u64, ()>)
         );
+        for state in device
+            .layouts
+            .iter()
+            .chain(&device.delta_layouts)
+            .chain(&device.negations)
+        {
+            assert_eq!(state.token, "radix_relation");
+            assert_eq!(state.offset, syn::parse_quote!(u64));
+            assert_eq!(state.construction, "full_key_set");
+            assert_eq!(state.read, "key_prefix");
+            assert_eq!(state.radix_bits, 0);
+            assert_eq!(state.input.key_count, state.input.columns.len());
+        }
         for (before, after) in source
             .layouts
             .iter()
@@ -1180,6 +1200,27 @@ mod tests {
         );
     }
 
+    fn refresh_state_initializers(record: &mut DeviceState) {
+        let state = &record.state;
+        let provider = &record.provider;
+        let (ratio, radix_bits, merge_tile_rows, block_threads) = (
+            record.ratio,
+            record.radix_bits,
+            record.merge_tile_rows,
+            record.block_threads,
+        );
+        record.state_init = syn::parse_quote!(<#state>::new(
+            __cq_gpu_pool.clone(),
+            ::gpu_datalog_runtime::RadixRunParams {
+                ratio: #ratio, radix_bits: #radix_bits,
+                merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
+            }
+        )?);
+        record.init = syn::parse_quote!(<#provider>::publish(
+            &__cq_gpu_state, __cq_gpu_packing.clone()
+        )?);
+    }
+
     #[test]
     fn independent_checker_accepts_legal_nondefault_merge_tiles() {
         let source = source();
@@ -1192,12 +1233,7 @@ mod tests {
             .chain(&mut device.negations)
         {
             record.merge_tile_rows = 7;
-            let state = &record.state;
-            let (ratio, merge_tile_rows, block_threads) =
-                (record.ratio, record.merge_tile_rows, record.block_threads);
-            record.state_init = syn::parse_quote!(<#state>::new(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RunParams {
-                ratio: #ratio, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
-            })?);
+            refresh_state_initializers(record);
         }
         check(&source, &target).unwrap();
         let roundtrip: Program = syn::parse2(quote!(#target)).unwrap();
@@ -1207,6 +1243,81 @@ mod tests {
             check_device(&target).is_err(),
             "initializer must agree with its recorded tile"
         );
+    }
+
+    #[test]
+    fn independent_checker_accepts_legal_nonzero_radix_directories() {
+        let source = source();
+        let default = compile(&source).unwrap();
+        for radix_bits in [1, 8, 20, 32] {
+            let mut target = default.clone();
+            let device = target.device.as_mut().unwrap();
+            for record in device
+                .layouts
+                .iter_mut()
+                .chain(&mut device.delta_layouts)
+                .chain(&mut device.negations)
+            {
+                record.radix_bits = radix_bits;
+                refresh_state_initializers(record);
+            }
+            assert_ne!(target.device, default.device);
+            check(&source, &target).unwrap();
+            check_device(&target).unwrap();
+            let roundtrip: Program = syn::parse2(quote!(#target)).unwrap();
+            assert_eq!(roundtrip, target);
+            check_device(&roundtrip).unwrap();
+
+            let mut stale_state = target.clone();
+            stale_state.device.as_mut().unwrap().layouts[0].state_init =
+                default.device.as_ref().unwrap().layouts[0].state_init.clone();
+            assert!(check(&source, &stale_state).is_err());
+            assert!(check_device(&stale_state).is_err());
+            // A view borrows the recorded state rather than allocating another
+            // state with a duplicated parameter block.
+            assert_eq!(
+                target.device.as_ref().unwrap().layouts[0].init,
+                default.device.as_ref().unwrap().layouts[0].init
+            );
+            let mut wrong_owner = target.clone();
+            let record = &mut wrong_owner.device.as_mut().unwrap().layouts[0];
+            let provider = &record.provider;
+            record.init = syn::parse_quote!(<#provider>::publish(
+                &__cq_gpu_other_state, __cq_gpu_packing.clone()
+            )?);
+            assert!(check(&source, &wrong_owner).is_err());
+            assert!(check_device(&wrong_owner).is_err());
+        }
+    }
+
+    #[test]
+    fn checker_rejects_radix_state_fact_mutations_in_every_collection() {
+        let source = source();
+        let target = compile(&source).unwrap();
+        let mutations: &[fn(&mut DeviceState)] = &[
+            |state| state.offset = syn::parse_quote!(u32),
+            |state| state.construction = syn::parse_quote!(occurrences),
+            |state| state.read = syn::parse_quote!(item_range),
+            |state| {
+                state.radix_bits = 33;
+                refresh_state_initializers(state);
+            },
+            |state| state.radix_bits = 1,
+        ];
+        for collection in 0..3 {
+            for (index, mutate) in mutations.iter().enumerate() {
+                let mut changed = target.clone();
+                let device = changed.device.as_mut().unwrap();
+                let states = match collection {
+                    0 => &mut device.layouts,
+                    1 => &mut device.delta_layouts,
+                    _ => &mut device.negations,
+                };
+                mutate(&mut states[0]);
+                assert!(check(&source, &changed).is_err(), "collection {collection}, mutation {index}");
+                assert!(check_device(&changed).is_err(), "boundary collection {collection}, mutation {index}");
+            }
+        }
     }
 
     /// A `Custom` instance of an authored verbatim token declaring `protocol`.
@@ -1289,7 +1400,7 @@ mod tests {
         let mut wrong_width = target.clone();
         let canonical = wrong_width.providers[0].canonical;
         wrong_width.device.as_mut().unwrap().layouts[canonical].state =
-            syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<u128>);
+            syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<u128, u64, ()>);
         assert!(check(&source, &wrong_width).is_err());
         let records: &[fn(&mut DeviceStorage)] = &[
             |d| d.providers.clear(),
@@ -1404,12 +1515,12 @@ mod tests {
         let device = target.device.as_ref().unwrap();
         assert_eq!(
             device.layouts[target.providers[0].canonical].state,
-            syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>)
+            syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>)
         );
         assert_eq!(device.layouts[target.providers[2].canonical].word, word);
         assert_eq!(
             target.layouts[0].provider,
-            syn::parse_quote!(@device_layout as ::gpu_datalog_runtime::DeviceLayout<(), (i64, i64,)>)
+            syn::parse_quote!(@radix_relation as ::gpu_datalog_runtime::RadixLayout<(i64, i64,), (), #word, u64, ()>)
         );
         check(&source, &target).unwrap();
     }

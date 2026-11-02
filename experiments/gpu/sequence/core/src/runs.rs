@@ -1,4 +1,4 @@
-//! Checked bindings for declared packed-run inputs.
+//! Checked bindings for declared full-key radix relation inputs.
 use cq_lang_structures::provider::{CodecId, NativeAbi};
 use cq_lang_structures::{Program, Structure, physical::symbol_name};
 use quote::quote;
@@ -110,7 +110,7 @@ pub(crate) fn scalar(ty: &Type) -> proc_macro2::TokenStream {
     quote!(<#ty as ::gpu_datalog_runtime::Scalar>::COLUMN)
 }
 
-// Formal rule GPU-Runs: only declared run handles bind packed inputs; every
+// Formal rule GPU-Runs: declared radix relation handles bind full-key inputs; every
 // lookup uses a leading packed prefix and every physical run remains visible.
 pub fn bind(source: &Program) -> syn::Result<Program> {
     let analysis = cq_lang_structures::contract::check(source)?;
@@ -129,11 +129,11 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
         if !matches!(reader, cq_lang_structures::ReaderRef::Scan) {
             continue;
         }
-        if analysis.facts(&keyed.provider).abi != Some(NativeAbi::Runs) {
+        if analysis.facts(&keyed.provider).abi != Some(NativeAbi::RadixRelation) {
             continue;
         }
         let input = keyed.provider.input.as_ref().ok_or_else(|| {
-            syn::Error::new_spanned(entry, "GPU-Runs: input schema is not recorded")
+            syn::Error::new_spanned(entry, "GPU-RadixRelation: input schema is not recorded")
         })?;
         let types = &input.columns;
         let key_count = input.key_count;
@@ -142,12 +142,12 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
         let row = &analysis.physical.rows[&symbol_name(&entry.name)];
         let origin =
             crate::rows::origin(&symbol_name(&entry.name), &definitions)?.ok_or_else(|| {
-                syn::Error::new_spanned(entry, "GPU-Runs: scan has no declared input origin")
+                syn::Error::new_spanned(entry, "GPU-RadixRelation: scan has no declared input origin")
             })?;
         if layout.len() != types.len() {
             return Err(syn::Error::new_spanned(
                 entry,
-                "GPU-Runs: declared packed arity differs from input",
+                "GPU-RadixRelation: declared packed arity differs from input",
             ));
         }
         for column in row.types.keys() {
@@ -157,7 +157,7 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
                 if logical.is_none() || row.logical_type_ids.get(column).copied() != logical {
                     return Err(syn::Error::new_spanned(
                         entry,
-                        "GPU-Runs: declared packed logical type id differs from input",
+                        "GPU-RadixRelation: declared packed logical type id differs from input",
                     ));
                 }
             }
@@ -183,22 +183,11 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
         let keys = keyed.level_names().concat();
         let layout = &analysis.host_layouts[&origin.host];
         if keys.len() > layout.len()
-            || keys
-                .iter()
-                .enumerate()
-                .any(|(i, key)| origin.columns.get(key) != layout.get(i))
+            || keys.iter().any(|key| !origin.columns.get(key).is_some_and(|column| layout.contains(column)))
         {
             return Err(syn::Error::new_spanned(
                 &entry.name,
-                format!(
-                    "GPU-Runs: lookup key {:?} (source columns {:?}) must be a leading prefix of sorted packed layout {:?} for input {}",
-                    keys,
-                    keys.iter()
-                        .map(|key| origin.columns.get(key))
-                        .collect::<Vec<_>>(),
-                    layout,
-                    origin.host,
-                ),
+                "GPU-RadixRelation: lookup key is absent from its full-key source",
             ));
         }
         keyed.provider = provider.clone();
@@ -234,7 +223,7 @@ pub fn record_representation(
             if columns.len() != layout.len() {
                 return Err(syn::Error::new_spanned(
                     entry,
-                    "GPU-Runs: declared packed arity differs from input",
+                    "GPU-RadixRelation: declared packed arity differs from input",
                 ));
             }
             for (column, ty) in layout.iter().zip(columns) {
@@ -496,14 +485,14 @@ mod tests {
             }
             structures {
                 providers {
-                    native = AnyDefaultSpelling { reads [exact, range, membership, resident], abi runs };
+                    native = AnyDefaultSpelling { reads [exact, range, membership, resident], abi radix_relation };
                     index = OtherDefaultSpelling { reads [exact] };
                     host_scan = Host { reads [] };
                     radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> {
                         reads [distinct], build inferred
                     };
                 }
-                r host scan = @native input { keys 1; columns [i64 => StoredScalar] } as Alias [];
+                r host scan = @native input { keys 1; columns [i64 => StoredScalar] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as Alias [];
                 r = @index as Index [x];
                 d host scan = @host_scan as Host [];
                 result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
@@ -519,5 +508,17 @@ mod tests {
         };
         assert_eq!(built.provider, host.provider);
         assert_eq!(built.provider.ty, syn::parse_quote!(Alias));
+        for omit_advice in [false, true] {
+            let mut stale = source.clone();
+            let Structure::Host { keyed, .. } = &mut stale.structures.entries[0].structure else {
+                unreachable!()
+            };
+            if omit_advice {
+                keyed.provider.radix = None;
+            } else {
+                keyed.provider.input.as_mut().unwrap().key_count = 0;
+            }
+            assert!(cq_lang_structures::contract::check(&stale).is_err());
+        }
     }
 }

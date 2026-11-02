@@ -13,8 +13,8 @@ use super::Grid;
 pub enum SourceOrigin {
     /// Immutable resident input columns (`host`), renamed into `columns`.
     Resident { host: String },
-    /// Resident packed device runs; lookups use the recorded native providers.
-    Runs {
+    /// Retained full-key radix sets; lookups use recorded prefix readers.
+    RadixRelation {
         host: String,
         providers: Vec<String>,
     },

@@ -1,55 +1,27 @@
 use crate::{Result, Word};
-use cuda_core::{CudaEvent, DeviceBuffer, DeviceCopy, LaunchConfig1D};
+use cuda_core::{DeviceBuffer, DeviceCopy, LaunchConfig1D};
 use gpu_device_columns::{Buffer, Pool};
 use rccl_cub::{DeviceSliceRead, DeviceSliceWrite};
-use std::{cmp::Reverse, collections::BinaryHeap, sync::Arc};
+use std::sync::Arc;
 
 /// A borrowed kernel ABI. Its owner must outlive all stream-ordered reads.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct RunView<W: Word> {
+pub(crate) struct RunView<W: Word> {
     pub ptr: *const W,
     pub len: usize,
 }
 // SAFETY: this C-layout descriptor contains only a device pointer and length.
 unsafe impl<W: Word> DeviceCopy for RunView<W> {}
 
-/// Find the half-open index interval for the inclusive value interval [lo, hi].
-/// This also handles the maximum word without overflowing `hi + 1`.
-/// # Safety
-/// `view` must describe initialized, sorted words readable on this device.
-#[inline(always)]
-pub unsafe fn range<W: Word>(view: RunView<W>, lo: W, hi: W) -> (usize, usize) {
-    let mut begin = 0;
-    let mut end = view.len;
-    while begin < end {
-        let mid = begin + (end - begin) / 2;
-        if unsafe { &*view.ptr.add(mid) }.compare(&lo).is_lt() {
-            begin = mid + 1;
-        } else {
-            end = mid;
-        }
-    }
-    let first = begin;
-    end = view.len;
-    while begin < end {
-        let mid = begin + (end - begin) / 2;
-        if !unsafe { &*view.ptr.add(mid) }.compare(&hi).is_gt() {
-            begin = mid + 1;
-        } else {
-            end = mid;
-        }
-    }
-    (first, begin)
-}
 
 /// Cheap shared ownership of an immutable sorted, unique initialized prefix.
 #[derive(Clone)]
-pub struct Run<W: Word> {
+pub struct SortedBatch<W: Word> {
     buffer: Arc<Buffer<W>>,
     rows: usize,
 }
-impl<W: Word> Run<W> {
+impl<W: Word> SortedBatch<W> {
     /// # Safety
     /// The prefix must be initialized, sorted and unique on its pool's stream.
     /// No alias may mutate its words for the lifetime of this run or its clones.
@@ -96,7 +68,11 @@ impl<W: Word> Run<W> {
     pub fn buffer(&self) -> &Buffer<W> {
         &self.buffer
     }
-    pub fn view(&self) -> RunView<W> {
+    pub(crate) fn shared_buffer(&self) -> Result<Buffer<W>> {
+        // SAFETY: the owner retains this immutable initialized prefix.
+        unsafe { Buffer::shared_slice(self.buffer.clone(), 0, self.rows) }
+    }
+    pub(crate) fn view(&self) -> RunView<W> {
         RunView {
             ptr: self.buffer.ptr(),
             len: self.rows,
@@ -104,7 +80,7 @@ impl<W: Word> Run<W> {
     }
 }
 // SAFETY: the retained immutable buffer owns the reported initialized prefix.
-unsafe impl<W: Word> cuda_host::KernelSliceArg for Run<W> {
+unsafe impl<W: Word> cuda_host::KernelSliceArg for SortedBatch<W> {
     type Elem = W;
     fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
         self.buffer.cu_deviceptr()
@@ -129,188 +105,25 @@ unsafe impl<W: Word> cuda_host::KernelSliceArg for Output<W> {
 // SAFETY: mutable access is exclusive and output is unpublished until launch.
 unsafe impl<W: Word> cuda_host::KernelSliceArgMut for Output<W> {}
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct AdmissionTimings {
-    pub sort_unique_ms: f32,
-    pub anti_join_ms: f32,
-    pub merge_ms: f32,
+/// Shared stateless full-key sorting, compaction, subtraction and merge kernels.
+/// Accepted state belongs exclusively to DeviceRadixRun.
+pub(crate) struct SetOps<'a> {
+    pub pool: &'a Arc<Pool>,
+    pub module: &'a run_kernels::LoadedModule,
+    pub params: crate::RadixRunParams,
 }
-struct Timing {
-    events: [CudaEvent; 4],
-}
-impl Timing {
-    fn new(pool: &Pool) -> Result<Self> {
-        let event = || {
-            pool.context()
-                .new_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
-        };
-        Ok(Self {
-            events: [event()?, event()?, event()?, event()?],
-        })
-    }
-    fn record(&self, phase: usize, pool: &Pool) -> Result<()> {
-        Ok(self.events[phase].record(pool.stream())?)
-    }
-    fn elapsed(&self) -> Result<AdmissionTimings> {
-        Ok(AdmissionTimings {
-            sort_unique_ms: self.events[0].elapsed_ms(&self.events[1])?,
-            anti_join_ms: self.events[1].elapsed_ms(&self.events[2])?,
-            merge_ms: self.events[2].elapsed_ms(&self.events[3])?,
-        })
-    }
-}
-
-/// Caller-recorded maintenance and run-kernel geometry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RunParams {
-    pub ratio: usize,
-    pub merge_tile_rows: usize,
-    pub block_threads: u32,
-}
-impl RunParams {
-    pub fn validate(&self) -> Result<()> {
-        if self.ratio < 2 {
-            return Err("device maintenance ratio must be at least two".into());
-        }
-        if self.merge_tile_rows == 0 {
-            return Err("merge tile must contain at least one row".into());
-        }
-        if self.block_threads != 256 {
-            return Err("run kernels require exactly 256 threads per block".into());
-        }
-        Ok(())
-    }
-}
-
-/// Formal rule DL-DeviceRuns: `fresh` subtracts all accepted immutable runs
-/// without changing them; each appended run is unique and disjoint from the
-/// accepted runs, and merging preserves their union using the recorded positive
-/// merge tile and checked run-kernel launch geometry.
-///
-/// Each nonempty `fresh` downloads only the candidate unique count and, when
-/// accepted state is nonempty, the fresh count. There are no row readbacks.
-/// Empty batches need neither download. `to_host` and opt-in `last_timings` are
-/// explicit diagnostic synchronization paths, never used by admission.
-pub struct DeviceRuns<W: Word> {
-    pool: Arc<Pool>,
-    accepted: Vec<Run<W>>,
-    rows: usize,
-    module: run_kernels::LoadedModule,
-    timing: Option<Timing>,
-    params: RunParams,
-}
-impl<W: Word> DeviceRuns<W> {
-    /// Formal rule DL-DeviceRatio: consume the recorded maintenance ratio
-    /// (at least two), positive merge tile, and supported launch geometry.
-    pub fn new(pool: Arc<Pool>, params: RunParams) -> Result<Self> {
-        params.validate()?;
-        // SAFETY: module is loaded in, and retained with, the pool's context.
-        let module = unsafe { run_kernels::load(pool.context())? };
-        Ok(Self {
-            pool,
-            accepted: Vec::new(),
-            rows: 0,
-            module,
-            timing: None,
-            params,
-        })
-    }
-    pub fn len(&self) -> usize {
-        self.rows
-    }
-    pub fn is_empty(&self) -> bool {
-        self.rows == 0
-    }
-    /// Initialized bytes in the accepted set, excluding retained spare capacity.
-    pub fn live_bytes(&self) -> usize {
-        self.rows * std::mem::size_of::<W>()
-    }
-    /// Backing bytes retained by current accepted runs. Published snapshots may
-    /// alias these allocations or retain older runs not counted here.
-    pub fn allocated_bytes(&self) -> usize {
-        self.accepted.iter().map(Run::allocated_bytes).sum()
-    }
-    pub fn reserved_capacity(&self) -> usize {
-        self.accepted.iter().map(Run::reserved_capacity).sum()
-    }
-    pub fn retained_buffers(&self) -> usize {
-        self.accepted.len()
-    }
-    pub fn runs(&self) -> Vec<RunView<W>> {
-        self.accepted.iter().map(Run::view).collect()
-    }
-    /// Retain a snapshot of accepted immutable runs, independent of later merges.
-    pub fn owned_runs(&self) -> Vec<Run<W>> {
-        self.accepted.clone()
-    }
-    /// Opt-in event timing: `fresh` records its sort and anti-join phases and
-    /// the following `append_sorted` records its merge.
-    pub fn enable_timing(&mut self, enabled: bool) -> Result<()> {
-        self.timing = if enabled {
-            Some(Timing::new(&self.pool)?)
-        } else {
-            None
-        };
-        Ok(())
-    }
-    /// Explicitly synchronize the last profiled admission and read CUDA event times.
-    pub fn last_timings(&self) -> Result<AdmissionTimings> {
-        self.timing
-            .as_ref()
-            .ok_or_else(|| "admission timing is not enabled".into())
-            .and_then(Timing::elapsed)
-    }
-    /// The unique candidate rows absent from every accepted run, sorted.
-    /// Accepted state is unchanged; publishing the result is a separate
-    /// `append_sorted` into each layout, including this one.
-    pub fn fresh(&self, candidates: &Buffer<W>, rows: usize) -> Result<Run<W>> {
-        if !Arc::ptr_eq(&self.pool, candidates.pool()) {
-            return Err("candidate pool differs from accepted state".into());
-        }
-        if rows > candidates.len() || rows > u32::MAX as usize {
-            return Err("candidate live length exceeds capacity or u32 domain".into());
-        }
-        self.mark(0)?;
-        let unique = self.sort_unique(candidates, rows)?;
-        self.mark(1)?;
-        let fresh = if self.accepted.is_empty() || unique.is_empty() {
-            unique
-        } else {
-            self.subtract(&unique)?
-        };
-        self.mark(2)?;
-        Ok(fresh)
-    }
-    fn mark(&self, phase: usize) -> Result<()> {
-        if let Some(timing) = &self.timing {
-            timing.record(phase, &self.pool)?;
-        }
-        Ok(())
-    }
-    /// Canonicalize a buffer without changing accepted state, for layout deltas.
-    /// Only the unique count is downloaded. The input remains unchanged.
-    pub fn sort_unique(&self, input: &Buffer<W>, rows: usize) -> Result<Run<W>> {
-        self.sort(input, rows, false)
-    }
-    /// Sort an already unique initialized prefix without count downloads.
-    ///
-    /// Formal rule DL-SortKnownUnique: an injective permutation of a unique run
-    /// remains unique; sorting preserves its cardinality without compaction.
-    /// # Safety
-    /// The initialized input prefix must contain pairwise distinct words.
-    /// The input remains unchanged and accepted state is not modified.
-    pub unsafe fn sort_known_unique(&self, input: &Buffer<W>, rows: usize) -> Result<Run<W>> {
-        self.sort(input, rows, true)
-    }
-    fn sort(&self, input: &Buffer<W>, rows: usize, known_unique: bool) -> Result<Run<W>> {
-        if !Arc::ptr_eq(&self.pool, input.pool()) || rows > input.len() || rows > u32::MAX as usize
+impl SetOps<'_> {
+    /// Formal rule DL-SortKnownUnique: certified injective full-key permutations
+    /// skip unique compaction and count readback, but never skip sorting.
+    pub(crate) fn sort<W: Word>(&self, input: &Buffer<W>, rows: usize, known_unique: bool) -> Result<SortedBatch<W>> {
+        if !self.pool.shares_memory(input.pool()) || rows > input.len() || rows > u32::MAX as usize
         {
             return Err("invalid sort input pool or live length".into());
         }
         // SAFETY: kernels initialize the returned prefix before publication.
         let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
         if rows == 0 {
-            return unsafe { Run::from_sorted(output, 0) };
+            return unsafe { SortedBatch::from_sorted(output, 0) };
         }
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
@@ -405,11 +218,11 @@ impl<W: Word> DeviceRuns<W> {
         };
         // SAFETY: compaction established uniqueness, or the caller guaranteed it.
         // Both paths initialize the complete sorted prefix before publication.
-        unsafe { Run::from_sorted(output, rows) }
+        unsafe { SortedBatch::from_sorted(output, rows) }
     }
-    fn subtract(&self, unique: &Run<W>) -> Result<Run<W>> {
+    pub(crate) fn subtract<W: Word>(&self, unique: &SortedBatch<W>, accepted: &[RunView<W>]) -> Result<SortedBatch<W>> {
         let rows = unique.len();
-        let descriptors = Buffer::from_host_async(self.pool.clone(), &self.runs())?;
+        let descriptors = Buffer::from_host_async(self.pool.clone(), accepted)?;
         // SAFETY: the flag kernel and stable select initialize these outputs.
         let flags = unsafe { Buffer::<u32>::uninitialized(self.pool.clone(), rows)? };
         let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
@@ -431,7 +244,7 @@ impl<W: Word> DeviceRuns<W> {
             unique.buffer.ptr(),
             rows as u64,
             descriptors.ptr(),
-            self.accepted.len() as u32,
+            accepted.len() as u32,
             flags.ptr(),
         )?;
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
@@ -453,40 +266,9 @@ impl<W: Word> DeviceRuns<W> {
         )?;
         let fresh = read_count(&self.pool, count.get())?;
         // SAFETY: stable selection preserves sorted uniqueness of the input.
-        unsafe { Run::from_sorted(output, fresh) }
+        unsafe { SortedBatch::from_sorted(output, fresh) }
     }
-    /// Append a pre-canonicalized layout delta and apply the recorded ratio.
-    /// Wide rows use tiled merge-path partitioning, without native RCCL's
-    /// 16-byte key-layout limit or a full-size auxiliary row allocation.
-    /// # Safety
-    /// The run must be disjoint from every accepted run. In particular callers
-    /// may sort a bijective permutation of an admitted delta for another layout.
-    pub unsafe fn append_sorted(&mut self, run: Run<W>) -> Result<()> {
-        if !Arc::ptr_eq(&self.pool, run.buffer.pool()) {
-            return Err("layout run pool differs".into());
-        }
-        if run.is_empty() {
-            return self.mark(3);
-        }
-        let rows = self
-            .rows
-            .checked_add(run.len())
-            .ok_or("accepted row count overflow")?;
-        // Prepare the complete merge before mutating state: failures leave it unchanged.
-        let mut merged = run;
-        let mut keep = self.accepted.len();
-        while keep > 0
-            && self.accepted[keep - 1].len() <= merged.len().saturating_mul(self.params.ratio)
-        {
-            merged = self.merge(&self.accepted[keep - 1], &merged)?;
-            keep -= 1;
-        }
-        self.accepted.truncate(keep);
-        self.accepted.push(merged);
-        self.rows = rows;
-        self.mark(3)
-    }
-    fn merge(&self, first: &Run<W>, second: &Run<W>) -> Result<Run<W>> {
+    pub(crate) fn merge<W: Word>(&self, first: &SortedBatch<W>, second: &SortedBatch<W>) -> Result<SortedBatch<W>> {
         let rows = first
             .len()
             .checked_add(second.len())
@@ -494,7 +276,7 @@ impl<W: Word> DeviceRuns<W> {
         // SAFETY: merge writes every output element before publication.
         let mut output = Output(unsafe { Buffer::uninitialized(self.pool.clone(), rows)? });
         if W::BITS > 128 {
-            let tiles = rows.div_ceil(self.params.merge_tile_rows);
+            let tiles = rows.div_ceil(self.params.merge_tile_rows as usize);
             let initial = self.module.prepare_merge_wide::<W>(LaunchConfig1D::new(
                 1,
                 self.params.block_threads,
@@ -513,10 +295,10 @@ impl<W: Word> DeviceRuns<W> {
                 first.view(),
                 second.view(),
                 output.0.ptr(),
-                self.params.merge_tile_rows,
+                self.params.merge_tile_rows as usize,
             )?;
             // SAFETY: disjoint merge-path tiles initialize the sorted union.
-            return unsafe { Run::from_sorted(output.0, rows) };
+            return unsafe { SortedBatch::from_sorted(output.0, rows) };
         }
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
@@ -535,29 +317,7 @@ impl<W: Word> DeviceRuns<W> {
             |a: &W, b: &W| a.compare(b),
         )?;
         // SAFETY: merging disjoint sorted unique runs produces a sorted unique run.
-        unsafe { Run::from_sorted(output.0, rows) }
-    }
-    /// Explicit diagnostic row download, followed by a host k-way sorted merge.
-    pub fn to_host(&self) -> Result<Vec<W>> {
-        let runs = self
-            .accepted
-            .iter()
-            .map(|run| run.buffer.to_host_prefix(run.len()))
-            .collect::<Result<Vec<_>>>()?;
-        let mut heap = BinaryHeap::new();
-        for (run, values) in runs.iter().enumerate() {
-            if let Some(&word) = values.first() {
-                heap.push(Reverse((word, run, 0)));
-            }
-        }
-        let mut output = Vec::with_capacity(self.rows);
-        while let Some(Reverse((word, run, offset))) = heap.pop() {
-            output.push(word);
-            if let Some(&next) = runs[run].get(offset + 1) {
-                heap.push(Reverse((next, run, offset + 1)));
-            }
-        }
-        Ok(output)
+        unsafe { SortedBatch::from_sorted(output.0, rows) }
     }
 }
 
@@ -807,7 +567,7 @@ pub(crate) fn read_count(pool: &Pool, buffer: &DeviceBuffer<u64>) -> Result<usiz
 ///
 /// Least-significant-lane-first stable radix passes over row indices keep
 /// equal words in input order, so the permutation also orders occurrences.
-/// Shared by [`DeviceRuns`] wide-word canonicalization and grouped radix runs.
+/// Shared by full-key set canonicalization and occurrence-preserving grouped radix runs.
 pub(crate) fn stable_order<W: Word>(
     pool: &Arc<Pool>,
     module: &run_kernels::LoadedModule,

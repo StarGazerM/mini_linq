@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use syn::Ident;
 
 /// The recorded device provider of each component's negative key set, as a
-/// `device_layout` token instance (declared by device storage).
+/// `radix_relation` token instance (declared by device storage).
 fn key_providers(program: &Program) -> syn::Result<Vec<Vec<round::storage::Provider>>> {
     let device = program
         .storage

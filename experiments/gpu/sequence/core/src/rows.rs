@@ -306,7 +306,8 @@ pub struct Rows {
     /// references the identifier; unused adapters would load device modules.
     pub support: Vec<(Ident, TokenStream, TokenStream)>,
     pub parameters: Vec<(Ident, Type, TokenStream)>,
-    pub rust_functions: Vec<(Ident, TokenStream, Ident)>,
+    /// Generated generic bounds and host preparation witnesses (callables/words).
+    pub type_witnesses: Vec<(Ident, TokenStream, Ident)>,
     pub output_columns: Vec<String>,
     /// The query's host captures (A-Capture), bound once before input setup.
     pub query_captures: cq_lang_structures::syntax::Captures,
@@ -417,7 +418,7 @@ impl Rows {
         // Encoded predicates belong to `where`; unsupported Rust placement stays at host, not rewritten.
         let captures = crate::capture::print(&realization.captures.captures);
         let capture_count = realization.captures.captures.len();
-        let rust_functions = captures.rust_functions;
+        let mut type_witnesses = captures.rust_functions;
         let disabled_captures = captures.disabled;
         let mut setup = captures.setup;
         let mut build = TokenStream::new();
@@ -478,19 +479,10 @@ impl Rows {
                         continue;
                     }
                     if analysis.structures.facts(&keyed.provider).abi
-                        == Some(cq_lang_structures::provider::NativeAbi::Runs)
+                        == Some(cq_lang_structures::provider::NativeAbi::RadixRelation)
                     {
-                        let input = keyed
-                            .provider
-                            .input
-                            .as_ref()
-                            .ok_or_else(|| error("GPU-Runs: input schema is not recorded"))?;
-                        let types = input
-                            .columns
-                            .iter()
-                            .map(|column| column.storage.clone())
-                            .collect::<Vec<_>>();
-                        run_binding = Some((types, input.key_count));
+                        run_binding = Some(analysis.gpu_bindings.relation_inputs.get(&name)
+                            .ok_or_else(|| error("GPU-RadixRelation: missing recorded input read"))?);
                         resident = true;
                     } else if analysis.structures.facts(&keyed.provider).abi
                         == Some(cq_lang_structures::provider::NativeAbi::Columns)
@@ -522,25 +514,40 @@ impl Rows {
                 });
                 first = false;
             }
-            if let Some((types, keys)) = run_binding {
+            if let Some(read) = run_binding {
+                let types = read.key_types.clone();
+                let keys = types.len();
+                let cq_lang_sequence::gpu::bindings::RadixWordCapture::InputView { host } = &read.word_capture;
+                let word = format_ident!("__CqRadixWord_{host}");
+                let witness = format_ident!("__cq_radix_word_{host}");
+                type_witnesses.push((word.clone(), quote!(::gpu_datalog_runtime::Word), witness.clone()));
+                let offset = &read.offset;
+                let ty = &read.provider.ty;
                 let schema: Vec<_> = types.iter().map(crate::runs::scalar).collect();
                 let view = format_ident!("__cq_sequence_runs_{name}");
                 setup.extend(quote! {
+                    let #id: &#ty = #id;
                     if !__cq_pool.shares_memory(#id.pool()) {
                         return Err("T-Gpu: resident inputs must share a pool's memory".into());
                     }
                     #id.validate(&[#(#schema),*])?;
+                    let #witness = {
+                        fn infer<W: ::gpu_datalog_runtime::Word>(
+                            _: &::gpu_datalog_runtime::radix_run::RadixLayoutView<W, u64>,
+                        ) -> W { W::zero() }
+                        infer(&#id.view())
+                    };
                     let #length = #id.len();
                     if ::gpu_datalog_runtime::trace_kernels() {
                         ::std::eprintln!("gpu_sequence_input\tname={}\tdescriptors={:p}\trows={}\truns={}",
-                            #name, #id.view().runs, #length, #id.view().run_count);
+                            #name, #id.view().keys.runs, #length, #id.view().keys.run_count);
                     }
                     __cq_run_owners.push(#id.owner());
                 });
                 parameters.push((
                     view.clone(),
-                    syn::parse_quote!(::gpu_datalog_runtime::RunsView),
-                    quote!(#id.view()),
+                    syn::parse_quote!(::gpu_datalog_runtime::radix_run::RadixLayoutView<#word, #offset>),
+                    quote!(#id.view_on(&__cq_pool)?),
                 ));
                 run_hosts.insert(name.clone(), (view, types, keys));
                 hosts.insert(name, (id, length));
@@ -700,17 +707,17 @@ impl Rows {
                 hosts.insert(name.clone(), (id, length));
             }
             let origin_host = match &realization.origin {
-                SourceOrigin::Resident { host } | SourceOrigin::Runs { host, .. } => host.clone(),
+                SourceOrigin::Resident { host } | SourceOrigin::RadixRelation { host, .. } => host.clone(),
                 SourceOrigin::Uploaded { .. } => name.clone(),
             };
             let (host, host_length) = &hosts[&origin_host];
-            if let SourceOrigin::Runs {
+            if let SourceOrigin::RadixRelation {
                 providers: native, ..
             } = &realization.origin
             {
                 let (view, _types, _key_count) = run_hosts
                     .get(&origin_host)
-                    .ok_or_else(|| error("GPU-Runs: run source names a nonrun input"))?;
+                    .ok_or_else(|| error("GPU-RadixRelation: run source names a nonrun input"))?;
                 let layout = &analysis.structures.host_layouts[&origin_host];
                 let payload = layout
                     .iter()
@@ -720,7 +727,7 @@ impl Rows {
                             .iter()
                             .find(|(_, original)| *original == source)
                             .map(|(column, _)| column.clone())
-                            .ok_or_else(|| error("GPU-Runs: supplied layout lost a packed column"))
+                            .ok_or_else(|| error("GPU-RadixRelation: supplied layout lost a packed column"))
                     })
                     .collect::<syn::Result<Vec<_>>>()?;
                 let reads = payload
@@ -747,7 +754,7 @@ impl Rows {
                         .is_some_and(|layouts| layouts.len() != 1)
                     {
                         return Err(error(
-                            "GPU-Runs: name each supplied provider layout separately",
+                            "GPU-RadixRelation: name each supplied provider layout separately",
                         ));
                     }
                     let recorded = analysis
@@ -762,21 +769,24 @@ impl Rows {
                         &recorded.materialization
                     {
                         let order = &materialization.permutation;
+                        let cq_lang_sequence::gpu::bindings::RadixWordCapture::InputView { host: capture_host } = &recorded.radix.word_capture;
+                        let word = format_ident!("__CqRadixWord_{capture_host}");
+                        let offset = &recorded.radix.offset;
                         let provider = &materialization.provider.ty;
-                        let cq_lang_sequence::gpu::bindings::RunParams {
-                            ratio,
-                            merge_tile_rows,
-                            block_threads,
+                        let types = materialization.provider.input.as_ref()
+                            .expect("checked permutation schema").columns.iter().map(|column| &column.storage);
+                        let cq_lang_sequence::gpu::bindings::RadixParams {
+                            ratio, radix_bits, merge_tile_rows, block_threads,
                         } = materialization.params;
                         let threads = materialization.permutation_threads;
                         let owner = format_ident!("__cq_native_provider_{provider_name}");
                         let provider_view = format_ident!("__cq_native_view_{provider_name}");
                         build.extend(quote! {
-                                let #owner: #provider = #host.permuted_provider(
+                                let #owner: #provider = #host.permuted_provider::<(#(#types,)*)>(
                                     &__cq_pool,
                                     &[#(#order),*],
-                                    ::gpu_datalog_runtime::RunParams {
-                                        ratio: #ratio, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads,
+                                    ::gpu_datalog_runtime::radix_run::RadixRunParams {
+                                        ratio: #ratio, radix_bits: #radix_bits, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads,
                                     },
                                     #threads,
                                 )?;
@@ -784,8 +794,8 @@ impl Rows {
                             });
                         parameters.push((
                             provider_view.clone(),
-                            syn::parse_quote!(::gpu_datalog_runtime::RunsView),
-                            quote!(#owner.view()),
+                            syn::parse_quote!(::gpu_datalog_runtime::radix_run::RadixLayoutView<#word, #offset>),
+                            quote!(#owner.view_on(&__cq_pool)?),
                         ));
                         (provider_view, recorded.payload.clone())
                     } else {
@@ -1149,7 +1159,7 @@ impl Rows {
             build,
             support,
             parameters,
-            rust_functions,
+            type_witnesses,
             output_columns,
             query_captures: physical.program.captures.clone(),
             capture_types,
@@ -1239,13 +1249,13 @@ impl Rows {
             // DECODE V: P6 run scans unpack every demanded field before relational consumers; retain narrow codes unless rust_reads requires identity.
             let reads = source.reads.iter().map(|(slot, column)| {
                 quote! {
-                    #row[#slot] = unsafe { ::gpu_datalog_runtime::device::decode(
+                    #row[#slot] = unsafe { ::gpu_datalog_runtime::radix_run::device::decode_key(
                         #view, __run_index, __run_position, #column as u32) };
                 }
             });
             return Ok(quote! {
                 let (__run_index, __run_position) = unsafe {
-                    ::gpu_datalog_runtime::device::locate(#view, (#position) as u32)
+                    ::gpu_datalog_runtime::radix_run::device::locate_key(#view.keys, (#position) as u64)
                 };
                 #(#reads)*
             });
@@ -1689,7 +1699,7 @@ fn host_rows(
     for entry in &program.structures.structures.entries {
         if let cq_lang_structures::Structure::Host { keyed, .. } = &entry.structure
             && analysis.structures.facts(&keyed.provider).abi
-                == Some(cq_lang_structures::provider::NativeAbi::Runs)
+                == Some(cq_lang_structures::provider::NativeAbi::RadixRelation)
             && let Some(input) = &keyed.provider.input
             && let Some(host) = analysis
                 .structures
@@ -1739,7 +1749,7 @@ fn host_rows(
             let values = types.iter().enumerate().map(|(index, ty)| {
                 quote!(<#ty as ::gpu_datalog_runtime::Scalar>::decode(__cq_codes[#index]))
             });
-            quote!(#value.to_host_codes()?.into_iter().map(|__cq_codes| (#(#values,)*)).collect::<::std::vec::Vec<_>>())
+            quote!(#value.to_rows()?.into_iter().map(|__cq_codes| (#(#values,)*)).collect::<::std::vec::Vec<_>>())
         } else {
             // DECODE V: P6 host fallback materializes complete logical tuples before further relational processing, not final publication.
             quote!(#value.to_host()?)
@@ -2375,9 +2385,9 @@ mod tests {
                 selected = let canon point select r if (b = 7);
                 return selected as answer(a,b);
             }
-            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build typed, abi runs }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
-                r host scan = @device_layout input { keys 2; columns [i32 => i32, i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
-                r host result(selected) = @device_layout input { keys 2; columns [i32 => i32, i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
+            structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+                r host scan = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u64,u64,()> [];
+                r host result(selected) = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u64,u64,()> [b];
                 selected rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 selected canon = rows;
             }
@@ -2416,10 +2426,10 @@ mod tests {
                 result = let canon project joined keep {a,b};
                 return result as answer(a,b);
             }
-            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build typed, abi runs }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
-                d host scan = @device_layout input { keys 1; columns [i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
-                r host scan = @device_layout input { keys 2; columns [i32 => i32, i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [];
-                r = @device_layout input { keys 2; columns [i32 => i32, i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,i32),()> [b];
+            structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+                d host scan = @radix_relation input { keys 1; columns [i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,),(),u64,u64,()> [];
+                r host scan = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u64,u64,()> [];
+                r = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u64,u64,()> [b];
                 result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 result canon = rows;
             }
@@ -2442,6 +2452,25 @@ mod tests {
         let materialization = recorded.materialization.as_ref().unwrap();
         assert_eq!(materialization.permutation, vec![1, 0]);
         assert_eq!(recorded.source, ["a", "b"]);
+        assert_eq!(recorded.radix.fields, [1, 0]);
+        assert_eq!(recorded.radix.key_types, vec![syn::parse_quote!(i32), syn::parse_quote!(i32)]);
+        let mut stale = analysis.gpu_bindings.clone();
+        stale.native.get_mut("r").unwrap().radix.fields.swap(0, 1);
+        assert!(crate::bindings::check(&program, &analysis, &stale).is_err());
+        let mut missing = analysis.gpu_bindings.clone();
+        missing.native.remove("r");
+        assert!(crate::bindings::check(&program, &analysis, &missing).is_err());
+        let mut wrong_offset = analysis.gpu_bindings.clone();
+        wrong_offset.relation_inputs.values_mut().next().unwrap().offset = syn::parse_quote!(u32);
+        assert!(crate::bindings::check(&program, &analysis, &wrong_offset).is_err());
+        let mut wrong_capture = analysis.gpu_bindings.clone();
+        wrong_capture.relation_inputs.values_mut().next().unwrap().word_capture =
+            cq_lang_sequence::gpu::bindings::RadixWordCapture::InputView { host: "absent".into() };
+        assert!(crate::bindings::check(&program, &analysis, &wrong_capture).is_err());
+        let mut wrong_permutation_capture = analysis.gpu_bindings.clone();
+        wrong_permutation_capture.native.get_mut("r").unwrap().radix.word_capture =
+            cq_lang_sequence::gpu::bindings::RadixWordCapture::InputView { host: "absent".into() };
+        assert!(crate::bindings::check(&program, &analysis, &wrong_permutation_capture).is_err());
         struct Permutations(Vec<Vec<usize>>);
         impl VisitMut for Permutations {
             fn visit_expr_method_call_mut(&mut self, call: &mut syn::ExprMethodCall) {
@@ -2504,7 +2533,7 @@ mod tests {
             .materialization
             .as_mut()
             .unwrap()
-            .provider = crate::providers::declaration("device_layout").instance();
+            .provider = crate::providers::declaration("radix_relation").instance();
         assert!(Rows::new(&program, &wrong_materialization).is_err());
         let mut wide_permutation = analysis.clone();
         wide_permutation
@@ -2560,10 +2589,9 @@ mod tests {
                 result = let canon project r keep {x,y};
                 return result as answer(x,y);
             }
-            structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build typed, abi runs }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
-                r host scan = @device_layout input { keys 1; columns [i32 => ::gpu_datalog_runtime::Symbol<i32, Codec> codec [7] Codec, i32 => ::gpu_datalog_runtime::Symbol<i32, Codec> codec [8] Codec] } as ::gpu_datalog_runtime::DeviceLayout<
-                    (::gpu_datalog_runtime::Symbol<i32, Codec>,),
-                    (::gpu_datalog_runtime::Symbol<i32, Codec>,)> [];
+            structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+                r host scan = @radix_relation input { keys 2; columns [i32 => ::gpu_datalog_runtime::Symbol<i32, Codec> codec [7] Codec, i32 => ::gpu_datalog_runtime::Symbol<i32, Codec> codec [8] Codec] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<
+                    (::gpu_datalog_runtime::Symbol<i32, Codec>, ::gpu_datalog_runtime::Symbol<i32, Codec>), (), u64, u64, ()> [];
                 result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 result canon = rows;
             }

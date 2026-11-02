@@ -9,7 +9,7 @@ pub enum DirectoryPolicy {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProviderAbi {
     Range,
-    Runs,
+    RadixRelation,
     /// A `RadixLayout` built over its resident source; facts in [`RadixRealization`].
     Radix,
     Host,
@@ -38,13 +38,6 @@ pub struct RadixParams {
     pub block_threads: u32,
 }
 
-/// `gpu_datalog_runtime::RunParams` of a materialized run provider, printed verbatim.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RunParams {
-    pub ratio: usize,
-    pub merge_tile_rows: usize,
-    pub block_threads: u32,
-}
 
 /// How one Sequence read of a radix instance is executed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,15 +67,15 @@ pub struct RadixRealization {
     pub reads: Vec<(Vec<String>, RadixRead)>,
 }
 
-/// A complete permutation of a run input materialized as a declared
+/// A complete permutation of a full-key relation materialized as a declared
 /// provider before the lookup reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Materialization {
-    /// Source position of each payload column.
+    /// Source key position of each physical column in the new key order.
     pub permutation: Vec<usize>,
     /// The declared materialized provider instance.
     pub provider: cq_lang_structures::Provider,
-    pub params: RunParams,
+    pub params: RadixParams,
     /// Block width of the permutation kernel.
     pub permutation_threads: u32,
 }
@@ -95,6 +88,31 @@ pub struct NativeLookup {
     pub payload: Vec<String>,
     /// None borrows the existing view.
     pub materialization: Option<Materialization>,
+    /// Full physical key schema and retained snapshot read contract.
+    pub radix: RadixRelationRead,
+}
+
+
+/// Native full-key set read, independent of the occurrence radix ABI.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RadixRelationRead {
+    pub provider: cq_lang_structures::Provider,
+    pub key_types: Vec<syn::Type>,
+    pub word: syn::Type,
+    pub word_capture: RadixWordCapture,
+    pub offset: syn::Type,
+    pub params: RadixParams,
+    /// The lookup decodes columns at these physical key positions.
+    pub fields: Vec<usize>,
+}
+
+/// Kernel word types are inferred from a retained host view, not spelled in
+/// the CUDA module: the producer's word expression can name function-local types.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RadixWordCapture {
+    /// A `Word` kernel generic, prepared with a zero-value type witness inferred
+    /// from this input's `RadixLayoutView<W, u64>`. Permutations share its `W`.
+    InputView { host: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -141,6 +159,8 @@ pub enum UploadAdapter {
 pub struct Bindings {
     pub providers: BTreeMap<String, Vec<ProviderLayout>>,
     pub native: BTreeMap<String, NativeLookup>,
+    /// Retained typed full-key layouts supplied by host inputs.
+    pub relation_inputs: BTreeMap<String, RadixRelationRead>,
     /// Downloaded host scans read through these recorded declared providers.
     pub downloads: BTreeMap<String, cq_lang_structures::Provider>,
     /// Host row subplans use these collection/index adapters instead of the

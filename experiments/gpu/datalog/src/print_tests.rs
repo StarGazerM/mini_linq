@@ -87,7 +87,7 @@ fn negative_device_bindings_preserve_fork_declarations() {
         assert_eq!(before.cq.declarations, after.cq.declarations);
     }
     let key = &bound.context.strata[0].keys[0];
-    assert_eq!(key.provider.token, storage::DEVICE_LAYOUT);
+    assert_eq!(key.provider.token, storage::RADIX_RELATION);
     let consumer = &bound.holes[bound.context.strata[0].seeds[0].hole];
     let declaration = consumer
         .cq
@@ -128,13 +128,27 @@ fn tc_emits_resident_waves_admission_and_publication() {
     assert!(source.contains(". fresh ("));
     assert!(!source.contains(". admit ("));
     assert!(source.contains("append_sorted"));
+    assert!(source.contains("RadixLayout"));
+    assert!(source.contains("DeviceRadixRun"));
+    assert!(source.contains("RadixRunParams"));
+    assert!(source.contains("radix_bits"));
+    assert!(source.contains("with_sorted"));
+    assert!(source.contains(". republish (&"));
     assert!(source.contains("while"));
     assert!(source.contains("translate_arena"));
     assert_eq!(
-        source.matches("to_host").count(),
+        source.matches("to_rows").count(),
         program.context.outputs.len()
     );
     assert_eq!(source.matches("Rows :: rows").count(), 1);
+    assert_eq!(source.matches(". hole (").count(), program.holes.len());
+    for hole in 0..program.holes.len() {
+        assert_eq!(
+            source.matches(&quote!(.hole(#hole)).to_string()).count(),
+            1,
+            "each hole must retain its own previous-capacity reservation"
+        );
+    }
     assert!(!source.contains("synchronize"));
     assert_eq!(
         source.matches("release_cached_scratch").count(),
@@ -215,6 +229,11 @@ fn printer_rejects_tampered_device_facts() {
     let source = program();
     let changes: &[fn(&mut cq_lang_datalog_storage::DeviceStorage)] = &[
         |device| device.layouts[0].ratio += 1,
+        |device| device.layouts[0].offset = syn::parse_quote!(u32),
+        |device| device.layouts[0].construction = syn::parse_quote!(occurrences),
+        |device| device.layouts[0].read = syn::parse_quote!(item_range),
+        |device| device.layouts[0].radix_bits = 33,
+        |device| device.layouts[0].radix_bits = 1,
         |device| device.layouts[0].merge_tile_rows = 0,
         |device| device.layouts[0].block_threads = 512,
         |device| device.layouts[0].permutation_threads = 128,
@@ -298,13 +317,19 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
             e host result(joined) = @hash_index as ::cq_storage::HashIndex<'_,_,_> [y];
         }
     };
-    let declaration = cq_gpu_sequence_core::providers::declaration("device_layout");
+    let declaration = cq_gpu_sequence_core::providers::declaration("radix_relation");
+    assert_eq!(
+        declaration.facts.abi,
+        Some(cq_lang_structures::provider::NativeAbi::RadixRelation)
+    );
+    let scalar = syn::parse_quote!(i32);
+    let word = storage::word_type([&scalar, &scalar]).unwrap();
     let target = crate::bind_inputs(
         &source,
         quote! {
             providers { #declaration }
-            Delta => @device_layout input { keys 1; columns [i32 => i32, i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> ;
-            Edge => @device_layout input { keys 1; columns [i32 => i32, i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> ;
+            Delta => @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word #word; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32,),(),#word,u64,()> ;
+            Edge => @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word #word; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32,),(),#word,u64,()> ;
         },
     )
     .unwrap();
@@ -327,7 +352,7 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
     for entry in &mut opaque.structures.entries {
         if let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure {
             let input = keyed.provider.input.as_ref().unwrap();
-            assert_eq!(input.key_count, 1);
+            assert_eq!(input.key_count, 2);
             assert_eq!(input.columns.len(), 2);
             keyed.provider.ty = syn::parse_quote!(OpaqueLayoutAlias);
         }

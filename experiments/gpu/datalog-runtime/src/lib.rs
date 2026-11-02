@@ -1,8 +1,7 @@
-//! GPU-resident packed Datalog tuples and immutable, disjoint sorted runs.
-//! All device work uses the owning [`Pool`]'s stream: the program pool's
-//! legacy default stream, or a [`Lanes`] worker's lane stream (DL-WaveLanes).
-//! [`DeviceLayout`] retains typed, immutable run inputs and uploads only their
-//! erased descriptors. [`CandidateArena`] leases packed output lanes to Sequence
+//! GPU-resident packed Datalog tuples and immutable full-key radix sets.
+//! All device work uses an explicitly ordered [`Pool`] stream.
+//! [`RadixLayout`] retains typed immutable radix snapshots and field metadata.
+//! [`CandidateArena`] leases packed output lanes to Sequence
 //! terminals; [`CandidateBatch`] retains those lanes and input owners without a
 //! candidate-row download. Signed packing preserves numeric lexicographic order.
 //! [`DeviceRadixRun`] is the occurrence-preserving grouped index engine;
@@ -13,22 +12,19 @@ pub mod layout;
 pub mod pack;
 pub mod phases;
 pub mod radix_run;
-pub mod runs;
+mod runs;
 mod stats;
 pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
 pub use gpu_device_columns::{Buffer, Pool};
 pub use lanes::{Job, Lane, Lanes};
-pub use layout::{
-    device, encode_scalar, DeviceLayout, PackedField, PackedProvider, PackedRunView, RunsView,
-    Scalar, ScalarTuple,
-};
+pub use layout::{encode_scalar, PackedField, Scalar, ScalarTuple};
 pub use pack::{Column, Packing, Word};
 pub use radix_run::{
     DeviceItemColumns, DeviceRadixRun, ItemColumn, OffsetWord, RadixItemsView, RadixKeysView,
     RadixLayout, RadixLayoutView, RadixMatch, RadixMatches, RadixRunParams, RadixSnapshot,
     SourceItemColumns, SourceLane,
 };
-pub use runs::{AdmissionTimings, DeviceRuns, Run, RunParams, RunView};
+pub use runs::SortedBatch;
 pub use stats::{readback_count, record_readback, trace_kernels, trace_memory, MemoryUse};
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
@@ -40,8 +36,7 @@ const _: () = {
     send_sync::<Pool>();
     send_sync::<Buffer<u64>>();
     send_sync::<Packing>();
-    send_sync::<DeviceLayout<(u32,), (i64,)>>();
-    send_sync::<PackedProvider>();
+    send_sync::<RadixLayout<(u32, i64), (), u128, u64, ()>>();
     send_sync::<CandidateBatch>();
     send::<CandidateArena>();
     send::<Job>();

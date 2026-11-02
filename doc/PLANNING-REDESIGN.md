@@ -18,9 +18,10 @@ plain value cloning per consuming move closure (`434b2d14`, 2026-11-02), not
 `Arc` handles. `cq_order::compile_written` owns the written reference;
 `cq_relational_lowering::compile` lowers it. Datalog negative provider/hash choices live
 in Storage (`f7511375`, 2026-11-02), not a `hasher_round` rewrite.
-`DeviceRuns` still implements Datalog state: `fresh` plus `append_sorted`
-replaces fused `admit`; replacing this state with grouped radix sets remains
-planned in this baseline.
+P4-GPU slice D replaces the baseline's `DeviceRuns`/packed `DeviceLayout`
+protocol with ordinary full-key `RadixLayout` sets backed by `DeviceRadixRun`.
+The read-only `fresh` / separate `append_sorted` boundary is preserved;
+the dated acceptance below records exact gates and matched paired measurements.
 
 ## Contract
 
@@ -506,8 +507,8 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     ownership fields. RC (P3d) completed the device cutover: device Storage records
     every layout's state and initializers, NEW (`fresh_run`), key sets, candidate
     containers, arenas and scratch policy; admission is read-only
-    `DeviceRuns::fresh` against the canonical layout, publication appends to
-    every layout, and fused `DeviceRuns::admit` is removed.
+    canonical `fresh` against the ordinary layout state, publication appends to
+    every layout, and the former fused admission API is removed.
   - **GPU CQ printers print only recorded facts** (P3e, audit
     `agent://GpuPrinterAudit`). GPU-Launch also records initial capacity,
     stripe-batch reservation and per-level strips (resolved tile defaults and
@@ -663,8 +664,7 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   Remaining: a faster smallest
   read (e.g. dense or cached candidate directories, measured) before any
   default use, Retain/Expand (retained L&E witnesses need the GPU target's
-  witness support), encoded FOR key packing (two P4 DECODE V sites), GPU
-  Datalog layouts (replacing plain-word `DeviceRuns`).
+  witness support), and encoded FOR key packing (two P4 DECODE V sites).
   **Slice C implementation:** canonical references use the constrained
   full-row/unit-item `radix_set` token and ordinary resident `RadixLayout`.
   Complete-key uniqueness shares stable ordering with occurrence builds;
@@ -674,6 +674,41 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   Per-thread/pool scratch grows and is reused separately from result owners.
   The old packed/wide canonical implementations are removed. The h06 keyless
   fold is unchanged.
+  **Slice D implementation:** Datalog EDB/full/delta/negative layouts use
+  `radix_relation`, `NativeAbi::RadixRelation`, and ordinary
+  `RadixLayout<(all physical row columns), (), W, u64, ()>` views over
+  `DeviceRadixRun<W, u64, ()>`. Logical prefix lookups use encoded key
+  intervals and decode only demanded complete-key fields. Per-layout records
+  include `offset: u64`, `construction: full_key_set`, `read: key_prefix`,
+  legal configurable `radix_bits` (default zero), ratio and launch geometry.
+  Independent legality predicates check these facts, schemas, initializers
+  and source erasure without replaying realization. Canonical `fresh` returns
+  a read-only `SortedBatch`; every secondary permutation consumes that same
+  admitted batch, restoring order without another unique pass. Publication
+  uses `append_sorted` and `republish(&state)`; initial maintained views share
+  their backing state through `publish`, and one-shot negative views use
+  `from_sorted(pool, packing, params, batch)`. Delta replacement uses
+  `with_sorted(batch, params)` to reuse snapshot/kernel/field owners;
+  outputs use `to_rows`.
+  Delta moves, independently unique frozen negative projections, lane
+  schedules and per-hole reservation are preserved. Old public state/view
+  aliases are removed. Existing DL-DevicePacking/DL-DeviceRuns,
+  CK-DL-DeviceStorage and GPU-Runs laws cover the cutover.
+  **Acceptance, 2026-11-02:** GPU suites and fixed-fixture full relations pass;
+  xalan/batik each match all 43 duplicate-free tuple sets against an independent
+  CPU reference, and Cassandra all 26 tuple sets. Root, quick, formal and API
+  gates pass; all 46 CPU expansions are identical to `b7e83c6f`.
+  Five interleaved exact-answer pairs give current/baseline fixpoint ratios:
+  xalan **1.01059 [0.99901,1.02241]** (neutral/slightly slower),
+  batik **0.98145 [0.97875,0.98556]**, Cassandra
+  **0.49983 [0.48944,0.51058]**. Cassandra's reported series repeats the
+  comparison with matched `oxide run` materialization.
+  Nsight shows unchanged sort/unique-mark counts and added unit-offset work;
+  Cassandra's module load/unload calls fall 158→6, not its GPU sort cost.
+  Slice E should specialize recorded active-bit/key-only sorts and suppress
+  redundant unit-offset/layout materialization before automatic ranking.
+  Raw evidence, profile scope and per-command gate times:
+  `experiments/gpu/compare/p4-gpu-d.results.json`.
 - **P5 Scan columns (CPU).** Measured rules only (§12.4): plain default;
   byte truncation for scans; bit-packing only for bandwidth-bound parallel
   scans; encoded execution on dictionary codes first. Block format, codec trait, summaries built with
@@ -906,10 +941,12 @@ Paths and lines refer to that tree; later cutovers below supersede resolved item
    VO prefix that binds its free columns (WF-BlockPlacement), not a
    written-order join, and the checked RA rewrites live in `cq-ra-rewrites`.
 4. **GPU runtime owners — historical unrecorded runtime work.** The reviewed
-   tree chose run geometry inside the runtime. Current `DeviceState` records
-   merge tile, block and permutation threads, consumed by `RunParams`
-   (`experiments/gpu/datalog/src/storage.rs`, `datalog-runtime/src/runs.rs`;
-   `14d76950`, 2026-11-02). The original lane-attribution concern is not
+   tree chose run geometry inside the runtime. `DeviceState` now records
+   offset/construction/read and directory facts as well as merge tile, block
+   and permutation threads, consumed by explicit `RadixRunParams`
+   (`experiments/gpu/datalog/src/storage.rs`, `datalog-runtime/src/radix_run.rs`).
+   The earlier geometry-only change was `14d76950` (2026-11-02).
+   The original lane-attribution concern is not
    independently closed by that geometry change.
 5. **Datalog fork/round owners — plan-argument correspondence.** Authored
    order forwarding is implemented, but fork synthesizes `no_reduce`,

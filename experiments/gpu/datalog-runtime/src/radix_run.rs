@@ -442,6 +442,8 @@ pub struct RadixRunParams {
 }
 
 impl RadixRunParams {
+    /// Formal rule DL-DeviceRatio: explicit ratio, directory, tile and launch
+    /// geometry are checked once; maintenance uses the ordinary radix ratio law.
     pub fn validate(&self) -> Result<()> {
         if self.ratio < 2 {
             return Err("radix run ratio must be at least two".into());
@@ -578,7 +580,7 @@ pub struct IntervalProbe {
 unsafe impl DeviceCopy for IntervalProbe {}
 
 struct Segment<W: Word, O: OffsetWord, C> {
-    keys: Buffer<W>,
+    keys: Arc<Buffer<W>>,
     offsets: Buffer<O>,
     directory: Buffer<O>,
     items: C,
@@ -627,6 +629,9 @@ pub struct DeviceRadixRun<W: Word, O: OffsetWord, C: DeviceItemColumns> {
     pool: Arc<Pool>,
     params: RadixRunParams,
     runs: Vec<Arc<Segment<W, O, C>>>,
+    /// Construction witness, not inferred from C=(): set admission guarantees
+    /// unit offsets and disjoint complete keys across all accepted runs.
+    full_key_set: bool,
     /// The current publication's descriptors, uploaded once on first read and
     /// replaced only when a publication changes the runs.
     published: Mutex<Option<Arc<RadixSnapshot<W, O, C>>>>,
@@ -649,6 +654,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             pool,
             params,
             runs: Vec::new(),
+            full_key_set: C::COLUMNS == 0,
             published: Mutex::new(None),
             order,
         })
@@ -710,6 +716,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         }
         self.runs.truncate(keep);
         self.runs.push(merged);
+        self.full_key_set = false;
         *self.published.get_mut().expect("radix publication cache") = None;
         Ok(())
     }
@@ -737,8 +744,10 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             columns: Buffer::from_host_async(self.pool.clone(), &columns)?,
             count: Buffer::from_host_async(self.pool.clone(), &[items])?,
             items,
+            full_key_set: self.full_key_set,
             runs: self.runs.clone(),
             module: self.kernels.module.clone(),
+            order: self.order.clone(),
             pool: self.pool.clone(),
             block_threads: self.params.block_threads,
         });
@@ -850,7 +859,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         let key_count = runs::read_count(pool, offset_count.get())? - 1;
         let directory = self.directory(&distinct, key_count)?;
         Ok(Some(Segment {
-            keys: distinct,
+            keys: Arc::new(distinct),
             offsets,
             directory,
             items,
@@ -931,33 +940,39 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             slots,
             &mut workspace,
         )?;
-        // SAFETY: each merged item position has exactly one source occurrence.
-        let sources = unsafe { Buffer::<O>::uninitialized(pool.clone(), total)? };
-        let initial = module.prepare_item_sources::<W, O>(self.kernels.shape())?;
-        let config = self.launch_config(initial.function(), total)?;
-        module.item_sources::<W, O>(
-            pool.stream(),
-            &module.prepare_item_sources::<W, O>(config)?,
-            left.view(),
-            right.view(),
-            tags.ptr(),
-            positions.ptr(),
-            slots as u64,
-            total as u64,
-            sources.ptr(),
-        )?;
+        // Unit-item layouts need no item-source map, even for occurrence merges.
+        let sources = if C::COLUMNS == 0 {
+            None
+        } else {
+            // SAFETY: each merged item position has exactly one source occurrence.
+            let sources = unsafe { Buffer::<O>::uninitialized(pool.clone(), total)? };
+            let initial = module.prepare_item_sources::<W, O>(self.kernels.shape())?;
+            let config = self.launch_config(initial.function(), total)?;
+            module.item_sources::<W, O>(
+                pool.stream(),
+                &module.prepare_item_sources::<W, O>(config)?,
+                left.view(),
+                right.view(),
+                tags.ptr(),
+                positions.ptr(),
+                slots as u64,
+                total as u64,
+                sources.ptr(),
+            )?;
+            Some(sources)
+        };
         let items = C::merge(
             &left.items,
             &right.items,
             &self.kernels,
             left.item_count,
-            sources.ptr(),
+            sources.as_ref().map_or(std::ptr::null(), |sources| sources.ptr()),
             total,
         )?;
         let key_count = runs::read_count(pool, offset_count.get())? - 1;
         let directory = self.directory(&distinct, key_count)?;
         Ok(Segment {
-            keys: distinct,
+            keys: Arc::new(distinct),
             offsets,
             directory,
             items,
@@ -991,6 +1006,134 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
     }
 }
 
+/// Formal rule DL-DeviceRuns: fresh is read-only unique-minus-committed;
+/// admitted complete keys are disjoint, with unit offsets in the radix engine.
+impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
+    fn set_ops(&self) -> runs::SetOps<'_> {
+        runs::SetOps { pool: &self.pool, module: &self.order, params: self.params }
+    }
+
+    /// Full-key set cardinality. Set publications have one unit item per key.
+    pub fn len(&self) -> usize {
+        self.item_count()
+    }
+
+    /// Initialized keys, unit offsets and radix directories of current runs.
+    pub fn live_bytes(&self) -> usize {
+        self.runs.iter().map(|run| {
+            run.key_count * size_of::<W>()
+                + (run.key_count + 1 + run.directory.len()) * size_of::<O>()
+        }).sum::<usize>() + self.published.lock().expect("radix publication cache")
+            .as_ref().map_or(0, |snapshot| {
+                snapshot.descriptors.len() * size_of::<RadixRunView<W, O>>()
+                    + snapshot.columns.len() * size_of::<u64>() + size_of::<u64>()
+            })
+    }
+
+    /// Current backing allocations; older retained snapshots are separate owners.
+    pub fn allocated_bytes(&self) -> usize {
+        self.runs.iter().map(|run| {
+            run.keys.allocated_bytes() + run.offsets.allocated_bytes()
+                + run.directory.allocated_bytes()
+        }).sum::<usize>() + self.published.lock().expect("radix publication cache")
+            .as_ref().map_or(0, |snapshot| {
+                snapshot.descriptors.allocated_bytes() + snapshot.columns.allocated_bytes()
+                    + snapshot.count.allocated_bytes()
+            })
+    }
+
+    /// Read-only unique(candidates) minus every committed key, in sorted order.
+    /// Only unique/fresh counts cross the existing admission barrier.
+    pub fn fresh(&self, candidates: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
+        let unique = self.sort_unique(candidates, rows)?;
+        if unique.is_empty() || self.is_empty() {
+            return Ok(unique);
+        }
+        let accepted = self.runs.iter().map(|run| runs::RunView {
+            ptr: run.keys.ptr(), len: run.key_count,
+        }).collect::<Vec<_>>();
+        self.set_ops().subtract(&unique, &accepted)
+    }
+
+    /// Sort and deduplicate complete keys without changing committed state.
+    pub fn sort_unique(&self, input: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
+        self.set_ops().sort(input, rows, false)
+    }
+
+    /// Sort an injective permutation without compaction or count readback.
+    /// # Safety
+    /// The initialized input prefix must contain pairwise distinct keys.
+    pub unsafe fn sort_known_unique(&self, input: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
+        self.set_ops().sort(input, rows, true)
+    }
+
+    fn set_segment(&self, batch: runs::SortedBatch<W>) -> Result<Segment<W, O, ()>> {
+        if !self.pool.shares_memory(batch.buffer().pool()) || !offset_fits::<O>(batch.len()) {
+            return Err("set batch memory or offset carrier differs".into());
+        }
+        let rows = batch.len();
+        let keys = batch.shared_buffer()?;
+        // SAFETY: the kernel initializes the terminal offset as well as every unit offset.
+        let offsets = unsafe { Buffer::<O>::uninitialized(self.pool.clone(), rows + 1)? };
+        let module = &self.kernels.module;
+        let initial = module.prepare_unit_offsets::<O>(self.kernels.shape())?;
+        let config = self.launch_config(initial.function(), rows + 1)?;
+        module.unit_offsets::<O>(
+            self.pool.stream(), &module.prepare_unit_offsets::<O>(config)?,
+            rows as u64, offsets.ptr(),
+        )?;
+        let directory = self.directory(&keys, rows)?;
+        Ok(Segment { keys: Arc::new(keys), offsets, directory, items: (), key_count: rows,
+            item_count: rows, radix_bits: self.params.radix_bits })
+    }
+
+    /// Adopt a sorted unique delta, maintaining the ordinary radix ratio law.
+    /// No sort, grouping count download or item-source map is needed.
+    /// # Safety
+    /// `batch` must be disjoint from all committed keys. Publication and all
+    /// input producers must be ordered before this pool's stream reads them.
+    pub unsafe fn append_sorted(&mut self, batch: runs::SortedBatch<W>) -> Result<()> {
+        if !self.full_key_set {
+            return Err("set admission requires a full-key set publication".into());
+        }
+        if !self.pool.shares_memory(batch.buffer().pool()) {
+            return Err("set batch memory differs".into());
+        }
+        if batch.is_empty() { return Ok(()); }
+        let total = self.len().checked_add(batch.len()).ok_or("set length overflow")?;
+        if !offset_fits::<O>(total) { return Err("set exceeds offset carrier".into()); }
+        let mut merged = batch;
+        let mut keep = self.runs.len();
+        while keep > 0 && self.runs[keep - 1].item_count / self.params.ratio < merged.len() {
+            let previous = &self.runs[keep - 1];
+            // SAFETY: committed set keys are immutable sorted unique prefixes.
+            let owner = previous.keys.clone();
+            let keys = unsafe { Buffer::shared_slice(owner, 0, previous.key_count)? };
+            let previous = unsafe { runs::SortedBatch::from_sorted(keys, previous.key_count)? };
+            merged = self.set_ops().merge(&previous, &merged)?;
+            keep -= 1;
+        }
+        let segment = Arc::new(self.set_segment(merged)?);
+        self.runs.truncate(keep);
+        self.runs.push(segment);
+        *self.published.get_mut().expect("radix publication cache") = None;
+        Ok(())
+    }
+
+    /// Replace a delta publication by adopting its immutable unique batch.
+    pub fn replace_sorted(&mut self, batch: runs::SortedBatch<W>) -> Result<()> {
+        if !self.pool.shares_memory(batch.buffer().pool()) {
+            return Err("set batch memory differs".into());
+        }
+        let segment = if batch.is_empty() { None } else { Some(Arc::new(self.set_segment(batch)?)) };
+        self.runs.clear();
+        self.runs.extend(segment);
+        self.full_key_set = true;
+        *self.published.get_mut().expect("radix publication cache") = None;
+        Ok(())
+    }
+}
+
 static NEXT_SNAPSHOT: AtomicU64 = AtomicU64::new(1);
 
 /// Immutable descriptors over one publication's runs, retained independently
@@ -1003,8 +1146,10 @@ pub struct RadixSnapshot<W: Word, O: OffsetWord, C> {
     /// One-entry resident logical occurrence count for count-gated kernels.
     count: Buffer<u64>,
     items: u64,
+    full_key_set: bool,
     runs: Vec<Arc<Segment<W, O, C>>>,
     module: radix_kernels::LoadedModule,
+    order: runs::run_kernels::LoadedModule,
     pool: Arc<Pool>,
     block_threads: u32,
 }
@@ -1836,6 +1981,9 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Device
             marker: PhantomData,
         })
     }
+}
+
+impl<K, V, W: Word + 'static, O: OffsetWord, C: DeviceItemColumns> RadixLayout<K, V, W, O, C> {
 
     pub fn snapshot(&self) -> &Arc<RadixSnapshot<W, O, C>> {
         &self.publication.snapshot
@@ -1887,6 +2035,12 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Device
             bits: publication.packing.bits(),
             count: publication.snapshot.count_ptr(),
         }
+    }
+
+    /// Pool qualification checks memory compatibility, not stream readiness.
+    pub fn view_on(&self, pool: &Arc<Pool>) -> Result<RadixLayoutView<W, O>> {
+        check_execution(self.pool(), pool)?;
+        Ok(self.view())
     }
 
     /// Narrow access to value field `column`, whose lane type must be `T`.
@@ -1953,6 +2107,144 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Device
     }
 }
 
+impl<K: ScalarTuple, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
+    pub fn empty(pool: Arc<Pool>, packing: Packing, params: RadixRunParams) -> Result<Self> {
+        Self::publish(&DeviceRadixRun::new(pool, params)?, packing)
+    }
+
+    /// Adopt a sorted unique full-key batch without re-sorting or group readback.
+    pub fn from_sorted(
+        pool: Arc<Pool>, packing: Packing, params: RadixRunParams, batch: runs::SortedBatch<W>,
+    ) -> Result<Self> {
+        let mut state = DeviceRadixRun::new(pool, params)?;
+        state.replace_sorted(batch)?;
+        Self::publish(&state, packing)
+    }
+}
+
+impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
+    pub fn validate(&self, columns: &[Column]) -> Result<()> {
+        self.require_full_key_set()?;
+        if columns.len() == self.packing().len()
+            && self.packing().packed_fields().zip(columns).all(|(field, column)| {
+                field.bits == column.bits() && (field.signed != 0) == column.is_signed()
+            })
+        {
+            Ok(())
+        } else {
+            Err("radix layout differs from recorded physical columns".into())
+        }
+    }
+
+    /// Replace a delta using retained kernels and field descriptors. An
+    /// unchanged immutable batch returns this publication with no uploads.
+    pub fn with_sorted(&self, batch: runs::SortedBatch<W>, params: RadixRunParams) -> Result<Self> {
+        params.validate()?;
+        if !self.pool().shares_memory(batch.buffer().pool()) {
+            return Err("set batch memory differs".into());
+        }
+        let snapshot = self.snapshot();
+        let unchanged = snapshot.full_key_set && match snapshot.runs.as_slice() {
+            [] => batch.is_empty(),
+            [run] => run.keys.ptr() == batch.buffer().ptr()
+                && run.key_count == batch.len() && run.radix_bits == params.radix_bits,
+            _ => false,
+        };
+        if unchanged {
+            return Ok(self.clone());
+        }
+        let mut state = DeviceRadixRun {
+            pool: self.pool().clone(),
+            params,
+            runs: Vec::new(),
+            full_key_set: true,
+            published: Mutex::new(None),
+            kernels: ItemKernels {
+                pool: self.pool().clone(),
+                module: snapshot.module.clone(),
+                block_threads: params.block_threads,
+            },
+            order: snapshot.order.clone(),
+        };
+        state.replace_sorted(batch)?;
+        Ok(Self {
+            publication: Arc::new(RadixPublication {
+                snapshot: state.snapshot()?,
+                fields: self.publication.fields.clone(),
+                packing: self.publication.packing.clone(),
+            }),
+            marker: PhantomData,
+        })
+    }
+
+    fn require_full_key_set(&self) -> Result<()> {
+        if self.snapshot().full_key_set {
+            Ok(())
+        } else {
+            Err("full-key set reader cannot consume an occurrence publication".into())
+        }
+    }
+
+    /// Explicit diagnostic download, sorted across all retained runs.
+    pub fn to_host(&self) -> Result<Vec<W>> {
+        let mut keys = Vec::with_capacity(self.len());
+        for run in &self.snapshot().runs {
+            keys.extend(run.keys.to_host_prefix(run.key_count)?);
+        }
+        keys.sort_unstable();
+        Ok(keys)
+    }
+
+    /// Explicit output reconstruction, never part of publication or admission.
+    // DECODE ?: radix to_rows unpacks host fields for final answers, diagnostics and intermediate fallback; caller publication evidence is required.
+    pub fn to_rows(&self) -> Result<Vec<Vec<i128>>> {
+        self.to_host()?.into_iter().map(|key| self.packing().unpack(key)).collect()
+    }
+
+    pub fn live_bytes(&self) -> usize {
+        self.snapshot().runs.iter().map(|run| {
+            run.key_count * size_of::<W>()
+                + (run.key_count + 1 + run.directory.len()) * size_of::<O>()
+        }).sum::<usize>() + self.snapshot().descriptors.len() * size_of::<RadixRunView<W, O>>()
+            + self.publication.fields.len() * size_of::<PackedField>() + size_of::<u64>()
+    }
+
+    /// Includes metadata. Aliased publications must not be summed as disjoint owners.
+    pub fn allocated_bytes(&self) -> usize {
+        let snapshot = self.snapshot();
+        snapshot.runs.iter().map(|run| {
+            run.keys.allocated_bytes() + run.offsets.allocated_bytes()
+                + run.directory.allocated_bytes()
+        }).sum::<usize>() + snapshot.descriptors.allocated_bytes()
+            + snapshot.columns.allocated_bytes() + snapshot.count.allocated_bytes()
+            + self.publication.fields.allocated_bytes()
+    }
+
+    /// Bijective full-heading permutation: unique input still requires sorting.
+    pub fn permuted_provider<P: ScalarTuple>(
+        &self, pool: &Arc<Pool>, order: &[usize], params: RadixRunParams,
+        permutation_threads: u32,
+    ) -> Result<RadixLayout<P, (), W, O, ()>> {
+        check_execution(self.pool(), pool)?;
+        self.require_full_key_set()?;
+        let packing = self.packing().permute(order)?;
+        RadixLayout::<P, (), W, O, ()>::check_schema(&packing)?;
+        if permutation_threads != 256 {
+            return Err("permutation kernel requires exactly 256 threads per block".into());
+        }
+        let mut state = DeviceRadixRun::<W, O, ()>::new(pool.clone(), params)?;
+        for run in &self.snapshot().runs {
+            let permuted = self.packing().permute_device_on(
+                pool, &run.keys, run.key_count, order, permutation_threads,
+            )?;
+            // SAFETY: a full-column permutation is bijective on the full-key set.
+            let batch = unsafe { state.sort_known_unique(&permuted, run.key_count)? };
+            unsafe { state.append_sorted(batch)?; }
+        }
+        RadixLayout::publish(&state, packing)
+    }
+}
+
 impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: SourceItemColumns>
     RadixLayout<K, V, W, O, C>
 {
@@ -2016,6 +2308,42 @@ pub mod device {
         RadixRunView,
     };
     use crate::Word;
+
+    /// Locate a key in concatenated run-local distinct-key arrays.
+    /// # Safety
+    /// All descriptors must remain live and readable on this device.
+    #[inline(always)]
+    pub unsafe fn locate_key<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>, mut position: u64,
+    ) -> (u32, u64) {
+        let mut index = 0;
+        while index < view.run_count {
+            let descriptor = unsafe { run(view, index) };
+            if position < descriptor.keys_len { return (index, position); }
+            position -= descriptor.keys_len;
+            index += 1;
+        }
+        (view.run_count, 0)
+    }
+
+    /// Decode one demanded physical key field for expression/output use.
+    /// # Safety
+    /// The key position and field index must designate initialized storage.
+    #[inline(always)]
+    pub unsafe fn decode_key<W: Word, O: OffsetWord>(
+        view: RadixLayoutView<W, O>, index: u32, position: u64, column: u32,
+    ) -> i64 {
+        // DECODE ?: demanded radix key inversion serves relational and diagnostic callers; field demand alone does not authorize logical reconstruction.
+        let descriptor = unsafe { run(view.keys, index) };
+        let key = unsafe { *descriptor.keys.add(position as usize) };
+        let field = unsafe { *view.fields.add(column as usize) };
+        let encoded = key.extract(field.shift, field.bits);
+        if field.signed != 0 {
+            encoded.wrapping_sub(1_u64 << (field.bits - 1)) as i64
+        } else {
+            encoded as i64
+        }
+    }
 
     /// `a - b` for `a >= b`, lane-wise with borrow.
     #[inline(always)]
@@ -2497,6 +2825,18 @@ mod radix_kernels {
                 // DECODE V: radix source build reconstructs resident FOR payloads into native item lanes; P4 retain encoded lanes.
                 *output.add(row as usize) = T::from_source(decode_source(input, source));
             }
+            row += stride;
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn unit_offsets<O: OffsetWord>(rows: u64, offsets: *mut O) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
+        while row <= rows {
+            unsafe { *offsets.add(row as usize) = O::from_u64(row); }
             row += stride;
         }
     }

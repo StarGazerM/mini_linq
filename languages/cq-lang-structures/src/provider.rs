@@ -20,7 +20,7 @@
 //!        | "supports" "[" ("retain" | "expand" | "keys"),* "]"
 //!        | "build" ("inferred" | "typed") | "accounting" ("rows" | "keys")
 //!        | ("nested" | "routed") Integer | "join_filter" | "shared"
-//!        | "packed_bits" Integer | "abi" ("range" | "runs" | "columns" | "radix")
+//!        | "packed_bits" Integer | "abi" ("range" | "radix_relation" | "columns" | "radix")
 //!        | "contiguous_range" | "bounds" "resident_columns"
 //!        | "items" Integer "[" "rows" RustType "," "columns" RustType "]"
 //!        | "choice" Integer "[" "eager" GenericArgument "," "lazy" GenericArgument "]"
@@ -66,7 +66,6 @@ pub mod kw {
     syn::custom_keyword!(columns);
     syn::custom_keyword!(codec);
     syn::custom_keyword!(abi);
-    syn::custom_keyword!(runs);
     syn::custom_keyword!(contiguous_range);
     syn::custom_keyword!(bounds);
     syn::custom_keyword!(resident_columns);
@@ -161,7 +160,7 @@ pub enum Composition {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeAbi {
     Range,
-    Runs,
+    RadixRelation,
     Columns,
     /// Grouped radix index (`RadixLayout`): whole packed order keys, explicit
     /// item lanes; every instance records its [`RadixAdvice`].
@@ -916,7 +915,7 @@ impl syn::parse::Parse for Declaration {
                 let abi: Ident = body.parse()?;
                 facts.abi = Some(match abi.to_string().as_str() {
                     "range" => NativeAbi::Range,
-                    "runs" => NativeAbi::Runs,
+                    "radix_relation" => NativeAbi::RadixRelation,
                     "columns" => NativeAbi::Columns,
                     "radix" => NativeAbi::Radix,
                     _ => return error(&abi, "unknown native ABI"),
@@ -1042,7 +1041,7 @@ impl ToTokens for Declaration {
         if let Some(abi) = abi {
             facts.push(match abi {
                 NativeAbi::Range => quote::quote!(abi range),
-                NativeAbi::Runs => quote::quote!(abi runs),
+                NativeAbi::RadixRelation => quote::quote!(abi radix_relation),
                 NativeAbi::Columns => quote::quote!(abi columns),
                 NativeAbi::Radix => quote::quote!(abi radix),
             });
@@ -1157,12 +1156,12 @@ pub(crate) fn check(structures: &Structures) -> syn::Result<()> {
                 reader: ReaderRef::Scan,
                 ..
             }
-        ) && matches!(facts.abi, Some(NativeAbi::Runs | NativeAbi::Columns))
+        ) && matches!(facts.abi, Some(NativeAbi::RadixRelation | NativeAbi::Columns))
             && provider.input.is_none()
         {
             return error(
                 &provider.token,
-                "native runs and columns scans require an input schema",
+                "native radix relations and columns scans require an input schema",
             );
         }
         // Formal rule STR-ItemLayout: a built payload (non-membership)
@@ -1254,7 +1253,16 @@ fn check_instance(providers: &Providers, provider: &Provider, in_routed: bool) -
             return error(&provider.token, "input key count exceeds column count");
         }
     }
-    let radix = declaration.facts.abi == Some(NativeAbi::Radix);
+    let relation = declaration.facts.abi == Some(NativeAbi::RadixRelation);
+    if relation {
+        let Some(input) = &provider.input else {
+            return error(&provider.token, "native radix relations and columns scans require an input schema");
+        };
+        if input.key_count != input.columns.len() {
+            return error(&provider.token, "a radix relation records every physical column as a key");
+        }
+    }
+    let radix = relation || declaration.facts.abi == Some(NativeAbi::Radix);
     match &provider.radix {
         None if radix => {
             return error(

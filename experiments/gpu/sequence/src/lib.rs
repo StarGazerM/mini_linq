@@ -1,6 +1,6 @@
 //! Checked Sequence-to-CUDA translation and named pipeline adapters.
 //!
-//! `bind_runs` binds explicit native `DeviceLayout<K, V>` inputs before Sequence
+//! `bind_runs` binds declared full-key `RadixLayout<K, (), W, u64, ()>` set inputs before Sequence
 //! lowering. Finish a graded raw-candidate dispatch with
 //! `translate_arena(&mut arena)` to return a `gpu_datalog_runtime::CandidateBatch`.
 //! Its live rows use declared head-column widths, most-significant column first;

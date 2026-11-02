@@ -12,9 +12,11 @@ See the [Sequence workspace](../experiments/gpu/README.md) for the active
 backend's supported contracts and commands.
 
 The removed maintained-index backend is not today's GPU Datalog runtime.
-Current Datalog uses recorded `DeviceRuns` state with read-only `fresh`
-admission and separate `append_sorted` publication. `DeviceRadixRun` is an
-implemented grouped provider, not a completed replacement of that state.
+Current Datalog records ordinary `DeviceRadixRun<W, u64, ()>` full-key state
+and typed `RadixLayout` views (`radix_relation` / `NativeAbi::RadixRelation`),
+with read-only `fresh` admission and separate `append_sorted` publication.
+Offset, construction, prefix-read, directory and launch facts are checked
+independently; see P4-GPU slice D for the contract, not a new gate result.
 Recorded wave lanes support stream overlap; the single-stream initial profile
 is historical. See [storage ownership](STORAGE.md#132-gpu-provider-ownership-p3d-c1c2).
 

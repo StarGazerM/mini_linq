@@ -345,15 +345,17 @@ finish. No historical cut is promised after retirement. A leveled capacity
 ratio is explicit maintenance advice (default four), not a semantic premise;
 it cannot change admission, the multiset, or snapshot publication.
 The device Storage constructor resolves \code{ratio(n)} (omission means four)
-to a printable integer $\rho\ge2$. Every accepted/layout run state receives
-that integer; temporary sort states receive their caller's recorded parameters.
-The runtime checks the ratio bound, positive merge tile and compiled block-width
-contract, then uses $\rho$, never a hidden constant, in the merge threshold.
+to a printable integer $\rho\ge2$. Every accepted/layout radix state receives
+that integer in its recorded parameters. The runtime checks the ratio bound,
+legal directory bits, positive merge tile and compiled block-width contract,
+then uses $\rho$, never a hidden constant, in the \textsc{GPU-RadixPublish}
+merge threshold. The former device-run equality boundary is not retained;
+only maintenance work and run counts may change, not represented rows.
 \begin{mathpar}
 \Rule{DL-DeviceRatio}{\rho=\mathrm{Storage.device.ratio}\ge2\quad
  \rho\text{ passed to every device run constructor}}
  {\mathrm{mergeTrailing}(A,N)\text{ merges while }
-  |A_{\mathrm{last}}|\le\mathrm{saturatingMul}(|N|,\rho)\quad
+  \lfloor|A_{\mathrm{last}}|/\rho\rfloor<|N|\quad
   \textsc{STR-RunCompact}\text{ preserves the represented rows}}
 \end{mathpar}
 

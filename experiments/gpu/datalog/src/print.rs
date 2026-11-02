@@ -56,12 +56,20 @@ pub(crate) fn input_providers(
     let context = &program.context;
     let device = device(program);
     let provider = |source: &storage::Provider,
-                    input: &cq_lang_structures::provider::InputSchema| {
+                    input: &cq_lang_structures::provider::InputSchema,
+                    word: &Type,
+                    state: &storage::DeviceState| {
         cq_lang_structures::Provider {
             token: source.token.clone(),
             inner: None,
             input: Some(input.clone()),
-            radix: None,
+            radix: Some(cq_lang_structures::provider::RadixAdvice {
+                word: word.clone(),
+                offset: state.offset.clone(),
+                ratio: state.ratio,
+                radix_bits: state.radix_bits,
+                merge_tile: state.merge_tile_rows,
+            }),
             ty: source.ty.clone(),
         }
     };
@@ -70,7 +78,8 @@ pub(crate) fn input_providers(
         if let Some(delta) = &relation.delta {
             inputs.insert(
                 delta.to_string(),
-                provider(&relation.providers.delta, &state.input),
+                provider(&relation.providers.delta, &state.input, &state.word,
+                    &device.layouts[relation.providers.canonical]),
             );
         }
     }
@@ -82,7 +91,7 @@ pub(crate) fn input_providers(
     {
         inputs.insert(
             layout.name.to_string(),
-            provider(&layout.provider, &state.input),
+            provider(&layout.provider, &state.input, &state.word, state),
         );
     }
     for (component, stratum) in context.strata.iter().enumerate() {
@@ -93,7 +102,7 @@ pub(crate) fn input_providers(
                 "GPU Datalog does not support unit-valued existential negation keys",
             )?;
             let state = &device.negations[negation(program, component, key)?];
-            inputs.insert(key.name.to_string(), provider(&key.provider, &state.input));
+            inputs.insert(key.name.to_string(), provider(&key.provider, &state.input, &state.word, state));
         }
         for rule in stratum.seeds.iter().chain(&stratum.steps) {
             if let Some(scan) = &rule.scan {
@@ -101,10 +110,14 @@ pub(crate) fn input_providers(
                     InputSource::Delta(index) => provider(
                         &context.relations[index].providers.delta,
                         &device.relations[index].input,
+                        &device.relations[index].word,
+                        &device.layouts[context.relations[index].providers.canonical],
                     ),
                     InputSource::Layout(index) => provider(
                         &context.layouts[index].provider,
                         &device.layouts[index].input,
+                        &device.layouts[index].word,
+                        &device.layouts[index],
                     ),
                 };
                 inputs.insert(scan.binding.to_string(), input);
@@ -197,8 +210,8 @@ fn reordered(
 }
 
 /// Bulk `full_layouts` maintenance: append the fresh rows to each layout's
-/// recorded state in its own order, then republish its view from those runs
-/// (unchanged runs republish the same view; field descriptors are shared).
+/// recorded radix state in its own order, then republish its immutable view.
+/// Unchanged snapshots and field descriptors are shared.
 fn full_layouts(
     program: &Program,
     context: &RoundContext,
@@ -209,7 +222,6 @@ fn full_layouts(
     let updates = layouts.iter().map(|&j| {
         let layout = &context.layouts[j];
         let state = local("layout", j);
-        let packing = local("layout_packing", j);
         let host = &layout.host;
         let run = reordered(program, context, index, fresh, &layout.columns, &state);
         quote!({
@@ -217,7 +229,7 @@ fn full_layouts(
             // SAFETY: fresh rows are absent from the canonical layout, and every
             // full layout holds exactly the canonical rows in its own order.
             unsafe { #state.append_sorted(run)?; }
-            #host = #host.republish(__cq_gpu_pool.clone(), #packing.clone(), #state.owned_runs())?;
+            #host = #host.republish(&#state)?;
         })
     });
     quote!(#(#updates)*)
@@ -254,7 +266,7 @@ fn admit_publish(
                 // Recorded `fresh_run` NEW: the fresh rows in relation order,
                 // built directly; publishing it as the next delta is a move.
                 quote!(
-                    let #next: #ty = #delta.republish(__cq_gpu_pool.clone(), #packing.clone(), ::std::vec![#run])?;
+                    let #next: #ty = #delta.with_sorted(#run, #canonical.params())?;
                     #delta = #next;
                 )
             }
@@ -262,10 +274,9 @@ fn admit_publish(
                 let rebuilds = operation.layouts.iter().map(|&j| {
                     let layout = &context.delta_layouts[j];
                     let state = local("delta_layout", j);
-                    let schema = local("delta_packing", j);
                     let host = &layout.host;
                     let run = reordered(program, context, i, &fresh, &layout.columns, &state);
-                    quote!(#host = #host.republish(__cq_gpu_pool.clone(), #schema.clone(), ::std::vec![#run])?;)
+                    quote!(#host = #host.with_sorted(#run, #state.params())?;)
                 });
                 quote!(#(#rebuilds)*)
             }
@@ -598,7 +609,10 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let runner = program_runner();
         initialize.push(quote!(
             let (#packing, mut #state, mut #host) = #runner(#[inline] || -> ::gpu_datalog_runtime::Result<(_, #state_ty, #ty)> {
-                Ok((#packing_init, #state_init, #init))
+                let __cq_gpu_packing = #packing_init;
+                let __cq_gpu_state: #state_ty = #state_init;
+                let __cq_gpu_view: #ty = #init;
+                Ok((__cq_gpu_packing, __cq_gpu_state, __cq_gpu_view))
             })?;
         ));
     }
@@ -623,7 +637,10 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let runner = program_runner();
         initialize.push(quote!(
             let (#packing, #state, mut #host) = #runner(#[inline] || -> ::gpu_datalog_runtime::Result<(_, #state_ty, #ty)> {
-                Ok((#packing_init, #state_init, #init))
+                let __cq_gpu_packing = #packing_init;
+                let __cq_gpu_state: #state_ty = #state_init;
+                let __cq_gpu_view: #ty = #init;
+                Ok((__cq_gpu_packing, __cq_gpu_state, __cq_gpu_view))
             })?;
         ));
     }
@@ -736,7 +753,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 let buffer = ::gpu_datalog_runtime::concatenate_batches::<#word>(__cq_gpu_pool.clone(), &packing, &[batch])?;
                 let state: #state_ty = #state_init;
                 let run = state.sort_unique(&buffer, buffer.len())?;
-                <#ty>::from_runs(__cq_gpu_pool.clone(), packing, ::std::vec![run])?
+                <#ty>::from_sorted(__cq_gpu_pool.clone(), packing, state.params(), run)?
             };));
         }
         // Each stratum and phase runs as its own non-inlined function. Relation
@@ -818,8 +835,8 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         // where logical host symbols are restored.
         let runner = program_runner();
         quote!(#runner(#[inline] || -> ::gpu_datalog_runtime::Result<_> {
-            // DECODE P: generated final host output reads the canonical layout's packed codes.
-            Ok(#host.to_host_codes()?.into_iter()
+            // DECODE P: invert canonical radix key fields only at final output.
+            Ok(#host.to_rows()?.into_iter()
                 .map(|row| (#(#fields,)*))
                 .collect::<::std::vec::Vec<_>>()
                 .into_iter())

@@ -492,16 +492,18 @@ approval.
   (not a CPU default).
 - GPU Datalog (`experiments/gpu/datalog`, `cq-gpu-datalog`): `device_storage`
   (`CK-DL-DeviceStorage`) + `batch` hole terminal `translate_arena` over
-  packed-run inputs (`GPU-Runs`, `GPU-Arena`) + `print_rounds` (`P-DL-Gpu`) on
-  device runs (`DL-DevicePacking`, `DL-DeviceRuns`). Historical acceptance:
+  radix relation inputs (`GPU-Runs`, `GPU-Arena`) + `print_rounds` (`P-DL-Gpu`)
+  (`DL-DevicePacking`, `DL-DeviceRuns`). Historical acceptance:
   the 13-program oracle was exact on the GPU (416 comparisons). Random graph,
   2048 nodes, ~4.1M answers: TC 0.36–0.49 s vs 1.58–1.79 s mini /
   1.83–2.18 s mini-par; same generation 0.41 s vs 3.58 s / 3.07 s.
-  That checkpoint issued waves on one stream. Current storage still uses
-  `DeviceRuns`, with read-only `fresh` admission and separate `append_sorted`
-  publication; the grouped-radix Datalog replacement remains planned.
-  Current scheduling can record multiple lanes; see the dated P6b evidence.
-  DOOP cassandra runs on the GPU and all 26 outputs equal `mini` exactly:
+  That checkpoint issued waves on one stream. P4-GPU slice D now uses
+  ordinary full-key `DeviceRadixRun<W, u64, ()>` state and `RadixLayout` views:
+  read-only `fresh` returns a `SortedBatch`, and `append_sorted` publishes it.
+  Device records independently check offset, construction, prefix reads,
+  directory policy and geometry. Slice-D gates/timings are not claimed here.
+  Scheduling can record multiple lanes; see the dated P6b evidence.
+  Historical DOOP cassandra acceptance: all 26 GPU outputs equaled `mini` exactly:
   strings stay in the dataset (`method_descriptor` interned at load, symbol
   columns as `SymbolCodec` u32 codes, closed constants captured on the host),
   wide inputs use multi-lane words. 11.8 s vs 4.27 s `mini` / 1.26 s `mini-par`.

@@ -191,9 +191,10 @@ That fallback was rejected, then P4-GPU slice B (`af735660`, 2026-11-01)
 added real minimum-candidate selection over recorded two-level radix layouts
 with a Candidates read on every side. The current rejection boundary is
 documented in [`realize.rs`](sequence/core/src/realize.rs), not a blanket
-target-wide prohibition. The packed `DeviceLayout` experiments here do not
-automatically acquire radix providers; `advice-aipt` and `advice-load` are not
-evidence of a realized smallest plan. See the executable `triangle-smallest`
+target-wide prohibition. The historical packed `DeviceLayout` experiment
+results here are not evidence for the slice-D radix relation cutover;
+`advice-aipt` and `advice-load` are not evidence of a realized smallest plan.
+See the executable `triangle-smallest`
 case and its dated paired evidence below. CPU smallest support is unchanged.
 
 Build each variant separately, e.g.
@@ -382,12 +383,18 @@ confidence intervals, and the explicitly labelled exploratory runs are in
 records final no-advice LLVM identity (6,250,872 bytes before and after; exact
 normalized equality without reordering instructions).
 
-### Packed Datalog runtime
+### Radix-backed Datalog runtime
 
-`gpu-datalog-runtime` provides `Packing`/`Column` encodings and `DeviceRuns<W>`
-on the resident-column `Pool`. This is still the Datalog layout state emitted
-and checked by [`datalog/src/storage.rs`](datalog/src/storage.rs), with APIs
-defined in [`datalog-runtime/src/runs.rs`](datalog-runtime/src/runs.rs).
+`gpu-datalog-runtime` provides `Packing`/`Column` encodings and ordinary
+`DeviceRadixRun<W, u64, ()>` full-key sets on the resident-column `Pool`.
+Every Datalog layout publishes a typed
+`RadixLayout<(all physical row columns), (), W, u64, ()>` view, including
+EDB, canonical, secondary, delta and frozen negative layouts. The recorded
+`radix_relation` provider uses `NativeAbi::RadixRelation`; the logical
+key/payload split is a prefix boundary, not a split into radix item columns.
+[`datalog/src/storage.rs`](datalog/src/storage.rs) records and independently
+checks the contract; [`datalog-runtime/src/radix_run.rs`](datalog-runtime/src/radix_run.rs)
+and [`datalog-runtime/src/layout.rs`](datalog-runtime/src/layout.rs) implement it.
 The narrowest word is u64, u128, or `[u64; L]` for larger schemas.
 Array lanes are most-significant first; native u128 keeps
 its native in-memory lane order. Integer columns use their full declared width;
@@ -395,21 +402,34 @@ signed columns flip the sign bit, and the first tuple column occupies the most
 significant packed bits. `prefix_range` returns inclusive bounds, including the
 maximum word without overflow.
 
-`DeviceRuns::fresh` sorts, deduplicates and subtracts all accepted runs
-on-device without changing them, returning a cheap immutable `Run`; publishing
-it is a separate unsafe `append_sorted` into each layout, canonical included.
-It reads back only the unique count and fresh count (empty batches and an empty
-accepted state omit unnecessary readbacks). `DeviceRuns::new(pool, params)`
-consumes explicit `RunParams { ratio, merge_tile_rows, block_threads }`: ratio
-is at least two, merge tiles contain at least one row, and the compiled kernels
-require 256 threads. `Packing::permute_device` separately receives its recorded
-256-thread width. Unsupported geometry is rejected rather than adjusted.
-Merges retain sorted, unique, pairwise-disjoint runs. For another layout, permute the delta with
-`Packing::permute_device`, sort with unsafe `DeviceRuns::sort_known_unique`
-(the column permutation preserves uniqueness and cardinality), and use unsafe
-`append_sorted` after proving disjointness. This path needs no unique-count
-readback or compaction; arbitrary inputs still use `sort_unique`. `RunView` and device
-`runs::range` support inclusive prefix searches without materialization.
+Canonical `fresh` sorts, deduplicates and subtracts all accepted complete keys
+on-device without changing state, returning an immutable `SortedBatch`.
+Separate `append_sorted` publication requires a sorted, unique batch disjoint
+from accepted keys. All secondary layouts derive from that same admitted
+batch: bijective column permutation preserves uniqueness and cardinality,
+but sorting must restore the new order. Negative projections independently
+deduplicate, since projection need not be injective. Recorded delta moves
+are unchanged. Maintained views use `republish(&state)`; initial construction
+uses `from_sorted(pool, packing, params, batch)`, and delta replacement uses
+`with_sorted(batch, params)` to retain kernels and field descriptors.
+Explicit output uses `to_rows`. Full-key views also require the state/snapshot's
+construction-only set witness: occurrence publication clears it, while set
+append/replacement establishes or preserves it; unit item columns alone are
+not a uniqueness certificate.
+
+Each `DeviceState` records `offset: u64`, `construction: full_key_set`,
+`read: key_prefix`, ratio, `radix_bits`, merge-tile rows, block threads and
+permutation threads. `radix_bits` defaults to zero (no directory) but legal
+configured values are accepted. `RadixRunParams` consumes explicit settings:
+ratio is at least two, merge tiles contain at least one row, and compiled
+run/permutation kernels require 256 threads. Unsupported geometry is rejected
+rather than adjusted. The checker validates token/ABI, complete ordered
+schemas/codecs, state and initializer agreement, legal settings, cardinalities,
+canonical/layout references, scratch policy and exact source erasure; it never
+replays realization or requires its default choices. Full keys are retained
+regardless of directory resolution; unit item columns alone do not establish
+set uniqueness. The former public `DeviceRuns`/`DeviceLayout` APIs have no
+compatibility aliases.
 Work is ordered on the owning pool's stream. The main pool uses the legacy
 default stream; explicit wave lanes use streams sharing that pool's allocator,
 with event fork/join before admission (see `lanes` below).
@@ -422,27 +442,73 @@ cargo oxide test --arch sm_89 -- --release -p gpu-datalog-runtime
 cargo oxide test --arch sm_89 -- --release -p gpu-datalog-runtime --test runs -- --ignored --nocapture
 ```
 
-The ignored probe admits 10M random u64 candidates against 50M accepted rows.
-Timing is opt-in: `enable_timing(true)` records CUDA events, and the explicit
-`last_timings()` accessor synchronizes and reports sort/unique, anti-join, and
-merge milliseconds. `to_host()` is an explicit diagnostic sorted download,
-not part of the admission path.
+The ignored probe is a runtime workload, not acceptance evidence. Slice D's
+2026-11-02 acceptance is recorded in
+[`compare/p4-gpu-d.results.json`](compare/p4-gpu-d.results.json): GPU runtime,
+Datalog core/facade and Sequence suites pass; xalan and batik each match an
+independent CPU reference on all **43 duplicate-free output tuple sets**,
+and Cassandra matches all **26 complete tuple sets**. Root, quick (15 targets),
+formal and API gates pass; all **46 CPU expansions are identical** to `b7e83c6f`.
 
-### Run-bound hole inputs and candidate arenas
+Five interleaved process-isolated pairs per dataset held the GPU lock, then
+the timing lock. Every sample checked complete answers. Times below are only
+`GPU_DATALOG_PHASES=1` **fixpoint** means; exports are outside that interval.
+The ratio is current/baseline, with a paired-bootstrap 95% confidence interval.
 
-A CQ input whose declared host type is `::gpu_datalog_runtime::DeviceLayout<K, V>`
-(`DeviceLayout::from_runs(pool, packing, runs)`) is bound as packed device runs
-(`GPU-Runs`): scans visit every run, key-prefix lookups binary-search one range
-per run with block-uniform expansion, and membership ORs over runs. A recorded
-lookup on nonleading columns obtains a sorted, permuted provider view; it retains
-each original run's rows and cross-run multiplicity. Unused selection fallbacks do
-not construct providers. Scalar widths come from the native `Scalar` provider
-trait; codec-declared symbols use u32 codes, with no 128-bit tuple cap.
+| Dataset | `b7e83c6f` seconds | Slice D seconds | Ratio [95% CI] |
+| --- | ---: | ---: | ---: |
+| xalan | 0.877541 | 0.886834 | 1.01059 [0.99901, 1.02241] |
+| batik | 1.554275 | 1.525438 | 0.98145 [0.97875, 0.98556] |
+| Cassandra | 1.112116 | 0.555870 | 0.49983 [0.48944, 0.51058] |
+
+Xalan is neutral/slightly slower, not a demonstrated speedup. Batik is modestly
+faster. Cassandra was repeated after rebuilding the baseline with the same
+`oxide run` materialized-cubin workflow; the second series above retained the
+improvement. Both series and executable hashes remain in the evidence.
+
+Nsight Systems 2025.3.1 attribution covers **all process GPU work**, including
+setup/output, not only fixpoint. These kernel totals cannot be subtracted from
+paired wall time. Direct sort/lane-gather/unique-mark work and explicit layout
+permutation/merge/metadata work were:
+
+| Dataset | Sort/unique marks, before → after (ms) | Layout maintenance, before → after (ms) |
+| --- | ---: | ---: |
+| xalan | 227.111 → 227.019 | 18.504 → 25.971 |
+| batik | 240.230 → 241.200 | 40.322 → 55.706 |
+| Cassandra | 57.215 → 57.227 | 8.404 → 11.476 |
+
+Shared scan/select kernels are reported separately rather than assigned
+speculatively to uniqueness or admission. Sort/unique-mark instance counts
+are unchanged. The new unit-offset metadata adds 4,269 / 7,085 / 3,132 launches
+on xalan / batik / Cassandra. Cassandra's generated relational kernel time is
+nearly unchanged, while observed module load/unload calls fall **158 → 6**;
+its wall-time improvement is not a sort/unique optimization. Xalan/batik
+relational kernel totals decrease, so this evidence does not motivate
+nonzero-directory retuning merely to explain xalan's neutral total.
+
+**Slice E:** target recorded active-bit/key-only sort specialization and
+reuse or elimination of materialized unit offsets under an explicit checked
+representation; then reduce repeated secondary-layout publication work.
+Rank directory choices by matched build/read/maintenance cost, not the
+provider's name. Per-command gate times and raw kernel attribution accompany
+the results; historical measurements elsewhere remain historical.
+
+### Radix relation hole inputs and candidate arenas
+
+A checked `radix_relation` input binds a complete-key `RadixLayout` snapshot
+(`GPU-Runs`). Scans visit every run; logical key-prefix lookups encode probe
+operands once and search an inclusive key interval per run, with block-uniform
+expansion. Membership ORs over runs, and only demanded fields are decoded
+from complete keys; no fictitious item payload is read. A recorded lookup on
+nonleading columns obtains a sorted, permuted provider view that retains each
+original run's rows. Unused selection fallbacks do not construct providers.
+Scalar widths come from the native `Scalar` provider trait; codec-declared
+symbols use u32 codes, with no 128-bit tuple cap.
 `cq_gpu_sequence::translate_arena(&mut arena)` (`GPU-Arena`) publishes head rows
 packed most-significant-first in head order into a `CandidateArena` and returns
 a `CandidateBatch` (u64 lanes, native low-first for u128 and most-significant
 first for larger words; length; packing; retained owners). The hole must be
-consumer-canonical: the batch is a candidate bag for `DeviceRuns::fresh`.
+consumer-canonical: the batch is a candidate bag for canonical `fresh`.
 Sizing keeps the dispatch's output protocol, so each attempt reads its
 metadata back; candidate rows are never downloaded. Arena invocations omit
 the redundant final stream synchronize and phase timing events by default.
@@ -545,7 +611,7 @@ injective `code(&IStr) -> u32` mapping and its `decode(u32) -> IStr` inverse.
 Use the same type spelling as the relation declaration; the compiler does not
 resolve Rust aliases. Upload/download performs the conversion on the host.
 The declared codec map is a printable Storage field, independent of opaque
-provider types; `DeviceRuns<W>` contains no logical-schema generic metadata.
+provider types; `DeviceRadixRun<W, u64, ()>` has no logical-schema metadata.
 Closed guard, binding and selection expressions are host captures, evaluated
 once per invocation on demand for a nonempty dispatch input. Invocation-local
 `OnceCell` values retain captures across retries and dispatches; symbols use

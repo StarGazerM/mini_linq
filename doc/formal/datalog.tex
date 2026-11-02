@@ -1385,8 +1385,9 @@ A sorted-run canonical layout admits by the same anti-join: candidates found in
 an accepted run are removed, and the round's survivors are concatenated,
 sorted and deduplicated into the fresh batch (\textsc{DL-ShardedAdmission}),
 which publication appends as a run (merging as above).
-Device runs realize the same run layout and admission over packed words. For fixed-width
-column types $\tau_1\ldots\tau_n$ with $b=\sum_i w_i$, a word is $L=\lceil b/64\rceil$
+Device radix full-key sets realize the same relational admission over packed words.
+For fixed-width column types $\tau_1\ldots\tau_n$ with $b=\sum_i w_i$,
+a word is $L=\max(1,\lceil b/64\rceil)$
 64-bit lanes ($u64$, $u128$, or $[u64;L]$ for $L>2$) read as one
 $64L$-bit integer, most significant lane first. Packing places column $i$ of a
 layout's permutation in the next $w_i$ bits from the most significant end,
@@ -1394,21 +1395,27 @@ after an order-preserving encoding $e_i$ (signed integers flip the sign bit;
 symbol codes are unsigned). Packing is injective and maps the lexicographic
 order to the integer order, so sort, uniqueness, merge and binary search on
 words coincide with those on tuples, and a key prefix $k$ of length $j$
-selects the contiguous word range $[p(k)\cdot2^{s_j},(p(k)+1)\cdot2^{s_j})$
-with $s_j=64L-\sum_{i\le j}w_i$.
+selects the inclusive word interval
+$[p(k)\cdot2^{s_j},p(k)\cdot2^{s_j}+(2^{s_j}-1)]$
+with $s_j=64L-\sum_{i\le j}w_i$. Inclusive bounds avoid overflow at the
+maximum word; only demanded key fields are decoded after the search.
 \begin{mathpar}
 \Rule{DL-DevicePacking}{\forall i.\ e_i\text{ injective and monotone}\quad
- L=\lceil\textstyle\sum_i w_i/64\rceil}
+ L=\max(1,\lceil\textstyle\sum_i w_i/64\rceil)}
  {\mathrm{pack}(r)<\mathrm{pack}(r')\iff r<_{\mathrm{lex}}r'\quad
- \mathrm{lookup}_L(k)=\mathrm{unpack}(\{x\in L\mid p(k)2^{s_j}\le x<(p(k)+1)2^{s_j}\})}
+ \mathrm{lookup}_L(k)=\mathrm{unpack}(\{x\in L\mid p(k)2^{s_j}\le x\le p(k)2^{s_j}+(2^{s_j}-1)\})}
 \Rule{DL-DeviceRuns}{\textsc{DL-DevicePacking}\quad
  \text{device fresh (sort, deduplicate, drop rows found in an accepted run, read-only)}\\
- \text{and append (merge) follow \textsc{DL-RunLayout} on words}}
- {\mathrm{unpack}(\text{state after fresh then append})=\text{the CPU run state after the same candidate batches}}
+ \text{and append of sorted unique disjoint complete keys follows \textsc{GPU-RadixPublish}}}
+ {\mathrm{unpack}(\text{state after fresh then append})=\text{the CPU relation after the same candidate batches}}
 \end{mathpar}
-Run maintenance consumes a recorded positive merge-tile row count and
-per-family auxiliary block widths. The current run and permutation kernels
-require exactly 256 threads; unsupported widths are rejected, never adjusted.
+Run maintenance consumes the recorded ratio, exact-directory radix bits,
+positive merge-tile row count and per-family auxiliary block widths.
+The radix merge condition is $\mathrm{older.items}/r<\mathrm{newer.items}$
+(integer division); run-count differences from the former device-run threshold
+are maintenance cost changes, not relation changes.
+The current run and permutation kernels require exactly 256 threads;
+unsupported widths are rejected, never adjusted.
 A layout run built from an admitted delta permutes columns of a run whose
 words are pairwise distinct; the permutation is injective, so its image is
 also pairwise distinct and sorting alone yields a sorted unique run of the same
@@ -1424,15 +1431,18 @@ readbacks are recorded realization cost, not semantic steps.
 \paragraph{Device realization (extension).}
 The device Storage rewrite replaces every layout provider (EDB and IDB, full
 and delta, canonical included, any key length) by the bulk-maintained view
-\code{DeviceLayout<K, V>} and records, in \code{Storage.device}, each layout's
-backing state \code{DeviceRuns<W>} in that layout's column order, its packing,
-state initializer and empty view, where $W$ is the narrowest word holding the
-packed columns. The canonical layout is an ordinary such layout; there is no
-separate accepted state. It also records each negative key set's provider and
-state, each relation's packing, candidate container and arena, and the scratch
-policy (component-scoped arenas, scratch released after each component). IDB
-delta and NEW are relation-order \code{DeviceLayout} views; NEW is recorded as
-\code{fresh\_run}: built directly from admission's fresh rows, so its declared
+\code{RadixLayout<(all physical row columns), (), W, u64, ()>} and records,
+in \code{Storage.device}, each layout's backing
+\code{DeviceRadixRun<W, u64, ()>} in that layout's complete column order,
+its packing, state initializer and empty view, where $W$ is the narrowest
+word holding the packed columns. Every layout uses ordinary full-key set
+construction, not occurrence construction with a uniqueness assumption.
+The canonical layout is an ordinary such layout; there is no separate accepted
+state. It also records each negative key set's provider and state, each
+relation's packing, candidate container and arena, and the scratch policy
+(component-scoped arenas, scratch released after each component).
+IDB delta and NEW are relation-order radix views; NEW is recorded as
+\code{fresh\_run}: built directly from admission's \code{SortedBatch}, so its declared
 empty \code{next\_init} is checked but never printed. It requires every column
 type to be a supported fixed-width integer or a declared symbol type, and each
 source layout to be the default \code{HashSet} or \code{HashMap} with the
@@ -1451,14 +1461,18 @@ as \code{Vec<SymbolCodec>}, whose records have
 \code{logical\_type\_id: Option<LogicalTypeId>}, \code{logical: Type},
 \code{codec\_id: CodecId} and \code{codec: Type}. Their stored syntax uses
 \code{SymbolCodec \{ logical\_type\_id: [3], logical, codec\_id: [7], codec \}}.
-The resolved geometric maintenance ratio is also recorded in \code{device};
-\code{DeviceRuns<W>} carries no logical schema metadata. Input schemas copy
-the recorded source ids; checking compares ids and never re-interns types.
+Each \code{DeviceState} records \code{offset: u64},
+\code{construction: full\_key\_set}, \code{read: key\_prefix},
+the exact-directory \code{radix\_bits} (default zero, legally configurable),
+ratio and launch geometry. \code{DeviceRadixRun<W, u64, ()>} carries no
+logical schema metadata. The offset choice is conservative for total
+publication size, not inferred from the current delta.
+Input schemas copy the recorded source ids; checking compares ids and never re-interns types.
 Later symbol codec lookup uses \code{Option<LogicalTypeId>}, not \code{Type}.
 The device record also carries GPU provider declarations keyed by the Storage
-token, with \code{abi runs}; maintained layouts, negative projections and IDB
-delta/NEW views use the same \code{device\_layout} identity. Each relation and
-layout records an explicit input schema: key count and ordered
+token, with \code{NativeAbi::RadixRelation}; maintained layouts, negative
+projections and IDB delta/NEW views use the same \code{radix\_relation} identity.
+Each relation and layout records an explicit input schema: key count and ordered
 \code{[L] logical => storage codec [N] C} columns (the codec is optional).
 Source records may omit ids; declaration boundaries intern missing ids once
 by opaque spelling and preserve explicit ids. Automatic equal spellings
@@ -1477,11 +1491,14 @@ membership, schema cardinality, logical column order and key boundaries.
 The Round binding packet copies these declarations and input records into CQ
 Host providers; Rust spellings remain opaque and are printed unchanged.
 No consumer infers codecs or native ABIs from provider names or generic arguments.
-Independent legality predicates check these schema and token facts, the
-resolved ratio in each state, positive merge tiles, compiled launch bounds,
+Independent legality predicates check these schema and token facts, collection
+cardinalities and layout/canonical references, complete packing order, the
+offset/construction/read contract, legal directory bits and resolved ratio
+in each state, positive merge tiles, compiled launch bounds, scratch policy
 and initializer agreement with the declared ABI. They never rerun the device
-realization producer. Fixed-width scalar eligibility, including type aliases,
-is checked by Rust's \code{Scalar} bounds rather than by type-name recognition.
+realization producer or require its preferred legal defaults.
+Fixed-width scalar eligibility, including type aliases, is checked by Rust's
+\code{Scalar} bounds rather than by type-name recognition.
 \begin{mathpar}
 \Rule{DL-DeviceSymbols}{D=\mathrm{Storage.device.symbols}\quad
  \mathrm{dom}(D)\text{ consists of distinct, declared nonnative logical ids}\quad
@@ -1521,15 +1538,24 @@ unique candidates, permuted into canonical order when that order is not the
 identity, minus the committed canonical layout's runs (\textsc{DL-DeviceRuns},
 read-only). Publication then follows the recorded operations:
 \code{full\_layouts} appends fresh to every full layout's state, the canonical
-one included, sharing the run when the layout's order equals the canonical
-order and otherwise permuting and sorting it (disjoint because it was
-admitted), and republishes each view from its runs; \code{delta\_swap} builds
-NEW from fresh in relation order (\code{fresh\_run}) and moves it to the delta;
-\code{delta\_rebuild} builds each delta layout from fresh. Termination tests the
-sum of the fresh counts. Outputs read the canonical layout's rows through its
-column permutation. Hole grain and inline advice is rejected: each hole is one
-device invocation. Issuing waves in order on one stream is exact by
-\textsc{DL-WaveCommute}; concurrent streams per wave would change only cost.
+one included, sharing the \code{SortedBatch} when the layout's order equals
+the canonical order and otherwise permuting and sorting it (unique and
+disjoint because it was admitted), and republishes each view with
+\code{republish(\&state)}; \code{delta\_swap} builds NEW from fresh in relation
+order (\code{fresh\_run}) and moves it to the delta.
+Initial construction uses \code{from\_sorted(pool, packing, params, batch)};
+replacement uses \code{with\_sorted(batch, params)}, retaining kernels and
+field descriptors. \code{delta\_rebuild} replaces each delta layout from fresh.
+Full-key views require the state's construction-only set witness; ordinary
+occurrence publication clears that witness even with unit item columns.
+Frozen negative projections independently
+deduplicate, because projection is not generally injective.
+Termination tests the sum of the fresh counts. Outputs use \code{to\_rows}
+on the canonical layout and restore its column permutation.
+Hole grain and inline advice is rejected: each hole is one device invocation.
+Recorded wave lanes and per-hole reservations are unchanged; main-stream
+admission and publication follow the recorded lane join. Shared allocation
+alone does not establish stream readiness (\textsc{GPU-RadixLaneRead}).
 Worker lanes construct each relation's arena from the same recorded initializer
 as the caller. Component release drops those arenas, releases that worker's
 thread-local scratch and then returns unused pool storage, matching the caller.

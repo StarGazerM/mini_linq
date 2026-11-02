@@ -362,7 +362,7 @@ impl<'a> Facts<'a> {
                         continue;
                     }
                     if analysis.structures.facts(&keyed.provider).abi
-                        == Some(cq_lang_structures::provider::NativeAbi::Runs)
+                        == Some(cq_lang_structures::provider::NativeAbi::RadixRelation)
                     {
                         runs.insert(name.clone());
                         resident.insert(name.clone());
@@ -709,7 +709,7 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                 if let Some(layouts) = analysis.structures.built.get(name) {
                     if layouts.len() != 1
                         || analysis.structures.facts(&layouts[0].1).abi
-                            == Some(cq_lang_structures::provider::NativeAbi::Runs)
+                            == Some(cq_lang_structures::provider::NativeAbi::RadixRelation)
                     {
                         providers.push(name.clone());
                     }
@@ -724,10 +724,10 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                             continue;
                         }
                         if analysis.structures.facts(ty).abi
-                            != Some(cq_lang_structures::provider::NativeAbi::Runs)
+                            != Some(cq_lang_structures::provider::NativeAbi::RadixRelation)
                         {
                             return Err(error(
-                                "GPU-Runs: native lookup requires a declared run layout",
+                                "GPU-RadixRelation: native lookup requires a declared run layout",
                             ));
                         }
                         let provider = format!("{name}__{}", sorted.join("__"));
@@ -739,7 +739,7 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                 sources.insert(
                     name.clone(),
                     SourceRealization {
-                        origin: SourceOrigin::Runs {
+                        origin: SourceOrigin::RadixRelation {
                             host: origin.host.clone(),
                             providers,
                         },
@@ -853,7 +853,7 @@ impl<'f, 'a> Steps<'f, 'a> {
         let mut bounds = BoundsState::default();
         // Run reads carry Scalar ranges; a provider key over them is measured.
         for source in sources.values() {
-            let SourceOrigin::Runs { host, .. } = &source.origin else {
+            let SourceOrigin::RadixRelation { host, .. } = &source.origin else {
                 continue;
             };
             for original in &facts.analysis.structures.host_layouts[host] {
@@ -876,7 +876,7 @@ impl<'f, 'a> Steps<'f, 'a> {
                 SourceOrigin::Uploaded { .. } => {
                     (name, &facts.analysis.structures.layouts[name], true)
                 }
-                SourceOrigin::Runs { .. } => continue,
+                SourceOrigin::RadixRelation { .. } => continue,
             };
             for (column, original) in &source.columns {
                 let index = layout
@@ -1530,11 +1530,11 @@ pub(crate) fn check(
                 .is_some_and(|host| !facts.resident.contains(host))
         });
         let layout = match &source.origin {
-            SourceOrigin::Resident { host } | SourceOrigin::Runs { host, .. } => {
+            SourceOrigin::Resident { host } | SourceOrigin::RadixRelation { host, .. } => {
                 if !facts.resident.contains(host) || nonresident {
                     return Err(error("resident source reads a nonresident input"));
                 }
-                if let SourceOrigin::Runs { providers, .. } = &source.origin {
+                if let SourceOrigin::RadixRelation { providers, .. } = &source.origin {
                     if !facts.runs.contains(host) || source.access != SourceAccess::Scan {
                         return Err(error("packed runs have no interval or provider access"));
                     }
@@ -2071,7 +2071,7 @@ impl CheckState {
                     SourceOrigin::Uploaded { .. } => {
                         (name, &facts.analysis.structures.layouts[name], true)
                     }
-                    SourceOrigin::Runs { .. } => continue,
+                    SourceOrigin::RadixRelation { .. } => continue,
                 };
                 let Some(original) = source.columns.get(column) else {
                     continue;

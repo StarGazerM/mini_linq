@@ -352,6 +352,10 @@ fn select(
             .find(|candidate| {
                 let facts = entry_facts(catalog, candidate);
                 !candidate.levels.is_empty()
+                    // Native full-key relations require their producer's schema
+                    // and radix advice; a bare catalog token cannot build them.
+                    && (facts.abi != Some(structures::provider::NativeAbi::RadixRelation)
+                        || recorded(&candidate))
                     && if kind == "canon" {
                         // Packed bounds are runtime codec facts, never inferred from Rust types.
                         facts.packed_bits.is_none() && facts.reads(&Capability::Distinct)
@@ -550,6 +554,7 @@ fn retain_host_index(
         let candidate = native.or_else(|| catalog.providers.iter().find(|candidate| {
             let facts = entry_facts(catalog, candidate);
             !candidate.levels.is_empty()
+                && facts.abi != Some(structures::provider::NativeAbi::RadixRelation)
                 && supplies_support(&facts, &support_required)
                 && required.iter().all(|capability| facts.reads(capability))
         })).ok_or_else(|| syn::Error::new(

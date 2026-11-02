@@ -1,4 +1,4 @@
-//! GPU provider tokens (STR-Provider): resident range reads, device layouts
+//! GPU provider tokens (STR-Provider): resident range reads, full-key radix relations
 //! and columns, grouped radix indices and the canonical distinct builds. A
 //! token's facts are declared here once; recorded entries carry its id and
 //! spelling.
@@ -10,8 +10,8 @@ pub fn declarations() -> Vec<Declaration> {
         range_provider = ::cq_gpu_sequence_runtime::RangeProvider {
             reads [exact, range, membership], build inferred, abi range, contiguous_range
         };
-        device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> {
-            reads [exact, range, membership, resident], build typed, abi runs
+        radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> {
+            reads [exact, range, membership, resident, distinct], build typed, abi radix_relation
         };
         radix_layout = ::gpu_datalog_runtime::RadixLayout<_, _, _, _, _> {
             reads [exact, range, membership, candidates], build typed, abi radix
@@ -34,19 +34,3 @@ pub fn declaration(token: &str) -> Declaration {
         .unwrap_or_else(|| panic!("STR-Provider: `{token}` is a GPU provider token"))
 }
 
-/// The provider a run input's complete key permutation materializes into
-/// (GPU-NativeAbi). Declared here, never registered in the catalog or
-/// placed in Structures: only a native lookup's recorded materialization
-/// names it.
-pub fn packed_provider() -> Declaration {
-    let providers: Providers = syn::parse_quote!(providers {
-        packed_provider = ::gpu_datalog_runtime::PackedProvider {
-            reads [exact, range, membership], build typed, abi runs
-        };
-    });
-    providers
-        .declarations
-        .into_iter()
-        .next()
-        .expect("one materialized provider declaration")
-}

@@ -377,7 +377,8 @@ GPU-RadixPublish, GPU-RadixItemColumns), plus its typed view `RadixLayout`
 (GPU-RadixLayout, GPU-RadixCursor, GPU-RadixLaneRead). GPU CQ built indices
 select `RadixLayout` only through the authored `radix_layout` provider token
 (P4-GPU slice B, below); canonical references select the constrained full-row
-set token (slice C). Datalog layouts remain on their existing protocol.
+set token (slice C). Datalog layouts use ordinary full-key radix sets (slice D,
+§13.2), with logical lookup keys represented as prefixes of complete row keys.
 Provider choices are recorded upstream, never by type name.
 
 - **Full-row sets (P4-GPU slice C, GPU-RadixSet).** The constrained
@@ -420,14 +421,14 @@ Provider choices are recorded upstream, never by type name.
   kernels' compiled 256-thread contract before construction and retained by
   snapshots for reads; grids follow GPU-LAUNCH-OCCUPANCY. Scratch is sized by
   the input/merge row counts.
-- **Build.** The stable lane radix permutation shared with `DeviceRuns`
+- **Build.** The shared stable lane radix permutation
   (`runs::stable_order`, RCCL pairs radix sort per lane), a group-start flag
   kernel, RCCL `device_select_flagged` for offsets (over a counting range)
   and distinct keys (through the permutation), a per-column gather, and the
   directory kernel. One group-count readback per build.
 - **Publish/merge.** The CPU ratio law: merge the newest runs while
   `older.items / ratio < newer.items`, so run counts equal `RadixRun`'s.
-  A merge-path kernel (the co-rank shared with `DeviceRuns::merge_wide`, one
+  A merge-path kernel (shared co-rank primitives, one
   strategy for every key width, caller tile size) tags each merged key slot
   with its source, preceding item count and new-key flag; RCCL selections
   produce offsets and distinct keys; a load-balanced source map gathers each
@@ -455,7 +456,7 @@ Provider choices are recorded upstream, never by type name.
   same signedness and at least its width, or unsigned in a strictly wider
   signed lane; never a narrowing). `republish(run)` returns this layout itself
   when the run's cached snapshot is unchanged and otherwise shares the field
-  descriptors (the `DeviceLayout::republish` contract). `view()` is the key
+  descriptors. `view()` is the key
   field ABI (`RadixLayoutView`: keys view, field descriptors, packed bits and
   the resident count pointer) and carries no item pointers;
   `item_column::<T>(i)` is narrow access to one value field whose lane must be
@@ -514,16 +515,20 @@ Provider choices are recorded upstream, never by type name.
   `probe first` triangle on DBLP).
 - **Not yet.** Retain/Expand supports are not declared: the GPU target
   rejects witnesses and staging, so retained smallest witnesses (L&E) wait
-  for that target feature. No Distinct capability or set build exists; arity
+  for that target feature. The generic occurrence provider does not claim
+  Distinct; the constrained full-key set construction does. Arity
   above 12 item columns has no `DeviceItemColumns` implementation; builds
   above `u32::MAX` rows and offset-carrier overflow at a merge are rejected
   errors (no widening, no chunked build). FOR-coded sources are decoded once
   during the build (two registered P4 DECODE V sites).
-- **Relation to existing device storage.** `DeviceRuns`/`DeviceLayout` still
-  implement Datalog's packed-word state and views; `fresh` and `append_sorted`
-  replaced the old fused admission API (§13.2), not the `DeviceRuns` type.
-  `RangeProvider` remains the dense-domain provider. Replacing Datalog state
-  with grouped radix storage is planned, not completed by this CQ provider.
+- **Datalog relation sets (P4-GPU slice D).** EDB, full, delta and frozen
+  negative layouts use `RadixLayout<(all physical row columns), (), W, u64, ()>`
+  backed by `DeviceRadixRun<W, u64, ()>`. The ordinary `radix_relation` token
+  records `NativeAbi::RadixRelation`; a logical key/payload split does not
+  create item columns. Key-prefix reads search encoded intervals and decode
+  only demanded fields from complete keys. `RangeProvider` remains the
+  separate dense-domain provider. The former public `DeviceRuns` and
+  packed-word `DeviceLayout` protocols are retired, not compatibility aliases.
 
 `experiments/gpu/datalog-runtime/tests/radix_run.rs` checks these laws on
 the device with fixed seeds: `u64` keys against `cq_storage::RadixRun`
@@ -1228,6 +1233,19 @@ carrier metadata; a later uploaded publication cannot change an earlier codec
 recipe. A non-range provider is never silently realized as `RangeProvider`.
 Native materialization is an explicit complete permutation; the provider owns
 its sorting implementation.
+Native full-key relation reads record `Bindings.relation_inputs` and
+`NativeLookup.radix` (`RadixRelationRead`): complete-key schema, word and
+`u64` offset, explicit parameters and physical field mapping are independently
+checked. `SourceOrigin::RadixRelation` and `ProviderAbi::RadixRelation` carry
+that realization into translation. Bare `radix_relation` is not an automatic
+catalog candidate without authored native-producer schema/advice; this does
+not displace the constrained `radix_set` selection for CQ canonical builds.
+`RadixRelationRead.word_capture` records `RadixWordCapture::InputView { host }`.
+CUDA kernel parameters remain generic in `W`, inferred from the retained host
+`RadixLayoutView<W, u64>` through `prepare_*_for` witnesses; permutations reuse
+the same capture. This transports the checked word carrier without spelling
+function-local logical types in the CUDA module. The zero-word witness is
+host-only and consumes no device argument slot.
 
 Keyed groups record the `group_map` provider instance for `group::SegmentedGroup`
 in `Structure::Group.provider` during GPU refinement and print that provider's fold.
@@ -1244,18 +1262,40 @@ key sets, initializers and scratch lifetimes
 these facts in `experiments/gpu/datalog/src/storage.rs`; translation consumes
 them in `experiments/gpu/datalog/src/print.rs`.
 
-Admission and publication are separate: `DeviceRuns::fresh` sorts/uniques
-candidates and subtracts committed canonical rows without changing accepted
-state. The printer publishes that fresh run, reordered where necessary, with
-`append_sorted` into every full layout, including the canonical layout.
-The runtime contract requires each appended run to be sorted, unique and
-disjoint from accepted rows (`experiments/gpu/datalog-runtime/src/runs.rs`,
-`DeviceRuns::fresh` and `DeviceRuns::append_sorted`). This is no longer the
-old fused device admission path.
-`DeviceState` also records merge-tile, block-thread and permutation-thread
-geometry; `RunParams` consumes the recorded run settings rather than selecting
-them implicitly (`14d76950`, 2026-11-02). This is separate from the proposed
-grouped-run replacement.
+Admission and publication are separate: the canonical
+`DeviceRadixRun<W, u64, ()>::fresh` sorts/uniques candidates and subtracts
+committed complete keys without changing accepted state, returning a
+`SortedBatch`. `append_sorted` publishes that batch into every full layout,
+canonical included; each appended batch must be sorted, unique and disjoint
+from accepted keys. Secondary permutations derive from the same admitted
+batch: they preserve uniqueness and cardinality but must restore sort order.
+The relation-order batch becomes NEW/delta by the recorded moves; frozen
+negative projections independently deduplicate because projection need not
+be injective. The view uses `republish(&state)` for maintained publication
+and `from_sorted(pool, packing, params, batch)` for initial fresh-view construction.
+Delta replacement uses `with_sorted(batch, params)`, retaining kernels and
+sharing field descriptors; an unchanged batch or unchanged empty publication
+reuses its snapshot without a sort, upload or count readback.
+Explicit output materialization uses `to_rows`.
+State and snapshots carry a construction-only `full_key_set` witness:
+ordinary occurrence publication clears it, and set append/replacement
+establishes or preserves it. Full-key layout validation and permutation require
+that witness; `C=()` alone does not prove uniqueness.
+
+Each `DeviceState` records `offset: u64`, `construction: full_key_set`,
+`read: key_prefix`, exact-directory `radix_bits` (default zero, with legal
+configured values accepted), ratio, positive merge-tile size, block threads
+and permutation threads. Constructors consume explicit `RadixRunParams`;
+compiled launch-width constraints are checked, not adjusted. Zero radix bits
+means binary search without a directory, not truncated equality keys.
+`CK-DL-DeviceStorage` independently validates collection cardinalities,
+layout/canonical references, complete physical schemas and codecs, token/ABI,
+packing order, offset/construction/read facts, legal parameters, initializers
+and scratch policy. Erasing representation records must recover source
+Storage; the checker does not replay realization or demand its preferred
+defaults. Lane schedules and per-hole reservation remain unchanged:
+admission/publication stays on the main stream after the recorded lane join.
+These are implementation contracts, not new gate or timing results.
 
 GPU-ProgramLaunch records query-kernel preparation in
 `gpu::realization::Realization.launches`, separately from publication storage.

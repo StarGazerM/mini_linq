@@ -1587,7 +1587,7 @@ fn providers_table_round_trips_every_fact() {
         hash_set = ::cq_storage::HashSet<_> { reads [membership, ordered, resident], build typed, accounting keys };
         packed = ::cq_storage::dedup::Packed { reads [distinct], build inferred, packed_bits 64 };
         range = OpaqueRange { reads [range], abi range, contiguous_range };
-        runs = OpaqueRuns { reads [exact], abi runs };
+        relation = OpaqueRadix { reads [exact], abi radix_relation };
         columns = OpaqueColumns { reads [], abi columns, bounds resident_columns };
     });
     assert_eq!(providers.declarations.len(), 9);
@@ -1732,7 +1732,7 @@ fn native_input_round_trip_preserves_opaque_types_and_explicit_codecs() {
     assert_eq!(input.columns[1].codec, Some(syn::parse_quote!(Codec)));
     assert!(input.columns[2].codec.is_none());
     let declaration: structures::Declaration =
-        syn::parse_quote!(native = unrelated::Alias { reads [], abi runs };);
+        syn::parse_quote!(native = unrelated::Alias { reads [], abi radix_relation };);
     assert!(declaration.instance().input.is_none());
 }
 
@@ -1740,7 +1740,7 @@ fn native_input_round_trip_preserves_opaque_types_and_explicit_codecs() {
 fn native_declaration_mutations_reject_inconsistent_facts() {
     for table in [
         quote!(index = Alias { reads [range], contiguous_range };),
-        quote!(index = Alias { reads [range], abi runs, contiguous_range };),
+        quote!(index = Alias { reads [range], abi radix_relation, contiguous_range };),
         quote!(index = Alias { reads [exact], abi range, contiguous_range };),
     ] {
         reject_providers(
@@ -1751,7 +1751,7 @@ fn native_declaration_mutations_reject_inconsistent_facts() {
     }
     for table in [
         quote!(index = Alias { reads [], bounds resident_columns };),
-        quote!(index = Alias { reads [], abi runs, bounds resident_columns };),
+        quote!(index = Alias { reads [], abi radix_relation, bounds resident_columns };),
     ] {
         reject_providers(
             table,
@@ -1760,13 +1760,16 @@ fn native_declaration_mutations_reject_inconsistent_facts() {
         );
     }
     reject_providers(
-        quote!(index = Alias<_> { reads [], abi runs, nested 0 };),
+        quote!(index = Alias<_> { reads [], abi radix_relation, nested 0 };),
         quote!(r = @index as Alias<_> [x];),
         "native ABI requires a simple provider",
     );
 }
 
 fn native_input_program(abi: proc_macro2::TokenStream) -> structures::Program {
+    let advice = (abi.to_string() == "radix_relation").then(|| quote!(
+        radix { word KeyCarrier; offset u64; ratio 4; radix_bits 0; merge_tile 32 }
+    ));
     provider_program(quote! {
         structures {
             providers {
@@ -1779,8 +1782,8 @@ fn native_input_program(abi: proc_macro2::TokenStream) -> structures::Program {
             r = @index as Index [x];
             r rows = @vec as ::std::vec::Vec<_>;
             r host scan = @native input {
-                keys 1; columns [i32 => Carrier, i32 => Encoded codec Codec]
-            } as CompletelyDifferent [];
+                keys 2; columns [i32 => Carrier, i32 => Encoded codec Codec]
+            } #advice as CompletelyDifferent [];
             l host scan = @host_scan as ::core::iter::Map<_, _> [];
             j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows;
         }
@@ -1789,7 +1792,7 @@ fn native_input_program(abi: proc_macro2::TokenStream) -> structures::Program {
 
 #[test]
 fn native_host_schema_mutations_are_checked_without_type_recognition() {
-    for abi in [quote!(runs), quote!(columns)] {
+    for abi in [quote!(radix_relation), quote!(columns)] {
         let program = native_input_program(abi);
         structures::contract::check(&program).unwrap();
         assert_eq!(
@@ -1814,7 +1817,7 @@ fn native_host_schema_mutations_are_checked_without_type_recognition() {
                 .to_string();
             assert!(
                 error.contains(if missing {
-                    "native runs and columns scans require an input schema"
+                    "native radix relations and columns scans require an input schema"
                 } else {
                     "input key count exceeds column count"
                 }),
@@ -1853,7 +1856,7 @@ fn native_host_schema_mutations_are_checked_without_type_recognition() {
 fn native_fact_parser_rejects_unknown_and_duplicate_declarations() {
     for declaration in [
         quote!(native = Alias { abi unknown };),
-        quote!(native = Alias { abi range, abi runs };),
+        quote!(native = Alias { abi range, abi radix_relation };),
         quote!(native = Alias { contiguous_range, contiguous_range };),
         quote!(native = Alias { bounds unknown };),
         quote!(native = Alias { bounds resident_columns, bounds resident_columns };),

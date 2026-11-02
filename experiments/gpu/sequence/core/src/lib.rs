@@ -137,7 +137,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     catalog.register(providers::declaration("range_provider"), levels.clone());
     // Input schema and codecs are recorded by the provider's producer;
     // runtime trait obligations check the opaque storage spellings.
-    catalog.register(providers::declaration("device_layout"), levels.clone());
+    catalog.register(providers::declaration("radix_relation"), levels.clone());
     // Formal rule GPU-RadixAdvice: grouped radix indices are selected only by
     // authored instances carrying their advice; registered after the existing
     // tokens, so unadvised catalog choices are unchanged.

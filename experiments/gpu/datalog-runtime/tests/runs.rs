@@ -3,14 +3,15 @@ use std::{collections::BTreeSet, sync::Arc};
 use cuda_core::LaunchConfig1D;
 use gpu_datalog_runtime::{
     pack::{Packing, Word},
-    runs::{DeviceRuns, Run, RunParams},
+    DeviceRadixRun, SortedBatch, RadixRunParams,
 };
 use gpu_device_columns::{Buffer, Pool};
 
 type Result<T = (), E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
-const PARAMS: RunParams = RunParams {
+const PARAMS: RadixRunParams = RadixRunParams {
     ratio: 4,
+    radix_bits: 0,
     merge_tile_rows: 32,
     block_threads: 256,
 };
@@ -48,13 +49,19 @@ fn word<W: Word>(value: u64) -> W {
     word
 }
 
-fn assert_run_bound<W: Word>(state: &DeviceRuns<W>) {
-    let views = state.runs();
+fn host_keys<W: Word>(state: &DeviceRadixRun<W, u64, ()>) -> Result<Vec<W>> {
+    let mut keys = state.to_host()?.into_iter().flat_map(|run| run.keys).collect::<Vec<_>>();
+    keys.sort_unstable();
+    Ok(keys)
+}
+
+fn assert_run_bound<W: Word>(state: &DeviceRadixRun<W, u64, ()>) {
+    let views = state.run_lengths();
     assert_eq!(
-        views.iter().map(|view| view.len).sum::<usize>(),
+        views.iter().map(|view| view.0).sum::<usize>(),
         state.len()
     );
-    assert!(views.iter().all(|view| view.len > 0));
+    assert!(views.iter().all(|view| view.0 > 0));
     if state.len() == 0 {
         assert!(views.is_empty());
         return;
@@ -75,7 +82,7 @@ fn assert_run_bound<W: Word>(state: &DeviceRuns<W>) {
 }
 
 /// Ascent-shaped admission: fresh against accepted runs, then publication.
-fn admit<W: Word>(state: &mut DeviceRuns<W>, input: &Buffer<W>, rows: usize) -> Result<Run<W>> {
+fn admit<W: Word>(state: &mut DeviceRadixRun<W, u64, ()>, input: &Buffer<W>, rows: usize) -> Result<SortedBatch<W>> {
     let fresh = state.fresh(input, rows)?;
     // SAFETY: fresh is sorted, unique and absent from every accepted run.
     unsafe { state.append_sorted(fresh.clone())? };
@@ -84,10 +91,10 @@ fn admit<W: Word>(state: &mut DeviceRuns<W>, input: &Buffer<W>, rows: usize) -> 
 
 fn admit_against_cpu<W: Word>(
     pool: &Arc<Pool>,
-    state: &mut DeviceRuns<W>,
+    state: &mut DeviceRadixRun<W, u64, ()>,
     accepted: &mut BTreeSet<W>,
     values: &[W],
-) -> Result<Run<W>> {
+) -> Result<SortedBatch<W>> {
     let input = Buffer::from_host(pool.clone(), values)?;
     let batch: BTreeSet<_> = values.iter().copied().collect();
     let expected_delta: Vec<_> = batch.difference(accepted).copied().collect();
@@ -100,12 +107,12 @@ fn admit_against_cpu<W: Word>(
     let fresh = admit(state, &input, values.len())?;
     assert_eq!(fresh.len(), expected_delta.len());
     assert_eq!(fresh.buffer().to_host_prefix(fresh.len())?, expected_delta);
-    assert_eq!(fresh.view().len, fresh.len());
+    assert_eq!(fresh.len(), fresh.len());
     assert_eq!(input.to_host()?, values, "admission mutated its input");
     accepted.extend(batch);
     assert_eq!(state.len(), accepted.len());
     assert_eq!(
-        state.to_host()?,
+        host_keys(&state)?,
         accepted.iter().copied().collect::<Vec<_>>()
     );
     assert_run_bound(state);
@@ -114,7 +121,7 @@ fn admit_against_cpu<W: Word>(
 
 fn random_batches<W: Word>() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
+    let mut state = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
     let mut accepted = BTreeSet::new();
     let mut random = Random(0xa523_4b19_c018_762d);
     let mut retained = Vec::new();
@@ -153,7 +160,7 @@ fn random_batches<W: Word>() -> Result {
 
 fn known_unique_sort<W: Word>() -> Result {
     let pool = pool()?;
-    let state = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
+    let state = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
     for rows in [0, 1, 17, 257, 4097] {
         let mut values: Vec<_> = (0..rows).rev().map(|row| word::<W>(row as u64)).collect();
         if rows > 1 {
@@ -211,10 +218,10 @@ fn random_duplicate_batches_four_lanes() -> Result {
 
 fn empty_single_and_extremes<W: Word>() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
+    let mut state = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
     let mut accepted = BTreeSet::new();
     assert_eq!(state.len(), 0);
-    assert!(state.to_host()?.is_empty());
+    assert!(host_keys(&state)?.is_empty());
     assert_run_bound(&state);
     let zero = W::zero();
     let mut max = W::zero();
@@ -239,7 +246,7 @@ fn empty_single_and_extremes<W: Word>() -> Result {
     assert_eq!(admit(&mut state, &input, 1)?.len(), 0);
     assert_eq!(admit(&mut state, &input, 0)?.len(), 0);
     assert_eq!(
-        state.to_host()?,
+        host_keys(&state)?,
         accepted.iter().copied().collect::<Vec<_>>()
     );
     assert_run_bound(&state);
@@ -264,7 +271,7 @@ fn empty_single_and_extremes_wide_lanes() -> Result {
 
 fn million_rows<W: Word>() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
+    let mut state = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
     let mut random = Random(0x6b73_d147_590a_821f);
     let values: Vec<_> = (0..1_000_000)
         .map(|_| word::<W>(random.next() % 600_001))
@@ -276,12 +283,12 @@ fn million_rows<W: Word>() -> Result {
     let fresh = admit(&mut state, &input, values.len())?;
     assert_eq!(fresh.buffer().to_host_prefix(fresh.len())?, expected);
     assert_eq!(state.len(), expected.len());
-    assert_eq!(state.to_host()?, expected);
+    assert_eq!(host_keys(&state)?, expected);
     assert_run_bound(&state);
     let duplicate = admit(&mut state, &input, values.len())?;
     assert_eq!(duplicate.len(), 0);
     assert_eq!(state.len(), expected.len());
-    assert_eq!(state.to_host()?, expected);
+    assert_eq!(host_keys(&state)?, expected);
     assert_run_bound(&state);
     Ok(())
 }
@@ -298,14 +305,14 @@ fn million_rows_u128() -> Result {
 
 fn append_disjoint_runs<W: Word>() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
+    let mut state = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
     let mut accepted = BTreeSet::new();
     for batch in 0..128 {
         // Runs interleave numerically; they are not adjacent sorted chunks.
         let values: Vec<_> = (0..33).map(|row| word::<W>(row * 128 + batch)).collect();
         let buffer = Buffer::from_host(pool.clone(), &values)?;
         // Values are strictly increasing and each batch has a distinct residue.
-        let run = unsafe { Run::from_sorted(buffer, values.len())? };
+        let run = unsafe { SortedBatch::from_sorted(buffer, values.len())? };
         // SAFETY: different batch residues make these sorted runs disjoint.
         unsafe { state.append_sorted(run.clone())? };
         accepted.extend(values.iter().copied());
@@ -314,8 +321,8 @@ fn append_disjoint_runs<W: Word>() -> Result {
     }
     let empty = Buffer::<W>::from_host(pool, &[])?;
     // SAFETY: an empty initialized run is sorted, unique, and disjoint.
-    unsafe { state.append_sorted(Run::from_sorted(empty, 0)?)? };
-    assert_eq!(state.to_host()?, accepted.into_iter().collect::<Vec<_>>());
+    unsafe { state.append_sorted(SortedBatch::from_sorted(empty, 0)?)? };
+    assert_eq!(host_keys(&state)?, accepted.into_iter().collect::<Vec<_>>());
     assert_run_bound(&state);
     Ok(())
 }
@@ -323,38 +330,38 @@ fn append_disjoint_runs<W: Word>() -> Result {
 #[test]
 fn recorded_ratio_changes_compaction_without_changing_rows() -> Result {
     let pool = pool()?;
-    assert!(DeviceRuns::<u64>::new(pool.clone(), RunParams { ratio: 1, ..PARAMS }).is_err());
+    assert!(DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), RadixRunParams { ratio: 1, ..PARAMS }).is_err());
     for bad in [
-        RunParams {
+        RadixRunParams {
             merge_tile_rows: 0,
             ..PARAMS
         },
-        RunParams {
+        RadixRunParams {
             block_threads: 0,
             ..PARAMS
         },
-        RunParams {
+        RadixRunParams {
             block_threads: 128,
             ..PARAMS
         },
-        RunParams {
+        RadixRunParams {
             block_threads: 512,
             ..PARAMS
         },
     ] {
-        assert!(DeviceRuns::<u64>::new(pool.clone(), bad).is_err());
+        assert!(DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), bad).is_err());
     }
     for (ratio, expected_runs) in [(2, 2), (4, 2), (8, 1)] {
-        let mut state = DeviceRuns::<u64>::new(pool.clone(), RunParams { ratio, ..PARAMS })?;
+        let mut state = DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), RadixRunParams { ratio, ..PARAMS })?;
         let first = Buffer::from_host(pool.clone(), &[0u64, 1, 2, 3, 4, 5])?;
         let second = Buffer::from_host(pool.clone(), &[6u64])?;
         admit(&mut state, &first, 6)?;
         admit(&mut state, &second, 1)?;
-        assert_eq!(state.retained_buffers(), expected_runs);
-        assert_eq!(state.to_host()?, (0u64..7).collect::<Vec<_>>());
+        assert_eq!(state.run_count(), expected_runs);
+        assert_eq!(host_keys(&state)?, (0u64..7).collect::<Vec<_>>());
         let duplicate = admit(&mut state, &second, 1)?;
         assert!(duplicate.is_empty());
-        assert_eq!(state.to_host()?, (0u64..7).collect::<Vec<_>>());
+        assert_eq!(host_keys(&state)?, (0u64..7).collect::<Vec<_>>());
     }
     Ok(())
 }
@@ -363,13 +370,11 @@ fn recorded_ratio_changes_compaction_without_changing_rows() -> Result {
 fn recorded_merge_tile_preserves_wide_union() -> Result {
     let pool = pool()?;
     for merge_tile_rows in [1, 7, 32, 129] {
-        let mut state = DeviceRuns::<[u64; 3]>::new(
-            pool.clone(),
-            RunParams {
-                merge_tile_rows,
-                ..PARAMS
-            },
-        )?;
+        let mut state = DeviceRadixRun::<[u64; 3], u64, ()>::new(pool.clone(),
+        RadixRunParams {
+            merge_tile_rows,
+            ..PARAMS
+        },)?;
         for parity in [0, 1] {
             let rows = (0..137)
                 .map(|i| word::<[u64; 3]>(i * 2 + parity))
@@ -377,9 +382,9 @@ fn recorded_merge_tile_preserves_wide_union() -> Result {
             let input = Buffer::from_host(pool.clone(), &rows)?;
             admit(&mut state, &input, rows.len())?;
         }
-        assert_eq!(state.retained_buffers(), 1);
+        assert_eq!(state.run_count(), 1);
         assert_eq!(
-            state.to_host()?,
+            host_keys(&state)?,
             (0..274).map(word::<[u64; 3]>).collect::<Vec<_>>()
         );
     }
@@ -447,22 +452,22 @@ fn merge_wide_tile_boundaries<W: Word>() -> Result {
                 let mut expected = first.clone();
                 expected.extend_from_slice(&second);
                 expected.sort_unstable();
-                let mut state = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
+                let mut state = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
                 let first_buffer = Buffer::from_host(pool.clone(), &first)?;
                 let second_buffer = Buffer::from_host(pool.clone(), &second)?;
                 // SAFETY: both sequences increase in the selected lane; their
                 // ranks are disjoint in every pattern.
-                let snapshot = unsafe { Run::from_sorted(first_buffer, first_len)? };
+                let snapshot = unsafe { SortedBatch::from_sorted(first_buffer, first_len)? };
                 unsafe {
                     state.append_sorted(snapshot.clone())?;
-                    state.append_sorted(Run::from_sorted(second_buffer, second_len)?)?;
+                    state.append_sorted(SortedBatch::from_sorted(second_buffer, second_len)?)?;
                 }
                 // All selected length ratios must exercise the actual merge,
                 // not merely the diagnostic host merge of separate runs.
-                assert_eq!(state.retained_buffers(), 1);
-                let merged = &state.owned_runs()[0];
+                assert_eq!(state.run_count(), 1);
+                let merged = &state.to_host()?[0];
                 assert_eq!(
-                    merged.buffer().to_host_prefix(merged.len())?,
+                    merged.keys,
                     expected,
                     "lane {lane}, lengths {first_len}/{second_len}, pattern {pattern}"
                 );
@@ -482,15 +487,14 @@ fn append_sorted_wide_merge_tile_boundaries() -> Result {
 #[cuda_host::cuda_module]
 mod prefix_kernel {
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
-    use gpu_datalog_runtime::runs::{range, RunView};
+    use gpu_datalog_runtime::radix_run::{device, RadixKeysView};
     use gpu_datalog_runtime::Word;
 
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub fn lookup<W: Word>(
-        views: *const RunView<W>,
-        run_count: usize,
+        views: RadixKeysView<W, u64>,
         bounds: *const W,
         queries: usize,
         capacity: usize,
@@ -505,11 +509,11 @@ mod prefix_kernel {
             let lo = *bounds.add(query * 2);
             let hi = *bounds.add(query * 2 + 1);
             let mut count = 0;
-            for run in 0..run_count {
-                let view = *views.add(run);
-                let (start, end) = range(view, lo, hi);
+            for run in 0..views.run_count {
+                let view = device::run(views, run);
+                let (start, end) = device::interval(view, lo, hi);
                 for row in start..end {
-                    *output.add(query * capacity + count) = *view.ptr.add(row);
+                    *output.add(query * capacity + count) = *view.keys.add(row as usize);
                     count += 1;
                 }
             }
@@ -637,8 +641,8 @@ fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
     let packing = Packing::new(widths)?;
     let order = [2, 0, 1];
     let layout = packing.permute(&order)?;
-    let mut canonical = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
-    let mut permuted = DeviceRuns::<W>::new(pool.clone(), PARAMS)?;
+    let mut canonical = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
+    let mut permuted = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
     let mut rows = BTreeSet::new();
     let mut random = Random(0xd9e2_051b_c76a_438f);
     for batch in 0..12 {
@@ -682,8 +686,7 @@ fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
         assert_run_bound(&permuted);
     }
     let expected_rows: BTreeSet<_> = rows.iter().map(|row| [row[2], row[0], row[1]]).collect();
-    let actual_rows = permuted
-        .to_host()?
+    let actual_rows = host_keys(&permuted)?
         .into_iter()
         .map(|key| layout.unpack(key).map(|row| [row[0], row[1], row[2]]))
         .collect::<Result<Vec<_>>>()?;
@@ -715,8 +718,7 @@ fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
         let range = layout.prefix_range::<W>(prefix)?;
         bounds.extend([*range.start(), *range.end()]);
     }
-    let views = permuted.runs();
-    let device_views = Buffer::from_host(pool.clone(), &views)?;
+    let snapshot = permuted.snapshot()?;
     let device_bounds = Buffer::from_host(pool.clone(), &bounds)?;
     let output = Buffer::<W>::zeroed(pool.clone(), prefixes.len() * permuted.len())?;
     let counts = Buffer::<u64>::zeroed(pool.clone(), prefixes.len())?;
@@ -728,8 +730,7 @@ fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
             256,
             0,
         ))?,
-        device_views.ptr(),
-        views.len(),
+        snapshot.keys_view(),
         device_bounds.ptr(),
         prefixes.len(),
         permuted.len(),
@@ -773,12 +774,12 @@ fn throughput_10m_candidates_against_50m_accepted() -> Result {
     const ACCEPTED: usize = 50_000_000;
     const CANDIDATES: usize = 10_000_000;
     let pool = pool()?;
-    let mut state = DeviceRuns::<u64>::new(pool.clone(), PARAMS)?;
+    let mut state = DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), PARAMS)?;
     let seed: Vec<_> = (0..ACCEPTED as u64).map(|row| row * 2).collect();
     let buffer = Buffer::from_host(pool.clone(), &seed)?;
     drop(seed);
     // SAFETY: the upload initialized the sorted unique seed; state is empty.
-    unsafe { state.append_sorted(Run::from_sorted(buffer, ACCEPTED)?)? };
+    unsafe { state.append_sorted(SortedBatch::from_sorted(buffer, ACCEPTED)?)? };
     let mut random = Random(0x49ac_651f_0382_bd77);
     let mut candidates: Vec<_> = (0..CANDIDATES)
         .map(|_| random.next() % (2 * ACCEPTED as u64))
@@ -787,15 +788,120 @@ fn throughput_10m_candidates_against_50m_accepted() -> Result {
     candidates.retain(|value| value % 2 == 1);
     candidates.sort_unstable();
     candidates.dedup();
-    state.enable_timing(true)?;
     let fresh = admit(&mut state, &input, CANDIDATES)?;
-    let timings = state.last_timings()?;
-    println!(
-        "DeviceRuns<u64>: accepted_before={ACCEPTED} candidates={CANDIDATES} fresh={} accepted_after={} sort_unique_ms={:.3} anti_join_ms={:.3} merge_ms={:.3}",
-        fresh.len(), state.len(), timings.sort_unique_ms, timings.anti_join_ms, timings.merge_ms,
-    );
     assert_eq!(fresh.buffer().to_host_prefix(fresh.len())?, candidates);
     assert_eq!(state.len(), ACCEPTED + candidates.len());
     assert_run_bound(&state);
+    Ok(())
+}
+
+#[test]
+fn full_key_admission_is_read_only_across_runs_and_adopts_shared_batches() -> Result {
+    use gpu_datalog_runtime::RadixLayout;
+    for radix_bits in [0, 4] {
+        let pool = pool()?;
+        let params = RadixRunParams { radix_bits, ..PARAMS };
+        let packing = Packing::with_columns(&[gpu_datalog_runtime::Column::U64])?;
+        let mut state = DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), params)?;
+        for values in [(0..64).collect::<Vec<_>>(), vec![100, 101, 102, 103]] {
+            let input = Buffer::from_host(pool.clone(), &values)?;
+            let batch = state.fresh(&input, values.len())?;
+            let before = gpu_datalog_runtime::readback_count();
+            unsafe { state.append_sorted(batch)?; }
+            assert_eq!(gpu_datalog_runtime::readback_count(), before);
+        }
+        assert_eq!(state.run_count(), 2);
+        let old = RadixLayout::<(u64,), (), u64, u64, ()>::publish(&state, packing.clone())?;
+        let original = old.to_host()?;
+        let snapshot = state.snapshot()?;
+        let input = Buffer::from_host(pool.clone(), &[103, 7, 200, 200, 101, 201, 7])?;
+        let batch = state.fresh(&input, 7)?;
+        assert_eq!(batch.buffer().to_host()?, vec![200, 201]);
+        assert!(Arc::ptr_eq(&snapshot, &state.snapshot()?));
+        assert_eq!(host_keys(&state)?, original);
+        assert_eq!(input.to_host()?, vec![103, 7, 200, 200, 101, 201, 7]);
+        let retained_bytes = batch.allocated_bytes();
+        let before = gpu_datalog_runtime::readback_count();
+        let delta = RadixLayout::<(u64,), (), u64, u64, ()>::from_sorted(
+            pool.clone(), packing.clone(), params, batch.clone(),
+        )?;
+        assert_eq!(gpu_datalog_runtime::readback_count(), before);
+        let directory_bytes = if radix_bits == 0 { 0 } else { ((1usize << radix_bits) + 1) * 8 };
+        assert_eq!(delta.allocated_bytes(), retained_bytes + 3 * 8 + directory_bytes
+            + std::mem::size_of::<gpu_datalog_runtime::radix_run::RadixRunView<u64, u64>>()
+            + std::mem::size_of::<gpu_datalog_runtime::PackedField>() + 8);
+        unsafe { state.append_sorted(batch)?; }
+        assert_eq!(old.to_host()?, original);
+        let output = host_keys(&state)?;
+        assert_eq!(output.len(), output.iter().collect::<BTreeSet<_>>().len());
+        assert_eq!(output.len(), 70);
+        for run in state.to_host()? {
+            assert_eq!(run.offsets, (0..=run.keys.len() as u64).collect::<Vec<_>>());
+        }
+        let duplicate = state.fresh(&input, 7)?;
+        assert!(duplicate.is_empty());
+        state.replace_sorted(duplicate)?;
+        assert!(state.is_empty());
+        assert_eq!(delta.to_host()?, vec![200, 201]);
+        assert_eq!(old.to_host()?, original);
+    }
+    Ok(())
+}
+
+#[test]
+fn empty_heading_and_projection_have_their_own_unique_admission() -> Result {
+    let pool = pool()?;
+    let mut state = DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), PARAMS)?;
+    let candidates = Buffer::from_host(pool.clone(), &[0, 0, 0])?;
+    let batch = state.fresh(&candidates, 3)?;
+    assert_eq!(batch.len(), 1);
+    unsafe { state.append_sorted(batch)?; }
+    assert!(state.fresh(&candidates, 3)?.is_empty());
+    // Projecting distinct complete rows can collapse them to one negative key.
+    let projected = state.sort_unique(&candidates, 3)?;
+    assert_eq!(projected.buffer().to_host()?, vec![0]);
+    let empty = state.sort_unique(&candidates, 0)?;
+    state.replace_sorted(empty)?;
+    assert_eq!(state.len(), 0);
+    assert_eq!(state.live_bytes(), 0);
+    Ok(())
+}
+
+#[test]
+fn full_key_readers_reject_occurrence_publications_and_delta_reuses_metadata() -> Result {
+    use gpu_datalog_runtime::{Column, RadixLayout};
+    type Layout = RadixLayout<(u64,), (), u64, u64, ()>;
+    let pool = pool()?;
+    let packing = Layout::derive_packing()?;
+    let input = Buffer::from_host(pool.clone(), &[7u64, 7, 9])?;
+    let mut state = DeviceRadixRun::<u64, u64, ()>::build(
+        pool.clone(), PARAMS, &input, &(), 3,
+    )?;
+    let occurrences = Layout::publish(&state, packing.clone())?;
+    assert!(occurrences.validate(&[Column::U64]).is_err());
+    assert!(occurrences.permuted_provider::<(u64,)>(&pool, &[0], PARAMS, 256).is_err());
+    let batch = state.sort_unique(&input, 3)?;
+    assert!(unsafe { state.append_sorted(batch.clone()) }.is_err());
+    state.replace_sorted(batch.clone())?;
+    let set = Layout::publish(&state, packing)?;
+    set.validate(&[Column::U64])?;
+    assert!(occurrences.validate(&[Column::U64]).is_err());
+    let before = gpu_datalog_runtime::readback_count();
+    let same = set.with_sorted(batch.clone(), PARAMS)?;
+    assert_eq!(same.snapshot_id(), set.snapshot_id());
+    assert_eq!(same.fields_ptr(), set.fields_ptr());
+    let replacement = occurrences.with_sorted(batch.clone(), PARAMS)?;
+    assert_ne!(replacement.snapshot_id(), occurrences.snapshot_id());
+    assert_eq!(replacement.fields_ptr(), occurrences.fields_ptr());
+    replacement.validate(&[Column::U64])?;
+    let empty = state.sort_unique(&input, 0)?;
+    let cleared = replacement.with_sorted(empty.clone(), PARAMS)?;
+    assert!(cleared.is_empty());
+    assert_eq!(cleared.fields_ptr(), replacement.fields_ptr());
+    assert_eq!(cleared.with_sorted(empty, PARAMS)?.snapshot_id(), cleared.snapshot_id());
+    assert_eq!(gpu_datalog_runtime::readback_count(), before);
+    assert_eq!(set.to_host()?, vec![7, 9]);
+    assert_eq!(replacement.to_host()?, vec![7, 9]);
+    assert_eq!(batch.buffer().to_host()?, vec![7, 9]);
     Ok(())
 }

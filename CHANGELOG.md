@@ -13,6 +13,31 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- P4-GPU slice D cuts Datalog EDB/full/delta/negative layouts over to ordinary
+  complete-key `RadixLayout<_, (), W, u64, ()>` sets backed by
+  `DeviceRadixRun<W, u64, ()>`, with `radix_relation` /
+  `NativeAbi::RadixRelation` and no old `DeviceRuns`/`DeviceLayout` aliases.
+  Per-layout records include offset, full-key-set construction, key-prefix
+  reads, legal configurable radix bits (default zero), ratio and launch
+  geometry. Independent checks validate those facts, schemas, initializers
+  and source erasure without replaying realization. Read-only `fresh`
+  returns a `SortedBatch`; all secondary permutations use that same admitted
+  batch, delta moves and frozen negative deduplication are preserved, and
+  maintained views use `republish(&state)`. Prefix lookup compares encoded
+  intervals and decodes only demanded complete-key fields. Lane scheduling
+  and per-hole reservation are unchanged. Checked host-derived Word witnesses
+  preserve function-local type aliases without leaking them into CUDA modules.
+  GPU runtime/core/facade suites pass; xalan/batik match 43/43 duplicate-free
+  tuple sets, Cassandra 26/26. Root, quick, formal and API gates pass; all 46
+  CPU expansions are identical to `b7e83c6f`. Five exact interleaved pairs give
+  current/baseline fixpoint ratios 1.01059 [0.99901,1.02241] for xalan,
+  0.98145 [0.97875,0.98556] for batik, and 0.49983 [0.48944,0.51058] for
+  matched-workflow Cassandra. Xalan is neutral/slightly slower; sort/unique
+  work did not shrink, and unit-offset maintenance increased. Nsight kernel/API
+  attribution and per-command gate times are in
+  `experiments/gpu/compare/p4-gpu-d.results.json`; slice E targets measured
+  sorting and metadata materialization costs.
+
 - P6b GPU host preparation: `Realization.launches` records invocation
   occupancy or a program-owned one-block/resident launch envelope.
   Program slots use the CUDA module's opaque compiled entry identity,

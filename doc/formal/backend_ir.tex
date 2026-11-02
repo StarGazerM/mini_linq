@@ -1374,16 +1374,19 @@ same membership probe; neither expands witnesses. Empty provider ranges,
 absent directory keys, and existential wildcard columns follow the same
 equation. The translator reads this polarity, rather than choosing it.
 
-\paragraph{Packed-run inputs and candidate arenas.}
-A checked binding records that a host input is a collection of device runs
-of packed words (\textsc{DL-DevicePacking}) in a stated column permutation;
-it is never inferred from a built index. Scanning visits every run; a lookup
-of a key prefix takes one contiguous word range per run, and expansion loops
-over runs uniformly across the block, flattening each run's ranges as in the
-segmented-flatten lemma. Membership is the disjunction over runs.
+\paragraph{Radix relation inputs and candidate arenas.}
+A checked binding records a \code{radix\_relation} input with
+\code{NativeAbi::RadixRelation}: a typed full-key radix set in a stated
+complete column permutation (\textsc{DL-DevicePacking}), not an item-payload
+index inferred from Rust syntax. Scanning visits every run; lookup encodes
+the logical key prefix once and searches one inclusive complete-key interval
+per run. Expansion loops over runs uniformly across the block, flattening
+each run's ranges as in the segmented-flatten lemma and decoding only demanded
+key fields. Membership is the disjunction over runs. Logical global offsets
+are not addresses into a fictitious contiguous item allocation.
 \begin{mathpar}
-\Rule{GPU-Runs}{\text{input bound to runs }\rho_1\ldots\rho_m\text{ with packing }p\quad
- \textsc{STR-RunRead}}
+\Rule{GPU-Runs}{\text{input bound to full-key radix runs }\rho_1\ldots\rho_m\text{ with packing }p\quad
+ \textsc{DL-DevicePacking}\quad\textsc{STR-RunRead}}
  {\mathsf{lookup}(k)=\biguplus_j\mathrm{unpack}_p(\rho_j[\mathrm{range}_p(k)])\quad
   \mathsf{member}(k)=\bigvee_j\rho_j[\mathrm{range}_p(k)]\neq\emptyset}
 \end{mathpar}

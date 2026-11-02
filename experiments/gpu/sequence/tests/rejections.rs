@@ -66,7 +66,7 @@ fn rust_below_host_requires_identity_representation() {
     );
     assert!(unknown.representation.encoded.is_empty());
     program.structures.structures.entries[0] = syn::parse_quote!(
-        r host scan = @device_layout input { keys 1; columns [[0] i32 => i32] } as ::gpu_datalog_runtime::DeviceLayout<(i32,), ()> [];
+        r host scan = @radix_relation input { keys 1; columns [[0] i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,), (), u64, u64, ()> [];
     );
     program
         .structures
@@ -77,8 +77,8 @@ fn rust_below_host_requires_identity_representation() {
     assert!(native.representation.identity.contains("a"));
     assert!(!native.representation.encoded.contains("a"));
     program.structures.structures.entries[0] = syn::parse_quote!(
-        r host scan = @device_layout input { keys 1; columns [[0] i32 => ::gpu_datalog_runtime::Symbol<i32, TestCodec> codec [0] TestCodec] } as ::gpu_datalog_runtime::DeviceLayout<
-            (::gpu_datalog_runtime::Symbol<i32, TestCodec>,), ()
+        r host scan = @radix_relation input { keys 1; columns [[0] i32 => ::gpu_datalog_runtime::Symbol<i32, TestCodec> codec [0] TestCodec] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<
+            (::gpu_datalog_runtime::Symbol<i32, TestCodec>,), (), u64, u64, ()
         > [];
     );
     let encoded = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();

@@ -1,10 +1,10 @@
 //! End-to-end GPU candidates, compared as bags rather than deduplicated sets.
 //! Kernel modules use the same CUDA macro / merged-PTX build as other Sequence tests.
-use gpu_datalog_runtime::{Buffer, Column, DeviceLayout, Packing, Pool, Run};
+use gpu_datalog_runtime::{Buffer, Column, DeviceRadixRun, RadixLayout, RadixRunParams, ScalarTuple, SortedBatch, Packing, Pool, Word};
 use std::sync::Arc;
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-fn runs(pool: &Arc<Pool>, packing: &Packing, rows: &[Vec<Vec<i128>>]) -> Result<Vec<Run<u64>>> {
+fn runs(pool: &Arc<Pool>, packing: &Packing, rows: &[Vec<Vec<i128>>]) -> Result<Vec<SortedBatch<u64>>> {
     rows.iter()
         .map(|rows| {
             let mut words = rows
@@ -12,14 +12,32 @@ fn runs(pool: &Arc<Pool>, packing: &Packing, rows: &[Vec<Vec<i128>>]) -> Result<
                 .map(|row| packing.pack::<u64>(row))
                 .collect::<Result<Vec<_>>>()?;
             words.sort_unstable();
-            // Keep duplicates between runs, but each immutable run is sorted/unique.
+            // Each candidate batch is sorted/unique; publication admits across batches.
             words.dedup();
             let len = words.len();
             let buffer = Buffer::from_host(pool.clone(), &words)?;
             // SAFETY: this upload is initialized, sorted and unique in the packing's order.
-            unsafe { Run::from_sorted(buffer, len) }
+            unsafe { SortedBatch::from_sorted(buffer, len) }
         })
         .collect()
+}
+
+fn relation<K: ScalarTuple, W: Word + 'static>(
+    pool: Arc<Pool>, packing: Packing, batches: Vec<SortedBatch<W>>,
+) -> Result<RadixLayout<K, (), W, u64, ()>> {
+    let mut index = DeviceRadixRun::<W,u64,()>::new(pool, RadixRunParams {
+        ratio: 4, radix_bits: 0, merge_tile_rows: 32, block_threads: 256,
+    })?;
+    for batch in batches {
+        let fresh = index.fresh(batch.buffer(), batch.len())?;
+        // SAFETY: read-only fresh excluded every committed full key.
+        unsafe { index.append_sorted(fresh)?; }
+    }
+    RadixLayout::publish(&index, packing)
+}
+
+fn distinct(rows: &[Vec<Vec<i128>>]) -> std::collections::BTreeSet<&Vec<i128>> {
+    rows.iter().flatten().collect()
 }
 
 fn bag(buffer: &Buffer<u64>, len: usize, packing: &Packing) -> Result<Vec<Vec<i128>>> {
@@ -34,8 +52,8 @@ fn bag(buffer: &Buffer<u64>, len: usize, packing: &Packing) -> Result<Vec<Vec<i1
 
 fn join(left: &[Vec<Vec<i128>>], right: &[Vec<Vec<i128>>]) -> Vec<Vec<i128>> {
     let mut expected = Vec::new();
-    for l in left.iter().flatten() {
-        for r in right.iter().flatten() {
+    for l in distinct(left) {
+        for r in distinct(right) {
             if l[1] == r[0] {
                 expected.push(vec![l[0], r[1]]);
             }
@@ -43,6 +61,30 @@ fn join(left: &[Vec<Vec<i128>>], right: &[Vec<Vec<i128>>]) -> Vec<Vec<i128>> {
     }
     expected.sort();
     expected
+}
+
+#[test]
+fn native_word_alias_is_captured_from_the_host_view() -> Result {
+    // Deliberately unavailable to the generated cuda_module's `use super::*`.
+    type LocalWord = u64;
+    let pool = Pool::new(0, 0, 0)?;
+    let dp = Packing::with_columns(&[Column::I32, Column::I32])?;
+    let ep = Packing::with_columns(&[Column::I32, Column::U32])?;
+    let delta_rows = vec![vec![vec![-13, -7]]];
+    let edge_rows = vec![vec![vec![-7, 19], vec![8, 23]]];
+    let delta = relation::<(i32, i32), LocalWord>(
+        pool.clone(), dp.clone(), runs(&pool, &dp, &delta_rows)?,
+    )?;
+    let edge = relation::<(i32, u32), LocalWord>(
+        pool.clone(), ep.clone(), runs(&pool, &ep, &edge_rows)?,
+    )?;
+    let mut arena = gpu_datalog_runtime::CandidateArena::new(pool);
+    let result = cq_gpu_sequence_test_macros::planned_arena_hole!(native_local_word);
+    assert_eq!(
+        bag(result.buffer(), result.len(), result.packing())?,
+        join(&delta_rows, &edge_rows),
+    );
+    Ok(())
 }
 
 #[test]
@@ -56,7 +98,7 @@ fn delta_edge_runs_empty_delta_and_retry() -> Result {
         vec![vec![-7, 0], vec![9, u32::MAX as i128]],
         vec![],
     ];
-    let edge = DeviceLayout::<(i32,), (u32,)>::from_runs(
+    let edge = relation::<(i32,u32),u64>(
         pool.clone(),
         ep.clone(),
         runs(&pool, &ep, &edge_rows)?,
@@ -67,7 +109,7 @@ fn delta_edge_runs_empty_delta_and_retry() -> Result {
         vec![vec![vec![-13, -7], vec![i32::MIN as i128, 9]]],
         vec![vec![]],
     ] {
-        let delta = DeviceLayout::<(i32,), (i32,)>::from_runs(
+        let delta = relation::<(i32,i32),u64>(
             pool.clone(),
             dp.clone(),
             runs(&pool, &dp, &delta_rows)?,
@@ -81,7 +123,7 @@ fn delta_edge_runs_empty_delta_and_retry() -> Result {
     }
     cq_gpu_runtime::enable_arena_timing(true);
     let delta_rows = vec![vec![vec![-13, -7]]];
-    let delta = DeviceLayout::<(i32,), (i32,)>::from_runs(
+    let delta = relation::<(i32,i32),u64>(
         pool.clone(),
         dp.clone(),
         runs(&pool, &dp, &delta_rows)?,
@@ -110,7 +152,7 @@ fn previous_count_is_only_a_hint_and_retained_batches_stay_immutable() -> Result
     let dp = Packing::with_columns(&[Column::I32, Column::I32])?;
     let ep = Packing::with_columns(&[Column::I32, Column::U32])?;
     let edge_rows = vec![vec![vec![7, 11], vec![7, 12]]];
-    let edge = DeviceLayout::<(i32,), (u32,)>::from_runs(
+    let edge = relation::<(i32,u32),u64>(
         pool.clone(),
         ep.clone(),
         runs(&pool, &ep, &edge_rows)?,
@@ -119,7 +161,7 @@ fn previous_count_is_only_a_hint_and_retained_batches_stay_immutable() -> Result
     let mut retained = Vec::new();
     for (rows, attempts) in [(1, 2), (2, 2), (1, 1), (0, 1), (1, 2)] {
         let delta_rows = vec![(0..rows).map(|x| vec![x, 7]).collect::<Vec<_>>()];
-        let delta = DeviceLayout::<(i32,), (i32,)>::from_runs(
+        let delta = relation::<(i32,i32),u64>(
             pool.clone(),
             dp.clone(),
             runs(&pool, &dp, &delta_rows)?,
@@ -157,12 +199,12 @@ fn nonlinear_delta_full_visits_every_full_run() -> Result {
         vec![vec![-2, 8], vec![8, -3]],
     ];
     let delta_rows = vec![vec![vec![-11, -3], vec![-12, -2], vec![17, 5], vec![19, 8]]];
-    let delta = DeviceLayout::<(i32,), (i32,)>::from_runs(
+    let delta = relation::<(i32,i32),u64>(
         pool.clone(),
         packing.clone(),
         runs(&pool, &packing, &delta_rows)?,
     )?;
-    let full = DeviceLayout::<(i32,), (i32,)>::from_runs(
+    let full = relation::<(i32,i32),u64>(
         pool.clone(),
         packing.clone(),
         runs(&pool, &packing, &rows)?,
@@ -188,20 +230,20 @@ fn two_edge_occurrences_keep_independent_lookup_positions() -> Result {
         vec![vec![-2, 11], vec![7, 12]],
         vec![vec![-2, 0]],
     ];
-    let delta = DeviceLayout::<(i32,), (i32,)>::from_runs(
+    let delta = relation::<(i32,i32),u64>(
         pool.clone(),
         dp.clone(),
         runs(&pool, &dp, &delta_rows)?,
     )?;
-    let edge = DeviceLayout::<(i32,), (u32,)>::from_runs(
+    let edge = relation::<(i32,u32),u64>(
         pool.clone(),
         ep.clone(),
         runs(&pool, &ep, &edge_rows)?,
     )?;
     let mut expected = Vec::new();
-    for d in delta_rows.iter().flatten() {
-        for l in edge_rows.iter().flatten().filter(|e| e[0] == d[0]) {
-            for r in edge_rows.iter().flatten().filter(|e| e[0] == d[1]) {
+    for d in distinct(&delta_rows) {
+        for l in distinct(&edge_rows).into_iter().filter(|e| e[0] == d[0]) {
+            for r in distinct(&edge_rows).into_iter().filter(|e| e[0] == d[1]) {
                 expected.push(vec![l[1], r[1]]);
             }
         }
@@ -226,12 +268,12 @@ fn anti_membership_checks_all_blocked_runs_without_multiplying_rows() -> Result 
         vec![vec![-5, 1]],
     ];
     let blocked_rows = vec![vec![], vec![vec![-2]], vec![vec![8]], vec![vec![-2]]];
-    let delta = DeviceLayout::<(i32,), (i32,)>::from_runs(
+    let delta = relation::<(i32,i32),u64>(
         pool.clone(),
         dp.clone(),
         runs(&pool, &dp, &delta_rows)?,
     )?;
-    let blocked = DeviceLayout::<(i32,), ()>::from_runs(
+    let blocked = relation::<(i32,),u64>(
         pool.clone(),
         bp.clone(),
         runs(&pool, &bp, &blocked_rows)?,
@@ -243,6 +285,7 @@ fn anti_membership_checks_all_blocked_runs_without_multiplying_rows() -> Result 
         .cloned()
         .collect();
     expected.sort();
+    expected.dedup();
     let mut arena = gpu_datalog_runtime::CandidateArena::new(pool);
     let result = cq_gpu_sequence_test_macros::planned_arena_hole!(anti);
     assert_eq!(
@@ -264,7 +307,7 @@ fn anti_membership_checks_all_blocked_runs_without_multiplying_rows() -> Result 
 }
 
 #[test]
-fn multi_run_scan_keeps_run_boundary_duplicates_and_unsigned_symbols() -> Result {
+fn multi_run_scan_admits_boundary_duplicates_and_preserves_unsigned_symbols() -> Result {
     let pool = Pool::new(0, 0, 0)?;
     let packing = Packing::with_columns(&[Column::I32, Column::U32])?;
     let rows = vec![
@@ -275,13 +318,14 @@ fn multi_run_scan_keeps_run_boundary_duplicates_and_unsigned_symbols() -> Result
         vec![vec![-1, 0]],
         vec![],
     ];
-    let edge = DeviceLayout::<(i32,), (u32,)>::from_runs(
+    let edge = relation::<(i32,u32),u64>(
         pool.clone(),
         packing.clone(),
         runs(&pool, &packing, &rows)?,
     )?;
     let mut expected: Vec<_> = rows.iter().flatten().cloned().collect();
     expected.sort();
+    expected.dedup();
     let mut arena = gpu_datalog_runtime::CandidateArena::new(pool);
     let result = cq_gpu_sequence_test_macros::planned_arena_hole!(scan);
     assert_eq!(
@@ -313,9 +357,9 @@ fn wide_multi_run_scan_preserves_both_word_halves() -> Result {
         let len = words.len();
         let buffer = Buffer::from_host(pool.clone(), &words)?;
         // SAFETY: every uploaded word is initialized and the run is sorted/unique.
-        uploaded.push(unsafe { Run::from_sorted(buffer, len)? });
+        uploaded.push(unsafe { SortedBatch::from_sorted(buffer, len)? });
     }
-    let edge = DeviceLayout::<(i64,), (i64,)>::from_runs(pool.clone(), packing, uploaded)?;
+    let edge = relation::<(i64,i64),u128>(pool.clone(), packing, uploaded)?;
     let mut arena = gpu_datalog_runtime::CandidateArena::new(pool);
     let result = cq_gpu_sequence_test_macros::planned_arena_hole!(wide_scan);
     assert_eq!(result.packing().word_bits(), 128);
@@ -330,6 +374,7 @@ fn wide_multi_run_scan_preserves_both_word_halves() -> Result {
     let mut expected: Vec<_> = rows.into_iter().flatten().collect();
     actual.sort();
     expected.sort();
+    expected.dedup();
     assert_eq!(actual, expected);
     Ok(())
 }
@@ -338,14 +383,24 @@ fn wide_multi_run_scan_preserves_both_word_halves() -> Result {
 mod fixtures;
 
 #[test]
-fn run_binding_rejects_nonleading_lookup_key() {
-    let mut source = fixtures::fixture("linear");
-    source.structures.entries[2] =
-        syn::parse_quote!(e = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [z][y];);
+fn run_binding_accepts_a_source_present_nonleading_lookup_key() {
+    let mut source = fixtures::fixture("nonlinear");
+    // Keep the lawful lookup [y], but store the full rows physically as (z,y).
+    let columns = &mut source.physical.program.declarations[1].columns;
+    *columns = std::mem::take(columns).into_iter().rev().collect();
     source
         .structures
         .declare(&cq_gpu_sequence::providers::declarations())
         .unwrap();
+    cq_gpu_sequence_core::runs::bind(&source).unwrap();
+}
+
+#[test]
+fn run_binding_rejects_an_index_without_the_join_prefix() {
+    let mut source = fixtures::fixture("linear");
+    source.structures.entries[2] =
+        syn::parse_quote!(e = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [z][y];);
+    source.structures.declare(&cq_gpu_sequence::providers::declarations()).unwrap();
     assert!(cq_gpu_sequence_core::runs::bind(&source).is_err());
 }
 
@@ -367,12 +422,12 @@ fn native_host_lookup_uses_supplied_runs_without_building() -> Result {
     let ep = Packing::with_columns(&[Column::I32, Column::U32])?;
     let left = vec![vec![vec![-13, -7], vec![2, 9]]];
     let right = vec![vec![vec![-7, 0], vec![9, 4]], vec![vec![-7, 8]], vec![]];
-    let delta = DeviceLayout::<(i32,), (i32,)>::from_runs(
+    let delta = relation::<(i32,i32),u64>(
         pool.clone(),
         dp.clone(),
         runs(&pool, &dp, &left)?,
     )?;
-    let edge = DeviceLayout::<(i32,), (u32,)>::from_runs(
+    let edge = relation::<(i32,u32),u64>(
         pool.clone(),
         ep.clone(),
         runs(&pool, &ep, &right)?,
@@ -387,10 +442,10 @@ fn native_host_lookup_uses_supplied_runs_without_building() -> Result {
 }
 
 #[test]
-fn native_host_lookup_accepts_a_leading_value_column() {
+fn native_host_lookup_accepts_a_leading_full_key_column() {
     let mut source = fixtures::fixture("native_linear");
-    source.structures.entries[1] = syn::parse_quote!(e host scan = @device_layout input { keys 0; columns [[0] i32 => i32, [1] u32 => u32] } as ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [];);
-    source.structures.entries[2] = syn::parse_quote!(e host result(joined) = @device_layout input { keys 0; columns [[0] i32 => i32, [1] u32 => u32] } as ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [y];);
+    source.structures.entries[1] = syn::parse_quote!(e host scan = @radix_relation input { keys 2; columns [[0] i32 => i32, [1] u32 => u32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,u32),(),u64,u64,()> [];);
+    source.structures.entries[2] = syn::parse_quote!(e host result(joined) = @radix_relation input { keys 2; columns [[0] i32 => i32, [1] u32 => u32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,u32),(),u64,u64,()> [y];);
     source
         .structures
         .declare(&cq_gpu_sequence::providers::declarations())
@@ -436,7 +491,7 @@ fn host_captures_are_lazy_once_per_invocation_and_survive_retry() -> Result {
             23u32
         };
         let rows = vec![(0..length).map(|value| vec![-7, value as i128]).collect()];
-        let edge = DeviceLayout::<(i32,), (u32,)>::from_runs(
+        let edge = relation::<(i32,u32),u64>(
             pool.clone(),
             packing.clone(),
             runs(&pool, &packing, &rows)?,
@@ -460,7 +515,7 @@ fn constant_atom_filters_before_projection_exactly_like_cpu() -> Result {
         vec![vec![-7, 0], vec![4, 19]],
         vec![vec![-7, u32::MAX as i128], vec![-7, 0]],
     ];
-    let edge = DeviceLayout::<(i32,), (u32,)>::from_runs(
+    let edge = relation::<(i32,u32),u64>(
         pool.clone(),
         packing.clone(),
         runs(&pool, &packing, &rows)?,
@@ -474,6 +529,7 @@ fn constant_atom_filters_before_projection_exactly_like_cpu() -> Result {
         .map(|row| vec![row[1]])
         .collect::<Vec<_>>();
     expected.sort();
+    expected.dedup();
     assert_eq!(
         bag(result.buffer(), result.len(), result.packing())?,
         expected
@@ -485,7 +541,7 @@ fn wide_runs<W: gpu_datalog_runtime::Word>(
     pool: &Arc<Pool>,
     packing: &Packing,
     rows: &[Vec<Vec<i128>>],
-) -> Result<Vec<Run<W>>> {
+) -> Result<Vec<SortedBatch<W>>> {
     rows.iter()
         .map(|rows| {
             let mut words = rows
@@ -497,7 +553,7 @@ fn wide_runs<W: gpu_datalog_runtime::Word>(
             let length = words.len();
             let buffer = Buffer::from_host(pool.clone(), &words)?;
             // SAFETY: every word was initialized above, then sorted and deduplicated.
-            unsafe { Run::from_sorted(buffer, length) }
+            unsafe { SortedBatch::from_sorted(buffer, length) }
         })
         .collect()
 }
@@ -514,7 +570,7 @@ fn three_lane_scan_decodes_cross_lane_fields_and_publishes_exact_bag() -> Result
             vec![i64::MAX as i128, i32::MIN as i128, i64::MIN as i128],
         ],
     ];
-    let edge = DeviceLayout::<(i64,), (i32, i64)>::from_runs(
+    let edge = relation::<(i64,i32,i64),[u64;3]>(
         pool.clone(),
         packing.clone(),
         wide_runs::<[u64; 3]>(&pool, &packing, &rows)?,
@@ -529,6 +585,7 @@ fn three_lane_scan_decodes_cross_lane_fields_and_publishes_exact_bag() -> Result
     let mut expected: Vec<_> = rows.into_iter().flatten().collect();
     actual.sort();
     expected.sort();
+    expected.dedup();
     assert_eq!(actual, expected);
     Ok(())
 }
@@ -551,7 +608,7 @@ fn four_lane_scan_decodes_cross_lane_fields_and_publishes_exact_bag() -> Result 
             vec![-1, i32::MAX as i128, 0, i32::MIN as i128, 4],
         ],
     ];
-    let edge = DeviceLayout::<(i64,), (i32, i64, i32, i32)>::from_runs(
+    let edge = relation::<(i64,i32,i64,i32,i32),[u64;4]>(
         pool.clone(),
         packing.clone(),
         wide_runs::<[u64; 4]>(&pool, &packing, &rows)?,
@@ -570,6 +627,7 @@ fn four_lane_scan_decodes_cross_lane_fields_and_publishes_exact_bag() -> Result 
     let mut expected: Vec<_> = rows.into_iter().flatten().collect();
     actual.sort();
     expected.sort();
+    expected.dedup();
     assert_eq!(actual, expected);
     Ok(())
 }
