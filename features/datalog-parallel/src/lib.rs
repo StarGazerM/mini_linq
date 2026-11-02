@@ -65,8 +65,8 @@
 //! CQ holes discharge result canonicalization to admission and negation key
 //! sets rather than allocating separate answer-dedup sets. Fx is unkeyed: for
 //! adversarial inputs select `cq_datalog_hasher::hasher(keyed)` before
-//! `shard_storage` and `cq_datalog_hasher::hasher_round(keyed)` before `partition`
-//! when not selecting `layouts(runs)`. Hash iteration order is not an output guarantee.
+//! `shard_storage` when not selecting `layouts(runs)`; it also selects the
+//! recorded negation key sets. Hash iteration order is not an output guarantee.
 use proc_macro::TokenStream;
 
 #[proc_macro]

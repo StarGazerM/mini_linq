@@ -122,8 +122,6 @@ pub struct Context {
     pub owned: BTreeSet<String>,
     /// The grouped fold's hashing policy is part of the checked context.
     pub hasher: syn::Type,
-    /// A stock terminal establishes the checked Structures canonical-return fact.
-    pub canonical_stream: bool,
 }
 fn domain(source: &Source) -> syn::Result<()> {
     ensure(
@@ -202,10 +200,12 @@ fn constant_group(source: &Source) -> bool {
         .into_iter()
         .map(|position| &body[position])
         .collect();
-    source.keys.iter().all(|key| captured.iter().any(|item| {
-        matches!(item, cq_lang_cq::BodyItem::Let(binding)
+    source.keys.iter().all(|key| {
+        captured.iter().any(|item| {
+            matches!(item, cq_lang_cq::BodyItem::Let(binding)
             if rust::bindings(&binding.pattern).iter().any(|binder| same_symbol(binder, key)))
-    }))
+        })
+    })
 }
 pub fn compile(source: &Source) -> syn::Result<Context> {
     domain(source)?;
@@ -220,7 +220,6 @@ pub fn compile(source: &Source) -> syn::Result<Context> {
         constant_group: constant_group(source),
         owned: owned_columns(&source.rows),
         hasher: syn::parse_quote!(::cq_storage::HashState),
-        canonical_stream: false,
     })
 }
 /// Erasing shared leaf bindings restores the row query; key layout, measure
@@ -259,43 +258,12 @@ pub fn check(source: &Source, target: &Context) -> syn::Result<()> {
     )
 }
 
-fn canonical_stream(pipeline: &cq_stage::Pipeline) -> bool {
-    pipeline.passes.last().is_some_and(|pass| {
-        let path = pass
-            .path
-            .segments
-            .iter()
-            .map(|s| s.ident.to_string())
-            .collect::<Vec<_>>();
-        path == ["mini_linq", "passes", "translate_pull"] && pass.arguments.is_empty()
-    })
-}
-
-pub fn compile_with_pipeline(
-    source: &Source,
-    pipeline: &cq_stage::Pipeline,
-) -> syn::Result<Context> {
-    let mut target = compile(source)?;
-    target.canonical_stream = canonical_stream(pipeline);
-    Ok(target)
-}
-
-/// Formal rule EXT-SetFold: Fold the checked canonical core stream exactly once;
-/// an unknown terminal retains a fast-hashed set boundary.
+/// Formal rule EXT-SetFold: The hole resumes the remaining pipeline fact-free, so
+/// the core CK-Return obligation (inferred key or recorded `return canon` with its
+/// canonical index) makes the returned rows a set under every checked terminal;
+/// the fold consumes them exactly once without a second distinct boundary.
 /// Formal rule EXT-ConstantGroup: Capture-bound group columns (A-Capture) use an
 /// optional accumulator, preserving empty-input and set-valued aggregate semantics.
-pub fn check_with_pipeline(
-    source: &Source,
-    target: &Context,
-    pipeline: &cq_stage::Pipeline,
-) -> syn::Result<()> {
-    check(source, target)?;
-    ensure(
-        target.canonical_stream == canonical_stream(pipeline),
-        source,
-        "aggregate canonical-stream proof changed",
-    )
-}
 pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<TokenStream> {
     let Context {
         hole,
@@ -305,7 +273,6 @@ pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<T
         constant_group,
         owned,
         hasher,
-        canonical_stream,
     } = context;
     let columns: Vec<_> = hole
         .query
@@ -357,25 +324,9 @@ pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<T
             Operation::Max => quote!(if #column > &#values.#index { #values.#index = ::core::clone::Clone::clone(#column); }),
         }
     });
-    let invocation = pipeline.clone().start(hole.to_token_stream())?;
-    // The stock terminal printer checks the Structures canonical-return fact.
-    // An arbitrary caller-selected printer may repeat rows, so it retains an
-    // explicit set boundary rather than inheriting a proof it did not establish.
-    ensure(
-        *canonical_stream == self::canonical_stream(pipeline),
-        hole,
-        "aggregate canonical-stream proof changed",
-    )?;
-    let rows = if *canonical_stream {
-        invocation
-    } else {
-        let seen = fresh.id("aggregate_seen");
-        let row = fresh.id("aggregate_row");
-        quote!({
-            let mut #seen = ::std::collections::HashSet::<_, #hasher>::default();
-            #invocation.filter(move |#row| #seen.insert(::core::clone::Clone::clone(#row)))
-        })
-    };
+    // Fact-free start: no `consumer = canonical` envelope is claimed, because
+    // count and sum observe multiplicity. The core therefore owns the set boundary.
+    let rows = pipeline.clone().start(hole.to_token_stream())?;
     let key_fields = keys.iter().map(|column| {
         let column = reference(column);
         quote!(::core::clone::Clone::clone(#column))
@@ -500,8 +451,8 @@ mod tests {
             rows(group,id,amount) :- R(id,value), let group:i32 = 0, let amount:i64 = *value * 2;
         };
         let pipeline: cq_stage::Pipeline = syn::parse_quote!(pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull });
-        let context = compile_with_pipeline(&source, &pipeline).unwrap();
-        check_with_pipeline(&source, &context, &pipeline).unwrap();
+        let context = compile(&source).unwrap();
+        check(&source, &context).unwrap();
         let rendered = render(&context, &pipeline).unwrap().to_string();
         assert!(rendered.contains("SingleGroup"));
         assert!(!rendered.contains("HashMap"));
@@ -509,20 +460,116 @@ mod tests {
         assert!(!rendered.contains("collect"));
         let mut changed = context.clone();
         changed.constant_group = false;
-        assert!(check_with_pipeline(&source, &changed, &pipeline).is_err());
-        let mut changed = context.clone();
-        changed.canonical_stream = false;
-        assert!(check_with_pipeline(&source, &changed, &pipeline).is_err());
+        assert!(check(&source, &changed).is_err());
         let mut changed = context.clone();
         changed.hasher = syn::parse_quote!(::std::collections::hash_map::RandomState);
-        assert!(check_with_pipeline(&source, &changed, &pipeline).is_err());
+        assert!(check(&source, &changed).is_err());
         let mut changed = context;
         changed.owned.clear();
-        assert!(check_with_pipeline(&source, &changed, &pipeline).is_err());
-        let unknown: cq_stage::Pipeline = syn::parse_quote!(pipeline { another::print });
-        let context = compile_with_pipeline(&source, &unknown).unwrap();
-        let rendered = render(&context, &unknown).unwrap().to_string();
-        assert!(rendered.contains("HashSet"));
-        assert!(rendered.contains("HashState"));
+        assert!(check(&source, &changed).is_err());
+    }
+    /// EXT-SetFold rests on the core CK-Return obligation, not on the terminal's
+    /// spelling: every terminal receives the same fact-free hole and the same fold.
+    #[test]
+    fn set_fold_is_independent_of_terminal_spelling() {
+        let source: Source = syn::parse_quote! {
+            by(d); n=count(); s=sum(a);
+            struct G; relation Sale(d:i32,id:i32,a:i32); rows(d,a) :- Sale(d,id,a);
+        };
+        let context = compile(&source).unwrap();
+        check(&source, &context).unwrap();
+        let stock: cq_stage::Pipeline =
+            syn::parse_quote!(pipeline { mini_linq::passes::translate_pull });
+        let rendered = |pipeline: cq_stage::Pipeline, terminal: &str| {
+            render(&context, &pipeline)
+                .unwrap()
+                .to_string()
+                .replace(terminal, "TERMINAL")
+        };
+        let expected = rendered(stock, "mini_linq :: passes :: translate_pull");
+        assert!(expected.contains("HashMap"));
+        assert!(expected.contains("HashState"));
+        // The fold neither adds a distinct set nor claims the consumer fact that
+        // would let the core drop its set boundary (count/sum see multiplicity).
+        assert!(!expected.contains("HashSet"));
+        assert!(!expected.contains("context"));
+        assert!(!expected.contains("consumer"));
+        for (pipeline, terminal) in [
+            (
+                syn::parse_quote!(pipeline { ::mini_linq::passes::translate_pull }),
+                ":: mini_linq :: passes :: translate_pull",
+            ),
+            (
+                syn::parse_quote!(pipeline { renamed::print }),
+                "renamed :: print",
+            ),
+            (
+                syn::parse_quote!(pipeline { mini_linq::passes::translate_pull(option) }),
+                "mini_linq :: passes :: translate_pull",
+            ),
+        ] {
+            let alternative: String = rendered(pipeline, terminal);
+            assert!(!alternative.contains("HashSet"));
+            assert!(!alternative.contains("consumer"));
+            if terminal.ends_with("translate_pull") && !terminal.starts_with("::") {
+                // Arguments are opaque to the extension and travel unchanged.
+                assert!(alternative.contains("arguments { option }"));
+            } else {
+                assert_eq!(alternative, expected);
+            }
+        }
+    }
+    /// Lower the aggregate's fact-free hole through the core and return the IX
+    /// source and Physical target under the given lowering argument packet.
+    fn lower_hole(
+        source: &str,
+        arguments: TokenStream,
+    ) -> (cq_lang_ix::Program, cq_lang_physical::Program) {
+        let source: Source = syn::parse_str(source).unwrap();
+        let context = compile(&source).unwrap();
+        check(&source, &context).unwrap();
+        let normal = cq_lang_cq::normal::normalize(&context.hole).unwrap();
+        let vo = cq_order::compile(&normal, &cq_order::Options::default()).unwrap();
+        let ra = cq_elaborate::compile(&vo).unwrap();
+        let ix = cq_index_policy::compile(&ra).unwrap();
+        let physical = cq_physical_lowering::compile_with(&ix, arguments).unwrap();
+        (ix, physical)
+    }
+    fn returned_canon(target: &cq_lang_physical::Program) -> bool {
+        target.program.return_canon.is_some()
+            || target.program.definitions.iter().any(|definition| {
+                definition.name == target.program.returned && definition.canon.is_some()
+            })
+    }
+    /// EXT-SetFold premise: the fact-free hole is a set by CK-Return. A non-key
+    /// projection records its canonical boundary; a keyed return needs none; a
+    /// forged set claim (dropped canon or key fact) fails the core check.
+    #[test]
+    fn fact_free_hole_returns_a_core_checked_set() {
+        let projected = "by(d); n=count(); s=sum(a); struct G;
+            relation Sale(d:i32,id:i32,a:i32); rows(d,a) :- Sale(d,id,a);";
+        let (ix, target) = lower_hole(projected, TokenStream::new());
+        assert!(target.program.consumer_canonical.is_none());
+        assert!(returned_canon(&target));
+        cq_physical_lowering::check(&ix, &target).unwrap();
+        let mut forged = target.clone();
+        forged.program.return_canon = None;
+        for definition in &mut forged.program.definitions {
+            definition.canon = None;
+        }
+        assert!(cq_physical_lowering::check(&ix, &forged).is_err());
+        // Legal alternative: a discharged host set keys the full-row return.
+        let keyed = "by(d); n=count(); s=sum(a); struct G;
+            relation Sale(d:i32,id:i32,a:i32); rows(d,id,a) :- Sale(d,id,a);";
+        let (ix, target) = lower_hole(keyed, quote!(host_set Sale discharged));
+        assert!(!returned_canon(&target));
+        cq_physical_lowering::check(&ix, &target).unwrap();
+        let mut forged = target;
+        forged.program.host_sets.clear();
+        assert!(cq_physical_lowering::check(&ix, &forged).is_err());
+        // The only other discharge is the consumer fact, which drops the set
+        // boundary; the aggregate never starts its hole with it (see render).
+        let (_, relaxed) = lower_hole(projected, quote!(consumer = canonical));
+        assert!(!returned_canon(&relaxed));
     }
 }

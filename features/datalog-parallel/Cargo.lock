@@ -136,7 +136,6 @@ name = "cq-datalog-hasher"
 version = "0.0.0"
 dependencies = [
  "cq-datalog-support",
- "cq-lang-datalog-round",
  "cq-lang-datalog-storage",
  "cq-stage",
  "proc-macro2",

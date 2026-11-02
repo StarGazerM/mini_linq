@@ -25,17 +25,14 @@ fn recursive_duplicate_heavy_negation_matches_fx_default_and_keyed() {
     let base: BTreeSet<_> = closure!(edges, blocked;).collect();
     let fx: Vec<_> = closure!(edges, blocked;
         storage_rewrites = [cq_datalog_hasher::hasher(fx)];
-        round = [cq_datalog_hasher::hasher_round(fx)];
     )
     .collect();
     let keyed: Vec<_> = closure!(edges, blocked;
         storage_rewrites = [cq_datalog_hasher::hasher(fx), cq_datalog_hasher::hasher(keyed), cq_datalog_hasher::hasher(keyed)];
-        round = [cq_datalog_hasher::hasher_round(fx), cq_datalog_hasher::hasher_round(keyed), cq_datalog_hasher::hasher_round(keyed)];
     )
     .collect();
     let restored: Vec<_> = closure!(edges, blocked;
         storage_rewrites = [cq_datalog_hasher::hasher(keyed), cq_datalog_hasher::hasher(fx), cq_datalog_hasher::hasher(fx)];
-        round = [cq_datalog_hasher::hasher_round(keyed), cq_datalog_hasher::hasher_round(fx), cq_datalog_hasher::hasher_round(fx)];
     )
     .collect();
     let expected: BTreeSet<_> = (1..=4).flat_map(|x| (1..=3).map(move |y| (x, y))).collect();
@@ -55,7 +52,6 @@ fn borrowed_noncopy_edbs_and_owned_outputs_use_selected_canonical_sets() {
         cq_datalog::datalog! {
             pipeline {
                 storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
-                round = [cq_datalog_hasher::hasher_round(keyed)];
             }
             struct CanonicalOutput;
             relation Names(name:Vec<i64>) = (&rows);
@@ -76,7 +72,6 @@ fn empty_inputs_and_empty_idbs_remain_empty() {
     let blocked: [(i32,); 0] = [];
     let answer: Vec<_> = closure!(edges, blocked;
         storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
-        round = [cq_datalog_hasher::hasher_round(keyed)];
     )
     .collect();
     assert!(answer.is_empty());
@@ -89,7 +84,6 @@ fn zero_column_negation_keys_preserve_existential_blocking() {
     let answer: Vec<_> = cq_datalog::datalog! {
         pipeline {
             storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
-            round = [cq_datalog_hasher::hasher_round(keyed)];
         }
         struct Existential;
         relation E(x:i32) = (rows);

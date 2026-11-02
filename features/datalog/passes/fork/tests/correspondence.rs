@@ -517,7 +517,14 @@ fn literal_key_filters_are_post_scan_filters() {
     assert_eq!(atom.variables().count(), 2);
     let constant = &atom.args[1];
     let expected: BodyItem = syn::parse_quote!(where #constant == (7));
-    assert!(all_constants.query.body.iter().skip(1).any(|item| item == &expected));
+    assert!(
+        all_constants
+            .query
+            .body
+            .iter()
+            .skip(1)
+            .any(|item| item == &expected)
+    );
 
     // A changed filter is still valid CQ, but changes the recorded selection.
     let hole_index = key.hole;
@@ -834,7 +841,7 @@ fn fork_preserves_generators_and_generated_join_values() {
 }
 
 #[test]
-fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
+fn providers_are_copied_and_key_providers_are_storage_premises() {
     let mut source = authored();
     // Authored providers are declared verbatim tokens; a key-set token
     // declares membership, so hole inputs are unchanged by the key swap.
@@ -856,7 +863,7 @@ fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
         custom("custom_index", Some(protocol), true, &[]),
         custom(
             "custom_keys",
-            None,
+            Some(storage::LayoutProtocol::Set),
             true,
             &[storage::provider::HostRead::Membership],
         ),
@@ -864,6 +871,9 @@ fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
     source.providers[2].delta = syn::parse_quote!(@custom_rows as custom::Rows<(i32, i32)>);
     source.providers[2].next = syn::parse_quote!(@custom_rows as custom::Rows<(i32, i32)>);
     source.layouts[0].provider = syn::parse_quote!(@custom_index as custom::Index);
+    for negative in &mut source.negations {
+        negative.provider = syn::parse_quote!(@custom_keys as custom::BorrowedKeys<_>);
+    }
     let target = compile(&source).unwrap();
     assert_eq!(target.context.relations[2].providers, source.providers[2]);
     assert_eq!(
@@ -874,13 +884,13 @@ fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
         target.context.layouts[0].maintenance,
         source.layouts[0].maintenance
     );
-    let mut alternative = target.clone();
-    alternative.context.strata[0].keys[0].provider =
-        syn::parse_quote!(@custom_keys as custom::BorrowedKeys<_>);
-    cq_lang_datalog_round::check_rewrite(&target, &alternative).unwrap();
-    let replay: Fork = syn::parse2(alternative.to_token_stream()).unwrap();
-    assert_eq!(alternative, replay);
+    let replay: Fork = syn::parse2(target.to_token_stream()).unwrap();
+    assert_eq!(target, replay);
     check(&source, &replay).unwrap();
+    let mut invalid = target.clone();
+    invalid.context.strata[0].keys[0].provider = storage::default_key_set().0;
+    assert!(cq_lang_datalog_round::check_rewrite(&target, &invalid).is_err());
+    assert!(check(&source, &invalid).is_err());
 }
 
 #[test]
@@ -1011,7 +1021,8 @@ fn authored_variant_orders_become_explicit_plan_advice_on_their_holes() {
             .find(|rule| rule.variant == variant)
             .unwrap();
         let hole = &fork.holes[rule.hole];
-        let plan = &hole.pipeline.passes[hole.plan.unwrap()];
+        let pipeline = hole.invocation_pipeline().unwrap();
+        let plan = &pipeline.passes[hole.plan.unwrap()];
         plan.arguments.to_string().replace(' ', "")
     };
     // The hole body already follows the authored order (Super is the scan),
@@ -1101,7 +1112,7 @@ fn step_advice_remaps_delta_occurrences_and_uses_cq_checkers() {
     let restored: Fork = syn::parse2(fork.to_token_stream()).unwrap();
     assert_eq!(restored, fork);
     for hole in fork.holes.iter().filter(|hole| {
-        !hole.pipeline.passes[hole.plan.unwrap()]
+        !hole.invocation_pipeline().unwrap().passes[hole.plan.unwrap()]
             .arguments
             .is_empty()
     }) {
@@ -1115,7 +1126,9 @@ fn step_advice_remaps_delta_occurrences_and_uses_cq_checkers() {
             syn::parenthesized!(entries in input);
             entries.parse_terminated(cq_order::OrderAtom::parse, syn::Token![,])
         };
-        let args = hole.pipeline.passes[hole.plan.unwrap()].arguments.clone();
+        let args = hole.invocation_pipeline().unwrap().passes[hole.plan.unwrap()]
+            .arguments
+            .clone();
         let selectors = parser.parse2(args).unwrap().into_iter().collect::<Vec<_>>();
         let normal = cq_lang_datalog_round::cq::normal::normalize(&hole.cq).unwrap();
         // compile_explicit runs WF-VO and the selected CK-Le phases.
@@ -1170,7 +1183,8 @@ fn smallest_rule_sites_preserve_recorded_pipeline_ordinals() {
     assert_eq!(before.lower, after.lower);
     assert_eq!(before.plan, after.plan);
     assert_eq!(before.pipeline.passes.len(), after.pipeline.passes.len());
-    let wrapper = &after.pipeline.passes[after.lower + 1];
+    let invocation = after.invocation_pipeline().unwrap();
+    let wrapper = &invocation.passes[after.lower + 1];
     assert_eq!(
         wrapper.path.segments.last().unwrap().ident,
         "smallest_before"

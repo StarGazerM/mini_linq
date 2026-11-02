@@ -2,39 +2,61 @@
 //! Providers, initializers, backing states and scratch lifetimes come from the
 //! recorded device Storage; this printer composes their fixed operations.
 use cq_datalog_support::ensure;
-use cq_lang_datalog_round::{self as round, storage, HoleInterface, InputSource, KeySet, Program, RoundContext};
+use cq_lang_datalog_round::{
+    self as round, HoleInterface, InputSource, KeySet, Program, RoundContext, storage,
+};
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote, ToTokens};
+use quote::{ToTokens, format_ident, quote};
 use std::collections::BTreeMap;
 use syn::{Ident, Type};
 
-fn local(kind: &str, index: usize) -> Ident { format_ident!("__cq_gpu_{}_{}", kind, index) }
+fn local(kind: &str, index: usize) -> Ident {
+    format_ident!("__cq_gpu_{}_{}", kind, index)
+}
 fn device(program: &Program) -> &storage::DeviceStorage {
-    program.storage.device.as_ref().expect("checked device records")
+    program
+        .storage
+        .device
+        .as_ref()
+        .expect("checked device records")
 }
 /// `order[destination] = source position` taking rows from the `source`
 /// layout's column order into the `target` layout's column order.
 fn reorder(source: &[usize], target: &[usize]) -> Vec<usize> {
     let mut at = vec![0; source.len()];
-    for (position, &column) in source.iter().enumerate() { at[column] = position; }
+    for (position, &column) in source.iter().enumerate() {
+        at[column] = position;
+    }
     target.iter().map(|&column| at[column]).collect()
 }
-fn identity(order: &[usize]) -> bool { order.iter().copied().eq(0..order.len()) }
+fn identity(order: &[usize]) -> bool {
+    order.iter().copied().eq(0..order.len())
+}
 
 /// The Storage negative projection a component's key set realizes.
 pub(crate) fn negation(program: &Program, component: usize, key: &KeySet) -> syn::Result<usize> {
-    program.storage.negations.iter().position(|negative| {
-        negative.component == component && negative.relation == key.relation
-            && negative.columns == key.columns && negative.filters == key.filters
-            && negative.equalities == key.equalities
-    }).ok_or_else(|| syn::Error::new_spanned(key, "negative key set has no Storage projection"))
+    program
+        .storage
+        .negations
+        .iter()
+        .position(|negative| {
+            negative.component == component
+                && negative.relation == key.relation
+                && negative.columns == key.columns
+                && negative.filters == key.filters
+                && negative.equalities == key.equalities
+        })
+        .ok_or_else(|| syn::Error::new_spanned(key, "negative key set has no Storage projection"))
 }
 
 /// The recorded provider of every input name a hole may declare.
-pub(crate) fn input_providers(program: &Program) -> syn::Result<BTreeMap<String, cq_lang_structures::Provider>> {
+pub(crate) fn input_providers(
+    program: &Program,
+) -> syn::Result<BTreeMap<String, cq_lang_structures::Provider>> {
     let context = &program.context;
     let device = device(program);
-    let provider = |source: &storage::Provider, input: &cq_lang_structures::provider::InputSchema| {
+    let provider = |source: &storage::Provider,
+                    input: &cq_lang_structures::provider::InputSchema| {
         cq_lang_structures::Provider {
             token: source.token.clone(),
             inner: None,
@@ -46,26 +68,44 @@ pub(crate) fn input_providers(program: &Program) -> syn::Result<BTreeMap<String,
     let mut inputs = BTreeMap::new();
     for (relation, state) in context.relations.iter().zip(&device.relations) {
         if let Some(delta) = &relation.delta {
-            inputs.insert(delta.to_string(), provider(&relation.providers.delta, &state.input));
+            inputs.insert(
+                delta.to_string(),
+                provider(&relation.providers.delta, &state.input),
+            );
         }
     }
-    for (layout, state) in context.layouts.iter().zip(&device.layouts)
+    for (layout, state) in context
+        .layouts
+        .iter()
+        .zip(&device.layouts)
         .chain(context.delta_layouts.iter().zip(&device.delta_layouts))
     {
-        inputs.insert(layout.name.to_string(), provider(&layout.provider, &state.input));
+        inputs.insert(
+            layout.name.to_string(),
+            provider(&layout.provider, &state.input),
+        );
     }
     for (component, stratum) in context.strata.iter().enumerate() {
         for key in &stratum.keys {
-            ensure(!key.columns.is_empty(), program,
-                "GPU Datalog does not support unit-valued existential negation keys")?;
+            ensure(
+                !key.columns.is_empty(),
+                program,
+                "GPU Datalog does not support unit-valued existential negation keys",
+            )?;
             let state = &device.negations[negation(program, component, key)?];
             inputs.insert(key.name.to_string(), provider(&key.provider, &state.input));
         }
         for rule in stratum.seeds.iter().chain(&stratum.steps) {
             if let Some(scan) = &rule.scan {
                 let input = match scan.source {
-                    InputSource::Delta(index) => provider(&context.relations[index].providers.delta, &device.relations[index].input),
-                    InputSource::Layout(index) => provider(&context.layouts[index].provider, &device.layouts[index].input),
+                    InputSource::Delta(index) => provider(
+                        &context.relations[index].providers.delta,
+                        &device.relations[index].input,
+                    ),
+                    InputSource::Layout(index) => provider(
+                        &context.layouts[index].provider,
+                        &device.layouts[index].input,
+                    ),
                 };
                 inputs.insert(scan.binding.to_string(), input);
             }
@@ -74,15 +114,29 @@ pub(crate) fn input_providers(program: &Program) -> syn::Result<BTreeMap<String,
     Ok(inputs)
 }
 
-fn memory_snapshot(context: &RoundContext, indices: &[usize], arenas: &[usize], stage: &str) -> TokenStream {
+fn memory_snapshot(
+    context: &RoundContext,
+    indices: &[usize],
+    arenas: &[usize],
+    stage: &str,
+) -> TokenStream {
     let entries = indices.iter().map(|&index| {
         let relation = &context.relations[index];
         let name = relation.declaration.name.to_string();
         let canonical = local("layout", relation.providers.canonical);
         let arena = local("arena", index);
-        let arena_bytes = if arenas.contains(&index) { quote!(#arena.allocated_bytes()) } else { quote!(0usize) };
-        let layouts = context.layouts.iter().chain(&context.delta_layouts)
-            .filter(|layout| layout.relation == index).map(|layout| &layout.host).collect::<Vec<_>>();
+        let arena_bytes = if arenas.contains(&index) {
+            quote!(#arena.allocated_bytes())
+        } else {
+            quote!(0usize)
+        };
+        let layouts = context
+            .layouts
+            .iter()
+            .chain(&context.delta_layouts)
+            .filter(|layout| layout.relation == index)
+            .map(|layout| &layout.host)
+            .collect::<Vec<_>>();
         quote!(__cq_gpu_memory_usage[#index] = ::gpu_datalog_runtime::MemoryUse {
             name: #name, rows: #canonical.len(), accepted_live_bytes: #canonical.live_bytes(),
             accepted_bytes: #canonical.allocated_bytes(),
@@ -100,7 +154,12 @@ fn memory_snapshot(context: &RoundContext, indices: &[usize], arenas: &[usize], 
 /// Bind `fresh` to the sorted unique rows of `candidates` (relation order)
 /// absent from the committed canonical layout, in canonical column order.
 /// The canonical state is read, not changed: publication appends separately.
-fn admission(context: &RoundContext, index: usize, candidates: &Ident, fresh: &Ident) -> TokenStream {
+fn admission(
+    context: &RoundContext,
+    index: usize,
+    candidates: &Ident,
+    fresh: &Ident,
+) -> TokenStream {
     let canonical = context.relations[index].providers.canonical;
     let state = local("layout", canonical);
     let packing = local("packing", index);
@@ -113,10 +172,18 @@ fn admission(context: &RoundContext, index: usize, candidates: &Ident, fresh: &I
 
 /// The fresh canonical-order run in another column order: shared when the
 /// order is the canonical one, otherwise permuted and sorted by `sorter`.
-fn reordered(context: &RoundContext, index: usize, fresh: &Ident, columns: &[usize], sorter: &Ident) -> TokenStream {
+fn reordered(
+    context: &RoundContext,
+    index: usize,
+    fresh: &Ident,
+    columns: &[usize],
+    sorter: &Ident,
+) -> TokenStream {
     let canonical = context.relations[index].providers.canonical;
     let order = reorder(&context.layouts[canonical].columns, columns);
-    if identity(&order) { return quote!(#fresh.clone()); }
+    if identity(&order) {
+        return quote!(#fresh.clone());
+    }
     let packing = local("layout_packing", canonical);
     quote!({
         let permuted = #packing.permute_device(#fresh.buffer(), #fresh.len(), &[#(#order),*])?;
@@ -128,7 +195,12 @@ fn reordered(context: &RoundContext, index: usize, fresh: &Ident, columns: &[usi
 /// Bulk `full_layouts` maintenance: append the fresh rows to each layout's
 /// recorded state in its own order, then republish its view from those runs
 /// (unchanged runs republish the same view; field descriptors are shared).
-fn full_layouts(context: &RoundContext, index: usize, fresh: &Ident, layouts: &[usize]) -> TokenStream {
+fn full_layouts(
+    context: &RoundContext,
+    index: usize,
+    fresh: &Ident,
+    layouts: &[usize],
+) -> TokenStream {
     let updates = layouts.iter().map(|&j| {
         let layout = &context.layouts[j];
         let state = local("layout", j);
@@ -147,7 +219,12 @@ fn full_layouts(context: &RoundContext, index: usize, fresh: &Ident, layouts: &[
 }
 
 /// One member's admission and recorded publication transaction.
-fn admit_publish(program: &Program, index_in_stratum: usize, transaction: &round::Publication, phase: &str) -> syn::Result<TokenStream> {
+fn admit_publish(
+    program: &Program,
+    index_in_stratum: usize,
+    transaction: &round::Publication,
+    phase: &str,
+) -> syn::Result<TokenStream> {
     let context = &program.context;
     let i = transaction.relation;
     let relation = &context.relations[i];
@@ -214,23 +291,36 @@ fn substitute(
     parameters: &mut Vec<(Ident, Ident, Type)>,
 ) -> TokenStream {
     use proc_macro2::{Group, TokenTree};
-    tokens.into_iter().map(|token| match token {
-        TokenTree::Ident(name) if hosts.contains_key(&name.to_string()) => {
-            let position = parameters.iter().position(|(_, host, _)| *host == name).unwrap_or_else(|| {
-                let parameter = format_ident!("__cq_gpu_input_{}", parameters.len());
-                parameters.push((parameter, name.clone(), hosts[&name.to_string()].clone()));
-                parameters.len() - 1
-            });
-            let parameter = &parameters[position].0;
-            quote!((*#parameter))
-        }
-        TokenTree::Group(group) => {
-            let mut replacement = Group::new(group.delimiter(), substitute(group.stream(), hosts, parameters));
-            replacement.set_span(group.span());
-            TokenStream::from(TokenTree::Group(replacement))
-        }
-        token => TokenStream::from(token),
-    }).collect()
+    tokens
+        .into_iter()
+        .map(|token| match token {
+            TokenTree::Ident(name) if hosts.contains_key(&name.to_string()) => {
+                let position = parameters
+                    .iter()
+                    .position(|(_, host, _)| *host == name)
+                    .unwrap_or_else(|| {
+                        let parameter = format_ident!("__cq_gpu_input_{}", parameters.len());
+                        parameters.push((
+                            parameter,
+                            name.clone(),
+                            hosts[&name.to_string()].clone(),
+                        ));
+                        parameters.len() - 1
+                    });
+                let parameter = &parameters[position].0;
+                quote!((*#parameter))
+            }
+            TokenTree::Group(group) => {
+                let mut replacement = Group::new(
+                    group.delimiter(),
+                    substitute(group.stream(), hosts, parameters),
+                );
+                replacement.set_span(group.span());
+                TokenStream::from(TokenTree::Group(replacement))
+            }
+            token => TokenStream::from(token),
+        })
+        .collect()
 }
 
 /// Whether a hole's query names anything bound outside the query, such as a
@@ -253,23 +343,41 @@ pub(crate) fn reads_environment(cq: &round::cq::Program) -> bool {
     }
     let mut bound = std::collections::BTreeSet::new();
     let mut expressions: Vec<&syn::Expr> = cq.query.head.args.iter().collect();
-    expressions.extend(cq.query.captures.items.iter().flat_map(cq_syntax::Capture::expressions));
+    expressions.extend(
+        cq.query
+            .captures
+            .items
+            .iter()
+            .flat_map(cq_syntax::Capture::expressions),
+    );
     for item in &cq.query.body {
         match item {
-            BodyItem::Positive { atom } => for argument in &atom.args {
-                match cq_syntax::rust::variable(argument) {
-                    Some(variable) => { bound.insert(cq_syntax::symbol_name(variable)); }
-                    None => expressions.push(argument),
+            BodyItem::Positive { atom } => {
+                for argument in &atom.args {
+                    match cq_syntax::rust::variable(argument) {
+                        Some(variable) => {
+                            bound.insert(cq_syntax::symbol_name(variable));
+                        }
+                        None => expressions.push(argument),
+                    }
                 }
-            },
+            }
             BodyItem::Negation(negation) => expressions.extend(&negation.atom.args),
             BodyItem::Filter(filter) => expressions.push(&filter.condition),
             BodyItem::Let(binding) => {
-                bound.extend(cq_syntax::rust::bindings(&binding.pattern).iter().map(cq_syntax::symbol_name));
+                bound.extend(
+                    cq_syntax::rust::bindings(&binding.pattern)
+                        .iter()
+                        .map(cq_syntax::symbol_name),
+                );
                 expressions.push(&binding.expression);
             }
             BodyItem::For(binding) => {
-                bound.extend(cq_syntax::rust::bindings(&binding.pattern).iter().map(cq_syntax::symbol_name));
+                bound.extend(
+                    cq_syntax::rust::bindings(&binding.pattern)
+                        .iter()
+                        .map(cq_syntax::symbol_name),
+                );
                 expressions.push(&binding.expression);
             }
             _ => return true,
@@ -279,7 +387,11 @@ pub(crate) fn reads_environment(cq: &round::cq::Program) -> bool {
         let free = cq_syntax::rust::free_variables(expression);
         let mut callees = Callees(std::collections::BTreeSet::new());
         callees.visit_expr(expression);
-        free.opaque || free.names.iter().any(|name| !bound.contains(name) && !callees.0.contains(name))
+        free.opaque
+            || free
+                .names
+                .iter()
+                .any(|name| !bound.contains(name) && !callees.0.contains(name))
     })
 }
 
@@ -298,41 +410,87 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     round::contract::check(program)?;
     crate::bindings::check(program)?;
     crate::lanes::check(program)?;
-    ensure(program.context.observer.is_none(), program, "GPU Datalog does not support observer callbacks")?;
-    ensure(program.policy.timing == "none", program, "GPU Datalog does not support recorded phase timing")?;
-    ensure(program.execution.is_empty(), program, "GPU Datalog does not support host execution certificates")?;
+    ensure(
+        program.context.observer.is_none(),
+        program,
+        "GPU Datalog does not support observer callbacks",
+    )?;
+    ensure(
+        program.policy.timing == "none",
+        program,
+        "GPU Datalog does not support recorded phase timing",
+    )?;
+    ensure(
+        program.execution.is_empty(),
+        program,
+        "GPU Datalog does not support host execution certificates",
+    )?;
     for hole in &program.holes {
-        ensure(hole.interface == HoleInterface::Batch, hole, "GPU Datalog requires batch holes")?;
+        ensure(
+            hole.interface == HoleInterface::Batch,
+            hole,
+            "GPU Datalog requires batch holes",
+        )?;
     }
-    for rule in program.context.strata.iter().flat_map(|stratum| stratum.seeds.iter().chain(&stratum.steps)) {
-        ensure(rule.known == round::Admission::Admit, rule,
-            "GPU Datalog admission is at admit only (ADM-InPlan GPU follow-up)")?;
+    for rule in program
+        .context
+        .strata
+        .iter()
+        .flat_map(|stratum| stratum.seeds.iter().chain(&stratum.steps))
+    {
+        ensure(
+            rule.known == round::Admission::Admit,
+            rule,
+            "GPU Datalog admission is at admit only (ADM-InPlan GPU follow-up)",
+        )?;
     }
-    ensure(program.schedule.strata.iter().all(|stratum| stratum.policy.is_empty()), &program.schedule,
-        "GPU Datalog runs each hole as one device invocation; hole grain and inline advice are unsupported")?;
+    ensure(
+        program
+            .schedule
+            .strata
+            .iter()
+            .all(|stratum| stratum.policy.is_empty()),
+        &program.schedule,
+        "GPU Datalog runs each hole as one device invocation; hole grain and inline advice are unsupported",
+    )?;
     let context = &program.context;
     let device = device(program);
-    ensure(device.scratch.arenas == "component" && device.scratch.release == "component", program,
-        "GPU Datalog supports only component-scoped candidate arenas and scratch release")?;
+    ensure(
+        device.scratch.arenas == "component" && device.scratch.release == "component",
+        program,
+        "GPU Datalog supports only component-scoped candidate arenas and scratch release",
+    )?;
     // NEW is built from admission's fresh rows; its declared empty `next_init`
     // is checked by the device refinement and never printed.
     for relation in &device.relations {
-        ensure(relation.next == "fresh_run", &relation.next, "GPU Datalog builds NEW only from fresh rows")?;
+        ensure(
+            relation.next == "fresh_run",
+            &relation.next,
+            "GPU Datalog builds NEW only from fresh rows",
+        )?;
     }
     for layout in context.layouts.iter().chain(&context.delta_layouts) {
-        ensure(layout.protocol == storage::LayoutProtocol::Bulk, &layout.name,
-            "GPU Datalog maintains bulk device layouts only")?;
+        ensure(
+            layout.protocol == storage::LayoutProtocol::Bulk,
+            &layout.name,
+            "GPU Datalog maintains bulk device layouts only",
+        )?;
     }
     for output in &context.outputs {
-        ensure(output.conversion == "borrowed_cloned_into_iter", output,
-            "GPU Datalog outputs read borrowed canonical rows")?;
+        ensure(
+            output.conversion == "borrowed_cloned_into_iter",
+            output,
+            "GPU Datalog outputs read borrowed canonical rows",
+        )?;
     }
     let symbols = crate::storage::Symbols::from_program(&program.storage)?;
     let input_providers = input_providers(program)?;
     // Hosts a hole may read through its CQ declarations, with their providers.
     let mut hosts = BTreeMap::<String, Type>::new();
     for relation in &context.relations {
-        if let Some(delta) = &relation.delta_host { hosts.insert(delta.to_string(), relation.providers.delta.ty.clone()); }
+        if let Some(delta) = &relation.delta_host {
+            hosts.insert(delta.to_string(), relation.providers.delta.ty.clone());
+        }
     }
     for layout in context.layouts.iter().chain(&context.delta_layouts) {
         hosts.insert(layout.host.to_string(), layout.provider.ty.clone());
@@ -347,7 +505,9 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         }
         for rule in stratum.seeds.iter().chain(&stratum.steps) {
             owners[rule.hole] = rule.head;
-            if let Some(scan) = &rule.scan { scans.insert(rule.hole, scan.binding.clone()); }
+            if let Some(scan) = &rule.scan {
+                scans.insert(rule.hole, scan.binding.clone());
+            }
         }
     }
     // Each hole is a separate function item: rustc type-checks a closure with
@@ -369,11 +529,12 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             for declaration in &mut cq.declarations {
                 if let Some(value) = &mut declaration.value {
                     let expression = value.expression.to_token_stream();
-                    value.expression = syn::parse2(substitute(expression, &hosts, &mut parameters))?;
+                    value.expression =
+                        syn::parse2(substitute(expression, &hosts, &mut parameters))?;
                 }
             }
         }
-        let invocation = hole.pipeline.clone().start(cq.to_token_stream())?;
+        let invocation = hole.invocation_pipeline()?.start(cq.to_token_stream())?;
         if !standalone {
             return Ok(invocation);
         }
@@ -386,7 +547,9 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             None => (quote!(), quote!()),
         };
         let arena = &device.relations[owners[index]].arena;
-        let declared = parameters.iter().map(|(parameter, _, ty)| quote!(#parameter: &#ty));
+        let declared = parameters
+            .iter()
+            .map(|(parameter, _, ty)| quote!(#parameter: &#ty));
         let arguments = parameters.iter().map(|(_, host, _)| quote!(&#host));
         hole_items.push(quote!(
             fn #function(
@@ -413,9 +576,18 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     };
     let mut initialize = Vec::new();
     for (index, (layout, record)) in context.layouts.iter().zip(&device.layouts).enumerate() {
-        let (state, packing, host) = (local("layout", index), local("layout_packing", index), &layout.host);
-        let (state_ty, state_init, packing_init, ty, init) =
-            (&record.state, &record.state_init, &record.packing, &layout.provider.ty, &record.init);
+        let (state, packing, host) = (
+            local("layout", index),
+            local("layout_packing", index),
+            &layout.host,
+        );
+        let (state_ty, state_init, packing_init, ty, init) = (
+            &record.state,
+            &record.state_init,
+            &record.packing,
+            &layout.provider.ty,
+            &record.init,
+        );
         let runner = program_runner();
         initialize.push(quote!(
             let (#packing, mut #state, mut #host) = #runner(#[inline] || -> ::gpu_datalog_runtime::Result<(_, #state_ty, #ty)> {
@@ -423,10 +595,24 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             })?;
         ));
     }
-    for (index, (layout, record)) in context.delta_layouts.iter().zip(&device.delta_layouts).enumerate() {
-        let (state, packing, host) = (local("delta_layout", index), local("delta_packing", index), &layout.host);
-        let (state_ty, state_init, packing_init, ty, init) =
-            (&record.state, &record.state_init, &record.packing, &layout.provider.ty, &record.init);
+    for (index, (layout, record)) in context
+        .delta_layouts
+        .iter()
+        .zip(&device.delta_layouts)
+        .enumerate()
+    {
+        let (state, packing, host) = (
+            local("delta_layout", index),
+            local("delta_packing", index),
+            &layout.host,
+        );
+        let (state_ty, state_init, packing_init, ty, init) = (
+            &record.state,
+            &record.state_init,
+            &record.packing,
+            &layout.provider.ty,
+            &record.init,
+        );
         let runner = program_runner();
         initialize.push(quote!(
             let (#packing, #state, mut #host) = #runner(#[inline] || -> ::gpu_datalog_runtime::Result<(_, #state_ty, #ty)> {
@@ -454,7 +640,9 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     // EDB loading is one admission against the empty canonical layout followed
     // by publication into every full layout of the relation.
     for (index, relation) in context.relations.iter().enumerate() {
-        let Some(value) = &relation.declaration.value else { continue };
+        let Some(value) = &relation.declaration.value else {
+            continue;
+        };
         let expression = &value.expression;
         let packing = local("packing", index);
         let word = &device.relations[index].word;
@@ -469,8 +657,13 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let upload = format_ident!("__cq_gpu_upload");
         let fresh = local("fresh", index);
         let admit = admission(context, index, &upload, &fresh);
-        let layouts = context.layouts.iter().enumerate()
-            .filter(|(_, layout)| layout.relation == index).map(|(j, _)| j).collect::<Vec<_>>();
+        let layouts = context
+            .layouts
+            .iter()
+            .enumerate()
+            .filter(|(_, layout)| layout.relation == index)
+            .map(|(j, _)| j)
+            .collect::<Vec<_>>();
         let publish = full_layouts(context, index, &fresh, &layouts);
         let runner = program_runner();
         initialize.push(quote!(
@@ -504,7 +697,12 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             let name = &key.name;
             let ty = &key.provider.ty;
             let record = &device.negations[negation(program, index, key)?];
-            let (word, packing, state_ty, state_init) = (&record.word, &record.packing, &record.state, &record.state_init);
+            let (word, packing, state_ty, state_init) = (
+                &record.word,
+                &record.packing,
+                &record.state,
+                &record.state_init,
+            );
             let relation = &device.relations[key.relation];
             let (arena_ty, arena_init) = (&relation.arena, &relation.arena_init);
             let invocation = &holes[key.hole];
@@ -531,10 +729,17 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let seed = quote!(#seed_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #seed Ok(()) })?;);
         let step = phase(program, index, round::schedule::STEP, &holes, &calls)?;
         let step = quote!(#step_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #step Ok(()) })?;);
-        let lengths = stratum.termination.iter().map(|&i| {
-            let delta = context.relations[i].delta_host.as_ref().expect("checked delta");
-            quote!(#delta.len())
-        }).collect::<Vec<_>>();
+        let lengths = stratum
+            .termination
+            .iter()
+            .map(|&i| {
+                let delta = context.relations[i]
+                    .delta_host
+                    .as_ref()
+                    .expect("checked delta");
+                quote!(#delta.len())
+            })
+            .collect::<Vec<_>>();
         let condition = match stratum.termination_test.to_string().as_str() {
             "sum_delta_lengths" => quote!(0usize #(+ #lengths)* != 0),
             "any_delta" => quote!(false #(|| #lengths != 0)*),
@@ -552,7 +757,12 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             let (ty, init) = (&device.relations[i].arena, &device.relations[i].arena_init);
             quote!(let mut #arena: #ty = #init;)
         });
-        let released = memory_snapshot(context, &stratum.members, &[], &format!("stratum={index}/released"));
+        let released = memory_snapshot(
+            context,
+            &stratum.members,
+            &[],
+            &format!("stratum={index}/released"),
+        );
         strata.push(quote!({
             #stratum_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> {
                 #(#arenas)*
@@ -593,7 +803,11 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 .into_iter())
         })?)
     }).collect::<Vec<_>>();
-    let result = if outputs.len() == 1 { outputs[0].clone() } else { quote!((#(#outputs,)*)) };
+    let result = if outputs.len() == 1 {
+        outputs[0].clone()
+    } else {
+        quote!((#(#outputs,)*))
+    };
     let relation_count = context.relations.len();
     let indices = (0..relation_count).collect::<Vec<_>>();
     let initialized = memory_snapshot(context, &indices, &[], "initialized");
@@ -622,30 +836,57 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     }))
 }
 
-fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], calls: &[Option<HoleCall>]) -> syn::Result<TokenStream> {
+fn phase(
+    program: &Program,
+    index: usize,
+    phase: &str,
+    holes: &[TokenStream],
+    calls: &[Option<HoleCall>],
+) -> syn::Result<TokenStream> {
     let context = &program.context;
     let device = device(program);
     let stratum = &context.strata[index];
     let schedule = &program.schedule.strata[index];
-    let rules = if phase == round::schedule::SEED { &stratum.seeds } else { &stratum.steps };
+    let rules = if phase == round::schedule::SEED {
+        &stratum.seeds
+    } else {
+        &stratum.steps
+    };
     let batches = stratum.members.iter().map(|&i| {
         let candidates = local("candidates", i);
-        let (ty, init) = (&device.relations[i].candidates, &device.relations[i].candidates_init);
+        let (ty, init) = (
+            &device.relations[i].candidates,
+            &device.relations[i].candidates_init,
+        );
         quote!(let mut #candidates: #ty = #init;)
     });
     // Recorded earliest safe publication wave per member in this phase; a
     // phase without waves admits and publishes every member after its holes.
-    let after = |relation: usize| schedule.publication.iter()
-        .find(|entry| entry.phase == phase && entry.relation == relation)
-        .map(|entry| entry.wave);
+    let after = |relation: usize| {
+        schedule
+            .publication
+            .iter()
+            .find(|entry| entry.phase == phase && entry.relation == relation)
+            .map(|entry| entry.wave)
+    };
     let mut published = std::collections::BTreeSet::new();
     let mut steps = Vec::new();
     for (global, wave) in schedule.waves.iter().enumerate() {
-        if wave.phase != phase { continue; }
+        if wave.phase != phase {
+            continue;
+        }
         // P-DL-Gpu prints recorded lanes only (DL-WaveLanes): lane 0 runs on
         // this thread and stream, later lanes on the program's lane workers.
-        let laned = schedule.lanes.iter().find(|entry| entry.wave == global && entry.lanes.len() > 1);
-        let position = |hole: usize| wave.holes.iter().position(|&h| h == hole).expect("checked lane partition");
+        let laned = schedule
+            .lanes
+            .iter()
+            .find(|entry| entry.wave == global && entry.lanes.len() > 1);
+        let position = |hole: usize| {
+            wave.holes
+                .iter()
+                .position(|&h| h == hole)
+                .expect("checked lane partition")
+        };
         let mut launches = Vec::new();
         let main_lane: &[usize] = laned.map_or(&wave.holes, |entry| &entry.lanes[0]);
         for &rule_index in main_lane {
@@ -665,7 +906,10 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], ca
             let scan = rule.scan.as_ref().map(|scan| {
                 let binding = &scan.binding;
                 let source = match scan.source {
-                    InputSource::Delta(i) => context.relations[i].delta_host.as_ref().expect("checked delta"),
+                    InputSource::Delta(i) => context.relations[i]
+                        .delta_host
+                        .as_ref()
+                        .expect("checked delta"),
                     InputSource::Layout(i) => &context.layouts[i].host,
                 };
                 quote!(let #binding = &#source;)
@@ -682,10 +926,12 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], ca
                 let packing = local("packing", rule.head);
                 let word = &device.relations[rule.head].word;
                 let source_rule = program.storage.incremental.variants[variant].rule;
-                let delta = program.storage.incremental.variants[variant].delta
+                let delta = program.storage.incremental.variants[variant]
+                    .delta
                     .map_or_else(|| "seed".to_owned(), |position| position.to_string());
                 let rule_name = program.storage.incremental.strata.source.labels[source_rule]
-                    .as_ref().map(ToString::to_string)
+                    .as_ref()
+                    .map(ToString::to_string)
                     .unwrap_or_else(|| format!("{}/{}", head_name, program.holes[hole].cq.name));
                 let rows = format_ident!("__cq_expansion_candidates");
                 let fresh = format_ident!("__cq_expansion_fresh");
@@ -706,7 +952,9 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], ca
                     #admit
                     __cq_expansion_capture.report(#rule_name, #variant, __cq_gpu_round, #fresh.len());
                 })
-            } else { None };
+            } else {
+                None
+            };
             launches.push(quote!({
                 #scan
                 if __cq_gpu_trace_memory {
@@ -734,22 +982,34 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], ca
                 for (lane, holes) in entry.lanes.iter().enumerate().skip(1) {
                     for &rule_index in holes {
                         let rule = &rules[rule_index];
-                        let call = calls[rule.hole].as_ref().ok_or_else(|| syn::Error::new_spanned(entry,
-                            "a worker-lane hole must be a standalone function item"))?;
+                        let call = calls[rule.hole].as_ref().ok_or_else(|| {
+                            syn::Error::new_spanned(
+                                entry,
+                                "a worker-lane hole must be a standalone function item",
+                            )
+                        })?;
                         let function = &call.function;
                         let at = position(rule_index);
                         let (head, hole) = (rule.head, rule.hole);
                         let (scan_clone, scan_argument) = match &rule.scan {
                             Some(scan) => {
                                 let source = match scan.source {
-                                    InputSource::Delta(i) => context.relations[i].delta_host.as_ref().expect("checked delta"),
+                                    InputSource::Delta(i) => context.relations[i]
+                                        .delta_host
+                                        .as_ref()
+                                        .expect("checked delta"),
                                     InputSource::Layout(i) => &context.layouts[i].host,
                                 };
-                                (quote!(let __cq_lane_scan = #source.clone();), quote!(&__cq_lane_scan,))
+                                (
+                                    quote!(let __cq_lane_scan = #source.clone();),
+                                    quote!(&__cq_lane_scan,),
+                                )
                             }
                             None => (quote!(), quote!()),
                         };
-                        let names = (0..call.hosts.len()).map(|i| format_ident!("__cq_lane_host_{i}")).collect::<Vec<_>>();
+                        let names = (0..call.hosts.len())
+                            .map(|i| format_ident!("__cq_lane_host_{i}"))
+                            .collect::<Vec<_>>();
                         let hosts = &call.hosts;
                         submits.push(quote!({
                             #scan_clone
@@ -786,13 +1046,26 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], ca
     }
     for transaction in &stratum.publication {
         if !published.contains(&transaction.relation) {
-            ensure(after(transaction.relation).is_none(), schedule,
-                "publication placement names a wave outside its phase")?;
+            ensure(
+                after(transaction.relation).is_none(),
+                schedule,
+                "publication placement names a wave outside its phase",
+            )?;
             steps.push(admit_publish(program, index, transaction, phase)?);
         }
     }
-    let before = memory_snapshot(context, &[], &[], &format!("stratum={index}/{phase}/before"));
-    let after = memory_snapshot(context, &stratum.members, &stratum.members, &format!("stratum={index}/{phase}/after"));
+    let before = memory_snapshot(
+        context,
+        &[],
+        &[],
+        &format!("stratum={index}/{phase}/before"),
+    );
+    let after = memory_snapshot(
+        context,
+        &stratum.members,
+        &stratum.members,
+        &format!("stratum={index}/{phase}/after"),
+    );
     Ok(quote!(
         #before
         let __cq_gpu_readbacks_before = if __cq_gpu_trace_rounds {

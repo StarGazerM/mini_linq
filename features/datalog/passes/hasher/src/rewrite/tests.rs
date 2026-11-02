@@ -24,16 +24,6 @@ fn fixture() -> storage::Program {
     cq_datalog_storage::compile(&incremental).unwrap()
 }
 
-fn first_key(program: &mut rounds::Program) -> &mut rounds::KeySet {
-    program
-        .context
-        .strata
-        .iter_mut()
-        .flat_map(|s| &mut s.keys)
-        .next()
-        .unwrap()
-}
-
 #[test]
 fn selects_both_directions_and_restores_fx_base_exactly() {
     let source = fixture();
@@ -52,11 +42,23 @@ fn selects_both_directions_and_restores_fx_base_exactly() {
     for layout in keyed.layouts.iter().chain(&keyed.delta_layouts) {
         assert_eq!(layout.hasher, storage::Hasher::Keyed);
     }
+    assert_eq!(keyed.negations.len(), 1);
+    for negative in &keyed.negations {
+        assert_eq!(
+            negative.provider,
+            syn::parse_quote!(@hash_set as ::cq_storage::HashSet<_>)
+        );
+        assert_eq!(negative.hasher, storage::Hasher::Keyed);
+    }
     check_storage(&source, &keyed, Choice::Keyed).unwrap();
     let selected = storage(&keyed, Choice::Fx).unwrap();
     for layout in selected.layouts.iter().chain(&selected.delta_layouts) {
         assert_eq!(layout.hasher, storage::Hasher::Fx);
     }
+    assert_eq!(
+        selected.negations[0].provider,
+        syn::parse_quote!(@hash_set as ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
+    );
     check_storage(&source, &selected, Choice::Fx).unwrap();
     assert_eq!(storage(&selected, Choice::Fx).unwrap(), selected);
     assert_eq!(selected, source);
@@ -143,6 +145,12 @@ fn independent_storage_checker_rejects_mutations() {
         |p| p.reads[0].index = usize::MAX,
         |p| p.layouts[0].maintenance = syn::parse_quote!(replace_each_run),
         |p| p.negations.clear(),
+        // A negation key set spelled with a hasher other than its record.
+        |p| {
+            p.negations[0].provider.ty =
+                syn::parse_quote!(::std::collections::HashSet<(i32,), ::cq_storage::HashState>)
+        },
+        |p| p.negations[0].provider.token = syn::parse_quote!(hash_map),
         |p| {
             p.tokens.pop();
         },
@@ -173,78 +181,47 @@ fn independent_storage_checker_rejects_mutations() {
         mutation.layouts[canonical] = source.layouts[canonical].clone();
         assert!(check_storage(&source, &mutation, Choice::Keyed).is_err());
     }
-}
-
-#[test]
-fn round_selects_only_negation_key_providers() {
-    let source = cq_datalog_fork::compile(&storage(&fixture(), Choice::Fx).unwrap()).unwrap();
-    assert_eq!(
-        source
-            .context
-            .strata
-            .iter()
-            .map(|s| s.keys.len())
-            .sum::<usize>(),
-        1
-    );
-    let keyed = round(&source, Choice::Keyed).unwrap();
-    assert_ne!(keyed, source);
-    assert_eq!(round(&keyed, Choice::Keyed).unwrap(), keyed);
-    for key in keyed.context.strata.iter().flat_map(|s| &s.keys) {
-        assert_eq!(
-            key.provider,
-            syn::parse_quote!(@hash_set as ::cq_storage::HashSet<_>)
-        );
-        assert_eq!(key.hasher, storage::Hasher::Keyed);
-    }
-    let mut selected = round(&keyed, Choice::Fx).unwrap();
-    assert_eq!(selected.storage, source.storage);
-    assert_eq!(selected.holes, source.holes);
-    assert_eq!(
-        first_key(&mut selected).provider,
-        syn::parse_quote!(@hash_set as ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
-    );
-    assert_eq!(round(&selected, Choice::Fx).unwrap(), selected);
-    assert_eq!(selected, source);
-    assert_eq!(round(&selected, Choice::Keyed).unwrap(), keyed);
-    let replay: rounds::Program = syn::parse2(selected.to_token_stream()).unwrap();
-    assert_eq!(replay, selected);
-}
-
-#[test]
-fn independent_round_checker_rejects_mutations() {
-    let source = cq_datalog_fork::compile(&fixture()).unwrap();
-    let selected = round(&source, Choice::Fx).unwrap();
-    let mutations: &[fn(&mut rounds::Program)] = &[
-        |p| first_key(p).hasher = storage::Hasher::Keyed,
-        |p| first_key(p).provider.ty = syn::parse_quote!(::std::collections::HashSet<(i32,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>),
-        |p| p.policy.timing = syn::parse_quote!(phases),
-        |p| first_key(p).columns.clear(),
-        |p| first_key(p).hole = usize::MAX,
-        |p| p.holes[0].pipeline = syn::parse_quote!(pipeline { custom::emit }),
-    ];
-    for (index, mutate) in mutations.iter().enumerate() {
-        let mut mutation = selected.clone();
-        mutate(&mut mutation);
-        assert!(
-            check_round(&source, &mutation, Choice::Fx).is_err(),
-            "mutation {index}"
-        );
-    }
-    assert!(check_round(&source, &selected, Choice::Keyed).is_err());
-    let keyed = round(&source, Choice::Keyed).unwrap();
-    assert!(check_round(&source, &keyed, Choice::Fx).is_err());
-    for (index, mutate) in mutations.iter().enumerate().skip(1) {
-        let mut mutation = keyed.clone();
-        mutate(&mut mutation);
-        assert!(
-            check_round(&source, &mutation, Choice::Keyed).is_err(),
-            "keyed mutation {index}"
-        );
-    }
+    // Leaving a negation key set at Fx under a keyed selection is rejected.
     let mut mutation = keyed.clone();
-    mutation.context = source.context.clone();
-    assert!(check_round(&source, &mutation, Choice::Keyed).is_err());
+    mutation.negations[0] = source.negations[0].clone();
+    assert!(check_storage(&source, &mutation, Choice::Keyed).is_err());
+    // Hasher selection may not change the projection a key set realizes.
+    let mut mutation = selected.clone();
+    mutation.negations[0].columns.clear();
+    assert!(check_storage(&source, &mutation, Choice::Fx).is_err());
+}
+
+#[test]
+fn verbatim_negation_key_sets_stay_opaque() {
+    let mut source = fixture();
+    source.tokens.push(provider::declared(
+        "custom_set",
+        provider::Spelling::Verbatim,
+        Some(storage::LayoutProtocol::Set),
+        provider::Admission::None,
+        true,
+        provider::TaskHasher::Fx,
+        &[provider::HostRead::Membership],
+        &[],
+    ));
+    source.negations[0].provider =
+        syn::parse_quote!(@custom_set as ::std::collections::HashSet<_, Custom>);
+    storage::contract::check(&source).unwrap();
+    let keyed = storage(&source, Choice::Keyed).unwrap();
+    assert_eq!(keyed.negations[0], source.negations[0]);
+    check_storage(&source, &keyed, Choice::Keyed).unwrap();
+}
+
+#[test]
+fn fork_copies_selected_negation_key_sets() {
+    for choice in [Choice::Fx, Choice::Keyed] {
+        let selected = storage(&fixture(), choice).unwrap();
+        let round = cq_datalog_fork::compile(&selected).unwrap();
+        let keys: Vec<_> = round.context.strata.iter().flat_map(|s| &s.keys).collect();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].provider, selected.negations[0].provider);
+        assert_eq!(keys[0].hasher, selected.negations[0].hasher);
+    }
 }
 
 #[test]
@@ -278,15 +255,6 @@ fn stage_protocol_forwards_checked_provider_selections() {
     assert!(output.contains("downstream :: consume"));
     assert!(output.contains("FxHasher"));
     assert!(!output.contains("compile_error"));
-    let round_source = cq_datalog_fork::compile(&source).unwrap();
-    let output = cq_stage::rewrite::<rounds::Program>(
-        quote!(arguments { fx }; pipeline { downstream::consume }; #round_source),
-        |source, args| round(source, syn::parse2(args)?),
-    )
-    .to_string();
-    assert!(output.contains("downstream :: consume"));
-    assert!(output.contains("FxHasher"));
-    assert!(!output.contains("compile_error"));
     let output = cq_stage::rewrite::<storage::Program>(
         quote!(arguments { keyed }; pipeline { downstream::consume }; #source),
         |source, args| storage(source, syn::parse2(args)?),
@@ -294,14 +262,7 @@ fn stage_protocol_forwards_checked_provider_selections() {
     .to_string();
     assert!(output.contains("downstream :: consume"));
     assert!(output.contains("HashState"));
-    assert!(!output.contains("compile_error"));
-    let output = cq_stage::rewrite::<rounds::Program>(
-        quote!(arguments { keyed }; pipeline { downstream::consume }; #round_source),
-        |source, args| round(source, syn::parse2(args)?),
-    )
-    .to_string();
-    assert!(output.contains("downstream :: consume"));
-    assert!(output.contains("cq_storage :: HashSet"));
+    assert!(output.contains("cq_storage :: HashSet < _ >"));
     assert!(!output.contains("compile_error"));
     let error = cq_stage::rewrite::<storage::Program>(
         quote!(arguments { unsupported }; pipeline { downstream::consume }; #source),

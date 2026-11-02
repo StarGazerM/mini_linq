@@ -54,15 +54,17 @@ fn direct_surface_packet_carries_arguments_through_stacked_union_negation() {
 }
 
 #[test]
-fn aggregate_nested_query_uses_the_callers_printer_and_deduplicates_its_witnesses() {
-    let Sale = [(1, 1, 10), (1, 2, 10)];
+fn aggregate_nested_query_uses_the_callers_canonical_printer() {
+    let Sale = [(1, 1, 10), (1, 1, 10), (1, 2, 10)];
     let groups = mini_linq::compile! {
         pipeline {
             surface = [cq_ext_aggregate::aggregate];
             sequence = mini_linq::passes::sequence;
             grade = mini_linq::passes::sequential;
-            print = cq_ext_test_passes::repeated(twice);
+            print = cq_ext_test_passes::canonical(once);
         }
+        // Count and sum consume the core's canonical index, even through an
+        // alternate terminal path with arguments; duplicate source rows vanish.
         aggregate! { by(d); n=count(); s=sum(a);
             struct G; relation Sale(d:i32,id:i32,a:i32); rows(d,id,a) :- Sale(d,id,a);
         }

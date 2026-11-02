@@ -9,26 +9,53 @@ use syn::Ident;
 /// The recorded device provider of each component's negative key set, as a
 /// `device_layout` token instance (declared by device storage).
 fn key_providers(program: &Program) -> syn::Result<Vec<Vec<round::storage::Provider>>> {
-    let device = program.storage.device.as_ref().ok_or_else(||
-        syn::Error::new_spanned(program, "missing device storage records"))?;
-    program.context.strata.iter().enumerate().map(|(component, stratum)| {
-        stratum.keys.iter().map(|key| {
-            let state = &device.negations[crate::print::negation(program, component, key)?];
-            Ok(round::storage::Provider {
-                token: state.token.clone(),
-                ty: state.provider.clone(),
-            })
-        }).collect()
-    }).collect()
+    let device = program
+        .storage
+        .device
+        .as_ref()
+        .ok_or_else(|| syn::Error::new_spanned(program, "missing device storage records"))?;
+    program
+        .context
+        .strata
+        .iter()
+        .enumerate()
+        .map(|(component, stratum)| {
+            stratum
+                .keys
+                .iter()
+                .map(|key| {
+                    let state = &device.negations[crate::print::negation(program, component, key)?];
+                    Ok(round::storage::Provider {
+                        token: state.token.clone(),
+                        ty: state.provider.clone(),
+                    })
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Each input carries its Storage token, declared GPU facts and physical schema.
-fn packet(hole: &Hole, inputs: &BTreeMap<String, cq_lang_structures::Provider>, providers: &[cq_lang_structures::Declaration]) -> TokenStream {
-    let declared = hole.cq.declarations.iter().map(|declaration| declaration.name.to_string())
+fn packet(
+    hole: &Hole,
+    inputs: &BTreeMap<String, cq_lang_structures::Provider>,
+    providers: &[cq_lang_structures::Declaration],
+) -> TokenStream {
+    let declared = hole
+        .cq
+        .declarations
+        .iter()
+        .map(|declaration| declaration.name.to_string())
         .collect::<BTreeSet<_>>();
-    let inputs = inputs.iter().filter(|(name, _)| declared.contains(*name)).collect::<Vec<_>>();
-    let providers = providers.iter().filter(|declaration|
-        inputs.iter().any(|(_, provider)| provider.token == declaration.token));
+    let inputs = inputs
+        .iter()
+        .filter(|(name, _)| declared.contains(*name))
+        .collect::<Vec<_>>();
+    let providers = providers.iter().filter(|declaration| {
+        inputs
+            .iter()
+            .any(|(_, provider)| provider.token == declaration.token)
+    });
     let bindings = inputs.iter().map(|(name, provider)| {
         let name = Ident::new(name, proc_macro2::Span::call_site());
         quote!(#name => #provider;)
@@ -42,7 +69,12 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
     impl syn::parse::Parse for Owner {
         fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
             let name: Ident = input.parse()?;
-            if name != "binding" { return Err(syn::Error::new_spanned(name, "expected binding = invocation_index")); }
+            if name != "binding" {
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "expected binding = invocation_index",
+                ));
+            }
             input.parse::<syn::Token![=]>()?;
             let owner = input.parse::<syn::LitInt>()?.base10_parse()?;
             Ok(Self(owner))
@@ -52,24 +84,41 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
     round::contract::check(source)?;
     crate::storage::check_device(&source.storage)?;
     let mut target = source.clone();
-    for (stratum, providers) in target.context.strata.iter_mut().zip(key_providers(source)?) {
-        for (key, provider) in stratum.keys.iter_mut().zip(providers) {
-            key.provider = provider;
-            key.hasher = round::storage::Hasher::None;
-        }
-    }
     let inputs = crate::print::input_providers(&target)?;
     for hole in &mut target.holes {
-        ensure(hole.interface == HoleInterface::Batch, &*hole, "GPU Datalog requires batch holes")?;
-        ensure(owner > hole.lower && owner < hole.pipeline.passes.len().saturating_sub(1),
-            &*hole, "binding owner must follow lowering and precede the terminal")?;
-        ensure(hole.binding.is_none() && hole.pipeline.passes[owner].arguments.is_empty(),
-            &*hole, "binding invocation already has arguments or an owner")?;
-        let bindings = packet(hole, &inputs, &target.storage.device.as_ref().expect("checked device records").providers);
+        ensure(
+            hole.interface == HoleInterface::Batch,
+            &*hole,
+            "GPU Datalog requires batch holes",
+        )?;
+        ensure(
+            owner > hole.lower && owner < hole.pipeline.passes.len().saturating_sub(1),
+            &*hole,
+            "binding owner must follow lowering and precede the terminal",
+        )?;
+        ensure(
+            hole.binding.is_none() && hole.pipeline.passes[owner].arguments.is_empty(),
+            &*hole,
+            "binding invocation already has arguments or an owner",
+        )?;
+        let bindings = packet(
+            hole,
+            &inputs,
+            &target
+                .storage
+                .device
+                .as_ref()
+                .expect("checked device records")
+                .providers,
+        );
         hole.binding = Some(owner);
         hole.pipeline.passes[owner].arguments = bindings;
         let terminal = hole.pipeline.passes.last_mut().expect("checked terminal");
-        ensure(terminal.arguments.is_empty(), &terminal.path, "GPU batch terminal already has arguments")?;
+        ensure(
+            terminal.arguments.is_empty(),
+            &terminal.path,
+            "GPU batch terminal already has arguments",
+        )?;
         terminal.arguments = quote!(&mut *__cq_gpu_arena);
     }
     round::check_rewrite(source, &target)?;
@@ -83,21 +132,49 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
 pub fn check(program: &Program) -> syn::Result<()> {
     for (stratum, providers) in program.context.strata.iter().zip(key_providers(program)?) {
         for (key, provider) in stratum.keys.iter().zip(providers) {
-            ensure(key.provider == provider && key.hasher == round::storage::Hasher::None, key, "GPU key set differs from its recorded device provider")?;
+            ensure(
+                key.provider == provider && key.hasher == round::storage::Hasher::None,
+                key,
+                "GPU key set differs from its recorded device provider",
+            )?;
         }
     }
     let inputs = crate::print::input_providers(program)?;
     for hole in &program.holes {
-        let owner = hole.binding.ok_or_else(|| syn::Error::new_spanned(hole, "missing GPU binding invocation owner"))?;
-        let invocation = hole.pipeline.passes.get(owner).ok_or_else(||
-            syn::Error::new_spanned(hole, "GPU binding invocation owner is out of bounds"))?;
-        ensure(owner > hole.lower && owner < hole.pipeline.passes.len().saturating_sub(1),
-            hole, "GPU binding invocation owner is outside the Structures pipeline")?;
-        ensure(invocation.arguments.to_string() == packet(hole, &inputs, &program.storage.device.as_ref().expect("checked device records").providers).to_string(),
-            hole, "GPU binding invocation differs from its declared inputs")?;
-        ensure(hole.pipeline.passes.last().is_some_and(|terminal|
-            terminal.arguments.to_string() == quote!(&mut *__cq_gpu_arena).to_string()),
-            hole, "GPU batch invocation differs from its recorded arena argument")?;
+        let owner = hole
+            .binding
+            .ok_or_else(|| syn::Error::new_spanned(hole, "missing GPU binding invocation owner"))?;
+        let invocation = hole.pipeline.passes.get(owner).ok_or_else(|| {
+            syn::Error::new_spanned(hole, "GPU binding invocation owner is out of bounds")
+        })?;
+        ensure(
+            owner > hole.lower && owner < hole.pipeline.passes.len().saturating_sub(1),
+            hole,
+            "GPU binding invocation owner is outside the Structures pipeline",
+        )?;
+        ensure(
+            invocation.arguments.to_string()
+                == packet(
+                    hole,
+                    &inputs,
+                    &program
+                        .storage
+                        .device
+                        .as_ref()
+                        .expect("checked device records")
+                        .providers,
+                )
+                .to_string(),
+            hole,
+            "GPU binding invocation differs from its declared inputs",
+        )?;
+        ensure(
+            hole.pipeline.passes.last().is_some_and(|terminal| {
+                terminal.arguments.to_string() == quote!(&mut *__cq_gpu_arena).to_string()
+            }),
+            hole,
+            "GPU batch invocation differs from its recorded arena argument",
+        )?;
     }
     Ok(())
 }

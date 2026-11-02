@@ -177,8 +177,12 @@ opaque concrete \code{provider} type, \code{maintenance} operation and
 maintenance \code{protocol}.
 A \code{Read} records the variant, written body position, read kind, structure
 index and column order. A \code{Negative} records its consuming component,
-source relation, distinct-variable columns, constant filters and positional
-repeated-variable equalities.
+source relation, distinct-variable columns, constant filters, positional
+repeated-variable equalities, and a provider token and hasher over the inferred
+key schema \code{\_} with unit payload. Its token must declare the set protocol,
+or the bulk protocol for a recorded device realization.
+Fork copies this provider into each Round key set; correspondence requires exact
+agreement with the matching Storage negation record.
 
 \paragraph{Textual records.} Storage and Round use the existing
 \code{record!} grammar, not a second surface language: fields occur in their
@@ -404,6 +408,11 @@ its borrowed completed key-set hosts, any scan binding, and its output head.
 Negation is a CQ \code{!K(args)} atom, not a Rust predicate capture.
 The Round checker independently derives the required declarations, host
 bindings, distinct-variable projections and repeated-variable equalities.
+Scan correspondence checks the recorded first occurrence against a complete
+delta or a key-zero full layout of the same relation and column order; it does
+not rerun fork's scan selector. An ordinary unwrapped read is also legal.
+Negative occurrences are checked against their recorded key name and projected
+arguments, rather than reconstructed by a shared producer.
 Declaring an alternate path asserts its calling convention and semantic printer
 obligation; it is not Rust alias resolution or a proof of printer equivalence.
 The argument-free \code{own\_push::push!} is not a push-interface terminal:
@@ -779,7 +788,16 @@ or \code{set} canonical layout and yields its owned keys, while
 \code{borrowed\_cloned\_into\_iter} clones a \code{bulk} canonical layout's
 borrowed rows once. Conversion must match the canonical layout's protocol.
 The remaining \code{RoundPolicy} field is \code{timing}, accepting \code{none}
-or \code{phases}; timing and observer effects remain outside relational meaning.
+or \code{phases}. Under \textsc{DL-Timing}, \code{phases} includes eager candidate
+materialization before admission, so the two phases have separate clocks;
+\code{none} streams candidates directly. This materialization is a property of
+the recorded timing variant, not a printer optimization. Timing and observer
+effects remain outside relational meaning.
+\begin{mathpar}
+\Rule{DL-Timing}{t\in\{\code{none},\code{phases}\}\quad
+ t=\code{phases}\Rightarrow\text{materialize candidates before admission}}
+ {\text{candidate materialization follows the recorded timing variant}}
+\end{mathpar}
 Provider, admission, publication, termination, observer, scope, loop and output
 choices are explicit records, not decisions recovered from a bundled policy label.
 
@@ -807,10 +825,11 @@ terminal was removed; the ordinary pull terminal remains the default.
 Full measurements are recorded in
 \code{features/datalog/doop/codegen-evidence.json}.
 \paragraph{Rewrite check.} Check both contracts and preserve Storage exactly.
-The target may change checked execution records, frozen-key provider types,
-timing and each hole's CQ sub-pipeline independently; it must retain the typed
-terminal registry, context facts, admission owners, runtime names and query
-correspondence except for the independently checked scan-certificate substitution.
+The target may change checked execution records, timing and each hole's CQ
+sub-pipeline independently; it must retain the typed terminal registry, context
+facts, per-hole planning advice (including the known level), Storage-selected
+frozen-key providers, admission owners, runtime names and query correspondence
+except for the independently checked scan-certificate substitution.
 In particular, a rewrite may choose \code{stage(batch(64))} for one hole,
 \code{represent(positions)} for another, or insert Structures rewrites.
 These are recorded invocation arguments, not changes to the embedded CQ
@@ -973,8 +992,13 @@ every version; a version-specific plan overrides a rule-wide plan. Whole-read
 orders resolve to the existing permutation form. Step orders retain original
 source occurrences and optional columns separately from that permutation.
 The mark is denoted advice, not a validity premise: DL-OccurrenceOrder still
-checks permutation, dependencies and exact erasure. Fork passes the order to
-its hole's recorded planning invocation over normalized clause positions.
+checks permutation, dependencies and exact erasure. Fork records each rule
+hole's positive-occurrence order, authored flag, steps, smallest sites and
+optional known level as \code{Planning}. CK-DL-Fork checks these against the
+Incremental variant; an unauthored known level may be any legal level after
+head binding and no later than the last positive read. Round rewrites keep the
+fact fixed. The base invocation queue contains no generated planning arguments;
+\code{invocation\_pipeline} mechanically serializes the fact at print time.
 Named configuration resolution records
 that invocation's ordinal; a custom flat queue declares it explicitly.
 An absent owner or nonempty conflicting planner arguments is rejected.
@@ -982,11 +1006,15 @@ Unauthored variants leave the hole's CQ planner free to choose its own order.
 \begin{mathpar}
 \Rule{DL-PlanningOwner}
  {p=h.\mathrm{plan}<h.\mathrm{lower}\quad p<|h.Q|\quad
-  \mathrm{authored}(v)\Rightarrow \mathrm{args}(h.Q_p)=\varnothing}
- {\mathrm{fork}(v,h).Q_p.\mathrm{args}=\mathrm{order}(\mathrm{normalize}(v))}
+  (\mathrm{authored}(v)\lor h.\mathrm{planning.known}\ne\varnothing)
+    \Rightarrow \mathrm{args}(h.Q_p)=\varnothing}
+ {\mathrm{invoke}(h).Q_p.\mathrm{args}=
+   \mathrm{serialize}(\rho_v,h.\mathrm{planning})}
 \end{mathpar}
-The conclusion applies to authored variants; unauthored arguments remain
-unchanged. No pass path or relative queue-position heuristic identifies the owner.
+Unauthored order arguments remain unchanged unless a recorded known level
+owns the invocation. No pass path or relative queue-position heuristic identifies
+the owner. The smallest wrapper is likewise serialized from the recorded sites
+without changing invocation ordinals.
 
 \paragraph{Occurrence-preserving step advice.}
 Let $\rho_v$ map an original positive occurrence through the variant's
@@ -1004,7 +1032,7 @@ logical CQ variable names; no Rust type or expression is inspected.
  {\mathrm{advice}(v,A,S)=
   \mathrm{order}(\rho_v(A));\ \mathrm{smallest}(\rho_v(S))}
 \end{mathpar}
-Fork transports selectors; the ordinary CQ planner checks step legality,
+The occurrence translation serializes selectors; the ordinary CQ planner checks step legality,
 including completion of partial occurrences, WF-VO and selected CK-Le phases.
 Step or smallest advice uses \code{no_reduce}, preserving its named occurrences.
 The ordinary Physical rewrite checks exact smallest sites under PH-Smallest
@@ -1146,12 +1174,11 @@ be retained as a no-op compatibility setting.
 No MiniLinq core defaults are changed. The facade reexports
 \code{rustc\_hash}, so default consumers need no new direct dependency for Fx.
 The public \code{cq-datalog-hasher} plug-in retains explicit
-\code{hasher(fx)} and \code{hasher\_round(fx)} selections.
-For adversarial inputs, \code{hasher(keyed)} selects keyed \code{cq\_storage}
-providers for Storage and \code{hasher\_round(keyed)} does so for Round. These two Datalog
-boundaries replace the former three-part selection: no CQ dedup override is
-needed or admitted for the discharged default holes.
-These rewrites are parallel-agnostic and are not installed in the default queue.
+\code{hasher(fx)} selection. For adversarial inputs, \code{hasher(keyed)}
+selects keyed \code{cq\_storage} providers at Storage, including negative key sets.
+Fork copies those records; the former \code{hasher\_round} rewrite is removed.
+No CQ dedup override is needed or admitted for discharged default holes.
+The rewrite is parallel-agnostic and is not installed in the default queue.
 Fx uses \code{BuildHasherDefault<rustc\_hash::FxHasher>} from version 2.1.3,
 as does the Ascent oracle. All providers require lawful hashing and equality.
 The default additionally assumes trusted input: unkeyed Fx is not

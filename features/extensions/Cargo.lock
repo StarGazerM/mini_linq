@@ -36,8 +36,14 @@ dependencies = [
 name = "cq-ext-aggregate"
 version = "0.1.0"
 dependencies = [
+ "cq-elaborate",
  "cq-ext-support",
+ "cq-index-policy",
  "cq-lang-cq",
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "cq-order",
+ "cq-physical-lowering",
  "cq-stage",
  "cq-syntax",
  "cq-testkit",

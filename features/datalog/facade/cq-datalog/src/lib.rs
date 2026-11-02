@@ -151,14 +151,14 @@
 //! dedup representations in the generated rule holes, so the default queue
 //! installs no CQ dedup retype rewrite.
 //! This assumes trusted inputs: Fx is not collision-attack resistant.
-//! For adversarial input, select keyed hashing at both Datalog boundaries:
+//! For adversarial input, select keyed hashing at the Storage boundary; Storage
+//! records negation key-set providers, which fork copies into Round:
 //! ```ignore
 //! pipeline {
 //!     storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
-//!     round = [cq_datalog_hasher::hasher_round(keyed)];
 //! }
 //! ```
-//! Explicit `hasher(fx)` and `hasher_round(fx)` remain available. CQ canonical
+//! Explicit `hasher(fx)` remains available. CQ canonical
 //! boundaries use sort strategies rather than retypable set providers; discharged
 //! holes require no additional canonicalization strategy.
 //!

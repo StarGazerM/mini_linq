@@ -1,4 +1,4 @@
-use crate::{Analysis, BodyItem, Negative, Program};
+use crate::{Analysis, BodyItem, Program};
 use cq_datalog_support::{columns, ensure, equalities, filters};
 use cq_syntax::{rust, symbol_name};
 use std::collections::{BTreeMap, BTreeSet};
@@ -154,13 +154,13 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 }
                 BodyItem::Negation(negative) => {
                     let atom = &negative.atom;
-                    let entry = Negative {
+                    let entry = (
                         component,
-                        relation: analysis.positions[&symbol_name(&atom.relation)],
-                        columns: columns(atom),
-                        filters: filters(atom),
-                        equalities: equalities(atom),
-                    };
+                        analysis.positions[&symbol_name(&atom.relation)],
+                        columns(atom),
+                        filters(atom),
+                        equalities(atom),
+                    );
                     if !negations.contains(&entry) {
                         negations.push(entry);
                     }
@@ -175,8 +175,38 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         "storage read binding does not name a positive occurrence",
     )?;
     ensure(
-        program.negations == negations,
+        program.negations.len() == negations.len()
+            && program.negations.iter().zip(&negations).all(
+                |(recorded, (component, relation, columns, filters, equalities))| {
+                    recorded.component == *component
+                        && recorded.relation == *relation
+                        && recorded.columns == *columns
+                        && recorded.filters == *filters
+                        && recorded.equalities == *equalities
+                },
+            ),
         program,
         "storage negative projection coverage changed",
-    )
+    )?;
+    // Formal rule DL-LayoutProtocol: a negation key set is a payload-free set
+    // of projected keys; its token declares that protocol and its spelling is
+    // the token's spelling of the recorded hasher over the inferred key row.
+    let (key, payload) = crate::negative_schema();
+    for negative in &program.negations {
+        let token = crate::provider::check_instance(
+            &program.tokens,
+            &negative.provider,
+            &key,
+            &payload,
+            negative.hasher,
+        )?;
+        ensure(
+            token.protocol == Some(crate::LayoutProtocol::Set)
+                || (program.device.is_some()
+                    && token.protocol == Some(crate::LayoutProtocol::Bulk)),
+            &negative.provider.token,
+            "negation key set provider token must declare set protocol (or bulk for device storage)",
+        )?;
+    }
+    Ok(())
 }

@@ -117,6 +117,62 @@ fn negation(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
         syn::parse_quote!(!#name(#(#args),*))
     }
 }
+/// The synthetic in-plan admission read `!C(x̄)`: the head relation's committed
+/// canonical layout over the complete head key, in canonical column order.
+fn admission_negation(context: &RoundContext, head: usize, args: &[syn::Expr]) -> BodyItem {
+    let canonical = &context.layouts[context.relations[head].providers.canonical];
+    let name = &canonical.name;
+    let args = canonical.columns.iter().map(|&column| &args[column]);
+    syn::parse_quote!(!#name(#(#args),*))
+}
+// Layouts change only positional host representation, never Rust-step order.
+fn use_layouts(
+    query: &mut round::cq::Query,
+    context: &RoundContext,
+    storage: &storage::Program,
+    variant: usize,
+) -> syn::Result<()> {
+    for read in storage.reads.iter().filter(|read| read.variant == variant) {
+        let Some(BodyItem::Positive { atom }) = query.body.iter_mut().nth(read.position) else {
+            return Err(syn::Error::new_spanned(
+                &*query,
+                "recorded read is not a positive occurrence",
+            ));
+        };
+        if read.kind == "direct" {
+            continue;
+        }
+        let layouts = if read.kind == "delta" {
+            &context.delta_layouts
+        } else {
+            &context.layouts
+        };
+        let layout = layouts
+            .get(read.index)
+            .ok_or_else(|| syn::Error::new_spanned(&*atom, "missing recorded layout"))?;
+        atom.args = read.columns.iter().map(|&i| atom.args[i].clone()).collect();
+        atom.relation = layout.name.clone();
+    }
+    Ok(())
+}
+
+fn scan_source(query: &round::cq::Query, context: &RoundContext) -> Option<InputSource> {
+    let BodyItem::Positive { atom } = query.body.first()? else {
+        return None;
+    };
+    if let Some(index) = context
+        .relations
+        .iter()
+        .position(|relation| relation.delta.as_ref() == Some(&atom.relation))
+    {
+        return Some(InputSource::Delta(index));
+    }
+    context
+        .layouts
+        .iter()
+        .position(|layout| layout.name == atom.relation && layout.key == 0)
+        .map(InputSource::Layout)
+}
 
 /// Formal rule FK-Known: decide where a rule hole discharges its head's
 /// committed anti-join, returning the pinned in-plan level. Advice
@@ -382,12 +438,7 @@ fn construct(
         round_name: fresh.id("round"),
     };
     let mut holes: Vec<round::cq::Program> = Vec::new();
-    // An authored variant order (incremental `plan(..)` advice) reaches the
-    // hole's default CQ plan as explicit `order(..)` advice, so the storage
-    // layouts (which follow the variant order) and the hole plan agree.
-    let mut authored_orders: Vec<Option<(TokenStream, TokenStream)>> = Vec::new();
-    // Pinned in-plan admission placement (FK-Known), as CQ `known(C@i at k)`.
-    let mut known_options: Vec<Option<TokenStream>> = Vec::new();
+    let mut planning = Vec::new();
     for members in &analysis.components {
         let mut stratum = Stratum {
             members: members.clone(),
@@ -486,17 +537,8 @@ fn construct(
                         filters: selections,
                         equalities: repeated,
                         name: fresh.id("keys"),
-                        provider: {
-                            let token = storage::provider::hash_set();
-                            let ty = storage::provider::spell(
-                                &token,
-                                &syn::parse_quote!(_),
-                                &syn::parse_quote!(()),
-                                storage::Hasher::Fx,
-                            )?;
-                            storage::Provider { token: token.token, ty }
-                        },
-                        hasher: storage::Hasher::Fx,
+                        provider: planned.provider.clone(),
+                        hasher: planned.hasher,
                         hole: holes.len(),
                     };
                     let name = fresh.id("key_hole");
@@ -567,8 +609,7 @@ fn construct(
                         std::iter::once(source_name),
                     )?;
                     holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#arguments),*) #(, #selections)*;))?);
-                    authored_orders.push(None);
-                    known_options.push(None);
+                    planning.push(None);
                     stratum.keys.push(key);
                     stratum.keys.len() - 1
                 };
@@ -596,9 +637,12 @@ fn construct(
                 plan.is_some(),
                 &fanout,
             )?;
-            let known = if level.is_some() { Admission::InPlan } else { Admission::Admit };
-            let mut known_option = None;
-            if let Some(level) = level {
+            let known = if level.is_some() {
+                Admission::InPlan
+            } else {
+                Admission::Admit
+            };
+            if level.is_some() {
                 // Formal rule ADM-InPlan: name computed head terms by ordinary
                 // bindings, then append the committed anti-join `!C(x̄)` over the
                 // head's canonical layout, pinned after the FK-Known level.
@@ -613,12 +657,7 @@ fn construct(
                     }
                 }
                 let args: Vec<syn::Expr> = query.head.args.iter().cloned().collect();
-                query.body.push(round::admission_negation(&context, head, &args));
-                let relations = &context.relations[head];
-                let canonical = &context.layouts[relations.providers.canonical].name;
-                let clause = syn::Index::from(query.body.len() - 1);
-                let level = syn::Index::from(level);
-                known_option = Some(quote!(known(#canonical @ #clause at #level)));
+                query.body.push(admission_negation(&context, head, &args));
             }
             let declarations = hole_inputs(
                 &source.tokens,
@@ -635,12 +674,8 @@ fn construct(
             holes.push(syn::parse2(
                 quote!(struct #name; #(#declarations)* #scan_declaration #output #query),
             )?);
-            known_options.push(known_option);
-            authored_orders.push(if variant.authored {
-                let normal = round::cq::normal::normalize(&holes[hole])?;
-                // Formal rule DL-StepAdvice: retain occurrence identity through
-                // permutation, delta/layout/scan renaming, and CQ normalization.
-                let source_atoms: Vec<_> = variant
+            planning.push(Some(Planning {
+                order: variant
                     .query
                     .body
                     .iter()
@@ -648,67 +683,19 @@ fn construct(
                     .filter_map(|(position, item)| {
                         matches!(item, BodyItem::Positive { .. }).then_some(variant.order[position])
                     })
-                    .collect();
-                let normal_atoms: Vec<_> = normal
-                    .query
-                    .body
+                    .collect(),
+                authored: variant.authored,
+                steps: variant
+                    .steps
                     .iter()
-                    .enumerate()
-                    .filter_map(|(index, item)| match item {
-                        BodyItem::Positive { atom } => Some((index, &atom.relation)),
-                        _ => None,
+                    .map(|step| PlanningStep {
+                        occurrence: step.occurrence,
+                        columns: step.columns.clone(),
                     })
-                    .collect();
-                ensure(
-                    source_atoms.len() == normal_atoms.len(),
-                    &normal,
-                    "Datalog step advice requires normalization to preserve positive occurrences",
-                )?;
-                let mapped: std::collections::BTreeMap<_, _> = source_atoms
-                    .into_iter()
-                    .zip(normal_atoms.iter().copied())
-                    .collect();
-                let selector =
-                    |occurrence: usize, columns: &Option<Vec<Ident>>| -> syn::Result<TokenStream> {
-                        let &(index, relation) = mapped.get(&occurrence).ok_or_else(|| {
-                            syn::Error::new_spanned(&normal, "advice names no positive occurrence")
-                        })?;
-                        let index = syn::Index::from(index);
-                        let columns = columns.as_ref().map(|columns| quote!((#(#columns),*)));
-                        Ok(quote!(#relation @ #index #columns))
-                    };
-                let atoms = if variant.steps.is_empty() {
-                    normal_atoms
-                        .iter()
-                        .map(|&(index, relation)| {
-                            let index = syn::Index::from(index);
-                            quote!(#relation @ #index)
-                        })
-                        .collect::<Vec<_>>()
-                } else {
-                    variant
-                        .steps
-                        .iter()
-                        .map(|step| selector(step.occurrence, &step.columns))
-                        .collect::<syn::Result<Vec<_>>>()?
-                };
-                let sites = variant
-                    .smallest
-                    .iter()
-                    .map(|site| {
-                        let atoms = site
-                            .iter()
-                            .map(|&occurrence| selector(occurrence, &None))
-                            .collect::<syn::Result<Vec<_>>>()?;
-                        Ok(quote!(smallest(#(#atoms),*)))
-                    })
-                    .collect::<syn::Result<Vec<_>>>()?;
-                let no_reduce = (!variant.steps.is_empty() || !variant.smallest.is_empty())
-                    .then(|| quote!(no_reduce,));
-                Some((quote!(#no_reduce order(#(#atoms),*)), quote!(#(#sites),*)))
-            } else {
-                None
-            });
+                    .collect(),
+                smallest: variant.smallest.clone(),
+                known: level,
+            }));
             context.relations[head].admit.push(hole);
             let rule = RuleHole {
                 variant: variant_index,
@@ -786,15 +773,16 @@ fn construct(
         &pipeline,
         plan,
         lower,
-        authored_orders.iter().any(Option::is_some) || known_options.iter().any(Option::is_some),
+        planning
+            .iter()
+            .flatten()
+            .any(|facts| facts.authored || facts.known.is_some()),
     )?;
-    debug_assert_eq!(holes.len(), authored_orders.len());
-    debug_assert_eq!(holes.len(), known_options.len());
+    debug_assert_eq!(holes.len(), planning.len());
     let holes = holes
         .into_iter()
-        .zip(authored_orders)
-        .zip(known_options)
-        .map(|((cq, authored_order), known_option)| {
+        .zip(planning)
+        .map(|(cq, planning)| {
             let facts = cq_stage::Context {
                 consumer_canonical: true,
                 discharged_host_sets: cq
@@ -813,24 +801,6 @@ fn construct(
             };
             let mut pipeline = pipeline.clone();
             pipeline.passes[lower].arguments = facts.to_token_stream();
-            if let (Some(plan), Some((order, smallest))) = (plan, authored_order) {
-                pipeline.passes[plan].arguments = order;
-                if !smallest.is_empty() {
-                    let next = &pipeline.passes[lower + 1];
-                    // Keep recorded invocation ordinals stable (notably the
-                    // GPU binding owner) while prepending this checked rewrite.
-                    pipeline.passes[lower + 1] = syn::parse_quote!(
-                        ::cq_datalog::passes::smallest_before(#next; #smallest)
-                    );
-                }
-            }
-            if let (Some(plan), Some(known)) = (plan, known_option) {
-                let arguments = &mut pipeline.passes[plan].arguments;
-                if !arguments.is_empty() {
-                    arguments.extend(quote!(,));
-                }
-                arguments.extend(known);
-            }
             Hole {
                 answer: round::answer_ownership(&cq, interface),
                 cq,
@@ -839,6 +809,7 @@ fn construct(
                 facts,
                 lower,
                 plan,
+                planning,
                 binding: None,
             }
         })

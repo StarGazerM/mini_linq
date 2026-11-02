@@ -1,10 +1,11 @@
 //! Hash-provider selection for Datalog, whose default providers use Fx hashing.
 //!
 //! `hasher(keyed)` opts Storage's native hash layout maps, including each
-//! relation's canonical layout, into the keyed `cq_storage` hash providers.
-//! `hasher(fx)` explicitly selects the default Fx providers. Ordered/custom
-//! providers, row buffers, bindings, the canonical choice, maintenance, and all
-//! logical/execution decisions are preserved.
+//! relation's canonical layout, and its recorded negation key sets into the
+//! keyed `cq_storage` hash providers. `hasher(fx)` explicitly selects the
+//! default Fx providers. Ordered/custom providers, row buffers, bindings, the
+//! canonical choice, maintenance, and all logical/execution decisions are
+//! preserved.
 //! Selection reads recorded provider tokens (A-126): every instance whose
 //! declared token is `hashed` with a spelling function records the chosen
 //! `hasher { fx | keyed }` and is respelled from its key/payload schema by its
@@ -13,11 +14,8 @@
 //! and `sharded_layout` are hashed, so Storage selection may precede or follow
 //! sharded Storage selection.
 //!
-//! Negation key sets are recorded only after fork. Pair the Storage rewrite
-//! with `hasher_round(keyed)` in the Round queue to opt those sets out of Fx
-//! as well. Apply it before converting Round to a specialized parallel
-//! language. `hasher_round(fx)` explicitly selects Fx without changing the
-//! embedded Storage program or the CQ hole pipelines.
+//! Storage records each negation key set's provider and hasher; fork copies
+//! them into Round, so there is no separate Round hasher rewrite.
 //!
 //! CQ holes discharge result canonicalization to admission and negation key
 //! sets, so they have no separate answer-dedup provider to select. To opt these
@@ -27,7 +25,6 @@
 //! ```ignore
 //! pipeline {
 //!     storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
-//!     round = [cq_datalog_hasher::hasher_round(keyed)];
 //! }
 //! ```
 //!
@@ -42,15 +39,6 @@ mod rewrite;
 pub fn hasher(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     cq_stage::rewrite::<cq_lang_datalog_storage::Program>(input.into(), |source, args| {
         rewrite::storage(source, syn::parse2(args)?)
-    })
-    .into()
-}
-
-/// Select `fx` or `keyed` negation key sets at the checked Round boundary.
-#[proc_macro]
-pub fn hasher_round(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    cq_stage::rewrite::<cq_lang_datalog_round::Program>(input.into(), |source, args| {
-        rewrite::round(source, syn::parse2(args)?)
     })
     .into()
 }

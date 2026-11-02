@@ -210,13 +210,18 @@ domain inclusion makes $g$ defined; context adequacy lifts the argument to macro
 invocations.\end{proof}
 
 \paragraph{Set aggregate contexts.}
-The aggregate context records its row-stream canonicality proof, owned head
-columns, constant-group proof and \code{cq_storage::HashState}. The default
-Sequence translator preserves the checked canonical-return boundary; the extension folds
-that stream directly without adding another distinct set. Unknown terminals
-may repeat rows and retain an explicit fast-hashed distinct boundary.
+The aggregate context records owned head columns, constant-group proof and
+\code{cq_storage::HashState}. Its hole resumes the remaining pipeline with an
+empty context, so CK-Return (an inferred key or a recorded \code{return canon}
+and its canonical index) makes returned rows a set under every checked terminal.
+The extension folds that stream once and never claims \code{consumer = canonical},
+because count and sum observe multiplicity.
+Every selected terminal must preserve that canonical return, including its
+multiplicity; a terminal deliberately repeating canonical rows violates the
+printer obligation. The aggregate does not repair such a terminal with a second
+set boundary.
 \begin{mathpar}
-\Rule{EXT-SetFold}{\mathsf{checkedCanonicalTerminal}(\pi)\quad
+\Rule{EXT-SetFold}{\Gamma_{\rm hole}=\emptyset\quad\textsc{CK-Return}(hole)\quad
  Q:\mathcal P_{\rm fin}(Row)}
  {\mathsf{aggregate}(Q)=\mathsf{fold}(Q)}
 

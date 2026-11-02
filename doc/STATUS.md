@@ -440,8 +440,8 @@ approval.
   (`doc/formal/context.tex`); rule holes build no local `__cq_seen`.
 - Negation is core `!R(..)` (anti-join, `doc/formal/guards.tex`) over key sets
   built once per stratum; zero per-call index builds.
-- Fx hashing is the default; keyed `cq_storage` providers via
-  `hasher(keyed)`/`hasher_round(keyed)` (`mini-keyed` engines).
+- Fx hashing is the default; keyed `cq_storage` providers, negation key sets
+  included, via `hasher(keyed)` (`mini-keyed` engines).
 - Compile time (base DOOP crate): macro expansion 139 → 3.4 s (holes declare
   only what they read, one check per pass, linear source checks, optimized
   proc macros); codegen partitioned per component/hole; one crate per engine.

@@ -146,7 +146,6 @@ dependencies = [
  "cq-datalog-storage",
  "cq-datalog-stratify",
  "cq-datalog-support",
- "cq-lang-datalog-round",
  "cq-lang-datalog-storage",
  "cq-stage",
  "cq-storage",

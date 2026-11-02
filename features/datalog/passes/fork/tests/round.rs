@@ -939,3 +939,61 @@ fn custom_lower_aliases_require_an_explicit_role() {
         assert!(compile_with(&storage, arguments).is_err());
     }
 }
+
+#[test]
+fn scan_correspondence_accepts_an_unwrapped_read_and_rejects_wrong_sources() {
+    let storage = source();
+    let original = compile(&storage).unwrap();
+    let component = original
+        .context
+        .strata
+        .iter()
+        .position(|s| !s.seeds.is_empty())
+        .unwrap();
+    let rule = original.context.strata[component].seeds[0].clone();
+    let scan = rule.scan.as_ref().unwrap();
+    let (name, host) = match scan.source {
+        round::InputSource::Layout(index) => {
+            let layout = &original.context.layouts[index];
+            (layout.name.clone(), layout.host.clone())
+        }
+        round::InputSource::Delta(index) => {
+            let relation = &original.context.relations[index];
+            (
+                relation.delta.clone().unwrap(),
+                relation.delta_host.clone().unwrap(),
+            )
+        }
+    };
+    let mut alternative = original.clone();
+    alternative.context.strata[component].seeds[0].scan = None;
+    let hole = &mut alternative.holes[rule.hole];
+    let round::cq::BodyItem::Positive { atom } = &mut hole.cq.query.body[0] else {
+        panic!()
+    };
+    atom.relation = name.clone();
+    let declaration = hole
+        .cq
+        .declarations
+        .iter_mut()
+        .find(|d| d.name == scan.binding)
+        .unwrap();
+    declaration.name = name.clone();
+    declaration.value = Some(syn::parse_quote!(= (&#host)));
+    hole.rename_host_fact(&scan.binding, &name);
+    check(&storage, &alternative).unwrap();
+    let mut invalid = original.clone();
+    invalid.context.strata[component].seeds[0]
+        .scan
+        .as_mut()
+        .unwrap()
+        .source = round::InputSource::Layout(usize::MAX);
+    assert!(check(&storage, &invalid).is_err());
+    let mut invalid = original.clone();
+    invalid.context.strata[component].seeds[0]
+        .scan
+        .as_mut()
+        .unwrap()
+        .source = round::InputSource::Delta(rule.head);
+    assert!(check(&storage, &invalid).is_err());
+}

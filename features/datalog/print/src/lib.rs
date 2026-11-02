@@ -37,7 +37,11 @@ pub fn check_host_interfaces(program: &Program) -> syn::Result<()> {
     // DL-WaveLanes realize device streams; host printers have their own
     // wave concurrency and must not silently drop a recorded lane split.
     ensure(
-        program.schedule.strata.iter().all(|stratum| stratum.lanes.is_empty()),
+        program
+            .schedule
+            .strata
+            .iter()
+            .all(|stratum| stratum.lanes.is_empty()),
         &program.schedule,
         "host Datalog printers do not realize wave lanes; use a device printer",
     )?;
@@ -47,7 +51,7 @@ pub fn check_host_interfaces(program: &Program) -> syn::Result<()> {
 pub fn splice(program: &Program) -> syn::Result<Vec<TokenStream>> {
     check_host_interfaces(program)?;
     splice_with(program, |hole| {
-        let mut pipeline = hole.pipeline.clone();
+        let mut pipeline = hole.invocation_pipeline()?;
         if hole.interface == HoleInterface::Push {
             let terminal = pipeline.passes.last_mut().expect("checked terminal");
             let arguments = &terminal.arguments;
@@ -188,6 +192,8 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         program,
         "base printer does not interpret execution certificates",
     )?;
+    // `phases` includes eager candidate materialization: its evaluation timer
+    // must finish before admission starts. `none` streams directly (DL-Timing).
     let timed = program.policy.timing == "phases";
     compile_with(program, |rules, context, holes, _| {
         Ok(evaluate(rules, context, holes, &program.holes, timed))

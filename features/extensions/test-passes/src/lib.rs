@@ -1,9 +1,8 @@
-//! A conformance Sequence terminal for continuation propagation.
+//! Conformance Sequence terminals for continuation propagation.
 //!
-//! Its `twice` argument is mandatory and realized as two copies of the complete
-//! stream in the emitted Rust. Duplicated witnesses denote the same finite set.
-//! This fixture requires Clone answers and validates extensional extension
-//! boundaries when a caller's downstream printer repeats witnesses.
+//! `canonical(once)` preserves the core canonical return contract, including
+//! multiplicity-sensitive aggregate consumers. `repeated(twice)` deliberately
+//! violates that contract and is used only for extensional set-boundary tests.
 use quote::quote;
 
 #[proc_macro]
@@ -19,6 +18,19 @@ pub fn repeated(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             let rows = (#printed).collect::<::std::vec::Vec<_>>();
             rows.clone().into_iter().chain(rows)
         }))
+    })
+    .into()
+}
+
+#[proc_macro]
+pub fn canonical(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, arguments| {
+        let argument: syn::Ident = syn::parse2(arguments)?;
+        if argument != "once" {
+            return Err(syn::Error::new_spanned(argument, "expected once"));
+        }
+        let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
+        cq_sequence_pull::translate(source, &analysis)
     })
     .into()
 }

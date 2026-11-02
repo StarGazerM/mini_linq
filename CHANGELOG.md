@@ -30,6 +30,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   `abi columns` scans (e.g. `DeviceColumns`) now count even when the target
   catalog does not register their token. Tests cover the declared, host-level
   alternative, matching, undeclared and PL-Catalog-rejected omission records.
+- Datalog review fixes: fork records Round planning decisions and lowers them
+  through a mechanical pipeline, checked by an independent scan/negation
+  correspondence checker. Storage `Negative` records now carry their key-set
+  provider token and hasher (checked as `set`-protocol instances over `_`);
+  `hasher(keyed)` selects them and fork copies them into Round, so the
+  `hasher_round` Round rewrite is removed (drop it from `round = [...]`).
+  Aggregate lowering no longer builds a redundant `seen` `HashSet`.
 
 - Align current storage documentation and task-catalog comments with direct calls:
   document `build typed`, native-read and `abandon N of H` grammar, declared host
@@ -1209,8 +1216,9 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   and kept opt-in (no CGU or runtime gain).
 
 - Fx hashing is the Datalog default (Storage and Round providers, hole dedup
-  sets). Keyed aHash for adversarial inputs: `hasher(keyed)` +
-  `hasher_round(keyed)`; DOOP engines `mini-keyed` / `mini-par-keyed`.
+  sets). Keyed aHash for adversarial inputs: `hasher(keyed)` (originally paired
+  with the since-removed `hasher_round(keyed)`); DOOP engines `mini-keyed` /
+  `mini-par-keyed`.
   Exact vs Ascent on all six apps; goldens unchanged.
 
 - Sequence GPU providers reuse setup-time count owners and payload view tables;

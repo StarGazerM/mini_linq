@@ -262,6 +262,68 @@ fn every_read_must_serve_exactly_its_positive_occurrence() {
 }
 
 #[test]
+fn negations_record_a_checked_set_key_provider_and_hasher() {
+    use cq_lang_datalog_storage::{Hasher, LayoutProtocol, provider};
+    let original = authored(INCREMENTAL);
+    assert!(!original.negations.is_empty());
+    for negative in &original.negations {
+        assert_eq!(
+            negative.provider,
+            syn::parse_quote!(@hash_set as ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
+        );
+        assert_eq!(negative.hasher, Hasher::Fx);
+    }
+    let tokens = original.to_token_stream();
+    assert_eq!(syn::parse2::<Program>(tokens).unwrap(), original);
+    // Legal alternatives: the keyed hasher, and a declared verbatim set token.
+    let mut keyed = original.clone();
+    keyed.negations[0].provider = syn::parse_quote!(@hash_set as ::cq_storage::HashSet<_>);
+    keyed.negations[0].hasher = Hasher::Keyed;
+    check_rewrite(&original, &keyed).unwrap();
+    let mut authored_set = original.clone();
+    authored_set.tokens.push(provider::declared(
+        "custom_set",
+        provider::Spelling::Verbatim,
+        Some(LayoutProtocol::Set),
+        provider::Admission::None,
+        false,
+        provider::TaskHasher::Fx,
+        &[provider::HostRead::Membership],
+        &[],
+    ));
+    authored_set.negations[0].provider = syn::parse_quote!(@custom_set as ::my::KeySet<_>);
+    authored_set.negations[0].hasher = Hasher::None;
+    check_rewrite(&original, &authored_set).unwrap();
+    // Illegal records: spelling, hasher, token and protocol must agree.
+    let mutations: &[fn(&mut Program)] = &[
+        |p| p.negations[0].hasher = Hasher::Keyed,
+        |p| p.negations[0].hasher = Hasher::None,
+        |p| {
+            p.negations[0].provider.ty =
+                syn::parse_quote!(::std::collections::HashSet<(i32,), ::cq_storage::HashState>)
+        },
+        |p| p.negations[0].provider.token = syn::parse_quote!(undeclared),
+        |p| {
+            p.negations[0].provider = syn::parse_quote!(
+                @hash_map as ::std::collections::HashMap<_, ::std::vec::Vec<()>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+            )
+        },
+        |p| {
+            p.negations[0].provider = syn::parse_quote!(@rows_vec as ::std::vec::Vec<_>);
+            p.negations[0].hasher = Hasher::None;
+        },
+    ];
+    for (index, mutate) in mutations.iter().enumerate() {
+        let mut changed = original.clone();
+        mutate(&mut changed);
+        assert!(
+            contract::check(&changed).is_err(),
+            "key-set mutation {index}"
+        );
+    }
+}
+
+#[test]
 fn rust_bindings_are_available_only_after_their_written_clause() {
     let original = authored(
         "struct Q; relation E(x:i32,y:i32)=(e); relation R(x:i32); output R;

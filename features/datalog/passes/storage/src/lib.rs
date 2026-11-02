@@ -3,7 +3,8 @@
 //! column (a read binding all columns); otherwise the admission anti-join read
 //! adds the identity all-column-keyed layout. It is an ordinary layout. Every
 //! layout keyed by all columns is a payload-free hash set; the others are
-//! grouped hash maps.
+//! grouped hash maps. Every negation projection records the default `hash_set`
+//! Fx key-set provider; Storage rewrites may select another and fork copies it.
 use cq_datalog_support::{ensure, key_columns};
 use cq_lang_datalog_incremental as incremental;
 use cq_lang_datalog_storage::{
@@ -18,7 +19,7 @@ pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
     let mut target = Program {
         incremental: source.clone(),
         device: None,
-        // Base tokens; `hash_set` also types Round's negation key sets.
+        // Base tokens; `hash_set` also types the recorded negation key sets.
         tokens: vec![
             provider::hash_set(),
             provider::hash_map(),

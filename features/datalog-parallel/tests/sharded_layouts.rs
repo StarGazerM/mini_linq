@@ -142,7 +142,7 @@ fn keyed_hasher_composes_with_sharded_layouts_in_both_orders() {
             ($($storage:tt)*) => {
                 assert_exact(closure!(&edges;
                     storage_rewrites = [$($storage)*];
-                    round = [cq_datalog_hasher::hasher_round(keyed), cq_datalog_schedule::schedule(by_head), cq_datalog_parallel::partition(threshold = 0, grain = 2)];
+                    round = [cq_datalog_schedule::schedule(by_head), cq_datalog_parallel::partition(threshold = 0, grain = 2)];
                     print = cq_datalog_parallel::print_rounds;
                 ), &expected, 4, "keyed/by_head");
             };

@@ -10,13 +10,16 @@
 //! maintained layout permutations, and set-valued negation projections.
 //! Negative projections record first variable columns, repeated-column equality
 //! pairs and constant filters; their key sets are prepared once per component.
+//! Each projection also records its key-set provider token and hasher state
+//! (WF-DL-Storage): a `set`-protocol token spelled over the inferred key row
+//! `_` with no payload. Round copies these facts; it never chooses them.
 //! Uncertified hosts remain valid storage but cannot discharge CQ host facts.
 //! See doc/formal/datalog.tex for the storage refinement obligations.
 use cq_datalog_support::{columns, ensure, equalities, filters, key_columns};
 pub use cq_lang_datalog_incremental as incremental;
+use cq_lang_structures::{Declaration, provider::InputSchema};
 use cq_syntax::symbol_name;
 pub use incremental::strata::source::{BodyItem, Query};
-use cq_lang_structures::{Declaration, provider::InputSchema};
 use std::collections::BTreeSet;
 use syn::{Expr, Ident, Type};
 mod layouts;
@@ -200,6 +203,40 @@ pub struct Negative {
     pub columns: Vec<usize>,
     pub filters: Vec<(usize, Expr)>,
     pub equalities: Vec<(usize, usize)>,
+    /// Key-set provider, spelled over [`negative_schema`].
+    pub provider: Provider,
+    /// Recorded hasher state of the key set.
+    pub hasher: Hasher,
+}
+impl Negative {
+    /// Whether both records describe the same logical projection, whatever
+    /// provider realizes it.
+    pub fn same_projection(&self, other: &Self) -> bool {
+        self.component == other.component
+            && self.relation == other.relation
+            && self.columns == other.columns
+            && self.filters == other.filters
+            && self.equalities == other.equalities
+    }
+}
+/// Key and payload schema of every negation key set: the inferred key row `_`
+/// (the hole's projected row) and no payload.
+pub fn negative_schema() -> (Type, Type) {
+    (syn::parse_quote!(_), syn::parse_quote!(()))
+}
+/// The default negation key set: the base `hash_set` token with the Fx hasher.
+pub fn default_key_set() -> (Provider, Hasher) {
+    let token = provider::hash_set();
+    let (key, payload) = negative_schema();
+    let ty =
+        provider::spell(&token, &key, &payload, Hasher::Fx).expect("hash_set spells the Fx hasher");
+    (
+        Provider {
+            token: token.token,
+            ty,
+        },
+        Hasher::Fx,
+    )
 }
 /// Structural provenance of a canonical host, indexed in its storage vector.
 /// Opaque collection implementations still owe their declared collection laws.
@@ -246,7 +283,7 @@ pub fn row_type(declaration: &cq_syntax::RelationDecl) -> Type {
     syn::parse_quote!((#(#types,)*))
 }
 record!(Read { variant: usize, position: usize, kind: Ident, index: usize, columns: Vec<usize> });
-record!(Negative { component: usize, relation: usize, columns: Vec<usize>, filters: Vec<(usize, Expr)>, equalities: Vec<(usize, usize)> });
+record!(Negative { component: usize, relation: usize, columns: Vec<usize>, filters: Vec<(usize, Expr)>, equalities: Vec<(usize, usize)>, provider: Provider, hasher: Hasher });
 record!(HostCanonical { kind: Ident, index: usize, source: Ident, columns: Vec<usize> });
 record!(Policy {
     insertion: Ident,
@@ -254,7 +291,8 @@ record!(Policy {
 });
 
 pub use incremental::Analysis;
-/// Choose the default written-order occurrence bindings; contracts do not call this.
+/// Choose the default written-order occurrence bindings and default `hash_set`
+/// Fx negation key sets; contracts do not call this.
 pub fn read_plan(
     program: &Program,
     analysis: &Analysis,
@@ -325,14 +363,20 @@ pub fn read_plan(
                 }
                 BodyItem::Negation(negative) => {
                     let atom = &negative.atom;
+                    let (provider, hasher) = default_key_set();
                     let entry = Negative {
                         component,
                         relation: analysis.positions[&symbol_name(&atom.relation)],
                         columns: columns(atom),
                         filters: filters(atom),
                         equalities: equalities(atom),
+                        provider,
+                        hasher,
                     };
-                    if !negations.contains(&entry) {
+                    if !negations
+                        .iter()
+                        .any(|n: &Negative| n.same_projection(&entry))
+                    {
                         negations.push(entry);
                     }
                 }
@@ -474,47 +518,109 @@ pub mod contract {
             )?;
             for (index, declaration) in device.providers.iter().enumerate() {
                 ensure(
-                    !device.providers[..index].iter().any(|previous| previous.token == declaration.token)
-                        && program.tokens.iter().any(|token| token.token == declaration.token)
+                    !device.providers[..index]
+                        .iter()
+                        .any(|previous| previous.token == declaration.token)
+                        && program
+                            .tokens
+                            .iter()
+                            .any(|token| token.token == declaration.token)
                         && declaration.facts.abi.is_some(),
                     program,
                     "device provider declarations require unique declared Storage tokens and a native ABI",
                 )?;
             }
-            let declared = |token: &Ident| device.providers.iter().any(|declaration| declaration.token == *token);
-            let schema_matches = |input: &InputSchema, columns: &[&Type], keys: usize| {
-                input.key_count == keys && input.columns.len() == columns.len()
-                    && input.columns.iter().zip(columns).all(|(input, logical)| input.logical == **logical)
+            let declared = |token: &Ident| {
+                device
+                    .providers
+                    .iter()
+                    .any(|declaration| declaration.token == *token)
             };
-            for (index, (relation, declaration)) in device.relations.iter()
-                .zip(&program.incremental.strata.source.declarations).enumerate()
+            let schema_matches = |input: &InputSchema, columns: &[&Type], keys: usize| {
+                input.key_count == keys
+                    && input.columns.len() == columns.len()
+                    && input
+                        .columns
+                        .iter()
+                        .zip(columns)
+                        .all(|(input, logical)| input.logical == **logical)
+            };
+            for (index, (relation, declaration)) in device
+                .relations
+                .iter()
+                .zip(&program.incremental.strata.source.declarations)
+                .enumerate()
             {
-                let columns = declaration.columns.iter().map(|column| &column.ty).collect::<Vec<_>>();
-                ensure(schema_matches(&relation.input, &columns, columns.len()), program,
-                    "device relation input must record its complete logical schema")?;
+                let columns = declaration
+                    .columns
+                    .iter()
+                    .map(|column| &column.ty)
+                    .collect::<Vec<_>>();
+                ensure(
+                    schema_matches(&relation.input, &columns, columns.len()),
+                    program,
+                    "device relation input must record its complete logical schema",
+                )?;
                 if declaration.value.is_none() {
-                    ensure(program.providers.get(index).is_some_and(|provider| declared(&provider.delta.token)), program,
-                        "device delta provider must have declared GPU facts")?;
+                    ensure(
+                        program
+                            .providers
+                            .get(index)
+                            .is_some_and(|provider| declared(&provider.delta.token)),
+                        program,
+                        "device delta provider must have declared GPU facts",
+                    )?;
                 }
             }
-            for (state, layout) in device.layouts.iter().zip(&program.layouts)
+            for (state, layout) in device
+                .layouts
+                .iter()
+                .zip(&program.layouts)
                 .chain(device.delta_layouts.iter().zip(&program.delta_layouts))
             {
-                let relation = analysis.positions.get(&symbol_name(&layout.relation))
+                let relation = analysis
+                    .positions
+                    .get(&symbol_name(&layout.relation))
                     .and_then(|&index| program.incremental.strata.source.declarations.get(index))
-                    .ok_or_else(|| syn::Error::new_spanned(layout, "unknown device layout relation"))?;
-                let columns = layout.columns.iter().filter_map(|&column| relation.columns.get(column).map(|column| &column.ty)).collect::<Vec<_>>();
-                ensure(declared(&state.token) && state.token == layout.provider.token
-                    && columns.len() == layout.columns.len() && schema_matches(&state.input, &columns, layout.key), program,
-                    "device layout input and token must match its recorded logical layout")?;
+                    .ok_or_else(|| {
+                        syn::Error::new_spanned(layout, "unknown device layout relation")
+                    })?;
+                let columns = layout
+                    .columns
+                    .iter()
+                    .filter_map(|&column| relation.columns.get(column).map(|column| &column.ty))
+                    .collect::<Vec<_>>();
+                ensure(
+                    declared(&state.token)
+                        && state.token == layout.provider.token
+                        && columns.len() == layout.columns.len()
+                        && schema_matches(&state.input, &columns, layout.key),
+                    program,
+                    "device layout input and token must match its recorded logical layout",
+                )?;
             }
             for (state, negative) in device.negations.iter().zip(&program.negations) {
-                let relation = program.incremental.strata.source.declarations.get(negative.relation)
-                    .ok_or_else(|| syn::Error::new_spanned(negative, "unknown device negative relation"))?;
-                let columns = negative.columns.iter().filter_map(|&column| relation.columns.get(column).map(|column| &column.ty)).collect::<Vec<_>>();
-                ensure(declared(&state.token) && columns.len() == negative.columns.len()
-                    && schema_matches(&state.input, &columns, columns.len()), program,
-                    "device negative input must match its recorded logical projection")?;
+                let relation = program
+                    .incremental
+                    .strata
+                    .source
+                    .declarations
+                    .get(negative.relation)
+                    .ok_or_else(|| {
+                        syn::Error::new_spanned(negative, "unknown device negative relation")
+                    })?;
+                let columns = negative
+                    .columns
+                    .iter()
+                    .filter_map(|&column| relation.columns.get(column).map(|column| &column.ty))
+                    .collect::<Vec<_>>();
+                ensure(
+                    declared(&state.token)
+                        && columns.len() == negative.columns.len()
+                        && schema_matches(&state.input, &columns, columns.len()),
+                    program,
+                    "device negative input must match its recorded logical projection",
+                )?;
             }
         }
         provider::check_table(&program.tokens)?;

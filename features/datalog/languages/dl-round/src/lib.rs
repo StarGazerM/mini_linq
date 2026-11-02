@@ -36,7 +36,8 @@ pub use storage::incremental;
 use storage::{record, text::Text};
 use syn::{Expr, Ident};
 mod correspondence;
-pub use correspondence::{admission_negation, check_storage, scan_source, use_layouts, use_scan};
+mod planning;
+pub use correspondence::check_storage;
 pub mod schedule;
 pub use schedule::Schedule;
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,7 +73,7 @@ pub struct KeySet {
     pub filters: Vec<(usize, Expr)>,
     pub equalities: Vec<(usize, usize)>,
     pub name: Ident,
-    /// A token of `Program.storage.tokens`, spelled over the inferred row `_`.
+    /// Copied from the matching Storage `Negative`, over inferred row `_`.
     pub provider: storage::Provider,
     pub hasher: storage::Hasher,
     pub hole: usize,
@@ -298,6 +299,21 @@ pub struct Program {
     /// Recorded evaluation schedule; checked by WF-DL-Schedule, changes no value.
     pub schedule: Schedule,
 }
+/// CQ planning facts in original positive-occurrence numbering. Normalization
+/// only translates these identities to CQ clause selectors; it chooses nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Planning {
+    pub order: Vec<usize>,
+    pub authored: bool,
+    pub steps: Vec<PlanningStep>,
+    pub smallest: Vec<Vec<usize>>,
+    pub known: Option<usize>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanningStep {
+    pub occurrence: usize,
+    pub columns: Option<Vec<Ident>>,
+}
 #[derive(Clone, Debug)]
 pub struct Hole {
     pub cq: CqProgram,
@@ -308,6 +324,7 @@ pub struct Hole {
     pub lower: usize,
     /// Planning invocation owned by this hole; independent of pass spelling.
     pub plan: Option<usize>,
+    pub planning: Option<Planning>,
     /// Invocation owning the complete device input binding packet.
     pub binding: Option<usize>,
     /// How each answer column reaches the round printer (DL-AnswerOwnership).
@@ -320,6 +337,7 @@ impl PartialEq for Hole {
             && self.facts == other.facts
             && self.lower == other.lower
             && self.plan == other.plan
+            && self.planning == other.planning
             && self.binding == other.binding
             && self.answer == other.answer
             && self.pipeline.to_token_stream().to_string()
@@ -589,6 +607,9 @@ pub struct Execution {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoundPolicy {
+    /// Formal rule DL-Timing: `phases` materializes candidates before admission
+    /// so evaluation and admission have separate clocks; `none` streams them.
+    /// This is a property of the timing variant, not a printer optimization.
     pub timing: Ident,
 }
 record!(Program { storage: storage::Program, context: RoundContext, holes: Vec<Hole>, terminals: TerminalRegistry, execution: Vec<Execution>, policy: RoundPolicy, schedule: Schedule });
@@ -599,9 +620,12 @@ record!(Hole {
     facts: cq_stage::Context,
     lower: usize,
     plan: Option<usize>,
+    planning: Option<Planning>,
     binding: Option<usize>,
     answer: Vec<AnswerColumn>
 });
+record!(Planning { order: Vec<usize>, authored: bool, steps: Vec<PlanningStep>, smallest: Vec<Vec<usize>>, known: Option<usize> });
+record!(PlanningStep { occurrence: usize, columns: Option<Vec<Ident>> });
 record!(Execution {
     hole: usize,
     occurrence: usize,
@@ -809,6 +833,7 @@ pub fn check_pipeline(hole: &Hole, terminals: &TerminalRegistry) -> syn::Result<
         hole,
         "hole planning invocation must precede lowering",
     )?;
+    hole.invocation_pipeline()?;
     ensure(
         hole.binding.is_none_or(|binding| {
             binding > hole.lower && binding < hole.pipeline.passes.len().saturating_sub(1)
@@ -991,10 +1016,15 @@ fn check_execution(program: &Program) -> syn::Result<()> {
 /// residual δ) runs in the `admit` phase for every candidate.
 fn check_admit_once(program: &Program) -> syn::Result<()> {
     let context = &program.context;
-    for rule in context.strata.iter().flat_map(|s| s.seeds.iter().chain(&s.steps)) {
-        let relation = context.relations.get(rule.head).ok_or_else(|| {
-            syn::Error::new_spanned(rule, "rule hole names no head relation")
-        })?;
+    for rule in context
+        .strata
+        .iter()
+        .flat_map(|s| s.seeds.iter().chain(&s.steps))
+    {
+        let relation = context
+            .relations
+            .get(rule.head)
+            .ok_or_else(|| syn::Error::new_spanned(rule, "rule hole names no head relation"))?;
         let canonical = context
             .layouts
             .get(relation.providers.canonical)
@@ -1172,16 +1202,13 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
         before.observer = after.observer.clone();
         before.key_scope = after.key_scope.clone();
         before.loop_form = after.loop_form.clone();
-        for (before, after) in before.keys.iter_mut().zip(&after.keys) {
-            before.provider = after.provider.clone();
-            before.hasher = after.hasher;
-        }
     }
     source.context.outputs = erased.context.outputs.clone();
     source.policy.timing = erased.policy.timing.clone();
     // The schedule records only admissible evaluation order (CK-DL-Schedule).
     source.schedule = erased.schedule.clone();
     for (before, after) in source.holes.iter_mut().zip(&erased.holes) {
+        // Planning facts stay fixed even when invocation ordinals move.
         before.pipeline = after.pipeline.clone();
         before.lower = after.lower;
         before.plan = after.plan;

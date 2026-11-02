@@ -74,7 +74,12 @@ fn default_admission_follows_the_recorded_fanout() {
     assert_eq!(rule(&target, "Pair").known, Admission::Admit);
     for rule in rules(&target) {
         assert_eq!(rule.fanout, [Fanout::Multiply, Fanout::Multiply]);
-        let arguments = target.holes[rule.hole].pipeline.passes[0].arguments.to_string();
+        let arguments = target.holes[rule.hole]
+            .invocation_pipeline()
+            .unwrap()
+            .passes[0]
+            .arguments
+            .to_string();
         let name = &canonical(&target, rule.head).name;
         let clause = syn::Index::from(target.holes[rule.hole].cq.query.body.len() - 1);
         match rule.known {
@@ -110,9 +115,8 @@ fn default_admission_follows_the_recorded_fanout() {
     let mut items: Vec<BodyItem> = hole.cq.query.body.iter().cloned().collect();
     items.pop();
     hole.cq.query.body = items.into_iter().collect();
-    hole.pipeline.passes[0].arguments = TokenStream::new();
-    let error = check(&source, &changed).unwrap_err().to_string();
-    assert!(error.contains("disagrees with its advice or recorded fan-out"), "{error}");
+    hole.planning.as_mut().unwrap().known = None;
+    assert!(check(&source, &changed).is_err());
 }
 
 /// A recorded EDB key bound at a read makes it a filter (at most one row).
@@ -131,7 +135,10 @@ fn recorded_keys_make_keyed_reads_filters() {
         quote!(evidence from "m" { key E [x, x]; }),
         quote!(evidence from "m" { key E [x]; key E [x]; }),
     ] {
-        assert!(source::contract::check(&source_with(bad.clone())).is_err(), "{bad}");
+        assert!(
+            source::contract::check(&source_with(bad.clone())).is_err(),
+            "{bad}"
+        );
     }
     let program = source_with(quote!(evidence from "m" { key E [x, y]; }));
     source::contract::check(&program).unwrap();
@@ -182,14 +189,24 @@ fn advised_admission_records_the_committed_read() {
             .context
             .strata
             .iter()
-            .position(|stratum| stratum.seeds.iter().chain(&stratum.steps).any(|r| r == rule))
+            .position(|stratum| {
+                stratum
+                    .seeds
+                    .iter()
+                    .chain(&stratum.steps)
+                    .any(|r| r == rule)
+            })
             .unwrap();
         let reads = target.schedule.strata[stratum]
             .reads
             .iter()
             .find(|reads| {
                 let phase = &target.context.strata[stratum];
-                let holes = if reads.phase == "seed" { &phase.seeds } else { &phase.steps };
+                let holes = if reads.phase == "seed" {
+                    &phase.seeds
+                } else {
+                    &phase.steps
+                };
                 holes[reads.index] == *rule
             })
             .unwrap();
@@ -334,7 +351,9 @@ fn fork_correspondence_erases_exactly_the_committed_read() {
             Box::new(move |p| {
                 let mut items = body(p, twice.hole);
                 let at = items.len() - 2;
-                let BodyItem::Let(binding) = &mut items[at] else { panic!("binding") };
+                let BodyItem::Let(binding) = &mut items[at] else {
+                    panic!("binding")
+                };
                 binding.expression = syn::parse_quote!((*x + 2));
                 set(p, twice.hole, items);
             }),
@@ -344,7 +363,9 @@ fn fork_correspondence_erases_exactly_the_committed_read() {
             Box::new(move |p| {
                 let mut items = body(p, twice.hole);
                 let at = items.len() - 2;
-                let BodyItem::Let(binding) = &mut items[at] else { panic!("binding") };
+                let BodyItem::Let(binding) = &mut items[at] else {
+                    panic!("binding")
+                };
                 binding.annotation.as_mut().unwrap().ty = syn::parse_quote!(i64);
                 set(p, twice.hole, items);
             }),
@@ -397,7 +418,13 @@ fn non_identity_canonical_order_permutes_the_committed_key() {
     check(&source, &target).unwrap();
     // The identity order over the same layout is rejected.
     let mut changed = target.clone();
-    let mut items: Vec<BodyItem> = changed.holes[rule.hole].cq.query.body.iter().cloned().collect();
+    let mut items: Vec<BodyItem> = changed.holes[rule.hole]
+        .cq
+        .query
+        .body
+        .iter()
+        .cloned()
+        .collect();
     items.pop();
     items.push(syn::parse_quote!(!#name(x, x, #computed)));
     changed.holes[rule.hole].cq.query.body = items.into_iter().collect();
@@ -439,9 +466,17 @@ fn advised(known: incremental::Known, order: bool) -> syn::Result<round::Program
 fn known_advice_pins_admission_and_transports_the_level() {
     // known(admit) keeps the committed probe at admission.
     let admit = advised(incremental::Known::Admit, false).unwrap();
-    assert!(rules(&admit).iter().all(|rule| rule.known == Admission::Admit));
+    assert!(
+        rules(&admit)
+            .iter()
+            .all(|rule| rule.known == Admission::Admit)
+    );
     for rule in rules(&admit) {
-        assert!(admit.holes[rule.hole].pipeline.passes[0].arguments.is_empty());
+        assert!(
+            admit.holes[rule.hole].pipeline.passes[0]
+                .arguments
+                .is_empty()
+        );
     }
     // known(at(level 2)): Pair's `z` binds at read 2, Flag's `x` at read 1.
     for order in [false, true] {
@@ -451,20 +486,28 @@ fn known_advice_pins_admission_and_transports_the_level() {
             let hole = &at.holes[rule.hole];
             let name = &canonical(&at, rule.head).name;
             let clause = syn::Index::from(hole.cq.query.body.len() - 1);
-            let arguments = hole.pipeline.passes[0].arguments.to_string();
+            let arguments = hole.invocation_pipeline().unwrap().passes[0]
+                .arguments
+                .to_string();
             let known = quote!(known(#name @ #clause at 2)).to_string();
             assert!(arguments.ends_with(&known), "{arguments}");
             assert_eq!(arguments.contains("order"), order, "{arguments}");
         }
     }
     // Level 1 precedes Pair's last head binding.
-    let error = advised(incremental::Known::At(1), false).unwrap_err().to_string();
-    assert!(error.contains("known(at(level 1)) must lie between"), "{error}");
+    let error = advised(incremental::Known::At(1), false)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("known(at(level 1)) must lie between"),
+        "{error}"
+    );
 }
 
 #[test]
 fn advised_in_plan_requires_a_planning_owner() {
-    let queue = quote!(cq = pipeline { custom::lower, ::mini_linq::passes::translate_pull }; lower = 0;);
+    let queue =
+        quote!(cq = pipeline { custom::lower, ::mini_linq::passes::translate_pull }; lower = 0;);
     // Without a recorded planning invocation the default is admit even where
     // a `multiply` read follows the head binding: no known option is placed.
     let incremental = cq_datalog_incremental::compile(&strata()).unwrap();
@@ -478,5 +521,52 @@ fn advised_in_plan_requires_a_planning_owner() {
     }
     // Advised in plan, the known placement targets a planning invocation.
     let error = compile_with(&program(), queue).unwrap_err().to_string();
-    assert!(error.contains("requires a recorded planning invocation"), "{error}");
+    assert!(
+        error.contains("requires a recorded planning invocation"),
+        "{error}"
+    );
+}
+
+#[test]
+fn recorded_planning_admits_legal_levels_but_rewrites_preserve_the_fact() {
+    let (storage, original) = unadvised(quote!());
+    let hole = rule(&original, "Flag").hole;
+    assert_eq!(
+        original.holes[hole].planning.as_ref().unwrap().known,
+        Some(1)
+    );
+    let mut alternative = original.clone();
+    alternative.holes[hole].planning.as_mut().unwrap().known = Some(2);
+    check(&storage, &alternative).unwrap();
+    assert!(round::check_rewrite(&original, &alternative).is_err());
+    for level in [0, 3] {
+        let mut invalid = original.clone();
+        invalid.holes[hole].planning.as_mut().unwrap().known = Some(level);
+        assert!(check(&storage, &invalid).is_err());
+    }
+    let authored = advised(incremental::Known::At(2), true).unwrap();
+    let hole = rule(&authored, "Flag").hole;
+    let mutations: &[fn(&mut round::Planning)] = &[
+        |p| p.order.swap(0, 1),
+        |p| p.authored = false,
+        |p| {
+            p.steps.push(round::PlanningStep {
+                occurrence: usize::MAX,
+                columns: None,
+            })
+        },
+        |p| p.smallest.push(vec![0, 1]),
+        |p| p.known = Some(3),
+    ];
+    for mutate in mutations {
+        let mut invalid = authored.clone();
+        mutate(invalid.holes[hole].planning.as_mut().unwrap());
+        assert!(check(&authored.storage, &invalid).is_err());
+    }
+    let mut missing = authored.clone();
+    missing.holes[hole].planning = None;
+    assert!(check(&authored.storage, &missing).is_err());
+    let mut raw = authored.clone();
+    raw.holes[hole].pipeline.passes[0].arguments = quote!(known(C@0 at 1));
+    assert!(check(&authored.storage, &raw).is_err());
 }

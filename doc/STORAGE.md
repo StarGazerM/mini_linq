@@ -908,12 +908,10 @@ constant-folded bounds on the Vec side. No compiler default changes in S1.
    the result's only storage (its build need not be duplicate-free).
    `ret head = ::cq_storage::dedup::Sort` types the answer's identity index,
    including computed heads.
-   This is the adopted rule, not yet universal implementation: the aggregate
-   extension still emits an `aggregate_seen` HashSet unless its terminal is
-   exactly the argument-free `mini_linq::passes::translate_pull`
-   (`features/extensions/cq-ext-aggregate/src/expansion.rs`,
-   `canonical_stream` and `render`). That syntax-based exception remains
-   outside the canonical-index rule.
+   Aggregate holes resume the core pipeline fact-free: CK-Return supplies the
+   canonical index or inferred key under every checked terminal. The aggregate
+   folds that set directly, without terminal-name recognition or a separate
+   seen HashSet.
    On CPU, `dedup::Sort` collects the whole boundary stream, uses `sort_unstable_by` with
    Rust `Ord` comparisons of the fields, then removes adjacent equal rows.
    Tasks uses `par_sort_unstable_by`; its adjacent-unique pass is sequential.
