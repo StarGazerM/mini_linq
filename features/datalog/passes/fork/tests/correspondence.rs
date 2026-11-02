@@ -32,6 +32,43 @@ fn authored() -> Program {
 }
 
 #[test]
+fn hole_declarations_preserve_source_domain_ids_in_subsets() {
+    let source = schedule(&syn::parse_quote! {
+        struct Domains;
+        relation Unused(x:u32 in (other)) = (unused);
+        relation Edge(x:u32 in (names),y:u32 in (names)) = (edges);
+        relation Blocked(x:u32 in (names)) = (blocked);
+        relation Reach(x:u32 in (names),y:u32 in (names));
+        output Reach;
+        Reach(*x,*y) :- Edge(x,y), !Blocked(y);
+        strata { component [Reach]; }
+        incremental { scheme seminaive_covering;
+            delta Reach = Recent;
+            variant 0 seed { Reach(*x,*y) :- Edge(x,y), !Blocked(y); }
+        }
+    }).unwrap();
+    let target = compile(&source).unwrap();
+    let domain = source.incremental.strata.source.declarations[1].columns[0]
+        .domain.as_ref().unwrap().id;
+    assert_eq!(domain, Some(cq_syntax::DomainId(1)));
+    for hole in &target.holes {
+        let domains: Vec<_> = hole.cq.declarations.iter()
+            .flat_map(|declaration| &declaration.columns)
+            .filter_map(|column| column.domain.as_ref())
+            .collect();
+        assert!(!domains.is_empty());
+        assert!(domains.iter().all(|recorded| recorded.id == domain));
+    }
+    let parsed: Fork = syn::parse2(target.to_token_stream()).unwrap();
+    assert_eq!(parsed, target);
+    check(&source, &parsed).unwrap();
+    let mut changed = target.clone();
+    changed.holes[0].cq.declarations[0].columns[0].domain.as_mut().unwrap().id =
+        Some(cq_syntax::DomainId(0));
+    assert!(check(&source, &changed).is_err());
+}
+
+#[test]
 fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     let source = authored();
     let target = compile(&source).unwrap();

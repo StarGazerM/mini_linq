@@ -245,8 +245,9 @@ pub fn check(program: &Program) -> syn::Result<()> {
             .zip(input_decl.columns.iter())
             .filter_map(|(arg, col)| {
                 rust::variable(arg).map(|var| {
-                    let ty = &col.ty;
-                    quote!(#var: #ty)
+                    let mut column = col.clone();
+                    column.name = var.clone();
+                    column
                 })
             })
             .collect();

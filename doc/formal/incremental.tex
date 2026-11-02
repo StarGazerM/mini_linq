@@ -217,9 +217,13 @@ row). The early anti-join saves the expansion of known heads only when a later
 read multiplies, and probes every intermediate row where later reads filter
 (the unconditional default $\ell<p$ measured DOOP xalan \code{mini}
 2.36$\times$ and batik \code{mini-par} 2.95$\times$ slower), so an unadvised
-hole is in plan at $\max(\ell,1)$ iff some read after it is recorded
-$\mathsf{multiply}$ and its queue records a planning invocation; otherwise it
-is $\mathsf{admit}$. Keys come from source evidence
+hole is in plan iff some read after the written head-binding level $\ell$ is
+recorded $\mathsf{multiply}$ and its queue records a planning invocation;
+otherwise it is $\mathsf{admit}$. Automatic placement follows CQ's ordinary
+ready-negation schedule after its actual head bindings: reordering reads may
+change their level. Only explicit advice records a numeric placement in
+\code{Planning.known}; invocation serialization transports that pin.
+Keys come from source evidence
 \code{evidence from "provenance" \{ key R [c, ...]; \}}
 (\textsc{WF-DL-Evidence}: provenance, declared relation, distinct declared
 columns); evidence has no denotation, so a false key changes speed, never
@@ -235,8 +239,8 @@ answers. Device storage records $\mathsf{admit}$ only.
  {\mathsf{key}\ R\ [K]\ \text{well formed}}
 
 \Rule{FK-Known}{\ell\le k\le p\ \text{(advice } \mathit{at}(k))\ \vee\
- (\text{no advice},\ \mathit{plan}\ \text{recorded},\ k=\max(\ell,1),\
- \exists j>k.\ \mathit{fanout}_j=\mathsf{multiply})}
+ (\text{no advice},\ \mathit{plan}\ \text{recorded},\
+ \exists j>\ell.\ \mathit{fanout}_j=\mathsf{multiply})}
  {\mathit{known}(h)=\mathsf{in\_plan}\quad Q_h' = Q_h,\ \mathit{lets},\ \neg C(\bar x)}
 
 \Rule{DL-AdmitOnce}{\mathit{known}(h)=\mathsf{in\_plan}\iff \neg C\in Q_h\ \text{exactly once, last}}

@@ -114,8 +114,9 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
             .zip(input.columns.iter())
             .filter_map(|(arg, col)| {
                 rust::variable(arg).map(|v| {
-                    let ty = &col.ty;
-                    quote!(#v: #ty)
+                    let mut column = col.clone();
+                    column.name = v.clone();
+                    column
                 })
             })
             .collect();

@@ -7,6 +7,11 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Datalog Source interns code-domain identities across its full declaration
+  table before producing Storage/Round or individual CQ holes. Hole subsets
+  preserve those recorded ids instead of assigning new local identities;
+  exact declaration correspondence remains unchanged.
+
 - DriftFix1: IF-Capture binds each host value once and gives every `move`
   closure that reads it an owned `Clone::clone` at closure creation, rebinding
   the capture reference inside that closure. Nested closures own their own
@@ -32,6 +37,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   cutover. Unrelated reviewed rules remain; removing obsolete approvals is
   fail-closed, so new capture hunks require their own reviewed hashes.
 
+- Fix automatic Datalog in-plan admission after CQ reorders positive reads:
+  only explicit `known(at(...))` advice records a numeric `Planning.known` pin;
+  automatic anti-joins run once their actual head bindings are ready. CPU
+  heap-allocation coverage checks captured filters, changed constants, and empty
+  inputs. Known-placement diagnostics retain the valuation-contract error.
+
 - Elaboration redesign slice 3a: relational predicate placement is recorded in
   VO. `cq-order` emits `restrict R@i where P;` at the head of each scope
   (O-Restrict) from one shared definition, `hypergraph::local_predicates`
@@ -49,6 +60,17 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   `cq_elaborate::compile` of `cq_order::compile_written`). The cq-testkit VO
   evaluator executes restrictions. Masks no longer reduces by a support whose
   filter elaboration never applied (`A(a,b), B(b,x), where x < 5, C(x,d)`).
+
+- GPU Datalog negative key providers are selected in Storage before Fork
+  declares their CQ inputs; binding an arena must not replace a provider
+  underneath its recorded host-read capabilities. A CPU-only regression covers
+  `device_storage` through `bind_round` with negation and rejects fabricated
+  host membership declarations without weakening Fork correspondence.
+
+- Datalog invariant materialization preserves the complete projected column
+  schema, including its declared code domain. The independent invariant
+  certificate checker requires the same domain, preventing hoisted frozen
+  filters from joining interned codes through an undeclared domain.
 
 - Sequence Analysis now owns checked BE-PrefixBound row/key records and
   BE-GroupKey canon-free group facts. Retention replay consumes these records,

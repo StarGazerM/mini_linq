@@ -48,6 +48,75 @@ fn program_with_symbols(
 }
 
 #[test]
+fn negative_device_bindings_preserve_fork_declarations() {
+    let host = cq_datalog_storage::compile(&syn::parse_quote! {
+        struct Negative;
+        relation Edge(x:i32,y:i32) = (edges);
+        relation Blocked(x:i32) = (blocked);
+        relation Result(x:i32,y:i32);
+        output Result;
+        Result(*x,*y) :- Edge(x,y), !Blocked(x);
+        strata { component [Result]; }
+        incremental { scheme seminaive_covering;
+            delta Result = ResultChanges;
+            variant 0 seed { Result(*x,*y) :- Edge(x,y), !Blocked(x); }
+        }
+    })
+    .unwrap();
+    let device = storage::compile(&host).unwrap();
+    let mut pipeline = cq_datalog_fork::default_pipeline();
+    pipeline.passes.last_mut().unwrap().path =
+        syn::parse_quote!(::cq_gpu_sequence::translate_arena);
+    pipeline.passes.insert(
+        pipeline.passes.len() - 1,
+        syn::parse_quote!(::cq_gpu_datalog::bind_inputs),
+    );
+    let binding = pipeline.passes.len() - 2;
+    let round = cq_datalog_fork::compile_with(
+        &device,
+        quote!(
+            cq = #pipeline;
+            lower = 2;
+            terminals = [::cq_gpu_sequence::translate_arena => batch];
+        ),
+    )
+    .unwrap();
+    let bound = crate::bindings::compile_with(&round, quote!(binding = #binding)).unwrap();
+    cq_lang_datalog_round::check_storage(&device, &bound).unwrap();
+    for (before, after) in round.holes.iter().zip(&bound.holes) {
+        assert_eq!(before.cq.declarations, after.cq.declarations);
+    }
+    let key = &bound.context.strata[0].keys[0];
+    assert_eq!(key.provider.token, storage::DEVICE_LAYOUT);
+    let consumer = &bound.holes[bound.context.strata[0].seeds[0].hole];
+    let declaration = consumer
+        .cq
+        .declarations
+        .iter()
+        .find(|declaration| declaration.name == key.name)
+        .unwrap();
+    assert!(
+        declaration.hosts.is_empty(),
+        "device inputs do not declare CPU host reads"
+    );
+
+    // The correspondence checker must still reject a fabricated host capability.
+    let mut forged = bound.clone();
+    let consumer = &mut forged.holes[bound.context.strata[0].seeds[0].hole];
+    let declaration = consumer
+        .cq
+        .declarations
+        .iter_mut()
+        .find(|declaration| declaration.name == key.name)
+        .unwrap();
+    let column = &declaration.columns[0].name;
+    declaration
+        .hosts
+        .push(syn::parse_quote!(host [#column] reads [membership]));
+    assert!(cq_lang_datalog_round::check_storage(&device, &forged).is_err());
+}
+
+#[test]
 fn tc_emits_resident_waves_admission_and_publication() {
     let program = program();
     let source = print::compile(&program)

@@ -208,8 +208,8 @@ pub fn fanout(query: &cq::Query, keys: &dyn Fn(&Ident) -> Vec<Vec<usize>>) -> Ve
     reads
 }
 
-/// Whether a read after the head-binding level `last` (pinned at
-/// `last.max(1)`) is recorded `multiply`: the premise of FK-Known's default.
+/// Whether a read after the written head-binding level `last` (at least the
+/// first read) is recorded `multiply`: the premise of FK-Known's default.
 pub fn fanout_follows(fanout: &[Fanout], last: usize) -> bool {
     fanout
         .get(last.max(1)..)
@@ -307,6 +307,7 @@ pub struct Planning {
     pub authored: bool,
     pub steps: Vec<PlanningStep>,
     pub smallest: Vec<Vec<usize>>,
+    /// Explicit `Known::At` level pin only; automatic admission follows CQ readiness.
     pub known: Option<usize>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]

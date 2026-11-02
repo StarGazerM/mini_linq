@@ -61,6 +61,37 @@ fn helper_projection_is_relational_and_type_blind() {
 }
 
 #[test]
+fn helper_projection_preserves_each_selected_code_domain() {
+    let source: Program = syn::parse_quote! {
+        struct FilteredCodes;
+        relation Seed(x:u32 in (names),y:u32 in (names)) = (seed);
+        relation Edge(kind:u32 in (kinds),x:u32 in (names),y:u32 in (names)) = (edges);
+        relation Block(x:u32 in (names)) = (blocked);
+        relation Reach(x:u32 in (names),y:u32 in (names));
+        output Reach;
+        Reach(*x,*y) :- Seed(x,y);
+        Reach(*x,*z) :- Reach(x,y), Edge("edge",y,z), !Block(z);
+    };
+    let before = stratify::compile(&source).unwrap();
+    let after = invariants::compile(&before).unwrap();
+    assert_eq!(after.source.invariants.len(), 1);
+    let helper = after.source.declarations.last().unwrap();
+    assert_eq!(helper.columns.len(), 2);
+    for (column, input) in helper.columns.iter().zip(source.declarations[1].columns.iter().skip(1)) {
+        assert_eq!(column.ty, input.ty);
+        assert_eq!(column.domain, input.domain);
+    }
+    let parsed = syn::parse2(after.to_token_stream()).unwrap();
+    invariants::check(&before, &parsed).unwrap();
+    seminaive::compile(&parsed).unwrap();
+    for domain in [None, Some(syn::parse_quote!(in (kinds)))] {
+        let mut forged = after.clone();
+        forged.source.declarations.last_mut().unwrap().columns[0].domain = domain;
+        assert!(contract::check(&forged).is_err());
+    }
+}
+
+#[test]
 fn forged_filter_binding_schema_and_scc_are_rejected() {
     let before = stratify::compile(&source()).unwrap();
     let good = invariants::compile(&before).unwrap();

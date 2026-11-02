@@ -64,8 +64,8 @@ fn unadvised(evidence: TokenStream) -> (storage::Program, round::Program) {
 }
 
 /// Without advice FK-Known follows DL-Fanout: Flag and Twice bind their head
-/// at read 1 and then enumerate `E(y,_)` (`multiply`), so they are in plan at
-/// level 1; Pair binds its head at its last read and stays `admit`.
+/// at read 1 and then enumerate `E(y,_)` (`multiply`), so they are in plan;
+/// CQ schedules the negation when ready. Pair stays `admit`.
 #[test]
 fn default_admission_follows_the_recorded_fanout() {
     let (source, target) = unadvised(quote!());
@@ -80,20 +80,17 @@ fn default_admission_follows_the_recorded_fanout() {
             .passes[0]
             .arguments
             .to_string();
-        let name = &canonical(&target, rule.head).name;
-        let clause = syn::Index::from(target.holes[rule.hole].cq.query.body.len() - 1);
-        match rule.known {
-            Admission::InPlan => {
-                assert_eq!(arguments, quote!(known(#name @ #clause at 1)).to_string())
-            }
-            Admission::Admit => assert!(arguments.is_empty(), "{arguments}"),
-        }
+        assert!(arguments.is_empty(), "{arguments}");
+        assert_eq!(target.holes[rule.hole].planning.as_ref().unwrap().known, None);
     }
     let reparsed: round::Program = syn::parse2(target.to_token_stream()).unwrap();
     assert_eq!(reparsed, target);
     // The record is checked: a changed fan-out fact, or an admit record that
     // contradicts a recorded `multiply` read, is rejected.
     let flag = rule(&target, "Flag").clone();
+    let mut pinned = target.clone();
+    pinned.holes[flag.hole].planning.as_mut().unwrap().known = Some(1);
+    assert!(check(&source, &pinned).is_err());
     let mut changed = target.clone();
     for stratum in &mut changed.context.strata {
         for rule in stratum.seeds.iter_mut().chain(&mut stratum.steps) {
@@ -528,16 +525,16 @@ fn advised_in_plan_requires_a_planning_owner() {
 }
 
 #[test]
-fn recorded_planning_admits_legal_levels_but_rewrites_preserve_the_fact() {
+fn recorded_planning_preserves_only_explicit_known_pins() {
     let (storage, original) = unadvised(quote!());
     let hole = rule(&original, "Flag").hole;
     assert_eq!(
         original.holes[hole].planning.as_ref().unwrap().known,
-        Some(1)
+        None
     );
     let mut alternative = original.clone();
     alternative.holes[hole].planning.as_mut().unwrap().known = Some(2);
-    check(&storage, &alternative).unwrap();
+    assert!(check(&storage, &alternative).is_err());
     assert!(round::check_rewrite(&original, &alternative).is_err());
     for level in [0, 3] {
         let mut invalid = original.clone();
@@ -557,6 +554,8 @@ fn recorded_planning_admits_legal_levels_but_rewrites_preserve_the_fact() {
         },
         |p| p.smallest.push(vec![0, 1]),
         |p| p.known = Some(3),
+        |p| p.known = Some(1),
+        |p| p.known = None,
     ];
     for mutate in mutations {
         let mut invalid = authored.clone();

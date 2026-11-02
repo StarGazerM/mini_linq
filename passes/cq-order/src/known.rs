@@ -97,10 +97,10 @@ impl Known {
             at += 1;
         }
         steps.insert(at, step);
-        if valuation::contract::check(program).is_err() {
+        if let Err(err) = valuation::contract::check(program) {
             return Err(syn::Error::new_spanned(
                 &self.relation,
-                "known placement precedes the binding of its variables",
+                format!("known placement precedes the binding of its variables: {err}"),
             ));
         }
         Ok(())

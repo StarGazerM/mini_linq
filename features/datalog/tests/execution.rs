@@ -1103,3 +1103,57 @@ fn split_codegen_preserves_local_types_captures_and_mutable_observers() {
     assert!(!rounds.is_empty());
     assert_eq!(facts.seeds, [(0,)]);
 }
+
+#[test]
+fn heapalloc_filters_captured_constants_before_known_membership() {
+    struct Constants {
+        object_array: i32,
+        string_array: i32,
+    }
+    fn run(alloc: Vec<(i32, i32)>, constants: &Constants) -> BTreeSet<(i32, i32)> {
+        cq_datalog::datalog! {
+            struct Heaps;
+            relation Alloc(h: i32, t: i32) = (alloc);
+            relation Component(a: i32, c: i32) = ([(1, 11), (2, 12), (3, 13)]);
+            relation Super(c: i32, t: i32) = ([(11, 11), (12, 12), (13, 13), (13, 1)]);
+            relation Compat(h: i32, b: i32);
+            output Compat;
+            HeapAllocHelper: Compat(*heap, *baseheap) :-
+                Alloc(heap, heaptype), Alloc(baseheap, baseheaptype),
+                Component(baseheaptype, comptype), Super(comptype, heaptype),
+                where baseheaptype != constants.object_array && baseheaptype != constants.string_array;
+        }
+        .collect()
+    }
+    let alloc = vec![(10, 1), (20, 2), (30, 3), (31, 3), (40, 11), (50, 12), (60, 13)];
+    assert_eq!(
+        run(
+            alloc.clone(),
+            &Constants {
+                object_array: 1,
+                string_array: 2,
+            },
+        ),
+        BTreeSet::from([(10, 30), (10, 31), (60, 30), (60, 31)])
+    );
+    assert_eq!(
+        run(
+            alloc,
+            &Constants {
+                object_array: 2,
+                string_array: 3,
+            },
+        ),
+        BTreeSet::from([(40, 10)])
+    );
+    assert!(
+        run(
+            Vec::new(),
+            &Constants {
+                object_array: 1,
+                string_array: 2,
+            },
+        )
+        .is_empty()
+    );
+}

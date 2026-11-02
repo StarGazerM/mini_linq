@@ -113,14 +113,14 @@
 //! GPU experiments preserve these orders with `cq_gpu_sequence::decompose`
 //! in the decomposition phase; Sequence does not replan relational decisions.
 //!
-//! Admission placement (ADM-InPlan): by default every rule hole probes the
-//! head's committed layout at admission. `plan(Label, known(at(level k)));`
-//! anti-joins the hole's candidates with the head's committed canonical layout
-//! inside its plan (`!C(x̄)`), so later fan-out reads expand only unknown heads
-//! and admission keeps only the round-local insert-if-absent; where later reads
-//! only filter, the early anti-join probes every intermediate row, so it is
-//! advice-only until fan-out evidence is recorded. `plan(Label, known(admit));`
-//! states the default explicitly; `known(at(level k))` pins the in-plan read after the
+//! Admission placement (ADM-InPlan): a planned CPU hole automatically
+//! anti-joins its candidates with the head's committed canonical layout inside
+//! its plan (`!C(x̄)`) when recorded fan-out follows the written head-binding
+//! level. CQ schedules that negation after the actual bindings, even if reads
+//! reorder. Otherwise the committed probe stays at admission. In-plan
+//! admission keeps the round-local insert-if-absent.
+//! `plan(Label, known(admit));` explicitly keeps the committed probe at admission;
+//! `plan(Label, known(at(level k)));` pins the in-plan read after the
 //! k-th positive read (1-based, at or after the read binding the last head
 //! variable; needs a planning invocation). `known(..)` combines with
 //! `delta(..)`, `order(..)` and `smallest(..)`, and `order` is optional when

@@ -175,16 +175,18 @@ fn scan_source(query: &round::cq::Query, context: &RoundContext) -> Option<Input
 }
 
 /// Formal rule FK-Known: decide where a rule hole discharges its head's
-/// committed anti-join, returning the pinned in-plan level. Advice
+/// committed anti-join, returning its written head-binding/advised level. Advice
 /// `known(at(level k))` places it in plan after the k-th positive read (k must
 /// not precede the read binding the last head variable); `known(admit)` keeps
 /// admission. Without advice, a hole whose queue records a planning invocation
-/// is in plan at the head-binding level iff a later read is recorded
+/// is in plan iff a read after the written head-binding level is recorded
 /// `multiply` (DL-Fanout): an early anti-join saves the expansion of known
 /// heads there, while before reads that only filter it would probe every
 /// intermediate row (the unconditional structural default measured DOOP xalan
 /// `mini` 2.36x and batik `mini-par` 2.95x slower). Device storage realizes
 /// `admit` only.
+/// Automatic admission leaves placement to CQ's ready-negation scheduling:
+/// its reordered reads need not bind the head at the written query's level.
 fn known_admission(
     query: &round::cq::Query,
     advice: Option<incremental::Known>,
@@ -645,7 +647,7 @@ fn construct(
             if level.is_some() {
                 // Formal rule ADM-InPlan: name computed head terms by ordinary
                 // bindings, then append the committed anti-join `!C(x̄)` over the
-                // head's canonical layout, pinned after the FK-Known level.
+                // head's canonical layout; only explicit advice pins its level.
                 let declaration = &source.incremental.strata.source.declarations[head];
                 for (position, argument) in query.head.args.iter_mut().enumerate() {
                     if cq_syntax::rust::variable(argument).is_none() {
@@ -694,7 +696,11 @@ fn construct(
                     })
                     .collect(),
                 smallest: variant.smallest.clone(),
-                known: level,
+                known: if matches!(variant.known, Some(incremental::Known::At(_))) {
+                    level
+                } else {
+                    None
+                },
             }));
             context.relations[head].admit.push(hole);
             let rule = RuleHole {

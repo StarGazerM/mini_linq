@@ -1,6 +1,32 @@
 use cq_lang_datalog_source::{Program, contract};
 
 #[test]
+fn source_interns_domains_once_and_preserves_recorded_identities() {
+    use quote::ToTokens;
+    let source: Program = syn::parse_quote! {
+        struct Domains;
+        relation Unused(x:u32 in (other)) = (unused);
+        relation Input(x:u32 in (names)) = (input);
+        relation Output(x:u32 in (names));
+        output Output;
+        Output(*x) :- Input(x);
+    };
+    let ids: Vec<_> = source.declarations.iter()
+        .map(|relation| relation.columns[0].domain.as_ref().unwrap().id)
+        .collect();
+    assert_eq!(ids, [
+        Some(cq_syntax::DomainId(0)),
+        Some(cq_syntax::DomainId(1)),
+        Some(cq_syntax::DomainId(1)),
+    ]);
+    let mut reordered = source.clone();
+    reordered.declarations.swap(0, 1);
+    let parsed: Program = syn::parse2(reordered.to_token_stream()).unwrap();
+    assert_eq!(parsed, reordered);
+    contract::check(&parsed).unwrap();
+}
+
+#[test]
 fn declaration_rule_and_output_obligations_are_checked() {
     for source in [
         "struct P; relation E(x:i32) = (e); relation A(x:i32); output A;",

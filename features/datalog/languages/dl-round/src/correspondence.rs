@@ -601,12 +601,13 @@ pub(crate) fn check_storage_with_analysis(
                 ensure(
                     match (rule.known, planning.known) {
                         (Admission::Admit, None) => true,
+                        (Admission::InPlan, None) => variant.known.is_none(),
                         (Admission::InPlan, Some(level)) => {
                             level >= last.max(1)
                                 && level <= reads
                                 && match variant.known {
                                     Some(incremental::Known::At(authored)) => level == authored,
-                                    _ => true,
+                                    _ => false,
                                 }
                         }
                         _ => false,
