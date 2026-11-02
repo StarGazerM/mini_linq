@@ -30,6 +30,31 @@ fn column_dependencies_cover_equalities_constraints_and_opaque_rust() {
     );
 }
 
+#[test]
+fn capture_ownership_clones_values_at_every_closure_level() {
+    use quote::ToTokens;
+    let mut expression: syn::Expr = syn::parse_quote!({
+        inspect(c);
+        let outer = move || {
+            inspect(c);
+            move || inspect(c)
+        };
+        let sibling = move || inspect(c);
+        (outer, sibling)
+    });
+    cq_print::own_captures(
+        &mut expression,
+        &[],
+        &[(syn::parse_quote!(value), syn::parse_quote!(c))],
+    );
+    let printed = expression.to_token_stream().to_string();
+    assert_eq!(printed.matches("Clone :: clone (& value)").count(), 3);
+    assert_eq!(printed.matches("let c = & value").count(), 3);
+    assert!(!printed.contains("Arc"));
+    assert!(!printed.contains("Rc"));
+    assert!(printed.starts_with("{ inspect (c) ;"));
+}
+
 fn membership_plan() -> cq_lang_structures::Program {
     let source = syn::parse_quote! { physical {
         relation L(a: ::opaque::KeyAlias); relation R(a: ::opaque::KeyAlias,b:i64);

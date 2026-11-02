@@ -183,15 +183,27 @@ later IR carries the list unchanged. A top-level query-closed \code{let} or
 (A-Capture). A query-closed branch \code{let}/\code{if} is a fresh capture
 whose branch binder or guard stays in place as a capture reference
 \code{let p = capture c} / \code{if capture c} (A-CaptureRef), so union
-interfaces keep their binders. A \code{let} capture is printed once and shared
-through a handle (the value itself when \code{Copy}, else an \code{Arc}) whose
-binder is a reference; an \code{if} capture gates the whole answer; a reference copies
-(or, for a guard, reads) the host value (IF-Capture).
+interfaces keep their binders. A \code{let} capture is printed once as an owned
+value with a reference binder. Every move closure that reads it owns a
+\code{Clone::clone(\&value)} made at closure creation and rebinds its reference.
+An \code{if} capture gates the whole answer (IF-Capture).
 Capture binders are in scope when checking the body and head. After hoisting,
 their occurrences on either side of a relational \code{where} predicate are
 closed host operands, including equalities resolved before hoisting. Such a
 predicate remains a relational restriction, not an opaque Rust guard; its
 capture value is evaluated once without recognizing or rewriting Rust.
+A-Domain records a distinct typed capture
+\code{domain k:T in (D) = f(t)}, with $f\in\{\mathsf{exact},\mathsf{lower},\mathsf{upper}\}$.
+Only its Rust realization prints \code{::cq\_storage::domain::f(\&(D), \&(t))}.
+An authored \code{let} containing that identical Rust call remains opaque.
+Normalization and WF-Domain inspect only the typed record and structurally
+equal declared domains, never the generated Rust call or a token-string key.
+This uniform rule applies at every closure nesting level and in every
+translator; direct reads use the original value. Rust requires \code{Clone}
+where a closure needs a copy. \code{Copy} values need no allocation;
+non-\code{Copy} values pay their own clone cost per closure instance.
+Authors may explicitly wrap large values in \code{Rc} or \code{Arc}.
+The compiler introduces neither shared handles nor capture-induced collection.
 
 \paragraph{Contract.}
 $\mathsf{CQScope}(s)$ is the scope rules plus:
@@ -218,8 +230,8 @@ names and have query-closed Rust operands; types are checked only by rustc.
  \text{no top-level or branch query-closed }\code{let}/\code{if}\text{ remains}}
  {\mathsf{WF}_{NF}(s)\Downarrow\ok}
 
-\Rule{WF-Domain}{\forall x.\ \text{all positive occurrences of }x\text{ sit at columns with one domain key }d_x\ (\text{or none})\\
- \text{every operand compared with }x,\ d_x\ne\bot,\text{ is a capture }\code{::cq\_storage::domain::}f\code{(\&(}d_x\code{), \&(}t\code{))}\\
+\Rule{WF-Domain}{\forall x.\ \text{all positive occurrences of }x\text{ sit at columns with one recorded domain }d_x\ (\text{or none})\\
+ \text{every closed operand compared with }x,\ d_x\ne\bot,\text{ names a typed capture }\mathsf{Domain}(k,T,f,d_x,t)\\
  f=\mathsf{exact}\text{ for }=,\ne;\quad f\in\{\mathsf{lower},\mathsf{upper}\}\text{ for }<,\geq\quad
  \text{a declared answer domain equals its head variable's }d_x}
  {\mathsf{WF}_{Dom}(s)\Downarrow\ok}

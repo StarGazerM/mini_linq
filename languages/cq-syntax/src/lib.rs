@@ -82,13 +82,6 @@ pub struct CodeDomain {
     pub expression: syn::Expr,
 }
 
-impl CodeDomain {
-    /// Domain identity is token identity of the authored expression.
-    pub fn key(&self) -> String {
-        quote::ToTokens::to_token_stream(&self.expression).to_string()
-    }
-}
-
 /// One typed relation declaration supplied by the host program.
 ///
 /// CQ atom arguments remain positional against this declaration order.

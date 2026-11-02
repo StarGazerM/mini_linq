@@ -331,3 +331,39 @@ fn closed_capture_where_restricts_answers_and_evaluates_host_values_once() {
         assert_eq!(calls.get(), [1, 1, 1]);
     }
 }
+
+#[test]
+fn copy_and_owned_captures_keep_answers_lazy() {
+    let R = [(1_i32,), (2,), (3,), (4,)];
+    let captures = std::cell::Cell::new(0);
+    let visits = std::cell::Cell::new(0);
+    let capture_text = || {
+        captures.set(captures.get() + 1);
+        String::from("owned")
+    };
+    let visit = |_: &i32, text: &String| {
+        assert_eq!(text, "owned");
+        visits.set(visits.get() + 1);
+        true
+    };
+    let mut answers = mini_linq::compile! {
+        pipeline {}
+        struct LazyCaptures;
+        relation R(x: i32);
+        answer(x) :- R(x), let limit: i32 = 2, let text: String = capture_text(),
+            if visit(x, text) && *x > *limit;
+    }
+    .map(|(x,)| *x);
+    assert_eq!(captures.get(), 1);
+    assert_eq!(
+        visits.get(),
+        0,
+        "capture ownership must not collect the answer"
+    );
+    assert_eq!(answers.next(), Some(3));
+    // Canonical adapters may look ahead once polled; setup above must not poll.
+    assert_eq!(answers.next(), Some(4));
+    assert_eq!(answers.next(), None);
+    assert_eq!(captures.get(), 1);
+    assert_eq!(visits.get(), 4);
+}

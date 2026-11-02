@@ -253,7 +253,7 @@ pub(crate) fn reads_environment(cq: &round::cq::Program) -> bool {
     }
     let mut bound = std::collections::BTreeSet::new();
     let mut expressions: Vec<&syn::Expr> = cq.query.head.args.iter().collect();
-    expressions.extend(cq.query.captures.items.iter().map(cq_syntax::Capture::expression));
+    expressions.extend(cq.query.captures.items.iter().flat_map(cq_syntax::Capture::expressions));
     for item in &cq.query.body {
         match item {
             BodyItem::Positive { atom } => for argument in &atom.args {

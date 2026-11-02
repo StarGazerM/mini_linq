@@ -82,7 +82,6 @@
 
 mod answers;
 mod candidates;
-pub mod capture;
 macro_rules! count {
     ($field:ident) => {
         #[cfg(feature = "counters")]

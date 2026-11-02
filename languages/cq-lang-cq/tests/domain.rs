@@ -29,10 +29,10 @@ fn closed_operands_at_domain_columns_become_translation_captures() {
     assert_eq!(
         captures(&normal),
         [
-            "let __cq_c_0 : Code = :: cq_storage :: domain :: exact (& (modes) , & (\"AIR\"))",
-            "let __cq_c_1 : Code = :: cq_storage :: domain :: exact (& (modes) , & (\"MAIL\"))",
-            "let __cq_c_2 : Code = :: cq_storage :: domain :: exact (& (modes) , & (\"SHIP\"))",
-            "let __cq_c_3 : Code = :: cq_storage :: domain :: exact (& (modes) , & (host ()))",
+            "domain __cq_c_0 : Code in (modes) = exact (\"AIR\")",
+            "domain __cq_c_1 : Code in (modes) = exact (\"MAIL\")",
+            "domain __cq_c_2 : Code in (modes) = exact (\"SHIP\")",
+            "domain __cq_c_3 : Code in (modes) = exact (host ())",
         ]
     );
     let body = normal.query.body.to_token_stream().to_string();
@@ -57,20 +57,18 @@ fn ordered_comparisons_and_ranges_use_order_preserving_bounds() {
         answer(m) :- R(m), where m <= "m", where m > "c", where m in "a"..="z";
     });
     let normal = cq::normal::normalize(&source).unwrap();
-    let functions: Vec<_> = captures(&normal)
+    let functions: Vec<_> = normal
+        .query
+        .captures
+        .items
         .iter()
-        .map(|capture| {
-            capture
-                .split(" :: ")
-                .nth(3)
-                .unwrap()
-                .split(' ')
-                .next()
-                .unwrap()
-                .to_owned()
+        .map(|capture| match capture {
+            cq::syntax::Capture::Domain(capture) => capture.function,
+            _ => panic!("expected a recorded domain translation"),
         })
         .collect();
-    assert_eq!(functions, ["upper", "upper", "lower", "upper"]);
+    use cq::syntax::capture::DomainFunction::{Lower, Upper};
+    assert_eq!(functions, [Upper, Upper, Lower, Upper]);
     let body = normal.query.body.to_token_stream().to_string();
     assert!(body.contains("m < (__cq_c_0)"), "{body}");
     assert!(body.contains("m >= (__cq_c_1)"), "{body}");
@@ -109,6 +107,63 @@ fn joins_and_comparisons_across_domains_are_rejected() {
             #body
         });
         let error = cq::normal::normalize(&source).unwrap_err().to_string();
+        assert!(error.contains("WF-Domain"), "{error}");
+    }
+}
+
+#[test]
+fn authored_domain_calls_remain_opaque_and_normalization_is_idempotent() {
+    let source = cq(quote! {
+        struct Q;
+        relation R(m: Code in (names));
+        relation answer(m: Code);
+        answer(m) :- R(m), where m == (c)
+        capture {
+            let c = ::cq_storage::domain::exact(&(names), &("AIR"));
+        };
+    });
+    let error = cq::normal::check(&source).unwrap_err().to_string();
+    assert!(error.contains("WF-Domain"), "{error}");
+    let normal = cq::normal::normalize(&source).unwrap();
+    let [
+        cq::syntax::Capture::Let(binding),
+        cq::syntax::Capture::Domain(capture),
+    ] = normal.query.captures.items.as_slice()
+    else {
+        panic!("an authored call must be distinct from an A-Domain record");
+    };
+    assert_eq!(
+        binding.expression,
+        syn::parse_quote!(::cq_storage::domain::exact(&(names), &("AIR")))
+    );
+    assert_eq!(capture.operand, syn::parse_quote!(c));
+    cq::normal::check(&normal).unwrap();
+    assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
+    let reparsed: cq::Program = syn::parse2(normal.to_token_stream()).unwrap();
+    assert_eq!(reparsed, normal);
+    assert_eq!(cq::normal::normalize(&reparsed).unwrap(), normal);
+}
+
+#[test]
+fn domain_capture_checks_recorded_domain_and_function() {
+    let source = cq(quote! {
+        struct Q;
+        relation R(m: Code in (names));
+        relation answer(m: Code);
+        answer(m) :- R(m), where m == "AIR";
+    });
+    let normal = cq::normal::normalize(&source).unwrap();
+    for wrong_domain in [false, true] {
+        let mut invalid = normal.clone();
+        let cq::syntax::Capture::Domain(capture) = &mut invalid.query.captures.items[0] else {
+            panic!("expected a recorded translation");
+        };
+        if wrong_domain {
+            capture.domain.expression = syn::parse_quote!(other_names);
+        } else {
+            capture.function = cq::syntax::capture::DomainFunction::Lower;
+        }
+        let error = cq::normal::check(&invalid).unwrap_err().to_string();
         assert!(error.contains("WF-Domain"), "{error}");
     }
 }

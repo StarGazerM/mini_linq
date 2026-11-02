@@ -6,15 +6,20 @@
 //! whole answer, and expressions keep their written syntax.
 //!
 //! ```text
-//! Captures ::= ["capture" "{" (Let ";" | "if" RustExpr ";")* "}"]
+//! Captures ::= ["capture" "{" (Let ";" | "if" RustExpr ";" | DomainCapture ";")* "}"]
 //! ```
-use crate::{Filter, Let, rust, symbol_name};
+use crate::{CodeDomain, Filter, Let, rust, symbol_name};
 use quote::ToTokens;
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use syn::{Ident, Token, token};
 
 pub mod kw {
     syn::custom_keyword!(capture);
+    syn::custom_keyword!(domain);
+    syn::custom_keyword!(exact);
+    syn::custom_keyword!(lower);
+    syn::custom_keyword!(upper);
 }
 
 /// IF-Capture: `capture c` in a binding or guard value position
@@ -65,11 +70,77 @@ pub fn check_reference(
     Ok(())
 }
 
+/// A-Domain's recorded operation, never inferred from a Rust call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DomainFunction {
+    Exact,
+    Lower,
+    Upper,
+}
+
+impl syn::parse::Parse for DomainFunction {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(kw::exact) {
+            input.parse::<kw::exact>()?;
+            Ok(Self::Exact)
+        } else if input.peek(kw::lower) {
+            input.parse::<kw::lower>()?;
+            Ok(Self::Lower)
+        } else {
+            input.parse::<kw::upper>()?;
+            Ok(Self::Upper)
+        }
+    }
+}
+
+impl ToTokens for DomainFunction {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        match self {
+            Self::Exact => kw::exact::default().to_tokens(tokens),
+            Self::Lower => kw::lower::default().to_tokens(tokens),
+            Self::Upper => kw::upper::default().to_tokens(tokens),
+        }
+    }
+}
+
+/// Explicit IR syntax preserves A-Domain provenance across serialization.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct DomainCapture {
+    pub domain_token: kw::domain,
+    pub name: Ident,
+    pub colon_token: Token![:],
+    pub ty: syn::Type,
+    pub domain: CodeDomain,
+    pub eq_token: Token![=],
+    pub function: DomainFunction,
+    #[syn(parenthesized)]
+    pub paren_token: token::Paren,
+    #[syn(in = paren_token)]
+    pub operand: syn::Expr,
+}
+
+impl DomainCapture {
+    /// Realize the recorded operation without recognizing Rust syntax.
+    pub fn binding(&self) -> Let {
+        let Self {
+            name,
+            ty,
+            domain,
+            function,
+            operand,
+            ..
+        } = self;
+        let domain = &domain.expression;
+        syn::parse_quote!(let #name: #ty = ::cq_storage::domain::#function(&(#domain), &(#operand)))
+    }
+}
+
 /// One host-once value: a binding or an answer gate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Capture {
     Let(Box<Let>),
     Guard(Filter),
+    Domain(Box<DomainCapture>),
 }
 
 impl Capture {
@@ -77,13 +148,33 @@ impl Capture {
         match self {
             Self::Let(binding) => binding.capture.as_ref(),
             Self::Guard(guard) => guard.capture.as_ref(),
+            Self::Domain(_) => None,
         }
     }
 
-    pub fn expression(&self) -> &syn::Expr {
+    pub fn expressions(&self) -> impl Iterator<Item = &syn::Expr> {
+        let expressions = match self {
+            Self::Let(binding) => [Some(&binding.expression), None],
+            Self::Guard(guard) => [Some(&guard.condition), None],
+            Self::Domain(capture) => [Some(&capture.domain.expression), Some(&capture.operand)],
+        };
+        expressions.into_iter().flatten()
+    }
+
+    /// A binding ready for a Rust printer; the typed record remains unchanged.
+    pub fn binding(&self) -> Option<Cow<'_, Let>> {
         match self {
-            Self::Let(binding) => &binding.expression,
-            Self::Guard(guard) => &guard.condition,
+            Self::Let(binding) => Some(Cow::Borrowed(binding)),
+            Self::Domain(capture) => Some(Cow::Owned(capture.binding())),
+            Self::Guard(_) => None,
+        }
+    }
+
+    pub fn binding_types(&self) -> Vec<(Ident, syn::Type)> {
+        match self {
+            Self::Let(binding) => binding.binding_types(),
+            Self::Domain(capture) => vec![(capture.name.clone(), capture.ty.clone())],
+            Self::Guard(_) => Vec::new(),
         }
     }
 
@@ -91,13 +182,16 @@ impl Capture {
         match self {
             Self::Let(binding) => rust::bindings(&binding.pattern),
             Self::Guard(_) => Vec::new(),
+            Self::Domain(capture) => vec![capture.name.clone()],
         }
     }
 }
 
 impl syn::parse::Parse for Capture {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        if input.peek(Token![let]) {
+        if input.peek(kw::domain) {
+            Ok(Self::Domain(input.parse()?))
+        } else if input.peek(Token![let]) {
             Ok(Self::Let(input.parse()?))
         } else {
             Ok(Self::Guard(input.parse()?))
@@ -110,6 +204,7 @@ impl ToTokens for Capture {
         match self {
             Self::Let(binding) => binding.to_tokens(tokens),
             Self::Guard(guard) => guard.to_tokens(tokens),
+            Self::Domain(capture) => capture.to_tokens(tokens),
         }
     }
 }
@@ -144,9 +239,11 @@ impl Captures {
         let mut seen = BTreeSet::new();
         for item in &self.items {
             if item.reference().is_some()
-                || !rust::free_variables(item.expression())
-                    .dependencies(logical)
-                    .is_empty()
+                || item.expressions().any(|expression| {
+                    !rust::free_variables(expression)
+                        .dependencies(logical)
+                        .is_empty()
+                })
             {
                 return Err(syn::Error::new_spanned(
                     item,

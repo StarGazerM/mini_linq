@@ -413,24 +413,21 @@ impl Rows {
         // before any launch and read through its binder reference; an `if`
         // capture (answer gate) has no GPU realization.
         for (index, item) in physical.program.captures.items.iter().enumerate() {
-            match item {
-                cq_lang_structures::syntax::Capture::Let(binding) => {
-                    let id = format_ident!("__cq_query_capture_{index}");
-                    let annotation = &binding.annotation;
-                    let expression = &binding.expression;
-                    let pattern = &binding.pattern;
-                    setup.extend(quote! {
-                        let #id #annotation = #expression;
-                        #[allow(unused_variables)]
-                        let #pattern = &#id;
-                    });
-                }
-                cq_lang_structures::syntax::Capture::Guard(guard) => {
-                    return Err(syn::Error::new_spanned(
-                        guard,
-                        "T-Gpu: an `if` capture (answer gate) has no GPU realization",
-                    ));
-                }
+            if let Some(binding) = item.binding() {
+                let id = format_ident!("__cq_query_capture_{index}");
+                let annotation = &binding.annotation;
+                let expression = &binding.expression;
+                let pattern = &binding.pattern;
+                setup.extend(quote! {
+                    let #id #annotation = #expression;
+                    #[allow(unused_variables)]
+                    let #pattern = &#id;
+                });
+            } else if let cq_lang_structures::syntax::Capture::Guard(guard) = item {
+                return Err(syn::Error::new_spanned(
+                    guard,
+                    "T-Gpu: an `if` capture (answer gate) has no GPU realization",
+                ));
             }
         }
         let mut build = TokenStream::new();
@@ -439,10 +436,7 @@ impl Rows {
         // IF-Capture on GPU: an answer column naming a capture is published from
         // one host-encoded kernel scalar, never a device row slot.
         for item in &physical.program.captures.items {
-            let cq_lang_structures::syntax::Capture::Let(binding) = item else {
-                continue;
-            };
-            for (binder, ty) in binding.binding_types() {
+            for (binder, ty) in item.binding_types() {
                 let column = symbol_name(&binder);
                 if !output_columns.contains(&column) {
                     continue;

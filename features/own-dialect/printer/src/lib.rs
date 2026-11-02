@@ -228,8 +228,8 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
         #run
         #result
     }))?;
-    // Push loops finish inside this block, so captures stay borrowed.
-    cq_print::own_captures(&mut expression, &push.owned, &[]);
+    // Move closures own clones of the capture values they read.
+    cq_print::own_captures(&mut expression, &push.owned, &push.captured_values);
     Ok(expression)
 }
 

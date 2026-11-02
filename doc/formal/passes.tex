@@ -59,7 +59,7 @@ arguments, fresh $k$ starts at \code{__cq_i_j}; cases are tried in order:
  (op,\mathsf{lower})&op\in\{<,\geq\}\\
  (<,\mathsf{upper})&op={\leq}\\
  ({\geq},\mathsf{upper})&op={>}\end{cases}}
- {x\ op\ t\leadsto_{NF}x\ op'\ k\quad[\mathsf{captures}:=\mathsf{captures}\concat[\mathsf{let}\ k:T=\code{::cq\_storage::domain::}f\code{(\&(}D\code{), \&(}t\code{))}]]}
+ {x\ op\ t\leadsto_{NF}x\ op'\ k\quad[\mathsf{captures}:=\mathsf{captures}\concat[\mathsf{Domain}(k,T,f,D,t)]]}
 \end{mathpar}
 A-Domain runs once per operand at normalization; a literal membership
 \code{x in [t, ...]} first becomes the disjunction of $x=t_i$, \code{x in a..b}
@@ -73,7 +73,9 @@ which no row carries. \textsf{exact} needs \code{CodeDomain};
 \textsf{lower}/\textsf{upper} need \code{OrderedCodeDomain}, so an ordered
 comparison on an unordered domain is rejected by rustc. Columns without a
 domain keep their operands unchanged. The captured code is then an ordinary
-closed operand (A-Closed, IF-Capture); no later pass knows it came from a domain.
+closed operand (A-Closed, IF-Capture); its typed domain record is carried unchanged.
+Already recorded translations of the same declared domain stay unchanged.
+Authored Rust calls, even identically spelled, never establish this provenance.
 Replace the atom by $\mathit{before}\concat[R(\bar a')]\concat\mathit{after}$.
 Identities are relational clauses, not guards. Row-dependent Rust guards,
 lets and generators are copied; branch bodies normalize recursively with fresh names; a
@@ -735,15 +737,17 @@ expansion fixtures. Interfaces at the Rust boundary:
 
 \Rule{IF-Capture}{\mathsf{let}\ p=e\in\mathsf{captures}\quad b\text{ fresh}\quad
  \mathsf{if}\ g\in\mathsf{captures}}
- {\code{let b = e; let b = Value::new(b).share(); let p = \&*b;}\text{ once before IF-Parameter};\ 
-  \text{a move closure reading }p\text{ owns }\code{Clone::clone(\&b)}\text{ and rebinds }\code{p = \&*b};\ 
+ {\code{let b = e; let p = \&b;}\text{ once before IF-Parameter};\
+  \text{each move closure reading }p\text{ owns }\code{Clone::clone(\&b)}\text{ and rebinds }\code{p = \&b};\
   \text{answer}=\code{if g \{rows\} else \{empty\}};\ 
   \mathsf{capture}\ c\longmapsto\code{Clone::clone(c)}\ /\ \code{*c}}
-The handle \code{share()} is chosen by Rust method resolution in
-\code{cq\_storage::capture}: a \code{Copy} value is its own handle (closures
-copy it; nothing is allocated), any other value is moved once into an
-\code{Arc}. The printer emits the same tokens for every capture and inspects
-no type; a lazy answer is never collected because of a capture.
+Every captured value uses plain ownership. Each closure instance clones the
+values it reads, at every nesting level; direct reads use the original value.
+Rust checks \code{Clone}; \code{Copy} captures need no allocation, while other
+captures pay their own clone cost (authors can wrap large values explicitly).
+A typed $\mathsf{Domain}(k,T,f,D,t)$ capture realizes its binding as
+\code{let k:T = ::cq\_storage::domain::f(\&(D), \&(t))} before this same rule.
+No type-dependent selection, shared handle or capture-induced collection exists.
 
 \Rule{IF-Range}{\mathsf{native}(r,c,\{d\})=\rho\quad\rho\in\{\code{range},\code{ordered}\}}
  {\mathsf{window}(H,d)\longmapsto\code{dispatch::range}/\code{window}(H,\ldots)\text{; unrecorded: scan/filter, no build}}

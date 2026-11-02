@@ -20,11 +20,7 @@ fn capture_types(program: &Program) -> Vec<(String, syn::Type)> {
         .captures
         .items
         .iter()
-        .filter_map(|item| match item {
-            cq_lang_structures::syntax::Capture::Let(binding) => Some(binding.binding_types()),
-            cq_lang_structures::syntax::Capture::Guard(_) => None,
-        })
-        .flatten()
+        .flat_map(cq_lang_structures::syntax::Capture::binding_types)
         .filter(|(_, ty)| !matches!(ty, syn::Type::Infer(_)))
         .map(|(binder, ty)| (symbol_name(&binder), ty))
         .collect()

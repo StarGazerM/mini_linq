@@ -487,14 +487,11 @@ fn check_program(program: &Program) -> syn::Result<()> {
     if program.output().is_none() {
         let mut types = blocks::types(&schema, &program.query.body, &BTreeMap::new())?;
         for item in &program.query.captures.items {
-            if let cq_syntax::Capture::Let(binding) = item {
-                types.extend(
-                    binding
-                        .binding_types()
-                        .into_iter()
-                        .map(|(id, ty)| (symbol_name(&id), ty)),
-                );
-            }
+            types.extend(
+                item.binding_types()
+                    .into_iter()
+                    .map(|(id, ty)| (symbol_name(&id), ty)),
+            );
         }
         for arg in &program.query.head.args {
             if !rust::variable(arg)

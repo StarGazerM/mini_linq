@@ -1,10 +1,9 @@
 //! Move shared dispatch state into each closure that needs it. Nested closures
 //! get their own handles, so repeated probes never move out of an outer closure.
-//! IF-Capture handles are shared the same way: a `move` closure reading a
-//! capture binder owns a clone of its handle (`cq_storage::capture`: a copy of
-//! a `Copy` value, else an `Arc` that tasks share across threads) and rebinds
-//! the binder pattern from it, so the answer iterator never borrows a
-//! block-local capture.
+//! IF-Capture values use plain ownership: each `move` closure clones every
+//! captured value it reads and borrows its own clone through the binder.
+//! This applies at every nesting level; direct reads use the original value.
+//! Rust checks Clone, and Copy values need no allocation.
 use super::*;
 use syn::visit::Visit;
 use syn::visit_mut::VisitMut;
@@ -49,17 +48,17 @@ pub fn own_captures(expression: &mut Expr, owned: &[Ident], captures: &[(Ident, 
             }
             let mut handles = Vec::new();
             let mut rebinds = Vec::new();
-            for ((handle, pattern), binders) in self.captures.iter().zip(&self.names) {
+            for ((value, pattern), binders) in self.captures.iter().zip(&self.names) {
                 let mut names = binders.clone();
-                names.push(handle.clone());
+                names.push(value.clone());
                 let mut uses = Uses {
                     names: &names,
                     used: Vec::new(),
                 };
                 uses.visit_expr(&closure.body);
                 if !uses.used.is_empty() {
-                    handles.push(handle.clone());
-                    rebinds.push(quote!(#[allow(unused_variables)] let #pattern = &*#handle;));
+                    handles.push(value.clone());
+                    rebinds.push(quote!(#[allow(unused_variables)] let #pattern = &#value;));
                 }
             }
             if !rebinds.is_empty() {

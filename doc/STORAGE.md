@@ -1017,14 +1017,17 @@ source text (so it matches no row), and `lower`/`upper` are the
 `partition_point` ranks of the first entry `>= v` / `> v` in the sorted
 entries. Normalization rule A-Domain translates every closed operand
 compared with a domain column (in `where`, atom or negated-atom positions,
-membership items and range bounds) into a host-once capture
+membership items and range bounds) into a typed host-once capture
+`domain __cq_c_i: T in (D) = f(t)`. Its Rust realization is
 `let __cq_c_i: T = ::cq_storage::domain::f(&(D), &(t));`:
 `exact` for `==`, `!=`, positions and literal membership (an `Or` of
 equalities); `lower` for `<` and `>=`; `x <= t` becomes `x < upper(t)` and
 `x > t` becomes `x >= upper(t)`; `a..b` becomes `>= lower(a) && < lower(b)`
 and `a..=b` becomes `>= lower(a) && < upper(b)`. Columns without a domain
-keep their operands unchanged. WF-Domain rejects joins and comparisons
-across domains. Unordered domains (DOOP's first-sight `IStr`, GPU Datalog
+keep their operands unchanged. WF-Domain checks the typed capture variant,
+function and structurally equal declared domain; an authored identical Rust
+call is opaque and never proves translation. Joins and comparisons across
+domains are rejected. Unordered domains (DOOP's first-sight `IStr`, GPU Datalog
 `Symbol` codecs) do not implement `OrderedCodeDomain`, so rustc rejects an
 ordered comparison on them. `Dictionaries::literal` no longer exists:
 query setup does not translate literals by hand.

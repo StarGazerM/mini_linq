@@ -19,7 +19,7 @@
   },
   "interned-capture-handle": {
    "kind": "intended",
-   "description": "IF-Capture ownership: a `let` capture is bound as `let c = T-expr; let c = { use ::cq_storage::capture::{ShareArc as _, ShareCopy as _}; ::cq_storage::capture::Value::new(c).share() }; let p = &*c;` (Rust method resolution: a Copy value is its own handle, other values share one Arc) and every `move` closure that reads p (or c) owns `let c = Clone::clone(&c);` and rebinds `let p = &*c;` (own_captures), so a lazy answer no longer borrows the block-local capture and is not collected; parameter ordinals shift"
+   "description": "IF-Capture ownership: every value capture is bound as `let c = T-expr; let p = &c;`, and every `move` closure that reads p (or c) owns `let c = ::core::clone::Clone::clone(&c);` and rebinds `let p = &c;` at every nesting level. Direct reads use the original binding. There is no type-dependent selection or compiler-introduced Rc/Arc; lazy answers remain uncollected. Non-Copy values pay their own clone cost per closure instance."
   }
  },
  "rules": [

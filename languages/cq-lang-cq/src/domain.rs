@@ -5,8 +5,8 @@
 //! (a query-closed host value implementing `cq_storage::CodeDomain`). The
 //! domain fact, never the column type or an operand's Rust shape, decides that
 //! a closed operand compared with the column is translated once on the host:
-//! A-Domain records the translation as a closed capture
-//! `let __cq_c_i: T = ::cq_storage::domain::f(&(D), &(t));`, and the comparison
+//! A-Domain records the operation, declared domain, and operand as a typed
+//! `Capture::Domain`; only printers realize its runtime call. The comparison
 //! then reads the capture like any closed operand. Later IRs carry captures
 //! and declarations unchanged; printers decide nothing about domains.
 //! DO NOT inspect column types, recognize literal kinds, or translate per row.
@@ -15,7 +15,7 @@ use super::{BodyItem, CommaList, Program, normal, rust};
 use crate::symbol_name;
 use cq_syntax::{
     CodeDomain, ColumnDecl, EqualityValue,
-    capture::{Capture, Captures},
+    capture::{Capture, Captures, DomainCapture, DomainFunction},
     constraint::{Comparison, Constraint, Term},
 };
 use quote::ToTokens;
@@ -36,19 +36,19 @@ impl Column {
             ty: declaration.ty.clone(),
         }
     }
-    fn key(&self) -> Option<String> {
-        self.domain.as_ref().map(CodeDomain::key)
+    fn key(&self) -> Option<&CodeDomain> {
+        self.domain.as_ref()
     }
 }
 
 /// The translation function a comparison needs and the comparison it keeps:
 /// `x <= v ⇔ code(x) < upper(v)` and `x > v ⇔ code(x) >= upper(v)`.
-fn translation(comparison: Comparison) -> (Comparison, &'static str) {
+fn translation(comparison: Comparison) -> (Comparison, DomainFunction) {
     match comparison {
-        Comparison::Eq(_) | Comparison::Ne(_) => (comparison, "exact"),
-        Comparison::Lt(_) | Comparison::Ge(_) => (comparison, "lower"),
-        Comparison::Le(_) => (Comparison::Lt(Default::default()), "upper"),
-        Comparison::Gt(_) => (Comparison::Ge(Default::default()), "upper"),
+        Comparison::Eq(_) | Comparison::Ne(_) => (comparison, DomainFunction::Exact),
+        Comparison::Lt(_) | Comparison::Ge(_) => (comparison, DomainFunction::Lower),
+        Comparison::Le(_) => (Comparison::Lt(Default::default()), DomainFunction::Upper),
+        Comparison::Gt(_) => (Comparison::Ge(Default::default()), DomainFunction::Upper),
     }
 }
 
@@ -101,48 +101,21 @@ fn variables(
 }
 
 /// The domain function of a recorded A-Domain capture named by `term`.
-fn domain_function(term: &Term, domain: &CodeDomain, captures: &Captures) -> Option<String> {
+fn domain_function(
+    term: &Term,
+    domain: &CodeDomain,
+    captures: &Captures,
+) -> Option<DomainFunction> {
     let Term::Closed(syn::Expr::Path(path)) = term else {
         return None;
     };
     let name = path.path.get_ident()?;
     captures.items.iter().find_map(|capture| {
-        let Capture::Let(binding) = capture else {
+        let Capture::Domain(capture) = capture else {
             return None;
         };
-        let syn::Pat::Ident(pattern) = &binding.pattern else {
-            return None;
-        };
-        if symbol_name(&pattern.ident) != symbol_name(name) {
-            return None;
-        }
-        let syn::Expr::Call(call) = &binding.expression else {
-            return None;
-        };
-        let syn::Expr::Path(callee) = &*call.func else {
-            return None;
-        };
-        let segments: Vec<_> = callee
-            .path
-            .segments
-            .iter()
-            .map(|s| s.ident.to_string())
-            .collect();
-        let [crate_name, module, function] = segments.as_slice() else {
-            return None;
-        };
-        let syn::Expr::Reference(reference) = call.args.first()? else {
-            return None;
-        };
-        let syn::Expr::Paren(argument) = &*reference.expr else {
-            return None;
-        };
-        (callee.path.leading_colon.is_some()
-            && crate_name == "cq_storage"
-            && module == "domain"
-            && call.args.len() == 2
-            && argument.expr.to_token_stream().to_string() == domain.key())
-        .then(|| function.clone())
+        (symbol_name(&capture.name) == symbol_name(name) && capture.domain == *domain)
+            .then_some(capture.function)
     })
 }
 
@@ -175,24 +148,26 @@ struct Translation<'a> {
 }
 
 impl Translation<'_> {
-    /// Record `let k: T = ::cq_storage::domain::f(&(D), &(operand));`.
-    fn code(&mut self, column: &Column, operand: &syn::Expr, function: &str) -> Term {
-        let domain = &column
-            .domain
-            .as_ref()
-            .expect("a code-domain column")
-            .expression;
-        let function = Ident::new(function, proc_macro2::Span::call_site());
+    /// Record the translation as typed A-Domain data, not generated Rust.
+    fn code(&mut self, column: &Column, operand: &syn::Expr, function: DomainFunction) -> Term {
         let name = normal::fresh_capture(self.names);
-        let expression: syn::Expr =
-            syn::parse_quote!(::cq_storage::domain::#function(&(#domain), &(#operand)));
-        self.captures.items.push(normal::capture(normal::binding(
-            &name, &column.ty, expression,
-        )));
+        self.captures
+            .items
+            .push(Capture::Domain(Box::new(DomainCapture {
+                domain_token: Default::default(),
+                name: name.clone(),
+                colon_token: Default::default(),
+                ty: column.ty.clone(),
+                domain: column.domain.clone().expect("a code-domain column"),
+                eq_token: Default::default(),
+                function,
+                paren_token: Default::default(),
+                operand: operand.clone(),
+            })));
         Term::Closed(normal::path(&name))
     }
 
-    fn operand(&mut self, column: &Column, term: Term, function: &str) -> Term {
+    fn operand(&mut self, column: &Column, term: Term, function: DomainFunction) -> Term {
         let domain = column.domain.as_ref().expect("a code-domain column");
         if domain_function(&term, domain, self.captures).is_some() {
             return term;
@@ -283,12 +258,12 @@ impl Translation<'_> {
                     Constraint::Compare {
                         left: term.clone(),
                         comparison: Comparison::Ge(Default::default()),
-                        right: self.operand(&column, low, "lower"),
+                        right: self.operand(&column, low, DomainFunction::Lower),
                     },
                     Constraint::Compare {
                         left: term,
                         comparison: Comparison::Lt(Default::default()),
-                        right: self.operand(&column, high, "upper"),
+                        right: self.operand(&column, high, DomainFunction::Upper),
                     },
                 ]
             }
@@ -302,7 +277,7 @@ impl Translation<'_> {
                         vec![Constraint::Compare {
                             left: term.clone(),
                             comparison: Comparison::Eq(Default::default()),
-                            right: self.code(&column, &literal, "exact"),
+                            right: self.code(&column, &literal, DomainFunction::Exact),
                         }]
                     })
                     .collect();
@@ -353,7 +328,7 @@ impl Translation<'_> {
                         // A-Closed form: a fresh column variable restricted by
                         // the translated closed operand.
                         let key = normal::fresh(self.names, clause, position);
-                        let right = self.code(&column, argument, "exact");
+                        let right = self.code(&column, argument, DomainFunction::Exact);
                         after.push(BodyItem::Constraint(Constraint::Compare {
                             left: Term::Variable(key.clone()),
                             comparison: Comparison::Eq(Default::default()),
@@ -399,7 +374,9 @@ impl Translation<'_> {
                         if domain_function(&term, domain, self.captures).is_some() {
                             continue;
                         }
-                        let Term::Closed(code) = self.code(&column, argument, "exact") else {
+                        let Term::Closed(code) =
+                            self.code(&column, argument, DomainFunction::Exact)
+                        else {
                             unreachable!("codes are closed terms")
                         };
                         *argument = code;
@@ -425,7 +402,7 @@ impl Translation<'_> {
                             .filter(|c| c.domain.is_some())
                         {
                             Some(column) => {
-                                let right = self.code(&column, value, "exact");
+                                let right = self.code(&column, value, DomainFunction::Exact);
                                 translated.push(BodyItem::Constraint(Constraint::Compare {
                                     left: Term::Variable(equality.left.clone()),
                                     comparison: Comparison::Eq(Default::default()),
@@ -482,12 +459,14 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
             return Ok(());
         };
         let function = domain_function(term, &domain, captures);
-        let allowed: &[&str] = match comparison {
-            Comparison::Eq(_) | Comparison::Ne(_) => &["exact"],
-            Comparison::Lt(_) | Comparison::Ge(_) => &["lower", "upper"],
+        let allowed: &[DomainFunction] = match comparison {
+            Comparison::Eq(_) | Comparison::Ne(_) => &[DomainFunction::Exact],
+            Comparison::Lt(_) | Comparison::Ge(_) => {
+                &[DomainFunction::Lower, DomainFunction::Upper]
+            }
             Comparison::Le(_) | Comparison::Gt(_) => &[],
         };
-        if function.is_some_and(|f| allowed.contains(&f.as_str())) {
+        if function.is_some_and(|f| allowed.contains(&f)) {
             Ok(())
         } else {
             Err(error(
@@ -558,7 +537,7 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
                     if let Some(variable) =
                         rust::variable(argument).filter(|v| logical.contains(&symbol_name(v)))
                     {
-                        if key(variable) != column.domain.as_ref().map(CodeDomain::key) {
+                        if key(variable) != column.domain.as_ref() {
                             return Err(error(
                                 argument,
                                 format!("`{variable}` occupies columns of different code domains"),
@@ -568,8 +547,7 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
                     }
                     if let Some(domain) = &column.domain {
                         if domain_function(&Term::Closed(argument.clone()), domain, captures)
-                            .as_deref()
-                            != Some("exact")
+                            != Some(DomainFunction::Exact)
                         {
                             return Err(error(
                                 argument,
@@ -612,7 +590,7 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
             else {
                 continue;
             };
-            if key(variable).is_some_and(|key| key != declared.key()) {
+            if key(variable).is_some_and(|key| key != declared) {
                 return Err(error(
                     argument,
                     format!(

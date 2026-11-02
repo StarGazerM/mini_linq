@@ -1160,10 +1160,13 @@ Paths and lines refer to the reviewed `17a14b93` tree.
   2026-11-01. IF-Capture handles: an `Arc` for every capture made CPU
   `retail_h07` 1.058 [1.047, 1.137] slower than `c395fe83` with identical
   counters (+0.15% instructions, +3.7% cycles, extra realloc copies); the
-  same tree without captures ran 1.002. The printer now emits
-  `cq_storage::capture::Value::new(c).share()`; Rust method resolution makes
-  a `Copy` value its own handle and shares any other value through one
-  `Arc`, with no type inspection. Gates on the rebased tree: root 1230 and
+  same tree without captures ran 1.002. That checkpoint used type-dependent
+  capture handles. Drift review removed that selection: captures use plain
+  ownership and each move closure clones the values it reads at creation.
+  This applies at every nesting level; Rust checks Clone. Copy values need
+  no allocation; other values pay their own clone cost per closure instance.
+  A-Domain now carries a typed record, never a recognized Rust call.
+  Gates on the earlier rebased tree: root 1230 and
   all feature workspaces (4633 tests, 0 failed); GPU sequence 92/92;
   regressions 119/119; CPU TPC-H SF1 `default,par` 58/58 exact; DOOP xalan
   `--check` mini and mini-keyed ok; GPU TPC-H SF1 52/52 exact (advised +
