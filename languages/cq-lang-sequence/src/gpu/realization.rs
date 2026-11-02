@@ -267,6 +267,8 @@ pub enum Capture {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Captures {
+    /// Host bindings and answer gates, evaluated in checked source order.
+    pub query: cq_lang_structures::syntax::Captures,
     /// Kernel parameter order.
     pub captures: Vec<Capture>,
     /// Captures read by each Physical definition.

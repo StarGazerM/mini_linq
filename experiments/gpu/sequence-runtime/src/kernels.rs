@@ -1,5 +1,5 @@
 use cuda_device::thread;
-use gpu_device_columns::{decode_source, decode_source_u32, SourceView};
+use gpu_device_columns::{decode_source, SourceView};
 
 #[cuda_device::cuda_module]
 pub mod build {
@@ -44,6 +44,7 @@ pub mod build {
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub fn keys_and_rows(
         key: SourceView,
+        base: i64,
         source: *const u32,
         rows: u32,
         keys: *mut u32,
@@ -59,7 +60,7 @@ pub mod build {
                     *source.add(i as usize)
                 };
                 // DECODE V: index key extraction reconstructs values before sorting; P6 sort recorded codes or keep index runs plain.
-                *keys.add(i as usize) = decode_source_u32(key, row as u64);
+                *keys.add(i as usize) = (decode_source(key, row as u64) - base) as u32;
                 *order.add(i as usize) = row;
             }
             i = match i.checked_add(stride) {
@@ -73,7 +74,13 @@ pub mod build {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     // DECODE V: multi-key index build expands each column before lexicographic sorting; P6 retain encoded keys.
-    pub fn sequence_decode_column(key: SourceView, source: *const u32, rows: u32, out: *mut u32) {
+    pub fn sequence_decode_column(
+        key: SourceView,
+        base: i64,
+        source: *const u32,
+        rows: u32,
+        out: *mut u32,
+    ) {
         let mut i = thread::index_1d().get() as u32;
         let stride = thread::gridDim_x() * 256;
         while i < rows {
@@ -84,7 +91,7 @@ pub mod build {
                     *source.add(i as usize)
                 };
                 // DECODE V: permutation gather reconstructs keys for a later sort; P6 compare encoded fields.
-                *out.add(i as usize) = decode_source_u32(key, row as u64);
+                *out.add(i as usize) = (decode_source(key, row as u64) - base) as u32;
             }
             i = match i.checked_add(stride) {
                 Some(next) => next,

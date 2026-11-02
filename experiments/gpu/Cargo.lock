@@ -386,6 +386,7 @@ dependencies = [
  "gpu-compress",
  "gpu-compress-host",
  "gpu-datalog-runtime",
+ "mini-linq",
  "proc-macro2",
  "quote",
  "serde_json",

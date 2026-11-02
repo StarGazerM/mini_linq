@@ -116,7 +116,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Real
         Ok(Realization {
             rejection: None,
             sources,
-            whole_lookups: crate::rows::lookup_demands(program)
+            whole_lookups: crate::rows::device_lookup_demands(program, analysis)
                 .into_iter()
                 .filter_map(|(name, keys)| keys.is_empty().then_some(name))
                 .collect(),
@@ -510,8 +510,26 @@ fn captures(facts: &Facts) -> syn::Result<Captures> {
     let analysis = facts.analysis;
     // Contract 7 (DESIGN anchor contract7-gpu-rows): only identity reads admit
     // device Rust; encoded predicates stay relational `where` captures.
-    let mut captures = crate::capture::Captures::default();
-    let mut records = Captures::default();
+    let query = &facts.program.structures.physical.program.captures;
+    let mut captures = crate::capture::Captures::new(query);
+    if query
+        .items
+        .iter()
+        .any(|item| matches!(item, cq_syntax::Capture::Guard(_)))
+        && facts
+            .sequence
+            .get(&facts.final_name()?)
+            .and_then(|term| grouped_boundary(term, &facts.sequence))
+            .is_some()
+    {
+        return Err(error(
+            "T-Gpu: an answer gate over a grouped publication is unsupported",
+        ));
+    }
+    let mut records = Captures {
+        query: query.clone(),
+        ..Captures::default()
+    };
     for (name, definition) in &facts.definitions {
         captures.used.clear();
         if !analysis.rust_requires_host(&definition.operator)
@@ -616,7 +634,7 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
     // Only checked device consumers require resident source adapters.
     // A host store can retain arbitrary Rust values (for example nullable
     // aggregates); it is not itself a host-to-device publication.
-    let required = crate::rows::device_source_results(analysis);
+    let required = crate::rows::device_source_results(facts.program, analysis);
     let host_bound = host_bound(&facts.definitions, captures);
     let demands = crate::rows::lookup_demands(facts.program);
     let mut sources = BTreeMap::new();
@@ -1253,7 +1271,7 @@ impl<'f, 'a> Steps<'f, 'a> {
             .sequence
             .get(&final_name)
             .and_then(|term| grouped_boundary(term, &facts.sequence));
-        let device_sources = crate::rows::device_source_results(analysis);
+        let device_sources = crate::rows::device_source_results(facts.program, analysis);
         let mut steps = Vec::new();
         let mut output = false;
         for definition in &facts.program.sequence.definitions {
@@ -1404,10 +1422,33 @@ pub(crate) fn check(
     analysis: &Analysis,
     records: &Realization,
 ) -> syn::Result<()> {
+    let query = &program.structures.physical.program.captures;
+    if query
+        .items
+        .iter()
+        .any(|item| matches!(item, cq_syntax::Capture::Guard(_)))
+    {
+        let facts = Facts::new(program, analysis)?;
+        if facts
+            .sequence
+            .get(&facts.final_name()?)
+            .and_then(|term| grouped_boundary(term, &facts.sequence))
+            .is_some()
+        {
+            return Err(error(
+                "T-Gpu: an answer gate over a grouped publication is unsupported",
+            ));
+        }
+    }
     if records.rejection.is_some() {
         return Ok(());
     }
-    let demands = crate::rows::lookup_demands(program);
+    if records.captures.query != *query {
+        return Err(error(
+            "GPU-Capture: query captures differ from checked source order",
+        ));
+    }
+    let demands = crate::rows::device_lookup_demands(program, analysis);
     if demands
         .iter()
         .any(|(name, keys)| keys.is_empty() && !records.whole_lookups.contains(name))
@@ -1552,6 +1593,20 @@ pub(crate) fn check(
     let mut state = CheckState::default();
     for (name, step) in &records.steps {
         let term = facts.sequence[name];
+        for source in crate::rows::lookup_providers(term) {
+            if records.whole_lookups.contains(&source)
+                && !records.sources.contains_key(&source)
+                && !state.uploads.contains(&source)
+                && !state
+                    .published
+                    .iter()
+                    .any(|published| published.result == source)
+            {
+                return Err(error(
+                    "whole-relation lookup requires a source or a preceding completed publication",
+                ));
+            }
+        }
         let terminal = *name == final_name;
         let dispatch = analysis.dispatches.iter().find(|dispatch| {
             dispatch.inner_stores.iter().rev().find(|store| {
@@ -2585,6 +2640,20 @@ mod tests {
                 _ => None,
             })
             .unwrap()
+    }
+
+    #[test]
+    fn checker_rejects_unrecorded_query_gate_changes() {
+        rejects(
+            probe(false),
+            &[&|realization| {
+                realization
+                    .captures
+                    .query
+                    .items
+                    .push(syn::parse_quote!(if (limit != 3)));
+            }],
+        );
     }
 
     #[test]

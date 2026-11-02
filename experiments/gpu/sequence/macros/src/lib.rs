@@ -209,12 +209,18 @@ pub fn bind_runs(input: TokenStream) -> TokenStream {
 /// Select device providers from the GPU catalog for every computed structure
 /// (filtered supports, built indexes, key sets) that `bind_runs` did not bind
 /// to a declared run input. Bound runs already match a catalog token.
+/// Catalog selection checks the retention correspondence itself: unsupported
+/// host indexes may become explicit retained builds, rather than preserving
+/// the Physical tree required by an ordinary Structures rewrite.
 #[proc_macro]
 pub fn select_catalog(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, arguments| {
-        no_arguments(arguments)?;
-        cq_sequence_plan::select_from_catalog(source, &cq_gpu_sequence_core::catalog())
-    })
+    cq_stage::pass::<cq_lang_structures::Program, cq_lang_structures::Program>(
+        input.into(),
+        |source, arguments| {
+            no_arguments(arguments)?;
+            cq_sequence_plan::select_from_catalog(source, &cq_gpu_sequence_core::catalog())
+        },
+    )
     .into()
 }
 

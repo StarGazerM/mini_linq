@@ -62,6 +62,24 @@ fn translates_grouped_canonical_publication() {
     assert_eq!(fold_providers(&expression), vec![Some(segmented)], "{code}");
     assert!(code.contains("build_set"));
     assert!(code.contains("valid [3usize]"));
+
+    // A group answer needs a distinct empty publication protocol. Reject that
+    // unsupported combination in the target checker, before any printer runs.
+    let mut gated = program.clone();
+    gated
+        .structures
+        .physical
+        .program
+        .captures
+        .items
+        .push(syn::parse_quote!(if (limit != 3)));
+    let error = check_grading(&gated, &cq_gpu_sequence::machine()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("answer gate over a grouped publication"),
+        "{error}"
+    );
 }
 
 #[test]

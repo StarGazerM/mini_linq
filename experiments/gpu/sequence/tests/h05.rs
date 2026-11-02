@@ -100,7 +100,7 @@ fn every_generated_kernel_fits_the_parameter_area() {
                             "u32" => (4, 4),
                             "usize" | "i64" => (8, 8),
                             "ColumnView" => (40, 8),
-                            "RangeView" => (64, 8),
+                            "RangeView" => (72, 8),
                             other => panic!("unknown emitted ABI type {other}"),
                         },
                         other => panic!("unknown emitted ABI type {}", other.to_token_stream()),

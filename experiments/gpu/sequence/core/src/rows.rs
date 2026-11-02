@@ -66,10 +66,8 @@ impl DirectoryPrint for DirectoryPolicy {
                 match #bounds {
                     ::cq_gpu_runtime::Bounds::Empty => 0usize,
                     ::cq_gpu_runtime::Bounds::Inclusive { min, max } => {
-                        if min < 0 || max > u32::MAX as i64 {
-                            return Err("T-Gpu: range keys require dense nonnegative u32 codes".into());
-                        }
-                        usize::try_from(max)?.checked_add(1).ok_or("T-Gpu: key domain overflow")?
+                        ::cq_gpu_sequence_runtime::dense_key_domain(
+                            ::cq_gpu_runtime::Bounds::Inclusive { min, max })?
                     }
                 }
             },
@@ -310,7 +308,7 @@ pub struct Rows {
     pub parameters: Vec<(Ident, Type, TokenStream)>,
     pub rust_functions: Vec<(Ident, TokenStream, Ident)>,
     pub output_columns: Vec<String>,
-    /// The query's host captures (A-Capture), bound once in `setup`.
+    /// The query's host captures (A-Capture), bound once before input setup.
     pub query_captures: cq_lang_structures::syntax::Captures,
     /// Carrier types of capture answer columns, published as kernel scalars.
     capture_types: BTreeMap<String, Type>,
@@ -418,27 +416,6 @@ impl Rows {
         let rust_functions = captures.rust_functions;
         let disabled_captures = captures.disabled;
         let mut setup = captures.setup;
-        // IF-Capture on GPU: each `let` capture is evaluated once on the host
-        // before any launch and read through its binder reference; an `if`
-        // capture (answer gate) has no GPU realization.
-        for (index, item) in physical.program.captures.items.iter().enumerate() {
-            if let Some(binding) = item.binding() {
-                let id = format_ident!("__cq_query_capture_{index}");
-                let annotation = &binding.annotation;
-                let expression = &binding.expression;
-                let pattern = &binding.pattern;
-                setup.extend(quote! {
-                    let #id #annotation = #expression;
-                    #[allow(unused_variables)]
-                    let #pattern = &#id;
-                });
-            } else if let cq_lang_structures::syntax::Capture::Guard(guard) = item {
-                return Err(syn::Error::new_spanned(
-                    guard,
-                    "T-Gpu: an `if` capture (answer gate) has no GPU realization",
-                ));
-            }
-        }
         let mut build = TokenStream::new();
         let mut parameters = captures.parameters;
         let mut capture_types = BTreeMap::new();
@@ -518,9 +495,6 @@ impl Rows {
                     }
                 }
             }
-            if !resident {
-                continue;
-            }
             let id = format_ident!("__cq_sequence_host_{}", name);
             let length = format_ident!("__cq_sequence_length_{}", name);
             let expression = input
@@ -535,6 +509,9 @@ impl Rows {
                     quote!(#name)
                 });
             setup.extend(quote!(let #id = &(#expression);));
+            if !resident {
+                continue;
+            }
             if first {
                 setup.extend(quote! {
                     let __cq_pool = #id.pool().clone();
@@ -1630,9 +1607,10 @@ impl Rows {
     }
 }
 
-/// Sources admitted by a dispatch, a native provider, or a recorded scalar
-/// host publication. Arbitrary host-only Rust rows do not acquire a device ABI.
-pub(crate) fn device_source_results(analysis: &Analysis) -> BTreeSet<String> {
+/// Sources admitted by a dispatch, a native provider, a whole-relation
+/// lookup, or a recorded scalar host publication. Arbitrary host-only Rust
+/// rows do not acquire a device ABI.
+pub(crate) fn device_source_results(program: &Program, analysis: &Analysis) -> BTreeSet<String> {
     let mut sources: BTreeSet<_> = analysis
         .dispatches
         .iter()
@@ -1641,6 +1619,11 @@ pub(crate) fn device_source_results(analysis: &Analysis) -> BTreeSet<String> {
         })
         .map(|name| analysis.results.get(name).unwrap_or(name).clone())
         .collect();
+    sources.extend(
+        device_lookup_demands(program, analysis)
+            .into_iter()
+            .filter_map(|(name, keys)| keys.is_empty().then_some(name)),
+    );
     sources.extend(
         analysis
             .structures
@@ -1770,7 +1753,17 @@ fn host_rows(
     host_structures.structures.declare(&declarations);
     cq_lang_structures::check_rewrite(&program.structures, &host_structures)?;
     let host_analysis = cq_lang_structures::contract::check(&host_structures)?;
-    let mut context = cq_print::Context::new(&host_structures, &host_analysis);
+    let inputs = host_structures
+        .physical
+        .inputs()
+        .map(|input| {
+            let name = symbol_name(&input.name);
+            let binding = format_ident!("__cq_sequence_host_{}", name);
+            (name, binding)
+        })
+        .collect();
+    let mut context =
+        cq_print::Context::with_bound_captures(&host_structures, &host_analysis, &inputs);
     // This host/device boundary publishes its complete checked layout, even
     // when the final answer projects columns away. Seed that demand before
     // RowEmitter prunes carriers through the producer's probes and guards.
@@ -1867,14 +1860,14 @@ fn host_rows(
         .map(|column| {
             let value = context.key_field(name, column, true);
             let ty = &analysis.structures.physical.rows[name].types[column];
-            let (value, carrier) = match codecs.get(ty) {
-                Some(codec) => (
-                    quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::code(&(#value))),
-                    syn::parse_quote!(u32),
-                ),
-                None => (value, ty.clone()),
+            let value = match codecs.get(ty) {
+                Some(codec) => {
+                    quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::code(&(#value)))
+                }
+                None => value,
             };
             if columnar {
+                let carrier = &analysis.gpu_bindings.carriers[column];
                 quote!(<#carrier as ::gpu_datalog_runtime::Scalar>::encode(&(#value)))
             } else {
                 value
@@ -1966,6 +1959,17 @@ pub(crate) fn origin(
                 predicate: false,
             };
             if let Some(constants) = &rename.constants {
+                if constants
+                    .equalities
+                    .iter()
+                    .map(|equality| symbol_name(&equality.left))
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    > 1
+                {
+                    result.predicate = true;
+                    return Ok(Some(result));
+                }
                 for equality in &constants.equalities {
                     let EqualityValue::Literal(value) = &equality.right else {
                         return Err(error(
@@ -1988,7 +1992,11 @@ pub(crate) fn origin(
                 return Ok(None);
             };
             // A noncontiguous selection stays a row predicate on the scan.
-            if !contiguous(&select.condition) {
+            if !contiguous(
+                &select.condition,
+                &result.columns,
+                result.selection.as_ref(),
+            ) {
                 result.predicate = true;
             } else {
                 intervals(
@@ -2007,17 +2015,42 @@ pub(crate) fn origin(
 
 /// Every constraint is an ordered comparison or equality against a host value
 /// on one column, so the selection is one half-open interval.
-fn contiguous(theta: &Theta) -> bool {
+fn contiguous(theta: &Theta, columns: &BTreeMap<String, String>, prior: Option<&Interval>) -> bool {
+    let mut source = prior.map(|interval| interval.column.clone());
+    let mut same_column = |column: &str| {
+        let Some(column) = columns.get(column) else {
+            return false;
+        };
+        match &source {
+            Some(source) => source == column,
+            None => {
+                source = Some(column.clone());
+                true
+            }
+        }
+    };
+    if !theta.equalities.iter().all(|equality| {
+        matches!(&equality.right, EqualityValue::Literal(_))
+            && same_column(&symbol_name(&equality.left))
+    }) {
+        return false;
+    }
     let variable = |term: &Term| matches!(term, Term::Variable(_));
     theta.constraints.iter().all(|constraint| match constraint {
         Constraint::Compare {
-            left,
+            left: Term::Variable(column),
             comparison,
             right,
-        } => !matches!(comparison, Comparison::Ne(_)) && variable(left) && !variable(right),
-        Constraint::Between { term, low, high } => {
-            variable(term) && !variable(low) && !variable(high)
+        } => {
+            !matches!(comparison, Comparison::Ne(_))
+                && !variable(right)
+                && same_column(&symbol_name(column))
         }
+        Constraint::Between {
+            term: Term::Variable(column),
+            low,
+            high,
+        } => !variable(low) && !variable(high) && same_column(&symbol_name(column)),
         _ => false,
     })
 }
@@ -2207,6 +2240,25 @@ pub(crate) fn lookup_demands(program: &Program) -> BTreeSet<(String, Vec<String>
     let mut demands = BTreeSet::new();
     for definition in &program.sequence.definitions {
         collect_lookups(&definition.term, &mut demands);
+    }
+    demands
+}
+
+/// Only reads below host require device source adapters and counts.
+pub(crate) fn device_lookup_demands(
+    program: &Program,
+    analysis: &Analysis,
+) -> BTreeSet<(String, Vec<String>)> {
+    let mut demands = BTreeSet::new();
+    for definition in &program.sequence.definitions {
+        if analysis
+            .levels
+            .get(&symbol_name(&definition.name))
+            .and_then(|level| level.last())
+            .is_some_and(|level| level != "host")
+        {
+            collect_lookups(&definition.term, &mut demands);
+        }
     }
     demands
 }

@@ -212,6 +212,25 @@ impl<'a> Context<'a> {
 
     /// Construct printer state from the complete program and its checked analysis.
     pub fn new(module: &'a structures::Program, analysis: &'a structures::Analysis) -> Self {
+        Self::capture_scope(module, analysis, false, None)
+    }
+
+    /// Construct a host subplan inside an already evaluated query scope.
+    /// The caller owns input bindings, capture bindings and answer gates.
+    pub fn with_bound_captures(
+        module: &'a structures::Program,
+        analysis: &'a structures::Analysis,
+        inputs: &BTreeMap<String, syn::Ident>,
+    ) -> Self {
+        Self::capture_scope(module, analysis, true, Some(inputs))
+    }
+
+    fn capture_scope(
+        module: &'a structures::Program,
+        analysis: &'a structures::Analysis,
+        bound_captures: bool,
+        bound_inputs: Option<&BTreeMap<String, syn::Ident>>,
+    ) -> Self {
         let mut hosts = BTreeMap::new();
         let mut statements = Vec::new();
         let mut bound = false;
@@ -230,7 +249,11 @@ impl<'a> Context<'a> {
         let mut used = std::collections::BTreeSet::new();
         names(module.to_token_stream(), &mut used);
         for input in module.physical.inputs() {
-            let value = if let Some(leaf) = &input.value {
+            let value = if let Some(value) =
+                bound_inputs.and_then(|inputs| inputs.get(&symbol_name(&input.name)))
+            {
+                value.clone()
+            } else if let Some(leaf) = &input.value {
                 // Formal rule IF-Leaf: Bind each leaf once in its enclosing Rust context.
                 let mut n = hosts.len();
                 while used.contains(&format!("__cq_leaf_{n}")) {
@@ -323,16 +346,20 @@ impl<'a> Context<'a> {
             let id = format_ident!("__cq_capture_{n}", span = proc_macro2::Span::mixed_site());
             used.insert(id.to_string());
             if let Some(binding) = item.binding() {
-                let expression = &binding.expression;
-                let annotation = &binding.annotation;
-                let pattern = &binding.pattern;
-                statements.push(syn::parse_quote!(let #id #annotation = #expression;));
-                statements.push(syn::parse_quote!(let #pattern = &#id;));
-                captured_values.push((id.clone(), pattern.clone()));
+                if !bound_captures {
+                    let expression = &binding.expression;
+                    let annotation = &binding.annotation;
+                    let pattern = &binding.pattern;
+                    statements.push(syn::parse_quote!(let #id #annotation = #expression;));
+                    statements.push(syn::parse_quote!(let #pattern = &#id;));
+                    captured_values.push((id.clone(), pattern.clone()));
+                }
                 for binder in item.binders() {
                     captures.insert(symbol_name(&binder), binder);
                 }
-            } else if let cq_lang_structures::syntax::Capture::Guard(guard) = item {
+            } else if !bound_captures
+                && let cq_lang_structures::syntax::Capture::Guard(guard) = item
+            {
                 let condition = &guard.condition;
                 statements.push(syn::parse_quote!(let #id: bool = #condition;));
                 gates.push(id);

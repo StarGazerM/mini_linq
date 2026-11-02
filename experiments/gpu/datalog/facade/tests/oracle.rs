@@ -74,6 +74,38 @@ fn all_oracle_programs_match_cpu_on_every_fixture() {
     }
 }
 
+#[test]
+fn resident_if_let_preserves_declared_scalar_metadata() {
+    let edges: Vec<(i32, i32)> = vec![(1, 2)];
+    let (r, s) = cq_datalog::datalog! {
+        pipeline {
+            incremental = ::cq_datalog::passes::incremental(driver(delta_first););
+            storage_rewrites = [::cq_gpu_datalog::device_storage];
+            cq = pipeline {
+                physical = [::cq_gpu_sequence::capture_constants];
+                structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
+                sequence = ::mini_linq::passes::sequence;
+                stage = ::cq_gpu_sequence::stage;
+                decompose = [::cq_gpu_sequence::decompose];
+                grade = ::cq_gpu_sequence::machine_grade;
+                print = ::cq_gpu_sequence::translate_arena;
+            };
+            terminals = [::cq_gpu_sequence::translate_arena => batch];
+            round = [::cq_gpu_datalog::bind_round(binding = 5)];
+            print = ::cq_gpu_datalog::print_rounds;
+        }
+        struct ResidentIfLet;
+        relation Edge(x: i32, y: i32) = (&edges);
+        relation R(x: i32, y: i32);
+        relation S(x: i32, y: i32);
+        output R, S;
+        R(*x, *y) :- Edge(x, y);
+        S(*x, z) :- R(x, y), if let Some(z) = Some(*y);
+    };
+    assert_eq!(r.collect::<Vec<(i32, i32)>>(), edges);
+    assert_eq!(s.collect::<Vec<(i32, i32)>>(), edges);
+}
+
 fn bounded_random_graph(nodes: i32, fanout: usize, mut state: u64) -> Data {
     let mut edge = Vec::with_capacity(nodes as usize * fanout);
     for source in 0..nodes {

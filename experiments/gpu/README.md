@@ -550,6 +550,11 @@ Closed guard, binding and selection expressions are host captures, evaluated
 once per invocation on demand for a nonempty dispatch input. Invocation-local
 `OnceCell` values retain captures across retries and dispatches; symbols use
 the column's codec, and kernels receive only integer parameters.
+Query-level answer gates are recorded separately and short-circuit before later
+captures, inputs or GPU work; false gates publish empty rows or arena batches.
+Host upload subplans reuse once-bound inputs and captures. Closed relational
+constraints with no row operands capture one host Boolean result. Grouped output
+with a query answer gate is currently rejected before printing.
 `capture_constants` is a checked Physical rewrite before provider selection:
 literal atom arguments become fresh columns, equality guards, then a projection
 that removes those columns. `bind_runs` never changes the Physical program.
@@ -1439,7 +1444,9 @@ per-call and median GPU build/kernel/dedup/total timings and query wall time.
 `--check` separately times the CPU tuple reference and checks every GPU call.
 Input loading/upload, answer download, and reference checks are excluded from
 the query samples.
-The recorded directory still requires dense nonnegative u32-range keys.
+The recorded directory requires a dense domain fitting its u32 addressing;
+signed keys are normalized by the provider's recorded `min(0, bounds.min)` base.
+Domain and sentinel sizes are checked, and payload values remain signed.
 Canonical publication uses ordinary full-row/unit-item `RadixLayout` sets.
 The constrained `radix_set` token promises Distinct, unlike the generic
 occurrence-preserving family. Shared stable radix ordering compares every

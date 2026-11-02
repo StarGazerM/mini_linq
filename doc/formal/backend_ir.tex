@@ -818,6 +818,8 @@ checked by Structures. Obsolete keyed host fallback entries are removed;
 the original host scan adapters remain unchanged. A built index supplies
 the keyed obligation rather than claiming that column encoding supplies
 an unavailable provider capability.
+Its macro entry point uses this retention correspondence, not the strict
+Structures rewrite correspondence that requires identical Physical trees.
 Structures has no machine grading, so selection requires host publication.
 Later Sequence planning validates every actual execution level.
 Provider tokens may restrict scalar row element types; an omitted restriction
@@ -1408,6 +1410,16 @@ The capture record retains parameter indices and definition dependencies before
 emission. Launch construction supplies the recorded domain length and branch
 enable expression; generated names and kernel argument offsets carry no meaning.
 The invocation-local cache is shared across capacity retries.
+Query-level capture items are a separate ordered record: bindings evaluate once
+in invocation scope and answer gates short-circuit before later captures,
+input evaluation or device work. A false gate returns an empty row publication
+or a validated empty arena batch. Query inputs bind once after the gates;
+host upload evaluators reuse those input and capture bindings rather than
+evaluating their expressions again. A relational
+constraint with no row operands is one closed Boolean capture; it does not
+need an artificial column or scalar-type guess. Grouped publication with a
+query answer gate currently has no empty-output adapter and is rejected by
+realization production and checking before printing.
 
 \paragraph{GPU realization records.}
 Native ABI is a declared provider-token fact. Input instances record the ordered
@@ -1476,8 +1488,9 @@ printing payload; equal spelling does not equate explicitly different ids.
 Thus a compared column and its closed capture use the same declared encoding.
 The GPU binding pass records one catalog-backed provider realization for both
 resident and computed paths; the checker validates supplied records without
-rerunning selection. Range providers record a dense nonnegative u32 domain
-with one terminal entry (zero entries for keyless providers). The first key is
+rerunning selection. Range providers record a dense u32-addressed domain after
+signed-base normalization, with one terminal entry (zero entries for keyless
+providers). The first key is
 reconstructed from the probe, later keys remain payload, and scans retain their
 complete payload. The domain is symbolic until bounds are available; the runtime
 checks and consumes the allocation rather than selecting its policy.
@@ -1564,6 +1577,20 @@ each row function and the host-bound selection conditions.
  p_b=(\mathsf{fold}_a(B_b),\mathsf{present}_a(B_b))_a}
  {\mathsf{group}_{\rm gpu}(G)_a=\bigoplus_b (p_b)_a\text{ in one stream-ordered combine block per aggregate }a}
 \end{mathpar}
+Whole-relation (zero-key) lookups also demand a recorded source or completed
+publication, including its row count; they do not require a keyed provider.
+Filtered host Cartesian operands are uploaded with the predicate applied,
+and consumers read the uploaded count rather than the unfiltered input length.
+A source interval is available only when every folded bound restricts the
+same source column. Independent literal restrictions remain row predicates;
+they are not an illegal multi-column interval. Dense range providers normalize
+signed keys by a recorded runtime base $\min(0,\mathsf{bounds.min})$ before
+directory addressing. Domain size and its sentinel are checked with widened
+arithmetic; payload values retain their original signed representation.
+An inferred answer binder's declared head type supplies its carrier inference
+constraint before publication storage records scalar bounds and arena metadata.
+The carrier checker validates that constraint independently; printing does not
+recover a type from expression or type spelling.
 The terminal group record names the Physical group, its input realization and
 its completion. The input is the packed canonical publication (whose recorded
 fields extraction decodes), a completed flat publication or device source

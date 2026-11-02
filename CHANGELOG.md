@@ -34,6 +34,20 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   lowering: VO → RA′"; stage-differential labels read `ra:relational_lowering`.
   Generated code is unchanged.
 
+- GPU fuzz regressions: catalog selection uses its checked retention contract
+  rather than the strict Physical-preserving Structures wrapper; whole-relation
+  reads demand recorded source rows and counts, including filtered Cartesian
+  operands. Independent literal-column restrictions remain predicates instead
+  of being forced into one interval. Dense range providers normalize signed
+  keys with a recorded base and checked domain size, preserving signed payloads.
+  Inferred resident-IDB answer binders carry the declared head's scalar inference
+  constraint into bounds and arena publication metadata.
+  Closed computed restrictions evaluate as recorded host Boolean captures;
+  ordered query answer gates return empty row/arena results before later
+  captures or inputs, and host subplans reuse outer capture bindings.
+  Grouped publication with an answer gate remains explicitly unsupported and
+  is rejected before printing. Minimized cases are default-tier regressions.
+
 - Documentation audit: distinguish current compiler/runtime contracts from
   historical mechanisms and benchmark snapshots; add report provenance and
   same-workload supersession links without changing measured data. The GPU

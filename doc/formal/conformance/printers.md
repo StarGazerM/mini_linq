@@ -119,6 +119,26 @@ GPU-Realization records the terminal group's store aliases, input realization
 (canonical, stored, source or host upload) and completion before printing; the
 emitter verifies the record against its chain and reroutes nothing.
 
+### Resolved: GPU fuzz source and scalar ownership
+
+The GPU catalog macro uses PL-Select's checked retention correspondence:
+materializing an unsupported keyed host read is not a strict Structures rewrite.
+GPU-SourceAccess includes whole-relation lookup operands in its required source
+set, and independently checks that each read has a source or preceding completed
+publication. Filtered Cartesian operands therefore publish their filtered count.
+Only single-column contiguous restrictions fold into intervals; independent
+literal-column restrictions remain predicates. Range descriptors record the
+signed key base used by directory addressing, with checked domain/sentinel size.
+GPU carrier selection takes an inferred answer binder's declared head constraint
+before recording its bounds and arena scalar metadata; the checker verifies the
+constraint without asking the printer to recover a scalar type.
+GPU-Capture records query capture order separately from per-row closed captures.
+Answer gates short-circuit to empty row/arena results before later bindings and
+inputs; host upload contexts reuse those bindings rather than repeating them.
+Closed constraints need no row column: their host Boolean result is recorded.
+Grouped outputs with an answer gate are checked unsupported before printing.
+
+
 ### Resolved: provider layout and native ABI identity
 
 GPU-ProviderLayout now records catalog identity/ABI, reconstruction, payload,

@@ -604,12 +604,77 @@ fn source_bounds(
     Ok(Bounds::Inclusive { min, max })
 }
 
-/// One dense u32 key level, in lexicographic order. The first level owns the
-/// domain+1 lower-bound directory; subsequent levels order rows within ranges.
+/// One dense u32 key level, in lexicographic order. Signed values are translated
+/// by `min(0, column.bounds().min)` before indexing; payload values stay unchanged.
 #[derive(Clone)]
 pub struct KeyDescriptor {
     pub column: ColumnDescriptor,
     pub domain_size: usize,
+}
+
+fn key_base(bounds: Bounds) -> i64 {
+    match bounds {
+        Bounds::Empty => 0,
+        Bounds::Inclusive { min, .. } => min.min(0),
+    }
+}
+
+/// Checked directory extent for a possibly signed, dense integer domain.
+pub fn dense_key_domain(bounds: Bounds) -> Result<usize> {
+    match bounds {
+        Bounds::Empty => Ok(0),
+        Bounds::Inclusive { min, max } => {
+            let span = max
+                .checked_sub(key_base(bounds))
+                .and_then(|span| span.checked_add(1))
+                .filter(|&span| min <= max && span > 0 && span < u32::MAX as i64)
+                .ok_or("dense key domain must leave u32::MAX available as a sentinel")?;
+            Ok(usize::try_from(span)?)
+        }
+    }
+}
+
+#[cfg(test)]
+mod dense_key_tests {
+    use super::{dense_key_domain, key_base, Bounds};
+
+    #[test]
+    fn signed_domains_translate_from_their_negative_base() {
+        for (min, max, base, size) in [
+            (-3, -1, -3, 3),
+            (-3, 2, -3, 6),
+            (i64::MIN, i64::MIN, i64::MIN, 1),
+            (7, 100, 0, 101),
+        ] {
+            let bounds = Bounds::Inclusive { min, max };
+            assert_eq!(key_base(bounds), base);
+            assert_eq!(dense_key_domain(bounds).unwrap(), size);
+        }
+        assert_eq!(key_base(Bounds::Empty), 0);
+        assert_eq!(dense_key_domain(Bounds::Empty).unwrap(), 0);
+    }
+
+    #[test]
+    fn unrepresentable_dense_domains_fail_before_key_normalization() {
+        for (min, max) in [
+            (i64::MIN, i64::MAX),
+            (i64::MIN, 0),
+            (0, i64::MAX),
+            (-1, u32::MAX as i64 - 2),
+            (0, u32::MAX as i64 - 1),
+            (2, 1),
+        ] {
+            assert!(dense_key_domain(Bounds::Inclusive { min, max }).is_err());
+        }
+        assert_eq!(
+            dense_key_domain(Bounds::Inclusive {
+                min: -1,
+                max: u32::MAX as i64 - 3
+            })
+            .unwrap(),
+            u32::MAX as usize - 1,
+        );
+    }
 }
 #[derive(Clone)]
 pub struct RangeSelection {
@@ -799,6 +864,7 @@ pub struct RangeView {
     pub payload: *const ColumnView,
     pub payload_columns: u32,
     pub domain: u32,
+    pub base: i64,
     pub len: u32,
 }
 
@@ -809,6 +875,7 @@ pub struct RangeProvider {
     payload: Vec<EncodedColumn>,
     payload_views: Arc<Buffer<ColumnView>>,
     domain: u32,
+    base: i64,
     len: u32,
 }
 impl RangeProvider {
@@ -863,6 +930,7 @@ impl RangeProvider {
             payload: self.payload_views.ptr(),
             payload_columns: self.payload.len() as u32,
             domain: self.domain,
+            base: self.base,
             len: self.len,
         }
     }
@@ -1070,7 +1138,7 @@ impl<'pool> RangeBuilder<'pool> {
             match key.column.bounds() {
                 Bounds::Empty if base_rows == 0 => {}
                 Bounds::Inclusive { min, max }
-                    if min >= 0 && max >= min && max < key.domain_size as i64 => {}
+                    if max >= min && dense_key_domain(key.column.bounds())? <= key.domain_size => {}
                 _ => return Err("key bounds do not fit the declared dense domain".into()),
             }
         }
@@ -1166,7 +1234,7 @@ impl<'pool> RangeBuilder<'pool> {
             if let Some(selected) = selected {
                 release(stream, selected)?;
             }
-            return finish(offsets, payload, 0, rows, workspace);
+            return finish(offsets, payload, 0, 0, rows, workspace);
         }
         let first = &descriptor.key[0];
         // Empty selections still own a complete all-zero directory.
@@ -1193,7 +1261,14 @@ impl<'pool> RangeBuilder<'pool> {
             if let Some(selected) = selected {
                 release(stream, selected)?;
             }
-            return finish(offsets, payload, first.domain_size, rows, workspace);
+            return finish(
+                offsets,
+                payload,
+                first.domain_size,
+                key_base(first.column.bounds()),
+                rows,
+                workspace,
+            );
         }
         let mut keys = temporary::<u32>(stream, rows)?;
         let mut order = temporary::<u32>(stream, rows)?;
@@ -1218,6 +1293,7 @@ impl<'pool> RangeBuilder<'pool> {
                         stream,
                         &decode_prepared,
                         key.column.view(),
+                        key_base(key.column.bounds()),
                         source,
                         rows as u32,
                         pointer(&out),
@@ -1257,6 +1333,7 @@ impl<'pool> RangeBuilder<'pool> {
                 stream,
                 &keys_prepared,
                 first.column.view(),
+                key_base(first.column.bounds()),
                 pointer(&base_order),
                 rows as u32,
                 pointer(&keys),
@@ -1271,6 +1348,7 @@ impl<'pool> RangeBuilder<'pool> {
                 stream,
                 &keys_prepared,
                 first.column.view(),
+                key_base(first.column.bounds()),
                 source,
                 rows as u32,
                 pointer(&keys),
@@ -1337,7 +1415,14 @@ impl<'pool> RangeBuilder<'pool> {
             release(stream, buffer)?;
         }
         release(stream, offsets)?;
-        finish(packed_offsets, payload, first.domain_size, rows, workspace)
+        finish(
+            packed_offsets,
+            payload,
+            first.domain_size,
+            key_base(first.column.bounds()),
+            rows,
+            workspace,
+        )
     }
 }
 
@@ -1345,6 +1430,7 @@ fn finish(
     offsets: EncodedColumn,
     payload: Vec<EncodedColumn>,
     domain: usize,
+    base: i64,
     len: usize,
     workspace: &mut RangeWorkspace,
 ) -> Result<RangeProvider> {
@@ -1364,6 +1450,7 @@ fn finish(
         payload,
         payload_views,
         domain: domain as u32,
+        base,
         len: len as u32,
     })
 }

@@ -247,6 +247,41 @@ impl<Row: OwnedRowCodec> DeviceColumns<'static, Row> {
         })
     }
 }
+impl<'data, Row: RowCodec<'data>> DeviceColumns<'data, Row> {
+    /// Publish an empty answer without evaluating or retaining query inputs.
+    pub fn empty(pool: Arc<Pool>) -> Result<Self> {
+        let columns = (0..Row::WIDTH)
+            .map(|_| EncodedColumn::from_host::<i64>(pool.clone(), &[], Codec::Plain).map(Arc::new))
+            .collect::<Result<Vec<_>>>()?;
+        let bounds = columns.iter().map(|column| column.bounds()).collect();
+        let host_views: Vec<_> = columns
+            .iter()
+            .map(|column| unsafe { column.view() })
+            .collect();
+        let views = Arc::new(Buffer::from_host(pool.clone(), &host_views)?);
+        let metadata = Arc::new(Buffer::from_host(
+            pool.clone(),
+            &[OutputCount {
+                rows: 0,
+                error: 0,
+                padding: 0,
+            }],
+        )?);
+        Ok(Self {
+            table: Table {
+                columns,
+                views,
+                metadata,
+                capacity: 0,
+                bounds,
+                statuses: Vec::new(),
+            },
+            dictionary: Arc::new(Dictionary::default()),
+            pool,
+            marker: PhantomData,
+        })
+    }
+}
 impl<'data, Row, C> DeviceColumns<'data, Row, C> {
     /// Construct a completed device result without transferring data.
     ///

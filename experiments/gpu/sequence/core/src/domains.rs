@@ -28,6 +28,23 @@ fn capture_types(program: &Program) -> Vec<(String, syn::Type)> {
         .collect()
 }
 
+/// A variable-only head supplies Rust's expected type for an inferred binder.
+/// Keep this context with the carrier facts: standalone scalar metadata has no
+/// expression from which Rust could recover an `if let` binder's type.
+fn head_types(program: &Program) -> Vec<(String, &syn::Type)> {
+    let physical = &program.structures.physical.program;
+    physical
+        .declarations
+        .iter()
+        .filter(|declaration| declaration.name == physical.head.relation)
+        .flat_map(|declaration| physical.head.args.iter().zip(&declaration.columns))
+        .filter_map(|(argument, column)| {
+            cq_lang_structures::syntax::rust::variable(argument)
+                .map(|name| (symbol_name(name), &column.ty))
+        })
+        .collect()
+}
+
 /// The device carrier of a logical column type: the u32 code of its
 /// declared codec, otherwise the type itself (GPU-Representation).
 fn device_carrier(codecs: &crate::runs::Codecs, logical: &syn::Type) -> syn::Type {
@@ -46,8 +63,16 @@ pub(crate) fn carriers(
 ) -> syn::Result<BTreeMap<String, syn::Type>> {
     let codecs = crate::runs::Codecs::check(&program.structures)?;
     let mut carriers = BTreeMap::new();
+    let head = head_types(program);
     for row in analysis.structures.physical.rows.values() {
         for (column, ty) in &row.types {
+            let ty = if matches!(ty, syn::Type::Infer(_)) {
+                head.iter()
+                    .find(|(name, _)| name == column)
+                    .map_or(ty, |(_, ty)| *ty)
+            } else {
+                ty
+            };
             carriers.insert(column.clone(), device_carrier(&codecs, ty));
         }
     }
@@ -70,6 +95,22 @@ fn check_carriers(program: &Program, analysis: &Analysis, records: &Bindings) ->
     let captures = capture_types(program);
     for (column, ty) in &captures {
         typed.entry(column).or_default().push(ty);
+    }
+    // The checker consumes the authored head constraints independently of the
+    // producer. Every available expected type must justify the inferred field.
+    let head = head_types(program);
+    for (column, logicals) in &mut typed {
+        if logicals.iter().any(|ty| matches!(ty, syn::Type::Infer(_))) {
+            let expected: Vec<_> = head
+                .iter()
+                .filter(|(name, _)| name == *column)
+                .map(|(_, ty)| *ty)
+                .collect();
+            if !expected.is_empty() {
+                logicals.retain(|ty| !matches!(ty, syn::Type::Infer(_)));
+                logicals.extend(expected);
+            }
+        }
     }
     if records.carriers.len() != typed.len() {
         return Err(error("GPU-Representation: incomplete carrier records"));
@@ -303,6 +344,67 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inferred_output_carrier_uses_the_declared_head_context() {
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation R(a:i32) = (&data);
+                relation answer(value:i32);
+                r = pipe rename R@0 {a -> a};
+                bound = pipe bind r with b = (*a);
+                computed = let canon project bound keep {b};
+                return computed as answer(b);
+            }
+            structures {
+                providers {
+                    device_columns = ::cq_gpu_runtime::DeviceColumns<_> {
+                        reads [], build typed, abi columns, bounds resident_columns
+                    };
+                    radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> {
+                        reads [distinct, resident], build inferred
+                    };
+                }
+                r host scan = @device_columns input {
+                    keys 0; columns [i32 => i32]
+                } as ::cq_gpu_runtime::DeviceColumns<'static,(i32,)> [];
+                computed rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
+                computed canon = rows;
+            }
+            sequence {
+                input = store rows r;
+                values = store canon map computed map bound input;
+                output_rows = store flatten tile 256 values;
+                output count;
+            }
+            graded gpu { input at host; values at host; output_rows at host.device; }
+        };
+        let program = crate::runs::record_representation(&program).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        assert!(matches!(
+            analysis.structures.physical.rows["computed"].types["b"],
+            syn::Type::Infer(_)
+        ));
+        let records = &analysis.gpu_bindings;
+        assert_eq!(records.carriers["b"], syn::parse_quote!(i32));
+        assert_eq!(
+            records.bounds["b"],
+            ColumnBounds::Scalar {
+                ty: syn::parse_quote!(i32)
+            }
+        );
+        let arena = analysis.gpu_publications["output_rows"]
+            .arena
+            .as_ref()
+            .unwrap();
+        assert_eq!(arena.columns[0].column, "b");
+        assert_eq!(arena.columns[0].carrier, syn::parse_quote!(i32));
+        for ty in [syn::parse_quote!(_), syn::parse_quote!(u32)] {
+            let mut wrong = records.clone();
+            wrong.carriers.insert("b".into(), ty);
+            assert!(check_carriers(&program, &analysis, &wrong).is_err());
+        }
+    }
 
     #[test]
     fn bounds_and_upload_records_check_original_provenance() {

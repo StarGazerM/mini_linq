@@ -28,6 +28,7 @@ use syn::{Expr, Ident, Type, visit_mut::VisitMut};
 pub(crate) struct Captures {
     pub records: Vec<Capture>,
     values: BTreeMap<String, usize>,
+    parameters: BTreeMap<String, Ident>,
     pub used: BTreeSet<usize>,
     frozen: bool,
     missing: bool,
@@ -150,6 +151,34 @@ pub(crate) fn print(records: &[Capture]) -> Printed {
     printed
 }
 
+/// Print checked query captures in source order. A failed answer gate returns
+/// before later captures or any query input is evaluated.
+pub(crate) fn print_query(
+    captures: &cq_lang_structures::syntax::Captures,
+    empty: &TokenStream,
+) -> TokenStream {
+    let mut setup = TokenStream::new();
+    for (index, item) in captures.items.iter().enumerate() {
+        if let Some(binding) = item.binding() {
+            let id = format_ident!("__cq_query_capture_{index}");
+            let annotation = &binding.annotation;
+            let expression = &binding.expression;
+            let pattern = &binding.pattern;
+            setup.extend(quote! {
+                let #id #annotation = #expression;
+                #[allow(unused_variables)]
+                let #pattern = &#id;
+            });
+        } else if let cq_lang_structures::syntax::Capture::Guard(guard) = item {
+            let condition = &guard.condition;
+            setup.extend(quote! {
+                if !(#condition) { return #empty; }
+            });
+        }
+    }
+    setup
+}
+
 fn value_key(expression: &Expr, logical: &Type) -> String {
     format!(
         "{}:{}",
@@ -248,7 +277,7 @@ pub(crate) fn check(
             }
             Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
                 let types = &rows[&symbol_name(&select.input)].types;
-                let mut frozen = Captures::frozen(&records.captures);
+                let mut frozen = Captures::frozen(&records.captures, &records.query);
                 let rendered = frozen.relational(&select.condition, types, codecs)?;
                 // Uses are the device form's captures; the host form reads caches.
                 let used = std::mem::take(&mut frozen.used);
@@ -409,8 +438,18 @@ fn check_row_function(
 }
 
 impl Captures {
+    pub(crate) fn new(query: &cq_lang_structures::syntax::Captures) -> Self {
+        Self {
+            parameters: query
+                .binders()
+                .map(|name| (name.to_string(), name))
+                .collect(),
+            ..Self::default()
+        }
+    }
+
     /// Lookup-only resolution over supplied records (never records new captures).
-    fn frozen(records: &[Capture]) -> Self {
+    fn frozen(records: &[Capture], query: &cq_lang_structures::syntax::Captures) -> Self {
         let values = records
             .iter()
             .enumerate()
@@ -426,9 +465,8 @@ impl Captures {
         Self {
             records: records.to_vec(),
             values,
-            used: BTreeSet::new(),
             frozen: true,
-            missing: false,
+            ..Self::new(query)
         }
     }
 
@@ -515,6 +553,26 @@ impl Captures {
             types: &BTreeMap<String, Type>,
             codecs: &crate::runs::Codecs,
         ) {
+            if value.variables().next().is_none() {
+                let tokens =
+                    cq_print::expressions::relational_constraint(value, &captures.parameters);
+                let expression = syn::parse_quote!(#tokens);
+                let index = captures.value_index(&expression, &syn::parse_quote!(bool), codecs);
+                if let Some(Capture::Value {
+                    expression,
+                    logical,
+                    codec,
+                }) = captures.records.get(index)
+                {
+                    let host = host_value(index, expression, logical, codec.as_ref());
+                    *value = Constraint::Compare {
+                        left: Term::Closed(syn::parse_quote!(#host)),
+                        comparison: Comparison::Eq(Default::default()),
+                        right: Term::Literal(syn::parse_quote!(true)),
+                    };
+                }
+                return;
+            }
             match value {
                 Constraint::Compare { left, right, .. } => {
                     let column = match (&*left, &*right) {
@@ -670,6 +728,18 @@ impl Captures {
         types: &BTreeMap<String, Type>,
         codecs: &crate::runs::Codecs,
     ) -> syn::Result<TokenStream> {
+        // A column-free predicate is a host proposition, not a device
+        // comparison with an inferred column representation. Reuse the shared
+        // relational laws and capture only its boolean result.
+        if constraint.variables().next().is_none() {
+            let expression = syn::parse2(cq_print::expressions::relational_constraint(
+                constraint,
+                &self.parameters,
+            ))?;
+            return Ok(self
+                .value(&expression, &syn::parse_quote!(bool), codecs)
+                .into_token_stream());
+        }
         let context = |term: &Term| match term {
             Term::Variable(name) => types.get(&name.to_string()),
             _ => None,
@@ -753,6 +823,68 @@ impl Captures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closed_relational_forms_capture_only_the_host_boolean() {
+        let query = syn::parse_quote!(capture { let y: Alias = (limit + 1); });
+        let codecs = crate::runs::Codecs::default();
+        for predicate in [
+            quote!(@(y) > 0),
+            quote!(@(y) between 0 and 3),
+            quote!(@(y) in { 1, 2 }),
+            quote!((@(y) > 0) or (@(y) < -3)),
+        ] {
+            let theta: Theta = syn::parse2(predicate).unwrap();
+            let mut captures = Captures::new(&query);
+            let device = captures
+                .relational(&theta, &BTreeMap::new(), &codecs)
+                .unwrap();
+            assert_eq!(captures.records.len(), 1);
+            let Capture::Value {
+                expression,
+                logical,
+                codec,
+            } = &captures.records[0]
+            else {
+                panic!("a closed restriction must not become a device callable");
+            };
+            assert_eq!(*logical, syn::parse_quote!(bool));
+            assert!(codec.is_none());
+            let host = expression.to_token_stream().to_string();
+            assert!(host.contains("relational_"), "{host}");
+            assert!(
+                !host.contains("& (y)"),
+                "capture binders already borrow values: {host}"
+            );
+            let mut host_theta = theta.clone();
+            captures.host_relational(&mut host_theta, &BTreeMap::new(), &codecs);
+            assert_eq!(captures.records.len(), 1);
+
+            let mut frozen = Captures::frozen(&captures.records, &query);
+            assert_eq!(
+                frozen
+                    .relational(&theta, &BTreeMap::new(), &codecs)
+                    .unwrap(),
+                device
+            );
+            frozen.host_relational(&mut theta.clone(), &BTreeMap::new(), &codecs);
+            assert!(!frozen.missing);
+            let mut changed = captures.records.clone();
+            let Capture::Value { expression, .. } = &mut changed[0] else {
+                unreachable!()
+            };
+            *expression = syn::parse_quote!(false);
+            let mut frozen = Captures::frozen(&changed, &query);
+            frozen
+                .relational(&theta, &BTreeMap::new(), &codecs)
+                .unwrap();
+            assert!(
+                frozen.missing,
+                "lookup-only checking must reject a changed proposition"
+            );
+        }
+    }
+
     #[test]
     fn relational_symbol_operand_uses_recorded_codec() {
         let mut captures = Captures::default();

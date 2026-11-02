@@ -1101,8 +1101,9 @@ impl<'a> Compiler<'a> {
         Ok(quote! {
             let mut __member_found = false;
             let (mut __begin, mut __end) = (0u32, 0u32);
-            if __live && (__row[#slot] as i64) >= 0 && (__row[#slot] as u64) < #view.domain as u64 {
-                (__begin, __end) = ::cq_gpu_sequence_runtime::device::range(#view.offsets, __row[#slot] as u32);
+            let __directory_key = (__row[#slot] as i64).wrapping_sub(#view.base) as u64;
+            if __live && (__row[#slot] as i64) >= #view.base && __directory_key < #view.domain as u64 {
+                (__begin, __end) = ::cq_gpu_sequence_runtime::device::range(#view.offsets, __directory_key as u32);
                 __member_found = __begin < __end;
             }
             #membership_checks
@@ -3739,6 +3740,15 @@ fn translate_observed(
     let arena_setup = arena
         .zip(arena_packing.as_ref())
         .map(|(expression, packing)| packing.setup(expression));
+    let empty = arena
+        .zip(arena_packing.as_ref())
+        .map(|(expression, packing)| packing.empty(expression))
+        .unwrap_or_else(|| {
+            quote!(::cq_gpu_runtime::DeviceColumns::empty(
+                ::gpu_datalog_runtime::thread_pool()?
+            ))
+        });
+    let query_setup = crate::capture::print_query(&realization.captures.query, &empty);
     let mut used = BTreeSet::new();
     identifiers(
         quote!(#setup #arena_setup #build #(#launches)* #output),
@@ -3777,6 +3787,7 @@ fn translate_observed(
             #(#kernels)*
         }
         ::cq_gpu_sequence_runtime::__codegen::#partition::run(#[inline] || -> ::cq_gpu_sequence_runtime::Result<_> {
+            #query_setup
             #(#support_before)*
             #setup
             #arena_setup

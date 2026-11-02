@@ -17,6 +17,7 @@ cuda-oracle = []
 cuda-retry-oracle = ["cuda-oracle"]
 
 [dev-dependencies]
+mini-linq = { path = "../../../facade/mini-linq" }
 cq-sequence-plan = { path = "../../../passes/cq-sequence-plan" }
 cq-sequence-lowering = { path = "../../../passes/cq-sequence-lowering" }
 cq-gpu-sequence-test-macros = { path = "tests/support/macros" }

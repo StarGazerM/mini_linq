@@ -68,6 +68,16 @@ impl Packing {
         }
     }
 
+    /// Publish a failed answer gate without reading query inputs or launching.
+    pub fn empty(&self, arena: &syn::Expr) -> TokenStream {
+        let columns = &self.columns;
+        quote! {{
+            let __cq_arena = &mut (#arena);
+            let packing = ::gpu_datalog_runtime::Packing::with_columns(&[#(#columns),*])?;
+            unsafe { __cq_arena.reserve(packing, 0)?.finish(0, ::std::vec::Vec::new()) }
+        }}
+    }
+
     /// Pack one answer row; each value is a row slot or a capture kernel scalar.
     pub fn write(&self, values: &[TokenStream]) -> TokenStream {
         let bits = &self.bits;
