@@ -305,8 +305,10 @@ dependencies = [
  "cq-sequence-rewrites",
  "cq-sequence-tasks",
  "cq-stage",
+ "cq-storage",
  "mini-linq",
  "quote",
+ "rayon",
  "syn 2.0.119",
 ]
 

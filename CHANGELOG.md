@@ -7,6 +7,16 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- F5: task decomposition recognizes independent union arms beneath unary
+  consumers (including the canonicalization of lowered set union), publishes
+  each arm separately, and concatenates/canonicalizes at host. The dispatch
+  checker remains unchanged: identical-valued relation occurrences do not
+  make their stored spaces interchangeable. Default tasks-route regressions
+  check grading and empty/duplicate-containing answers.
+- Updated the task routed-membership test's stale token declaration to the
+  canonical `AdaptiveMembership<_, 16777216>` declaration; catalog equality
+  checking remains strict.
+
 - Elaboration redesign slice 3b: H-Local is order-independent. A relational
   predicate restricts every covering positive atom of its scope, written
   before or after it; the only positional premise left is the domain cut (a

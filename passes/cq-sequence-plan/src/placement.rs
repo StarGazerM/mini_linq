@@ -132,10 +132,21 @@ pub(crate) fn boundaries(
         });
     }
     for definition in definitions {
-        let term = match &definition.term {
-            Term::Store { inner, .. } => inner.as_ref(),
-            term => term,
-        };
+        // Unary consumers do not merge the driver spaces of their input.
+        // In particular, lowering records set union as `canon union [...]`.
+        // Publish its independent arms before placing the consumer at host.
+        let mut term = &definition.term;
+        while let Term::Store { inner, .. }
+        | Term::Canon(inner)
+        | Term::Map(_, inner)
+        | Term::Compact(_, inner)
+        | Term::Flatten(inner)
+        | Term::Fold(_, inner)
+        | Term::Group(_, inner)
+        | Term::Lookup { inner, .. } = term
+        {
+            term = inner;
+        }
         let Term::Union(arms) = term else { continue };
         let mut domains = BTreeSet::new();
         driver_domains(term, definitions, &indices, &mut domains);

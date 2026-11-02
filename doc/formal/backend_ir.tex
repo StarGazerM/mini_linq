@@ -822,7 +822,11 @@ Placement propagates unavailable device representations and their unstored
 feeds to host. A Rust expression may read only identity-represented device
 columns, with other inputs supplied by closed captures; encoded columns use
 relational predicates. Independent named union arms with distinct stored
-domains are published separately, then concatenated at host; neither rule
+domains are published separately, then concatenated at host. Unary consumers,
+including the canonicalization enclosing a lowered set union, do not merge
+its driver domains: placement finds the union beneath those consumers and
+keeps them at host. Distinct relation occurrences remain distinct spaces even
+when their source relation and projected values agree. Neither rule
 weakens BE-RustRepresentation or BE-Boundary.
 An already-checked Sequence store cuts producer provenance, including for
 lookup providers: descendant reads consume materialized rows rather than

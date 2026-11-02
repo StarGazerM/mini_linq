@@ -1345,7 +1345,7 @@ fn type_directed_membership_keeps_routed_provider_construction() {
             result = pipe probe first [a] l,r;
             return result as answer(a);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> { reads [membership], build typed, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; adaptive_membership = ::cq_storage::AdaptiveMembership<_, 16777216> { reads [membership], build typed, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             r = @adaptive_membership as ::cq_storage::AdaptiveMembership<_, 16777216> [a] membership payload [a] constants {};
         }
