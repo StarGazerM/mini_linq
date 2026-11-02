@@ -98,7 +98,12 @@ impl ToTokens for Advice {
             Self::Store(name) => quote!(store(#name)),
             Self::GroupWithoutCanon(name) => quote!(group_without_canon(#name)),
             Self::StoreLevel(name) => quote!(store_level(#name)),
-            Self::Retain { name, rows, tile, minimum } => {
+            Self::Retain {
+                name,
+                rows,
+                tile,
+                minimum,
+            } => {
                 let rows = LitInt::new(&rows.to_string(), name.span());
                 let tile = LitInt::new(&tile.to_string(), name.span());
                 let minimum = LitInt::new(&minimum.to_string(), name.span());

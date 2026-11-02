@@ -29,8 +29,8 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Ident, LitInt, Token, braced, bracketed, parenthesized};
 
-pub mod contract;
 pub mod bounds;
+pub mod contract;
 mod evidence;
 pub mod gpu;
 mod grading;

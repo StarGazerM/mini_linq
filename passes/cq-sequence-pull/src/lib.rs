@@ -76,14 +76,17 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     }
     // Codec registration only: these tokens authorize representations; this catalog does not execute logical decoding.
     // `None` is the identity representation of columns without a declared codec.
-    catalog.codecs = [None, Some::<syn::Type>(syn::parse_quote!(::cq_storage::sequence::Dense<_>))]
-        .into_iter()
-        .map(|codec| CodecToken {
-            codec,
-            ordered: true,
-            levels: levels.clone(),
-        })
-        .collect();
+    catalog.codecs = [
+        None,
+        Some::<syn::Type>(syn::parse_quote!(::cq_storage::sequence::Dense<_>)),
+    ]
+    .into_iter()
+    .map(|codec| CodecToken {
+        codec,
+        ordered: true,
+        levels: levels.clone(),
+    })
+    .collect();
     catalog
 }
 
@@ -930,11 +933,7 @@ impl<'a> Emitter<'a> {
                     .find_map(|obligation| match obligation {
                         cq_lang_sequence::Obligation::Canon {
                             result, canonical, ..
-                        }
-                            if result == &self.owner =>
-                        {
-                            canonical.as_ref()
-                        }
+                        } if result == &self.owner => canonical.as_ref(),
                         _ => None,
                     })
             })

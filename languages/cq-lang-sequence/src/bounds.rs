@@ -82,7 +82,11 @@ pub(crate) fn record(program: &Program) -> BTreeMap<String, Bound> {
                 }
             }
             Operator::Group(group) => Bound {
-                rows: if group.keys.is_empty() { Some(1) } else { get(&bounds, &group.input).rows },
+                rows: if group.keys.is_empty() {
+                    Some(1)
+                } else {
+                    get(&bounds, &group.input).rows
+                },
                 keys: vec![group.keys.iter().map(symbol_name).collect()],
             },
             Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => get(&bounds, &keyed.left),
@@ -109,54 +113,107 @@ pub(crate) fn record(program: &Program) -> BTreeMap<String, Bound> {
 /// justified side is legal; this does not replay `record`'s preferred side.
 pub fn check(program: &Program, bounds: &BTreeMap<String, Bound>) -> syn::Result<()> {
     fn weakens(recorded: &Bound, premise: &Bound) -> bool {
-        recorded.rows.is_none_or(|rows| premise.rows.is_some_and(|limit| limit <= rows))
+        recorded
+            .rows
+            .is_none_or(|rows| premise.rows.is_some_and(|limit| limit <= rows))
             && recorded.keys.iter().all(|key| premise.keys.contains(key))
     }
     let definitions = &program.structures.physical.program.definitions;
     if bounds.len() != definitions.len() {
-        return Err(syn::Error::new_spanned(program, "BE-PrefixBound: incomplete result coverage"));
+        return Err(syn::Error::new_spanned(
+            program,
+            "BE-PrefixBound: incomplete result coverage",
+        ));
     }
     let mut preceding = BTreeMap::<String, &Bound>::new();
     let unknown = Bound::default();
     for definition in definitions {
         let name = symbol_name(&definition.name);
         let Some(bound) = bounds.get(&name) else {
-            return Err(syn::Error::new_spanned(&definition.name, "BE-PrefixBound: missing result"));
+            return Err(syn::Error::new_spanned(
+                &definition.name,
+                "BE-PrefixBound: missing result",
+            ));
         };
         let get = |name: &syn::Ident| {
-            preceding.get(&symbol_name(name)).copied().unwrap_or(&unknown)
+            preceding
+                .get(&symbol_name(name))
+                .copied()
+                .unwrap_or(&unknown)
         };
-        let covers = |bound: &Bound, columns: &syn::punctuated::Punctuated<syn::Ident, syn::Token![,]>| {
-            bound.keys.iter().any(|key| key.iter().all(|column|
-                columns.iter().any(|candidate| symbol_name(candidate) == *column)))
-        };
+        let covers =
+            |bound: &Bound, columns: &syn::punctuated::Punctuated<syn::Ident, syn::Token![,]>| {
+                bound.keys.iter().any(|key| {
+                    key.iter().all(|column| {
+                        columns
+                            .iter()
+                            .any(|candidate| symbol_name(candidate) == *column)
+                    })
+                })
+            };
         let legal = match &definition.operator {
-            Operator::Unit(_) => weakens(bound, &Bound {
-                rows: Some(1), keys: vec![BTreeSet::new()],
-            }),
+            Operator::Unit(_) => weakens(
+                bound,
+                &Bound {
+                    rows: Some(1),
+                    keys: vec![BTreeSet::new()],
+                },
+            ),
             Operator::Rename(rename) => {
                 let relation = symbol_name(&rename.relation);
-                bound.rows.is_none_or(|rows|
-                    program.evidence.count(&relation).is_some_and(|limit| limit as u128 <= rows))
-                    && bound.keys.iter().all(|key| program.evidence.facts.iter().any(|fact| {
-                        let EvidenceFact::Key { subject, columns } = fact else { return false };
-                        symbol_name(subject) == relation && columns.iter().map(|column|
-                            rename.mapping.iter().find(|mapping| mapping.source == *column)
-                                .map(|mapping| symbol_name(&mapping.target)))
-                            .collect::<Option<BTreeSet<_>>>().as_ref() == Some(key)
-                    }))
+                bound.rows.is_none_or(|rows| {
+                    program
+                        .evidence
+                        .count(&relation)
+                        .is_some_and(|limit| limit as u128 <= rows)
+                }) && bound.keys.iter().all(|key| {
+                    program.evidence.facts.iter().any(|fact| {
+                        let EvidenceFact::Key { subject, columns } = fact else {
+                            return false;
+                        };
+                        symbol_name(subject) == relation
+                            && columns
+                                .iter()
+                                .map(|column| {
+                                    rename
+                                        .mapping
+                                        .iter()
+                                        .find(|mapping| mapping.source == *column)
+                                        .map(|mapping| symbol_name(&mapping.target))
+                                })
+                                .collect::<Option<BTreeSet<_>>>()
+                                .as_ref()
+                                == Some(key)
+                    })
+                })
             }
-            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) =>
-                weakens(bound, get(&select.input)),
+            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+                weakens(bound, get(&select.input))
+            }
             Operator::Guard(guard) => weakens(bound, get(&guard.input)),
             Operator::Bind(bind) if bind.for_token.is_none() => weakens(bound, get(&bind.input)),
-            Operator::Project(project) => weakens(bound, get(&project.input))
-                && bound.keys.iter().all(|key| key.iter().all(|column|
-                    project.attributes.iter().any(|kept| symbol_name(kept) == *column))),
-            Operator::Group(group) => weakens(bound, &Bound {
-                rows: if group.keys.is_empty() { Some(1) } else { get(&group.input).rows },
-                keys: vec![group.keys.iter().map(symbol_name).collect()],
-            }),
+            Operator::Project(project) => {
+                weakens(bound, get(&project.input))
+                    && bound.keys.iter().all(|key| {
+                        key.iter().all(|column| {
+                            project
+                                .attributes
+                                .iter()
+                                .any(|kept| symbol_name(kept) == *column)
+                        })
+                    })
+            }
+            Operator::Group(group) => weakens(
+                bound,
+                &Bound {
+                    rows: if group.keys.is_empty() {
+                        Some(1)
+                    } else {
+                        get(&group.input).rows
+                    },
+                    keys: vec![group.keys.iter().map(symbol_name).collect()],
+                },
+            ),
             Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => weakens(bound, get(&keyed.left)),
             Operator::Probe(_, keyed) | Operator::Merge(_, keyed) => {
                 let (left, right) = (get(&keyed.left), get(&keyed.right));
@@ -167,8 +224,10 @@ pub fn check(program: &Program, bounds: &BTreeMap<String, Bound>) -> syn::Result
             Operator::Bind(_) | Operator::Union(_) => weakens(bound, &unknown),
         };
         if !legal {
-            return Err(syn::Error::new_spanned(&definition.name,
-                "BE-PrefixBound: recorded rows or keys lack an evidence/transfer premise"));
+            return Err(syn::Error::new_spanned(
+                &definition.name,
+                "BE-PrefixBound: recorded rows or keys lack an evidence/transfer premise",
+            ));
         }
         preceding.insert(name, bound);
     }

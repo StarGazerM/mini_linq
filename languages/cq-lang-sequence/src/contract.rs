@@ -142,7 +142,10 @@ impl Checker {
                 let Some(codec) = &column.codec else {
                     continue;
                 };
-                match codecs.iter().find(|(logical, _)| *logical == column.logical) {
+                match codecs
+                    .iter()
+                    .find(|(logical, _)| *logical == column.logical)
+                {
                     Some((_, previous)) if previous != codec => {
                         return fail(codec, "BE-Code", "conflicting codecs for one logical type");
                     }
@@ -646,17 +649,17 @@ impl Checked<'_> {
                     return fail(name, "BE-Alpha", "rows names no retained result or host");
                 };
                 let unique = match &meaning {
-                        Meaning::Result(result) => self
-                            .stored_result_keys
-                            .get(result)
-                            .map(|(_, key)| key.clone())
-                            .or_else(|| self.inferred_key(name, None)),
-                        _ => self.facts.values().find_map(|fact| {
-                            (fact.materializes && fact.meaning == meaning)
-                                .then(|| fact.unique.clone())
-                                .flatten()
-                        }),
-                    };
+                    Meaning::Result(result) => self
+                        .stored_result_keys
+                        .get(result)
+                        .map(|(_, key)| key.clone())
+                        .or_else(|| self.inferred_key(name, None)),
+                    _ => self.facts.values().find_map(|fact| {
+                        (fact.materializes && fact.meaning == meaning)
+                            .then(|| fact.unique.clone())
+                            .flatten()
+                    }),
+                };
                 Ok(Fact {
                     canon_free_unique: unique.clone(),
                     unique,
@@ -1016,13 +1019,15 @@ impl Checked<'_> {
                     .get(&provider_name)
                     .map(|(_, key)| key.clone())
                     .or_else(|| self.inferred_key(provider, None));
-                let combine = |key: Option<Vec<String>>| key.and_then(|mut key| {
-                    let other = other.clone()?;
-                    key.extend(other);
-                    key.sort();
-                    key.dedup();
-                    Some(key)
-                });
+                let combine = |key: Option<Vec<String>>| {
+                    key.and_then(|mut key| {
+                        let other = other.clone()?;
+                        key.extend(other);
+                        key.sort();
+                        key.dedup();
+                        Some(key)
+                    })
+                };
                 fact.unique = combine(fact.unique.take());
                 fact.canon_free_unique = combine(fact.canon_free_unique.take());
                 fact.meaning = Meaning::Lookup(provider_name, names, Box::new(fact.meaning));

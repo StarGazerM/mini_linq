@@ -285,7 +285,7 @@ mod tests {
                 answer = let canon probe first [a] l,r;
                 return answer as answer(a,b);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; opaque_native = OpaqueNative<i32> { reads [exact, range, membership], build macro }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; opaque_native = OpaqueNative<i32> { reads [exact, range, membership], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
                 l host scan = @reader input { keys 0; columns [i32 => Code codec Codec] } as Reader [];
                 r host scan = @opaque_native as OpaqueNative<i32> [];
                 r host result(answer) = @opaque_native as OpaqueNative<i32> [a];
@@ -322,7 +322,10 @@ mod tests {
             codecs.contains(&(vec!["a".into()], false, Some(declared.clone()))),
             "{codecs:?}"
         );
-        assert!(codecs.contains(&(vec!["b".into()], false, None)), "{codecs:?}");
+        assert!(
+            codecs.contains(&(vec!["b".into()], false, None)),
+            "{codecs:?}"
+        );
         let token = |codec: Option<syn::Type>, ordered| cq_lang_sequence::CodecToken {
             codec,
             ordered,
@@ -335,11 +338,21 @@ mod tests {
         // Legal: identity columns use the identity token.
         assert!(codec_available(&analysis, &catalog, None, true));
         // Illegal: neither identity nor another codec discharges `Codec`.
-        assert!(!codec_available(&analysis, &catalog, Some(&declared), false));
+        assert!(!codec_available(
+            &analysis,
+            &catalog,
+            Some(&declared),
+            false
+        ));
         catalog
             .codecs
             .push(token(Some(syn::parse_quote!(OtherCodec)), true));
-        assert!(!codec_available(&analysis, &catalog, Some(&declared), false));
+        assert!(!codec_available(
+            &analysis,
+            &catalog,
+            Some(&declared),
+            false
+        ));
         // Legal: the exact token, certifying order only when it declares it.
         catalog.codecs.push(token(Some(declared.clone()), false));
         assert!(codec_available(&analysis, &catalog, Some(&declared), false));
@@ -365,7 +378,12 @@ mod tests {
         // unmet although a Distinct entry exists.
         assert!(!canon_available(&catalog, None, None, at(&["host"])));
         // Legal: its recorded identity index at a registered level.
-        assert!(canon_available(&catalog, None, Some(&instance), at(&["host"])));
+        assert!(canon_available(
+            &catalog,
+            None,
+            Some(&instance),
+            at(&["host"])
+        ));
         assert!(!canon_available(
             &catalog,
             None,

@@ -60,18 +60,38 @@ fn retention_checks_policy_and_chain_premises_without_replaying_advice() {
     // Independent policy records are legal; neither is required to equal a
     // producer's preferred machine geometry.
     for (tile, minimum) in [(32, 50), (64, 100)] {
-        Advice::Retain { name: syn::parse_quote!(joined), rows: 100, tile, minimum }
-            .apply(&source).unwrap();
+        Advice::Retain {
+            name: syn::parse_quote!(joined),
+            rows: 100,
+            tile,
+            minimum,
+        }
+        .apply(&source)
+        .unwrap();
     }
     for (rows, tile, minimum) in [(99, 32, 50), (100, 1, 50), (100, 32, 101)] {
-        assert!(Advice::Retain { name: syn::parse_quote!(joined), rows, tile, minimum }
-            .apply(&source).is_err());
+        assert!(
+            Advice::Retain {
+                name: syn::parse_quote!(joined),
+                rows,
+                tile,
+                minimum
+            }
+            .apply(&source)
+            .is_err()
+        );
     }
     let mut no_follower = source.clone();
-    no_follower.sequence.definitions[4].term =
-        syn::parse_quote!(store flatten lookup t [b] joined);
+    no_follower.sequence.definitions[4].term = syn::parse_quote!(store flatten lookup t [b] joined);
     contract::check(&no_follower).unwrap();
-    assert!(Advice::Retain {
-        name: syn::parse_quote!(joined), rows: 100, tile: 32, minimum: 50,
-    }.apply(&no_follower).is_err());
+    assert!(
+        Advice::Retain {
+            name: syn::parse_quote!(joined),
+            rows: 100,
+            tile: 32,
+            minimum: 50,
+        }
+        .apply(&no_follower)
+        .is_err()
+    );
 }

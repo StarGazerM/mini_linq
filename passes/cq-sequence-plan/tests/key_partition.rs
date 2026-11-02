@@ -1994,7 +1994,11 @@ fn automatic_probe_chain_preserves_filtered_shared_index_contracts() {
 #[test]
 fn group_canon_removal_consumes_recorded_valuation_uniqueness() {
     for named in [false, true] {
-        let mut source = if named { named_grouped(true) } else { grouped(true) };
+        let mut source = if named {
+            named_grouped(true)
+        } else {
+            grouped(true)
+        };
         let absent = cq_lang_sequence::contract::check(&source).unwrap();
         assert!(!absent.canon_free_groups.contains("result"));
         let advice = Advice::GroupWithoutCanon(syn::parse_quote!(result));
@@ -2023,6 +2027,9 @@ fn prefix_bounds_keep_the_empty_global_group_identity() {
         assert_eq!(facts.prefix_bounds["totals"].rows, Some(u128::from(global)));
         let mut forged = facts.prefix_bounds.clone();
         forged.get_mut("totals").unwrap().rows = Some(0);
-        assert_eq!(cq_lang_sequence::bounds::check(&source, &forged).is_err(), global);
+        assert_eq!(
+            cq_lang_sequence::bounds::check(&source, &forged).is_err(),
+            global
+        );
     }
 }

@@ -1205,9 +1205,11 @@ mod tests {
                 native_levels,
             );
             assert_eq!(rebuilds_native_provider(&source, &facts, "r"), rebuilds);
-            assert!(crate::catalog::check(&source, &facts, &available)
-                .err()
-                .is_none_or(|error| !error.to_string().contains("PL-Catalog")));
+            assert!(
+                crate::catalog::check(&source, &facts, &available)
+                    .err()
+                    .is_none_or(|error| !error.to_string().contains("PL-Catalog"))
+            );
             let advice = advise(&source, &machine(), true, &facts, &source, &available);
             let expected = if rebuilds {
                 vec!["host", "device"]

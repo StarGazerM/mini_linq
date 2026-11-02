@@ -153,7 +153,10 @@ pub(crate) fn apply_in(
     minimum: usize,
 ) -> syn::Result<Program> {
     let analysis = checker.check_shared(source)?;
-    let bound = analysis.prefix_bounds.get(&symbol_name(name)).and_then(|bound| bound.rows);
+    let bound = analysis
+        .prefix_bounds
+        .get(&symbol_name(name))
+        .and_then(|bound| bound.rows);
     if bound != Some(rows) {
         return Err(syn::Error::new_spanned(
             name,
@@ -164,7 +167,9 @@ pub(crate) fn apply_in(
     }
     // Check the recorded candidate's premises, not the producer's chosen advice.
     // Policy parameters are explicit in the trace, like tile/segment widths.
-    let valid = tile > 0 && minimum > 0 && rows >= minimum as u128
+    let valid = tile > 0
+        && minimum > 0
+        && rows >= minimum as u128
         && source.sequence.definitions.iter().any(|definition| {
             if !expansion(&definition.term) {
                 return false;
@@ -173,21 +178,31 @@ pub(crate) fn apply_in(
             let Some(root) = stream(source, &Term::Ref(definition.name.clone()), &mut path) else {
                 return false;
             };
-            if !analysis.prefix_bounds.get(&root).and_then(|bound| bound.rows)
-                .is_some_and(|rows| rows < tile as u128) {
+            if !analysis
+                .prefix_bounds
+                .get(&root)
+                .and_then(|bound| bound.rows)
+                .is_some_and(|rows| rows < tile as u128)
+            {
                 return false;
             }
             let Some(index) = path.iter().position(|candidate| candidate == name) else {
                 return false;
             };
-            index + 1 < path.len() && path[..index].iter().all(|earlier| {
-                analysis.prefix_bounds.get(&symbol_name(earlier)).and_then(|bound| bound.rows)
-                    .is_some_and(|rows| rows < minimum as u128)
-            })
+            index + 1 < path.len()
+                && path[..index].iter().all(|earlier| {
+                    analysis
+                        .prefix_bounds
+                        .get(&symbol_name(earlier))
+                        .and_then(|bound| bound.rows)
+                        .is_some_and(|rows| rows < minimum as u128)
+                })
         });
     if !valid {
-        return Err(syn::Error::new_spanned(name,
-            "GR-RetainPrefix: recorded prefix violates root, threshold, first-bound or following-expansion premises"));
+        return Err(syn::Error::new_spanned(
+            name,
+            "GR-RetainPrefix: recorded prefix violates root, threshold, first-bound or following-expansion premises",
+        ));
     }
     crate::rewrites::store_level_in(checker, source, quote::quote!(#name))
 }

@@ -83,9 +83,12 @@ impl Advice {
             }
             Self::Store(name) => rewrites::store_in(checker, source, quote!(#name)),
             Self::StoreLevel(name) => rewrites::store_level_in(checker, source, quote!(#name)),
-            Self::Retain { name, rows, tile, minimum } => {
-                retain::apply_in(checker, source, name, *rows, *tile, *minimum)
-            }
+            Self::Retain {
+                name,
+                rows,
+                tile,
+                minimum,
+            } => retain::apply_in(checker, source, name, *rows, *tile, *minimum),
             Self::Publish { name, producer } => {
                 rewrites::publish_in(checker, source, name, producer)
             }
@@ -179,8 +182,12 @@ fn decompose_in(
         .sequence
         .definitions
         .iter()
-        .filter(|definition| has_group(&definition.term)
-            && analysis.canon_free_groups.contains(&symbol_name(&definition.name)))
+        .filter(|definition| {
+            has_group(&definition.term)
+                && analysis
+                    .canon_free_groups
+                    .contains(&symbol_name(&definition.name))
+        })
         .map(|definition| definition.name.clone())
         .collect();
     let mut unique_groups = std::collections::BTreeSet::new();
