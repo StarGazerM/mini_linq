@@ -24,16 +24,20 @@ Do not run every feature workspace's `cargo test --workspace` and then repeat
 those same tests through the regression inventory. The behavioral gate is the
 regression suite plus root `cargo test`; run a feature-workspace sweep only when
 the track changed that workspace and it covers tests absent from the inventory.
-Use the quick tier during iterations, the impact-selected suite once at the final
-gate, and separate structural, API, formatting or documentation gates only where
-the change requires them. Do not rerun behavioral gates for a docs-only rebase.
+A track's gate is the tests of the crates it changed, the tests covering its fix,
+root `cargo test --workspace` when core, testkit or facade code changed, the quick
+tier, and any named downstream target it knows it affects. Tracks do not run the
+impact-selected suite: a change to any compiler crate selects every target. Main
+runs it once per merge batch with `--reuse-from` the previous main evidence. Run
+separate structural, API, formatting or documentation gates only where the change
+requires them. Do not rerun behavioral gates for a docs-only rebase.
 An explicitly named selector narrows even an impact-selected run; omit selectors
 for the final gate. Unknown selectors are errors, not successful empty gates.
 
 Verification follows what a change can break: docs-only changes run nothing;
 test tooling runs its own unit tests; an oracle/infrastructure swap checks only
-that the oracle is unchanged; compiler/runtime changes run the impact-selected
-suite. Every agent and track report states its gate time: total wall-clock spent
+that the oracle is unchanged; compiler/runtime changes run the track gate above.
+Every agent and track report states its gate time: total wall-clock spent
 on gates, tests and benchmarks since the previous report, per command, plus time
 waiting on the GPU/timing locks, measured (runner timing columns or
 `/usr/bin/time -f %e`), never estimated.
