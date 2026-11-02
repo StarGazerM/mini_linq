@@ -92,6 +92,16 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   parameters. Canonical grouping, union and chained callers use this one
   protocol; h06's keyless fold and CPU provider selection are unchanged.
 
+- P6 slice A adds an opt-in shared S1 Plain/Bytes format/runtime boundary
+  and checked per-consumer carrier-read facts. Explicit domain/layout/family/
+  carrier and snapshot metadata, optional encode-time vector extrema and
+  initialized-byte transfer preserve the existing format rather than aliasing
+  GPU FastLanes. Read authorization remains a Structures decision, not a
+  runtime or printer inference. No automatic/default selection, shared-format
+  FastLanes selection, retirement of the 74 P6 V sites, or performance claim;
+  untouched default expansions must remain identical. Formal/conformance
+  registration describes obligations and fixtures, not executed gate results.
+
 - F5: task decomposition recognizes independent union arms beneath unary
   consumers (including the canonicalization of lowered set union), publishes
   each arm separately, and concatenates/canonicalizes at host. The dispatch

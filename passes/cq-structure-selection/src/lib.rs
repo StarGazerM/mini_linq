@@ -784,6 +784,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     let target = structures::Program {
         physical: source.clone(),
         structures: selected,
+        encoded: Default::default(),
     };
     check(source, &target)?;
     Ok(target)

@@ -8,6 +8,9 @@ use std::{marker::PhantomData, num::NonZeroU32, ops::Bound};
 
 pub const VECTOR_ROWS: usize = 1024;
 
+#[path = "scan_format.rs"]
+pub mod format;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockRows(NonZeroU32);
 impl BlockRows {
@@ -55,7 +58,10 @@ pub struct BlockHeader {
     pub rows: u32,
     pub width: Width,
     pub codec: CodecId,
+    /// Initialized ABI padding; byte uploads never read Rust padding.
+    pub reserved: [u8; 2],
 }
+#[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MinMax {
     pub lo: u64,
@@ -162,6 +168,9 @@ pub struct ScanColumn<T: OrdinalDecode, F: Family> {
     headers: Vec<BlockHeader>,
     payload: AlignedBytes,
     summary: Option<Vec<MinMax>>,
+    vector_summary: Option<Vec<MinMax>>,
+    snapshot: format::SnapshotId,
+    declared_domain: Option<format::Domain>,
     marker: PhantomData<(T, F)>,
 }
 /// Incremental column encoder. Only one block of ordinals is buffered; extrema
@@ -174,13 +183,40 @@ pub struct ScanColumnBuilder<T: OrdinalDecode, F: Family> {
 
 impl<T: OrdinalDecode, F: Family> ScanColumnBuilder<T, F> {
     pub fn new(block_rows: BlockRows, summaries: bool) -> Self {
+        Self::with_summaries(block_rows, summaries, false)
+    }
+
+    /// Bind the provider domain before accepting values. Legacy CPU-only
+    /// builders remain unbound and cannot expose a shared device descriptor.
+    pub fn with_domain(
+        block_rows: BlockRows,
+        block_summaries: bool,
+        vector_summaries: bool,
+        domain: format::Domain,
+    ) -> Result<Self, format::FormatError> {
+        let mut builder = Self::with_summaries(block_rows, block_summaries, vector_summaries);
+        builder.column.declared_domain = Some(domain);
+        builder.column.checked_view(domain, 0)?;
+        Ok(builder)
+    }
+
+    /// Select summaries explicitly. Vector extrema are collected with the
+    /// ordinals, including when a block contains several vectors.
+    pub fn with_summaries(
+        block_rows: BlockRows,
+        block_summaries: bool,
+        vector_summaries: bool,
+    ) -> Self {
         Self {
             column: ScanColumn {
                 rows: 0,
                 block_rows,
                 headers: Vec::new(),
                 payload: AlignedBytes::default(),
-                summary: summaries.then(Vec::new),
+                summary: block_summaries.then(Vec::new),
+                vector_summary: vector_summaries.then(Vec::new),
+                snapshot: format::SnapshotId::fresh(),
+                declared_domain: None,
                 marker: PhantomData,
             },
             tail: Vec::with_capacity(block_rows.get()),
@@ -195,6 +231,18 @@ impl<T: OrdinalDecode, F: Family> ScanColumnBuilder<T, F> {
         let ordinal = value.ordinal();
         self.extrema.lo = self.extrema.lo.min(ordinal);
         self.extrema.hi = self.extrema.hi.max(ordinal);
+        if let Some(summaries) = &mut self.column.vector_summary {
+            if self.column.rows % VECTOR_ROWS == 0 {
+                summaries.push(MinMax {
+                    lo: ordinal,
+                    hi: ordinal,
+                });
+            } else {
+                let summary = summaries.last_mut().unwrap();
+                summary.lo = summary.lo.min(ordinal);
+                summary.hi = summary.hi.max(ordinal);
+            }
+        }
         self.tail.push(ordinal);
         self.column.rows += 1;
         if self.tail.len() == self.column.block_rows.get() {
@@ -239,6 +287,7 @@ impl<T: OrdinalDecode, F: Family> ScanColumnBuilder<T, F> {
             rows: self.tail.len() as u32,
             width,
             codec,
+            reserved: [0; 2],
         });
         self.column.payload.append_block(&self.tail, base, width);
         // Formal rule RT-ScanSummary: extrema enclose exactly the payload's
@@ -277,6 +326,45 @@ impl<T: OrdinalDecode, F: Family> ScanColumn<T, F> {
     }
     pub fn payload(&self) -> &[u8] {
         self.payload.as_bytes()
+    }
+    pub fn vector_summaries(&self) -> Option<&[MinMax]> {
+        self.vector_summary.as_deref()
+    }
+
+    pub fn snapshot(&self) -> format::SnapshotId {
+        self.snapshot
+    }
+
+    /// Check the encode-time declared ordinal domain, without inspecting a Rust type.
+    pub fn checked_view(
+        &self,
+        domain: format::Domain,
+        live_count: usize,
+    ) -> Result<format::CheckedScanView<'_>, format::FormatError> {
+        if domain.carrier != T::WIDTH || self.declared_domain != Some(domain) {
+            return Err(format::FormatError::Domain);
+        }
+        let descriptor = format::BlockFormat {
+            version: 1,
+            layout: format::LayoutId::S1LittleEndian,
+            family: F::ID,
+            domain,
+            preservation: F::PRESERVES,
+            block_rows: self.block_rows,
+            vector_rows: VECTOR_ROWS as u32,
+        };
+        // Trusted encoder output needs only descriptor/extent checks; imported
+        // bytes use CheckedScanView::import, which also checks payload integrity.
+        format::CheckedScanView::encoded(
+            descriptor,
+            self.snapshot,
+            &self.headers,
+            self.payload(),
+            self.summaries(),
+            self.vector_summaries(),
+            self.rows,
+            live_count,
+        )
     }
     fn visit_codes(
         &self,

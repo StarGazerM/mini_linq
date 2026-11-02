@@ -61,6 +61,7 @@
 //!
 pub use cq_lang_physical as physical;
 
+pub mod encoded;
 pub mod provider;
 pub use provider::{Capability, CodecId, Declaration, Facts, Provider, Providers};
 pub mod stats;
@@ -685,11 +686,17 @@ impl Structures {
 pub struct Program {
     pub physical: physical::Program,
     pub structures: Structures,
+    /// Optional encoded facts travel with the program and are always checked.
+    /// The empty contract emits no tokens and changes no default selection.
+    #[parse(encoded::Contract::parse_optional)]
+    pub encoded: encoded::Contract,
 }
 
 pub mod contract {
     pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
-        super::analyze(program)
+        let facts = super::analyze(program)?;
+        super::encoded::check(program, &facts)?;
+        Ok(facts)
     }
 }
 

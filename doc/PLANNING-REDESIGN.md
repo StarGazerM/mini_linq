@@ -679,9 +679,19 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   predicates. This adds no compiler selection; loader/ScanTable cutover and
   STR-Blocks/BE-Blocks remain later slices.
 - **P6 GPU storage** (compression for transfer/capacity first; resident
-  scan codecs only where measured). Device blocks with per-vector summaries, tile decode
-  fused with predicates, narrow carriers, summary skip; GPU Datalog runs as
-  grouped runs.
+  scan codecs only where measured). Slice A adds an opt-in shared S1
+  Plain/Bytes format and recorded read contracts, not automatic selection.
+  Explicit domain/layout/family/carrier and immutable snapshot identity
+  accompany optional encode-time vector extrema; metadata validation is
+  independent of encoding. Initialized-byte uploads retain event-ordered
+  owners. Structures owns per-consumer read authorization; runtime and
+  printers do not select it or inspect Rust/type spellings.
+  FastLanes remains unselectable as a shared-format family; existing
+  FastLanes callers and default target selection remain unchanged.
+  Cooperative scan selection, intermediate/publication caller cutover and
+  grouped-run integration remain later slices. Slice A retires none of
+  the 74 P6 V sites and makes no performance claim; default expanded targets
+  must remain identical. Formal registration is not a gate-result claim.
 - **P6b GPU Datalog parallelism — historical initial profile** (2026-10-31,
   `experiments/gpu/compare/p3b-profile/01-doop-report.md`): fixpoint xalan 1.76 s /
   batik 4.97 s vs SRDatalog ~1.0–1.5 s / 1.8–3.0 s; one stream, zero kernel

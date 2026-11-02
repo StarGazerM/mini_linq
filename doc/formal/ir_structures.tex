@@ -278,6 +278,46 @@ Window translation handles open endpoints with checked successor/predecessor;
 absent constants and empty intersections do not introduce matches. Filtering
 returns ascending occurrence positions, including duplicate occurrences.
 
+\paragraph{Opt-in shared scan descriptors (P6 A).}
+S1 has one little-endian byte layout, declared Plain/Bytes family,
+domain identity/version and carrier. A fresh immutable snapshot identifies
+the encoded source; layout and domain are not inferred from Rust names.
+Let $\alpha_S$ be the ordinal occurrence sequence of a checked descriptor.
+Metadata validation is independent of encoding: it checks family membership,
+byte extents/alignment, block/vector counts, live prefix and summary provenance,
+not equality with the encoder's preferred compression choice. Safe imports
+add payload overflow/carrier and summary-enclosure checks.
+\begin{mathpar}
+\Rule{STR-DeviceBlocks}{S=\mathsf{checkedS1}(A,F,D)\quad
+ F\in\{\mathsf{Plain},\mathsf{Bytes}\}}
+ {\mathsf{concat}(\alpha_S(\mathsf{vectors}))=\mathsf{ord}_D(A)}
+\Rule{GPU-VectorSummary}{S\text{ checked}\quad
+ s=\mathsf{summary}_S(v)\quad
+ \mathsf{provenance}(s)=(S.\mathsf{snapshot},S.\mathsf{domain})}
+ {\forall a\in\alpha_S(v).\ s.lo\le a\le s.hi}
+\Rule{GPU-LateRead}{S\text{ retained and checked}\quad
+ P.\mathsf{snapshot}=S.\mathsf{snapshot}\quad
+ \forall p\in P.\ 0\le p<S.\mathsf{liveCount}}
+ {\mathsf{readPositions}(S,P)=[\alpha_S[p]\mid p\in P]}
+\Rule{GPU-BlockTransfer}{S\text{ checked S1}\quad
+ U=\mathsf{uploadInitialized}(S)\quad
+ \mathsf{ready}(U)\prec\mathsf{read}(U)\prec\mathsf{releaseOwners}(U)}
+ {\alpha_U[0:S.\mathsf{liveCount}]=\alpha_S[0:S.\mathsf{liveCount}]}
+\Rule{STR-CarrierRead}{O\text{ original provider/domain/consumer obligations}\quad
+ R\text{ recorded representation, publication and read packets}\quad
+ \mathsf{checkReadFacts}(O,R)}
+ {\mathsf{authorizedFields}(R)=\mathsf{demandedFields}(O)\quad
+  \mathsf{preserveOtherCarriers}(R)}
+\end{mathpar}
+Optional vector extrema originate in the encoding traversal, or are validated
+against imported payload. Conservative enclosing extrema are lawful.
+The positional read law preserves duplicates and requested order and returns
+ordinal carriers, not reconstructed authored Rust values. It does not supply
+compiler read authorization. Predicate-mask agreement uses RT-Translate;
+these laws do not assert cooperative tile scheduling, payload-read pruning,
+default codec selection or retirement of existing logical inverse sites.
+Legacy FastLanes is not a selectable S1 family.
+
 \paragraph{Membership representation law.}
 Selection records the \code{dense\_membership} token
 \code{DenseMembership<K,B>} for a membership store with one stored key column

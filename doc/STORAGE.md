@@ -867,6 +867,59 @@ byte min/max and packed word comparison/pack loops). RT-ScanCodec,
 RT-ScanSummary and RT-Translate also check masks against decoded oracles.
 S1 does not select blocks in the compiler. S2 adds the runtime loader below;
 compiler selection, positional traits and late materialization are later slices.
+
+**P6 A shared-format boundary (opt-in).** The shared S1 format extends this
+runtime boundary rather than reinterpreting the existing GPU FastLanes
+headers: S1 offsets and widths are bytes, and S1 ordinal bases are not the
+older device codec's signed frames. Plain and Bytes retain their S1 payload
+meaning. The format records domain, layout, family, carrier and fresh immutable
+snapshot identity. `ScanColumnBuilder::with_domain` binds the provider domain
+before accepting values; later descriptors and uploads reject domain/version/
+law rebinding. Legacy CPU-only builders remain unbound and cannot expose device
+descriptors. Optional per-vector extrema are collected during encoding,
+including partial vectors in larger blocks, not by reconstructing a logical
+column afterward. Metadata validation checks the recorded descriptor and
+extents independently of the encoder; metadata validity is not a proof of
+arbitrary imported payload integrity.
+
+The device path uploads initialized bytes and needed metadata, retaining
+owners and readiness ordering for safe snapshot-bound views. Runtime facts
+do not grant permission to reconstruct authored Rust values: Structures read
+records own consumer, lineage and purpose. `contract::check` always checks
+the encoded envelope when present; no pipeline carries unchecked packets.
+Preserving a carrier, an opaque Rust read and a final host answer are distinct
+purposes; transport alone is not final-answer authorization. New records are
+printable facts, not printer selection or Rust/type inspection.
+
+This is a slice-A substrate, not default compiler selection or the full
+cooperative-scan slice. FastLanes is not selectable through the shared format;
+its existing callers are unchanged. Predicate-mask validation extends the
+existing translation obligation, not a claim of complete tile scheduling.
+No P6 V-site retirement (the ledger remains 74), changed default target
+expansion, or performance improvement is claimed. Transfer/intermediate and
+grouped-index caller cutovers, automatic ranking and measurement remain later
+work; the historical measurements above are not results for this slice.
+
+Slice-A law/fixture anchors are `STR-DeviceBlocks`, `GPU-VectorSummary` and
+`GPU-LateRead` in `runtime/cq-storage/src/scan_format.rs`, and
+`GPU-BlockTransfer` in `experiments/gpu/device-columns/src/scan.rs`.
+`runtime/cq-storage/tests/scan_format.rs` covers shared-format round trips,
+enclosure/translation, independent metadata rejection and retained positional
+reads; `experiments/gpu/device-columns/tests/shared_scan.rs` covers uploaded
+bytes, host/device masks and retained publication. Root and locked sm_89
+storage/Sequence tests passed for this slice. Device predicate masks use
+`RT-Translate`; no full-slice tile-predicate or narrow-carrier rule is claimed.
+`STR-CarrierRead` is checked in
+`languages/cq-lang-structures/src/encoded.rs`; its fixtures are in
+`languages/cq-lang-structures/tests/encoded_contract.rs`. Original
+provider/domain/consumer obligations are checked against selected records,
+not by rerunning selection. Plain storage of dictionary codes is not semantic
+identity. Opaque device Rust requires an explicitly identity-represented
+provider; final-answer authorization requires an actual host answer consumer.
+Exact demanded field/buffer coverage and retained lineage are checked while
+concrete count/capacity/events/owners remain Sequence/GPU-owned facts.
+An absent encoded envelope is a vacuous check and leaves ordinary program
+printing and selection unchanged.
  
 **P5 S2 columnar input boundary.** `ScanColumnBuilder<T, F>` retains at most
 one block of ordinals per ordinary column and collects extrema while accepting
