@@ -6,7 +6,7 @@ use proc_macro2::TokenStream;
 use syn::Ident;
 
 /// Remove a group's valuation canonicalizers only when the checker proves
-/// positional uniqueness from the author's asserted keys (or existing laws).
+/// positional uniqueness from explicitly trusted authored keys (or existing laws).
 pub fn group_without_canon(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
     group_without_canon_in(&mut Default::default(), source, arguments)
 }

@@ -120,7 +120,7 @@ pub struct Analysis {
     pub collectives: Vec<(String, Monoid, Vec<String>)>, // fold/scan Defs and their level
     pub output: Option<(String, OutputProtocol)>,       // the final store and how it is filled
     pub obligations: Vec<Obligation>,                  // provider/codec/canon traits and dispatch failure paths
-    pub evidence: Evidence,                           // estimates and author-asserted key premises
+    pub evidence: Evidence,                           // sourced advice and explicitly trusted keys
     pub representation: Representation,               // recorded identity/encoded column sets
 }
 pub mod contract { pub fn check(p: &Program) -> syn::Result<Analysis>; }   // BE-Alpha…BE-Choose structurally
@@ -198,6 +198,12 @@ Checks (each a named `// Formal rule BE-…:` marker):
 - `union [d, ...]` is a view with α = ⊎ and summed Len; Rust Guard/Bind maps use BE-RustRepresentation, not a partial-expression classification.
 - BE-Code: codec premises are deferred to traits (recorded as obligations in Analysis, like Leibniz).
 - BE-Choose: guards exhaustive; all alternatives have equal `supp∘α` by construction (the same result or independently checked equivalent join/semijoin support). `workers < N` requires a positive bound and observes the target-wide available worker count, a uniform scheduling parameter that neither changes support nor supplies size evidence; a final `else` covers its remaining cases.
+- STR-BuildStats / BE-StatsRead: provider declarations own typed fields, units,
+  precision, scalar ABI and publication provenance. `stat ready (reference) < N`
+  or `>= N` requires a preceding flat Store of that immutable build, matching
+  complete layout/domain/epoch/unit/precision and a host execution scope.
+  Missing `Option<u64>` takes mandatory `else`; code bounds and statistics used
+  as lengths/capacities are rejected. No statistics are selected automatically.
 - Grading: BE-Scope (extent/level), BE-Collective (whole-level participation), BE-Separate (ancestor publication), BE-Boundary (dispatches), BE-RustRepresentation (host-Rust capability or identity device inputs), BE-Abort (failure channel).
 
 Acceptance: round-trip of every form; one rejection test per rule; `rules.tsv` rows switch to `implementation`; `tools/public-api/cq-lang-sequence.txt`.
@@ -690,21 +696,20 @@ Current rewrites are checked by `check_rewrite` (Motion, BE-Offsets, BE-Scope).
 They select execution shape without rediscovering relational order.
 Authored `choose` alternatives remain subject to BE-Choose equal support.
 
-Evidence advice: estimation is not part of the query. An `evidence { … }`
-advice block carries facts about data (row counts, keys, foreign keys,
-selectivities, bounds, sortedness), hand-written or generated (build.rs
-from a manifest, DuckDB statistics, a sampling pass). Recorded in the
-Analysis beside obligations. Law PL-Evidence: estimates select among checked
-candidates; a wrong estimate costs time, not answers. Keys are explicit author
-assertions: false keys can change answers through BE-GroupKey. Decomposition
-uses evidence for checked execution shape, not relational replanning.
+Evidence advice: estimation is not part of the query. A sourced evidence block
+carries row counts, planning keys, foreign keys, selectivities, bounds and
+sortedness. Every fact records `from authored("source")` or the original
+`from vo("source")`; mapping subjects preserves that source. PL-Evidence lets
+estimates and `planning_key` select checked shapes only. The separately spelled
+`trusted_key` is an authored semantic premise: false trusted keys can change
+answers through BE-GroupKey. VO sources cannot author trusted keys.
 
 Evidence syntax (a complete advice block, also serialized in a planner trace):
 
 ```text
-evidence {
+evidence from authored("manifest and schema") {
     count Lineitem = 60000000;
-    key Orders [order_key];
+    planning_key Orders [order_key];
     foreign_key Lineitem [order_key] -> Orders [order_key];
     selectivity filtered_part = 1 / 10;
     bounds Orders.order_key = 0 ..= 60000000;
@@ -712,10 +717,10 @@ evidence {
 }
 ```
 
-Facts validate names and syntax, not their truth. Later facts of a kind take
-precedence for planning; no fact establishes totality, uniqueness, referential
-integrity, or a codec law for correctness checking. `Program.evidence` and
-`Analysis.evidence` retain the advice independently of the obligations.
+Facts validate names, nonempty provenance and syntax, not their truth. Later
+scalar estimates take precedence for planning, never establish a memory bound
+or uniqueness proof, and remain distinct from explicitly authored trusted keys.
+`Program.evidence` and `Analysis.evidence` retain their original sources.
 `Advice` implements parsing and token printing, so author-written
 `store(name)`, `store_level(name)`, `publish(name, producer)`,
 `tile(name, n, items m)`, `partition(name, n)`, `segment(name, n, items m)`,
@@ -811,9 +816,9 @@ owner-offset construction, segment-local monoid reduction and publication.
 
 ### Box 12d key-aware grouped fold
 
-`evidence { Lineitem(l_orderkey, l_linenumber) key; }` asserts that no two
-physical input rows have the same key. The prefix spelling
-`key Lineitem [l_orderkey, l_linenumber];` denotes the same premise.
+`evidence from authored("schema") { trusted_key Lineitem [l_orderkey, l_linenumber]; }`
+asserts that no two physical input rows have the same key. Legacy `key` and
+postfix key spellings are rejected rather than silently reinterpreted.
 These assertions are not inferred from counts, bounds or sampled statistics.
 Unlike estimates, a false key can change answers: the author is responsible
 for its truth. The manifest-driven TPC-H suite asserts dbgen's declared keys

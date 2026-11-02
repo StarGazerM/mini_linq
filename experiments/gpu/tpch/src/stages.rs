@@ -1047,7 +1047,7 @@ mod tests {
         assert!(
             h01.stages[0]
                 .evidence
-                .has_key("Lineitem", &["l_orderkey".into(), "l_linenumber".into()])
+                .has_trusted_key("Lineitem", &["l_orderkey".into(), "l_linenumber".into()])
         );
         let h13 = Program::import(
             crate::source::SOURCES

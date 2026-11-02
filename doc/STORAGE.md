@@ -565,6 +565,18 @@ reason to write a new layout (a fifth copy reason, alongside §2's four).
 | Codec choice by measured size (K checkpointer, B sampling) | applies to *scan columns*, not to run components that must stay byte-addressable; offsets/keys may use delta-FOR only in scan-only copies | role fact (§8) decides |
 | Exact statistics for planning (K stats; PL-Evidence) | a run knows key count, row count and max group size exactly at build; publish them as evidence for runtime `choose` (BE-Choose) and grading | published lengths/evidence facts |
 
+P7.1 implements the publication/evidence contract, not runtime population or
+automatic policy: `STR-BuildStats` records provider-declared scalar ABI,
+field/unit/precision, construction and aggregation provenance, immutable
+build/layout identity and authored code-domain epochs. `BE-StatsRead` admits
+typed host scalar comparisons only after the matching completed flat Store,
+with explicit fallback for missing optional values. Accessors are read-only,
+O(1) `Option<u64>` and must not force lazy construction. Code bounds are not
+count operands; overlapping-segment exact keys/maxima require an explicit
+merge/additional computation law. Device and round publication remain separate
+implementation slices. Sequence `planning_key` is never a uniqueness proof;
+only explicitly authored `trusted_key` retains that semantic premise.
+
 None of these adds an observable. Each is either a representation law above,
 an access decision recorded in Structures/Sequence, or published evidence.
 

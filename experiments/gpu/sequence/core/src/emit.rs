@@ -604,6 +604,9 @@ impl<'a> Compiler<'a> {
     fn guard(&self, guard: &Guard) -> syn::Result<TokenStream> {
         Ok(match guard {
             Guard::Else => quote!(true),
+            Guard::Statistic(_) => {
+                unreachable!("BE-StatsRead excludes host statistics from device guards")
+            }
             Guard::WorkersLt(_) => {
                 return Err(error(
                     "GPU Sequence does not support target-wide worker guards",
@@ -4634,7 +4637,7 @@ mod tests {
                 output count;
             }
             graded gpu { input at host; valuations at host; groups at host; }
-            evidence { R(id) key; }
+            evidence from authored("experiments/gpu/sequence/core/src/emit.rs fixture") { trusted_key R [id]; }
         };
         let program = crate::runs::record_representation(&program).unwrap();
         let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
@@ -4686,7 +4689,7 @@ mod tests {
                     output count;
                 }
                 graded gpu { input at host; valuations at host; groups at host; }
-                evidence { R(id) key; }
+                evidence from authored("experiments/gpu/sequence/core/src/emit.rs fixture") { trusted_key R [id]; }
             }).unwrap();
             let program = crate::runs::record_representation(&program).unwrap();
             let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();

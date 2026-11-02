@@ -49,6 +49,24 @@ preserve multiplicity. The target of $\alpha$ is a bag, not a set;
 \code{canon} takes support and re-establishes the set boundary. Positional
 representation alone proves neither uniqueness nor ordered enumeration.
 
+\paragraph{Build statistics.}
+The provider declaration owns each statistic's field, unit, precision,
+producer, accessor ABI, placement, availability, computation and aggregation
+law. A \code{publications} record binds that declaration to one immutable
+Physical build, provider token, complete ordered layout and code-domain epochs.
+\begin{mathpar}
+\Rule{STR-BuildStats}{
+ s\in\mathsf{declaredStats}(p)\quad
+ (b,p,L)\in\mathsf{selectedBuilds}\quad
+ \mathsf{domainsMatch}(b,L,s)\quad\mathsf{aggregationLegal}(s)
+}{\mathsf{publication}(b,p,L,s)\text{ is well formed}}
+\end{mathpar}
+Exact distinct keys and maximum buckets are not sums over overlapping
+segments; full-key counts never describe a scalar projection. Numeric accessor
+ABI is a read-only, constant-time \code{Option<u64>}: absence is not zero
+and neither availability nor a read may force lazy work. Code bounds are not
+numeric count operands. No statistic is selected automatically by this contract.
+
 \paragraph{Lookup witnesses.}
 Either representation may append \code{witness \{ b [K] at s as Type \}}.
 This cursor is not a column and does not contribute to coverage.

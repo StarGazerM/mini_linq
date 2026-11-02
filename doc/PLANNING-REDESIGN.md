@@ -731,6 +731,13 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   Sort/unique (~0.23 s) stays with P4-GPU.
 - **P7 Join filters and evidence** across targets (exact min/max and
   membership from runs; published key/row/group statistics for `choose`).
+  **P7.1:** typed provider statistic/publication records and host scalar guard
+  readiness contracts are implemented (`STR-BuildStats`, `BE-StatsRead`).
+  Exact/estimated units and structured immutable build/layout/domain provenance
+  remain distinct. Authored evidence carries per-fact source; `planning_key`
+  cannot become the explicit `trusted_key` semantic premise. No automatic
+  statistics, filter activation policy, runtime population, device transfer or
+  committed-round publication is selected by this slice.
 - **P8 Remaining items.** Key-partition routing projection, placement spine
   (only when a branching machine appears), Masks as full reducer (a cost
   question), delta=k SRDatalog plans.

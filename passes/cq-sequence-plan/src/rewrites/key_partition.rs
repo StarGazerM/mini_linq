@@ -127,6 +127,9 @@ fn references(term: &Term, counts: &mut std::collections::BTreeMap<String, usize
                 if let Guard::Lt(len, _) | Guard::Ge(len, _) = guard {
                     length(len, counts);
                 }
+                if let Guard::Statistic(read) = guard {
+                    *counts.entry(symbol_name(&read.ready)).or_default() += 1;
+                }
                 references(term, counts);
             }
         }

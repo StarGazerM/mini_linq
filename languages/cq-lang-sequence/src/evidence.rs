@@ -1,44 +1,74 @@
-//! Planning estimates and explicitly asserted relational key premises.
+//! Planning estimates and explicitly trusted relational key premises.
 //!
 //! ```text
-//! evidence {
+//! evidence from authored("schema contract and workload estimates") {
 //!     count R = 100;
-//!     key R [id];
+//!     planning_key R [id];
+//!     trusted_key R [id];
 //!     foreign_key S [rid] -> R [id];
 //!     selectivity filtered = 1 / 10;
 //!     bounds R.id = -5 ..= 100;
 //!     sorted R [id];
 //! }
 //! ```
-//! Subjects may name declared relations, Physical results, or Sequence results.
-//! Column references use the subject's heading. Counts and selectivities also
-//! accept scalar Sequence definitions. Contradictory estimates are retained;
-//! scalar consumers use the last authored fact. A key is an author assertion:
-//! false keys may change grouped answers when canonicalization is eliminated.
+//! Every fact retains its source when mapped or appended. Counts, planning
+//! keys, and other estimates are advice, not correctness certificates.
+//! Only an explicitly authored `trusted_key` asserts uniqueness; a false
+//! trusted premise may change answers when canonicalization is eliminated.
 
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Ident, LitInt, Token, braced, bracketed, parenthesized};
+use syn::{Ident, LitInt, LitStr, Token, braced, bracketed, parenthesized};
 
 use crate::{Analysis, Program};
 
 pub(crate) mod kw {
     syn::custom_keyword!(evidence);
     syn::custom_keyword!(count);
-    syn::custom_keyword!(key);
+    syn::custom_keyword!(planning_key);
+    syn::custom_keyword!(trusted_key);
+    syn::custom_keyword!(from);
+    syn::custom_keyword!(authored);
+    syn::custom_keyword!(vo);
     syn::custom_keyword!(foreign_key);
     syn::custom_keyword!(selectivity);
     syn::custom_keyword!(bounds);
     syn::custom_keyword!(sorted);
 }
 
-/// Ordered estimates and author-asserted keys, recorded with checked analysis.
+/// Ordered, sourced estimates and explicitly trusted authored key premises.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Evidence {
     pub facts: Vec<EvidenceFact>,
+}
+
+/// Original evidence owner, preserved across renaming and composition.
+/// Runtime build publications have separate typed references, not these labels.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EvidenceSource {
+    Authored { provenance: LitStr },
+    Vo { provenance: LitStr },
+}
+
+impl EvidenceSource {
+    pub fn provenance(&self) -> &LitStr {
+        match self {
+            Self::Authored { provenance } | Self::Vo { provenance } => provenance,
+        }
+    }
+
+    fn check(&self) -> syn::Result<()> {
+        if self.provenance().value().trim().is_empty() {
+            return Err(syn::Error::new_spanned(
+                self.provenance(),
+                "evidence: source provenance must be nonempty",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// An exact rational estimate, not a proven filtering ratio.
@@ -48,46 +78,79 @@ pub struct Selectivity {
     pub denominator: u64,
 }
 
-/// Keys assert unique physical rows per key; all other facts remain estimates.
+/// Only TrustedKey is a semantic premise; every other variant is planning advice.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EvidenceFact {
     Count {
+        source: EvidenceSource,
         subject: Ident,
         rows: usize,
     },
-    Key {
+    PlanningKey {
+        source: EvidenceSource,
+        subject: Ident,
+        columns: Vec<Ident>,
+    },
+    TrustedKey {
+        source: EvidenceSource,
         subject: Ident,
         columns: Vec<Ident>,
     },
     ForeignKey {
+        source: EvidenceSource,
         subject: Ident,
         columns: Vec<Ident>,
         referenced: Ident,
         referenced_columns: Vec<Ident>,
     },
     Selectivity {
+        source: EvidenceSource,
         subject: Ident,
         ratio: Selectivity,
     },
     Bounds {
+        source: EvidenceSource,
         subject: Ident,
         column: Ident,
         lower: i128,
         upper: i128,
     },
     Sorted {
+        source: EvidenceSource,
         subject: Ident,
         columns: Vec<Ident>,
     },
 }
 
 impl Evidence {
+    /// Rename evidence subjects without relabeling their original source.
+    /// Column headings are unchanged; the resulting references still require WF checking.
+    pub fn map_subjects(mut self, mut map: impl FnMut(&Ident) -> Ident) -> Self {
+        for fact in &mut self.facts {
+            let subject = match fact {
+                EvidenceFact::Count { subject, .. }
+                | EvidenceFact::PlanningKey { subject, .. }
+                | EvidenceFact::TrustedKey { subject, .. }
+                | EvidenceFact::ForeignKey { subject, .. }
+                | EvidenceFact::Selectivity { subject, .. }
+                | EvidenceFact::Bounds { subject, .. }
+                | EvidenceFact::Sorted { subject, .. } => subject,
+            };
+            *subject = map(subject);
+            if let EvidenceFact::ForeignKey { referenced, .. } = fact {
+                *referenced = map(referenced);
+            }
+        }
+        self
+    }
+
     /// Last recorded count for this subject; absence remains unknown.
     pub fn count(&self, subject: &str) -> Option<usize> {
         self.facts.iter().rev().find_map(|fact| match fact {
             EvidenceFact::Count {
                 subject: name,
                 rows,
+                ..
             } if symbol_name(name) == subject => Some(*rows),
             _ => None,
         })
@@ -99,17 +162,37 @@ impl Evidence {
             EvidenceFact::Selectivity {
                 subject: name,
                 ratio,
+                ..
             } if symbol_name(name) == subject => Some(*ratio),
             _ => None,
         })
     }
 
-    /// Whether this exact column set has an author-asserted key premise.
-    pub fn has_key(&self, subject: &str, columns: &[String]) -> bool {
+    /// Whether this exact column set has an explicitly trusted authored premise.
+    pub fn has_trusted_key(&self, subject: &str, columns: &[String]) -> bool {
         self.facts.iter().any(|fact| match fact {
-            EvidenceFact::Key {
+            EvidenceFact::TrustedKey {
                 subject: name,
                 columns: key,
+                ..
+            } => {
+                symbol_name(name) == subject
+                    && key.len() == columns.len()
+                    && key
+                        .iter()
+                        .all(|column| columns.contains(&symbol_name(column)))
+            }
+            _ => false,
+        })
+    }
+
+    /// Planning keys never establish uniqueness for a semantic rewrite.
+    pub fn has_planning_key(&self, subject: &str, columns: &[String]) -> bool {
+        self.facts.iter().any(|fact| match fact {
+            EvidenceFact::PlanningKey {
+                subject: name,
+                columns: key,
+                ..
             } => {
                 symbol_name(name) == subject
                     && key.len() == columns.len()
@@ -122,11 +205,26 @@ impl Evidence {
     }
 
     /// Check grammar invariants and references, never the truth of a fact.
+    // Formal rule WF-SequenceEvidence: Require structured nonempty provenance and valid references; VO planning advice never supplies a trusted semantic key premise.
     pub(crate) fn check(&self, program: &Program, analysis: &Analysis) -> syn::Result<()> {
         for fact in &self.facts {
+            fact.source().check()?;
+            if matches!(
+                fact,
+                EvidenceFact::TrustedKey {
+                    source: EvidenceSource::Vo { .. },
+                    ..
+                }
+            ) {
+                return Err(syn::Error::new_spanned(
+                    fact,
+                    "evidence: VO planning advice cannot supply a trusted key premise",
+                ));
+            }
             let subject = match fact {
                 EvidenceFact::Count { subject, .. }
-                | EvidenceFact::Key { subject, .. }
+                | EvidenceFact::PlanningKey { subject, .. }
+                | EvidenceFact::TrustedKey { subject, .. }
                 | EvidenceFact::ForeignKey { subject, .. }
                 | EvidenceFact::Selectivity { subject, .. }
                 | EvidenceFact::Bounds { subject, .. }
@@ -134,7 +232,9 @@ impl Evidence {
             };
             check_subject(program, analysis, subject)?;
             match fact {
-                EvidenceFact::Key { columns, .. } | EvidenceFact::Sorted { columns, .. } => {
+                EvidenceFact::PlanningKey { columns, .. }
+                | EvidenceFact::TrustedKey { columns, .. }
+                | EvidenceFact::Sorted { columns, .. } => {
                     check_columns(program, analysis, subject, columns)?;
                 }
                 EvidenceFact::ForeignKey {
@@ -268,35 +368,119 @@ fn signed_integer(input: ParseStream<'_>) -> syn::Result<i128> {
     Ok(if negative { -value } else { value })
 }
 
+impl Parse for EvidenceSource {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let lookahead = input.lookahead1();
+        let authored = if lookahead.peek(kw::authored) {
+            input.parse::<kw::authored>()?;
+            true
+        } else if lookahead.peek(kw::vo) {
+            input.parse::<kw::vo>()?;
+            false
+        } else {
+            return Err(lookahead.error());
+        };
+        let body;
+        parenthesized!(body in input);
+        let provenance = body.parse()?;
+        if !body.is_empty() {
+            return Err(body.error("evidence: expected one provenance string"));
+        }
+        let source = if authored {
+            Self::Authored { provenance }
+        } else {
+            Self::Vo { provenance }
+        };
+        source.check()?;
+        Ok(source)
+    }
+}
+
+impl ToTokens for EvidenceSource {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.extend(match self {
+            Self::Authored { provenance } => quote!(authored(#provenance)),
+            Self::Vo { provenance } => quote!(vo(#provenance)),
+        });
+    }
+}
+
 impl Parse for Evidence {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         input.parse::<kw::evidence>()?;
+        let source = if input.peek(kw::from) {
+            input.parse::<kw::from>()?;
+            Some(input.parse::<EvidenceSource>()?)
+        } else {
+            None
+        };
         let body;
         braced!(body in input);
         let mut facts = Vec::new();
         while !body.is_empty() {
-            facts.push(body.parse()?);
+            facts.push(EvidenceFact::parse_with_source(&body, source.as_ref())?);
         }
         Ok(Self { facts })
     }
 }
 
-impl Parse for EvidenceFact {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+impl EvidenceFact {
+    pub fn source(&self) -> &EvidenceSource {
+        match self {
+            Self::Count { source, .. }
+            | Self::PlanningKey { source, .. }
+            | Self::TrustedKey { source, .. }
+            | Self::ForeignKey { source, .. }
+            | Self::Selectivity { source, .. }
+            | Self::Bounds { source, .. }
+            | Self::Sorted { source, .. } => source,
+        }
+    }
+
+    fn parse_with_source(
+        input: ParseStream<'_>,
+        inherited: Option<&EvidenceSource>,
+    ) -> syn::Result<Self> {
+        let source = if input.peek(kw::from) {
+            input.parse::<kw::from>()?;
+            input.parse()?
+        } else {
+            inherited
+                .cloned()
+                .ok_or_else(|| input.error("evidence: fact requires an explicit source"))?
+        };
         let lookahead = input.lookahead1();
         let fact = if lookahead.peek(kw::count) {
             input.parse::<kw::count>()?;
             let subject = input.parse()?;
             input.parse::<Token![=]>()?;
+            let rows = input.parse::<LitInt>()?.base10_parse()?;
             Self::Count {
+                source,
                 subject,
-                rows: input.parse::<LitInt>()?.base10_parse()?,
+                rows,
             }
-        } else if lookahead.peek(kw::key) {
-            input.parse::<kw::key>()?;
-            Self::Key {
-                subject: input.parse()?,
-                columns: columns(input)?,
+        } else if lookahead.peek(kw::planning_key) || lookahead.peek(kw::trusted_key) {
+            let trusted = input.peek(kw::trusted_key);
+            if trusted {
+                input.parse::<kw::trusted_key>()?;
+            } else {
+                input.parse::<kw::planning_key>()?;
+            }
+            let subject = input.parse()?;
+            let columns = columns(input)?;
+            if trusted {
+                Self::TrustedKey {
+                    source,
+                    subject,
+                    columns,
+                }
+            } else {
+                Self::PlanningKey {
+                    source,
+                    subject,
+                    columns,
+                }
             }
         } else if lookahead.peek(kw::foreign_key) {
             input.parse::<kw::foreign_key>()?;
@@ -309,6 +493,7 @@ impl Parse for EvidenceFact {
                 return Err(input.error("evidence: foreign key column arities differ"));
             }
             Self::ForeignKey {
+                source,
                 subject,
                 columns,
                 referenced,
@@ -325,6 +510,7 @@ impl Parse for EvidenceFact {
                 return Err(input.error("evidence: selectivity denominator must be nonzero"));
             }
             Self::Selectivity {
+                source,
                 subject,
                 ratio: Selectivity {
                     numerator,
@@ -341,6 +527,7 @@ impl Parse for EvidenceFact {
             input.parse::<Token![..=]>()?;
             let upper = signed_integer(input)?;
             Self::Bounds {
+                source,
                 subject,
                 column,
                 lower,
@@ -348,24 +535,24 @@ impl Parse for EvidenceFact {
             }
         } else if lookahead.peek(kw::sorted) {
             input.parse::<kw::sorted>()?;
-            Self::Sorted {
-                subject: input.parse()?,
-                columns: columns(input)?,
-            }
-        } else if lookahead.peek(Ident) {
             let subject = input.parse()?;
-            let body;
-            parenthesized!(body in input);
-            let columns = Punctuated::<Ident, Token![,]>::parse_terminated(&body)?
-                .into_iter()
-                .collect();
-            input.parse::<kw::key>()?;
-            Self::Key { subject, columns }
+            let columns = columns(input)?;
+            Self::Sorted {
+                source,
+                subject,
+                columns,
+            }
         } else {
             return Err(lookahead.error());
         };
         input.parse::<Token![;]>()?;
         Ok(fact)
+    }
+}
+
+impl Parse for EvidenceFact {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        Self::parse_with_source(input, None)
     }
 }
 
@@ -378,17 +565,20 @@ impl ToTokens for Evidence {
 
 impl ToTokens for EvidenceFact {
     fn to_tokens(&self, tokens: &mut TokenStream) {
+        let source = self.source();
+        tokens.extend(quote!(from #source));
         tokens.extend(match self {
-            Self::Count { subject, rows } => quote! { count #subject = #rows; },
-            Self::Key { subject, columns } => quote! { key #subject [#(#columns),*]; },
-            Self::ForeignKey { subject, columns, referenced, referenced_columns } => {
+            Self::Count { subject, rows, .. } => quote! { count #subject = #rows; },
+            Self::PlanningKey { subject, columns, .. } => quote! { planning_key #subject [#(#columns),*]; },
+            Self::TrustedKey { subject, columns, .. } => quote! { trusted_key #subject [#(#columns),*]; },
+            Self::ForeignKey { subject, columns, referenced, referenced_columns, .. } => {
                 quote! { foreign_key #subject [#(#columns),*] -> #referenced [#(#referenced_columns),*]; }
             }
-            Self::Selectivity { subject, ratio: Selectivity { numerator, denominator } } => {
+            Self::Selectivity { subject, ratio: Selectivity { numerator, denominator }, .. } => {
                 quote! { selectivity #subject = #numerator / #denominator; }
             }
-            Self::Bounds { subject, column, lower, upper } => quote! { bounds #subject.#column = #lower ..= #upper; },
-            Self::Sorted { subject, columns } => quote! { sorted #subject [#(#columns),*]; },
+            Self::Bounds { subject, column, lower, upper, .. } => quote! { bounds #subject.#column = #lower ..= #upper; },
+            Self::Sorted { subject, columns, .. } => quote! { sorted #subject [#(#columns),*]; },
         });
     }
 }

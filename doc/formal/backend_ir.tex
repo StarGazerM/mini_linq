@@ -170,8 +170,16 @@ one part; a separated store publishes the concatenation of its outer parts.
  {\text{equality, hashing and canon on }K\text{, and order reads on }c\text{, act on codes}}
 
 \Rule{BE-Choose}{t_1,\ldots,t_n\text{ have checked equal support}\quad
- \text{guards }g_i\text{ over lengths or target-wide workers, exhaustive}}
+ \text{guards }g_i\text{ over lengths, workers or checked statistics, exhaustive}}
  {\mathsf{choose}\,[g_i\Rightarrow t_i]\text{ denotes any }t_i\text{; which runs is free}}
+
+\Rule{BE-StatsRead}{
+ r=\mathsf{reference}(s)\quad \mathsf{Store}(b)\prec\mathsf{read}(r)\quad
+ \mathsf{sameBuildLayoutDomainUnitPrecision}(r,s)\\
+ s.\mathsf{placement}=\mathsf{host}\quad
+ \mathsf{readScope}=\mathsf{host}\quad
+ s.\mathsf{unit}\ne\mathsf{codeBounds}\quad\mathsf{explicitElse}
+}{\mathsf{stat}(r)<n\text{ or }\mathsf{stat}(r)\ge n\text{ is advice}}
 \end{mathpar}
 BE-Bind is the Kleisli bind of Section~\ref{sec:denotation} restated: a
 probe is a flatten of per-row lookups, so a join nest is a nested flatten
@@ -927,9 +935,9 @@ retains its input once, and a runtime choice retains only its selected arm,
 recursively preserving dimensions. These records are printable analysis.
 Their row volumes are independent symbolic retained-traffic terms in the cost;
 summing conditional publications gives a conservative bound, not a claim that
-unselected arms execute. Ordinary pull erases choices without worker guards
-to Else, permitted by BE-Choose's equal-support premise; worker-guarded pull
-and target hooks evaluate first-match guards (pull has one worker).
+unselected arms execute. Ordinary pull erases choices without worker or statistic
+guards to Else, permitted by BE-Choose's equal-support premise; worker/statistic
+guarded pull and target hooks evaluate first-match guards (pull has one worker).
 The host-only translation leaves the final store with \code{output count}
 as a lazy pull iterator (BK-Dual); it does not collect the output into a
 \code{Vec}. Intermediate stores materialize, and rows escaping block-local
@@ -1004,6 +1012,24 @@ Decomposition preserves that construction and chooses checked execution shape.
 Author-supplied \code{choose} advice and key-partition alternatives remain
 governed by \textsc{BE-Choose}; they do not authorize automatic relational
 replanning or optional-filter discovery.
+
+Sequence evidence records a nonempty source on every fact: authored provenance
+or the unchanged originating VO provenance. \code{planning\_key} is advice
+only. The distinct \code{trusted\_key} spelling is an authored semantic premise;
+VO advice and measured statistics cannot synthesize it. The former ambiguous
+\code{key} syntax is rejected. Contradictory numeric estimates remain advice,
+not certified allocation bounds, truncation limits or uniqueness certificates.
+\begin{mathpar}
+\Rule{WF-SequenceEvidence}{
+ \mathsf{source}(e)\ne\epsilon\quad\mathsf{referencesValid}(e)\quad
+ e=\mathsf{trustedKey}\Longrightarrow\mathsf{source}(e)=\mathsf{authored}
+}{e\text{ is well formed}}
+\end{mathpar}
+In PL-Evidence, $E_{\rm key}$ denotes only explicitly trusted semantic keys.
+Statistic guards use typed publication references, never free-form provenance
+labels; absent scalars take the recorded else arm. All alternatives have the
+same checked construction. P7.1 admits host reads only; no device visibility,
+transfer or synchronization is inferred by a printer.
 
 \begin{mathpar}
 \Rule{PL-Evidence}{E\text{ is syntactically well-formed advice}\quad

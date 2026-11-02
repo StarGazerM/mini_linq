@@ -191,7 +191,7 @@ fn automatic_h09_uses_catalog_read_levels_after_opaque_prefix() {
     let structures = cq_structure_selection::compile(&physical).unwrap();
     let selected = select_from_catalog(&structures, &catalog()).unwrap();
     let mut source = cq_sequence_lowering::compile(&selected).unwrap();
-    source.evidence = syn::parse_quote!(evidence {
+    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/catalog_host_reads.rs fixture") {
         count Part = 20; count Orders = 150; count Lineitem = 600;
         count PartSupp = 80; count Supplier = 10; count Nation = 2;
     });
@@ -242,7 +242,7 @@ fn automatic_h07_keeps_numeric_forwards_legal_before_code_readers() {
     let structures = cq_structure_selection::compile(&physical).unwrap();
     let selected = select_from_catalog(&structures, &catalog()).unwrap();
     let mut source = cq_sequence_lowering::compile(&selected).unwrap();
-    source.evidence = syn::parse_quote!(evidence {
+    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/catalog_host_reads.rs fixture") {
         count Supplier = 10; count Lineitem = 600; count Orders = 150;
         count Customer = 15; count Nation = 2;
     });

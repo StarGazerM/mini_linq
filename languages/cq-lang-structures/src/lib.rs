@@ -63,6 +63,7 @@ pub use cq_lang_physical as physical;
 
 pub mod provider;
 pub use provider::{Capability, Declaration, Facts, Provider, Providers};
+pub mod stats;
 
 use quote::ToTokens;
 use std::collections::{BTreeMap, BTreeSet};
@@ -133,6 +134,8 @@ pub struct Structures {
     pub brace: token::Brace,
     #[syn(in = brace)]
     pub providers: Providers,
+    #[syn(in = brace)]
+    pub publications: stats::Publications,
     #[syn(in = brace)]
     #[parse(parse_entries)]
     #[to_tokens(|tokens, entries| quote::TokenStreamExt::append_all(tokens, entries))]
@@ -663,6 +666,8 @@ pub enum ReadAccess {
 /// What the contract establishes for later stages.
 #[derive(Clone, Debug)]
 pub struct Analysis {
+    /// Explicitly selected immutable statistic publications (STR-BuildStats).
+    pub publications: BTreeMap<String, stats::Publication>,
     /// Checked by-need lookup decisions, keyed by the first semijoin result.
     pub shares: BTreeMap<String, Share>,
     /// Non-column cursor carriers attached to result representations.
@@ -884,6 +889,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     let mut analysis = Analysis {
         physical: physical::contract::check(&program.physical)?,
         providers: module.providers.clone(),
+        publications: BTreeMap::new(),
         host_layouts: program
             .physical
             .inputs()
@@ -1615,6 +1621,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     }
     coalesce_join_filters(program, &mut analysis);
     check_items(program, &analysis)?;
+    stats::check(program, &mut analysis)?;
     Ok(analysis)
 }
 

@@ -2,8 +2,8 @@
 //!
 //! A program appends `sequence { name = term; ... }` and an optional
 //! `graded machine { name at level.path; ... }` to a complete Structures program.
-//! Optional `evidence { ... }` records estimates and author-asserted key premises;
-//! see [`Evidence`] and [`EvidenceFact`] for their distinct correctness contracts.
+//! Optional evidence records source-preserving estimates and planning keys,
+//! separately from explicitly authored trusted semantic key premises.
 //! Terms are prefix forms: `rows`, `map`, `flatten`, `compact`, `tile`, `lookup`,
 //! `partition_k[keys](parts)`, `fold`, `group`, `canon`, `store`, `union` and
 //! `choose`, or references to earlier definitions. A key partition reads a named
@@ -39,7 +39,8 @@ pub mod task_execution;
 
 pub use contract::check_rewrite;
 pub use cq_lang_structures as structures;
-pub use evidence::{Evidence, EvidenceFact, Selectivity};
+pub use evidence::{Evidence, EvidenceFact, EvidenceSource, Selectivity};
+pub mod stats;
 pub use grading::check_grading;
 use structures::Capability;
 
@@ -267,6 +268,8 @@ pub enum Guard {
     Ge(Len, usize),
     /// Target-wide available workers; a uniform scheduling parameter, not a size.
     WorkersLt(usize),
+    /// Advice-only scalar read from a completed, immutable build publication.
+    Statistic(stats::Guard),
     Else,
 }
 
@@ -573,7 +576,7 @@ pub struct Analysis {
     pub collectives: Vec<(String, Monoid, Vec<String>)>,
     pub output: Option<(String, OutputProtocol)>,
     pub obligations: Vec<Obligation>,
-    /// Planning estimates and explicit author-asserted key premises.
+    /// Source-preserving planning advice and explicitly authored trusted keys.
     pub evidence: Evidence,
     pub representation: Representation,
 }
@@ -957,6 +960,9 @@ impl Parse for Guard {
             input.parse::<Token![<]>()?;
             return Ok(Self::WorkersLt(parse_usize(input)?));
         }
+        if input.peek(stats::kw::stat) {
+            return input.parse().map(Self::Statistic);
+        }
         let len = input.parse()?;
         let lookahead = input.lookahead1();
         if lookahead.peek(Token![<]) {
@@ -986,6 +992,7 @@ impl ToTokens for Guard {
                 let threshold = integer(*threshold);
                 quote! { workers < #threshold }
             }
+            Self::Statistic(guard) => quote! { #guard },
             Self::Else => quote! { else },
         });
     }

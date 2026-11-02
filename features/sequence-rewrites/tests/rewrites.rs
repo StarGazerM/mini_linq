@@ -221,9 +221,9 @@ fn evidence_advice_is_checked_replayable_metadata() {
     let target = apply(
         cq_sequence_plan::rewrites::evidence,
         &source,
-        quote!(evidence {
+        quote!(evidence from authored("features/sequence-rewrites/tests/rewrites.rs fixture") {
             count R = 0;
-            key R [a];
+            trusted_key R [a];
             foreign_key R [a] -> r [a];
             selectivity out = 0 / 1;
             bounds R.a = 42 ..= -42;
@@ -242,19 +242,24 @@ fn evidence_advice_is_checked_replayable_metadata() {
     let extended = apply(
         cq_sequence_plan::rewrites::evidence,
         &target,
-        quote!(evidence { count R = 123; }),
+        quote!(evidence from vo("original VO append fixture") { count R = 123; planning_key R [a]; }),
     );
     assert_eq!(
         &extended.evidence.facts[..target.evidence.facts.len()],
         &target.evidence.facts
     );
     assert_eq!(extended.evidence.count("R"), Some(123));
+    assert!(matches!(
+        extended.evidence.facts.last().unwrap().source(),
+        cq_lang_sequence::EvidenceSource::Vo { provenance }
+            if provenance.value() == "original VO append fixture"
+    ));
     assert!(
-        cq_sequence_plan::rewrites::evidence(&source, quote!(evidence { count absent = 1; }))
+        cq_sequence_plan::rewrites::evidence(&source, quote!(evidence from authored("features/sequence-rewrites/tests/rewrites.rs fixture") { count absent = 1; }))
             .is_err()
     );
     assert!(
-        cq_sequence_plan::rewrites::evidence(&source, quote!(evidence { sorted R [absent]; }))
+        cq_sequence_plan::rewrites::evidence(&source, quote!(evidence from authored("features/sequence-rewrites/tests/rewrites.rs fixture") { sorted R [absent]; }))
             .is_err()
     );
 }
@@ -273,13 +278,26 @@ fn grouped_key_premises_remove_only_proven_valuation_canon() {
     };
     assert!(cq_sequence_plan::rewrites::group_without_canon(&source, quote!(answer)).is_err());
     let mut keyed = source.clone();
-    keyed.evidence = syn::parse_quote!(evidence { R(id) key; });
+    for advice in [
+        quote!(evidence from authored("untrusted planning key fixture") {
+            count R = 1; planning_key R [id];
+        }),
+        quote!(evidence from vo("original VO key fixture") {
+            count R = 1; planning_key R [id];
+        }),
+    ] {
+        keyed.evidence = syn::parse2(advice).unwrap();
+        let facts = contract::check(&keyed).unwrap();
+        assert!(facts.prefix_bounds["r"].keys.is_empty());
+        assert!(cq_sequence_plan::rewrites::group_without_canon(&keyed, quote!(answer)).is_err());
+    }
+    keyed.evidence = syn::parse_quote!(evidence from authored("features/sequence-rewrites/tests/rewrites.rs fixture") { trusted_key R [id]; });
     let target = cq_sequence_plan::rewrites::group_without_canon(&keyed, quote!(answer)).unwrap();
     assert!(matches!(target.sequence.definitions[0].term, Term::Rows(_)));
     contract::check_rewrite(&keyed, &target).unwrap();
     assert!(
         contract::check_rewrite(&source, &target).is_err(),
-        "the rewrite cannot invent an unasserted key"
+        "the rewrite cannot invent an explicitly trusted key"
     );
     let mut checker = cq_lang_sequence::contract::Checker::new(&target).unwrap();
     let mut missing = target.clone();
@@ -288,6 +306,11 @@ fn grouped_key_premises_remove_only_proven_valuation_canon() {
         checker.check(&missing).is_err(),
         "cached proofs must retain key premises"
     );
+    let mut planning = target.clone();
+    planning.evidence = syn::parse_quote! {
+        evidence from authored("downgraded trusted-key fixture") { planning_key R [id]; }
+    };
+    assert!(checker.check(&planning).is_err(), "cached proofs cannot use planning keys");
     let mut projected = keyed.clone();
     if let cq_lang_sequence::structures::physical::Operator::Rename(rename) =
         &mut projected.structures.physical.program.definitions[0].operator
@@ -322,10 +345,10 @@ fn grouped_join_requires_keys_for_every_enumerated_atom() {
             j = store canon flatten lookup r [a] l;
             result = store group grouped j;
         }
-        evidence { L(id) key; }
+        evidence from authored("features/sequence-rewrites/tests/rewrites.rs fixture") { trusted_key L [id]; }
     };
     assert!(cq_sequence_plan::rewrites::group_without_canon(&source, quote!(result)).is_err());
-    source.evidence = syn::parse_quote!(evidence { L(id) key; R(a,b) key; });
+    source.evidence = syn::parse_quote!(evidence from authored("features/sequence-rewrites/tests/rewrites.rs fixture") { trusted_key L [id]; trusted_key R [a,b]; });
     let target = cq_sequence_plan::rewrites::group_without_canon(&source, quote!(result)).unwrap();
     let Term::Store { inner, .. } = &target.sequence.definitions[2].term else {
         panic!("expanding input keeps its flat publication");

@@ -23,6 +23,102 @@ fn program(module: &structures::Program) -> String {
 }
 
 #[test]
+fn recorded_statistic_reads_use_completed_provider_and_missing_value_fallback() {
+    use cq_lang_sequence::{Guard, Term};
+    let physical = syn::parse_quote!(physical {
+        relation L(a:i32); relation R(a:i32,b:i32);
+        l = pipe rename L@0 {a -> a};
+        r = let rename R@1 {a -> a,b -> b};
+        j = let canon probe first [a] l,r;
+        return j as answer(a,b);
+    });
+    let mut selected = cq_structure_selection::compile(&physical).unwrap();
+    let keyed = selected
+        .structures
+        .entries
+        .iter()
+        .find_map(|entry| match &entry.structure {
+            structures::Structure::Built { keyed, .. } if entry.name == "r" => Some(keyed.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let token = &keyed.provider.token;
+    let layout = &keyed.levels;
+    let statistic: structures::stats::StatDeclaration = syn::parse_quote!(
+        count: rows occurrences estimate run_finalize rows_stat host optional build single
+    );
+    selected
+        .structures
+        .providers
+        .declarations
+        .iter_mut()
+        .find(|declaration| declaration.token == *token)
+        .unwrap()
+        .facts
+        .statistics
+        .push(statistic.clone());
+    let publication: structures::stats::Publication = syn::parse_quote!(
+        rows_r = build r provider #token layout #(#layout)* columns [] domains [] stat #statistic;
+    );
+    selected.structures.publications.0.push(publication.clone());
+    let mut program = cq_sequence_lowering::compile(&selected).unwrap();
+    let reference = publication.reference();
+    let guard: Guard = syn::parse_quote!(stat r (#reference) < 10);
+    let last = program.sequence.definitions.last_mut().unwrap();
+    let original = last.term.clone();
+    last.term = syn::parse_quote!(flatten choose [
+        #guard => tile 1 #original,
+        else => tile 2 #original
+    ]);
+    let analysis = cq_lang_sequence::check_grading(&program, &cq_sequence_pull::machine()).unwrap();
+    let expression = cq_sequence_pull::translate_with(
+        &program,
+        &analysis,
+        syn::parse_quote!(1usize),
+        cq_sequence_pull::CanonTarget::Sequential,
+        |term, _, _, output, _, _| {
+            if let Term::Tile { n, .. } = term {
+                let rows = &output.rows;
+                output.rows = quote!({ selected_cover.set(#n); #rows });
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+    let source = quote! {
+        use std::cell::Cell;
+        thread_local! {
+            static STAT: Cell<Option<u64>> = const { Cell::new(None) };
+            static READS: Cell<usize> = const { Cell::new(0) };
+        }
+        trait PublishedRows {
+            fn rows_stat(&self) -> Option<u64> {
+                READS.with(|count| count.set(count.get() + 1));
+                STAT.with(Cell::get)
+            }
+        }
+        impl<T> PublishedRows for T {}
+        fn main() {
+            let L = [(1i32,), (2,), (2,)];
+            let R = [(1i32, 4i32), (2, 5), (2, 5)];
+            for (value, expected_cover) in [(None, 2), (Some(0), 1), (Some(9), 1), (Some(10), 2), (Some(u64::MAX), 2)] {
+                STAT.with(|stat| stat.set(value));
+                READS.with(|count| count.set(0));
+                let selected_cover = Cell::new(0usize);
+                let mut rows: Vec<_> = (#expression).into_iter().map(|(a,b)| (*a,*b)).collect();
+                rows.sort();
+                assert_eq!(rows, vec![(1,4), (2,5)]);
+                assert_eq!(selected_cover.get(), expected_cover);
+                assert_eq!(READS.with(Cell::get), 1);
+            }
+        }
+    };
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
+
+#[test]
 fn ordered_merge_uses_selected_fallback_and_rejects_authored_native() {
     let physical = syn::parse_quote! {
         physical {

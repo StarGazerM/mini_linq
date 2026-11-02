@@ -249,7 +249,7 @@ fn known_small_collectives_pay_setup_and_large_collectives_amortize_it() {
     for global in [false, true] {
         for rows in [0usize, 1, 4, 4096] {
             let mut source = grouped(global);
-            source.evidence = syn::parse2(quote!(evidence { count Lineitem = #rows; })).unwrap();
+            source.evidence = syn::parse2(quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { count Lineitem = #rows; })).unwrap();
             let planned = decompose(&source, &machine(Some(8)), &catalog()).unwrap();
             assert_eq!(
                 planned
@@ -484,7 +484,7 @@ fn provider_store_retains_parts_and_records_routed_provider_type() {
 fn provider_choice_does_not_use_cardinality_evidence() {
     for rows in [0usize, 1, 4, 4096, 65535, 65536, 65537] {
         let mut source = provider_program();
-        source.evidence = syn::parse2(quote!(evidence { count R = #rows; count L = 1; })).unwrap();
+        source.evidence = syn::parse2(quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { count R = #rows; count L = 1; })).unwrap();
         let machine = machine(Some(4));
         let automatic = decompose(&source, &machine, &catalog()).unwrap();
         assert!(
@@ -583,7 +583,7 @@ fn global_groups_route_full_valuations_and_merge_to_one_row() {
 #[test]
 fn globally_unique_aggregates_use_tiles_without_canonicalizers() {
     let mut source = grouped(true);
-    source.evidence = syn::parse_quote!(evidence { key Lineitem [orderkey, linenumber]; });
+    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; });
     let machine = machine(Some(8));
     let planned =
         decompose_with_key_partitions(&source, &machine, &catalog(), &[policy("result", true)])
@@ -629,9 +629,9 @@ fn empty_global_partial_plans_keep_the_singleton_identity_shape() {
     for unique in [false, true] {
         let mut source = grouped(true);
         source.evidence = if unique {
-            syn::parse_quote!(evidence { count Lineitem = 0; key Lineitem [orderkey, linenumber]; })
+            syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { count Lineitem = 0; trusted_key Lineitem [orderkey, linenumber]; })
         } else {
-            syn::parse_quote!(evidence { count Lineitem = 0; })
+            syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { count Lineitem = 0; })
         };
         let machine = machine(Some(8));
         let planned =
@@ -1421,7 +1421,7 @@ fn unique_keyed_groups_stream_tiles_through_single_use_valuation_spines() {
         panic!("group fixture")
     };
     group.input = syn::parse_quote!(selected);
-    source.evidence = syn::parse_quote!(evidence { key Lineitem [orderkey, linenumber]; });
+    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; });
     source.sequence.definitions = vec![
         syn::parse_quote!(input = rows lineitem;),
         syn::parse_quote!(filtered = compact selected input;),
@@ -1491,7 +1491,7 @@ fn unique_keyed_groups_stream_tiles_through_single_use_valuation_spines() {
 #[test]
 fn streaming_partial_group_preserves_existing_stores_and_rejects_shared_pipes() {
     let mut source = grouped(false);
-    source.evidence = syn::parse_quote!(evidence { key Lineitem [orderkey, linenumber]; });
+    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; });
     source.sequence.definitions.last_mut().unwrap().term =
         syn::parse_quote!(store group totals input);
     let rewritten = key_partition(&source, quote!(result, unused, [], 8)).unwrap();
@@ -1534,7 +1534,7 @@ fn total_rust_partial_group_streams_without_an_extra_host_publication() {
         panic!("group fixture")
     };
     group.input = syn::parse_quote!(mapped);
-    source.evidence = syn::parse_quote!(evidence { key Lineitem [orderkey, linenumber]; });
+    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; });
     source.sequence.definitions = vec![
         syn::parse_quote!(input = store rows lineitem;),
         syn::parse_quote!(valuations = map mapped input;),
@@ -1588,8 +1588,8 @@ fn keyed_group_cost_compares_partial_map_merge_with_key_routing() {
         let mut source = grouped(false);
         source.sequence.definitions.last_mut().unwrap().term =
             syn::parse_quote!(store group totals input);
-        source.evidence = syn::parse2(quote!(evidence {
-            key Lineitem [orderkey, linenumber];
+        source.evidence = syn::parse2(quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") {
+            trusted_key Lineitem [orderkey, linenumber];
             count Lineitem = 4096;
             count totals = #groups;
         }))
@@ -1629,7 +1629,7 @@ fn keyed_group_cost_compares_partial_map_merge_with_key_routing() {
 #[test]
 fn unknown_partial_map_merge_is_symbolic_not_free() {
     let mut source = grouped(false);
-    source.evidence = syn::parse_quote!(evidence { key Lineitem [orderkey, linenumber]; });
+    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; });
     let planned = decompose(&source, &machine(Some(8)), &catalog()).unwrap();
     assert!(
         planned
@@ -2005,11 +2005,11 @@ fn group_canon_removal_consumes_recorded_valuation_uniqueness() {
         assert!(advice.apply(&source).is_err());
         // Either declared key is an independent legal proof. The checker does
         // not require the producer's preferred key or canonicalizer spelling.
-        for key in [
-            quote!(evidence { key Lineitem [orderkey, linenumber]; }),
-            quote!(evidence { key Lineitem [orderkey, linenumber, quantity]; }),
+        for trusted_key in [
+            quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; }),
+            quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber, quantity]; }),
         ] {
-            source.evidence = syn::parse2(key).unwrap();
+            source.evidence = syn::parse2(trusted_key).unwrap();
             let facts = cq_lang_sequence::contract::check(&source).unwrap();
             assert!(facts.canon_free_groups.contains("result"));
             let target = advice.apply(&source).unwrap();
@@ -2022,7 +2022,7 @@ fn group_canon_removal_consumes_recorded_valuation_uniqueness() {
 fn prefix_bounds_keep_the_empty_global_group_identity() {
     for global in [false, true] {
         let mut source = grouped(global);
-        source.evidence = syn::parse_quote!(evidence { count Lineitem = 0; });
+        source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { count Lineitem = 0; });
         let facts = cq_lang_sequence::contract::check(&source).unwrap();
         assert_eq!(facts.prefix_bounds["totals"].rows, Some(u128::from(global)));
         let mut forged = facts.prefix_bounds.clone();

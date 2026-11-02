@@ -135,7 +135,7 @@ pub fn analyze(program: &Program, analysis: &Analysis) -> Execution {
             Some(Staging::Choice {
                 pull_runtime: arms
                     .iter()
-                    .any(|(guard, _)| matches!(guard, Guard::WorkersLt(_))),
+                    .any(|(guard, _)| matches!(guard, Guard::WorkersLt(_) | Guard::Statistic(_))),
             })
         } else {
             None

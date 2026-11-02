@@ -114,13 +114,13 @@ fn evidence_retains_a_small_rooted_prefix_and_segments_its_fan_out() {
     let machine = cq_gpu_sequence::machine();
     let source = cq_sequence_lowering::compile(&step_r()).unwrap();
     let source = cq_gpu_sequence_core::runs::record_representation(&source).unwrap();
-    let evidence: cq_sequence_plan::Advice = syn::parse_quote!(evidence {
-        count Region = 5; key Region [r_regionkey];
-        count Nation = 25; key Nation [n_nationkey];
-        count Customer = 150000; key Customer [c_custkey];
-        count Orders = 1500000; key Orders [o_orderkey];
+    let evidence: cq_sequence_plan::Advice = syn::parse_quote!(evidence from authored("experiments/gpu/sequence/tests/planner.rs fixture") {
+        count Region = 5; trusted_key Region [r_regionkey];
+        count Nation = 25; trusted_key Nation [n_nationkey];
+        count Customer = 150000; trusted_key Customer [c_custkey];
+        count Orders = 1500000; trusted_key Orders [o_orderkey];
         count Lineitem = 6001215;
-        count Supplier = 10000; key Supplier [s_suppkey];
+        count Supplier = 10000; trusted_key Supplier [s_suppkey];
     });
     let source = evidence.apply(&source).unwrap();
     let result =

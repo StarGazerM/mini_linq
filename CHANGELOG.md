@@ -56,6 +56,15 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   materialized-cubin release path. It attempts both CQ and Datalog lanes and
   reports each outcome instead of letting the first failure hide the second.
 
+- P7.1 records provider statistic declarations and immutable build publications
+  with typed units, precision, producer/accessor ABI, availability and domain
+  epochs (`STR-BuildStats`). Sequence statistic guards check publication
+  dominance, exact reference identity and host scalar placement, with explicit
+  unavailable-value fallback (`BE-StatsRead`); no automatic choices are added.
+  Evidence retains per-fact authored/original-VO provenance. Legacy ambiguous
+  Sequence `key` is replaced by advice-only `planning_key` and explicitly
+  semantic `trusted_key`; only the latter feeds key-dependent rewrites.
+
 - F5: task decomposition recognizes independent union arms beneath unary
   consumers (including the canonicalization of lowered set union), publishes
   each arm separately, and concatenates/canonicalizes at host. The dispatch

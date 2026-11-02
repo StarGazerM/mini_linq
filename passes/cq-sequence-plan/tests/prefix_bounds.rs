@@ -31,10 +31,10 @@ fn program() -> Program {
             last = flatten lookup t [b] joined;
             result = store canon map answer last;
         }
-        evidence {
-            count R = 1; key R [a];
-            count S = 100; key S [a,b];
-            count T = 1000; key T [b,c];
+        evidence from authored("passes/cq-sequence-plan/tests/prefix_bounds.rs fixture") {
+            count R = 1; trusted_key R [a];
+            count S = 100; trusted_key S [a,b];
+            count T = 1000; trusted_key T [b,c];
         }
     }
 }

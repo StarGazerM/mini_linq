@@ -1,10 +1,10 @@
-//! Upper bounds on Physical result sizes from recorded counts and keys.
+//! Conditional planning bounds on Physical result sizes.
 //!
-//! A result's bound is a function of recorded evidence only; it is never a
-//! guess. A probe whose keys cover a key of its provider matches at most one
-//! provider row per stream row (the stream bound is kept, and so are the
-//! stream's keys). A probe whose keys cover a key of its stream matches each
-//! provider row with at most one stream row (the provider's bound and keys).
+//! Numeric bounds depend on authored estimates, not certified cardinalities;
+//! they must not justify truncation or unchecked memory access. A probe whose
+//! keys cover a trusted key of its provider matches at most one provider row
+//! per stream row, preserving the stream bound and keys. If the keys cover a
+//! trusted key of the stream, the provider bound and keys are preserved.
 //! Filters, scalar binds and projections preserve row bounds; projection
 //! preserves only surviving keys. Groups preserve the input row bound and
 //! introduce their grouping key. Unit has one row and the empty key.
@@ -14,9 +14,10 @@ use crate::structures::physical::Operator;
 use crate::{EvidenceFact, Program};
 use cq_syntax::symbol_name;
 
-/// What the evidence establishes about one Physical result.
+/// Conditional size advice and separately trusted uniqueness premises.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Bound {
+    /// Estimated upper bound, never a capacity or truncation certificate.
     pub rows: Option<u128>,
     /// Column sets on which the result has at most one row.
     pub keys: Vec<BTreeSet<String>>,
@@ -51,14 +52,12 @@ pub(crate) fn record(program: &Program) -> BTreeMap<String, Bound> {
                         .facts
                         .iter()
                         .filter_map(|fact| match fact {
-                            EvidenceFact::Key { subject, columns }
-                                if symbol_name(subject) == relation =>
-                            {
-                                columns
-                                    .iter()
-                                    .map(|column| mapping.get(&symbol_name(column)).cloned())
-                                    .collect::<Option<BTreeSet<_>>>()
-                            }
+                            EvidenceFact::TrustedKey {
+                                subject, columns, ..
+                            } if symbol_name(subject) == relation => columns
+                                .iter()
+                                .map(|column| mapping.get(&symbol_name(column)).cloned())
+                                .collect::<Option<BTreeSet<_>>>(),
                             _ => None,
                         })
                         .collect(),
@@ -168,7 +167,10 @@ pub fn check(program: &Program, bounds: &BTreeMap<String, Bound>) -> syn::Result
                         .is_some_and(|limit| limit as u128 <= rows)
                 }) && bound.keys.iter().all(|key| {
                     program.evidence.facts.iter().any(|fact| {
-                        let EvidenceFact::Key { subject, columns } = fact else {
+                        let EvidenceFact::TrustedKey {
+                            subject, columns, ..
+                        } = fact
+                        else {
                             return false;
                         };
                         symbol_name(subject) == relation

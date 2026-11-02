@@ -1042,7 +1042,7 @@ Each entry is a pipeline object, for example:
 `smallest_intersections(...)`; Structures advice accepts `sorted_indexes(...)`,
 `membership(...)`, and `retype(...)`. Sequence entries parse the planner's
 public `Advice` syntax, including `store`, `store_level`, `tile`, `partition`,
-`segment`, `output`, `grade`, and `evidence { ... }`. CPU workload
+`segment`, `output`, `grade`, and `evidence from authored("source") { ... }`. CPU workload
 `advise plan(...)` hints are not imported. GPU advice stays in its existing
 explicit catalog/override interface; CPU-specific reduction hints cannot
 silently replace the measured GPU baseline.

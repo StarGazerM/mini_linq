@@ -286,6 +286,36 @@ impl<'a> Emitter<'a> {
                 let workers = &self.workers;
                 Ok(quote!((#workers) < #threshold))
             }
+            Guard::Statistic(read) => {
+                let publication = &self.analysis.structures.publications
+                    [&cq_lang_structures::symbol_name(&read.reference.publication)];
+                let levels: Vec<Vec<String>> = publication
+                    .layout
+                    .iter()
+                    .map(|level| {
+                        let mut columns: Vec<_> = level
+                            .columns
+                            .iter()
+                            .map(cq_lang_structures::symbol_name)
+                            .collect();
+                        columns.sort();
+                        columns
+                    })
+                    .collect();
+                let provider = self.context().built_ident(
+                    &cq_lang_structures::symbol_name(&publication.build),
+                    &levels,
+                );
+                let accessor = &publication.statistic.accessor;
+                let threshold = read.threshold;
+                let comparison = match read.comparison {
+                    cq_lang_sequence::stats::Comparison::Lt => quote!(<),
+                    cq_lang_sequence::stats::Comparison::Ge => quote!(>=),
+                };
+                Ok(
+                    quote!((#provider).#accessor().is_some_and(|__cq_stat: u64| __cq_stat #comparison #threshold)),
+                )
+            }
             Guard::Else => Ok(quote!(true)),
         }
     }

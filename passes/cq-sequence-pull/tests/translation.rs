@@ -213,9 +213,9 @@ fn deliberately_false_evidence_preserves_generated_code_and_answers() {
     let source = cq_sequence_lowering::compile(&structures).unwrap();
     let mut advised = source.clone();
     advised.evidence = syn::parse_quote! {
-        evidence {
+        evidence from authored("passes/cq-sequence-pull/tests/translation.rs fixture") {
             count R = 0;
-            key R [a];
+            trusted_key R [a];
             foreign_key R [a] -> S [a];
             selectivity R = 0 / 1;
             bounds R.a = 100 ..= 200;

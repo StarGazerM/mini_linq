@@ -228,6 +228,13 @@ Keys come from source evidence
 (\textsc{WF-DL-Evidence}: provenance, declared relation, distinct declared
 columns); evidence has no denotation, so a false key changes speed, never
 answers. Device storage records $\mathsf{admit}$ only.
+Sequence's \code{planning\_key} preserves this advice-only meaning when
+mapped from upstream evidence. It is not Sequence's separately authored
+\code{trusted\_key} semantic premise. Build-statistic references
+(\textsc{STR-BuildStats}, \textsc{BE-StatsRead}) bind immutable Physical
+build/layout/domain identities; publication across committed Datalog rounds
+requires a separate versioned maintenance record and is not inferred from a
+relation name by the P7.1 host contract.
 \begin{mathpar}
 \Rule{DL-Fanout}{r_j=R(\bar t)\ \text{the }j\text{-th positive read of the variant}\quad
  B_j\text{ bound before }r_j}

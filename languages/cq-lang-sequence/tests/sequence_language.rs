@@ -2102,15 +2102,16 @@ fn evidence_forms_round_trip_without_changing_lengths_or_capabilities() {
     });
     let mut target = source.clone();
     target.evidence = syn::parse_quote! {
-        evidence {
+        evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") {
             count R = 0;
             count R = 999;
-            R(a) key;
+            planning_key R [b];
+            trusted_key R [a];
             foreign_key L [a] -> R [b];
             selectivity answer = 0 / 1;
             bounds R.b = 12 ..= -3;
             sorted R [b, a];
-            key answer [a, b];
+            trusted_key answer [a, b];
         }
     };
     let evidence = &target.evidence;
@@ -2131,8 +2132,10 @@ fn evidence_forms_round_trip_without_changing_lengths_or_capabilities() {
             denominator: 1
         })
     );
-    assert!(evidence.has_key("answer", &["b".into(), "a".into()]));
-    assert!(!evidence.has_key("R", &["b".into()]));
+    assert!(evidence.has_trusted_key("answer", &["b".into(), "a".into()]));
+    assert!(!evidence.has_trusted_key("R", &["b".into()]));
+    assert!(evidence.has_planning_key("R", &["b".into()]));
+    assert!(!evidence.has_trusted_key("R", &["b".into()]));
     let before = contract::check(&source).unwrap();
     let after = contract::check(&target).unwrap();
     assert_eq!(after.evidence, target.evidence);
@@ -2150,22 +2153,30 @@ fn evidence_forms_round_trip_without_changing_lengths_or_capabilities() {
 #[test]
 fn evidence_rejects_bad_syntax_and_references_not_false_claims() {
     for syntax in [
-        quote!(evidence { selectivity r = 1 / 0; }),
-        quote!(evidence { count r = -1; }),
-        quote!(evidence { foreign_key R [a] -> R []; }),
-        quote!(evidence { bounds R.a = 1; }),
-        quote!(evidence { unknown R = 1; }),
+        quote!(evidence { count r = 1; }),
+        quote!(evidence from authored("") { count r = 1; }),
+        quote!(evidence from vo("   ") { count r = 1; }),
+        quote!(evidence from authored("legacy key syntax") { key R [a]; }),
+        quote!(evidence from authored("legacy postfix syntax") { R(a) key; }),
+        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { selectivity r = 1 / 0; }),
+        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { count r = -1; }),
+        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { foreign_key R [a] -> R []; }),
+        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { bounds R.a = 1; }),
+        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { unknown R = 1; }),
     ] {
         assert!(syn::parse2::<Evidence>(syntax).is_err());
     }
     for syntax in [
-        quote!(evidence { count missing = 1; }),
-        quote!(evidence { key R [missing]; }),
-        quote!(evidence { key R [a, a]; }),
-        quote!(evidence { foreign_key R [a] -> missing [a]; }),
-        quote!(evidence { foreign_key R [a] -> r [missing]; }),
-        quote!(evidence { bounds R.missing = 0 ..= 10; }),
-        quote!(evidence { sorted r [missing]; }),
+        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { count missing = 1; }),
+        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { trusted_key R [missing]; }),
+        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { trusted_key R [a, a]; }),
+        quote!(evidence from authored("planning-key mutation fixture") { planning_key R [missing]; }),
+        quote!(evidence from authored("planning-key mutation fixture") { planning_key R [a, a]; }),
+        quote!(evidence from vo("VO advice mutation fixture") { trusted_key R [a]; }),
+        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { foreign_key R [a] -> missing [a]; }),
+        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { foreign_key R [a] -> r [missing]; }),
+        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { bounds R.missing = 0 ..= 10; }),
+        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { sorted r [missing]; }),
     ] {
         let mut target = program(quote!(out = store rows r;));
         target.evidence = syn::parse2(syntax).unwrap();
@@ -2176,7 +2187,7 @@ fn evidence_rejects_bad_syntax_and_references_not_false_claims() {
 #[test]
 fn evidence_bounds_cover_the_signed_integer_domain_and_empty_metadata() {
     let evidence: Evidence = syn::parse_quote! {
-        evidence {
+        evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") {
             bounds R.a = -170141183460469231731687303715884105728 ..= 170141183460469231731687303715884105727;
         }
     };
@@ -2187,6 +2198,77 @@ fn evidence_bounds_cover_the_signed_integer_domain_and_empty_metadata() {
     let source = program(quote!(out = store rows r;));
     let parsed: Program = syn::parse2(quote!(#source evidence {})).unwrap();
     assert_eq!(parsed, source);
+}
+
+#[test]
+fn evidence_mapping_and_composition_preserve_original_sources() {
+    let authored: Evidence = syn::parse_quote! {
+        evidence from authored("mapped authored fixture") {
+            count Original = 0;
+            foreign_key Original [a] -> Other [a];
+        }
+    };
+    let vo: Evidence = syn::parse_quote! {
+        evidence from vo("original VO manifest provenance") {
+            count Original = 999;
+            planning_key Original [a];
+        }
+    };
+    let mut combined = authored.clone();
+    combined.facts.extend(vo.facts.clone());
+    let mapped = combined.map_subjects(|subject| {
+        if subject == "Original" {
+            syn::parse_quote!(R)
+        } else {
+            syn::parse_quote!(r)
+        }
+    });
+    assert_eq!(mapped.facts[0].source(), authored.facts[0].source());
+    assert_eq!(mapped.facts[2].source(), vo.facts[0].source());
+    assert_eq!(mapped.count("R"), Some(999));
+    assert_eq!(mapped.count("Original"), None);
+    assert!(mapped.has_planning_key("R", &["a".into()]));
+    assert!(!mapped.has_trusted_key("R", &["a".into()]));
+    assert_eq!(
+        syn::parse2::<Evidence>(mapped.to_token_stream()).unwrap(),
+        mapped
+    );
+    let mut target = program(quote!(out = store rows r;));
+    target.evidence = mapped;
+    contract::check(&target).unwrap();
+}
+
+#[test]
+fn evidence_wf_rechecks_mutated_sources_and_trusted_key_owners() {
+    use cq_lang_sequence::{EvidenceFact, EvidenceSource};
+    let mut target = program(quote!(out = store rows r;));
+    target.evidence = syn::parse_quote! {
+        evidence from authored("trusted-key mutation fixture") { trusted_key R [a]; }
+    };
+    contract::check(&target).unwrap();
+    let EvidenceFact::TrustedKey { source, .. } = &mut target.evidence.facts[0] else {
+        unreachable!()
+    };
+    *source = EvidenceSource::Vo {
+        provenance: syn::parse_quote!("original VO source"),
+    };
+    reject(
+        &target,
+        "VO planning advice cannot supply a trusted key premise",
+    );
+
+    target.evidence = syn::parse_quote! {
+        evidence from authored("count mutation fixture") { count R = 1; }
+    };
+    for provenance in ["", "  "] {
+        let EvidenceFact::Count { source, .. } = &mut target.evidence.facts[0] else {
+            unreachable!()
+        };
+        *source = EvidenceSource::Authored {
+            provenance: syn::LitStr::new(provenance, proc_macro2::Span::call_site()),
+        };
+        reject(&target, "source provenance must be nonempty");
+    }
 }
 
 fn grouped_program(keys: proc_macro2::TokenStream, body: proc_macro2::TokenStream) -> Program {
@@ -2356,7 +2438,7 @@ fn shared_checker_invalidates_changed_terms_structures_and_evidence() {
     assert!(checker.check(&changed).is_err());
 
     let mut changed = source.clone();
-    changed.evidence = syn::parse_quote!(evidence { count missing = 10; });
+    changed.evidence = syn::parse_quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { count missing = 10; });
     assert!(checker.check(&changed).is_err());
     assert_eq!(checker.check(&source).unwrap().shapes, first.shapes);
 }
@@ -2412,11 +2494,11 @@ fn shared_checker_rechecks_evidence_and_complete_opaque_prefix_syntax() {
     let original = checker.check_shared(&source).unwrap();
 
     let mut advice = source.clone();
-    advice.evidence = syn::parse_quote!(evidence { count R = 10; });
+    advice.evidence = syn::parse_quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { count R = 10; });
     let advised = checker.check_shared(&advice).unwrap();
     assert_eq!(advised.evidence.count("R"), Some(10));
     assert_eq!(advised.obligations, original.obligations);
-    advice.evidence = syn::parse_quote!(evidence { count missing = 10; });
+    advice.evidence = syn::parse_quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { count missing = 10; });
     assert!(checker.check_shared(&advice).is_err());
 
     let mut changed = source.clone();
@@ -2738,7 +2820,7 @@ fn global_partial_group_accepts_key_canon_or_globally_unique_tiles() {
             out = store group grouped tile 4 input;
         ),
     );
-    tiled.evidence = syn::parse_quote!(evidence { R(witness) key; });
+    tiled.evidence = syn::parse_quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { trusted_key R [witness]; });
     grade(&mut tiled, quote!(input at host; out at pool;));
     let facts = check_grading(&tiled, &key_pool()).unwrap();
     assert_eq!(facts.shapes["out"], vec![Len::Lit(1)]);
@@ -2753,7 +2835,7 @@ fn keyed_partial_groups_merge_globally_unique_contiguous_parts() {
             out = store group grouped tile 4 input;
         ),
     );
-    tiled.evidence = syn::parse_quote!(evidence { R(witness) key; });
+    tiled.evidence = syn::parse_quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { trusted_key R [witness]; });
     grade(&mut tiled, quote!(input at host; out at pool;));
     let facts = check_grading(&tiled, &key_pool()).unwrap();
     assert_eq!(facts.shapes["out"], vec![Len::Scan("out".into())]);
@@ -2769,7 +2851,7 @@ fn keyed_partial_groups_merge_globally_unique_contiguous_parts() {
     contract::check_rewrite(&source, &tiled).unwrap();
 
     // Empty keyed input yields no groups, unlike the unkeyed identity row.
-    tiled.evidence = syn::parse_quote!(evidence { R(witness) key; count R = 0; });
+    tiled.evidence = syn::parse_quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { trusted_key R [witness]; count R = 0; });
     assert_ne!(
         check_grading(&tiled, &key_pool()).unwrap().lengths["out"],
         Len::Lit(1)
@@ -2820,7 +2902,7 @@ fn partial_group_metadata_uses_constructor_preorder_and_definition_ownership() {
             input = store rows r;
             output_rows = store group all_rows group by_key tile 4 input;
         }
-        evidence { key R [witness]; }
+        evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { trusted_key R [witness]; }
     };
     assert_eq!(
         contract::check(&p).unwrap().partial_groups["output_rows"],

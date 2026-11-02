@@ -226,7 +226,7 @@ fn replay(source: &Program, machine: &Machine, planned: &Planned) -> Analysis {
 fn decomposition_preserves_join_order_with_count_evidence() {
     let source = reorderable_multi_join();
     let mut estimated = source.clone();
-    estimated.evidence = syn::parse_quote!(evidence {
+    estimated.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/laws.rs fixture") {
         count L = 1; count R = 10; count S = 900;
     });
     for machine in machines() {
@@ -768,7 +768,7 @@ fn automatic_h09_keeps_retained_dependencies_in_their_read_extent() {
     let structures = cq_structure_selection::compile(&physical).unwrap();
     let structures = cq_sequence_plan::select_from_catalog(&structures, &available).unwrap();
     let mut source = cq_sequence_lowering::compile(&structures).unwrap();
-    source.evidence = syn::parse_quote!(evidence {
+    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/laws.rs fixture") {
         count Part = 200000; count Orders = 1500000; count Lineitem = 6001215;
         count PartSupp = 800000; count Supplier = 10000; count Nation = 25;
     });

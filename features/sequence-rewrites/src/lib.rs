@@ -14,7 +14,7 @@
 //! | `output` | `count`, `reserve`, `reserve_previous`, or `bounded` | Set the final store protocol; bounded requires declared capacity. |
 //! | `roots` | `spread` | Size fold-free dispatches' root tiles at launch to fill resident blocks, at most the declared tile (GPU-RootSpread). |
 //! | `grade` | `machine, d at host.device, ...` | Add/update placements; preserve other grades on the same machine. |
-//! | `evidence` | `evidence { ... }` | Record estimates and author-asserted key premises. False keys can change grouped answers. |
+//! | `evidence` | `evidence from authored("origin") { ... }` | Record sourced advice and explicit `trusted_key` premises. Only false trusted keys can change grouped answers. |
 //! | `group_without_canon` | group definition | Remove valuation canon only with checked positional uniqueness. |
 //!
 //! Every pass checks the source, target and construction-based support equality.
@@ -74,5 +74,5 @@ sequence_rewrite!(choose, b, len r < 4 => a, else => missing);
 sequence_rewrite!(output, bounded);
 sequence_rewrite!(roots, declared);
 sequence_rewrite!(grade, custom, missing at host);
-sequence_rewrite!(evidence, evidence { count missing = 1; });
+sequence_rewrite!(evidence, evidence from authored("sequence-rewrites syntax fixture") { count missing = 1; });
 sequence_rewrite!(group_without_canon, missing);

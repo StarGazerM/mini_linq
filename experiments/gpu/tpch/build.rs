@@ -787,11 +787,26 @@ fn compile_stage(
                 .into_iter()
                 .flat_map(|(subject, rows, key)| {
                     std::iter::once(cq_lang_sequence::EvidenceFact::Count {
+                        source: cq_lang_sequence::EvidenceSource::Authored {
+                            provenance: syn::LitStr::new(
+                                &format!("{} row counts", manifest.root.join("manifest.json").display()),
+                                proc_macro2::Span::call_site(),
+                            ),
+                        },
                         subject: subject.clone(),
                         rows,
                     })
                     .chain(
-                        key.map(|columns| cq_lang_sequence::EvidenceFact::Key { subject, columns }),
+                        key.map(|columns| cq_lang_sequence::EvidenceFact::TrustedKey {
+                            source: cq_lang_sequence::EvidenceSource::Authored {
+                                provenance: syn::LitStr::new(
+                                    "TPC-H schema primary keys retained by the loader",
+                                    proc_macro2::Span::call_site(),
+                                ),
+                            },
+                            subject,
+                            columns,
+                        }),
                     )
                 })
                 .collect(),

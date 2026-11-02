@@ -858,7 +858,7 @@ fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() 
 #[test]
 fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
     let mut program = grouped_program(true);
-    program.evidence = syn::parse_quote!(evidence { rows(witness) key; });
+    program.evidence = syn::parse_quote!(evidence from authored("features/sequence-tasks/tests/grading.rs fixture") { trusted_key rows [witness]; });
     program.sequence = syn::parse_quote! {
         sequence {
             input = store rows r;
@@ -1910,7 +1910,7 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
     let mut executions = Vec::new();
     for stored_parts in [false, true] {
         let mut program = grouped_program(false);
-        program.evidence = syn::parse_quote!(evidence { rows(witness) key; });
+        program.evidence = syn::parse_quote!(evidence from authored("features/sequence-tasks/tests/grading.rs fixture") { trusted_key rows [witness]; });
         program.sequence = if stored_parts {
             syn::parse_quote!(sequence {
                 input = store tile 64 rows r;

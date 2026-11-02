@@ -658,6 +658,16 @@ impl<'a> Checker<'a> {
                         Guard::Lt(length, _) | Guard::Ge(length, _) => {
                             self.uniform_length(length, owner, level)?
                         }
+                        Guard::Statistic(read) => {
+                            if level != 0 {
+                                return Err(self.error(owner, "BE-StatsRead: host scalar reads cannot execute in a device or worker scope"));
+                            }
+                            self.uniform_length(
+                                &Len::Input(symbol_name(&read.ready)),
+                                owner,
+                                level,
+                            )?
+                        }
                         Guard::WorkersLt(_) | Guard::Else => true,
                     };
                     branch_uniform &= guard_uniform;

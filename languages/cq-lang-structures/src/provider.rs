@@ -24,6 +24,9 @@
 //!        | "contiguous_range" | "bounds" "resident_columns"
 //!        | "items" Integer "[" "rows" RustType "," "columns" RustType "]"
 //!        | "choice" Integer "[" "eager" GenericArgument "," "lazy" GenericArgument "]"
+//!        | "statistics" "[" StatDeclaration,* "]"
+//! StatDeclaration ::= Ident ":" Field Unit Precision Producer Accessor
+//!                     Placement Availability Computation Aggregation
 //! ```
 
 // DESIGN provider-token
@@ -77,6 +80,7 @@ pub mod kw {
     syn::custom_keyword!(choice);
     syn::custom_keyword!(eager);
     syn::custom_keyword!(lazy);
+    syn::custom_keyword!(statistics);
 }
 
 /// Declared read capabilities, discharged against Sequence obligations.
@@ -313,6 +317,8 @@ pub struct Facts {
     pub items: Option<ItemSlot>,
     /// STR-ReaderChoice: the declared reader-choice argument of a host provider.
     pub choice: Option<ChoiceSlot>,
+    /// Optional statistic ABI declarations; declaring a field never selects it.
+    pub statistics: Vec<stats::StatDeclaration>,
 }
 
 impl Facts {
@@ -687,6 +693,7 @@ impl syn::parse::Parse for Declaration {
             bounds: None,
             items: None,
             choice: None,
+            statistics: Vec::new(),
         };
         let mut seen = BTreeSet::new();
         while !body.is_empty() {
@@ -807,6 +814,13 @@ impl syn::parse::Parse for Declaration {
                     return Err(list.error("expected `eager Argument, lazy Argument`"));
                 }
                 facts.choice = Some(ChoiceSlot { index, eager, lazy });
+            } else if lookahead.peek(kw::statistics) {
+                body.parse::<kw::statistics>()?;
+                let list;
+                syn::bracketed!(list in body);
+                facts.statistics = CommaList::<stats::StatDeclaration>::parse_terminated(&list)?
+                    .into_iter()
+                    .collect();
             } else {
                 return Err(lookahead.error());
             }
@@ -835,6 +849,7 @@ impl ToTokens for Declaration {
             bounds,
             items,
             choice,
+            statistics,
         } = &self.facts;
         let reads = reads
             .iter()
@@ -905,6 +920,9 @@ impl ToTokens for Declaration {
             let index = syn::Index::from(*index);
             facts.push(quote::quote!(choice #index [eager #eager, lazy #lazy]));
         }
+        if !statistics.is_empty() {
+            facts.push(quote::quote!(statistics [#(#statistics),*]));
+        }
         let token = &self.token;
         let ty = &self.ty;
         tokens.extend(quote::quote!(#token = #ty { #(#facts),* };));
@@ -922,6 +940,18 @@ pub(crate) fn check(structures: &Structures) -> syn::Result<()> {
         }
         concrete_type(&declaration.ty)?;
         let facts = &declaration.facts;
+        stats::check_declarations(&facts.statistics)?;
+        if facts
+            .statistics
+            .iter()
+            .any(|statistic| statistic.field == stats::Field::Bounds)
+            && !facts.reads(&Capability::Ordered)
+        {
+            return error(
+                &declaration.token,
+                "STR-BuildStats: code bounds require the declared ordered capability",
+            );
+        }
         if facts.contiguous_range
             && (facts.abi != Some(NativeAbi::Range) || !facts.reads(&Capability::Range))
         {

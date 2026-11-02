@@ -155,7 +155,7 @@ mod tests {
             "segment(result, 1024, items 4)",
             "output(reserve)",
             "grade(gpu, result at host.device)",
-            "evidence { count R = 42; }",
+            "evidence from authored(\"advice parser fixture\") { count R = 42; }",
             "key_partition(grouped, published, [region, year], 8)",
             "key_partition(provider, published, [key], 8, threshold 65536)",
         ] {

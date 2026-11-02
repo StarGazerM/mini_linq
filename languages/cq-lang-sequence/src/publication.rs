@@ -381,6 +381,8 @@ fn demands(term: &Term, name: &str, result: &str) -> bool {
         Term::Choose(arms) => arms.iter().any(|(guard, arm)| {
             matches!(guard, Guard::Lt(len, _) | Guard::Ge(len, _)
                 if length_demands(len, name, result))
+                || matches!(guard, Guard::Statistic(read)
+                    if symbol_name(&read.ready) == name || symbol_name(&read.reference.build) == result)
                 || demands(arm, name, result)
         }),
         Term::Union(arms) => arms.iter().any(|arm| demands(arm, name, result)),

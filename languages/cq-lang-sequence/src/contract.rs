@@ -568,10 +568,12 @@ impl Checked<'_> {
         input: Option<(&Meaning, &Option<Vec<String>>)>,
     ) -> Option<Vec<String>> {
         let definition = self.physical(name).ok()?;
-        // Formal rule BE-GroupKey: Asserted relation keys survive renaming and inherited-key transfer.
+        // Formal rule BE-GroupKey: Explicitly trusted keys survive renaming and inherited-key transfer.
         if let Operator::Rename(rename) = &definition.operator {
             for fact in &self.program.evidence.facts {
-                if let crate::EvidenceFact::Key { subject, columns } = fact
+                if let crate::EvidenceFact::TrustedKey {
+                    subject, columns, ..
+                } = fact
                     && *subject == rename.relation
                     && let Some(key) = columns
                         .iter()
@@ -1572,6 +1574,72 @@ impl Checked<'_> {
         Ok(())
     }
 
+    // Formal rule BE-StatsRead: checked immutable identity and dominating publication.
+    fn statistic(&self, read: &crate::stats::Guard) -> syn::Result<()> {
+        use cq_lang_structures::stats::{Placement, Unit};
+        let reference = &read.reference;
+        let Some(publication) = self
+            .analysis
+            .structures
+            .publications
+            .get(&symbol_name(&reference.publication))
+        else {
+            return fail(read, "BE-StatsRead", "unknown statistic publication");
+        };
+        if publication.reference() != *reference {
+            return fail(
+                read,
+                "BE-StatsRead",
+                "stale statistic identity, layout, domain, or unit",
+            );
+        }
+        if publication.statistic.placement != Placement::Host
+            || publication.statistic.unit == Unit::CodeBounds
+        {
+            return fail(
+                read,
+                "BE-StatsRead",
+                "scalar guard requires a host numeric publication",
+            );
+        }
+        let ready = symbol_name(&read.ready);
+        let Some(fact) = self.facts.get(&ready) else {
+            return fail(
+                read,
+                "BE-StatsRead",
+                "publication must precede the statistic read",
+            );
+        };
+        if !fact.materializes
+            || !matches!(&fact.meaning, Meaning::Result(build) if *build == symbol_name(&publication.build))
+            || !self.analysis.stores.contains_key(&ready)
+            || fact.depth != 0
+        {
+            return fail(
+                read,
+                "BE-StatsRead",
+                "readiness requires the completed build's Store",
+            );
+        }
+        let Some(definition) = self
+            .program
+            .sequence
+            .definitions
+            .iter()
+            .find(|definition| definition.name == read.ready)
+        else {
+            return fail(read, "BE-StatsRead", "missing publication definition");
+        };
+        if !matches!(&definition.term, Term::Store { .. }) {
+            return fail(
+                read,
+                "BE-StatsRead",
+                "readiness must name a publication, not an alias",
+            );
+        }
+        Ok(())
+    }
+
     fn guard_len(&self, len: &Len) -> syn::Result<()> {
         match len {
             Len::Input(name)
@@ -1611,6 +1679,16 @@ impl Checked<'_> {
                 Guard::WorkersLt(bound) => {
                     if *bound == 0 {
                         return fail(guard, "BE-Choose", "worker guard bound must be positive");
+                    }
+                }
+                Guard::Statistic(read) => {
+                    self.statistic(read)?;
+                    if !matches!(alternatives.last(), Some((Guard::Else, _))) {
+                        return fail(
+                            guard,
+                            "BE-StatsRead",
+                            "statistic reads require an explicit fallback",
+                        );
                     }
                 }
                 Guard::Lt(len, bound) | Guard::Ge(len, bound) => {
@@ -1684,13 +1762,14 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
     }
     if (!unchanged || source.sequence != target.sequence)
         && target.evidence.facts.iter().any(|fact| {
-            matches!(fact, crate::EvidenceFact::Key { .. }) && !source.evidence.facts.contains(fact)
+            matches!(fact, crate::EvidenceFact::TrustedKey { .. })
+                && !source.evidence.facts.contains(fact)
         })
     {
         return fail(
             target,
             "PL-Evidence",
-            "a structural rewrite cannot invent key premises; record author evidence first",
+            "a structural rewrite cannot invent trusted key premises; record authored evidence first",
         );
     }
     let target_facts = analyze_in(target, context, target_prefix)?;

@@ -738,6 +738,9 @@ fn references<'a>(
                 if let Guard::Lt(length, _) | Guard::Ge(length, _) = guard {
                     length_references(length, definitions, indices, result);
                 }
+                if let Guard::Statistic(read) = guard {
+                    result.push(&read.ready);
+                }
                 references(t, definitions, indices, result);
             }
         }

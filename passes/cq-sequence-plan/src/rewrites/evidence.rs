@@ -1,19 +1,19 @@
-//! Evidence records estimates and explicit author assertions of relation keys.
+//! Evidence records sourced planning advice and explicitly trusted authored keys.
 
 use cq_lang_sequence::{Evidence, Program};
 use proc_macro2::TokenStream;
 
-/// Record a complete `evidence { ... }` advice block. The same syntax prints in
-/// planner traces and in complete Sequence programs.
+/// Record a complete sourced evidence advice block without changing its origins.
+/// The same syntax prints in planner traces and complete Sequence programs.
 pub fn evidence(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
     record_evidence(source, &syn::parse2(arguments)?)
 }
 
-/// Append estimates and asserted keys without removing previously authored facts.
-/// Estimates rank plans; key-dependent rewrites are conditional on those keys.
+/// Append sourced advice and trusted keys without removing prior facts or origins.
+/// Estimates rank plans; semantic rewrites require explicitly trusted authored keys.
 /// Passing the already recorded metadata is idempotent, so an explicit planner
 /// evidence parameter may borrow `program.evidence` without duplicating it.
-// Formal rule PL-Evidence: Estimates rank checked plans; asserted keys are explicit premises of key-dependent rewrites.
+// Formal rule PL-Evidence: Sourced estimates and planning keys rank checked plans; only explicitly trusted authored keys supply semantic premises.
 pub fn record_evidence(source: &Program, evidence: &Evidence) -> syn::Result<Program> {
     record_evidence_in(&mut Default::default(), source, evidence)
 }
