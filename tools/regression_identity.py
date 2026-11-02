@@ -65,12 +65,16 @@ def _command(row):
         return ["cargo", "test", "--locked", "-p", package, "--all-features", f"--{kind}", target]
     if kind == "lib":
         return ["cargo", "test", "--locked", "-p", package, "--lib"]
-    if kind not in {"manifest-target-test", "manifest-test", "manifest-run", "oracle", "oracle-test"}:
+    if kind not in {"manifest-target-test", "manifest-feature-test", "manifest-test", "manifest-run", "oracle", "oracle-test"}:
         raise Unproven(f"unsupported regression kind: {kind}")
     command = ["cargo", "run" if kind in {"manifest-run", "oracle"} else "test",
                "--locked", "--manifest-path", source]
     if kind == "manifest-target-test":
         command += ["--test", target]
+    if kind == "manifest-feature-test":
+        test, feature = target.rsplit("@", 1)
+        command += ["-p", package, "--test", test]
+        command += ["--all-features"] if feature == "all-features" else ["--features", feature]
     if kind in {"oracle", "oracle-test"}:
         command += ["--features", "oracle"]
     if kind == "oracle":
@@ -238,6 +242,10 @@ class Identity:
             command += ["--all-features"]
         elif row[1] in {"oracle", "oracle-test"}:
             command += ["--features", "oracle"]
+        elif row[1] == "manifest-feature-test":
+            feature = row[2].rsplit("@", 1)[1]
+            command += (["--all-features"] if feature == "all-features" else
+                        ["--features", f"{row[0]}/{feature}"])
         metadata = json.loads(self._run(command, env))
         target_directory = metadata.get("target_directory")
         if target_directory:

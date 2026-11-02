@@ -60,6 +60,60 @@ class TimingTests(unittest.TestCase):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_latest_evidence_uses_mtime_recursively(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertIsNone(runner.latest_evidence(root))
+            paths = [root / "z" / "evidence.json", root / "a" / "nested" / "evidence.json"]
+            for index, path in enumerate(paths):
+                path.parent.mkdir(parents=True)
+                path.write_text("{}")
+                os.utime(path, ns=(index + 1, index + 1))
+            self.assertEqual(runner.latest_evidence(root), paths[1])
+
+    def test_save_baseline_requires_complete_success_and_preserves_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "run"
+            source.mkdir()
+            (source / "evidence.json").write_text("evidence")
+            (source / "case.log").write_text("passed")
+            destination = root / "baselines"
+            for revision, records in (("abc", []), (None, [{"status": 0}]),
+                                       ("abc", [{"status": 0}, {"status": 1}])):
+                self.assertIsNone(runner.save_baseline(source, destination, revision, records))
+                self.assertFalse(destination.exists())
+            saved = runner.save_baseline(source, destination, "1234567890abcdef", [{"status": 0}])
+            self.assertEqual(saved.name, "1234567890ab")
+            self.assertEqual((saved / "case.log").read_text(), "passed")
+            self.assertEqual((saved / "evidence.json").read_text(), "evidence")
+            with self.assertRaises(FileExistsError):
+                runner.save_baseline(source, destination, "1234567890abcdef", [{"status": 0}])
+
+    def test_list_latest_checks_identities_and_explains_missing_records(self):
+        # Take the real inventory row so this test follows source relocations.
+        import csv
+        with (runner.ROOT / "tools/regression-targets.tsv").open() as source:
+            row = next(row for row in csv.reader(source, delimiter="\t")
+                       if row[:3] == ["cq-storage", "test", "access_laws"])
+        for identity, records, decision in (
+                ({"key": "same"}, {tuple(row): {"identity": {"key": "same"}, "run_id": "base"}}, "REUSE"),
+                ({"key": "different"}, {tuple(row): {"identity": {"key": "same"}, "run_id": "base"}}, "EXECUTE"),
+                (None, {}, "EXECUTE")):
+            module = unittest.mock.Mock()
+            module.Identity.return_value.fingerprint.return_value = identity
+            output = io.StringIO()
+            with patch.object(sys, "argv", ["runner", "--reuse-latest", "/baseline", "--list",
+                                            "cq-storage/access_laws"]), \
+                    patch.object(runner, "latest_evidence", return_value=Path("/baseline/evidence.json")), \
+                    patch.object(runner, "load_evidence", return_value=records), \
+                    patch.dict(sys.modules, {"regression_identity": module}), \
+                    patch.dict(runner.RUN_OPTIONS, {}, clear=True), \
+                    patch.object(runner, "run") as run, contextlib.redirect_stdout(output):
+                self.assertEqual(runner.main(), 0)
+                run.assert_not_called()
+            self.assertIn(f"{decision} cq-storage/access_laws:", output.getvalue())
+
     def test_only_intact_executed_passing_evidence_is_reusable(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

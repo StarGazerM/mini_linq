@@ -101,6 +101,27 @@ class SchedulerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.command_for("p", "unknown", "t", "source")
 
+
+    def test_feature_commands_match_identity_commands(self):
+        from regression_identity import _command
+        for target, flags in (("execution@all-features", ["--all-features"]),
+                              ("counters@counters", ["--features", "counters"])):
+            row = ["cq-datalog", "manifest-feature-test", target, "features/datalog/Cargo.toml"]
+            expected = ["cargo", "test", "--locked", "--manifest-path", row[3],
+                        "-p", row[0], "--test", target.split("@")[0], *flags]
+            self.assertEqual(runner.command_for(*row), expected)
+            self.assertEqual(_command(row), expected)
+
+    def test_feature_identity_metadata_uses_requested_features(self):
+        from regression_identity import Identity
+        for target, flags in (("execution@all-features", ["--all-features"]),
+                              ("counters@counters", ["--features", "cq-datalog/counters"])):
+            engine = Identity(runner.ROOT)
+            with patch.object(engine, "_run", return_value='{"packages": []}') as command:
+                engine._metadata(["cq-datalog", "manifest-feature-test", target,
+                                  "features/datalog/Cargo.toml"], {})
+            self.assertEqual(command.call_args.args[0][-len(flags):], flags)
+
     def test_empty_selection(self):
         self.assertEqual(runner.run([], 2, Path("logs")), [])
 
@@ -112,13 +133,13 @@ class SchedulerTests(unittest.TestCase):
         selected = {line.split(":", 1)[0].removeprefix("SELECT ")
                     for line in output.getvalue().splitlines() if line.startswith("SELECT ")}
         self.assertEqual(selected, runner.QUICK_TARGETS)
-        self.assertEqual(len(selected), 12)
+        self.assertEqual(len(selected), 15)
 
     def test_fuzz_requires_tier_or_explicit_selector(self):
         import regression_impact
         for arguments, expected_count, expected_fuzz in (
-                ([], 118, False), (["--tier", "quick"], 12, False),
-                (["--changed-since", "HEAD"], 118, False),
+                ([], 122, False), (["--tier", "quick"], 15, False),
+                (["--changed-since", "HEAD"], 122, False),
                 (["--tier", "fuzz"], 3, True), (["cq-xtask/fuzz-quick"], 1, True)):
             with self.subTest(arguments=arguments):
                 output = io.StringIO()

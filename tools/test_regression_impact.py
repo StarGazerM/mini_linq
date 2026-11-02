@@ -298,6 +298,16 @@ class ImpactTests(unittest.TestCase):
         self.assertTrue(impact.reasons(datalog))
         self.assertEqual(impact.reasons(tpch), [])
 
+    def test_feature_target_uses_explicit_package_and_test(self):
+        self.gpu_workspace()
+        row = ["gpu-datalog", "manifest-feature-test", "datalog@all-features",
+               "features/gpu/Cargo.toml"]
+        self.rows.append(row)
+        impact = self.impact(["features/one/src/lib.rs"])
+        self.assertTrue(impact.reasons(row))
+        impact = self.impact(["runtime/shared/src/lib.rs"])
+        self.assertEqual(impact.reasons(row), [])
+
     def test_historical_lock_walk_excludes_unrelated_sibling_packages(self):
         datalog, tpch = self.gpu_workspace()
         self.historical_snapshot()

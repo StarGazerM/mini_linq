@@ -8,14 +8,14 @@ Use the pinned toolchain and keep heavy builds bounded:
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_PROFILE_TEST_DEBUG=line-tables-only
 export CARGO_BUILD_JOBS=6
-# Quick tier: 12 bounded compiler/runtime/architecture contracts.
+# Quick tier: 15 bounded compiler/runtime/architecture contracts.
 nice -n 10 bash tools/test_regressions.sh --tier quick
 # Or just the named regression(s) covering the change.
 nice -n 10 bash tools/test_regressions.sh mini-linq/physical_query
 # Inspect the final selection, including each reason.
 python3 tools/test_regressions.py --changed-since BASE_REV --list
 # Final behavioral gate: every potentially affected inventory target.
-nice -n 10 bash tools/test_regressions.sh --changed-since BASE_REV
+nice -n 10 bash tools/test_regressions.sh --changed-since BASE --reuse-latest target/baseline-gate
 # Full inventory remains the default.
 nice -n 10 bash tools/test_regressions.sh
 ```
@@ -28,7 +28,7 @@ A track's gate is the tests of the crates it changed, the tests covering its fix
 root `cargo test --workspace` when core, testkit or facade code changed, the quick
 tier, and any named downstream target it knows it affects. Tracks do not run the
 impact-selected suite: a change to any compiler crate selects every target. Main
-runs it once per merge batch with `--reuse-from` the previous main evidence. Run
+runs it once per merge batch with `--changed-since BASE --reuse-latest target/baseline-gate`. Run
 separate structural, API, formatting or documentation gates only where the change
 requires them. Do not rerun behavioral gates for a docs-only rebase.
 An explicitly named selector narrows even an impact-selected run; omit selectors
@@ -84,14 +84,25 @@ takes precedence and is normalized to an absolute path for nested scenarios.
 ## Explicit expansion-identity reuse
 
 ```sh
-# Record real passing execution plus expanded-Rust identities on the baseline.
-nice -n 10 bash tools/test_regressions.sh --record-identities --output target/baseline-gate
-# After the compiler-only change, opt into reuse of that exact evidence.
-nice -n 10 bash tools/test_regressions.sh --changed-since BASE_REV \
-  --reuse-from target/baseline-gate/evidence.json
+# Record identities and save a fully passing baseline under HEAD's 12-digit SHA.
+nice -n 10 bash tools/test_regressions.sh --save-baseline target/baseline-gate
+# Main's default batch command discovers the newest baseline automatically.
+nice -n 10 bash tools/test_regressions.sh --changed-since BASE --reuse-latest target/baseline-gate
+# Preview actual identity-checked reuse decisions without executing test targets.
+nice -n 10 bash tools/test_regressions.sh --changed-since BASE --reuse-latest target/baseline-gate --list
 ```
 
-Reuse is opt-in. A selected target is marked `reused BASELINE-RUN-ID` only when a
+Reuse is the default in Main's batch command above, but remains opt-in for other runs.
+`--reuse-latest DIR` recursively chooses the `evidence.json` with newest modification
+time (path breaks ties), including `DIR/*/evidence.json`; it is mutually exclusive
+with `--reuse-from FILE`. An empty/missing directory means normal execution.
+Malformed evidence is an error; failed, unrecorded, reused or damaged entries are
+never accepted. `--list` reports `REUSE` or `EXECUTE` after checking current
+identities; expansion checks can compile even though test targets are not executed.
+`--save-baseline DIR` enables identity recording and copies the complete evidence
+directory only for a nonempty, fully passing run to `DIR/<12-digit HEAD SHA>`.
+Existing baseline directories are never overwritten, and failed runs are not saved.
+A selected target is marked `reused BASELINE-RUN-ID` only when a
 recorded, actually executed passing target has an intact hashed log and its current
 identity is equal. Identities use actual expanded Rust normalized by
 `expanded_gate.py`, linked runtime source hashes, unchanged target/test inputs,
@@ -103,6 +114,10 @@ modes, missing evidence or any identity failure execute normally; an expansion b
 itself is never proof that a test passed. `--record-identities` is optional because
 recording identities has a real expansion cost. Markdown/changelogs and `doc/**`
 are excluded from expansion source/runtime keys, not from executable Rust bodies.
+
+Named feature-specific manifest tests use the `manifest-feature-test` inventory
+kind and `TEST@FEATURE` target spelling (`@all-features` selects `--all-features`).
+Both execution and identity expansion use the same package, test and feature flags.
 
 ## Performance comparison protocol
 
@@ -120,14 +135,24 @@ require measured compile-time improvement and passing tests before adoption.
 
 ## Measured quick tier
 
-The 12-target quick tier passed in **28.311 seconds** on the shared 24-CPU host:
-27.404 summed build seconds, 9.492 summed test/scenario seconds. The one-minute
-load average was 16.62 before and 17.87 after. This is below the three-minute
-iteration target without dropping failing or slow targets. Build settings were
-the environment above; no shared-target or profile tuning was credited.
+The 15-target quick tier passed in **21.939 seconds** (external gate time
+**21.98 seconds**): 21.383 summed build seconds and 6.841 summed test/scenario
+seconds. Build settings were the environment above with workspace target directories.
+Evidence: `target/regression-logs/20261102T080342Z-c3d8ecfd/results.tsv`.
 
-Evidence: `target/regression-measurements/quick/results.tsv`, run
-`20261102T034811Z-1441039c`. `--tier quick --list` prints the exact inventory:
+Three named Datalog targets are now in both the default inventory and quick tier:
+
+| Target | Cargo test selection | Warm wall time |
+| --- | --- | --- |
+| `cq-datalog/execution` | `--test execution` (default features) | 0.103 s |
+| `cq-datalog/execution@all-features` | `-p cq-datalog --test execution --all-features` | 0.104 s |
+| `cq-datalog/counters@counters` | `-p cq-datalog --test counters --features counters` | 0.184 s |
+
+Each is below the approximately 30-second warm cutoff. The three-target warm
+gate took **0.51 seconds**; evidence:
+`target/regression-logs/20261102T080317Z-cae1a4ae/results.tsv`.
+The initial build/warmup gate took 98.21 seconds and is not claimed as warm.
+`--tier quick --list` prints the complete inventory: these three Datalog targets,
 storage access/representation/counter laws, index demands, macro inputs, print
 expressions, CQ program/normal/guard tests, and the three architecture scenarios.
 

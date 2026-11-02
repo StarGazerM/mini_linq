@@ -13,7 +13,7 @@ except ModuleNotFoundError:
 
 
 ROOT_KINDS = {"test", "example", "lib"}
-MANIFEST_KINDS = {"manifest-test", "manifest-target-test", "manifest-run", "oracle", "oracle-test"}
+MANIFEST_KINDS = {"manifest-test", "manifest-target-test", "manifest-feature-test", "manifest-run", "oracle", "oracle-test"}
 
 
 def _documentation(path):
@@ -315,6 +315,10 @@ class Impact:
             starts = set(context["defaults"])
             if row[1] == "manifest-target-test":
                 starts = self._target_owners(context, starts, "test", row[2])
+            elif row[1] == "manifest-feature-test":
+                starts = {identifier for identifier in context["members"]
+                          if identifier in packages and packages[identifier][0] == row[0]}
+                starts = self._target_owners(context, starts, "test", row[2].rsplit("@", 1)[0])
             elif row[1] in {"manifest-run", "oracle"}:
                 starts = self._target_owners(context, starts, "bin", None)
                 if starts is None or len(starts) != 1:

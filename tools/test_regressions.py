@@ -34,6 +34,7 @@ QUICK_TARGETS = frozenset({
     "cq-lang-cq/guards", "cq-print/expressions", "mini-linq-macros/macro_inputs",
     "architecture/closed-core-dependencies", "architecture/external-sibling-closure",
     "architecture/public-api-reexports",
+    "cq-datalog/execution", "cq-datalog/execution@all-features", "cq-datalog/counters@counters",
 })
 RUN_OPTIONS = {}
 
@@ -85,6 +86,24 @@ def load_evidence(path):
     return records
 
 
+def latest_evidence(directory):
+    paths = list(directory.rglob("evidence.json"))
+    if not paths:
+        return None
+    return max(paths, key=lambda path: (path.stat().st_mtime_ns, str(path)))
+
+
+def save_baseline(logdir, directory, revision, records):
+    """Never publish failed, empty, or revisionless runs as baselines."""
+    if not revision or not records or any(record["status"] != 0 for record in records):
+        return None
+    destination = directory / revision[:12]
+    directory.mkdir(parents=True, exist_ok=True)
+    # Refuse to mix evidence from separate runs at the same revision.
+    shutil.copytree(logdir, destination)
+    return destination
+
+
 def command_for(package, kind, target, source):
     cargo = ["cargo", "test", "--locked"]
     if kind in ("test", "example"):
@@ -95,11 +114,15 @@ def command_for(package, kind, target, source):
         return ["python3", source]
     if kind in ("manifest-run", "oracle"):
         cargo = ["cargo", "run", "--locked"]
-    elif kind not in ("manifest-test", "oracle-test", "manifest-target-test"):
+    elif kind not in ("manifest-test", "oracle-test", "manifest-target-test", "manifest-feature-test"):
         raise ValueError(f"Unknown regression kind: {kind}")
     cargo += ["--manifest-path", source]
     if kind == "manifest-target-test":
         cargo += ["--test", target]
+    elif kind == "manifest-feature-test":
+        test, feature = target.rsplit("@", 1)
+        cargo += ["-p", package, "--test", test]
+        cargo += ["--all-features"] if feature == "all-features" else ["--features", feature]
     elif kind in ("oracle", "oracle-test"):
         cargo += ["--features", "oracle"]
         if kind == "oracle":
@@ -255,7 +278,10 @@ def main():
     parser.add_argument("--changed-since", help="select only targets potentially affected since this revision")
     parser.add_argument("--changed-until", help="end revision for a historical impact range (default: working tree)")
     parser.add_argument("--list", action="store_true", help="print selected targets and reasons without executing")
-    parser.add_argument("--reuse-from", type=Path, help="explicit passing evidence.json with expansion identities")
+    reuse = parser.add_mutually_exclusive_group()
+    reuse.add_argument("--reuse-from", type=Path, help="explicit passing evidence.json with expansion identities")
+    reuse.add_argument("--reuse-latest", type=Path, help="use newest evidence.json recursively under DIR")
+    parser.add_argument("--save-baseline", type=Path, help="copy a passing run to DIR/HEAD-short-sha")
     parser.add_argument("--record-identities", action="store_true",
                         help="record expanded Rust/runtime identities for a later --reuse-from run")
     parser.add_argument("--target-dirs", choices=("workspace", "shared"), default="workspace",
@@ -305,9 +331,13 @@ def main():
     for row in rows:
         print(f"SELECT {target_id(row)}: {'; '.join(selection[target_id(row)])}")
     print(f"Selected {len(rows)}/{len(inventory)} targets")
-    if args.list:
-        print(f"Selection wall time: {time.monotonic() - started:.3f} seconds")
-        return 0
+    if args.reuse_latest:
+        try:
+            args.reuse_from = latest_evidence(args.reuse_latest)
+        except OSError as error:
+            parser.error(f"cannot discover reuse evidence: {error}")
+        if args.reuse_from is None:
+            print(f"Reuse unavailable: no evidence.json under {args.reuse_latest}; execute selected targets")
     if args.target_dirs == "shared":
         os.environ.setdefault("CARGO_TARGET_DIR", str(ROOT / "target/regression-shared"))
     # Relative overrides otherwise resolve differently for nested scenario cwd's.
@@ -315,13 +345,30 @@ def main():
         os.environ["CARGO_TARGET_DIR"] = str(Path(os.environ["CARGO_TARGET_DIR"]).absolute())
     cargo_resources.cache_clear()
     RUN_OPTIONS.clear()
-    RUN_OPTIONS["record_identities"] = args.record_identities
+    RUN_OPTIONS["record_identities"] = args.record_identities or bool(args.save_baseline)
     if args.reuse_from:
         try:
             RUN_OPTIONS["reuse"] = load_evidence(args.reuse_from.resolve())
         except (OSError, ValueError, KeyError, TypeError) as error:
             parser.error(f"invalid reuse evidence: {error}")
         print(f"Validated {len(RUN_OPTIONS['reuse'])} reusable passing records from {args.reuse_from}")
+    if args.list:
+        if args.reuse_from:
+            from regression_identity import Identity
+            engine = Identity(ROOT)
+            for row in rows:
+                prior = RUN_OPTIONS["reuse"].get(tuple(row))
+                if not prior:
+                    print(f"EXECUTE {target_id(row)}: no intact executed baseline identity")
+                    continue
+                identity = engine.fingerprint(row)
+                if identity is not None and identity == prior["identity"]:
+                    print(f"REUSE {target_id(row)}: identical identity from {prior['run_id']}")
+                else:
+                    reason = engine.last_reason if identity is None else "identity mismatch"
+                    print(f"EXECUTE {target_id(row)}: {reason}")
+        print(f"Selection wall time: {time.monotonic() - started:.3f} seconds")
+        return 0
     run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:8]
     logdir = (args.output or ROOT / "target/regression-logs" / run_id).resolve()
     if (logdir / "results.tsv").exists():
@@ -355,6 +402,14 @@ def main():
                 "targets": [json.loads(Path(result[4]).with_suffix(".json").read_text())
                             for result in results]}
     (logdir / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
+    if args.save_baseline and not failed:
+        try:
+            destination = save_baseline(logdir, args.save_baseline.resolve(),
+                                        evidence["revision"], evidence["targets"])
+        except OSError as error:
+            parser.error(f"cannot save baseline: {error}")
+        print(f"Saved baseline: {destination}" if destination else
+              "Baseline not saved: empty selection or unavailable HEAD")
     print(f"{passed} passed, {failed} failed, {reused} reused; results: {summary}")
     print(f"Target totals: build {sum(r[5] for r in results):.3f}s; "
           f"test {sum(r[6] for r in results):.3f}s (overlapping targets are summed)")
