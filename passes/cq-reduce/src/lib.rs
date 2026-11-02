@@ -35,10 +35,8 @@ pub struct Options {
 }
 
 impl Options {
-    fn effective(self, suppress_hypergraph: bool, suppress_tree: bool) -> Self {
-        if suppress_hypergraph && self.semijoins == Reductions::Hypergraph
-            || suppress_tree && self.semijoins == Reductions::Tree
-        {
+    fn effective(self, suppress_tree: bool) -> Self {
+        if suppress_tree && self.semijoins == Reductions::Tree {
             Self {
                 semijoins: Reductions::None,
             }
@@ -236,11 +234,6 @@ pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<va
         &source.valuation.steps,
         &BTreeSet::new(),
     );
-    // Independent branches are exact build-side joins, not fact-dependent
-    // semijoin supports. The optional Hypergraph policy does not interpose a
-    // reducer across this recorded physical decomposition.
-    let effective = options.effective(source.valuation.join_branches.is_some(), false);
-    let options = &effective;
     let steps = compile_steps(
         &source.cq.query.body,
         &source.valuation.steps,
@@ -254,7 +247,6 @@ pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<va
         valuation: valuation::Valuation {
             valuation_token: source.valuation.valuation_token,
             evidence: source.valuation.evidence.clone(),
-            join_branches: source.valuation.join_branches.clone(),
             brace: Default::default(),
             steps,
         },
@@ -390,7 +382,7 @@ fn compile_steps(
                     .into_iter()
                     .collect();
                 let inner = scope_graph(&written.branches[j].body, &branch.steps, &context);
-                let options = options.effective(false, !inner.acyclic);
+                let options = options.effective(!inner.acyclic);
                 branch.steps = compile_steps(
                     &written.branches[j].body,
                     &branch.steps,

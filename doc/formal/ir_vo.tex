@@ -3,9 +3,8 @@
 
 \paragraph{Grammar.} VO extends a complete CQ$_{\rm NF}$ program with a schedule.
 \begin{lstlisting}
-VO   ::= CQProgram valuation [Evidence] [branches { JoinBranch* }] { Step* }
+VO   ::= CQProgram valuation [Evidence] { Step* }
 Evidence ::= evidence from "provenance" { (count R = n; | key R [col, ...];)* }
-JoinBranch ::= branch [clause, ...] (interface, ...);
 Step ::= R@path(x, _, ...); | !R(Arg, ...); | x = y; | where Constraint;
        | if Expr; | let Pat [: Type] = Expr;
        | for Pat in Expr;
@@ -36,21 +35,10 @@ no Rust guard, scalar bind, generator or negation is a reduction target or suppo
 the reduction graph need not be acyclic;
 (5)~blocks recursively check kind, paths, interface coverage, arm schedules and
 the required placement field. Hoisted blocks contain no Rust steps; correlated
-blocks require every free prefix variable. Repeated reads retain placement;
-(6)~independent join branches are disjoint connected groups of at least two
-full atom occurrences in a flat, Rust-free scope. Each records exactly its
-external interface and head columns; local predicates execute inside the
-branch. Reductions of a member precede the first grouped read and may use
-only other members, so a branch cannot depend on its future fact-side probe.
+blocks require every free prefix variable. Repeated reads retain placement.
 \begin{mathpar}
 \Rule{D-Constraint}{\vars(C)\subseteq B}
  {\mathsf{requires}(C)=\vars(C),\quad\mathsf{provides}(C)=\emptyset}
-
-\Rule{WF-JoinBranch}{B=\emptyset\ \lor\ \mathsf{FlatRelational}(q)\quad
- \mathsf{DisjointConnectedFullGroups}(B)\\
- \forall b\in B.\ I_b=\mathsf{Interface}(q,b)\quad
- \mathsf{EarlierBranchLocalReductions}(b)}
- {\mathsf{JoinBranches}(q,B)\Downarrow\ok}
 
 \Rule{WF-VO-Rust}{\forall i\text{ a Rust step}.\ \fv(e_i)\cap Q\subseteq B_i\\
  \mathsf{PlacedOnce}(i)\quad\mathsf{UnchangedRustPayload}(i)}
@@ -69,8 +57,7 @@ only other members, so a branch cannot depend on its future fact-side probe.
  \text{keys nonempty, distinct, of declared columns}}
  {\mathsf{Evidence}(t.cq,\mathcal{E})\Downarrow\ok}
 
-\Rule{WF-VO}{\mathsf{WF}_{NF}(t.cq)\quad\mathsf{Schedule}(t,A)\quad
- \mathsf{JoinBranches}(t.cq,t.branches)\Downarrow\ok\\
+\Rule{WF-VO}{\mathsf{WF}_{NF}(t.cq)\quad\mathsf{Schedule}(t,A)\\
  t.evidence\text{ present}\Rightarrow\mathsf{Evidence}(t.cq,t.evidence)\Downarrow\ok}
  {\mathsf{WF}_{VO}(t)\Downarrow A}
 \end{mathpar}
@@ -87,14 +74,13 @@ checked. Motion does not depend on Rust syntax or host type classification.
 
 \paragraph{Recorded decisions.} Clause order, split granularity (Coarse: one full
 subatom per atom; Fine: at most one new variable per subatom), semijoin
-reductions, independent exact-join branches, and block placement (hoisted
-derived relation or per-row arms). An independent branch is materialized once
-as the exact join of its member occurrences, projected to the recorded heading.
-It assumes neither uniqueness nor foreign-key coverage. Recorded evidence (row
+reductions, and block placement (hoisted
+derived relation or per-row arms).
+Recorded evidence (row
 counts and asserted keys with their provenance) is the input of the evidence
 ordering O-EvidenceLe; it never changes the meaning of a schedule.
 
 \paragraph{Rewrite check.} Unchanged CQ; the non-reduction step erasures are equal
 recursively; existing reductions are kept and added reductions satisfy the
-target contract. Non-reduction steps and independent branch metadata are not
+target contract. Non-reduction steps are not
 changed by a rewrite.

@@ -17,7 +17,6 @@ pub(super) fn layout(
     declaration: &syntax::RelationDecl,
     negation: &cq::Negation,
     bound: &BTreeSet<String>,
-    canonical: impl Fn(&Ident) -> Ident,
 ) -> Layout {
     let mut reserved = bound.clone();
     reserved.extend(negation.atom.variables().map(symbol_name));
@@ -33,7 +32,7 @@ pub(super) fn layout(
         let variable = syntax::rust::variable(argument);
         let term = variable.map(|v| {
             if bound.contains(&symbol_name(v)) {
-                Term::Variable(canonical(v))
+                Term::Variable(v.clone())
             } else {
                 Term::Closed(syn::parse_quote!(#v))
             }
@@ -76,7 +75,7 @@ pub(super) fn obligation(
     bound: &BTreeSet<String>,
     left: usize,
 ) -> usize {
-    let layout = layout(declaration, negation, bound, Clone::clone);
+    let layout = layout(declaration, negation, bound);
     let mut right = schedule.atom_path(path, &negation.atom.relation, &layout.mapping, None);
     let filtered =
         !layout.condition.equalities.is_empty() || !layout.condition.constraints.is_empty();

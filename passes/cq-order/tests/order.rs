@@ -1137,6 +1137,46 @@ fn shared_free_variables_can_be_supplied_by_any_admissible_atom() {
 }
 
 #[test]
+fn unsolved_equality_classes_do_not_count_as_connectivity() {
+    // Rust protects both names, so the equality stays a predicate and S shares
+    // no realizable join key with R. T is the connected occurrence.
+    for body in [
+        quote!(R(a,x), S(y,b), T(x,b), where x == y, if ok(x,y)),
+        quote!(R(a,x), S(y,b), T(x,b), where x == y, { U(b) } | { V(b) }),
+    ] {
+        let source = normal(quote! {
+            struct Q; relation R(a:i32,x:i32); relation S(y:i32,b:i32);
+            relation T(x:i32,b:i32); relation U(b:i32); relation V(b:i32);
+            relation answer(a:i32,b:i32);
+            answer(a,b) :- #body;
+        });
+        for heuristic in [
+            Heuristic::Prefix(Ranking::Connected),
+            Heuristic::Prefix(Ranking::GreedyWidth),
+            Heuristic::Filtered,
+        ] {
+            let target = plan(&source, heuristic, Split::Coarse);
+            let analysis = valuation::contract::check(&target).unwrap();
+            for (step, bound) in target.valuation.steps.iter().zip(&analysis.bound_before) {
+                let read = match step {
+                    valuation::Step::Atom(a, _) => a,
+                    valuation::Step::Block(b, _) => &b.source,
+                    _ => continue,
+                };
+                assert!(
+                    bound.is_empty()
+                        || read
+                            .variables()
+                            .any(|(_, v)| bound.contains(&v.to_string())),
+                    "{heuristic:?}: {} is disconnected from {bound:?}",
+                    read.to_token_stream()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn filtered_order_starts_with_point_then_grows_connected_before_disconnected_ranges() {
     let source = normal(quote! {
         struct Q; relation Customer(c:i32,n:i32); relation Orders(o:i32,c:i32,d:i32);
@@ -1196,119 +1236,6 @@ fn filtered_order_preserves_rust_free_variable_dependencies() {
         .position(|s| matches!(s, valuation::Step::Atom(a, _) if a.relation == "R"))
         .unwrap();
     assert!(before < guard);
-}
-
-#[test]
-fn filtered_order_records_independent_dimension_branches() {
-    let source = normal(quote! {
-        struct Q;
-        relation L(o:i32,p:i32,s:i32);
-        relation PS(p:i32,s:i32);
-        relation P(p:i32,n:i32);
-        relation S(s:i32,n:i32);
-        relation O(o:i32);
-        relation N(n:i32);
-        answer(o,p,s) :- L(o,p,s), PS(p,s), P(p,label), where label == 7,
-            S(s,n), O(o), N(n);
-    });
-    let target = plan(&source, Heuristic::Filtered, Split::Coarse);
-    let groups = target.valuation.join_branches.as_ref().unwrap();
-    assert_eq!(groups.branches.len(), 1);
-    let relations: Vec<_> = groups.branches[0]
-        .clauses()
-        .into_iter()
-        .map(|c| {
-            let BodyItem::Positive { atom } = &source.query.body[c] else {
-                panic!()
-            };
-            atom.relation.to_string()
-        })
-        .collect();
-    assert_eq!(relations, ["PS", "S", "N"]);
-    let reparsed: valuation::Program = syn::parse2(target.to_token_stream()).unwrap();
-    assert_eq!(reparsed, target);
-    let mut wrong = target.clone();
-    wrong.valuation.join_branches.as_mut().unwrap().branches[0]
-        .columns
-        .clear();
-    assert!(valuation::contract::check(&wrong).is_err());
-    let mut omitted = target.clone();
-    omitted.valuation.join_branches = None;
-    assert!(
-        cq_order::check(
-            &source,
-            &omitted,
-            &Options {
-                heuristic: Heuristic::Filtered,
-                split: Split::Coarse
-            }
-        )
-        .is_err()
-    );
-    assert!(valuation::check_rewrite(&target, &omitted).is_err());
-}
-
-#[test]
-fn dimension_branches_do_not_cross_opaque_rust() {
-    let source = normal(quote! {
-        struct Q; relation L(o:i32,p:i32,s:i32); relation P(p:i32);
-        relation S(s:i32,n:i32); relation N(n:i32); relation O(o:i32);
-        answer(o,p,s) :- L(o,p,s), P(p), S(s,n), if { 10 / *n > 0 }, N(n), O(o);
-    });
-    let target = plan(&source, Heuristic::Filtered, Split::Coarse);
-    assert!(target.valuation.join_branches.is_none());
-}
-
-#[test]
-fn dimension_ears_keep_a_customer_supplier_cycle_on_the_spine() {
-    let source = normal(quote! {
-        struct Q; relation L(o:i32,p:i32,s:i32); relation O(o:i32,c:i32);
-        relation PS(p:i32,s:i32); relation S(s:i32,n:i32); relation P(p:i32);
-        relation C(c:i32,n:i32); relation N(n:i32);
-        answer(o,p,s,n) :- L(o,p,s), O(o,c), PS(p,s), S(s,n), P(p), C(c,n), N(n);
-    });
-    let target = plan(&source, Heuristic::Filtered, Split::Coarse);
-    let groups = target.valuation.join_branches.as_ref().unwrap();
-    let relations: Vec<Vec<_>> = groups
-        .branches
-        .iter()
-        .map(|b| {
-            b.clauses()
-                .into_iter()
-                .map(|c| {
-                    let BodyItem::Positive { atom } = &source.query.body[c] else {
-                        panic!()
-                    };
-                    atom.relation.to_string()
-                })
-                .collect()
-        })
-        .collect();
-    assert_eq!(relations, [vec!["PS", "P"], vec!["S", "N"]]);
-}
-
-#[test]
-fn filtered_dimension_branch_precedes_a_weaker_fact_neighbor() {
-    let source = normal(quote! {
-        struct Q; relation L(o:i32,p:i32,s:i32); relation O(o:i32,d:i32);
-        relation P(p:i32,b:i32); relation S(s:i32,n:i32); relation N(n:i32,k:i32);
-        answer(o,p,s) :- L(o,p,s), O(o,d), where d > 5,
-            P(p,b), where b == 7, S(s,n), N(n,k), where k == 1;
-    });
-    let target = plan(&source, Heuristic::Filtered, Split::Coarse);
-    let atom_order: Vec<_> = target
-        .valuation
-        .steps
-        .iter()
-        .filter_map(|step| {
-            if let valuation::Step::Atom(a, _) = step {
-                Some(a.relation.to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
-    assert!(atom_order.iter().position(|r| r == "S") < atom_order.iter().position(|r| r == "O"));
 }
 
 #[test]
@@ -1433,74 +1360,6 @@ fn ordering_negation_preserves_reference_answers_for_constants_repeats_and_wildc
             }
         }
     }
-}
-
-#[test]
-fn branch_policy_rejects_well_formed_spine_pinned_and_cycle_groups() {
-    let options = Options {
-        heuristic: Heuristic::Filtered,
-        split: Split::Coarse,
-    };
-    let source = normal(quote! {
-        struct Q; relation L(o:i32,p:i32,s:i32); relation PS(p:i32,s:i32);
-        relation P(p:i32,label:i32); relation S(s:i32,n:i32); relation O(o:i32);
-        relation N(n:i32);
-        answer(o,p,s) :- L(o,p,s), PS(p,s), P(p,label), where label == 7,
-            S(s,n), O(o), N(n);
-    });
-    for members in [vec![0usize, 1], vec![1, 2]] {
-        let mut target = plan(&source, Heuristic::Filtered, Split::Coarse);
-        let columns: Vec<_> =
-            valuation::join_branches::interface(&source, &members.iter().copied().collect())
-                .into_iter()
-                .map(|name| syn::Ident::new(&name, proc_macro2::Span::call_site()))
-                .collect();
-        let members: Vec<_> = members
-            .iter()
-            .map(|clause| syn::LitInt::new(&clause.to_string(), proc_macro2::Span::call_site()))
-            .collect();
-        target.valuation.join_branches = Some(syn::parse_quote! {
-            branches { branch [#(#members),*] (#(#columns),*); }
-        });
-        valuation::contract::check(&target).unwrap();
-        assert!(cq_order::check(&source, &target, &options).is_err());
-    }
-
-    let source = normal(quote! {
-        struct Q; relation L(o:i32,p:i32,s:i32); relation O(o:i32,c:i32);
-        relation PS(p:i32,s:i32); relation S(s:i32,n:i32); relation P(p:i32);
-        relation C(c:i32,n:i32); relation N(n:i32);
-        answer(o,p,s,n) :- L(o,p,s), O(o,c), PS(p,s), S(s,n), P(p), C(c,n), N(n);
-    });
-    let mut target = plan(&source, Heuristic::Filtered, Split::Coarse);
-    target.valuation.join_branches = Some(syn::parse_quote! {
-        branches { branch [1,3,5,6] (o,s,n); branch [2,4] (p,s); }
-    });
-    valuation::contract::check(&target).unwrap();
-    assert!(cq_order::check(&source, &target, &options).is_err());
-}
-
-#[test]
-fn branch_policy_accepts_noncanonical_record_order() {
-    let source = normal(quote! {
-        struct Q; relation L(o:i32,p:i32,s:i32); relation O(o:i32,c:i32);
-        relation PS(p:i32,s:i32); relation S(s:i32,n:i32); relation P(p:i32);
-        relation C(c:i32,n:i32); relation N(n:i32);
-        answer(o,p,s,n) :- L(o,p,s), O(o,c), PS(p,s), S(s,n), P(p), C(c,n), N(n);
-    });
-    let mut target = plan(&source, Heuristic::Filtered, Split::Coarse);
-    let groups = &mut target.valuation.join_branches.as_mut().unwrap().branches;
-    assert_eq!(groups.len(), 2);
-    groups.reverse();
-    cq_order::check(
-        &source,
-        &target,
-        &Options {
-            heuristic: Heuristic::Filtered,
-            split: Split::Coarse,
-        },
-    )
-    .unwrap();
 }
 
 #[test]

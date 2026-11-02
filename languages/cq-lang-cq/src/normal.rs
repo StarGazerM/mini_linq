@@ -251,8 +251,171 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
         .items
         .extend(captures.into_iter().map(capture));
     normal.query.body = body.into_iter().collect();
+    solve_aliases(&mut normal.query);
     check(&normal)?;
     Ok(normal)
+}
+
+/// Formal rule A-Alias: Solve a relational equality between two atom generators by renaming one to the other, unless a block occurs, either name is protected, or an atom would repeat a name.
+///
+/// Protected names are the valuation (head) variables, negated atom columns,
+/// Rust binders and the generator inputs of every Rust expression: their
+/// spelling is observed outside relational algebra. The solved equality
+/// becomes a shared join name and is dropped; every other occurrence of the
+/// replaced name in atoms and relational predicates is renamed. The result is
+/// recorded only as plain shared names in the normal form.
+fn solve_aliases(query: &mut super::Query) {
+    use super::syntax::constraint::{Constraint, Term};
+    if super::blocks::walk(&query.body)
+        .iter()
+        .any(|item| matches!(item, BodyItem::Block(_)))
+    {
+        return;
+    }
+    let atoms: Vec<&Atom> = query.body.iter().filter_map(BodyItem::atom).collect();
+    let let_bound: BTreeSet<String> = query
+        .body
+        .iter()
+        .filter_map(|item| match item {
+            BodyItem::Let(binding) => Some(rust::bindings(&binding.pattern)),
+            BodyItem::For(binding) => Some(rust::bindings(&binding.pattern)),
+            _ => None,
+        })
+        .flatten()
+        .map(|v| symbol_name(&v))
+        .collect();
+    let generators: BTreeSet<String> = atoms
+        .iter()
+        .flat_map(|atom| atom.variables().map(symbol_name))
+        .filter(|v| !let_bound.contains(v))
+        .collect();
+    let mut protected: BTreeSet<String> = query.valuation_variables().map(symbol_name).collect();
+    for item in &query.body {
+        let expression = match item {
+            BodyItem::Negation(negation) => {
+                protected.extend(negation.atom.variables().map(symbol_name));
+                continue;
+            }
+            BodyItem::Filter(filter) => &filter.condition,
+            BodyItem::Let(binding) => {
+                protected.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
+                &binding.expression
+            }
+            BodyItem::For(binding) => {
+                protected.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
+                &binding.expression
+            }
+            _ => continue,
+        };
+        protected.extend(rust::free_variables(expression).dependencies(&generators));
+    }
+    let canonical = |id: &Ident, aliases: &BTreeMap<String, Ident>| {
+        aliases.get(&symbol_name(id)).unwrap_or(id).clone()
+    };
+    let mut aliases = BTreeMap::<String, Ident>::new();
+    for equality in query.body.iter().flat_map(|item| match item {
+        BodyItem::Equality(equality) => vec![equality.clone()],
+        BodyItem::Constraint(constraint) => constraint.equalities(),
+        _ => Vec::new(),
+    }) {
+        let EqualityValue::Variable(right) = &equality.right else {
+            continue;
+        };
+        if !generators.contains(&symbol_name(&equality.left))
+            || !generators.contains(&symbol_name(right))
+        {
+            continue;
+        }
+        let left = canonical(&equality.left, &aliases);
+        let right = canonical(right, &aliases);
+        if left == right {
+            continue;
+        }
+        let (keep, replace) = if protected.contains(&symbol_name(&right)) {
+            (right, left)
+        } else {
+            (left, right)
+        };
+        if protected.contains(&symbol_name(&replace)) {
+            continue;
+        }
+        let mut proposed = aliases.clone();
+        for value in proposed.values_mut() {
+            if symbol_name(value) == symbol_name(&replace) {
+                *value = keep.clone();
+            }
+        }
+        proposed.insert(symbol_name(&replace), keep);
+        if atoms.iter().any(|atom| {
+            let names: BTreeSet<_> = atom
+                .variables()
+                .map(|v| symbol_name(&canonical(v, &proposed)))
+                .collect();
+            names.len() != atom.variables().count()
+        }) {
+            continue;
+        }
+        aliases = proposed;
+    }
+    if aliases.is_empty() {
+        return;
+    }
+    let rename = |id: &mut Ident| {
+        if let Some(target) = aliases.get(&symbol_name(id)) {
+            *id = target.clone();
+        }
+    };
+    let trivial = |constraint: &Constraint| {
+        constraint.equality().is_some_and(|e| {
+            matches!(&e.right, EqualityValue::Variable(v) if symbol_name(v) == symbol_name(&e.left))
+        })
+    };
+    let body = std::mem::take(&mut query.body);
+    query.body = body
+        .into_iter()
+        .filter_map(|mut item| {
+            match &mut item {
+                BodyItem::Positive { atom } => {
+                    for argument in atom.args.iter_mut() {
+                        if let Some(target) = rust::variable(argument)
+                            .and_then(|variable| aliases.get(&symbol_name(variable)))
+                        {
+                            *argument = path(target);
+                        }
+                    }
+                }
+                BodyItem::Equality(equality) => {
+                    rename(&mut equality.left);
+                    if let EqualityValue::Variable(right) = &mut equality.right {
+                        rename(right);
+                        if symbol_name(right) == symbol_name(&equality.left) {
+                            return None;
+                        }
+                    }
+                }
+                BodyItem::Constraint(constraint) => {
+                    constraint.map_terms(&mut |term| {
+                        if let Term::Variable(variable) = term {
+                            rename(variable);
+                        }
+                    });
+                    if trivial(constraint) {
+                        return None;
+                    }
+                    if let Constraint::Or(branches) = constraint {
+                        if let [conjunction] = branches.as_mut_slice() {
+                            conjunction.retain(|conjunct| !trivial(conjunct));
+                            if conjunction.is_empty() {
+                                return None;
+                            }
+                        }
+                    }
+                }
+                _ => (),
+            }
+            Some(item)
+        })
+        .collect();
 }
 
 fn capture(item: BodyItem) -> cq_syntax::Capture {

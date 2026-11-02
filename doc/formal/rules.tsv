@@ -62,7 +62,7 @@ O-StepAdvice	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-StepAdv
 O-EvidenceLe	implementation	passes/cq-order/src/evidence.rs	/// Formal rule O-EvidenceLe:	With a count for every top-level occurrence, stream the largest-count key-functional root dominating the written root (no smaller count, no stronger filter, no neighbour besides the written root filtered as strongly), expand keyed reads by filter rank and look up other ready filtered keyed reads first; otherwise keep Prefix(Connected)/Coarse. Record the evidence.
 CK-EvidenceLe	implementation	passes/cq-order/src/evidence.rs	/// Formal rule CK-EvidenceLe:	Check the recorded root is a largest-count functional root dominating the written root, every other first read is keyed, lookups carry filters, plus WF-VO and selected CK-Le; scopes without a dominating functional root pass CK-Order.
 O-KnownAt	implementation	passes/cq-order/src/known.rs	/// Formal rule O-KnownAt:	Pin a selected top-level negation immediately after the k-th positive read; WF-VO checks its variables are bound there, and the placement is re-checked after reduction.
-CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check branch-preserving erasure, no optional reducer for independent branches, otherwise filtered support versions, tree obligations and exact block cuts.
+CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check erasure, filtered support versions, tree obligations and exact block cuts.
 CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check VO occurrences, reductions, relational constraints, unchanged Rust payloads and free-variable bindings.
 E-BlockPlacement	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-BlockPlacement:	Consume recorded Hoisted or Correlated placement independently of predicate optimization mode.
 CK-BlockPlacement	implementation	passes/cq-elaborate/src/block_contract.rs	/// Formal rule CK-BlockPlacement:	Check matching RA block provenance and exact recorded correlation alternative.
@@ -78,13 +78,14 @@ A-Prefix	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Pre
 A-Local	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Local:	Emit an opaque Rust binding after its atom, then a relational equality with the fresh atom column.
 A-Capture	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Capture:	Record a query-closed top-level let/if, head operand or aggregate argument once as a host capture in dependency order.
 A-CaptureRef	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-CaptureRef:	Hoist a query-closed branch let/if to a fresh capture; the branch keeps its binder or guard as a capture reference.
+A-Alias	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Alias:	Solve a relational equality between two unprotected top-level atom generators by renaming, recorded as plain shared names; blocks, protected names and repeated atom names decline.
 D-Atom	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Atom:	Atom provides its columns and requires scalar-let- or generator-supplied columns.
 D-Guard	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Guard:	Guard requires dependencies on the written prefix.
 D-Bind	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Bind:	Binding provides pattern names and requires RHS prefix dependencies.
 D-For	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-For:	Generator provides pattern names and requires RHS free variables.
 C-Ready	implementation	passes/cq-order/src/lib.rs	/// Formal rule C-Ready:	Require only free-variable binders, with no Rust-order or relational-predecessor condition.
 S-Written	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Written:	Written uses the complete normal-form body sequence.
-S-Connected	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Connected:	Ready atoms rank by shared names then clause index.
+S-Connected	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Connected:	Ready atoms rank by names actually shared after normalization, then clause index.
 S-Greedy	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Greedy:	GreedyWidth and Auto rank connected atoms before union arity.
 S-Elimination	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Elimination:	Rank ready atoms by earliest elimination variable then clause index.
 O-Coarse	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Coarse:	Copy equalities, constraints and Rust steps; emit a full subatom per chosen atom.
@@ -175,7 +176,7 @@ STR-FullKey	implementation	passes/cq-structure-selection/src/lib.rs	// Formal ru
 EXT-SetFold	implementation	features/extensions/cq-ext-aggregate/src/expansion.rs	/// Formal rule EXT-SetFold:	Checked canonical terminals need no extension dedup; unknown terminals retain fast-hashed set boundaries.
 EXT-ConstantGroup	implementation	features/extensions/cq-ext-aggregate/src/expansion.rs	/// Formal rule EXT-ConstantGroup:	Literal-bound group columns use an optional accumulator and preserve empty-input semantics.
 H-FilterRank	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-FilterRank:	Rank literal occurrence restrictions and explicit relational predicates, never Rust expression syntax.
-S-Filtered	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Filtered:	Rank ready occurrences by connectivity, local filter strength, then written position.
+S-Filtered	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Filtered:	Rank ready occurrences by connectivity through shared names, local filter strength, then written position.
 R-Filtered	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Filtered:	Propagate independently filtered components, omitting range-only support against a point-filtered component; order strongest siblings first.
 H-SpanningCore	implementation	languages/cq-lang-cq/src/hypergraph.rs	// Formal rule H-SpanningCore:	The reduction tree is the GYO join tree, or GYO ears plus a spanning tree of the cyclic core over shared variables (most shared, then earliest).
 R-Masks	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Masks:	Reduce each inner clause by its filtered child subtrees of the outer-rooted reduction tree, children first; the outer is never a target or support.
@@ -186,11 +187,6 @@ SEL-JoinFilter	implementation	passes/cq-structure-selection/src/positional.rs	//
 STR-AdaptiveMembership	implementation	runtime/cq-storage/src/adaptive.rs	/// Formal rule STR-AdaptiveMembership:	Rust capability dispatch selects dense storage only with a total injective ordinal; generic equality/hash keys retain exact hash membership.
 IF-JoinFilter	implementation	passes/cq-print/src/positional.rs	/// Formal rule IF-JoinFilter:	Build each recorded type through Build from the projected index Keys, prove marker ColumnSlot and ConservativeMembership with Rust traits, and filter scan positions by every filter already built when the scan is read while preserving each exact covering operator.
 IF-JoinFilterAbandon	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-JoinFilterAbandon:	A build keeping more than 35% of its positional source occurrence constructs no filter; the abandoned filter passes every key.
-WF-JoinBranch	implementation	languages/cq-lang-vo/src/join_branches.rs	/// Formal rule WF-JoinBranch:	Require disjoint connected full relational atom groups, exact interfaces, and branch-local reductions before reads; opaque Rust remains ungrouped.
-S-JoinBranch	implementation	passes/cq-order/src/branches.rs	/// Formal rule S-JoinBranch:	Pick the widest shared-key occurrence as the fact spine and absorb connected dimension ears through one external key set.
-CK-OrderBranches	implementation	passes/cq-order/src/branch_check.rs	/// Formal rule CK-OrderBranches:	Validate widest-spine exclusion, pinned probes, legal ear proofs and saturated recorded groups without invoking branch selection.
-E-JoinBranch	implementation	passes/cq-elaborate/src/join_branches.rs	/// Formal rule E-JoinBranch:	Materialize each independent exact atom join once, project its interface, and join the prefix against that result.
-CK-JoinBranch	implementation	passes/cq-elaborate/src/join_branches.rs	/// Formal rule CK-JoinBranch:	Require exact projected branch DAGs plus global occurrence, predicate, reduction and free-variable correspondence.
 INC-Adequacy	abstract	-	-	Exhaustive operational observation preserves finite-set denotation under pure-total Rust and host premises.
 INC-Supp	abstract	-	-	Support commutes with pure-total positive contexts; nonpositive and consumer boundaries retain their separate obligations.
 STR-Maintain	abstract	-	-	Planned; exact-once ordered insertion and merges that never cross protected cuts preserve Runs abstraction.

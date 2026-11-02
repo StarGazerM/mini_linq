@@ -36,8 +36,6 @@ pub mod blocks;
 pub use blocks::Placement;
 pub mod evidence;
 pub use evidence::Evidence;
-pub mod join_branches;
-pub use join_branches::{JoinBranch, JoinBranches};
 
 pub mod kw {
     syn::custom_keyword!(reduce);
@@ -51,8 +49,6 @@ pub struct Valuation {
     pub valuation_token: kw::valuation,
     #[parse(evidence::parse_optional)]
     pub evidence: Option<Evidence>,
-    #[parse(join_branches::parse_optional)]
-    pub join_branches: Option<JoinBranches>,
     #[syn(braced)]
     pub brace: token::Brace,
     #[syn(in = brace)]
@@ -224,7 +220,6 @@ fn error<T>(
 }
 
 fn analyze(program: &Program) -> syn::Result<Analysis> {
-    join_branches::check(program)?;
     if let Some(evidence) = &program.valuation.evidence {
         evidence.check(&program.cq)?;
     }
@@ -829,7 +824,6 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
             .collect()
     }
     if source.cq != target.cq
-        || source.valuation.join_branches != target.valuation.join_branches
         || erase(&source.valuation.steps) != erase(&target.valuation.steps)
         || reductions(&source.valuation.steps)
             .iter()

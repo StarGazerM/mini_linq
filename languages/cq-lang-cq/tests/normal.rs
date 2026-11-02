@@ -44,6 +44,50 @@ fn closed_branch_lets_and_guards_reference_fresh_query_captures() {
 }
 
 #[test]
+fn generator_equalities_become_shared_names_unless_protected_or_blocked() {
+    let body = |tokens: proc_macro2::TokenStream| {
+        let normal = cq::normal::normalize(&cq(tokens)).unwrap();
+        cq::normal::check(&normal).unwrap();
+        normal.query.body.to_token_stream().to_string()
+    };
+    // A-Alias: the solved equality is a shared join name, recorded in NF.
+    assert_eq!(
+        body(quote! {
+            struct Q; relation R(a:i32,x:i32); relation S(y:i32,b:i32); relation T(y:i32);
+            relation answer(a:i32,b:i32);
+            answer(a,b) :- R(a,x), S(y,b), where x == y && b > 3, T(y);
+        }),
+        "R (a , x) , S (x , b) , where b > 3 , T (x)"
+    );
+    // Opaque Rust observes both spellings: the equality stays a predicate.
+    assert_eq!(
+        body(quote! {
+            struct Q; relation R(a:i32,x:i32); relation S(y:i32,b:i32);
+            relation answer(a:i32,b:i32);
+            answer(a,b) :- R(a,x), S(y,b), where x == y, if ok(x,y);
+        }),
+        "R (a , x) , S (y , b) , where x == y , if ok (x , y)"
+    );
+    // Blocks keep their written names.
+    assert_eq!(
+        body(quote! {
+            struct Q; relation R(a:i32,x:i32); relation S(y:i32,b:i32);
+            relation U(b:i32); relation V(b:i32); relation answer(a:i32,b:i32);
+            answer(a,b) :- R(a,x), S(y,b), where x == y, { U(b) } | { V(b) };
+        }),
+        "R (a , x) , S (y , b) , where x == y , { U (b) } | { V (b) }"
+    );
+    // Renaming must not repeat a name inside one atom.
+    assert_eq!(
+        body(quote! {
+            struct Q; relation R(x:i32,y:i32); relation answer(x:i32);
+            answer(x) :- R(x,y), where x == y;
+        }),
+        "R (x , y) , where x == y"
+    );
+}
+
+#[test]
 fn normalization_preserves_literals_and_extracts_other_non_variable_arguments() {
     let source = cq(quote! {
         struct Q;

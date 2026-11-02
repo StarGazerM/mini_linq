@@ -28,9 +28,6 @@ use cq_lang_vo as valuation;
 use proc_macro2::Span;
 use syn::LitInt;
 
-mod branch_check;
-mod branches;
-
 pub mod evidence;
 pub mod known;
 pub mod le;
@@ -266,12 +263,14 @@ fn schedule(
 
 /// The clause-prefix rank: a ready guard or binding, then an atom sharing a
 /// bound variable, then the narrowest heading, then the earliest clause.
+/// Connectivity counts only names actually shared after normalization: an
+/// unsolved (protected) equality class is not a join key the lowering can
+/// realize, so it does not make an occurrence look connected.
 /// Formal rule S-Connected: Ready atoms rank by shared names then clause index.
 /// Formal rule S-Greedy: GreedyWidth and Auto rank connected atoms before union arity.
 fn prefix_rank<'a>(
     clauses: &'a [Clause<'a>],
     ranking: Ranking,
-    canonical_names: &'a BTreeMap<String, String>,
 ) -> impl Fn(usize, &BTreeSet<String>) -> Rank + 'a {
     move |clause, bound| {
         let facts = &clauses[clause];
@@ -282,22 +281,22 @@ fn prefix_rank<'a>(
             ));
             return (false, false, priority, clause);
         }
-        let canonical = |name: &String| canonical_names.get(name).unwrap_or(name).clone();
-        let supplied: BTreeSet<_> = facts.provides.iter().map(canonical).collect();
-        let available: BTreeSet<_> = bound.iter().map(canonical).collect();
-        let shared = supplied.intersection(&available).count();
+        let supplied: BTreeSet<&String> = facts.provides.iter().collect();
+        let shared = supplied
+            .iter()
+            .filter(|name| bound.contains(**name))
+            .count();
         let width = match ranking {
             Ranking::Connected => 0,
-            Ranking::GreedyWidth => available.union(&supplied).count(),
+            Ranking::GreedyWidth => bound.len() + supplied.len() - shared,
         };
         (true, shared == 0, width, clause)
     }
 }
 
-/// Formal rule S-Filtered: Rank ready occurrences by connectivity, local filter strength, then written position.
+/// Formal rule S-Filtered: Rank ready occurrences by connectivity through shared names, local filter strength, then written position.
 fn filtered_rank<'a>(
     clauses: &'a [Clause<'a>],
-    graph: &'a cq::hypergraph::Analysis,
     filters: &'a BTreeMap<usize, u8>,
 ) -> impl Fn(usize, &BTreeSet<String>) -> Rank + 'a {
     move |clause, bound| {
@@ -313,10 +312,7 @@ fn filtered_rank<'a>(
                 clause,
             );
         }
-        let connected = facts
-            .provides
-            .iter()
-            .any(|name| bound.iter().any(|b| graph.equivalent(name, b)));
+        let connected = facts.provides.iter().any(|name| bound.contains(name));
         (
             true,
             !connected,
@@ -605,13 +601,6 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
         valuation: valuation::Valuation {
             valuation_token: Default::default(),
             evidence: None,
-            join_branches: if options.heuristic == Heuristic::Filtered
-                && options.split == Split::Coarse
-            {
-                branches::choose(source)
-            } else {
-                None
-            },
             brace: Default::default(),
             steps,
         },
@@ -1022,24 +1011,8 @@ fn compile_body(
     let hypergraph = cq::hypergraph::Analysis::of_body(&query.body, context);
     let (sequence, mut variables) = match options.heuristic {
         Heuristic::Filtered => {
-            let mut filters = cq::hypergraph::filter_ranks(&query.body, &hypergraph);
-            if parent.is_none() && options.split == Split::Coarse {
-                if let Some(groups) = branches::choose(source) {
-                    for branch in groups.branches {
-                        let members = branch.clauses();
-                        let rank = members.iter().map(|c| filters[c]).min().unwrap();
-                        for clause in members {
-                            filters.insert(clause, rank);
-                        }
-                    }
-                }
-            }
-            let sequence = schedule(
-                query,
-                &clauses,
-                context,
-                filtered_rank(&clauses, &hypergraph, &filters),
-            )?;
+            let filters = cq::hypergraph::filter_ranks(&query.body, &hypergraph);
+            let sequence = schedule(query, &clauses, context, filtered_rank(&clauses, &filters))?;
             let variables = binding_order(&clauses, &sequence);
             (sequence, variables)
         }
@@ -1049,12 +1022,7 @@ fn compile_body(
             (sequence, variables)
         }
         Heuristic::Prefix(ranking) => {
-            let sequence = schedule(
-                query,
-                &clauses,
-                context,
-                prefix_rank(&clauses, ranking, &hypergraph.canonical_names),
-            )?;
+            let sequence = schedule(query, &clauses, context, prefix_rank(&clauses, ranking))?;
             let variables = binding_order(&clauses, &sequence);
             (sequence, variables)
         }
@@ -1153,7 +1121,7 @@ fn compile_body(
 
 /// Check normal form, unchanged CQ, split granularity and explicit order.
 /// Prefix and elimination rankings are expansion choices, not obligations.
-/// Formal rule CK-Order: Validate unchanged CQ, split, coverage, free-variable readiness, Written order, Filtered coarse greedy choices and independently proved branch groups.
+/// Formal rule CK-Order: Validate unchanged CQ, split, coverage, free-variable readiness, Written order and Filtered coarse greedy choices.
 pub fn check(
     source: &cq::Program,
     target: &valuation::Program,
@@ -1170,18 +1138,12 @@ pub fn check(
             ),
         ));
     }
-    branch_check::check(
-        source,
-        target.valuation.join_branches.as_ref(),
-        options.heuristic == Heuristic::Filtered && options.split == Split::Coarse,
-    )?;
     check_steps(
         source,
         &source.query.body,
         &target.valuation.steps,
         &analysis,
         options,
-        target.valuation.join_branches.as_ref(),
     )
 }
 
@@ -1191,7 +1153,6 @@ fn check_steps(
     steps: &[valuation::Step],
     analysis: &valuation::Analysis,
     options: &Options,
-    join_branches: Option<&valuation::JoinBranches>,
 ) -> syn::Result<()> {
     if options.heuristic == Heuristic::Written
         || options.heuristic == Heuristic::Filtered && options.split == Split::Coarse
@@ -1317,23 +1278,12 @@ fn check_steps(
                 .collect();
             let facts = clauses(body, &context);
             let graph = cq::hypergraph::Analysis::of_body(body, &context);
-            let mut filters = cq::hypergraph::filter_ranks(body, &graph);
-            if let Some(groups) = join_branches {
-                // The independent branch is one filtered build. Check each
-                // member's priority against every predicate in that branch.
-                for branch in &groups.branches {
-                    let members = branch.clauses();
-                    let strongest = members.iter().map(|c| filters[c]).min().unwrap();
-                    for clause in members {
-                        filters.insert(clause, strongest);
-                    }
-                }
-            }
+            let filters = cq::hypergraph::filter_ranks(body, &graph);
             let mut bound = context;
             let mut pending: Vec<_> = (0..body.len()).collect();
             for clause in written {
                 // Independently check the greedy choice, not compiler output equality.
-                let rank = filtered_rank(&facts, &graph, &filters);
+                let rank = filtered_rank(&facts, &filters);
                 if pending
                     .iter()
                     .copied()
@@ -1379,7 +1329,6 @@ fn check_steps(
                             &arm.steps,
                             &analysis.branches[&a.clause()][j],
                             options,
-                            None,
                         )?;
                     }
                 }

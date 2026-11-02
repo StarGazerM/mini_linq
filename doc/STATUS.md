@@ -40,7 +40,6 @@
   build pushes an exact key set per `i64` key column to the scan its spine
   reaches, through intermediate probes; builds keeping over 35% of their source
   rows construct none. Recorded in Structures; the exact probe still runs.
-- Bushy branches: independent dimension branches recorded in VO, built once.
 - Probes: Swiss-table `HashIndex`; batched (128) prefetched probes on scan
   spines, scalar elsewhere; no per-row `Rc`.
 - Back end (`doc/formal/backend.tex`): three recorded layers over one

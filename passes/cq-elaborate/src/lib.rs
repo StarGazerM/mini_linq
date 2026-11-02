@@ -46,12 +46,6 @@ pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
 /// Every block must already record Correlated placement.
 pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> {
     valuation::contract::check(source)?;
-    if source.valuation.join_branches.is_some() {
-        return Err(syn::Error::new_spanned(
-            &source.valuation,
-            "written reference cannot contain independent join branches",
-        ));
-    }
     use valuation::cq::BodyItem;
     fn exact(
         body: &cq::CommaList<BodyItem>,
@@ -131,8 +125,6 @@ fn compile_in(source: &valuation::Program, optimize_predicates: bool) -> syn::Re
         analysis: &analysis,
         body: &source.cq.query.body,
         steps: &source.valuation.steps,
-        join_branches: source.valuation.join_branches.as_ref(),
-        joined_branch_atoms: BTreeSet::new(),
         context: BTreeSet::new(),
         path: None,
         fused: BTreeSet::new(),
@@ -151,11 +143,6 @@ fn compile_in(source: &valuation::Program, optimize_predicates: bool) -> syn::Re
         relations: BTreeMap::new(),
         prefix: None,
         heading: BTreeSet::new(),
-        aliases: if optimize_predicates && !has_blocks {
-            aliases(&source.cq)
-        } else {
-            BTreeMap::new()
-        },
         optimize_predicates,
         constraints: Vec::new(),
         equalities: Vec::new(),
@@ -178,7 +165,6 @@ fn compile_in(source: &valuation::Program, optimize_predicates: bool) -> syn::Re
 }
 
 mod block_contract;
-mod join_branches;
 mod negation;
 mod reductions;
 mod structural;
@@ -264,7 +250,6 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
             format!("result `{}`: {message}", target.plan.output.input),
         )
     })?;
-    join_branches::check(source, target)?;
     block_contract::check_placement(&source.valuation.steps, target)?;
     Ok(())
 }
@@ -277,8 +262,6 @@ struct State<'a> {
     analysis: &'a valuation::Analysis,
     body: &'a cq::CommaList<valuation::cq::BodyItem>,
     steps: &'a [valuation::Step],
-    join_branches: Option<&'a valuation::JoinBranches>,
-    joined_branch_atoms: BTreeSet<usize>,
     context: BTreeSet<String>,
     path: Option<(cq::Occurrence, usize)>,
     fused: BTreeSet<usize>,
@@ -292,7 +275,6 @@ struct State<'a> {
     relations: BTreeMap<usize, Ident>,
     prefix: Option<Ident>,
     heading: BTreeSet<String>,
-    aliases: BTreeMap<String, Ident>,
     optimize_predicates: bool,
     equalities: Vec<(ra::Equality, BTreeSet<usize>)>,
     constraints: Vec<(cq::Constraint, BTreeSet<usize>)>,
@@ -396,8 +378,6 @@ impl<'a> State<'a> {
     }
 
     fn run_steps(&mut self, steps: &[valuation::Step]) {
-        // Grouped atoms introduce their entire branch interface at first read.
-        // Their local predicates already live on the branch's named relations.
         for (step, introduces) in steps.iter().zip(&self.analysis.introduces) {
             match step {
                 valuation::Step::Block(block, _) => {
@@ -415,22 +395,9 @@ impl<'a> State<'a> {
                     self.read_clauses.insert(clause);
                 }
                 valuation::Step::Atom(subatom, _) => {
-                    if self.joined_branch_atoms.contains(&subatom.clause()) {
-                        continue;
-                    }
-                    if let Some(branch) = self.join_branches.and_then(|groups| {
-                        groups
-                            .branches
-                            .iter()
-                            .find(|b| b.clauses().contains(&subatom.clause()))
-                    }) {
-                        self.join_branch(branch);
-                        continue;
-                    }
-                    let check = subatom.variables().all(|(_, variable)| {
-                        self.heading
-                            .contains(&symbol_name(&self.canonical(variable)))
-                    });
+                    let check = subatom
+                        .variables()
+                        .all(|(_, variable)| self.heading.contains(&symbol_name(variable)));
                     self.subatom(subatom, check);
                     self.read_clauses.insert(subatom.clause());
                 }
@@ -442,29 +409,10 @@ impl<'a> State<'a> {
                 }
                 valuation::Step::Let(binding, _) => self.bind(binding),
                 valuation::Step::For(binding, _) => self.for_bind(binding),
-                valuation::Step::Equality(equality, _) => {
-                    let local = self.branch_local(equality.variables().map(symbol_name).collect());
-                    if !local {
-                        self.equality(equality);
-                    }
-                }
-                valuation::Step::Constraint(c, _) => {
-                    let local = self.branch_local(c.variables().map(symbol_name).collect());
-                    if !local {
-                        self.constraint(c);
-                    }
-                }
+                valuation::Step::Equality(equality, _) => self.equality(equality),
+                valuation::Step::Constraint(c, _) => self.constraint(c),
             }
-            let introduced: Vec<_> = introduces
-                .iter()
-                .map(|name| {
-                    self.aliases
-                        .get(name)
-                        .map(symbol_name)
-                        .unwrap_or_else(|| name.clone())
-                })
-                .collect();
-            self.heading.extend(introduced);
+            self.heading.extend(introduces.iter().cloned());
         }
     }
 
@@ -682,7 +630,7 @@ impl<'a> State<'a> {
             .iter()
             .find(|d| symbol_name(&d.name) == symbol_name(&negation.atom.relation))
             .expect("contracted negative input");
-        let layout = negation::layout(declaration, negation, &bound, |v| self.canonical(v));
+        let layout = negation::layout(declaration, negation, &bound);
         let filtered =
             !layout.condition.equalities.is_empty() || !layout.condition.constraints.is_empty();
         let needs_projection = layout.keys.len() != layout.mapping.len() && filtered;
@@ -755,7 +703,7 @@ impl<'a> State<'a> {
                     source: column.name.clone(),
                     minus_token: Default::default(),
                     gt_token: Default::default(),
-                    target: self.canonical(variable),
+                    target: variable.clone(),
                 })
             })
             .collect();
@@ -782,10 +730,7 @@ impl<'a> State<'a> {
                     && targets.contains(&clause)
                     && matches!(e.right, ra::EqualityValue::Literal(_))
             })
-            .map(|(e, _)| ra::Equality {
-                left: self.canonical(&e.left),
-                ..e.clone()
-            })
+            .map(|(e, _)| e.clone())
             .collect();
         if !literals.is_empty() {
             result = self.select(result, literals);
@@ -797,12 +742,7 @@ impl<'a> State<'a> {
             for (c, targets) in &self.constraints {
                 let columns: BTreeSet<_> = c.variables().map(symbol_name).collect();
                 if targets.contains(&clause) {
-                    let mut predicate = c.clone();
-                    predicate.map_terms(&mut |t| {
-                        if let cq::constraint::Term::Variable(v) = t {
-                            *v = self.canonical(v);
-                        }
-                    });
+                    let predicate = c.clone();
                     if let Some((_, constraints)) =
                         groups.iter_mut().find(|(key, _)| *key == columns)
                     {
@@ -843,7 +783,7 @@ impl<'a> State<'a> {
             let variables: Vec<&Ident> = self.atoms[&clause].variables().collect();
             let attributes = subatom
                 .variables()
-                .map(|(position, _)| self.canonical(variables[position]))
+                .map(|(position, _)| variables[position].clone())
                 .collect();
             right = self.project(right, attributes);
         }
@@ -872,8 +812,8 @@ impl<'a> State<'a> {
                             .hypergraph
                             .equivalent(&symbol_name(variable), &symbol_name(support))
                         {
-                            let left = self.canonical(variable);
-                            let right = self.canonical(support);
+                            let left = variable.clone();
+                            let right = support.clone();
                             if symbol_name(&left) != symbol_name(&right) {
                                 equalities.push(ra::Equality {
                                     left,
@@ -898,10 +838,7 @@ impl<'a> State<'a> {
                         right,
                     })));
                     let matched = self.select(joined, equalities);
-                    let attributes = self.atoms[&clause]
-                        .variables()
-                        .map(|v| self.canonical(v))
-                        .collect();
+                    let attributes = self.atoms[&clause].variables().cloned().collect();
                     self.project(matched, attributes)
                 }
             }
@@ -921,13 +858,6 @@ impl<'a> State<'a> {
             with_token: Default::default(),
             right,
         })))
-    }
-
-    fn canonical(&self, variable: &Ident) -> Ident {
-        self.aliases
-            .get(&symbol_name(variable))
-            .unwrap_or(variable)
-            .clone()
     }
 
     fn select(&mut self, input: Ident, equalities: Vec<ra::Equality>) -> Ident {
@@ -973,12 +903,7 @@ impl<'a> State<'a> {
         {
             return;
         }
-        let mut c = constraint.clone();
-        c.map_terms(&mut |t| {
-            if let cq::constraint::Term::Variable(v) = t {
-                *v = self.canonical(v);
-            }
-        });
+        let c = constraint.clone();
         let input = self.prefix_or_unit();
         self.prefix = Some(self.select_constraints(input, vec![c]));
     }
@@ -994,10 +919,10 @@ impl<'a> State<'a> {
         {
             return;
         }
-        let left = self.canonical(&equality.left);
+        let left = equality.left.clone();
         let right = match &equality.right {
             ra::EqualityValue::Variable(variable) => {
-                let variable = self.canonical(variable);
+                let variable = variable.clone();
                 if symbol_name(&variable) == symbol_name(&left) {
                     return;
                 }
@@ -1229,113 +1154,6 @@ fn needs_domain(
                     if n.atom.variables().any(|v| facts.free.contains_key(&symbol_name(v))))
                 })
     })
-}
-
-/// Solve generator equalities through shared join headings when doing so keeps
-/// every opaque expression's names and every atom's distinct rename targets.
-fn aliases(source: &valuation::cq::Program) -> BTreeMap<String, Ident> {
-    use valuation::cq::BodyItem;
-    let atoms: Vec<_> = source
-        .query
-        .body
-        .iter()
-        .filter_map(|item| match item {
-            BodyItem::Positive { atom } => Some(atom),
-            _ => None,
-        })
-        .collect();
-    let let_bound: BTreeSet<_> = source
-        .query
-        .body
-        .iter()
-        .filter_map(|item| match item {
-            BodyItem::Let(b) => Some(cq::rust::bindings(&b.pattern)),
-            BodyItem::For(b) => Some(cq::rust::bindings(&b.pattern)),
-            _ => None,
-        })
-        .flatten()
-        .map(|v| symbol_name(&v))
-        .collect();
-    let generators: BTreeSet<_> = atoms
-        .iter()
-        .flat_map(|atom| atom.variables().map(symbol_name))
-        .filter(|v| !let_bound.contains(v))
-        .collect();
-    let mut protected: BTreeSet<_> = source
-        .query
-        .valuation_variables()
-        .map(symbol_name)
-        .collect();
-    for item in &source.query.body {
-        let expression = match item {
-            BodyItem::Negation(negation) => {
-                // Negative operand identities retain their exact source key
-                // names; solve positive aliases without rewriting that input.
-                protected.extend(negation.atom.variables().map(symbol_name));
-                continue;
-            }
-            BodyItem::Filter(filter) => &filter.condition,
-            BodyItem::Let(binding) => {
-                protected.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));
-                &binding.expression
-            }
-            BodyItem::For(binding) => {
-                protected.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));
-                &binding.expression
-            }
-            _ => continue,
-        };
-        protected.extend(cq::rust::free_variables(expression).dependencies(&generators));
-    }
-    let mut aliases = BTreeMap::<String, Ident>::new();
-    let canonical = |id: &Ident, aliases: &BTreeMap<String, Ident>| {
-        aliases.get(&symbol_name(id)).unwrap_or(id).clone()
-    };
-    for equality in source.query.body.iter().flat_map(|item| match item {
-        BodyItem::Equality(equality) => vec![equality.clone()],
-        BodyItem::Constraint(constraint) => constraint.equalities(),
-        _ => Vec::new(),
-    }) {
-        let ra::EqualityValue::Variable(right) = &equality.right else {
-            continue;
-        };
-        if !generators.contains(&symbol_name(&equality.left))
-            || !generators.contains(&symbol_name(right))
-        {
-            continue;
-        }
-        let left = canonical(&equality.left, &aliases);
-        let right = canonical(right, &aliases);
-        if left == right {
-            continue;
-        }
-        let (keep, replace) = if protected.contains(&symbol_name(&right)) {
-            (right, left)
-        } else {
-            (left, right)
-        };
-        if protected.contains(&symbol_name(&replace)) {
-            continue;
-        }
-        let mut proposed = aliases.clone();
-        for value in proposed.values_mut() {
-            if symbol_name(value) == symbol_name(&replace) {
-                *value = keep.clone();
-            }
-        }
-        proposed.insert(symbol_name(&replace), keep);
-        if atoms.iter().any(|atom| {
-            let names: BTreeSet<_> = atom
-                .variables()
-                .map(|v| symbol_name(&canonical(v, &proposed)))
-                .collect();
-            names.len() != atom.variables().count()
-        }) {
-            continue;
-        }
-        aliases = proposed;
-    }
-    aliases
 }
 
 fn occurrence_constants(

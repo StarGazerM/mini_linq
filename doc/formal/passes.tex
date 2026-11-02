@@ -44,6 +44,12 @@ arguments, fresh $k$ starts at \code{__cq_i_j}; cases are tried in order:
  \fv(e)\cap Q_{branch}=\emptyset\quad c\text{ fresh}}
  {\mathsf{let}\ p=e\leadsto_{NF}\mathsf{let}\ p=\mathsf{capture}\ c,\ \mathsf{if}\ e\leadsto_{NF}\mathsf{if}\ \mathsf{capture}\ c
   \quad[\mathsf{captures}:=\mathsf{captures}\concat[\mathsf{let}\ c=e]]}
+
+\Rule{A-Alias}{\mathsf{where}\ x==y\text{ top-level}\quad x,y\text{ atom generators}\quad
+ \text{no block in }q\\
+ y\notin\mathsf{Protected}(q)\quad
+ \text{no atom repeats a name under }[y:=x]}
+ {q\leadsto_{NF}q[y:=x]\text{ without the solved identity}}
 \end{mathpar}
 Replace the atom by $\mathit{before}\concat[R(\bar a')]\concat\mathit{after}$.
 Identities are relational clauses, not guards. Row-dependent Rust guards,
@@ -55,10 +61,19 @@ as a capture reference. In \code{R(x,f(x),g())}, closed
 \code{g()} remains a once-bound host operand of an occurrence restriction;
 the dependent \code{f(x)} bind follows the atom. No closed atom operand creates
 a row binding or a Rust block dependency.
+After the per-atom rewrites, A-Alias solves relational variable equalities
+between top-level atom generators (in written order, keeping the left name
+unless only the right one is protected). $\mathsf{Protected}(q)$ holds the
+valuation (head) variables, negated atom columns, Rust binders and the
+generator inputs of every Rust expression, whose spellings are observed outside
+relational algebra. The solution is recorded only as plain shared names in the
+NF; an unsolved equality remains a relational predicate. Later passes never
+treat an equality class as a join key: lowering realizes only shared names.
 \emph{Check:} the NF contract only; there is no separate correspondence check.
 \emph{Refinement:} each rewrite replaces an argument by an equivalent
 identity or a bind at the position Rust would evaluate it, and a pure total
-closed value evaluated once equals its per-row evaluation, so meanings are equal.
+closed value evaluated once equals its per-row evaluation; A-Alias substitutes
+equals for equals in relational positions only, so meanings are equal.
 
 \subsection{Ordering: CQ$_{\rm NF}\to$ VO}
 \label{sec:planning-order}
@@ -90,20 +105,21 @@ expression or a generator yielding no names.
 Identities and constraints require their variables and provide none
 (D-Constraint). A Rust-free block provides its free/interface heading; a Rust
 block requires its free names and is Rust. Heuristics repeatedly place the
-least-ranked ready clause; an empty ready set is an error. With $\kappa$ the
-equality-class map and $s_i=|\kappa(O_i)\cap\kappa(B)|$:
+least-ranked ready clause; an empty ready set is an error. Connectivity counts
+only names actually shared after normalization, $s_i=|O_i\cap B|$: an unsolved
+equality class (A-Alias declined) is not a realizable join key.
 \begin{mathpar}
 \Rule{S-Written}{}{\mathsf{sequence}_{Written}(q)=[0,\ldots,m-1]}
 
-\Rule{S-Connected}{c_i\text{ atom}\quad s_i=|\kappa(O_i)\cap\kappa(B)|}
+\Rule{S-Connected}{c_i\text{ atom}\quad s_i=|O_i\cap B|}
  {\mathsf{rank}_{Connected}(i,B)=(1,[s_i=0],0,i)}
 
-\Rule{S-Filtered}{c_i\text{ atom}\quad s_i=|\kappa(O_i)\cap\kappa(B)|}
+\Rule{S-Filtered}{c_i\text{ atom}\quad s_i=|O_i\cap B|}
  {\mathsf{rank}_{Filtered}(i,B)=(1,[s_i=0],f_i,i)}
 
-\Rule{S-Greedy}{c_i\text{ atom}\quad s_i=|\kappa(O_i)\cap\kappa(B)|\\
+\Rule{S-Greedy}{c_i\text{ atom}\quad s_i=|O_i\cap B|\\
  r\in\{GreedyWidth,Auto\}}
- {\mathsf{rank}_{r}(i,B)=(1,[s_i=0],|\kappa(B)\cup\kappa(O_i)|,i)}
+ {\mathsf{rank}_{r}(i,B)=(1,[s_i=0],|B\cup O_i|,i)}
 
 \Rule{S-Elimination}{c_i\text{ atom}\quad E=\mathsf{analysis}(q).\mathit{elimination\_order}\\
  e_i=\min(\{\operatorname{pos}_E(x)\mid x\in O_i\}\cup\{|E|\})}
@@ -194,7 +210,7 @@ then the others' checks. Every atom's full correlated row must eventually be
 checked. Literal-only occurrences have an empty variable heading and
 are placed as complete zero-column reads before the fine variable loop.
 The production facade uses Prefix(Connected)/Coarse: the written root, then
-at each step a ready atom sharing a bound equality class before a disconnected
+at each step a ready atom sharing a bound name before a disconnected
 one (earliest clause first), with ready relational predicates placed where
 their variables are bound. Written/Coarse with O-WrittenBlocks is the exact
 executable reference; ordinary Written/Coarse retains O-BlockPlacement and is
@@ -234,8 +250,8 @@ and the default planner remain unchanged.
 $\mathsf{OrderObligations}$: unchanged CQ; no reductions; every atom has a
 subatom; Coarse has one full subatom per atom; Fine introduces at most one
 variable per subatom; Written keeps NF order. Filtered/Coarse independently
-checks that no ready occurrence outranks the recorded choice and discharges
-CK-OrderBranches for the recorded groups. Other rankings remain construction
+checks that no ready occurrence outranks the recorded choice. Other rankings
+remain construction
 choices. \emph{Refinement:} by the VO contract (free-variable dependencies,
 unchanged total Rust expressions, relational predicates and full rows checked).
 
@@ -485,10 +501,11 @@ fixed occurrence paths.
 A full subatom always joins; a partial check uses the whole clause relation.
 $\mathsf{unitize}$ emits Unit when no prefix exists; binds copy pattern,
 annotation and expression. In E-ReduceWith, $\ltimes_\equiv$ matches every
-support column with the target's class; when protected Rust or head names block
-renaming it is realized as join/select/project. Elaboration consumes recorded
+support column with the target's class; when A-Alias left two names of one
+class unsolved (protected Rust or head names) it is realized as
+join/select/project. Elaboration consumes recorded
 constraint placement (E-Constraint); it does not independently push predicates
-or choose joins. Alias representation must preserve logical binding identities.
+or choose joins. It never renames variables: aliases are solved in CQ$_{\rm NF}$.
 Recorded hoisted blocks form a derived relation over $F\cup I$, using a named
 finite prefix domain for missing generators; recorded correlated blocks run
 per row over the prefix. Elaboration never chooses this alternative. The
@@ -540,68 +557,6 @@ independent existential supports. A split projected-witness view in either
 original schedule excludes this fallback: exposing a full read cannot erase
 its original correlation obligations. Rust, negative and block programs
 retain their existing checker.
-
-\paragraph{Independent dimension branches.}
-\textsc{S-JoinBranch} chooses the atom with the most shared equality-class
-columns (at least three; written position breaks ties) as a static fact spine.
-A locally filtered one-key dimension remains an early independent probe.
-The remaining dimension components absorb connected ears only when all
-non-spine connections leave through one neighbor heading and the ear's fact-key
-set is contained in its parent's. This groups Supplier/Nation and Part/PartSupp without
-collapsing a Customer/Supplier cycle. Every member receives the branch's
-strongest local filter priority, so a point-filtered Supplier/Nation branch
-is scheduled before a merely range-filtered Orders neighbor. These are
-compile-time structural heuristics, not estimates of relation cardinalities.
-\textsc{WF-JoinBranch} checks the recorded disjoint full-atom groups, their
-connectivity and exact external/head interfaces. Opaque Rust, lets and union
-blocks conservatively retain the ordinary checked schedule.
-\textsc{CK-OrderBranches} checks the widest-spine and pinned-probe premises
-independently. Recorded groups must admit connected-ear contractions from
-singletons, confined to each recorded group, until each group is one component;
-the final partition admits no further ear contraction. Unlisted atoms are
-singletons. Every contraction checks shared connectivity, fact-key containment
-and containment of all non-pinned external connections in the parent heading.
-The checker discharges within-group witnesses by least projected interface
-width, earliest parent member, then earliest leaf member. Group record order is
-irrelevant. The constructor uses the same priority globally to choose one
-deterministic admissible partition, but the checker never invokes that selector
-or compares against its output. Other ordering modes forbid recorded groups.
-\textsc{E-JoinBranch} elaborates each group to a separate exact natural-join
-DAG rooted at its first scheduled atom, with connected child subtrees built
-before their parent probes them. It applies local relational predicates,
-projects the interface, and joins that named result to the spine. This avoids
-a Cartesian product between independent children such as Part and Nation.
-No uniqueness or foreign-key premise
-is used. \textsc{CK-JoinBranch} independently requires the projected DAG for
-each VO group in addition to the unchanged global occurrence, predicate,
-reduction and Rust-binding proof. Reduction erasure preserves branch metadata.
-For recorded independent branches, the optional Hypergraph policy emits no
-semijoin reducer: a branch must not depend on scanning the fact side merely
-to build its support. The checker forbids those optional reductions rather
-than accepting a missing tree obligation. Explicit Tree on an incompatible
-grouped VO is rejected; ungrouped Tree retains the full reducer.
-The subsequent RA simplifier retains its existing relational rewrite proof.
-\begin{mathpar}
-\Rule{S-JoinBranch}{f=\mathsf{WidestSharedKeyAtom}(q)\quad
- B=\mathsf{ConnectedDimensionEars}(q,f)}
- {\mathsf{branches}_{Filtered,Coarse}(q)=B}
-
-\Rule{CK-OrderBranches}{\mathsf{FlatRelational}(q)\quad
- f=\mathsf{WidestSharedKeyAtom}_{\ge3}(q)\quad
- \mathsf{PinnedExcluded}(B,f)\\
- \mathsf{EarProofs}(q,B,f)\quad\mathsf{Saturated}(B)}
- {\mathsf{checkBranches}_{Filtered,Coarse}(q,B)\Downarrow\ok}
-
-\Rule{E-JoinBranch}{b=\{a_1,\ldots,a_k\}\quad I=\mathsf{Interface}(q,b)}
- {\mathsf{elaborateBranch}(b)=
-  \pi_I\sigma_{P_b}(R_{a_1}\bowtie\cdots\bowtie R_{a_k})}
-
-\Rule{CK-JoinBranch}{\mathsf{WF}_{VO}(s)\quad
- \mathsf{FixedFacts}(s,t)\quad\mathsf{RustPayloadsAndBindings}(s,t)\\
- \forall b\in s.branches.\ \mathsf{LiveExactProjectedDAG}(t,b,I_b)}
- {\mathsf{checkBranches}(s,t)\Downarrow\ok}
-\end{mathpar}
-
 
 \paragraph{Example: free variables determine eligibility.}
 In \code{answer(a,w) :- R(a,x), S(a,y), T(y,z), let k = combine(*x,*y), let

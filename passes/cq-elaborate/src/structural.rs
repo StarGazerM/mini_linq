@@ -46,64 +46,11 @@ pub(super) fn check(
     let mut prefix = None;
     let mut heading = HashSet::new();
     let mut reductions = Vec::new();
-    let mut grouped = HashSet::new();
-    let mut local_predicates = HashSet::new();
     let mut placed_negations = HashSet::new();
     for (step, introduces) in source.valuation.steps.iter().zip(&analysis.introduces) {
         match step {
             vo::Step::Block(..) => unreachable!("block schedule checked separately"),
             vo::Step::Atom(atom, _) => {
-                if grouped.contains(&atom.clause()) {
-                    continue;
-                }
-                if let Some(branch) = source.valuation.join_branches.as_ref().and_then(|groups| {
-                    groups
-                        .branches
-                        .iter()
-                        .find(|b| b.clauses().contains(&atom.clause()))
-                }) {
-                    let members = branch.clauses();
-                    let own: std::collections::BTreeSet<_> = members
-                        .iter()
-                        .flat_map(|c| analysis.atoms[c].variables().map(symbol_name))
-                        .collect();
-                    let mut result = None;
-                    for clause in &members {
-                        let right = relations[clause];
-                        result =
-                            Some(result.map_or(right, |left| schedule.join(left, right, false)));
-                    }
-                    for (clause, item) in source.cq.query.body.iter().enumerate() {
-                        let theta = match item {
-                            cq::BodyItem::Equality(e)
-                                if e.variables().all(|v| own.contains(&symbol_name(v))) =>
-                            {
-                                ra::Theta {
-                                    equalities: std::iter::once(e.clone()).collect(),
-                                    constraints: Default::default(),
-                                }
-                            }
-                            cq::BodyItem::Constraint(c)
-                                if c.variables().all(|v| own.contains(&symbol_name(v))) =>
-                            {
-                                let mut theta = ra::Theta::default();
-                                theta.push_constraint(c.clone());
-                                theta
-                            }
-                            _ => continue,
-                        };
-                        result = Some(schedule.select(result.unwrap(), &theta));
-                        local_predicates.insert(clause);
-                    }
-                    let right = schedule.project(
-                        result.unwrap(),
-                        &branch.columns.iter().cloned().collect::<Vec<_>>(),
-                    );
-                    prefix = Some(prefix.map_or(right, |left| schedule.join(left, right, false)));
-                    grouped.extend(members);
-                    heading.extend(branch.columns.iter().map(symbol_name));
-                    continue;
-                }
                 let mut right = relations[&atom.clause()];
                 let partial = atom.variables().count() != atom.columns.len();
                 let check = atom
@@ -162,16 +109,6 @@ pub(super) fn check(
                 reductions.push((reduce.clause(), support.clause()));
             }
             vo::Step::Equality(equality, _) => {
-                if source.cq.query.body.iter().enumerate().any(|(c, item)| {
-                    local_predicates.contains(&c)
-                        && match item {
-                            cq::BodyItem::Equality(e) => e == equality,
-                            cq::BodyItem::Constraint(c) => c.equality().as_ref() == Some(equality),
-                            _ => false,
-                        }
-                }) {
-                    continue;
-                }
                 let input = prefix.unwrap_or_else(|| schedule.unit());
                 prefix = Some(schedule.select(
                     input,
@@ -182,17 +119,6 @@ pub(super) fn check(
                 ));
             }
             vo::Step::Constraint(constraint, _) => {
-                let equality = constraint.equality();
-                if source.cq.query.body.iter().enumerate().any(|(c, item)| {
-                    local_predicates.contains(&c)
-                        && match item {
-                            cq::BodyItem::Constraint(predicate) => predicate == constraint,
-                            cq::BodyItem::Equality(e) => equality.as_ref() == Some(e),
-                            _ => false,
-                        }
-                }) {
-                    continue;
-                }
                 let input = prefix.unwrap_or_else(|| schedule.unit());
                 let mut theta = ra::Theta::default();
                 theta.push_constraint(constraint.clone());

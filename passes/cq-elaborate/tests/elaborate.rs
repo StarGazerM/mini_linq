@@ -216,6 +216,43 @@ fn normalized_cross_atom_equalities_become_shared_join_headings() {
 }
 
 #[test]
+fn protected_and_blocked_equalities_never_hide_a_cartesian_join() {
+    // Ordering counts only names shared after normalization, so the VO never
+    // schedules S as connected through an equality the lowering realizes as a
+    // product followed by a selection.
+    for body in [
+        quote!(R(a,x), S(y,b), T(x,b), where x == y, if ok(x,y)),
+        quote!(R(a,x), S(y,b), T(x,b), where x == y, { U(b) } | { V(b) }),
+    ] {
+        let source = cq(quote! {
+            struct Q; relation R(a:i32,x:i32); relation S(y:i32,b:i32);
+            relation T(x:i32,b:i32); relation U(b:i32); relation V(b:i32);
+            relation answer(a:i32,b:i32);
+            answer(a,b) :- #body;
+        });
+        let normal = cq::normal::normalize(&source).unwrap();
+        let options = cq_order::Options {
+            heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+            split: cq_order::Split::Coarse,
+        };
+        let ordered = cq_order::compile(&normal, &options).unwrap();
+        let target = compile(&ordered).unwrap();
+        let analysis = ra::contract::check(&target).unwrap();
+        for definition in &target.plan.definitions {
+            if let ra::Operator::NaturalJoin(join) = &definition.operator {
+                let left = &analysis[&join.left.to_string()].heading;
+                let right = &analysis[&join.right.to_string()].heading;
+                assert!(
+                    left.is_empty() || right.is_empty() || !left.is_disjoint(right),
+                    "{}",
+                    definition.to_token_stream()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn fine_plans_keep_existential_projection_and_semijoin_meaning() {
     let source = cq(quote! {
         struct Q; relation R(a: i32, b: i32); relation S(b: i32, c: i32); relation T(a: i32, c: i32);
@@ -1531,107 +1568,6 @@ fn opaque_multi_atom_guard_runs_once_its_free_variables_are_available() {
         })
         .unwrap();
     assert!(target.plan.definitions.iter().any(|d| d.result == select.input && matches!(d.operator, ra::Operator::NaturalJoin(_))));
-}
-
-#[test]
-fn independent_branch_is_exact_projected_and_checked() {
-    let source = cq(quote! {
-        struct Q;
-        relation L(o:i32,p:i32,s:i32); relation S(s:i32,n:i32);
-        relation N(n:i32,label:i32);
-        answer(o,p,s) :- L(o,p,s), S(s,n), N(n,label), where label == 7;
-    });
-    let grouped: valuation::Program = syn::parse2(quote! {
-        #source valuation branches { branch [1,2] (s); } {
-            L@0(o,p,s); S@1(s,n); N@2(n,label); where label = 7;
-        }
-    })
-    .unwrap();
-    assert!(matches!(
-        grouped.valuation.steps.last(),
-        Some(valuation::Step::Equality(..))
-    ));
-    let target = compile(&grouped).unwrap();
-    for form in equality_forms(&grouped) {
-        assert_eq!(compile(&form).unwrap(), target);
-    }
-    assert!(target.plan.definitions.iter().any(|d| matches!(&d.operator, ra::Operator::Project(p) if p.attributes.iter().map(ToString::to_string).collect::<Vec<_>>() == ["s"])));
-    let flat = compile(&coarse(&source)).unwrap();
-    assert!(check(&grouped, &flat).is_err());
-    assert!(cq_elaborate::compile_written(&grouped).is_err());
-    for seed in 0..32 {
-        let database = databases::binary_database(&source, seed);
-        assert_eq!(
-            oracle::evaluate_ra(&target, &database).output,
-            oracle::evaluate_ra(&flat, &database).output
-        );
-    }
-}
-
-#[test]
-fn grouped_branch_preserves_multi_atom_predicates_and_duplicate_witnesses() {
-    let source = cq(quote! {
-        struct Q;
-        relation L(o:i32,p:i32,s:i32); relation S(s:i32,n:i32);
-        relation N(n:i32,k:i32);
-        answer(o,p,s) :- L(o,p,s), S(s,n), N(n,k), where n < k;
-    });
-    let grouped: valuation::Program = syn::parse2(quote! {
-        #source valuation branches { branch [1,2] (s); } {
-            L@0(o,p,s); S@1(s,n); N@2(n,k); where n < k;
-        }
-    })
-    .unwrap();
-    let target = compile(&grouped).unwrap();
-    let flat = compile(&coarse(&source)).unwrap();
-    for seed in 0..32 {
-        let database = databases::binary_database(&source, seed);
-        assert_eq!(
-            oracle::evaluate_ra(&target, &database).output,
-            oracle::evaluate_ra(&flat, &database).output
-        );
-    }
-}
-
-#[test]
-fn dimension_subtrees_build_before_their_parent_without_cartesian_children() {
-    let source = cq(quote! {
-        struct Q;
-        relation L(o:i32,p:i32,s:i32); relation PS(p:i32,s:i32);
-        relation P(p:i32); relation S(s:i32,n:i32); relation N(n:i32); relation O(o:i32);
-        answer(o,p,s) :- L(o,p,s), PS(p,s), P(p), S(s,n), N(n), O(o);
-    });
-    let grouped: valuation::Program = syn::parse2(quote! {
-        #source valuation branches { branch [1,2,3,4] (p,s); } {
-            L@0(o,p,s); PS@1(p,s); P@2(p); S@3(s,n); N@4(n); O@5(o);
-        }
-    })
-    .unwrap();
-    let target = compile(&grouped).unwrap();
-    let facts = ra::contract::check(&target).unwrap();
-    let supplier = target
-        .plan
-        .definitions
-        .iter()
-        .find(|d| matches!(&d.operator, ra::Operator::Rename(r) if r.relation == "S"))
-        .unwrap();
-    let nation = target
-        .plan
-        .definitions
-        .iter()
-        .find(|d| matches!(&d.operator, ra::Operator::Rename(r) if r.relation == "N"))
-        .unwrap();
-    assert!(target.plan.definitions.iter().any(|d| matches!(&d.operator, ra::Operator::NaturalJoin(j) if j.left == supplier.result && j.right == nation.result)));
-    for definition in &target.plan.definitions {
-        if let ra::Operator::NaturalJoin(join) = &definition.operator {
-            assert!(
-                facts[&join.left.to_string()]
-                    .bindings
-                    .keys()
-                    .any(|v| facts[&join.right.to_string()].bindings.contains_key(v))
-            );
-        }
-    }
 }
 
 #[test]

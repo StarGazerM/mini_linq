@@ -234,11 +234,9 @@ pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<
 /// predicate, binding and block boundary in its written position: hoisting a
 /// total binding can otherwise change a later aggregate's recorded domain.
 fn connect_transfer_atoms(mut ordered: vo::Program) -> vo::Program {
-    let graph = cq::hypergraph::Analysis::of(&ordered.cq);
-    let canonical = |name: &syn::Ident| {
-        let name = name.to_string();
-        graph.canonical_names.get(&name).cloned().unwrap_or(name)
-    };
+    // Connectivity is through names actually shared after normalization
+    // (A-Alias); an unsolved equality class is not a realizable join key.
+    let canonical = |name: &syn::Ident| name.to_string();
     let mut bound = std::collections::BTreeSet::new();
     let steps = &mut ordered.valuation.steps;
     let mut position = 0;
@@ -455,7 +453,6 @@ fn written_valuation(normal: &cq::Program) -> syn::Result<vo::Program> {
         valuation: vo::Valuation {
             valuation_token: Default::default(),
             evidence: None,
-            join_branches: None,
             brace: Default::default(),
             steps,
         },
