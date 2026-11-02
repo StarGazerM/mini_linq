@@ -30,6 +30,14 @@ the change requires them. Do not rerun behavioral gates for a docs-only rebase.
 An explicitly named selector narrows even an impact-selected run; omit selectors
 for the final gate. Unknown selectors are errors, not successful empty gates.
 
+Verification follows what a change can break: docs-only changes run nothing;
+test tooling runs its own unit tests; an oracle/infrastructure swap checks only
+that the oracle is unchanged; compiler/runtime changes run the impact-selected
+suite. Every agent and track report states its gate time: total wall-clock spent
+on gates, tests and benchmarks since the previous report, per command, plus time
+waiting on the GPU/timing locks, measured (runner timing columns or
+`/usr/bin/time -f %e`), never estimated.
+
 Impact selection compares tracked working-tree changes, deletions, renames and
 nonignored untracked files with the supplied revision. It maps files to local
 packages and resolves each actual test package's dependency closure using offline,
