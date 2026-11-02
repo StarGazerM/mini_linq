@@ -568,8 +568,14 @@ pub fn host_sets(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir
             keys.insert(name, key);
         }
     }
-    if keys.contains_key(&symbol_name(&target.program.returned)) {
+    if keys.contains_key(&symbol_name(&target.program.returned)) && target.program.return_canon.is_some() {
         target.program.return_canon = None;
+        // PH-HeadDedup: the answer dedup the dropped canon recorded remains
+        // an obligation exactly when computed answers may still collapse.
+        let returned = &facts.headings[&symbol_name(&target.program.returned)];
+        if ir::head_collapses(&target.program, returned) {
+            target.program.return_dedup = Some(Default::default());
+        }
     }
     ir::check_rewrite(source, &target)?;
     Ok(target)

@@ -7,7 +7,7 @@
 //! premises. IX demands and relational erasure belong to the lowering pass.
 //!
 //! ```text
-//! Program ::= "physical" "{" RelationDecl* Fact* Definition* "return" ["canon"] Ident "as" Atom ";" "}"
+//! Program ::= "physical" "{" RelationDecl* Fact* Definition* "return" ["canon"] ["dedup"] Ident "as" Atom ";" "}"
 //! Fact ::= "host_set" Ident ["discharged"] ";" | "consumer" "canonical" ";"
 //! Definition ::= Ident "=" Mode ["canon"] Operator ";"
 //! Mode ::= "pipe" | "let"
@@ -68,6 +68,7 @@ pub mod kw {
     syn::custom_keyword!(discharged);
     syn::custom_keyword!(consumer);
     syn::custom_keyword!(canonical);
+    syn::custom_keyword!(dedup);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -92,6 +93,11 @@ pub struct Body {
     pub definitions: Vec<Definition>,
     pub return_token: Token![return],
     pub return_canon: Option<kw::canon>,
+    /// PH-HeadDedup: the recorded obligation to deduplicate
+    /// computed answers at the return boundary. Required when
+    /// [`head_collapses`] and the return is not already `canon`; an extra one
+    /// is admissible. [`Body::head_dedup`] is the complete obligation.
+    pub return_dedup: Option<kw::dedup>,
     pub returned: Ident,
     pub as_token: Token![as],
     pub head: cq_syntax::Atom,
@@ -109,6 +115,13 @@ pub struct HostSet {
 }
 
 impl Body {
+    /// PH-HeadDedup: the recorded return-boundary answer dedup
+    /// obligation (`return canon` or `return dedup`), which Structures types
+    /// with an answer identity index.
+    pub fn head_dedup(&self) -> bool {
+        self.return_canon.is_some() || self.return_dedup.is_some()
+    }
+
     pub fn host_is_set(&self, relation: &Ident) -> bool {
         self.host_sets
             .iter()
@@ -152,6 +165,7 @@ impl syn::parse::Parse for Body {
             definitions,
             return_token: input.parse()?,
             return_canon: input.parse()?,
+            return_dedup: input.parse()?,
             returned: input.parse()?,
             as_token: input.parse()?,
             head: input.parse()?,
@@ -239,6 +253,7 @@ impl FactPacket {
             }
             program.program.consumer_canonical = Some(fact.clone());
             program.program.return_canon = None;
+            program.program.return_dedup = None;
             let returned = &program.program.returned;
             let internal =
                 program
@@ -1232,7 +1247,35 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             );
         }
     }
+    // Formal rule PH-HeadDedup: answers that may collapse distinct canonical
+    // valuations record their dedup obligation; an extra one is harmless.
+    if !program.head_dedup()
+        && !analysis.consumer_canonical
+        && head_collapses(program, &analysis.headings[&symbol_name(&program.returned)])
+    {
+        return error(
+            &program.returned,
+            "computed answers may collapse distinct valuations: record `return dedup`",
+        );
+    }
     Ok(analysis)
+}
+
+/// PH-HeadDedup: whether computed answers can collapse distinct
+/// canonical valuations: a head with a computed argument that leaves some of
+/// the returned `columns` unprojected.
+pub fn head_collapses<'a>(program: &Body, columns: impl IntoIterator<Item = &'a String>) -> bool {
+    let head = &program.head;
+    head.args
+        .iter()
+        .any(|e| cq_syntax::rust::variable(e).is_none())
+        && columns.into_iter().any(|c| {
+            !head
+                .args
+                .iter()
+                .filter_map(cq_syntax::rust::variable)
+                .any(|v| symbol_name(v) == *c)
+        })
 }
 
 fn join_columns(keyed: &Keyed, left: &[String], right: &[String]) -> syn::Result<Vec<String>> {

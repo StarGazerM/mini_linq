@@ -146,7 +146,7 @@ macro_rules! owned_probe {
                 l = pipe bind u with x:u64 = ($key);
                 r = let rename R@0 {a -> x,b -> y};
                 p = let canon probe first [x] l,r;
-                return p as answer(*y);
+                return dedup p as answer(*y);
             }
         }
     };
@@ -420,4 +420,78 @@ fn partial_payload_reader_selects_tuple_columns() {
         }
     }
     assert!(ir::contract::check(&target).is_err());
+}
+
+/// STR-ItemLayout: the recorded `items` fact is the only source of the
+/// provider's layout argument. The instance spelling ends before the declared
+/// slot; the checked analysis prints the declared spelling of the fact.
+#[test]
+fn recorded_item_layout_alone_prints_the_layout_argument() {
+    let captured = partial_reader!(left, right;
+        cq_rewrites::radix_runs, cq_rewrite_test_driver::capture_structures
+    );
+    let program: ir::Program = syn::parse_str(captured).unwrap();
+    let run = |program: &ir::Program| {
+        program
+            .structures
+            .entries
+            .iter()
+            .position(|entry| matches!(&entry.structure, Structure::Built { keyed, .. } if keyed.provider.token == "radix_run"))
+            .unwrap()
+    };
+    let keyed = |program: &mut ir::Program| {
+        let index = run(program);
+        match &mut program.structures.entries[index].structure {
+            Structure::Built { keyed, .. } => keyed.as_mut().clone(),
+            _ => unreachable!(),
+        }
+    };
+    let set = |program: &mut ir::Program, value: ir::Keyed| {
+        let index = run(program);
+        if let Structure::Built { keyed, .. } = &mut program.structures.entries[index].structure {
+            **keyed = value;
+        }
+    };
+    let recorded = keyed(&mut program.clone());
+    assert_eq!(
+        recorded.provider,
+        syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _>)
+    );
+    // Flipping the fact flips the printed argument.
+    let mut rows = program.clone();
+    let mut flipped = recorded.clone();
+    flipped.items = Some(syn::parse_quote!(items rows));
+    set(&mut rows, flipped);
+    assert_eq!(
+        ir::contract::check(&rows).unwrap().built["r"][0].1,
+        syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
+    );
+    // A spelling stating the layout itself, or a missing fact, is rejected.
+    let mut spelled = program.clone();
+    let mut authored = recorded.clone();
+    authored.provider.ty = syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>);
+    set(&mut spelled, authored);
+    assert!(ir::contract::check(&spelled).is_err());
+    let mut missing = program.clone();
+    let mut absent = recorded;
+    absent.items = None;
+    set(&mut missing, absent);
+    assert!(ir::contract::check(&missing).is_err());
+    // Retype advice states the layout with the replacement provider.
+    let retyped = cq_rewrite_passes::retype(
+        &program,
+        quote!(r => @radix_run as ::cq_storage::RadixRun<_, _> supports [expand] items rows),
+    )
+    .unwrap();
+    assert_eq!(
+        ir::contract::check(&retyped).unwrap().built["r"][0].1,
+        syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
+    );
+    assert!(
+        cq_rewrite_passes::retype(
+            &program,
+            quote!(r => @radix_run as ::cq_storage::RadixRun<_, _> supports [expand]),
+        )
+        .is_err()
+    );
 }

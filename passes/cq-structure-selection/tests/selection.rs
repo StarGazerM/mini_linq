@@ -472,6 +472,109 @@ fn overlapping_union_cannot_drop_its_final_dedup_provider() {
 }
 
 #[test]
+fn head_dedup_types_exactly_the_recorded_physical_obligation() {
+    // An injective head with an authored `return dedup`: the extra obligation
+    // is admissible and selection types it with an answer identity index.
+    let source: physical::Program = syn::parse_quote! {physical {
+        relation R(a:i32);
+        host_set R;
+        r = pipe rename R@0 {a -> x};
+        return dedup r as answer(x);
+    }};
+    let head = |program: &structures::Program| {
+        program
+            .structures
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.structure, structures::Structure::HeadDedup { .. }))
+    };
+    let target = compile(&source).unwrap();
+    assert!(head(&target));
+    check(&source, &target).unwrap();
+    let mut dropped = target.clone();
+    dropped
+        .structures
+        .entries
+        .retain(|entry| !matches!(entry.structure, structures::Structure::HeadDedup { .. }));
+    assert!(check(&source, &dropped).is_err());
+    // Without the recorded obligation selection adds no index, and an
+    // authored one types nothing.
+    let mut plain = source;
+    plain.program.return_dedup = None;
+    let selected = compile(&plain).unwrap();
+    assert!(!head(&selected));
+    let mut extra = selected;
+    extra.structures.entries.extend(
+        target
+            .structures
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry.structure, structures::Structure::HeadDedup { .. }))
+            .cloned(),
+    );
+    assert!(contract(&extra).is_err());
+}
+
+/// STR-ReaderChoice: the host key set records token `keyset` for eager and
+/// lazy readers alike; the reader's recorded Physical choice alone prints the
+/// declared argument.
+#[test]
+fn reader_choice_prints_the_keyset_laziness() {
+    for (choice, printed) in [
+        (
+            quote::quote!(eager),
+            quote::quote!(::cq_storage::dispatch::KeySet<_, true>),
+        ),
+        (
+            quote::quote!(lazy),
+            quote::quote!(::cq_storage::dispatch::KeySet<_, false>),
+        ),
+    ] {
+        let source: physical::Program = syn::parse2(quote::quote! {physical {
+            relation R(x:i32); relation S(x:i32);
+            r = pipe rename R@0 {x -> x}; s = pipe rename S@1 {x -> x};
+            m = pipe semi #choice [x] r,s;
+            o = let canon project m keep {x};
+            return o as answer(x);
+        }})
+        .unwrap();
+        let target = compile(&source).unwrap();
+        let recorded = target
+            .structures
+            .entries
+            .iter()
+            .find_map(|entry| match &entry.structure {
+                structures::Structure::Host { keyed, .. } if keyed.provider.token == "keyset" => {
+                    Some(keyed.provider.clone())
+                }
+                _ => None,
+            });
+        assert_eq!(
+            recorded,
+            Some(syn::parse_quote!(@keyset as ::cq_storage::dispatch::KeySet<_>))
+        );
+        let facts = contract(&target).unwrap();
+        let printed: syn::Type = syn::parse2(printed).unwrap();
+        assert!(
+            facts
+                .fallbacks
+                .values()
+                .any(|provider| provider.ty == printed)
+        );
+        // A spelling stating the choice itself is rejected.
+        let mut spelled = target;
+        for entry in &mut spelled.structures.entries {
+            if let structures::Structure::Host { keyed, .. } = &mut entry.structure
+                && keyed.provider.token == "keyset"
+            {
+                keyed.provider.ty = printed.clone();
+            }
+        }
+        assert!(contract(&spelled).is_err());
+    }
+}
+
+#[test]
 fn independent_union_indices_share_canonical_rows() {
     let source: physical::Program = syn::parse_quote! {physical {
         relation L(a:i32); relation A(a:i32,b:i32); relation B(a:i32,b:i32);
@@ -1105,7 +1208,7 @@ fn selection_records_context_before_choosing_dedup_types() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a:i32);
         r = let canon rename R@0 {a -> x};
-        return r as answer(*x % 2);
+        return dedup r as answer(*x % 2);
     }};
     let selected = cq_structure_selection::compile_with(
         &source,

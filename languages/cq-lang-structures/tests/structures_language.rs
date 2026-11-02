@@ -1056,10 +1056,7 @@ fn canonical_consumer_accepts_bag_return_and_forbids_head_dedup() {
     };
     let facts = check(&program).unwrap();
     assert!(!facts.unique.contains_key("r"));
-    assert!(!structures::head_needs_dedup(
-        &program.physical,
-        &facts.physical
-    ));
+    assert!(!program.physical.program.head_dedup());
     assert!(facts.head_dedup.is_empty());
     let mut missing = program.clone();
     missing.physical.program.consumer_canonical = None;

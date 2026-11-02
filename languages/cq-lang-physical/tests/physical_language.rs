@@ -296,6 +296,41 @@ fn interleaved_context_facts_round_trip_and_remain_distinct() {
 }
 
 #[test]
+fn collapsing_computed_heads_record_their_dedup_obligation() {
+    let program: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32,b:i32);
+        r = pipe rename R@0 {a -> x,b -> y};
+        return dedup r as answer(*x % 2);
+    }};
+    physical::contract::check(&program).unwrap();
+    assert!(program.program.head_dedup());
+    assert_eq!(
+        syn::parse2::<physical::Program>(program.to_token_stream()).unwrap(),
+        program
+    );
+    // Without the obligation, distinct (x, y) valuations could collapse.
+    let mut missing = program.clone();
+    missing.program.return_dedup = None;
+    assert!(physical::contract::check(&missing).is_err());
+    // A canonicalized return already records the answer dedup.
+    let mut canon = missing.clone();
+    canon.program.return_canon = Some(Default::default());
+    physical::contract::check(&canon).unwrap();
+    assert!(canon.program.head_dedup());
+    // A consumer canonical boundary owns answer identity.
+    let mut consumer = missing;
+    consumer.program.consumer_canonical = Some(syn::parse_quote!(consumer canonical;));
+    physical::contract::check(&consumer).unwrap();
+    // An injective head admits a harmless extra dedup.
+    let extra: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32);
+        r = pipe rename R@0 {a -> x};
+        return dedup r as answer(x);
+    }};
+    physical::contract::check(&extra).unwrap();
+}
+
+#[test]
 fn context_fact_grammar_rejects_duplicates_and_malformed_packets() {
     assert!(syn::parse_str::<physical::Program>(
         "physical { consumer canonical; consumer canonical; u = pipe unit; return u as answer(); }"

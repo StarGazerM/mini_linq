@@ -78,7 +78,10 @@ fn invalid_descriptor_is_rejected_with_a_specific_diagnostic() {
 #[test]
 fn missing_demands_are_left_for_physical_correspondence() {
     for indexes in [quote! {}, quote! { partial = @reduced[0,1] stream; }] {
-        ix::contract::check(&source(indexes)).unwrap();
+        let program = source(indexes);
+        ix::contract::check(&program).unwrap();
+        let info = ix::ra::contract::check(&program.ra).unwrap();
+        assert!(ix::read_requirements(&program, &info).is_err());
     }
 }
 
@@ -145,6 +148,8 @@ fn literal_selections_are_const_reads_and_column_equalities_are_not() {
     );
     let mut wrong_supply = source.clone();
     wrong_supply.indexes[0].requirement.supply = syn::parse_quote!(stream);
+    assert!(ix::contract::check(&wrong_supply).is_err());
+    wrong_supply.indexes[0].requirement.supply = syn::parse_quote!(range);
     assert!(ix::contract::check(&wrong_supply).is_err());
     let column_equality: ix::Program = syn::parse_quote! {
         relational {

@@ -98,7 +98,7 @@ fn closed_owned_probe_key_uses_exact_sorted_run() {
             l = pipe bind u with x:i64 = (3i64);
             r = let rename R@0 {a -> x,b -> y};
             p = let canon probe first[x] l,r;
-            return p as answer(*y);
+            return dedup p as answer(*y);
         }
     }.collect();
     assert_eq!(actual, BTreeSet::from([(30,), (31,)]));

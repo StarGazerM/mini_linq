@@ -326,3 +326,74 @@ fn consumer_fact_preserves_internal_union_canonicalization() {
     }));
     check(&source, &target).unwrap();
 }
+
+#[test]
+fn recorded_requirements_distinguish_reads_of_the_same_result() {
+    let ra: ix::ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); relation L(a:i32); relation M(b:i32);
+        r = rename R@0 {a -> x,b -> y};
+        l = rename L@1 {a -> x};
+        m = rename M@2 {b -> y};
+        point = select r if (x = 2);
+        window = select r if (x >= 1);
+        equal = select r if (x = y);
+        on_x = natural_join l with r;
+        on_y = semijoin m with r;
+        both = natural_join point with window;
+        same = natural_join both with equal;
+        keyed = natural_join on_x with on_y;
+        result = natural_join same with keyed;
+        output result as answer(x,y);
+    }};
+    let mut source = cq_index_policy::compile(&ra).unwrap();
+    // Lowering consumes the recorded entries, not the producer's list positions.
+    source.indexes = source.indexes.into_iter().rev().collect();
+    source.indexes.push_punct(Default::default());
+    let info = ix::ra::contract::check(&ra).unwrap();
+    let requirements = ix::read_requirements(&source, &info).unwrap();
+    for (reader, supply, columns) in [
+        ("point", ix::SupplyKind::Const, vec![0]),
+        ("window", ix::SupplyKind::Range, vec![0]),
+        ("on_x", ix::SupplyKind::Stream, vec![0]),
+        ("on_y", ix::SupplyKind::Stream, vec![1]),
+    ] {
+        let recorded = requirements[reader];
+        assert!(
+            source
+                .indexes
+                .iter()
+                .any(|index| std::ptr::eq(index, recorded))
+        );
+        assert_eq!(
+            ix::signature(&recorded.requirement),
+            ("r".into(), columns, supply)
+        );
+    }
+    assert!(!requirements.contains_key("equal"));
+    let target = compile(&source).unwrap();
+    for definition in &target.program.definitions {
+        match ix::symbol_name(&definition.name).as_str() {
+            "point" => assert!(matches!(definition.operator, physical::Operator::Point(..))),
+            "window" => assert!(matches!(definition.operator, physical::Operator::Range(..))),
+            "equal" => assert!(matches!(
+                definition.operator,
+                physical::Operator::Select(..)
+            )),
+            "on_x" | "on_y" => {
+                let columns = match &definition.operator {
+                    physical::Operator::Probe(_, keyed) | physical::Operator::Semi(_, keyed) => {
+                        keyed
+                            .columns
+                            .iter()
+                            .map(ix::symbol_name)
+                            .collect::<Vec<_>>()
+                    }
+                    _ => panic!("expected a recorded keyed read"),
+                };
+                assert_eq!(columns, [if definition.name == "on_x" { "x" } else { "y" }]);
+            }
+            _ => {}
+        }
+    }
+    check(&source, &target).unwrap();
+}

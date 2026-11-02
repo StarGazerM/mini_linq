@@ -642,16 +642,29 @@ Traverse definitions in order from empty $D$:
  {D\vdash d\Downarrow D}
 
 \Rule{CK-Index}{\mathsf{WF}_{RA}(s)\quad\mathsf{WF}_{IX}(t)\quad t.ra=s\\
- t.indexes=[i_n=d_n]_{n=0}^{k-1}\text{ from first-use derivation}}
+ \forall u\in\mathsf{keyedReads}(s).\ \exists d\in t.indexes.\ d\text{ matches }u\\
+ \forall d\in t.indexes.\ \exists u\in\mathsf{keyedReads}(s).\ d\text{ matches }u\\
+ t.indexes\text{ is named }i_0,\ldots,i_{k-1}\text{ in first matched-use order}}
  {\mathsf{check}_{index}(s,t,())\Downarrow\ok}
 \end{mathpar}
 Antijoin uses IX-Join on its explicit key only. \emph{Refinement:} equality,
 since IX adds no meaning.
+Matching checks the recorded relation, logical column ordinals and supply against
+the read itself, using the local premises of IX-Join, IX-Const and IX-Range.
+It does not invoke the producer's demand traversal or reconstruct its ordered
+output list. The checked analysis associates each keyed read with the existing
+recorded requirement; repeated reads may share that entry. Local WF-IX permits
+missing entries, while CK-Index requires complete coverage.
 
 \subsection{Physical lowering: IX $\to$ Physical}
 Lowering restates each RA result with one physical operator and the mode its
 reads allow; defaults are first probes, eager semis and anti, union defaults of
 Section~\ref{sec:physical}.
+For each selection, the checked IX read association supplies the recorded
+\code{const} or \code{range} operator class; an unkeyed selection stays a filter.
+Join keys are decoded from the associated requirement's logical ordinals, not
+recomputed by heading intersection. CK-Demands independently checks the resulting
+Physical reads against IX.
 An occurrence's literal bindings remain on its rename, not a select operator.
 Such a rename is retained (\code{let}, or \code{exists} for an empty heading):
 every chosen index is built over the filtered, projected occurrence, and a
@@ -1105,8 +1118,9 @@ exclusive spine reaches; this is the bitmap a build side pushes to the deepest
 probe-side scan. A scan may therefore carry filters from several builds.
 Every eligible payload-index build whose selected token declares
 \code{join\_filter} (payload-directory key enumeration; a routed token
-inherits its inner's fact) records the \code{dense\_membership} token
-\code{DenseMembership<K,67108864>}. A membership-only build already answers
+inherits its inner's fact) selects token \code{join\_filter\_membership}, whose
+declaration spells the exact \code{DenseMembership<K,67108864>} once (the
+positional key set likewise selects token \code{positional\_keyset}). A membership-only build already answers
 the same exact key test and receives no redundant supplementary filter.
 The dense provider requires \code{K: OrderKey} (\textsc{STR-AdaptiveMembership});
 a key without it is a rustc error at the one typed build, never a hash

@@ -22,6 +22,8 @@
 //!        | ("nested" | "routed") Integer | "join_filter" | "shared"
 //!        | "packed_bits" Integer | "abi" ("range" | "runs" | "columns" | "radix")
 //!        | "contiguous_range" | "bounds" "resident_columns"
+//!        | "items" Integer "[" "rows" RustType "," "columns" RustType "]"
+//!        | "choice" Integer "[" "eager" GenericArgument "," "lazy" GenericArgument "]"
 //! ```
 
 // DESIGN provider-token
@@ -71,6 +73,10 @@ pub mod kw {
     syn::custom_keyword!(ratio);
     syn::custom_keyword!(radix_bits);
     syn::custom_keyword!(merge_tile);
+    syn::custom_keyword!(items);
+    syn::custom_keyword!(choice);
+    syn::custom_keyword!(eager);
+    syn::custom_keyword!(lazy);
 }
 
 /// Declared read capabilities, discharged against Sequence obligations.
@@ -192,6 +198,99 @@ pub struct InputColumn {
     pub codec: Option<syn::Type>,
 }
 
+/// The generic arguments of `ty`'s last path segment when the spelling ends
+/// exactly before argument `index` (lifetimes counted): the position of a
+/// declared argument slot that a recorded fact prints. Navigation only, like
+/// [`Declaration::compose`]; no argument is inspected.
+fn slot_arguments(
+    ty: &mut syn::Type,
+    index: usize,
+) -> Option<&mut syn::punctuated::Punctuated<syn::GenericArgument, Token![,]>> {
+    let syn::Type::Path(path) = ty else {
+        return None;
+    };
+    let segment = path.path.segments.last_mut()?;
+    if matches!(segment.arguments, syn::PathArguments::None) {
+        segment.arguments = syn::PathArguments::AngleBracketed(syn::parse_quote!(<>));
+    }
+    match &mut segment.arguments {
+        syn::PathArguments::AngleBracketed(arguments) if arguments.args.len() == index => {
+            Some(&mut arguments.args)
+        }
+        _ => None,
+    }
+}
+
+/// Check that an instance spelling ends before slot `index`, which `rule`'s
+/// recorded fact prints.
+fn check_slot(provider: &Provider, index: usize, rule: &str) -> syn::Result<()> {
+    if slot_arguments(&mut provider.ty.clone(), index).is_none() {
+        return error(
+            &provider.ty,
+            format!(
+                "{rule}: spell exactly {index} generic arguments; the recorded fact prints the next one"
+            ),
+        );
+    }
+    Ok(())
+}
+
+/// `provider` with `argument` printed at its checked slot `index`.
+fn print_slot(provider: &Provider, index: usize, argument: syn::GenericArgument) -> Provider {
+    let mut printed = provider.clone();
+    slot_arguments(&mut printed.ty, index)
+        .expect("checked instance spelling ends before its declared slot")
+        .push(argument);
+    printed
+}
+
+/// Formal rule STR-ItemLayout: the item-layout argument of a payload
+/// provider. An instance spelling ends right before argument `index`: the
+/// recorded `items` fact alone states the layout, printed as the declared
+/// `rows` or `columns` spelling at that argument.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemSlot {
+    pub index: usize,
+    pub rows: syn::Type,
+    pub columns: syn::Type,
+}
+
+impl ItemSlot {
+    /// The printed spelling of `provider` storing items in `layout`.
+    pub fn print(&self, provider: &Provider, layout: &ItemLayout) -> Provider {
+        let spelling = match layout {
+            ItemLayout::Rows(_) => &self.rows,
+            ItemLayout::Columns(_) => &self.columns,
+        };
+        print_slot(
+            provider,
+            self.index,
+            syn::GenericArgument::Type(spelling.clone()),
+        )
+    }
+}
+
+/// Formal rule STR-ReaderChoice: the argument of a host reader's provider
+/// that realizes the reader's recorded Physical `eager`/`lazy` choice. An
+/// instance spelling ends right before argument `index`; the served reader's
+/// choice alone selects the declared `eager` or `lazy` argument (a reader
+/// recording no `lazy` choice prints `eager`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChoiceSlot {
+    pub index: usize,
+    pub eager: syn::GenericArgument,
+    pub lazy: syn::GenericArgument,
+}
+
+impl ChoiceSlot {
+    /// The printed spelling of `provider` serving a reader whose recorded
+    /// choice is lazy iff `lazy`.
+    pub fn print(&self, provider: &Provider, lazy: bool) -> Provider {
+        let argument = if lazy { &self.lazy } else { &self.eager };
+        print_slot(provider, self.index, argument.clone())
+    }
+}
+
 /// Declared facts of one provider token.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Facts {
@@ -210,6 +309,10 @@ pub struct Facts {
     pub abi: Option<NativeAbi>,
     pub contiguous_range: bool,
     pub bounds: Option<BoundsSource>,
+    /// STR-ItemLayout: the declared item-layout argument of a payload provider.
+    pub items: Option<ItemSlot>,
+    /// STR-ReaderChoice: the declared reader-choice argument of a host provider.
+    pub choice: Option<ChoiceSlot>,
 }
 
 impl Facts {
@@ -219,6 +322,15 @@ impl Facts {
 
     pub fn supports(&self, capability: ProviderCapability) -> bool {
         self.supports.contains(&capability)
+    }
+
+    /// The declared argument slot a recorded fact prints, with its rule.
+    fn slot(&self) -> Option<(usize, &'static str)> {
+        match (&self.items, &self.choice) {
+            (Some(slot), _) => Some((slot.index, "STR-ItemLayout")),
+            (None, Some(slot)) => Some((slot.index, "STR-ReaderChoice")),
+            (None, None) => None,
+        }
     }
 
     /// STR-Routed: the facts of a routed instance over `inner`.
@@ -573,6 +685,8 @@ impl syn::parse::Parse for Declaration {
             abi: None,
             contiguous_range: false,
             bounds: None,
+            items: None,
+            choice: None,
         };
         let mut seen = BTreeSet::new();
         while !body.is_empty() {
@@ -661,6 +775,38 @@ impl syn::parse::Parse for Declaration {
                 body.parse::<kw::bounds>()?;
                 body.parse::<kw::resident_columns>()?;
                 facts.bounds = Some(BoundsSource::ResidentColumns);
+            } else if lookahead.peek(kw::items) {
+                body.parse::<kw::items>()?;
+                let index = body.parse::<syn::LitInt>()?.base10_parse()?;
+                let list;
+                syn::bracketed!(list in body);
+                list.parse::<kw::rows>()?;
+                let rows = list.parse()?;
+                list.parse::<Token![,]>()?;
+                list.parse::<kw::columns>()?;
+                let columns = list.parse()?;
+                if !list.is_empty() {
+                    return Err(list.error("expected `rows Type, columns Type`"));
+                }
+                facts.items = Some(ItemSlot {
+                    index,
+                    rows,
+                    columns,
+                });
+            } else if lookahead.peek(kw::choice) {
+                body.parse::<kw::choice>()?;
+                let index = body.parse::<syn::LitInt>()?.base10_parse()?;
+                let list;
+                syn::bracketed!(list in body);
+                list.parse::<kw::eager>()?;
+                let eager = list.parse()?;
+                list.parse::<Token![,]>()?;
+                list.parse::<kw::lazy>()?;
+                let lazy = list.parse()?;
+                if !list.is_empty() {
+                    return Err(list.error("expected `eager Argument, lazy Argument`"));
+                }
+                facts.choice = Some(ChoiceSlot { index, eager, lazy });
             } else {
                 return Err(lookahead.error());
             }
@@ -687,6 +833,8 @@ impl ToTokens for Declaration {
             abi,
             contiguous_range,
             bounds,
+            items,
+            choice,
         } = &self.facts;
         let reads = reads
             .iter()
@@ -744,6 +892,19 @@ impl ToTokens for Declaration {
         if let Some(BoundsSource::ResidentColumns) = bounds {
             facts.push(quote::quote!(bounds resident_columns));
         }
+        if let Some(ItemSlot {
+            index,
+            rows,
+            columns,
+        }) = items
+        {
+            let index = syn::Index::from(*index);
+            facts.push(quote::quote!(items #index [rows #rows, columns #columns]));
+        }
+        if let Some(ChoiceSlot { index, eager, lazy }) = choice {
+            let index = syn::Index::from(*index);
+            facts.push(quote::quote!(choice #index [eager #eager, lazy #lazy]));
+        }
         let token = &self.token;
         let ty = &self.ty;
         tokens.extend(quote::quote!(#token = #ty { #(#facts),* };));
@@ -777,6 +938,21 @@ pub(crate) fn check(structures: &Structures) -> syn::Result<()> {
         }
         if facts.abi.is_some() && facts.composition.is_some() {
             return error(&declaration.token, "native ABI requires a simple provider");
+        }
+        if facts.slot().is_some() && facts.composition.is_some() {
+            return error(
+                &declaration.token,
+                "an argument slot requires a simple provider",
+            );
+        }
+        if facts.items.is_some() && facts.choice.is_some() {
+            return error(
+                &declaration.token,
+                "a token declares at most one argument slot",
+            );
+        }
+        if let Some((index, rule)) = facts.slot() {
+            check_slot(&declaration.instance(), index, rule)?;
         }
         if declaration.facts.composition.is_some() {
             declaration.compose(Provider {
@@ -813,6 +989,42 @@ pub(crate) fn check(structures: &Structures) -> syn::Result<()> {
                 "native runs and columns scans require an input schema",
             );
         }
+        // Formal rule STR-ItemLayout: a built payload (non-membership)
+        // instance of a token declaring an item-layout argument records its
+        // layout, and only such an instance does; the fact is that argument's
+        // only source. Key-only membership storage and host readers keep the
+        // type's default layout. STR-ReaderChoice: a choice argument is
+        // printed from the reader a host or built entry serves.
+        let declared = &structures
+            .providers
+            .get(&provider.token)
+            .expect("checked instance")
+            .facts;
+        match &entry.structure {
+            Structure::Built { keyed, .. } => match (&keyed.items, &declared.items) {
+                (None, Some(_)) if keyed.membership.is_none() => {
+                    return error(
+                        &provider.token,
+                        "STR-ItemLayout: record `items rows` or `items columns` for this provider's layout argument",
+                    );
+                }
+                (Some(items), None) => {
+                    return error(
+                        items,
+                        "STR-ItemLayout: the provider token declares no item-layout argument",
+                    );
+                }
+                _ => {}
+            },
+            Structure::Host { .. } => {}
+            _ if declared.slot().is_some() => {
+                return error(
+                    &provider.token,
+                    "a token declaring an argument slot types only built and host keyed entries",
+                );
+            }
+            _ => {}
+        }
         for capability in support
             .into_iter()
             .flat_map(|support| &support.capabilities)
@@ -838,6 +1050,9 @@ fn check_instance(providers: &Providers, provider: &Provider, in_routed: bool) -
         return error(&provider.token, "undeclared provider token");
     };
     concrete_type(&provider.ty)?;
+    if let Some((index, rule)) = declaration.facts.slot() {
+        check_slot(provider, index, rule)?;
+    }
     if let Some(input) = &provider.input {
         if input.key_count > input.columns.len() {
             return error(&provider.token, "input key count exceeds column count");

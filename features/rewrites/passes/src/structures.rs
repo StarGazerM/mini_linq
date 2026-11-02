@@ -48,7 +48,7 @@ pub fn membership(source: &ir::Program, arguments: TokenStream) -> syn::Result<i
 }
 
 /// Add every admissible covered scalar filter to the named scan occurrence
-/// that is not already recorded, as the `dense_membership` token positional
+/// that is not already recorded, as the `join_filter_membership` token positional
 /// selection records; a later `retype(scan join_filter => @token as T)`
 /// chooses another representation. Every filter's abandon policy is then
 /// recorded (SEL-JoinFilterAbandon). This is explicit positional-host advice,
@@ -114,12 +114,10 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
             .find(|d| symbol_name(&d.name) == candidate.build)
             .map(|d| &d.name)
             .expect("checked build");
-        let ty = providers::instance(
-            "dense_membership",
-            syn::parse_quote!(::cq_storage::DenseMembership<_, 67108864>),
-        );
+        let provider = providers::declaration("join_filter_membership").instance();
         target.structures.entries.push(syn::parse_quote! {
-            #scan join_filter = #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
+            #scan join_filter = #provider
+                build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
         });
     }
     target.structures.declare(&providers::declarations());
@@ -231,23 +229,14 @@ fn select_runs(
             // Constants removed from the stored key do not make a composite
             // read eligible. Rust checks the selected provider's key traits.
             if columns.len() == 1 && stored.len() == 1 {
-                // The type argument prints the recorded `items` fact
-                // (SEL-ItemLayout).
-                if split_payload(source, &analysis, &name, &columns) {
-                    keyed.provider = providers::instance(
-                        "radix_run",
-                        syn::parse_quote!(
-                            ::cq_storage::RadixRun<_, _, ::cq_storage::TupleColumns<_>>
-                        ),
-                    );
-                    keyed.items = Some(syn::parse_quote!(items columns));
+                // The recorded `items` fact (SEL-ItemLayout) is the only
+                // source of the provider's declared layout argument.
+                keyed.provider = providers::declaration("radix_run").instance();
+                keyed.items = Some(if split_payload(source, &analysis, &name, &columns) {
+                    syn::parse_quote!(items columns)
                 } else {
-                    keyed.provider = providers::instance(
-                        "radix_run",
-                        syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>),
-                    );
-                    keyed.items = Some(syn::parse_quote!(items rows));
-                }
+                    syn::parse_quote!(items rows)
+                });
                 keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
             }
             continue;

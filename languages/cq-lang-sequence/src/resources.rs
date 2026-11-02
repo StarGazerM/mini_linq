@@ -3,8 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use cq_lang_structures::demand::{carried_columns, columns_used_rust as rust_columns};
 use cq_lang_structures::physical::{Definition, Operator, symbol_name};
-use cq_syntax::{algebra::Environment, rust};
+use cq_syntax::rust;
 
 use crate::{
     Analysis, Capability, Dispatch, DispatchShape, Machine, Monoid, Obligation, Program,
@@ -136,7 +137,10 @@ pub(crate) fn dispatch_shape(
             .map(|definition| (symbol_name(&definition.name), definition))
             .collect(),
         publications,
-        carried: carried_columns(program, analysis),
+        carried: carried_columns(&program.structures, &analysis.structures)
+            .into_iter()
+            .map(|(name, columns)| (name, columns.into_iter().collect()))
+            .collect(),
         scanned: analysis
             .dispatches
             .iter()
@@ -794,17 +798,6 @@ fn fold_columns(monoid: &Monoid) -> Columns {
     }
 }
 
-fn rust_columns(
-    expression: &syn::Expr,
-    heading: &[String],
-    environment: Option<&Environment>,
-) -> Columns {
-    let names = environment
-        .map(|environment| environment.variables.iter().map(symbol_name).collect())
-        .unwrap_or_else(|| heading.iter().cloned().collect());
-    rust::free_variables(expression).dependencies(&names)
-}
-
 fn operator_columns(operator: &Operator, analysis: &Analysis) -> Columns {
     let layouts = &analysis.structures.layouts;
     match operator {
@@ -835,96 +828,4 @@ fn operator_columns(operator: &Operator, analysis: &Analysis) -> Columns {
             .collect(),
         _ => Columns::new(),
     }
-}
-
-/// Provider payload demand follows the checked Physical DAG, not the Sequence
-/// schedule. Explicit storage keys, filtered payloads and canonical valuations
-/// survive downstream projection, just as they do at tuple adapter boundaries.
-fn carried_columns(program: &Program, analysis: &Analysis) -> BTreeMap<String, Columns> {
-    let structures = &analysis.structures;
-    let physical = &program.structures.physical.program;
-    let mut used: BTreeMap<_, Columns> = structures
-        .layouts
-        .keys()
-        .map(|name| (name.clone(), Columns::new()))
-        .collect();
-    let returned = symbol_name(&physical.returned);
-    for expression in &physical.head.args {
-        used.get_mut(&returned)
-            .expect("checked returned layout")
-            .extend(rust_columns(
-                expression,
-                &structures.layouts[&returned],
-                None,
-            ));
-    }
-    for definition in &physical.definitions {
-        let name = symbol_name(&definition.name);
-        let columns = used.get_mut(&name).expect("checked Physical layout");
-        if definition.canon.is_some() {
-            columns.extend(structures.layouts[&name].iter().cloned());
-        }
-        if let Some(builds) = structures.built.get(&name) {
-            for (levels, _) in builds {
-                columns.extend(levels.iter().flatten().cloned());
-            }
-        }
-        if let Some(filtered) = structures.filtered.get(&name) {
-            columns.extend(filtered.payload.columns.iter().map(symbol_name));
-        }
-        if structures.host_read(&name)
-            && (structures.physical.key_reads.contains_key(&name)
-                || structures.physical.merge_reads.contains_key(&name))
-        {
-            columns.extend(structures.layouts[&name].iter().cloned());
-        }
-    }
-    for (name, keys) in structures.keysets.keys() {
-        used.get_mut(name)
-            .expect("checked keyset layout")
-            .extend(keys.iter().cloned());
-    }
-    for definition in physical.definitions.iter().rev() {
-        let output = used[&symbol_name(&definition.name)].clone();
-        let mut demand = |input: &syn::Ident, extra: &Columns, carry: bool| {
-            let input = symbol_name(input);
-            let heading = &structures.layouts[&input];
-            used.get_mut(&input).expect("checked input layout").extend(
-                output
-                    .iter()
-                    .filter(|_| carry)
-                    .chain(extra)
-                    .filter(|column| heading.contains(column))
-                    .cloned(),
-            );
-        };
-        match &definition.operator {
-            Operator::Probe(_, keyed)
-            | Operator::Merge(_, keyed)
-            | Operator::Semi(_, keyed)
-            | Operator::Anti(_, keyed) => {
-                let keys = keyed.columns.iter().map(symbol_name).collect();
-                demand(&keyed.left, &keys, true);
-                demand(
-                    &keyed.right,
-                    &keys,
-                    matches!(
-                        definition.operator,
-                        Operator::Probe(_, _) | Operator::Merge(_, _)
-                    ),
-                );
-            }
-            Operator::Union(union) => {
-                for operand in &union.operands {
-                    demand(operand, &Columns::new(), true);
-                }
-            }
-            operator => {
-                if let Some(input) = operator.input() {
-                    demand(input, &operator_columns(operator, analysis), true);
-                }
-            }
-        }
-    }
-    used
 }

@@ -256,3 +256,34 @@ fn occurrence_constants_are_not_index_keys_or_selection_demands() {
     }};
     assert!(compile(&lone).unwrap().indexes.is_empty());
 }
+
+#[test]
+fn coverage_rejects_missing_extra_and_wrong_supply_requirements() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32);
+        r = rename R@0 {a -> x,b -> y};
+        point = select r if (x = 2);
+        window = select r if (y >= 1);
+        joined = natural_join point with window;
+        output joined as answer(x,y);
+    }};
+    let target = compile(&source).unwrap();
+    check(&source, &target).unwrap();
+    let mut wrong_supply = target.clone();
+    wrong_supply.indexes[0].requirement.supply = syn::parse_quote!(range);
+    assert!(ix::contract::check(&wrong_supply).is_err());
+    assert!(check(&source, &wrong_supply).is_err());
+    let mut extra = target.clone();
+    extra.indexes.push(syn::parse_quote!(extra = @r[0,1] const));
+    extra.indexes.push_punct(Default::default());
+    assert!(ix::contract::check(&extra).is_err());
+    assert!(check(&source, &extra).is_err());
+    let mut missing = target;
+    missing.indexes = syn::parse_quote! {
+        i0 = @r[1] range;
+        i1 = @window[0,1] stream;
+    };
+    // Local IX admits incomplete demand sets, but the pass must cover every read.
+    ix::contract::check(&missing).unwrap();
+    assert!(check(&source, &missing).is_err());
+}

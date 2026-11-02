@@ -83,15 +83,9 @@ fn instance(token: &str, ty: syn::Type) -> structures::Provider {
 /// `OrderKey` bound rustc checks; wider keys record exact hash membership.
 fn membership_provider(stored_arity: usize) -> structures::Provider {
     if stored_arity == 1 {
-        instance(
-            "dense_membership",
-            syn::parse_quote!(::cq_storage::DenseMembership<_, 16777216>),
-        )
+        providers::declaration("dense_membership").instance()
     } else {
-        instance(
-            "adaptive_membership",
-            syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>),
-        )
+        providers::declaration("adaptive_membership").instance()
     }
 }
 
@@ -495,13 +489,9 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                             });
                         if payload {
                             Need::Seek.provider()
-                        } else if matches!(operators[reader], Operator::Semi(_, k) | Operator::Anti(_, k) if matches!(k.choice, Some(physical::Choice::Lazy(_))))
-                        {
-                            instance(
-                                "keyset",
-                                syn::parse_quote!(::cq_storage::dispatch::KeySet<_, false>),
-                            )
                         } else {
+                            // STR-ReaderChoice: the reader's recorded eager
+                            // or lazy choice prints the declared argument.
                             providers::declaration("keyset").instance()
                         }
                     }
@@ -562,7 +552,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             }
         }
     }
-    if structures::head_needs_dedup(source, &analysis) {
+    if program.head_dedup() {
         let returned = &program.returned;
         let head = providers::declaration("sort").instance();
         entries.extend(quote!(#returned head = #head;));

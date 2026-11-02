@@ -239,9 +239,12 @@ columns, with tuple layouts supplied through arity twelve. Custom layouts
 implement the same append/position/range-copy law. The selected C is explicit
 in the provider type; compiler index selection records it, never inspects V.
 The Structures fact is `items rows | items columns` on a one-level payload
-build (STR-ItemLayout), printed as `C = ::std::vec::Vec<_>` or
-`C = ::cq_storage::TupleColumns<_>` (the tuple of vectors rustc derives from
-V, so no arity is spelled). `radix_runs` records `columns` when the payload
+build (STR-ItemLayout). The `radix_run` token declares the layout argument
+and both spellings (`items 2 [rows ::std::vec::Vec<_>, columns
+::cq_storage::TupleColumns<_>]`); the recorded instance spelling stops before
+it and the checked analysis prints `C = ::std::vec::Vec<_>` or
+`C = ::cq_storage::TupleColumns<_>` from the fact alone (the tuple of vectors
+rustc derives from V, so no arity is spelled). `radix_runs` records `columns` when the payload
 has 2–12 fields and some probe or merge on the index key carries only part
 of it (the carried columns of `cq_lang_structures::demand`), otherwise
 `rows` (SEL-ItemLayout). Every TPC-H radix payload reader carries the full
@@ -1142,7 +1145,7 @@ one direct call; there are no autoref dispatch tiers and no silent fallbacks.
   `adaptive_membership`; a dense key without `OrderKey` is a rustc error, not a
   hash fallback.
 - **Join filters.** Positional selection and the `join_filter` advice record
-  `dense_membership` filters and the abandon policy `abandon 35 of <base>`
+  `join_filter_membership` dense filters and the abandon policy `abandon 35 of <base>`
   (SEL-JoinFilterAbandon); every recorded filter is built, subject only to the
   recorded policy. A filter that regresses is removed by not selecting it, not
   by a runtime eligibility check.

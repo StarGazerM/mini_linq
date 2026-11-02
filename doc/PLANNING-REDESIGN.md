@@ -123,7 +123,7 @@ per-route siblings listed below.
 | `cq-reduce Masks` | reduce only filter-ranked subtrees, never the root | retained default policy (contract 2/6); full reduction is an optional P8 cost question |
 | `cq-elaborate` | predicate binder choice, branch join topology | open: record in VO; ElabFix in progress |
 | CQ `normalize` | computed head becomes `Bind` | retain original Rust; placement uses free variables, not expression classification (contract 7) |
-| `cq-physical-lowering` | probe first / eager / point-range / Let vs Pipe | representation only; allowed |
+| `cq-physical-lowering` | probe first / eager / Let vs Pipe | representation choices only; point/range supply and join keys are consumed from matched, checked IX requirements |
 | Sequence decomposition | preserves recorded relational construction | P3.3-lite removes automatic replanning; ordering belongs to VO |
 | `cq_planners::order(le)` | Lookup = dropped-column subatom, phase not recorded | fold into the default planner with recorded phases |
 | GPU emitter | tile defaults, virtual-range publication, retry protocol | representation; document |
@@ -586,8 +586,9 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   Memory placement is a per-target fact (`doc/STORAGE.md` §11): shared byte
   layout and laws; CUDA and Metal differ in allocation, copy reasons and cost.
   **Compiler selection (CPU, done 2026-10-31).** (a) A one-level payload
-  build records `items rows | items columns` (STR-ItemLayout), printed as
-  RadixRun's layout argument `::std::vec::Vec<_>` / `::cq_storage::TupleColumns<_>`.
+  build records `items rows | items columns` (STR-ItemLayout); the checked
+  analysis prints it at RadixRun's declared layout slot as `::std::vec::Vec<_>` /
+  `::cq_storage::TupleColumns<_>` (the instance spelling never states it).
   `radix_runs` chooses it from recorded read needs (SEL-ItemLayout): the
   carried-column demand analysis, now `cq_lang_structures::demand` (moved
   verbatim from cq-print), gives each probe/merge reader's columns; `columns`

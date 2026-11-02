@@ -950,6 +950,9 @@ and `Machine.layout: Option<fn(&DispatchShape) -> syn::Result<usize>>`.
 types and codec facts, tile and item counts; it contains no GPU byte constants.
 `Analysis.resources` records checked shape, required bytes and capacity per
 publication. BE-Resource rejects oversized authored or generated dispatches.
+Payload carriers consume Structures' shared carried-column demand, including
+canonical valuations, storage keys, filtered payloads and native keyed-read
+layouts. Sequence does not repeat the Physical DAG demand propagation.
 
 The planner starts at the machine width and preferred items. It first tries
 nested inner-flatten segmentation, then plain tiling, and compares legal

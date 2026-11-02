@@ -9,11 +9,13 @@ Fact ::= reads [Cap,...] | supports [Support,...] | build (inferred | typed)
        | accounting (rows | keys) | (nested | routed) N | join_filter
        | shared | packed_bits N | abi (range | runs | columns)
        | contiguous_range | bounds resident_columns
+       | items N [rows Type, columns Type]
+       | choice N [eager Arg, lazy Arg]
 Cap ::= exact | range | membership | ordered | distinct | resident
 Provider ::= @x [(Provider)] [InputSchema] as Type
 InputSchema ::= input { keys N; columns [InputColumn,...] }
 InputColumn ::= Type => Type [codec Type]
-Entry ::= r = Provider [K]... [supports [Support,...]]
+Entry ::= r = Provider [K]... [supports [Support,...]] [items (rows | columns)]
               [membership] [payload[P] constants{c = term, ...}];
         | r host ReaderRef = Provider [K]... [supports [Support,...]];
         | r native ReaderRef = HostRead [K] [supports [Support,...]];
@@ -79,8 +81,10 @@ or named keyed-reader providers;
 (3)~retained scans, multiple unfiltered builds and exists state record row
 storage; unfiltered host renames record scan and keyed-reader fallbacks;
 (4)~every definition canon has a canonical reference (STR-Canon);
-\code{return canon} has a head entry typing the answer's identity index; computed heads that may collapse valuations have one too unless
-\code{consumer canonical} assigns that returned boundary to the consumer;
+exactly the recorded Physical return-boundary dedup obligation
+(\code{return canon} or \code{return dedup}, \textsc{PH-HeadDedup}) has a head
+entry typing the answer's identity index; Structures checks its presence and
+never recomputes the obligation;
 (5)~filtered entries (ordinary renames without literal bindings, declarative
 selections including trusted-total predicates, or unions) record one shared
 projection; their readers are stream \code{probe first}, semi or anti on a level
@@ -221,11 +225,11 @@ An explicit \code{membership} modifier on a single-level filtered build proves
 that every downstream observation is a supplied key or reconstructed constant.
 The checker rederives projection coverage and rejects partial-key or ordered
 reads. The printer emits one unit witness on successful membership, without an
-occurrence-preserving payload index. Default selection applies this representation
-only when exactly one key column remains after removing reconstructed constants:
-\code{dense_membership}, spelled \code{DenseMembership<K,16777216>}, requiring
-\code{OrderKey} rather than selecting a representation by Rust traits.
-Composite stored keys retain their existing payload or hash-set provider.
+occurrence-preserving payload index. Default selection records
+token \code{dense\_membership} for one stored key column, whose declaration spells
+\code{DenseMembership<K,16777216>} once and requires \code{K: OrderKey}.
+Wider stored keys record \code{adaptive\_membership}, whose declaration spells
+\code{AdaptiveMembership<K,16777216>} once. Rust key syntax is never inspected.
 The membership contract itself remains valid for explicitly recorded composite keys.
 No base-table key or foreign-key assumption is used.
 
@@ -367,9 +371,15 @@ Key-only operations do not call row reconstruction. Column-group reads
 borrow the selected arrays and position ranges; lookup reconstructs only
 demanded rows, while contiguous legacy item reads may materialize a row view.
 The compiler records C rather than inspecting V: a one-level payload build
-carries the Structures fact \code{items rows} or \code{items columns}, printed
-as \code{C = ::std::vec::Vec<\_>} or \code{C = ::cq\_storage::TupleColumns<\_>}
+carries the Structures fact \code{items rows} or \code{items columns}. The
+provider token declares the layout argument and both spellings
+(\code{items 2 [rows ::std::vec::Vec<\_>, columns ::cq\_storage::TupleColumns<\_>]}
+for \code{radix\_run}); the instance spelling ends before that argument and
+the checked analysis appends the declared spelling of the recorded fact
 (the tuple of vectors rustc derives from the row type, so no arity is spelled).
+The fact is the argument's only source: a spelling that states the layout, a
+missing fact or a fact on a token without the slot is rejected. Host readers
+and key-only membership storage keep the type's default layout.
 The payload is the filtered schema, else the result's carried columns
 (\code{cq\_lang\_structures::demand}, the same column demand printers carry),
 without the key. A reader's need is the carried columns of the probe or merge
@@ -404,6 +414,12 @@ reading the index.
  b\text{ built}\quad |\mathsf{levels}(b)|=1\quad \neg\mathsf{membership}(b)\\
  \ell=\mathsf{columns}\Rightarrow|\mathsf{payload}(b)|\ge2
 }{b\ \code{items}\ \ell\text{ is admissible}}
+
+\Rule{STR-ReaderChoice}{
+ \mathsf{token}(e)\text{ declares }\code{choice}\ i\ [\code{eager}\ a_e,\ \code{lazy}\ a_l]\quad
+ \mathsf{spelling}(e)\text{ ends before argument }i\\
+ e\text{ serves reader }d
+}{e\text{ prints }a_l\text{ iff }d\text{ records }\code{lazy}\text{, else }a_e}
 
 \Rule{SEL-ItemLayout}{
  P=\mathsf{payload}(b)\quad 2\le|P|\le12\\
@@ -511,8 +527,8 @@ yields distinct complete rows (\textsc{PL-Distinct}; default
 \code{r canon = [K];} names an existing one-level complete-row Built entry;
 \code{r canon = host;} names the load-verified host carrier of a direct
 complete host rename. \code{r head = Type;} types the answer relation's
-identity index the same way, including computed heads that may collapse
-distinct valuations.
+identity index the same way; it exists exactly when Physical records the
+return-boundary obligation (\textsc{PH-HeadDedup}).
 \begin{mathpar}
 \Rule{STR-Canon}{(c=\mathsf{rows}\land\mathsf{mode}(r)\ne pipe\land
   r\text{ records rows})\ \lor\\
@@ -596,9 +612,11 @@ This alias names
 \code{std::collections::HashSet<K, cq_storage::HashState>};
 \code{HashState} uses keyed aHash. Payload reads record
 \code{::cq_storage::HashIndex<'_,_,_>}; its definition uses the same fast
-hash state. A deferred host membership fallback records
-\code{::cq_storage::dispatch::KeySet<_>} (or the lazy \code{false} form),
-whose key set uses that state. Trie levels and the staging and hash forms of
+hash state. A deferred host membership fallback records token \code{keyset}
+(\code{::cq_storage::dispatch::KeySet<_>}); its declared \code{choice 1}
+argument is printed from the served reader's recorded Physical eager/lazy
+choice (\textsc{STR-ReaderChoice}), so no spelling restates laziness. Its
+key set uses that state. Trie levels and the staging and hash forms of
 \code{AdaptiveKeySet} likewise fix their hash representation in the named
 runtime type. The printer passes recorded provider tokens to capability
 construction without choosing the resulting Rust implementation; retyping to

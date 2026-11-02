@@ -89,6 +89,12 @@ fn predicates_survive_projection_without_carrying_dead_columns() {
         } graded target { result at engine; }
     };
     let analysis = check_grading(&program, &machine()).unwrap();
+    let carried =
+        cq_lang_structures::demand::carried_columns(&program.structures, &analysis.structures);
+    assert_eq!(carried["l"], ["a", "x"]);
+    assert_eq!(carried["r"], ["a", "b"]);
+    assert_eq!(carried["j"], ["b", "x"]);
+    assert_eq!(carried["projected"], ["b"]);
     let shape = shape(&analysis, "result");
     assert_eq!(shape.level, ["host", "engine", "team"]);
     assert_eq!(shape.width, Some(8));

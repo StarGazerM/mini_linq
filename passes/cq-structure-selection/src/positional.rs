@@ -81,10 +81,8 @@ pub(super) fn choose(
                 .clone();
             let column = &facts.physical.rows[name].bindings[&key[0]];
             let origin = origin(name)?;
-            let keyset = cq_lang_structures::provider::base::instance(
-                "adaptive_keyset",
-                syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::I64Codec, 67108864>),
-            );
+            let keyset =
+                cq_lang_structures::provider::base::declaration("positional_keyset").instance();
             extra.push(syn::parse2(
                 quote!(#ident keyset = #keyset [#column] owned #origin;),
             )?);
@@ -423,12 +421,8 @@ fn choose_join_filters(
             let build = named(&candidate.build);
             let key = &facts.physical.rows[&candidate.build].bindings[&candidate.key];
             let covering = &d.name;
-            // One key column: the recorded dense provider requires its key's
-            // OrderKey (STR-AdaptiveMembership); rustc rejects other keys.
-            let ty = cq_lang_structures::provider::base::instance(
-                "dense_membership",
-                syn::parse_quote!(::cq_storage::DenseMembership<_, 67108864>),
-            );
+            let ty = cq_lang_structures::provider::base::declaration("join_filter_membership")
+                .instance();
             entries.push(syn::parse2(quote!(#scan join_filter = #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;))?);
         }
     }

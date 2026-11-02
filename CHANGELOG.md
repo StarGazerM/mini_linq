@@ -30,6 +30,7 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   `abi columns` scans (e.g. `DeviceColumns`) now count even when the target
   catalog does not register their token. Tests cover the declared, host-level
   alternative, matching, undeclared and PL-Catalog-rejected omission records.
+
 - Datalog review fixes: fork records Round planning decisions and lowers them
   through a mechanical pipeline, checked by an independent scan/negation
   correspondence checker. Storage `Negative` records now carry their key-set
@@ -45,6 +46,36 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   Generated-code compatibility: merge readers select a recorded ordered fallback
   rather than a native ordered lookup, which Sequence cannot execute. The checker
   continues to reject authored native ordered Sequence lookups.
+
+- IX correspondence now checks per-read requirement coverage, no extras, and
+  first-use naming without replaying demand construction. Physical lowering
+  consumes matched recorded supply and key ordinals instead of reclassifying
+  selections or intersecting join headings; independent demand correspondence
+  remains in place. Valid programs retain the same lowered operators and keys.
+- Sequence resource accounting now consumes Structures' shared carried-column
+  demand and Rust dependency helper instead of duplicating the Physical DAG
+  analysis, preserving checked-program payload layouts.
+- Structures argument slots (RevMiddle F5, S1, S2): a provider declaration may
+  declare `items N [rows T, columns T]` or `choice N [eager A, lazy A]`; an
+  instance spelling ends before that argument and the checked analysis prints
+  it from the recorded fact. `radix_run` declares its layout slot, so the
+  `items rows|columns` fact alone prints RadixRun's layout argument and
+  `radix_runs` records the token's default instance (STR-ItemLayout); retype
+  advice states `items rows|columns`. `keyset` declares its laziness slot,
+  printed from the served reader's Physical eager/lazy choice
+  (STR-ReaderChoice), replacing the hand-spelled `KeySet<_, false>`.
+  Adaptive thresholds are declared once per token: `adaptive_membership`
+  (`AdaptiveMembership<_, 16777216>`), new `join_filter_membership`
+  (`<_, 67108864>`) and `positional_keyset`
+  (`AdaptiveKeySet<_, AutoDense, 67108864>`). Printed spellings are unchanged
+  except that eager host key sets now print the default `KeySet<_, true>`
+  explicitly.
+- Physical records the head-dedup obligation (RevMiddle F6, PH-HeadDedup):
+  `return [canon] [dedup] r as H`. Lowering records `dedup` when a computed
+  head may collapse valuations and the return is not `canon`; the Physical
+  checker requires it where answers collapse and admits an extra one.
+  Structures checks only that an answer identity index types the recorded
+  obligation; `cq_lang_structures::head_needs_dedup` is removed.
 
 - Fix CQ normalization of `where` predicates over hoisted closed `let` captures:
   capture binders remain in scope and both predicate operands resolve as closed

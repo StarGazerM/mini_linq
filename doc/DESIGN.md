@@ -70,6 +70,13 @@ Every IR is a complete program that parses, prints, and checks independently.
 VO contains CQ, IX contains RA′, and Structures contains Physical. RA′ and
 Physical stand alone over `cq-syntax`; neither carries its producer's IR.
 
+IX correspondence checks each keyed RA read against a recorded requirement,
+rejects unused descriptors, and verifies `iN` naming in first-use order without
+replaying index construction. Its checked read-to-requirement association lets
+Physical lowering consume recorded Const/Range supply and join key ordinals;
+lowering does not rediscover selection classes or intersect join headings.
+The independent Physical correspondence check still verifies keyed-read demands.
+
 Declarations supply ordered columns and optional leaf expressions. Declaration
 order fixes host layout; types and runtime traits determine native access.
 Leading-prefix stream reads use native traits when available. A single

@@ -55,6 +55,7 @@ struct Retype {
     at: Ident,
     provider: ir::Provider,
     supports: Option<ir::ProviderSupport>,
+    items: Option<ir::Items>,
 }
 
 impl Parse for Retype {
@@ -107,7 +108,12 @@ impl Parse for Retype {
         };
         input.parse::<Token![=>]>()?;
         let provider = input.parse()?;
-        let supports = if input.is_empty() {
+        let supports = if input.peek(ir::kw::supports) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        let items = if input.is_empty() {
             None
         } else {
             Some(input.parse()?)
@@ -118,6 +124,7 @@ impl Parse for Retype {
             at,
             provider,
             supports,
+            items,
         })
     }
 }
@@ -134,6 +141,9 @@ impl Parse for Retype {
 /// ([`crate::providers`]); a redeclaration must agree. Retyping replaces token,
 /// spelling and support together: append `supports [...]` to declare the
 /// replacement's contracts; omitting it clears the previous provider's support.
+/// A built payload entry of a token declaring an item-layout argument states
+/// its layout with a trailing `items rows|columns` (STR-ItemLayout); omitting
+/// it clears the previous layout.
 pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let analysis = ir::contract::check(source)?;
     let request: Retype = syn::parse2(arguments)?;
@@ -221,7 +231,7 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 },
             };
         if matches {
-            if request.supports.is_some()
+            if (request.supports.is_some() || request.items.is_some())
                 && !matches!(
                     entry.structure,
                     Structure::Built { .. } | Structure::Host { .. }
@@ -229,13 +239,14 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
             {
                 return Err(syn::Error::new_spanned(
                     &request.at,
-                    "provider support requires a keyed representation",
+                    "provider support and item layout require a keyed representation",
                 ));
             }
             match &mut entry.structure {
                 Structure::Built { keyed, .. } | Structure::Host { keyed, .. } => {
                     keyed.provider = request.provider.clone();
                     keyed.supports = request.supports.clone();
+                    keyed.items = request.items.clone();
                 }
                 Structure::Rows { provider, .. }
                 | Structure::Group { provider, .. }

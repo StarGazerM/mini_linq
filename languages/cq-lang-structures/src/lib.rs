@@ -449,7 +449,9 @@ fn parse_support(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<Provi
 /// by index selection from the recorded read needs. `rows`
 /// stores complete payload rows contiguously; `columns` stores one vector per
 /// payload field, so a reader that needs some fields reads only those. The
-/// provider type's layout argument is this fact's printing.
+/// provider token declares the layout argument and both spellings
+/// ([`provider::ItemSlot`]); `Analysis::built` carries the provider spelling
+/// with this fact printed there, and the instance spelling never states it.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Items {
     pub items_token: kw::items,
@@ -678,7 +680,8 @@ pub struct Analysis {
     pub providers: Providers,
     /// Declared column order of every host relation.
     pub host_layouts: BTreeMap<String, Vec<String>>,
-    /// Built structures per result: (sorted columns of each level, provider).
+    /// Built structures per result: (sorted columns of each level, provider
+    /// whose spelling carries the recorded item layout, STR-ItemLayout).
     pub built: BTreeMap<String, Vec<Built>>,
     /// Exact fallback per host rename, typed reader role/identity, and key.
     pub fallbacks: BTreeMap<(String, ReaderRef<String>, Vec<String>), Provider>,
@@ -1045,12 +1048,22 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                         support.clone(),
                     );
                 }
+                // STR-ReaderChoice: the served reader's recorded Physical
+                // choice prints the provider's declared choice argument.
+                let provider = match analysis.facts(&keyed.provider).choice {
+                    Some(slot) => {
+                        let lazy = program.physical.program.definitions.iter().any(|d| {
+                            matches!(&reader_name, ReaderRef::Result(r) if symbol_name(&d.name) == *r)
+                                && matches!(&d.operator, Operator::Semi(_, k) | Operator::Anti(_, k)
+                                    if matches!(k.choice, Some(physical::Choice::Lazy(_))))
+                        });
+                        slot.print(&keyed.provider, lazy)
+                    }
+                    None => keyed.provider.clone(),
+                };
                 if analysis
                     .fallbacks
-                    .insert(
-                        (name.clone(), reader_name, read_columns),
-                        keyed.provider.clone(),
-                    )
+                    .insert((name.clone(), reader_name, read_columns), provider)
                     .is_some()
                 {
                     return error(entry, "duplicate host fallback");
@@ -1074,12 +1087,14 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 continue;
             }
             Structure::HeadDedup { provider, .. } => {
+                // STR-HeadDedup: an answer identity index types exactly the
+                // recorded Physical return-boundary obligation (PH-HeadDedup).
                 if name != symbol_name(&program.physical.program.returned)
-                    || !head_needs_dedup(&program.physical, &analysis.physical)
+                    || !program.physical.program.head_dedup()
                 {
                     return error(
                         entry,
-                        "head dedup requires a noninjective computed head without a canonical consumer",
+                        "head dedup types the recorded Physical `return canon` or `return dedup` obligation",
                     );
                 }
                 if analysis.head_dedup.insert(name, provider.clone()).is_some() {
@@ -1150,11 +1165,22 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     .built_support
                     .insert((name.clone(), columns.clone()), support.clone());
             }
+            // STR-ItemLayout: the recorded layout prints the declared
+            // item-layout argument; the instance spelling ends before it.
+            // STR-ReaderChoice: built storage never serves a lazy reader
+            // (WF-Physical: lazy reads name pipe host renames), so a declared
+            // choice argument prints `eager`.
+            let facts = analysis.facts(&keyed.provider);
+            let provider = match (&keyed.items, facts.items, facts.choice) {
+                (Some(items), Some(slot), _) => slot.print(&keyed.provider, &items.layout),
+                (_, _, Some(slot)) => slot.print(&keyed.provider, false),
+                _ => keyed.provider.clone(),
+            };
             analysis
                 .built
                 .entry(name.clone())
                 .or_default()
-                .push((columns, keyed.provider.clone()));
+                .push((columns, provider));
             if keyed.membership.is_some() {
                 if keyed.levels.len() != 1 {
                     return error(keyed, "membership storage requires one complete key");
@@ -1533,9 +1559,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             ),
         );
     }
-    if head_needs_dedup(&program.physical, &analysis.physical)
-        && !analysis.head_dedup.contains_key(&returned)
-    {
+    if program.physical.program.head_dedup() && !analysis.head_dedup.contains_key(&returned) {
         return error(
             &program.physical.program.returned,
             "missing answer identity index",
@@ -1611,29 +1635,6 @@ fn check_group(program: &Program, entry: &Entry) -> syn::Result<()> {
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
-
-/// Whether computed answers can collapse distinct canonical valuations.
-pub fn head_needs_dedup(program: &physical::Program, facts: &physical::Analysis) -> bool {
-    if facts.consumer_canonical {
-        return false;
-    }
-    if program.program.return_canon.is_some() {
-        return true;
-    }
-    let head = &program.program.head;
-    head.args
-        .iter()
-        .any(|e| cq_syntax::rust::variable(e).is_none())
-        && facts.headings[&symbol_name(&program.program.returned)]
-            .iter()
-            .any(|c| {
-                !head
-                    .args
-                    .iter()
-                    .filter_map(cq_syntax::rust::variable)
-                    .any(|v| symbol_name(v) == *c)
-            })
-}
 
 /// Concrete representation names may contain inference parameters, never macro slots.
 pub fn concrete_type(ty: &syn::Type) -> syn::Result<()> {

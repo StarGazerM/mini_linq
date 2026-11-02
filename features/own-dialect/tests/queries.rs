@@ -285,7 +285,7 @@ fn computed_head_deduplicates_its_image_with_the_recorded_type() {
                     relation R(x: i32);
                     r = pipe rename R@0 { x -> x };
                     o = let canon project r keep { x };
-                    return o as answer(*x % 2);
+                    return dedup o as answer(*x % 2);
                 }
                 structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
                     r host scan = @host_scan as ::core::iter::Map<_,_> [];
@@ -497,10 +497,10 @@ fn written_lazy_host_membership_and_fallback_type_are_preserved() {
                     o = let canon project m keep { x };
                     return o as answer(x);
                 }
-                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build typed, choice 1 [eager true, lazy false] }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
                     r host scan = @host_scan as ::core::iter::Map<_,_> [];
                     s host scan = @host_scan as ::core::iter::Map<_,_> [];
-                    s host result(m) = @keyset as ::cq_storage::dispatch::KeySet<_,false> [x];
+                    s host result(m) = @keyset as ::cq_storage::dispatch::KeySet<_> [x];
                     o rows = @sort as ::cq_storage::dedup::Sort; o canon = rows;
                 }
             }

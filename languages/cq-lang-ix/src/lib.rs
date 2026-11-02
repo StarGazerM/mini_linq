@@ -175,6 +175,95 @@ pub fn signature(index: &IndexRequirement) -> Signature {
     )
 }
 
+/// Associate each keyed RA read with its recorded IX requirement.
+/// This checks coverage against the read itself, not the producer's first-use
+/// demand traversal. The returned entries borrow the recorded supply and keys.
+/// Missing requirements are an error; non-keyed reads have no entry.
+pub fn read_requirements<'a>(
+    program: &'a Program,
+    info: &ra::Analysis,
+) -> syn::Result<BTreeMap<String, &'a IndexDefinition>> {
+    check_read_requirements(program, info, true)
+}
+
+fn check_read_requirements<'a>(
+    program: &'a Program,
+    info: &ra::Analysis,
+    complete: bool,
+) -> syn::Result<BTreeMap<String, &'a IndexDefinition>> {
+    use std::borrow::Cow;
+    let mut reads = BTreeMap::new();
+    let mut used = BTreeSet::new();
+    for definition in &program.ra.plan.definitions {
+        let (relation, keys, supply) = match &definition.operator {
+            ra::Operator::NaturalJoin(join) => (
+                &join.right,
+                Cow::Borrowed(&info[&symbol_name(&join.left)].heading),
+                SupplyKind::Stream,
+            ),
+            ra::Operator::Semijoin(join) => (
+                &join.right,
+                Cow::Borrowed(&info[&symbol_name(&join.left)].heading),
+                SupplyKind::Stream,
+            ),
+            ra::Operator::Anti(anti) => (
+                &anti.right,
+                Cow::Owned(anti.columns.iter().map(symbol_name).collect()),
+                SupplyKind::Stream,
+            ),
+            ra::Operator::Select(selection) => {
+                let (keys, supply) = if let Some(keys) = selection.condition.point_columns() {
+                    (keys, SupplyKind::Const)
+                } else if let Some((column, _)) = selection.condition.range_bounds() {
+                    (BTreeSet::from([column]), SupplyKind::Range)
+                } else {
+                    continue;
+                };
+                (&selection.input, Cow::Owned(keys), supply)
+            }
+            _ => continue,
+        };
+        let heading = &info[&symbol_name(relation)].heading;
+        let requirement = program.indexes.iter().find(|index| {
+            let requirement = &index.requirement;
+            requirement.relation == *relation
+                && requirement.supply.kind() == supply
+                && requirement
+                    .columns
+                    .iter()
+                    .map(|column| column.index as usize)
+                    .eq(heading
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(ordinal, column)| keys.contains(column).then_some(ordinal)))
+        });
+        if let Some(index) = requirement {
+            used.insert(symbol_name(&index.name));
+            reads.insert(symbol_name(&definition.result), index);
+        } else if complete {
+            return Err(syn::Error::new_spanned(
+                &definition.result,
+                format!(
+                    "definition `{}`: missing first-use demand for `{relation}` with {supply:?} supply",
+                    definition.result
+                ),
+            ));
+        }
+    }
+    for index in &program.indexes {
+        if !used.contains(&symbol_name(&index.name)) {
+            return Err(syn::Error::new_spanned(
+                &index.name,
+                format!(
+                    "index `{}` is demanded by no join or literal selection with this supply",
+                    index.name
+                ),
+            ));
+        }
+    }
+    Ok(reads)
+}
+
 /// A complete RA program followed by named index demands.
 ///
 /// ```text
@@ -258,20 +347,7 @@ fn check_indexes(module: &Program) -> syn::Result<()> {
         }
     }
 
-    let expected: BTreeSet<_> = demands(&module.ra, &info)
-        .into_iter()
-        .map(|d| d.signature)
-        .collect();
-    for (name, index) in indexes {
-        if !expected.contains(&signature(&index.requirement)) {
-            return Err(syn::Error::new_spanned(
-                &index.name,
-                format!(
-                    "index `{name}` is demanded by no join or literal selection with this supply"
-                ),
-            ));
-        }
-    }
+    check_read_requirements(module, &info, false)?;
     Ok(())
 }
 

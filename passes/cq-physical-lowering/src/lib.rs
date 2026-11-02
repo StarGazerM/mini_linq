@@ -103,7 +103,7 @@ pub fn compile_with(
             }
         })
         .collect();
-    let target = physical::Program {
+    let mut target = physical::Program {
         physical_token: Default::default(),
         brace: Default::default(),
         program: physical::Body {
@@ -117,12 +117,23 @@ pub fn compile_with(
                 && !unique.contains(&symbol_name(&returned))
                 && disjoint.contains(&symbol_name(&returned)))
             .then(Default::default),
+            return_dedup: None,
             returned,
             as_token: Default::default(),
             head: source.ra.plan.output.head.clone(),
             return_semi: Default::default(),
         },
     };
+    // Formal rule PH-HeadDedup: record the dedup obligation of computed
+    // answers that may collapse, unless the return is already canonicalized;
+    // a consumer canonical boundary owns answer identity.
+    target.program.return_dedup = (!consumer_canonical
+        && target.program.return_canon.is_none()
+        && physical::head_collapses(
+            &target.program,
+            info[&symbol_name(&target.program.returned)].bindings.keys(),
+        ))
+    .then(Default::default);
     physical::contract::check(&target)?;
     check(source, &target)?;
     Ok(target)
@@ -133,12 +144,13 @@ fn operators(
     info: &ix::ra::Analysis,
     operations: &[(Ident, Op)],
 ) -> syn::Result<(Vec<physical::Operator>, BTreeMap<String, Reads>)> {
+    let requirements = ix::read_requirements(source, info)?;
     let mut reads: BTreeMap<String, Reads> = operations
         .iter()
         .map(|(id, _)| (symbol_name(id), Reads::default()))
         .collect();
     let mut operators = Vec::new();
-    for (_, op) in operations {
+    for (name, op) in operations {
         let operator = match op {
             Op::Union(union) => {
                 for operand in &union.operands {
@@ -187,7 +199,18 @@ fn operators(
                 };
                 let lh = &info[&symbol_name(left)];
                 let rh = &info[&symbol_name(right)];
-                let columns: Vec<String> = lh.heading.intersection(&rh.heading).cloned().collect();
+                let requirement = &requirements[&symbol_name(name)].requirement;
+                let mut ordinals = requirement.columns.iter().peekable();
+                let columns: Vec<String> = rh
+                    .heading
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ordinal, column)| {
+                        ordinals
+                            .next_if(|recorded| recorded.index as usize == ordinal)
+                            .map(|_| column.clone())
+                    })
+                    .collect();
                 scan(&mut reads, left);
                 let keyed = physical::Keyed {
                     choice: Some(if matches!(op, Op::Semijoin(_)) {
@@ -211,12 +234,18 @@ fn operators(
             }
             Op::Select(s) => {
                 scan(&mut reads, &s.input);
-                if s.condition.point_columns().is_some() {
-                    physical::Operator::Point(Default::default(), s.clone())
-                } else if s.condition.range_bounds().is_some() {
-                    physical::Operator::Range(Default::default(), s.clone())
-                } else {
-                    physical::Operator::Select(s.clone())
+                match requirements
+                    .get(&symbol_name(name))
+                    .map(|index| &index.requirement.supply)
+                {
+                    Some(ix::Supply::Const(_)) => {
+                        physical::Operator::Point(Default::default(), s.clone())
+                    }
+                    Some(ix::Supply::Range(_)) => {
+                        physical::Operator::Range(Default::default(), s.clone())
+                    }
+                    None => physical::Operator::Select(s.clone()),
+                    Some(ix::Supply::Stream(_)) => unreachable!("checked selection supply"),
                 }
             }
             Op::Bind(b) => {

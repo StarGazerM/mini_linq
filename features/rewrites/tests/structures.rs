@@ -486,13 +486,13 @@ fn provider_trait_compatibility_is_not_inferred_from_type_spelling() {
 fn computed_head_uses_sort_without_touching_physical() {
     let source: cq_testkit::physical::Program = syn::parse_quote!(physical {
         relation R(a:i32); r = let canon rename R@0 {a -> x};
-        return r as answer(*x % 2);
+        return dedup r as answer(*x % 2);
     });
     let source = cq_structure_selection::compile(&source).unwrap();
     let expected: ir::Program = syn::parse_quote! {
         physical {
             relation R(a:i32); r = let canon rename R@0 {a -> x};
-            return r as answer(*x % 2);
+            return dedup r as answer(*x % 2);
         }
         structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
             r canon = rows; r rows = @sort as ::cq_storage::dedup::Sort;

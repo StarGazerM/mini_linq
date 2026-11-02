@@ -16,7 +16,8 @@ pub fn declarations() -> Vec<Declaration> {
             join_filter, shared
         };
         radix_run = ::cq_storage::RadixRun<_, _> {
-            reads [exact, range, membership], supports [retain, expand, keys], build typed, shared
+            reads [exact, range, membership], supports [retain, expand, keys], build typed, shared,
+            items 2 [rows ::std::vec::Vec<_>, columns ::cq_storage::TupleColumns<_>]
         };
         hash_set = ::cq_storage::HashSet<_> {
             reads [membership], build typed, accounting keys, shared
@@ -39,14 +40,22 @@ pub fn declarations() -> Vec<Declaration> {
         single_group = ::cq_storage::SingleGroup<_, _> {
             reads [exact, membership], build typed, shared
         };
-        keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build typed };
+        keyset = ::cq_storage::dispatch::KeySet<_> {
+            reads [membership], build typed, choice 1 [eager true, lazy false]
+        };
         adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> {
             reads [membership], build typed, shared
         };
-        adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> {
+        positional_keyset = ::cq_storage::AdaptiveKeySet<_, ::cq_storage::I64Codec, 67108864> {
             reads [membership], build typed, shared
         };
-        dense_membership = ::cq_storage::DenseMembership<_, _> {
+        adaptive_membership = ::cq_storage::AdaptiveMembership<_, 16777216> {
+            reads [membership], build typed, shared
+        };
+        join_filter_membership = ::cq_storage::DenseMembership<_, 67108864> {
+            reads [membership], build typed, shared
+        };
+        dense_membership = ::cq_storage::DenseMembership<_, 16777216> {
             reads [membership], build typed, shared
         };
         sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };

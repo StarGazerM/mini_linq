@@ -244,7 +244,7 @@ fn join_filters_preserve_coverage_and_lineage() {
         let filter = &facts.join_filters["l"][0];
         assert_eq!(
             filter.provider,
-            syn::parse_quote!(@dense_membership as ::cq_storage::DenseMembership<_, 67108864>)
+            syn::parse_quote!(@join_filter_membership as ::cq_storage::DenseMembership<_, 67108864>)
         );
         assert_eq!(filter.covering, "j");
         assert_eq!(

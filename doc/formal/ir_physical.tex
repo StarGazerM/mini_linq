@@ -3,7 +3,7 @@
 
 \paragraph{Grammar.} A complete standalone program.
 \begin{lstlisting}
-Physical ::= physical { Decl* Fact* Def* return [canon] r as Head; }
+Physical ::= physical { Decl* Fact* Def* return [canon] [dedup] r as Head; }
 Fact ::= host_set R [discharged];
        | consumer canonical;
 Def ::= r = (pipe | let | exists) [canon] Op;
@@ -46,6 +46,10 @@ $\mathsf{reads}(r)$ the operand and return uses of $r$:
  \mathsf{mode}(r)\in\{let,exists\}\ \lor\ (\mathsf{mode}(r)=pipe\land r\text{ is a host rename})}
  {\mathsf{PCanonOK}(r)}
 
+\Rule{PH-HeadDedup}{\mathsf{collapses}(H,\mathsf{heading}(r))\quad
+ \neg\mathsf{consumerCanonical}\quad\mathsf{return}\ r\ \mathsf{as}\ H}
+ {\code{return canon}\ \lor\ \code{return dedup}\text{ is recorded}}
+
 \Rule{PH-Block}{\text{branch scopes derived from union origins and fixed operands}\\
  \text{Rust payloads and free-variable binding identities preserved}}
  {\mathsf{blockBindingsOK}(source,target)}
@@ -62,6 +66,13 @@ Lazy semi/anti needs a reusable host read only lazily on that key. A witness
 union (\code{any}) has an empty interface; a fused union names its prefix and
 every arm depends on it; cross-arm canon on a statically disjoint union is
 rejected. Physical checks neither IX demands nor canonical return evidence.
+$\mathsf{collapses}(H,K)$ holds when some head argument is computed and some
+returned column is not a bare head argument: distinct valuations may then
+yield one answer. The return-boundary dedup obligation is
+\code{return canon} or \code{return dedup}; lowering records \code{dedup}
+exactly when the head collapses and the return is not \code{canon}, and an
+extra obligation is admissible. Structures types the recorded obligation
+with the answer identity index (\code{r head}) and never recomputes it.
 
 \paragraph{Smallest candidate intersection.}
 Let $p$ be the outer valuation and $v$ one new column. An introducing probe
