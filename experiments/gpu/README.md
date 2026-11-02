@@ -938,6 +938,21 @@ measurements of every subsequent revision. Raw P6b captures are referenced by
 the planning record under `/data/p6b-work`; the summary is checked in, but this
 README audit did not revalidate those external captures.
 
+**Host preparation follow-up (2026-11-02):** against rebuilt main `20101707`,
+five interleaved locked pairs measured xalan **0.912370 → 0.904628 s**
+(paired ratio **0.99133 [0.98154, 1.00028]**) and batik
+**1.609418 → 1.588257 s** (**0.98519 [0.97691, 0.98829]**).
+The 26-output Cassandra workload measured **1.331751 → 1.311806 s**
+(**0.98218 [0.95805, 1.02116]**). Only batik is statistically faster;
+xalan and Cassandra are neutral. GPU-ProgramLaunch records and caches the
+validated launch envelope per compiled CUDA entry/context, including opaque
+callable specialization; emitted scalar-ABI wrappers retain the same grid
+caps and count/failure readbacks. All timed samples had exact relation counts.
+The dated P6b plan entry records the separate setup attribution and artifacts.
+Complete sorted exports matched **43/43** relations for both xalan and batik;
+both binaries matched the CPU's **26/26** complete Cassandra output sets.
+The comparison checked duplicate-free exported counts as well as tuple hashes.
+
 For context only, the older SRDatalog fullclock reference ranges are
 **1.008194–1.021628 s xalan / 1.818340–2.101104 s batik**, retained in
 [`srd_query_xalan_batik.results.json`](compare/srd_query_xalan_batik.results.json)

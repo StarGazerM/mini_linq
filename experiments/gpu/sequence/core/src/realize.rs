@@ -9,7 +9,7 @@ use cq_lang_sequence::gpu::realization::{
     DescriptorBounds, Granularity, GroupCompletion, GroupInput, HostEvaluation, HostOutput,
     HostUnion, Interval, Phase, ProviderBuild, Realization, Side, SmallestRealization,
     SmallestSide, SourceAccess, SourceOrigin, SourceRealization, Step, TerminalGroup, Ties,
-    Transfer, TransferSource, UnionArm,
+    Transfer, TransferSource, UnionArm, Launch,
 };
 use cq_lang_sequence::gpu::{Grid, Publication};
 use cq_lang_sequence::{Analysis, Program, Term};
@@ -98,6 +98,17 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Real
     let selected: syn::Result<Realization> = (|| {
         let facts = Facts::new(program, analysis)?;
         let captures = captures(&facts)?;
+        let reusable = analysis.gpu_publications.values().any(|record| record.arena.is_some());
+        let launches = analysis.dispatches.iter().map(|dispatch| {
+            if reusable {
+                match dispatch.gpu.as_ref().expect("graded GPU dispatch").partition {
+                    cq_lang_sequence::gpu::Partition::One => Launch::ProgramOne,
+                    _ => Launch::ProgramOccupancy,
+                }
+            } else {
+                Launch::InvocationOccupancy
+            }
+        }).collect();
         let mut sources = sources(&facts, &captures)?;
         let (steps, output) = Steps::new(&facts, &sources).run()?;
         // One provider owner: a publication step that builds a result's
@@ -125,6 +136,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Real
             captures,
             smallest,
             auxiliary: Some(auxiliary()),
+            launches,
         })
     })();
     let realization = match selected {
@@ -1481,6 +1493,19 @@ pub(crate) fn check(
         analysis,
         &facts.codecs,
     )?;
+    // Formal rule GPU-ProgramLaunch: every dispatch records its preparation;
+    // a one-block preparation requires one root part. Program caches bind the
+    // module/context and opaque compiled CUDA entry, never a Rust type spelling.
+    if records.launches.len() != analysis.dispatches.len() {
+        return Err(error("GPU-ProgramLaunch: every dispatch needs a launch preparation"));
+    }
+    for (launch, dispatch) in records.launches.iter().zip(&analysis.dispatches) {
+        if *launch == Launch::ProgramOne
+            && !matches!(dispatch.gpu.as_ref().expect("checked GPU dispatch").partition, cq_lang_sequence::gpu::Partition::One)
+        {
+            return Err(error("GPU-ProgramLaunch: one-block preparation requires the one-part partition"));
+        }
+    }
     check_smallest(&facts, &records.smallest)?;
     let host_bound = host_bound(&facts.definitions, &records.captures);
     // Element templates (union decode/pack, host-output pack) are compiled

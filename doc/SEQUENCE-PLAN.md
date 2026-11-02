@@ -369,11 +369,12 @@ the grading and recorded analysis. Recorded today: dispatch boundaries
 (`analysis.dispatches`), publication kinds (BE-Publication), output protocol
 (`output …`), distributed tile parts (`Dispatch::parts`), range access
 (`883d60f8`). The 2026-10-28 launch violations are now recorded in
-`Dispatch::gpu` by `languages/cq-lang-sequence/src/gpu.rs`:
+`Dispatch::gpu` by `languages/cq-lang-sequence/src/gpu.rs`, with launch
+preparation owned by the target's `gpu::realization::Realization.launches`:
 
 | Decision | Recorded fact / consumer | Status |
 |---|---|---|
-| Grid size | `Partition::{One,Tiles}` plus `Grid::KernelOccupancy`; shared runtime queries SM count and actual kernel residency, capped by tile count | exact (was emitter choice) |
+| Grid size | `Partition::{One,Tiles,Spread}` plus `Realization.launches`; invocation occupancy or program-owned one-block/resident envelope keyed by compiled CUDA entry; recorded tile caps and sharing determine each grid within that envelope | exact (GPU-ProgramLaunch; reusable arena kernels avoid repeated preparation queries) |
 | Deferred lookup range | `Publication::DeferredRange { provider, keys }`; grading resolves catalog identity and consumers before BE-Resource; accounting and emission share that record | exact (was independent emitter/resource choices) |
 | Range-offset completion | `OffsetScan::DeviceExclusive`; CUB device-wide scan and parallel overflow check before consumers, with per-pool module/workspace reuse | exact (was serial one-block finalize) |
 | Whole-input fold | `FoldCompletion::BlockPartials`; distributed block partials followed by stream-ordered combine | exact (was one-block finalize) |

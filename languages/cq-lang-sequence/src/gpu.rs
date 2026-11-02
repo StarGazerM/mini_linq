@@ -28,9 +28,9 @@ pub enum Partition {
         rows: usize,
     },
     /// GPU-RootSpread: root tiles of `clamp(ceil(domain / resident), 1, max_rows)`
-    /// rows, `resident` the launch's occupancy-query block capacity; the grid is
-    /// the resulting tile count capped by `resident`. `max_rows` is the declared
-    /// distributed tile, else one block pass of source rows.
+    /// rows, `resident` the recorded launch preparation's block capacity. The
+    /// resulting tile count caps the grid except when root sharing is recorded.
+    /// `max_rows` is the declared tile, else one block pass of source rows.
     Spread {
         max_rows: usize,
     },
@@ -108,7 +108,6 @@ pub struct ChainExecution {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Execution {
     pub partition: Partition,
-    pub grid: Grid,
     pub block_threads: u32,
     pub publication: Publication,
     pub offsets: OffsetScan,
@@ -148,8 +147,8 @@ pub enum Share {
 /// Root tiles whose first expansion is shared under `Spread`.
 pub const SHARED_TILES: usize = 2048;
 
-/// Formal rule GPU-Launch: grading records partition, kernel occupancy policy,
-/// fold completion and synchronization before any launch is emitted.
+/// Formal rule GPU-Launch: grading records partition, fold completion and
+/// synchronization before emission; target realization owns launch preparation.
 pub(crate) fn derive(
     program: &Program,
     analysis: &Analysis,
@@ -209,7 +208,6 @@ pub(crate) fn derive(
             partition: dispatch
                 .parts
                 .map_or(Partition::One, |rows| Partition::Tiles { rows }),
-            grid: Grid::KernelOccupancy,
             block_threads: machine.block_threads,
             publication: Publication::Rows,
             offsets: OffsetScan::None,

@@ -303,6 +303,20 @@ pub struct Auxiliary {
     pub bounds: BlockGeometry,
 }
 
+/// GPU-ProgramLaunch: the dispatch's host preparation and physical grid.
+/// Program preparations live with the loaded module in one CUDA context and
+/// query scope, keyed by the module's opaque compiled entry-point identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Launch {
+    /// Prepare from kernel occupancy each invocation, capped by the root parts.
+    InvocationOccupancy,
+    /// Prepare one block once with the program's module.
+    ProgramOne,
+    /// Prepare a resident launch envelope once per compiled entry point.
+    /// Each invocation caps its grid by the recorded root-part policy.
+    ProgramOccupancy,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Realization {
     /// The target cannot realize this graded program; printing rejects it
@@ -319,6 +333,8 @@ pub struct Realization {
     pub smallest: BTreeMap<String, SmallestRealization>,
     /// Present exactly when the realization is not rejected.
     pub auxiliary: Option<Auxiliary>,
+    /// One launch preparation per checked dispatch, in dispatch order.
+    pub launches: Vec<Launch>,
 }
 
 /// One PH-Smallest side: a radix provider (rows-provider name) read under

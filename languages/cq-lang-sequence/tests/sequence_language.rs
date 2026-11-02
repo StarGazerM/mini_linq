@@ -778,7 +778,6 @@ fn gpu_launch_fixture(deferred: bool) -> (Program, Analysis) {
     // chosen defaults (these positive implicit sizes deliberately differ).
     analysis.dispatches[0].gpu = Some(gpu::Execution {
         partition: gpu::Partition::Tiles { rows: 19 },
-        grid: gpu::Grid::KernelOccupancy,
         block_threads: 256,
         publication: if deferred {
             gpu::Publication::DeferredRange {

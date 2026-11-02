@@ -761,6 +761,69 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   1.668 → 1.205 s, 0.723× [0.702, 0.765] of one stream (5 locked pairs);
   26/26 outputs exact.
   Sort/unique (~0.23 s) stays with P4-GPU.
+  **Host setup follow-up, 2026-11-02 (`f796fcd3`):** five locked current-main
+  runs gave xalan **0.912135 s** (bootstrap median CI [0.903112, 0.914550])
+  and batik **1.599563 s** ([1.596005, 1.608999]), all 43 relation counts exact.
+  Against a fresh build of the historical K=4 merge `a1e3423b`, five
+  interleaved batik pairs gave 1.602919 → 1.605993 s, paired ratio
+  **1.00169 [0.99906, 1.00272]**: no meaningful main regression. The current
+  versus Oct 31 batik difference was not reproduced in the paired comparison;
+  no bisect was warranted under the agreed 1.03 lower-CI threshold.
+  Separate locked nsys captures (all CUDA APIs) attributed xalan/batik
+  GPU-idle wall time in ms: setup APIs **83.94/109.36**, sync/readback
+  **185.59/183.29**, launches **79.28/118.35**, other CUDA **108.25/163.80**,
+  outside CUDA **165.62/236.52**; GPU busy **556.12/1195.94**. Overlapping
+  lane APIs are partitioned in that priority order, not summed as wall time.
+  Occupancy ran **13,656/18,535** times, function lookup **36,930/60,290**,
+  function attributes **67,184/103,458**, device attributes **425,520/648,767**.
+  Default trace readbacks were **14,708/19,507**, launches **39,133/62,120**.
+  A non-callable-only prepared-launch candidate was rejected (xalan
+  1.0011 [0.9783, 1.0855], batik 1.0106 [0.9948, 1.0368]); a diagnostic
+  trace showed unchanged setup counts because DOOP holes use callable
+  specialization. No benefit is claimed for that discarded design.
+  Evidence and preserved binaries: `/tmp/p6b-host/` (`main.json`,
+  `historical-batik.json`, `main-all-*-attribution.json`, `program-launch.json`).
+  **Retained 2026-11-02: GPU-ProgramLaunch**, rebased against main `20101707`
+  after the DOOP codec repair. `Realization.launches` owns preparation:
+  one-block or occupancy-derived program envelope, keyed by the CUDA module's
+  opaque compiled entry identity (including callable specialization).
+  The generated wrapper retains the exact scalar ABI; context and grid-envelope
+  checks replace repeated driver validation. Module/entry slots are owned by
+  the query scope and worker context. Grid caps, sharing and all count/failure
+  readbacks are unchanged. Five interleaved pairs, both locks, phase-only
+  fixpoint, no counters/profiler, exact counts in every sample:
+
+  | Workload | Main median (s) | Candidate median (s) | Paired ratio, bootstrap 95% CI |
+  |---|---:|---:|---:|
+  | srd-doop-gpu xalan | 0.912370 | 0.904628 | 0.99133 [0.98154, 1.00028] |
+  | srd-doop-gpu batik | 1.609418 | 1.588257 | 0.98519 [0.97691, 0.98829] |
+  | doop-gpu Cassandra | 1.331751 | 1.311806 | 0.98218 [0.95805, 1.02116] |
+
+  Batik is a demonstrated improvement; xalan and Cassandra are statistically
+  neutral, not claimed speedups. Retention follows the RootShare criterion:
+  a significant batik gain with neutral other workloads. A separate xalan
+  mechanism capture reduced setup-attributed GPU idle **83.94 → 48.04 ms**,
+  occupancy queries **13,656 → 3,123**, device attributes
+  **425,520 → 246,459**, function attributes **67,184 → 46,118**.
+  Launches (**39,133**) and readbacks (**14,708**) were unchanged.
+  Function lookup calls were unchanged; auxiliary runtime setup is outside
+  this query-kernel preparation slice.
+  Profile windows use same-thread synchronize endpoints enclosing every
+  generated query kernel and agreeing with the phase duration within 0.4 µs;
+  summed host API durations are not additive wall time. Evidence:
+  `/tmp/p6b-host/final-srd.json`, `final-cassandra.json`,
+  `specialized-all-xalan-attribution.json`. Final pair gate times:
+  **246.32 s** SRD and **30.27 s** Cassandra (**276.60 s** locked wave).
+  Complete sorted tuple exports matched **43/43** relations on both xalan and
+  batik, with duplicate-free counts checked against each run; both main and
+  candidate Cassandra matched the CPU's complete **26/26** output sets
+  (`/tmp/p6b-host/exact-final.json`, `*-cassandra-exact.log`; export/exactness
+  gate **539.20 s**). Required GPU Datalog crates plus Sequence-core and the
+  launch-cache runtime tests passed under the GPU lock (**353.80 s**, including
+  lock wait), as did the SRD exact fixture (**70.83 s**). Root workspace
+  (**64.06 s**), quick **15/15** (**84.17 s**), formal inventory
+  (**0.28 s**) and public API **29/29** (**38.08 s**, after the intentional
+  launch-IR snapshot update) passed. These are gate wall times, not fixpoint timings.
 - **P7 Join filters and evidence** across targets (exact min/max and
   membership from runs; published key/row/group statistics for `choose`).
   **P7.1:** typed provider statistic/publication records and host scalar guard

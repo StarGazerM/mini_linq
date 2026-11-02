@@ -13,3 +13,7 @@ dedup-diagnostics = []
 [dependencies]
 cuda-core.workspace = true
 gpu-device-columns = { path = "../device-columns" }
+
+[dev-dependencies]
+cuda-device.workspace = true
+cuda-host.workspace = true

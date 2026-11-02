@@ -1257,6 +1257,22 @@ geometry; `RunParams` consumes the recorded run settings rather than selecting
 them implicitly (`14d76950`, 2026-11-02). This is separate from the proposed
 grouped-run replacement.
 
+GPU-ProgramLaunch records query-kernel preparation in
+`gpu::realization::Realization.launches`, separately from publication storage.
+Raw-candidate programs use program-owned launch envelopes: one block for a
+one-part partition, otherwise occupancy-derived residency. Each slot is keyed
+by the CUDA module's opaque compiled entry name, including callable
+specializations. On first use, typed preparation validates function/device
+attributes and resolves handles and occupancy. Later invocations borrow that
+envelope; generated wrappers retain the kernel's exact scalar argument ABI
+without type inspection, handle cloning, or repeated CUDA preparation queries.
+The runtime rejects a foreign context or a grid outside the validated envelope.
+Each worker retains its context-qualified module and slots until query-scope
+release. Row-dependent grid caps, root tiles and sharing remain unchanged.
+Other programs explicitly record invocation-occupancy preparation. Count/failure
+readbacks, capacity replay, admission counts and fork/join synchronization are
+unchanged.
+
 ### 13.3 Host reads and dispatch (no fallback tiers)
 
 Every runtime representation choice is a recorded Structures fact printed as

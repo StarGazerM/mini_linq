@@ -1216,11 +1216,11 @@ truncated result. No target-side join order, uniqueness or tile choice is
 inferred by the translation.
 
 \paragraph{Checked GPU launch refinement.}
-The GPU machine records its collective block width and the kernel-occupancy
-policy. Grading records every dispatch's partition, publication, offset scan,
-fold completion and required host synchronization points; these records are
-part of printable analysis. One-part is explicit, not a fallback triggered by
-a deferred range or a whole-input fold. The native contiguous-range predicate
+The GPU machine records its collective block width. Grading records every
+dispatch's partition, publication, offset scan, fold completion and required
+host synchronization points; target realization records its launch preparation
+and grid. These records are part of printable analysis. One-part is explicit,
+not a fallback triggered by a deferred range or a whole-input fold. The native contiguous-range predicate
 is supplied by catalog identity, not by generated names or type suffixes.
 GPU launch refinement precedes BE-Resource: shared-memory accounting and CUDA
 emission consume the same recorded publication kind, never independent
@@ -1253,15 +1253,34 @@ failure and claim-cursor words in its arena's resident words
 (GPU-ResidentMeta): they are zero on entry, the last block to finish
 publishes count and failure and re-zeroes them, so a launch attempt neither
 allocates nor clears metadata.
+GPU-ProgramLaunch records either invocation occupancy (capped by root parts),
+program one-block preparation, or a program resident launch envelope. One-block
+preparation requires the one-part partition. Each program slot is keyed by the
+CUDA module's opaque compiled entry name, so callable specializations never
+share a preparation. On first use in that module, a typed preparation validates
+function/device attributes and fixes the ordinary one-dimensional envelope;
+the cache retains the function and configuration, not a Rust type tag.
+Generated wrappers keep the kernel's exact scalar argument signature. A launch
+checks its context and positive grid against the envelope without CUDA queries;
+the recorded part cap and spread/share policy determine that grid as before.
+The module and slots live on their worker thread until query-scope release;
+context replacement discards them. No count/failure readback, replay, launch
+grid, or synchronization changes. The selector uses program preparation for
+raw-candidate programs; checking accepts any legal recorded alternative.
 \begin{mathpar}
 \Rule{GPU-Launch}{d\text{ is a checked dispatch}\quad M.\mathsf{gpu}\text{ supplied}}
  {\mathsf{execution}(d)=
-  (\mathsf{partition},\mathsf{kernelOccupancy},\mathsf{publication},
+  (\mathsf{partition},\mathsf{publication},
    \mathsf{offsetScan},\mathsf{foldCompletion},\mathsf{synchronizations},
    \mathsf{capacity},\mathsf{reservation},\mathsf{strips})}
 \Rule{GPU-LAUNCH-OCCUPANCY}{P=\text{domain tile count}\quad
  S=\text{device SM count}\quad R=\mathsf{residentBlocks}(K,\mathsf{threads},\mathsf{shared})>0}
  {\mathsf{grid}(K,P)=\min(\max(1,P),S R)}
+\Rule{GPU-ProgramLaunch}{L(d)\text{ recorded}\quad
+ L(d)=\mathsf{ProgramOne}\Rightarrow d.\mathsf{partition}=\mathsf{One}\quad
+ (K,C,B)\text{ is the entry's validated ordinary 1-D envelope}\quad 1\le g\le B}
+ {\mathsf{launch}(K,C,g)\text{ reuses that program entry's function and attributes;
+ only its grid cap varies, with the same scalar ABI and synchronization}}
 \Rule{GPU-RootSpread}{\mathsf{roots}=\mathsf{spread}\quad d\text{ fold-free}\quad
  m>0\text{, the declared tile when present}\quad
  R'=S R\text{ (GPU-LAUNCH-OCCUPANCY)}}

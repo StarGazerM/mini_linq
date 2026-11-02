@@ -13,6 +13,17 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- P6b GPU host preparation: `Realization.launches` records invocation
+  occupancy or a program-owned one-block/resident launch envelope.
+  Program slots use the CUDA module's opaque compiled entry identity,
+  including callable specialization, and retain validated function/configuration
+  with the context and query scope. Generated typed scalar-ABI wrappers borrow
+  those preparations; runtime checks only context and grid-envelope bounds,
+  without repeated occupancy, function/device-attribute or module lookup calls.
+  Row-dependent grid caps, root sharing, count/failure readbacks, replay and
+  stream synchronization are unchanged. `Execution.grid` is removed rather
+  than duplicating the target realization's launch decision.
+
 - GPU-7/8/9: GPU bindings record separate checked host collection/index
   adapters instead of collecting a device `RangeProvider` in host subplans.
   Closed range subjects obtain their capture context from row-valued bounds.
