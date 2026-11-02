@@ -320,3 +320,23 @@ fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
         }
     }
 }
+
+#[test]
+fn native_constant_scan_emits_its_point_guard() {
+    use quote::quote;
+    let source = syn::parse_quote! { physical {
+        relation R(a:i32,b:i32) host [a] reads [exact];
+        r = let rename R@0 {b -> y} constants {a = 7};
+        return canon r as answer(y);
+    }};
+    let program = cq_structure_selection::compile(&source).unwrap();
+    let facts = cq_lang_structures::contract::check(&program).unwrap();
+    assert_eq!(facts.natives.len(), 1);
+    let mut context = cq_print::Context::new(&program, &facts);
+    context.prepare_host("r");
+    let statements = &context.statements;
+    // The guard's recorded key uses the declaration's literal column, which
+    // is absent from the result heading.
+    let printed = quote!(#(#statements)*).to_string();
+    assert!(printed.contains("native_point"));
+}

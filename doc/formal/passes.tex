@@ -689,8 +689,8 @@ the occurrence's row source; GPU materializes that source in the build phase.
 The optional \code{positional(H,...)} arguments assert host capabilities at this
 boundary; Physical contains only relational schemas, so unspecified hosts keep
 the previous representation. The initial selector handles recorded point/range
-reads and single-column eager membership; Rust capability dispatch chooses the
-key codec without compiler inspection of Rust types. It chooses retained masks
+reads and single-column eager membership; the recorded provider spells its
+key codec without compiler inspection of Rust types. The selector chooses retained masks
 for eligible rescans or shared reads and leaves single filtered index-only
 builds streaming. Supplemental exact keysets beside payload indexes are explicit
 entries. Multi-key reductions, lazy semi and unsupported spines keep their old
@@ -761,8 +761,8 @@ No type-dependent selection, shared handle or capture-induced collection exists.
  K=\{d_1,\ldots,d_{|K|}\}\ \lor\ |K|=1\\
  \{\code{candidates},\code{range},\code{ordered}\}\cap P\neq\emptyset\Rightarrow K\text{ prefix}\quad
  \code{range}\in P\Rightarrow|K|=1\\
- \code{borrowed}\Rightarrow P=\{\code{membership}\}\quad
- S\neq\emptyset\Rightarrow\code{exact}\in P}
+ \code{borrowed}\Rightarrow P\subseteq\{\code{membership}\}\quad
+ \text{a supports clause is present}\Rightarrow\code{exact}\in P}
  {\mathsf{hostReads}(R,K)=P\quad\mathsf{hostSupports}(R,K)=S}
 
 \Rule{IF-Dispatch}{\mathsf{native}(r,c,C)=(\rho,\vec K)\quad\mathsf{hostReads}(R,K)\ni\rho}
@@ -857,9 +857,11 @@ retained. Both printers enforce the Structures contract and emitted
 capabilities from a Rust host type. Push continues to reject written merge and
 smallest choices, including unused results.
 
-Native keyed reads are chosen by stable autoref dispatch at the exact
-leading-prefix key type, with the recorded fallback otherwise; const/range reads
-scan and filter without building; merge requires \code{OrderedRead}. Rows borrow
+Native keyed reads come from host declarations and are recorded in Structures,
+with a recorded fallback otherwise. Merge readers record an ordered fallback,
+not a native ordered read, for compatibility with Sequence keyed lookups.
+Unrecorded const/range reads scan and
+filter without building; merge requires \code{OrderedRead}. Rows borrow
 host and built fields; computed columns and lookup keys are owned; canonicality
 never follows from a host type.
 
@@ -1182,6 +1184,7 @@ covering exact operators decide membership either way.
 
 \Rule{SEL-NativeHost}{
  r=\mathsf{rename}(R)\text{ read by }c\text{ on }C\quad
+ \neg\mathsf{merge}(c)\quad
  \rho=\min_{\mathsf{need}(c)}\{\rho\in\mathsf{hostReads}(R,\mathsf{renames}(C))\}
 }{
  \mathsf{native}(r,c,C)=(\rho,\mathsf{declOrder}_R(C))\quad
@@ -1190,3 +1193,7 @@ covering exact operators decide membership either way.
 \end{mathpar}
 Absent bounds make the corresponding block test true. The emitted filter and
 exact probe preserve surviving occurrence order and multiplicity.
+Merge readers always record an ordered fallback rather than a native ordered
+read: Sequence keyed lookups do not execute native ordered reads. This selection
+policy preserves supported generated code; the checker still rejects authored
+native ordered Sequence lookups.

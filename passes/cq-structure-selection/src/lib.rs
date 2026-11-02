@@ -386,6 +386,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             // when the input declares `exact` on exactly that prefix.
             if let Operator::Rename(rename) = &definition.operator
                 && let Some(constants) = &rename.constants
+                && definition.canon.is_none()
             {
                 let literals: BTreeSet<String> = constants
                     .equalities
@@ -429,6 +430,19 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                         .condition
                         .constant_keys()
                         .filter(|keys| keys.keys().cloned().collect::<Vec<_>>() == *columns)
+                        .filter(|_| {
+                            let input = &analysis.hosts[&name];
+                            let key = sorted(
+                                &columns
+                                    .iter()
+                                    .map(|column| analysis.renames[&name][column].clone())
+                                    .collect::<Vec<_>>(),
+                            );
+                            source
+                                .inputs()
+                                .find(|declaration| symbol_name(&declaration.name) == *input)
+                                .is_some_and(|declaration| declaration.prefix(&key))
+                        })
                         .and_then(|_| {
                             native_read(source, &analysis, &name, columns, &[HostRead::Exact])
                         }),
@@ -445,32 +459,10 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                                 &[HostRead::Range, HostRead::Ordered],
                             )
                         }),
-                    (SupplyKind::Stream, Operator::Merge(..)) => {
-                        // The host enumerates in declaration order; a merge
-                        // compares in sorted key order.
-                        let input = &analysis.hosts[&name];
-                        let ordered = source
-                            .inputs()
-                            .find(|declaration| symbol_name(&declaration.name) == *input)
-                            .is_some_and(|declaration| {
-                                declaration
-                                    .columns
-                                    .iter()
-                                    .take(columns.len())
-                                    .map(|column| {
-                                        analysis.renames[&name]
-                                            .iter()
-                                            .find(|(_, host)| **host == symbol_name(&column.name))
-                                            .map(|(target, _)| target.clone())
-                                    })
-                                    .eq(columns.iter().cloned().map(Some))
-                            });
-                        ordered
-                            .then(|| {
-                                native_read(source, &analysis, &name, columns, &[HostRead::Ordered])
-                            })
-                            .flatten()
-                    }
+                    // Sequence realizes a merge side as keyed lookups. Its
+                    // native lookup protocol cannot consume an ordered cursor,
+                    // so retain the ordered fallback instead.
+                    (SupplyKind::Stream, Operator::Merge(..)) => None,
                     (SupplyKind::Stream, Operator::Probe(..)) if membership => {
                         native_read(source, &analysis, &name, columns, &[HostRead::Membership])
                     }

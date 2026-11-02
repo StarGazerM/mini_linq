@@ -23,6 +23,47 @@ fn program(module: &structures::Program) -> String {
 }
 
 #[test]
+fn ordered_merge_uses_selected_fallback_and_rejects_authored_native() {
+    let physical = syn::parse_quote! {
+        physical {
+            relation L(a:i32) host [a] reads [ordered];
+            relation R(a:i32,b:i32) host [a] reads [ordered];
+            l = pipe rename L@0 {a -> a};
+            r = pipe rename R@1 {a -> a,b -> b};
+            j = let canon merge [a] l,r;
+            return j as answer(a,b);
+        }
+    };
+    let mut selected = cq_structure_selection::compile(&physical).unwrap();
+    let analysis = structures::contract::check(&selected).unwrap();
+    for result in ["l", "r"] {
+        let key = (
+            result.into(),
+            structures::ReaderRef::Result("j".into()),
+            vec!["a".into()],
+        );
+        assert!(analysis.fallbacks.contains_key(&key));
+        assert!(!analysis.natives.contains_key(&key));
+    }
+    sequence_rows(&selected).unwrap();
+    let mut replaced = 0;
+    for entry in &mut selected.structures.entries {
+        if matches!(&entry.structure,
+            structures::Structure::Host { reader: structures::ReaderRef::Result(reader), .. }
+                if reader == "j")
+        {
+            let name = &entry.name;
+            *entry = syn::parse_quote!(#name native result(j) = ordered [a];);
+            replaced += 1;
+        }
+    }
+    assert_eq!(replaced, 2);
+    selected.structures.declare(&[]);
+    structures::contract::check(&selected).unwrap();
+    assert!(sequence_rows(&selected).is_err());
+}
+
+#[test]
 fn zero_heading_exists_can_be_scanned_and_probed_against_itself() {
     let physical = syn::parse_quote!(physical {
         relation rows(a:i32);
@@ -800,8 +841,8 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
         .join("../../runtime/cq-storage/src/lib.rs");
     let runtime = cq_testkit::rustc::Runtime::new(&runtime, false);
     runtime.run(&source.to_string());
-    // Direct merge premises are deliberately left to rustc, with the trait
-    // diagnostic: the hosts declare ordered reads that slices lack.
+    // Selection records ordered fallbacks even when the host declares an
+    // ordered read: Sequence's keyed printer consumes the recorded fallback.
     let unordered: structures::Program = syn::parse_quote!(physical {
         relation L(a:i32) host [a] reads [ordered]; relation R(a:i32) host [a] reads [ordered];
         l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a};
@@ -809,19 +850,17 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     } structures { providers {  }});
     let complete = cq_structure_selection::compile(&unordered.physical).unwrap();
     let expression = sequence_rows(&complete).unwrap();
-    let invalid = quote!(#source
-        #[allow(non_snake_case)] fn unordered_merge() {
-            let L: &[(i32,)] = &[(1,)]; let R: &[(i32,)] = &[(1,)];
-            let _: Vec<_> = (#expression).collect();
+    let fallback = quote! {
+        #[allow(non_snake_case)] fn main() {
+            let L: &[(i32,)] = &[(2,), (1,), (1,)];
+            let R: &[(i32,)] = &[(3,), (1,), (2,), (2,)];
+            let actual: ::std::collections::BTreeSet<_> =
+                (#expression).map(|(a,)| (*a,)).collect();
+            let expected: ::std::collections::BTreeSet<_> = [(1,), (2,)].into_iter().collect();
+            assert_eq!(actual, expected);
         }
-    );
-    let rejected = runtime.compile(&invalid.to_string());
-    assert!(!rejected.status.success());
-    let diagnostic = String::from_utf8_lossy(&rejected.stderr);
-    assert!(
-        diagnostic.contains("this read requires ordered inputs"),
-        "{diagnostic}"
-    );
+    };
+    runtime.run(&fallback.to_string());
 }
 
 #[test]

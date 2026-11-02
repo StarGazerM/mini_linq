@@ -1,9 +1,9 @@
-// The recorded two-column native ordered key must match the host cursor key;
-// a one-column BTreeMap key does not satisfy that contract.
+// A two-column merge key uses its recorded fallback even when the raw host
+// cursor has a shorter key; the fallback preserves complete joined rows.
 fn main() {
     let l = std::collections::BTreeMap::from([((1_i32,), vec![(2_i32, 3_i32)])]);
     let r = std::collections::BTreeMap::from([((1_i32,), vec![(2_i32, 4_i32)])]);
-    let _ = mini_linq::passes::select! {
+    let rows: Vec<_> = mini_linq::passes::select! {
         pipeline {
             mini_linq::passes::sequence,
             mini_linq::passes::sequential,
@@ -17,5 +17,6 @@ fn main() {
             j = let canon merge[a,b] left, right;
             return j as answer(a,b,c,d);
         }
-    }.count();
+    }.map(|(a,b,c,d)| (*a,*b,*c,*d)).collect();
+    assert_eq!(rows, [(1,2,3,4)]);
 }

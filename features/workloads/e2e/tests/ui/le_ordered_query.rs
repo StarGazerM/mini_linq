@@ -1,5 +1,5 @@
-// D85's LE merge requests native ordered reads explicitly. HashMap does not
-// implement that recorded contract, with or without the sorted-runs rewrite.
+// LE merges use selected ordered fallbacks on HashMap hosts, with and
+// without the sorted-runs rewrite; empty inputs produce no answers.
 macro_rules! d85_unordered_merge {
     ($($runs:path,)*) => {
         fn main() {
@@ -11,7 +11,7 @@ macro_rules! d85_unordered_merge {
             let RetailD85CustomerAddress = HashMap::<(i32,), Vec<()>>::new();
             let RetailD85DateDim = HashMap::<(i32,), Vec<()>>::new();
             let RetailD85Reason = HashMap::<(i32,), Vec<()>>::new();
-            let _ = mini_linq::compile! {
+            let count = mini_linq::compile! {
                 pipeline {
                     plan = cq_planners::order(le);
                     physical = [cq_rewrites::canon_prefixes, cq_rewrites::lazy_semijoins, cq_rewrites::merge_joins];
@@ -35,6 +35,7 @@ macro_rules! d85_unordered_merge {
                     RetailD85DateDim(sold_date),
                     RetailD85Reason(reason_key);
             }.count();
+            assert_eq!(count, 0);
         }
     };
 }

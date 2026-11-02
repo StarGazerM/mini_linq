@@ -123,9 +123,9 @@ pub fn machine_with_width(parts: usize) -> Machine {
 /// Native runtime tokens are valid at host, pool publication and task levels.
 ///
 /// Task chunks own their native values; no device codec or provider is implied.
-/// Type-directed membership builds retain the same routed publication protocol
-/// as explicit-codec keysets; their concrete dense representation is selected
-/// by `cq_storage::build!`, independently of the planner's key-partition choice.
+/// Recorded membership providers retain the same routed publication protocol
+/// as explicit-codec keysets. Single-column membership records `dense_membership`;
+/// provider builds use `Build`, independently of the planner's key-partition choice.
 pub fn catalog() -> cq_lang_sequence::Catalog {
     use cq_lang_sequence::CatalogEntry;
     use cq_lang_sequence::structures::provider::base::declaration;

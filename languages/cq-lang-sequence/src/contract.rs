@@ -212,6 +212,63 @@ pub fn check(program: &Program) -> syn::Result<Analysis> {
     Checker::default().check(program)
 }
 
+fn check_native_read(
+    provider: &Ident,
+    read: cq_syntax::host::HostRead,
+    required: &Capability,
+) -> syn::Result<()> {
+    use cq_syntax::host::HostRead;
+    // Formal rule BE-NativeBind: only the lookup's own recorded read can
+    // discharge its capability, and Sequence must be able to print that read.
+    let covers = match required {
+        Capability::Membership => matches!(read, HostRead::Membership | HostRead::Exact),
+        Capability::Exact => read == HostRead::Exact,
+        Capability::Range => matches!(read, HostRead::Range | HostRead::Ordered),
+        Capability::Ordered => read == HostRead::Ordered,
+        Capability::Candidates => read == HostRead::Candidates,
+        Capability::Resident | Capability::Distinct => false,
+    };
+    if !covers || !matches!(read, HostRead::Membership | HostRead::Exact) {
+        return fail(
+            provider,
+            "BE-NativeBind",
+            "recorded native host read cannot serve this Sequence lookup capability",
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn check_native_grading(program: &Program, analysis: &Analysis) -> syn::Result<()> {
+    for definition in &program.structures.physical.program.definitions {
+        let keyed = match &definition.operator {
+            Operator::Probe(_, keyed)
+            | Operator::Merge(_, keyed)
+            | Operator::Semi(_, keyed)
+            | Operator::Anti(_, keyed) => keyed,
+            _ => continue,
+        };
+        let provider = symbol_name(&keyed.right);
+        let mut keys: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
+        keys.sort();
+        let Some(required) = analysis.capabilities.get(&(provider.clone(), keys.clone())) else {
+            continue;
+        };
+        let required = if matches!(definition.operator, Operator::Semi(..) | Operator::Anti(..)) {
+            &Capability::Membership
+        } else {
+            required
+        };
+        if let Some(native) = analysis.structures.natives.get(&(
+            provider,
+            cq_lang_structures::ReaderRef::Result(symbol_name(&definition.name)),
+            keys,
+        )) {
+            check_native_read(&keyed.right, native.read, required)?;
+        }
+    }
+    Ok(())
+}
+
 fn analyze(program: &Program, context: &Checker) -> syn::Result<std::rc::Rc<CheckedProof>> {
     let prefix = context.structures(&program.structures)?;
     analyze_in(program, context, prefix)
@@ -754,7 +811,7 @@ impl Checked<'_> {
                             "membership lookup differs from its Physical read",
                         );
                     }
-                    self.provider(provider, &columns, Capability::Membership)?;
+                    self.provider(provider, &columns, Capability::Membership, Some(name))?;
                     self.analysis
                         .provider_reads
                         .entry(owner.into())
@@ -827,7 +884,12 @@ impl Checked<'_> {
                                 }
                                 _ => Capability::Exact,
                             };
-                            provider_reads.push((keyed.right.clone(), keys, capability));
+                            provider_reads.push((
+                                keyed.right.clone(),
+                                keys,
+                                capability,
+                                definition.name.clone(),
+                            ));
                         }
                         _ => {}
                     }
@@ -845,9 +907,9 @@ impl Checked<'_> {
                     };
                     current = symbol_name(input);
                 }
-                for (provider, keys, capability) in provider_reads {
+                for (provider, keys, capability, reader) in provider_reads {
                     let enumerated = matches!(capability, Capability::Exact | Capability::Ordered);
-                    self.provider(&provider, &keys, capability)?;
+                    self.provider(&provider, &keys, capability, Some(&reader))?;
                     self.analysis
                         .provider_reads
                         .entry(owner.into())
@@ -955,24 +1017,28 @@ impl Checked<'_> {
                         "lookup keys must be distinct columns of provider and input",
                     );
                 }
-                let ordered_left = self
+                let reader = self
                     .prefix
                     .lookups
                     .get(&provider_name)
                     .and_then(|lookups| lookups.get(&names))
                     .into_iter()
                     .flatten()
-                    .find_map(|(index, input)| {
+                    .filter_map(|(index, input)| {
                         let definition =
                             &self.program.structures.physical.program.definitions[*index];
-                        if let Operator::Merge(_, keyed) = &definition.operator
-                            && self.same_meaning(&fact.meaning, &Meaning::Result(input.clone()))
-                        {
-                            Some(keyed.left.clone())
-                        } else {
-                            None
-                        }
-                    });
+                        self.same_meaning(&fact.meaning, &Meaning::Result(input.clone()))
+                            .then_some(definition)
+                    })
+                    .min_by_key(|definition| !matches!(definition.operator, Operator::Merge(..)));
+                let ordered_left = reader.and_then(|definition| {
+                    if let Operator::Merge(_, keyed) = &definition.operator {
+                        Some(keyed.left.clone())
+                    } else {
+                        None
+                    }
+                });
+                let reader = reader.map(|definition| definition.name.clone());
                 let capability = if self
                     .analysis
                     .structures
@@ -985,7 +1051,7 @@ impl Checked<'_> {
                 } else {
                     Capability::Exact
                 };
-                self.provider(provider, &names, capability)?;
+                self.provider(provider, &names, capability, reader.as_ref())?;
                 self.analysis
                     .provider_reads
                     .entry(owner.into())
@@ -1010,7 +1076,12 @@ impl Checked<'_> {
                             .capabilities
                             .insert((left_name, names.clone()), Capability::Ordered);
                     } else {
-                        self.provider_capability(&left, &names, Capability::Ordered)?;
+                        self.provider_capability(
+                            &left,
+                            &names,
+                            Capability::Ordered,
+                            reader.as_ref(),
+                        )?;
                     }
                 }
                 fact.reads.insert((provider_name.clone(), names.clone()));
@@ -1049,7 +1120,7 @@ impl Checked<'_> {
                 // flattened bucket stream across executors.
                 for (provider, keys) in &fact.reads {
                     let name = Ident::new(provider, proc_macro2::Span::call_site());
-                    self.provider(&name, keys, Capability::Exact)?;
+                    self.provider(&name, keys, Capability::Exact, None)?;
                 }
                 fact.depth -= 1;
                 fact.max_depth -= 1;
@@ -1317,6 +1388,7 @@ impl Checked<'_> {
         provider: &Ident,
         keys: &[String],
         required: Capability,
+        reader: Option<&Ident>,
     ) -> syn::Result<()> {
         self.require_store(provider)?;
         // Formal rule BE-KeyPartProvider: A lookup key determines the provider's routing key.
@@ -1335,7 +1407,7 @@ impl Checked<'_> {
                 );
             }
         }
-        self.provider_capability(provider, keys, required)
+        self.provider_capability(provider, keys, required, reader)
     }
 
     fn provider_capability(
@@ -1343,9 +1415,46 @@ impl Checked<'_> {
         provider: &Ident,
         keys: &[String],
         required: Capability,
+        reader: Option<&Ident>,
     ) -> syn::Result<()> {
         let name = symbol_name(provider);
         let key = (name.clone(), keys.to_vec());
+        // Check the actual reader before using a capability cached for another
+        // reader or a retained provider recorded for the same result and keys.
+        let native = reader.and_then(|reader| {
+            self.analysis.structures.natives.get(&(
+                name.clone(),
+                cq_lang_structures::ReaderRef::Result(symbol_name(reader)),
+                keys.to_vec(),
+            ))
+        });
+        if let Some(native) = native {
+            check_native_read(provider, native.read, &required)?;
+            let capability = self
+                .analysis
+                .capabilities
+                .entry(key)
+                .or_insert(required.clone());
+            if required == Capability::Exact && *capability == Capability::Membership {
+                *capability = Capability::Exact;
+            }
+            return Ok(());
+        }
+        if let Some(reader) = reader
+            && self.analysis.structures.built_on(&name, keys).is_none()
+            && !self.analysis.structures.keysets.contains_key(&key)
+            && !self.analysis.structures.fallbacks.contains_key(&(
+                name.clone(),
+                cq_lang_structures::ReaderRef::Result(symbol_name(reader)),
+                keys.to_vec(),
+            ))
+        {
+            return fail(
+                provider,
+                "BE-NativeBind",
+                "lookup has no native read or fallback for its own reader",
+            );
+        }
         if self.analysis.capabilities.get(&key).is_some_and(|current| {
             *current == required
                 || *current == Capability::Ordered
@@ -1419,43 +1528,11 @@ impl Checked<'_> {
                     .map(|keyset| keyset.provider.clone())
             });
         let Some(ty) = ty else {
-            // Formal rule BE-NativeBind: a read recorded as native
-            // (STR-NativeHost) is discharged by the declared host capability;
-            // the host owns its keys, so no provider or codec premise arises.
-            // A native record whose declared read is weaker than the required
-            // capability is rejected rather than silently substituted.
-            let mut natives = self
-                .analysis
-                .structures
-                .natives
-                .iter()
-                .filter(|((result, reader, columns), _)| {
-                    *result == name
-                        && columns == keys
-                        && !matches!(reader, cq_lang_structures::ReaderRef::Scan)
-                })
-                .peekable();
-            if natives.peek().is_none() {
-                return fail(provider, "BE-Bind", "lookup has no provider for these keys");
-            }
-            use cq_syntax::host::HostRead;
-            let covers = |read: HostRead| match required {
-                Capability::Membership => true,
-                Capability::Exact => matches!(read, HostRead::Exact | HostRead::Candidates),
-                Capability::Range => matches!(read, HostRead::Range | HostRead::Ordered),
-                Capability::Ordered => read == HostRead::Ordered,
-                Capability::Candidates => read == HostRead::Candidates,
-                Capability::Resident | Capability::Distinct => false,
-            };
-            if !natives.any(|(_, native)| covers(native.read)) {
-                return fail(
-                    provider,
-                    "BE-NativeBind",
-                    "recorded native host read does not declare the required capability",
-                );
-            }
-            self.analysis.capabilities.insert(key, required);
-            return Ok(());
+            return fail(
+                provider,
+                "BE-Bind",
+                "lookup has no provider for this reader and keys",
+            );
         };
         let capability = match (self.analysis.capabilities.get(&key), &required) {
             (Some(Capability::Ordered), _) | (_, Capability::Ordered) => Capability::Ordered,
@@ -1648,6 +1725,40 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_lookup_capabilities_require_printable_recorded_reads() {
+        use cq_syntax::host::HostRead;
+        let provider: Ident = syn::parse_quote!(r);
+        for read in [
+            HostRead::Membership,
+            HostRead::Exact,
+            HostRead::Range,
+            HostRead::Ordered,
+            HostRead::Candidates,
+        ] {
+            for required in [
+                Capability::Membership,
+                Capability::Exact,
+                Capability::Range,
+                Capability::Ordered,
+                Capability::Candidates,
+            ] {
+                let supported = matches!(
+                    (read, &required),
+                    (
+                        HostRead::Membership | HostRead::Exact,
+                        Capability::Membership
+                    ) | (HostRead::Exact, Capability::Exact)
+                );
+                let result = check_native_read(&provider, read, &required);
+                assert_eq!(result.is_ok(), supported, "{read:?} for {required:?}");
+                if let Err(error) = result {
+                    assert!(error.to_string().contains("BE-NativeBind"));
+                }
+            }
+        }
+    }
 
     #[test]
     fn indexed_publication_keys_preserve_lexical_fact_order() {

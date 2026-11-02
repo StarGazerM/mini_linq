@@ -62,10 +62,30 @@ pub(super) fn derive(
         let name = symbol_name(&definition.name);
         let mut tiles = Vec::new();
         host_tiles(&definition.term, &analysis.host_sources, &mut tiles);
+        let base = base_source(&definition.term, &analysis.host_sources);
+        for result in tiles
+            .iter()
+            .flatten()
+            .chain(base.iter().filter(|_| inputs.contains(&name)))
+        {
+            if analysis
+                .structures
+                .natives
+                .keys()
+                .any(|(source, reader, _)| {
+                    source == result && matches!(reader, cq_lang_structures::ReaderRef::Scan)
+                })
+            {
+                return fail(
+                    &definition.term,
+                    "BE-NativeBind",
+                    "a tiled host source cannot replace a recorded native scan",
+                );
+            }
+        }
         if !tiles.is_empty() {
             analysis.host_tiles.insert(name.clone(), tiles);
         }
-        let base = base_source(&definition.term, &analysis.host_sources);
         if let Some(result) = &base {
             analysis.host_sources.insert(name.clone(), result.clone());
         }

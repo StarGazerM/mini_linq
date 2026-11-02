@@ -818,7 +818,7 @@ impl<'a> Printer<'a> {
                 quote!(::cq_storage::provider_contract::retain(#structure, &(#(#key,)*)))
             }
             Access::Host(access) => {
-                let read = self.host_retained_read(&left, &access);
+                let read = self.host_retained_read(&access);
                 let key = self.host_key(&left, &access);
                 quote!(::cq_storage::provider_contract::retain(#read, #key))
             }

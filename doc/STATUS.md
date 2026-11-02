@@ -38,9 +38,11 @@
   grouped containers use the recorded fast hasher.
 - Join filters (SQL Server bitmaps): eligible probes or semijoins into filtered
   builds push exact key sets to scans reached through their probe spines.
-  Structures records the filter candidates; the printer/runtime still decides
-  abandonment: retained distinct keys must be at most 35% of source occurrences.
-  Unknown source populations never abandon. The exact probe still runs.
+  Structures records filter candidates and the abandonment policy as
+  `abandon P of B` (default `35` for a positional lineage base). The checker
+  validates the percentage and base; the runtime applies that recorded threshold
+  to retained distinct keys versus base occurrences. Without a recorded policy,
+  filters never abandon. The exact probe still runs.
 - Probes: Swiss-table `HashIndex`; batched (128) prefetched probes on scan
   spines, scalar elsewhere; no per-row `Rc`.
 - Back end (`doc/formal/backend.tex`): three recorded layers over one
@@ -190,12 +192,11 @@ as planner axes (538 new accepted configurations; the two D85 `merge_joins`
 pinned as negative UI fixtures); the corpus gate passes (3,440 tests).
 
 `le_runs` explicitly applies `sorted_runs`; core default selection is
-unchanged. Sorted-run retyping selects `SortedRun<_, _, AutoDense>` for eligible
+unchanged. Sorted-run retyping selects `SortedRun<_, _, I64Codec>` for eligible
 one-level HashIndex payload builds with one stored key, without inspecting
-Rust key types or requiring borrowed keys. Concrete build dispatch selects
-the borrowed integral codec when supported, otherwise `NoDense` binary-search
-storage (subject to the provider's Rust trait bounds). An integral codec with
-an over-budget span can also fall back to binary search at runtime.
+Rust key types. The provider explicitly spells the codec; rustc enforces its
+trait bounds rather than selecting another codec. An over-budget span can
+still fall back to binary search within that recorded codec at runtime.
 
 The Mac experiment also exposes checked `cq_rewrites::radix_runs`, selecting
 native `cq_storage::RadixRun<_,_>` for eligible singleton i32/i64/u32/u64 payload

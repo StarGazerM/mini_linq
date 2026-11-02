@@ -1096,6 +1096,104 @@ fn bind_records_range_obligations_without_inspecting_type_names() {
     assert!(a.obligations.iter().any(|o| matches!(o, Obligation::Provider { capability: Capability::Range, instance, .. } if instance.token == "provider")));
 }
 
+fn native_lookup_program(body: proc_macro2::TokenStream) -> Program {
+    syn::parse2(quote! {
+        physical {
+            relation L(a:i32);
+            relation R(a:i32,b:i32) host [a] reads [exact];
+            l = pipe rename L@0 {a -> a};
+            r = pipe rename R@1 {a -> a,b -> b};
+            j = let canon probe first [a] l,r;
+            return j as answer(a,b);
+        }
+        structures {
+            providers {
+                reader = Reader { reads [exact, range, membership], build inferred };
+                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+            }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r native result(j) = exact [a];
+            j rows = @sort as ::cq_storage::dedup::Sort;
+            j canon = rows;
+        }
+        sequence { #body }
+    })
+    .unwrap()
+}
+
+#[test]
+fn native_lookup_is_checked_again_after_range_grading() {
+    let mut p = native_lookup_program(quote!(a = flatten lookup r [a] tile 8 rows l;));
+    let analysis = contract::check(&p).unwrap();
+    assert_eq!(
+        analysis.capabilities[&("r".into(), vec!["a".into()])],
+        Capability::Exact
+    );
+    check_grading(&p, &sequential()).unwrap();
+    grade(&mut p, quote!(a at device.block;));
+    assert!(check_grading(&p, &gpu()).is_err());
+}
+
+#[test]
+fn native_lookup_and_map_use_their_own_reader_record() {
+    for body in [
+        quote!(a = flatten lookup r [a] rows l;),
+        quote!(a = map j rows l;),
+    ] {
+        let p = native_lookup_program(body);
+        let analysis = contract::check(&p).unwrap();
+        assert_eq!(
+            analysis.capabilities[&("r".into(), vec!["a".into()])],
+            Capability::Exact
+        );
+        assert!(!analysis.obligations.iter().any(|obligation| {
+            matches!(obligation, Obligation::Provider { provider, .. } if provider == "r")
+        }));
+    }
+}
+
+#[test]
+fn tiled_host_sources_cannot_discard_native_scan_records() {
+    for (body, tiled) in [
+        (quote!(a = rows r;), false),
+        (quote!(a = tile 8 rows r;), true),
+        (
+            quote!(source = store rows r; a = partition_k[b](4) source;),
+            true,
+        ),
+    ] {
+        let p: Program = syn::parse2(quote! {
+            physical {
+                relation R(a:i32,b:i32) host [a] reads [exact];
+                r = let rename R@0 {b -> b} constants {a = 7};
+                out = let canon project r keep {b};
+                return out as answer(b);
+            }
+            structures {
+                providers {
+                    sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+                    rows = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
+                    scan = ::core::iter::Map<_, _> { reads [], build typed };
+                }
+                r native scan = exact [a];
+                r rows = @rows as ::std::vec::Vec<_>;
+                r host scan = @scan as ::core::iter::Map<_, _> [];
+                out rows = @sort as ::cq_storage::dedup::Sort;
+                out canon = rows;
+            }
+            sequence { #body }
+        })
+        .unwrap();
+        structures::contract::check(&p.structures).unwrap();
+        if tiled {
+            assert!(contract::check(&p).is_err());
+        } else {
+            contract::check(&p).unwrap();
+        }
+    }
+}
+
 #[test]
 fn partition_rejects_zero_tile_and_invalid_sum() {
     reject(&program(quote!(a = tile 0 rows r;)), "BE-Partition");

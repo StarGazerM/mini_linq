@@ -5,7 +5,7 @@
 \begin{lstlisting}
 Structures ::= Physical structures { providers { Decl* } Entry* }
 Decl ::= x = Type { Fact, ... };
-Fact ::= reads [Cap,...] | supports [Support,...] | build (inferred | macro)
+Fact ::= reads [Cap,...] | supports [Support,...] | build (inferred | typed)
        | accounting (rows | keys) | (nested | routed) N | join_filter
        | shared | packed_bits N | abi (range | runs | columns)
        | contiguous_range | bounds resident_columns
@@ -16,6 +16,7 @@ InputColumn ::= Type => Type [codec Type]
 Entry ::= r = Provider [K]... [supports [Support,...]]
               [membership] [payload[P] constants{c = term, ...}];
         | r host ReaderRef = Provider [K]... [supports [Support,...]];
+        | r native ReaderRef = HostRead [K] [supports [Support,...]];
         | r rows = Provider; | r canon = Canon; | r head = Provider;
         | r group = Provider;
         | r selection = Provider base H lineage{a -> c, ...}
@@ -25,13 +26,14 @@ Entry ::= r = Provider [K]... [supports [Support,...]]
         | r read = positional base H lineage{a -> c, ...}
               column c marker Type predicate Predicate;
         | r join_filter = Provider build s [k]
-              covering j marker Type;
+              covering j marker Type [abandon N of H];
         | r share = lookup b [K] first s force p;
         | r repr = (tuples | positions {H lineage {a -> c, ...}, ...}
                          owned [O]) [witness {b [K] at s as Type}];
         | r stage = batch N [expand];
 Predicate ::= physical | membership s [K] summary (exact | row)
 ReaderRef ::= scan | candidates | membership | result(Ident)
+HostRead ::= exact | membership | candidates | range | ordered
 Support ::= retain | expand | keys
 Canon ::= rows | [K] | host
 \end{lstlisting}
@@ -221,7 +223,8 @@ The checker rederives projection coverage and rejects partial-key or ordered
 reads. The printer emits one unit witness on successful membership, without an
 occurrence-preserving payload index. Default selection applies this representation
 only when exactly one key column remains after removing reconstructed constants:
-\code{AdaptiveMembership<K,16777216>}, independent of the spelling of $K$.
+\code{dense_membership}, spelled \code{DenseMembership<K,16777216>}, requiring
+\code{OrderKey} rather than selecting a representation by Rust traits.
 Composite stored keys retain their existing payload or hash-set provider.
 The membership contract itself remains valid for explicitly recorded composite keys.
 No base-table key or foreign-key assumption is used.
@@ -320,13 +323,20 @@ a declared host key in declaration order whose reads include $\rho$, $c$ reads
 $r$ on exactly that key, $\rho$ is a read $c$'s operator needs, and the
 recorded supports are declared and belong to an exact keyed read. A keyed read
 has at most one record: a native read or a fallback, never both.
+Native point reads require a leading-prefix host key; a non-leading
+single-column declaration does not support a native point read.
+Structures rejects a native scan when its Physical rename is both canonical
+and piped, since that source uses ordered host canonicalization. Sequence
+separately rejects native scans over tiled sources.
 \[
 \Rule{STR-NativeHost}{
  r=\mathsf{rename}(R)\quad\mathsf{renames}(\vec K)=\mathsf{declOrder}_R(K)\quad
  \rho\in\mathsf{hostReads}(R,K)\cap\mathsf{need}(c)\\
  \mathsf{reads}(c,r)=K\quad S\subseteq\mathsf{hostSupports}(R,K)\quad
  S\neq\emptyset\Rightarrow\rho=\code{exact}\quad
- \neg\mathsf{fallback}(r,c,K)
+ \neg\mathsf{fallback}(r,c,K)\\
+ \mathsf{point}(c)\Rightarrow K\text{ is a leading prefix}\quad
+ c=\mathsf{scan}\Rightarrow\neg(\mathsf{canon}(r)\land\mathsf{pipe}(r))
 }{
  \mathsf{native}(r,c,K)=(\rho,\vec K,S)
 }

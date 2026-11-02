@@ -100,6 +100,16 @@ Machine grading adds Range obligations when a non-leaf collective needs
 indexed bucket offsets, or a distributing tile cuts the flattened bucket
 stream across executors. This distinction preserves exact routed-provider
 reads inside a whole task-local segment without weakening collective scans.
+BE-NativeBind checks the native record for the lookup's own result reader and
+key, never another reader's record. For required capabilities membership,
+exact, range, ordered and candidates, respectively, the covering native reads
+are $\{\mathsf{membership},\mathsf{exact}\}$, $\{\mathsf{exact}\}$,
+$\{\mathsf{range},\mathsf{ordered}\}$, $\{\mathsf{ordered}\}$ and
+$\{\mathsf{candidates}\}$. Sequence keyed lookups additionally admit only
+recorded exact or membership reads; ordered merges and native range or
+candidate reads require a supported recorded fallback instead.
+The checker reapplies BE-NativeBind after grading adds Range obligations,
+so a native lookup promoted to Range is rejected before printing.
 Under BE-Alpha, constructors are lifted through outer tile levels:
 \code{map}, \code{compact}, \code{lookup}, \code{fold}, \code{canon} and
 \code{store} operate on innermost rows and preserve those outer partitions;
@@ -120,8 +130,10 @@ one part; a separated store publishes the concatenation of its outer parts.
 \Rule{BE-OrderedFallback}{\mathsf{host}(r)\quad\text{reader }c\text{ of }r\text{ is a merge}\quad\mathsf{fallback}(r,c)=T}
  {\text{the ordered read of }r\text{ is typed }T\text{, not by another reader's fallback}}
 
-\Rule{BE-NativeBind}{\mathsf{host}(r)\quad\mathsf{native}(r,c,K)=(\rho,\ldots)\quad
- \mathsf{required}(c)\sqsubseteq\rho}
+\Rule{BE-NativeBind}{\mathsf{host}(r)\quad c=\mathsf{result}(\mathsf{reader})\quad
+ \mathsf{native}(r,c,K)=(\rho,\ldots)\\
+ \rho\in\{\mathsf{exact},\mathsf{membership}\}\quad
+ \mathsf{required}(c)\sqsubseteq\rho\text{, including after grading}}
  {\text{the lookup of }r\text{ on }K\text{ is discharged by the host; no provider or codec premise}}
 
 \Rule{BE-Partition}{\{P_k\}\text{ disjoint}\quad\textstyle\bigcup_kP_k=[0,|t|)\quad

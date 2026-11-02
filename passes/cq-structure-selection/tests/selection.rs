@@ -25,6 +25,23 @@ fn contract(program: &structures::Program) -> syn::Result<structures::Analysis> 
 }
 
 #[test]
+fn nonleading_native_point_uses_scan_and_rejects_authored_native() {
+    let source: physical::Program = syn::parse_quote!(physical {
+        relation R(a:i32,b:i32) host [b] reads [exact];
+        r = pipe rename R@0 {a -> x,b -> y};
+        p = let canon point select r if (y = 2);
+        return p as answer(x,y);
+    });
+    let mut target = compile(&source).unwrap();
+    let analysis = contract(&target).unwrap();
+    assert!(analysis.natives.is_empty());
+    target.structures.entries.push(syn::parse_quote!(
+        r native result(p) = exact [y];
+    ));
+    assert!(contract(&target).is_err());
+}
+
+#[test]
 fn full_row_positive_probes_record_membership_without_a_filtered_source() {
     for mode in [quote::quote!(pipe), quote::quote!(let)] {
         let source: physical::Program = syn::parse_quote! { physical {

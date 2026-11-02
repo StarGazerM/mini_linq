@@ -277,6 +277,11 @@ pub(crate) fn entry(
             .position(|column| symbol_name(&column.name) == host_key[0])
             .expect("checked declared column")
     });
+    if slot.is_some()
+        && matches!(&reader_name, ReaderRef::Result(result) if program.physical.program.definitions.iter().any(|d| symbol_name(&d.name) == *result && matches!(d.operator, Operator::Point(..))))
+    {
+        return error(&read.key, "a native point reads a leading host key");
+    }
     if let Some(support) = &read.supports {
         let mut seen = BTreeSet::new();
         for token in &support.capabilities {
@@ -332,6 +337,15 @@ pub(crate) fn entry(
 /// Every keyed read has at most one record: native or fallback.
 pub(crate) fn check(analysis: &Analysis) -> syn::Result<()> {
     for (name, reader, key) in analysis.natives.keys() {
+        if matches!(reader, ReaderRef::Scan)
+            && analysis.physical.canon.contains(name)
+            && analysis.physical.modes[name] == ModeKind::Pipe
+        {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "a native scan cannot replace an ordered canonical host source",
+            ));
+        }
         if !matches!(reader, ReaderRef::Scan)
             && analysis
                 .fallbacks

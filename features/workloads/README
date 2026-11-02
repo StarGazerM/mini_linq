@@ -50,9 +50,10 @@ policy: only recorded payload-index families (HashIndex, SortedRun, and their
 routed forms) supply them, not HashSet merely because it can enumerate keys.
 This is a selection cost policy, not a validity restriction: explicitly selected
 custom single-level providers remain legal when they satisfy the covering
-probe and `Keys` contracts. Rust autoref dispatch
-enables the scalar policy for i64 (including aliases); other scalar types skip
-key counting, enumeration, and construction before the selectivity check.
+probe and `Keys` contracts. Selection records `dense_membership`, whose
+`OrderKey` bound is checked by rustc, and records abandonment as `abandon P of B`
+when the build has a positional lineage base. The runtime applies the recorded
+percentage to that base's occurrence count; it does not choose a scalar policy.
 Identity-only filters do not make a previously unknown source population known.
 The runtime exposes an explicit identity fact for absent filters. Scalar and
 chunked block reads enumerate positions directly for identity predicates,

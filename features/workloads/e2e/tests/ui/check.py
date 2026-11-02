@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Reject invalid recorded contracts; pin each construct/trait obligation.
+"""Check invalid recorded contracts and ordered-fallback compatibility.
 
-Host container types do not select native reads. Ordering fixtures declare
-their host reads explicitly so rustc checks the promised capability/key,
-rather than expecting an undeclared host to bypass index construction.
+An actual native window checks its declared OrderedRead capability. Merge
+fixtures instead compile and execute their selected ordered fallbacks.
 """
 import json
 import os
@@ -29,9 +28,9 @@ manifest += dependencies(CARGO, ["mini-linq", "cq-storage", "cq-load", "cq-workl
 fixtures = [(name, Path(__file__).parent / f"{name}.rs", needle)
             for name, needle in [
                 ("ordered", "OrderedRead"),
-                ("le_ordered", "OrderedRead"),
-                ("le_runs_ordered", "OrderedRead"),
-                ("leading_prefix", "leading declaration prefix"),
+                ("le_ordered", None),
+                ("le_runs_ordered", None),
+                ("leading_prefix", None),
                 ("push_merge", "own_push: merge is unsupported"),
                 ("push_smallest", "own_push: probe smallest is unsupported"),
                 ("extension", "name!"),
@@ -58,9 +57,16 @@ def diagnostic_text(error):
 
 total = 0
 for name, path, needle in fixtures:
-    result = subprocess.run([CARGO, "check", "--offline", "--locked", "--bin", name, "--message-format=json"],
+    command = "check" if needle is not None else "run"
+    result = subprocess.run([CARGO, command, "--offline", "--locked", "--bin", name, "--message-format=json"],
                             cwd=DIRECTORY, env=env, capture_output=True, text=True)
     (DIRECTORY / f"{name}.jsonl").write_text(result.stdout)
+    if needle is None:
+        if result.returncode != 0:
+            raise SystemExit(f"{name}: expected successful execution\n{result.stderr}")
+        total += 1
+        print(f"PASS: {name}: ordered fallback executes", flush=True)
+        continue
     errors = [m["message"] for line in result.stdout.splitlines()
               if (m := json.loads(line)).get("reason") == "compiler-message" and m["message"]["level"] == "error"]
     if result.returncode == 0 or not errors:
@@ -69,4 +75,4 @@ for name, path, needle in fixtures:
         raise SystemExit(f"{name}: expected {needle!r}; see {DIRECTORY / (name + '.jsonl')}")
     total += 1
     print(f"PASS: {name}: {needle}", flush=True)
-print(f"PASS: {total} handpicked compile-fail cases; logs: {DIRECTORY}", flush=True)
+print(f"PASS: {total} handpicked contract cases; logs: {DIRECTORY}", flush=True)

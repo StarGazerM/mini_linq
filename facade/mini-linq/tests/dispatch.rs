@@ -164,6 +164,61 @@ fn fallback_is_lazy_and_shared_for_membership() {
 }
 
 #[test]
+fn authored_exact_only_semi_reads_a_cursor_without_membership() {
+    type Host = HashMap<(i32,), Vec<(i32,)>>;
+    // Deliberately expose IndexRead, but not ExactMembership.
+    struct ExactOnly(Host);
+    impl<'a> Rows for &'a ExactOnly {
+        type Row = <&'a Host as Rows>::Row;
+
+        fn rows(self) -> impl Iterator<Item = Self::Row> {
+            (&self.0).rows()
+        }
+    }
+    impl<'a> IndexRead for &'a ExactOnly {
+        type Key = <&'a Host as IndexRead>::Key;
+        type Item = <&'a Host as IndexRead>::Item;
+        type Cursor = <&'a Host as IndexRead>::Cursor;
+
+        fn lookup(&self, key: &Self::Key) -> Self::Cursor {
+            (&self.0).lookup(key)
+        }
+    }
+
+    let left = [(7,), (99,), (8,), (7,)];
+    let right = Observed::new(ExactOnly(HashMap::from([
+        ((7,), vec![(10,), (11,)]),
+        ((8,), vec![(20,)]),
+    ])));
+    let result: Vec<_> = ::mini_linq::passes::sequence! {
+        pipeline { ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
+        physical {
+            relation L(q:i32) = (&left);
+            relation R(b:i32,a:i32) = (&right) host [b] reads [exact];
+            l = pipe rename L@0 {q -> k};
+            r = pipe rename R@1 {b -> k,a -> x};
+            s = pipe semi eager [k] l,r;
+            out = let canon project s keep {k};
+            return out as answer(k);
+        }
+        structures {
+            providers {
+                host_scan = ::core::iter::Map<_, _> { reads [], build typed };
+                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+            }
+            l host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            r native result(s) = exact [k];
+            out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
+        }
+    }
+    .map(|(k,)| *k)
+    .collect();
+    assert_eq!(result, [7, 8]);
+    assert_eq!((right.scans.get(), right.reads.get()), (0, left.len()));
+}
+
+#[test]
 fn negation_reuses_native_owned_and_borrowed_key_sets_without_builds() {
     macro_rules! negative {
         ($left:ident, $keys:ident $($host:tt)*) => {
@@ -937,6 +992,21 @@ fn compiled_declared_column_reads_native_source_rows_without_fallback() {
         ]
     );
     assert_eq!((owner.scans.get(), owner.reads.get()), (0, left.len()));
+}
+
+#[test]
+fn compiled_nonleading_constant_point_scans_and_filters_the_declared_column() {
+    let right = IndexedRows::new(vec![(10, 7, 100), (7, 8, 200), (11, 7, 101), (10, 7, 100)]);
+    let result: Vec<_> = ::mini_linq::compile! {
+        pipeline { }
+        struct NonleadingConstantPoint;
+        relation right(a:i32,b:i32,c:i32) host [b] reads [exact];
+        answer(x,z) :- right(x,7,z);
+    }
+    .map(|(x, z)| (*x, *z))
+    .collect();
+    assert_eq!(result, [(10, 100), (11, 101)]);
+    assert_eq!((right.scans.get(), right.reads.get()), (1, 0));
 }
 
 #[test]

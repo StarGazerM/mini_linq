@@ -31,6 +31,14 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   catalog does not register their token. Tests cover the declared, host-level
   alternative, matching, undeclared and PL-Catalog-rejected omission records.
 
+- Align current storage documentation and task-catalog comments with direct calls:
+  document `build typed`, native-read and `abandon N of H` grammar, declared host
+  reads, explicit provider codecs, and recorded dense membership and abandonment.
+  Match IF-HostDecl's empty-read and present-support-clause premises to the checker.
+  Generated-code compatibility: merge readers select a recorded ordered fallback
+  rather than a native ordered lookup, which Sequence cannot execute. The checker
+  continues to reject authored native ordered Sequence lookups.
+
 - Fix CQ normalization of `where` predicates over hoisted closed `let` captures:
   capture binders remain in scope and both predicate operands resolve as closed
   host values, including previously canonicalized equalities. Regression tests

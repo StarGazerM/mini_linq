@@ -269,10 +269,10 @@ impl<'a> Context<'a> {
 
     /// Allocate one lazy fallback for each host read key, outside all probe closures.
     pub fn prepare_host(&mut self, result: &str) {
+        self.native_guards(result);
         if !self.analysis.host_read(result) {
             return;
         }
-        self.native_guards(result);
         // One lazy fallback per key that a recorded fallback serves; native
         // reads (STR-NativeHost) build nothing.
         let mut keys: BTreeMap<Vec<String>, (bool, &structures::Provider)> = BTreeMap::new();
@@ -500,28 +500,8 @@ impl<'a> Context<'a> {
         quote!(&(#(#key,)*))
     }
 
-    fn host_key_types<'b>(
-        &'b self,
-        left: &str,
-        access: &'b HostAccess,
-    ) -> impl Iterator<Item = &'b syn::Type> {
-        let types = &self.infos[left].types;
-        let generated = self.has_generators;
-        access
-            .key
-            .iter()
-            .zip(&access.key_types)
-            .map(move |(column, host)| {
-                let ty = &types[column];
-                // Autoref dispatch must know its key type before selecting Seek.
-                // A generator has no surface annotation; its joined host supplies
-                // the same logical key type without constraining iterator items.
-                if generated && matches!(ty, syn::Type::Infer(_)) {
-                    host
-                } else {
-                    ty
-                }
-            })
+    fn host_key_types<'b>(&'b self, access: &'b HostAccess) -> impl Iterator<Item = &'b syn::Type> {
+        access.key_types.iter()
     }
 
     /// The recorded native host value: the host itself, or its explicitly
@@ -540,7 +520,7 @@ impl<'a> Context<'a> {
         if !access.owned_key {
             return self.host_key(left, access);
         }
-        let types: Vec<_> = self.host_key_types(left, access).collect();
+        let types: Vec<_> = self.host_key_types(access).collect();
         let fields = access.key.iter().zip(&types).map(|(column, ty)| {
             let value = self.access(left, column);
             // Pull filters borrow computed fields; push sinks own them.
@@ -552,9 +532,9 @@ impl<'a> Context<'a> {
 
     /// A retained handle whose cursor borrows stable query storage: the
     /// recorded native read's key-normalizing handle or the shared fallback.
-    pub fn host_retained_read(&self, left: &str, access: &HostAccess) -> TokenStream {
+    pub fn host_retained_read(&self, access: &HostAccess) -> TokenStream {
         let fallback = &access.fallback;
-        let types: Vec<_> = self.host_key_types(left, access).collect();
+        let types: Vec<_> = self.host_key_types(access).collect();
         let (read, proof) = match (&access.native, access.expand) {
             (Some(_), true) => {
                 let value = self.native_value(access);
@@ -602,20 +582,28 @@ impl<'a> Context<'a> {
             ).is_some());
         }
         if access.retained && !contains {
-            let read = self.host_retained_read(left, access);
+            let read = self.host_retained_read(access);
             let key = self.host_key(left, access);
             return quote!(::cq_storage::provider_contract::retain(#read, #key));
         }
         let membership = contains || access.membership;
-        let test = if access.native.is_some() {
+        let test = if let Some(native) = &access.native {
             let value = self.native_value(access);
             let key = self.native_key(left, access);
-            if membership && access.native.as_ref().is_some_and(|native| native.borrowed) {
-                quote!(::cq_storage::dispatch::contains_borrowed(#value, #key))
-            } else if membership {
-                quote!(::cq_storage::dispatch::contains(#value, #key))
-            } else {
-                return quote!(::cq_storage::dispatch::seek(#value, #key));
+            match native.read {
+                structures::syntax::HostRead::Membership if native.borrowed => {
+                    quote!(::cq_storage::dispatch::contains_borrowed(#value, #key))
+                }
+                structures::syntax::HostRead::Membership => {
+                    quote!(::cq_storage::dispatch::contains(#value, #key))
+                }
+                structures::syntax::HostRead::Exact if membership => {
+                    quote!(::core::iter::Iterator::next(&mut ::cq_storage::dispatch::seek(#value, #key)).is_some())
+                }
+                structures::syntax::HostRead::Exact => {
+                    return quote!(::cq_storage::dispatch::seek(#value, #key));
+                }
+                _ => unreachable!("checked native lookup capability"),
             }
         } else {
             let fallback = &access.fallback;
@@ -668,13 +656,26 @@ impl<'a> Context<'a> {
             .analysis
             .natives
             .iter()
-            .filter(|((name, reader, _), _)| {
-                name == result && !matches!(reader, cq_lang_structures::ReaderRef::Scan)
-            })
+            .filter(|((name, _, _), _)| name == result)
             .map(|((_, reader, columns), native)| (reader.clone(), columns.clone(), native.clone()))
             .collect();
         let mut seen = std::collections::BTreeSet::new();
         for (reader, columns, native) in natives {
+            if matches!(reader, cq_lang_structures::ReaderRef::Scan) {
+                let host = &self.hosts[&self.physical_analysis.hosts[result]];
+                let value = &host.value;
+                let types = native.key.iter().map(|column| {
+                    &host.types[host
+                        .layout
+                        .iter()
+                        .position(|c| c == column)
+                        .expect("checked native scan column")]
+                });
+                self.statements.push(syn::parse_quote!(
+                    ::cq_storage::require::native_point::<(#(#types,)*), _>(&#value);
+                ));
+                continue;
+            }
             let point = matches!(&reader, cq_lang_structures::ReaderRef::Result(name)
                 if matches!(self.physical[name].operator, Operator::Point(..)));
             if !seen.insert((native.read, native.key.clone(), point)) {

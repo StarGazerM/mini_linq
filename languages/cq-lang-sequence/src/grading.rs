@@ -235,6 +235,7 @@ pub(crate) fn check_grading_in(
             }
         }
     }
+    crate::contract::check_native_grading(program, &analysis)?;
     for (dispatch, unit) in analysis.dispatches.iter().enumerate() {
         analysis.obligations.push(Obligation::Failure {
             dispatch,

@@ -721,12 +721,6 @@ impl<'a> Emitter<'a> {
         let context = self.context();
         let mut setup = TokenStream::new();
         let (lookup, payload) = match context.keyed(&result, provider, &columns)? {
-            Access::Host(access) if access.native.is_some() && *capability == Capability::Range => {
-                return Err(syn::Error::new_spanned(
-                    provider,
-                    "a Sequence range lookup reads a recorded fallback, not a native host read",
-                ));
-            }
             Access::Host(access) if *capability == Capability::Range => {
                 let fallback = &access.fallback;
                 let key = context.host_key(left, &access);

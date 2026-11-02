@@ -429,7 +429,7 @@ yet. Provider choices are recorded upstream, never by type name.
   snapshot's own stream.
 - **CQ built indices and smallest (P4-GPU slice B).** The GPU catalog
   declares `radix_layout = ::gpu_datalog_runtime::RadixLayout<_,_,_,_,_>
-  { reads [exact, range, membership, candidates], build macro, abi radix }`,
+  { reads [exact, range, membership, candidates], build typed, abi radix }`,
   registered after the existing tokens so unadvised catalog choices are
   unchanged. Every instance carries authored advice `radix { word W; offset
   O; ratio N; radix_bits N; merge_tile N }` (GPU-RadixAdvice); nothing
