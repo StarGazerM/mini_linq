@@ -313,3 +313,184 @@ mod dispatch {
         crate::authored::with_query!(run);
     }
 }
+
+mod columnar {
+    use super::{CsvOptions, File};
+    use cq_storage::scan::{BlockRows, Bytes, Family, OrdinalDecode, Plain, ScanColumn, VECTOR_ROWS};
+
+    type Integer = i64;
+
+    ::mini_linq::columnar_relation_loaders! {
+        relation Reading(id: Integer @ bytes, amount: i32 @ plain);
+        relation r#type(r#match: i64 @ plain);
+    }
+
+    mod ordinary {
+        ::mini_linq::relation_loaders! {
+            relation Reading(id: i64, amount: i32);
+        }
+    }
+
+    pub(super) fn decode<T: OrdinalDecode, F: Family>(
+        column: &ScanColumn<T, F>,
+        initial: T,
+    ) -> Vec<T> {
+        let mut output = Vec::with_capacity(column.len());
+        let mut values = [initial; VECTOR_ROWS];
+        for (block, header) in column.headers().iter().enumerate() {
+            for vector in 0..(header.rows as usize).div_ceil(VECTOR_ROWS) {
+                let len = column.decode_vector(block, vector, &mut values);
+                output.extend_from_slice(&values[..len]);
+            }
+        }
+        output
+    }
+
+    #[test]
+    fn explicit_mixed_families_match_plain_rows_across_batches_and_partial_blocks() {
+        use std::fmt::Write;
+
+        let mut contents = String::from("amount,id\n");
+        for row in 0..(2 * VECTOR_ROWS + 17) {
+            writeln!(contents, "{},{}", row % 7, row / 3).unwrap();
+        }
+        let file = File::new(&contents);
+        let options = CsvOptions {
+            headers: true,
+            batch_size: 137,
+            ..CsvOptions::default()
+        };
+        let block_rows = BlockRows::new(VECTOR_ROWS as u32).unwrap();
+        let table = <relation_loader!(Reading)>::csv(file.path(), options, block_rows, true).unwrap();
+        let expected = ordinary::ReadingLoader::csv(file.path(), options).unwrap();
+        let (ids, amounts) = table.columns();
+        cq_storage::scan::family::<Bytes, _>(ids);
+        cq_storage::scan::family::<Plain, _>(amounts);
+        assert_eq!(table.len(), expected.len());
+        assert_eq!(table.block_rows(), block_rows);
+        assert_eq!(ids.headers().len(), 3);
+        assert_eq!(ids.headers()[2].rows, 17);
+        assert_eq!(ids.summaries().unwrap().len(), 3);
+        assert_eq!(amounts.summaries().unwrap().len(), 3);
+        assert_eq!(
+            decode(ids, 0).into_iter().zip(decode(amounts, 0)).collect::<Vec<_>>(),
+            expected,
+        );
+    }
+
+    #[test]
+    fn empty_and_raw_named_columns_keep_authored_layout_without_summaries() {
+        let block_rows = BlockRows::new(VECTOR_ROWS as u32).unwrap();
+        let empty = File::new("");
+        let table = ReadingLoader::csv(empty.path(), CsvOptions::default(), block_rows, false).unwrap();
+        assert_eq!(table.len(), 0);
+        assert!(table.columns().0.headers().is_empty());
+        assert!(table.columns().0.summaries().is_none());
+        let file = File::new("match\n-7\n-7\n");
+        let table = <relation_loader!(r#type)>::csv(
+            file.path(),
+            CsvOptions { headers: true, ..CsvOptions::default() },
+            block_rows,
+            false,
+        ).unwrap();
+        assert_eq!(decode(&table.columns().0, 0), [-7, -7]);
+        assert!(table.columns().0.summaries().is_none());
+    }
+
+    #[test]
+    fn columnar_parse_errors_retain_source_coordinates_and_field_names() {
+        let file = File::new("amount,id\n10,1\nwrong,2\n");
+        let error = ReadingLoader::csv(
+            file.path(),
+            CsvOptions { headers: true, batch_size: 1, ..CsvOptions::default() },
+            BlockRows::new(VECTOR_ROWS as u32).unwrap(),
+            true,
+        ).err().unwrap();
+        let message = error.to_string();
+        assert!(message.contains(file.path().to_str().unwrap()), "{message}");
+        assert!(message.contains('3'), "{message}");
+        assert!(message.contains("amount"), "{message}");
+        assert!(message.contains("wrong"), "{message}");
+    }
+}
+
+mod columnar_interned {
+    use super::{CsvOptions, File, columnar::decode};
+    use cq_storage::scan::{BlockRows, Bytes, Plain, VECTOR_ROWS};
+
+    type Code = cq_load::StringCode;
+
+    ::mini_linq::interned_relation_loaders! {
+        columnar;
+        relation Encoded(id: i64 @ plain, label: Code @ bytes, other: Code @ plain);
+    }
+
+    mod ordinary {
+        ::mini_linq::interned_relation_loaders! {
+            relation Encoded(id: i64, label: cq_load::StringCode, other: cq_load::StringCode);
+        }
+    }
+
+    #[test]
+    fn final_dictionary_codes_are_encoded_in_each_authored_family() {
+        use std::fmt::Write;
+
+        let mut contents = String::from("other,label,id\n");
+        let mut source = Vec::new();
+        for row in 0..(2 * VECTOR_ROWS + 9) {
+            let label = if row < VECTOR_ROWS + 1 { "z" } else { "a" };
+            let other = if row % 2 == 0 { "a" } else { "z" };
+            let id = (row / 3) as i64;
+            writeln!(contents, "{other},{label},{id}").unwrap();
+            source.push((id, label.to_owned(), other.to_owned()));
+        }
+        let mut expected_dictionaries = cq_load::Dictionaries::default();
+        let expected = ordinary::EncodedLoader::intern(source, &mut expected_dictionaries);
+        let file = File::new(&contents);
+        let mut dictionaries = cq_load::Dictionaries::default();
+        let table = <relation_loader!(Encoded)>::csv_interned(
+            file.path(),
+            CsvOptions { headers: true, batch_size: 137, ..CsvOptions::default() },
+            BlockRows::new(VECTOR_ROWS as u32).unwrap(),
+            true,
+            &mut dictionaries,
+        ).unwrap();
+        let (ids, labels, others) = table.columns();
+        cq_storage::scan::family::<Bytes, _>(labels);
+        cq_storage::scan::family::<Plain, _>(others);
+        let actual = decode(ids, 0).into_iter()
+            .zip(decode(labels, Code::MAX))
+            .zip(decode(others, Code::MAX))
+            .map(|((id, label), other)| (id, label, other))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+        assert_eq!(labels.headers().len(), 3);
+        assert_eq!(labels.headers()[2].rows, 9);
+        assert_eq!(labels.summaries().unwrap().len(), 3);
+        for column in ["label", "other"] {
+            for value in ["a", "z", "absent"] {
+                assert_eq!(
+                    cq_storage::domain::exact(dictionaries.domain(column), value),
+                    cq_storage::domain::exact(expected_dictionaries.domain(column), value),
+                );
+            }
+        }
+        assert!(dictionaries.get("id").is_none());
+    }
+
+    #[test]
+    fn empty_columnar_interned_input_publishes_empty_dictionaries() {
+        let file = File::new("");
+        let mut dictionaries = cq_load::Dictionaries::default();
+        let table = EncodedLoader::csv_interned(
+            file.path(), CsvOptions::default(),
+            BlockRows::new(VECTOR_ROWS as u32).unwrap(), false, &mut dictionaries,
+        ).unwrap();
+        assert_eq!(table.len(), 0);
+        assert!(table.columns().1.headers().is_empty());
+        assert!(table.columns().1.summaries().is_none());
+        assert!(dictionaries.get("label").is_some());
+        assert!(dictionaries.get("other").is_some());
+        assert_eq!(cq_storage::domain::exact(dictionaries.domain("label"), ""), Code::MAX);
+    }
+}

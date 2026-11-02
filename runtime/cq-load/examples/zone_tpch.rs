@@ -2,29 +2,28 @@
 //! key file. Run with --release --features parquet; arguments: lineitem.parquet
 //! and a newline-separated file of the 2,231 order keys. This checks the host,
 //! not compiler integration or survivor-only Parquet I/O.
-use cq_load::{Batch, Loader, MinMax, ParquetOptions, Relation, ZoneRows, column};
-use cq_storage::{AdaptiveKeySet, BlockRead, I64Codec, Membership, PositionalRows, counters};
+use cq_load::{Batch, ColumnarLoader, ColumnarRelation, Dictionaries, ParquetOptions};
+use cq_storage::OrderKey;
+use cq_storage::scan::{BlockRows, Bytes, Predicate, ScanColumn, ScanColumnBuilder, ScanTable, VECTOR_ROWS};
 use std::time::Instant;
 
 struct Lineitem;
-impl Relation for Lineitem {
-    type Row = (i64, i64, i64);
+impl ColumnarRelation for Lineitem {
     const COLUMNS: &'static [&'static str] = &["l_orderkey", "l_partkey", "l_suppkey"];
-    // DECODE V: this benchmark decoder materializes lineitem before membership selection; P5 requires encoded scan columns and late materialization.
-    fn decode(batch: &Batch<'_>) -> cq_load::Result<Vec<Self::Row>> {
-        Ok(batch
-            // DECODE V: order keys are decoded before membership tests; P5 evaluates preserved predicates in the scan representation.
-            .column::<i64>(0)?
-            .into_iter()
-            // DECODE V: part keys are materialized before row selection despite no query read; P5 must retain them encoded.
-            .zip(batch.column::<i64>(1)?)
-            // DECODE V: supplier keys are materialized before membership selection; P5 materializes only demanded survivor columns.
-            .zip(batch.column::<i64>(2)?)
-            .map(|((order, part), supplier)| (order, part, supplier))
-            .collect())
+    type Table = ScanTable<(ScanColumn<i64, Bytes>, ScanColumn<i64, Bytes>, ScanColumn<i64, Bytes>)>;
+    type Builders = (ScanColumnBuilder<i64, Bytes>, ScanColumnBuilder<i64, Bytes>, ScanColumnBuilder<i64, Bytes>);
+    fn builders(rows: BlockRows, summaries: bool) -> Self::Builders {
+        (ScanColumnBuilder::new(rows, summaries), ScanColumnBuilder::new(rows, summaries), ScanColumnBuilder::new(rows, summaries))
+    }
+    fn append(batch: &Batch<'_>, builders: &mut Self::Builders) -> cq_load::Result<()> {
+        batch.append_column(0, &mut builders.0)?;
+        batch.append_column(1, &mut builders.1)?;
+        batch.append_column(2, &mut builders.2)
+    }
+    fn finish(builders: Self::Builders, _: &mut Dictionaries) -> Self::Table {
+        ScanTable::new((builders.0.finish(), builders.1.finish(), builders.2.finish()))
     }
 }
-type Schema = (MinMax<i64>, MinMax<i64>, MinMax<i64>);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
@@ -38,50 +37,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         keys.iter().collect::<std::collections::BTreeSet<_>>().len(),
         2231
     );
-    let set = AdaptiveKeySet::<i64, I64Codec, 67108864>::from_keys(keys, I64Codec);
+    let predicate = Predicate::Membership(keys.iter().map(OrderKey::ordinal).collect());
+    let oracle_keys: std::collections::HashSet<_> = keys.iter().copied().collect();
     for (size, expected_visited) in [(2048, 1571), (122880, 49)] {
         let start = Instant::now();
-        // DECODE V: the benchmark loads all logical tuples before zone pruning; P5 must replace eager row loading with columnar scan storage.
-        let rows = Loader::<Lineitem>::parquet(&args[1], ParquetOptions { batch_size: 3000 })?;
+        let host = ColumnarLoader::<Lineitem>::parquet(
+            &args[1], ParquetOptions { batch_size: 3000 },
+            BlockRows::new(size).unwrap(), true,
+        )?;
         let load = start.elapsed();
-        assert_eq!(rows.len(), 6_001_215);
-        assert!(rows.windows(2).all(|pair| pair[0].0 <= pair[1].0));
-        // Independent scalar membership oracle retains exact positions/order.
-        let scalar: Vec<_> = rows
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| cq_storage::ExactMembership::contains(&set, &row.0))
-            .map(|(i, _)| i)
-            .collect();
-        let start = Instant::now();
-        let host = ZoneRows::from_rows::<Schema>(rows, size.try_into()?);
-        let build = start.elapsed();
-        let predicate = Membership(&set);
-        counters::reset();
-        let selected: Vec<_> = (&host)
-            .read(column::<0>(), &predicate)
-            .map(|id| id.offset())
-            .collect();
-        let counts = counters::snapshot();
+        assert_eq!(host.len(), 6_001_215);
+        let column = &host.columns().0;
+        // Independent diagnostic oracle decodes only the predicate column,
+        // after loading; the actual membership scan below retains residuals.
+        let mut scalar = Vec::new();
+        let mut buffer = [0_i64; VECTOR_ROWS];
+        let mut previous = i64::MIN;
+        let mut offset = 0;
+        for (block, header) in column.headers().iter().enumerate() {
+            for vector in 0..(header.rows as usize).div_ceil(VECTOR_ROWS) {
+                let n = column.decode_vector(block, vector, &mut buffer);
+                for &key in &buffer[..n] {
+                    assert!(previous <= key);
+                    previous = key;
+                    if oracle_keys.contains(&key) {
+                        scalar.push(offset);
+                    }
+                    offset += 1;
+                }
+            }
+        }
+        let considered = column.headers().len();
+        let visited = column.summaries().unwrap().iter().filter(|summary| {
+            keys.iter().any(|key| summary.lo <= key.ordinal() && key.ordinal() <= summary.hi)
+        }).count();
+        let mut selected = Vec::new();
+        column.filter(&predicate, |row| selected.push(row));
         assert_eq!(selected, scalar);
-        assert_eq!(counts.blocks_considered, host.len().div_ceil(size) as u64);
-        assert_eq!(counts.blocks_visited, expected_visited);
-        assert_eq!(
-            counts.blocks_skipped,
-            counts.blocks_considered - expected_visited
-        );
+        assert_eq!(visited, expected_visited);
         println!(
-            "block_rows={size} rows={} considered={} visited={} skipped={} rows_tested={} matched={} load_ms={:.3} metadata_build_ms={:.3} metadata_bytes={} keyset_bytes={}",
-            host.len(),
-            counts.blocks_considered,
-            counts.blocks_visited,
-            counts.blocks_skipped,
-            counts.rows_tested,
-            selected.len(),
-            load.as_secs_f64() * 1000.,
-            build.as_secs_f64() * 1000.,
-            host.metadata_bytes(),
-            set.retained_bytes()
+            "block_rows={size} rows={} considered={considered} visited={visited} skipped={} matched={} load_ms={:.3} predicate_payload_bytes={}",
+            host.len(), considered - visited, selected.len(),
+            load.as_secs_f64() * 1000., column.payload().len(),
         );
     }
     Ok(())

@@ -248,69 +248,6 @@ fn unknown_stats_nulls_unordered_and_nonclone_payloads() {
 }
 
 #[test]
-fn batches_preserve_global_alignment_empty_batches_and_short_tail() {
-    type Schema = (MinMax<i64>, MinMax<String>);
-    let input: Vec<_> = (0..23).map(|i| (i, format!("{i:02}"))).collect();
-    for size in [1, 2, 3, 7, 23, 100] {
-        for batch_size in [1, 2, 3, 8, 23, 40] {
-            let batches = std::iter::once(Ok::<_, ()>(vec![])).chain(
-                input
-                    .chunks(batch_size)
-                    .flat_map(|batch| [Ok(batch.to_vec()), Ok(vec![])]),
-            );
-            let host =
-                ZoneRows::from_batches::<Schema, _, _>(batches, size.try_into().unwrap()).unwrap();
-            let expected = ZoneRows::from_rows::<Schema>(input.clone(), size.try_into().unwrap());
-            assert_eq!(
-                host.rows().collect::<Vec<_>>(),
-                expected.rows().collect::<Vec<_>>()
-            );
-            assert_eq!(host.blocks().count(), input.len().div_ceil(size));
-            for block in host.blocks() {
-                assert_eq!(
-                    host.bounds(column::<0>(), block),
-                    expected.bounds(column::<0>(), block)
-                );
-                assert_eq!(
-                    host.bounds(column::<1>(), block),
-                    expected.bounds(column::<1>(), block)
-                );
-                assert_eq!(
-                    host.block_positions(block).count(),
-                    size.min(input.len() - block.offset() * size)
-                );
-            }
-            laws(&host, column::<0>(), &Point(7));
-        }
-    }
-    let empty = ZoneRows::from_batches::<Schema, (), _>(
-        [Ok(Vec::<(i64, String)>::new()), Ok(vec![])],
-        7.try_into().unwrap(),
-    )
-    .unwrap();
-    assert!(empty.is_empty());
-    assert_eq!(empty.metadata_bytes(), 0);
-    laws(&empty, column::<0>(), &Point(7));
-}
-
-#[test]
-fn source_is_consumed_once_and_stops_on_error() {
-    use std::cell::Cell;
-    let calls = Cell::new(0);
-    let batches = (0..10).map(|i| {
-        calls.set(calls.get() + 1);
-        if i == 3 {
-            Err("decode failure")
-        } else {
-            Ok(vec![(i,)])
-        }
-    });
-    let result = ZoneRows::from_batches::<(MinMax<i64>,), _, _>(batches, 2.try_into().unwrap());
-    assert!(matches!(result, Err("decode failure")));
-    assert_eq!(calls.get(), 4);
-}
-
-#[test]
 fn summarizes_every_occurrence_exactly_once_and_reuses_the_input_allocation() {
     use std::cell::Cell;
     thread_local! { static SEEN: Cell<usize> = const { Cell::new(0) }; }
@@ -331,9 +268,6 @@ fn summarizes_every_occurrence_exactly_once_and_reuses_the_input_allocation() {
         assert_eq!(n.get(), 11);
         n.set(0);
     });
-    let batches = (0..11).map(|i| Ok::<_, ()>(vec![(i,)]));
-    let host = ZoneRows::from_batches::<Counting, _, _>(batches, 3.try_into().unwrap()).unwrap();
-    SEEN.with(|n| assert_eq!(n.get(), 11));
     laws(&host, column::<0>(), &Point(9));
 }
 

@@ -23,11 +23,12 @@ impl Default for CsvOptions {
     }
 }
 
-/// Single-pass CSV source yielding at most `batch_size` owned tuples per batch.
+/// Single-pass CSV source with bounded batches and columnar ingestion support.
 pub struct Csv<S> {
     reader: csv::Reader<File>,
     file: PathBuf,
     mapping: Vec<usize>,
+    columns: &'static [&'static str],
     source_columns: Vec<&'static str>,
     options: CsvOptions,
     finished: bool,
@@ -36,6 +37,16 @@ pub struct Csv<S> {
 
 impl<S: Relation> Csv<S> {
     pub fn open(path: impl AsRef<Path>, options: CsvOptions) -> Result<Self> {
+        Self::open_columns(path, options, S::COLUMNS)
+    }
+}
+
+impl<S> Csv<S> {
+    pub(crate) fn open_columns(
+        path: impl AsRef<Path>,
+        options: CsvOptions,
+        columns: &'static [&'static str],
+    ) -> Result<Self> {
         let file = path.as_ref();
         if options.batch_size == 0 {
             return Err(Error::new(
@@ -66,24 +77,25 @@ impl<S: Relation> Csv<S> {
             let header = reader.headers().map_err(|error| csv_error(file, error))?;
             let mut names = header.iter().collect::<Vec<_>>();
             if options.trailing_delimiter
-                && names.len() == S::COLUMNS.len() + 1
+                && names.len() == columns.len() + 1
                 && names.last() == Some(&"")
             {
                 names.pop();
             }
-            column_mapping(file, &names, S::COLUMNS)?
+            column_mapping(file, &names, columns)?
         } else {
-            (0..S::COLUMNS.len()).collect()
+            (0..columns.len()).collect()
         };
-        let mut source_columns = S::COLUMNS.to_vec();
+        let mut source_columns = columns.to_vec();
         for (declared, &source) in mapping.iter().enumerate() {
-            source_columns[source] = S::COLUMNS[declared];
+            source_columns[source] = columns[declared];
         }
         Ok(Self {
             reader,
             file: file.to_path_buf(),
             mapping,
             source_columns,
+            columns,
             options,
             finished: false,
             schema: PhantomData,
@@ -91,10 +103,11 @@ impl<S: Relation> Csv<S> {
     }
 }
 
-impl<S: Relation> Iterator for Csv<S> {
-    type Item = Result<Vec<S::Row>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+impl<S> Csv<S> {
+    pub(crate) fn next_with<T>(
+        &mut self,
+        decode: impl FnOnce(&Batch<'_>) -> Result<T>,
+    ) -> Option<Result<T>> {
         if self.finished {
             return None;
         }
@@ -128,16 +141,24 @@ impl<S: Relation> Iterator for Csv<S> {
         }
         let batch = Batch {
             file: &self.file,
-            columns: S::COLUMNS,
+            columns: self.columns,
             mapping: &self.mapping,
             data: BatchData::Csv(&records),
         };
-        // DECODE V: Loader::csv_hash/csv_btree group these decoded rows; P4 keeps index keys encoded and P5 builds scan columns directly.
-        let decoded = S::decode(&batch);
+        let decoded = decode(&batch);
         if decoded.is_err() {
             self.finished = true;
         }
         Some(decoded)
+    }
+}
+
+impl<S: Relation> Iterator for Csv<S> {
+    type Item = Result<Vec<S::Row>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // DECODE V: row-mode CSV decoding precedes hash/btree grouping; P4 must retain encoded index keys. Columnar scans bypass this decoder.
+        self.next_with(S::decode)
     }
 }
 

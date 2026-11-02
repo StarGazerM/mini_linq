@@ -20,6 +20,21 @@ macro_rules! primitives {
                     crate::parquet_source::parse_arrow(column, Self::load)
                 }
             }
+
+            #[cfg(feature = "parquet")]
+            fn load_arrow_into(
+                column: &dyn arrow_array::Array,
+                mut emit: impl FnMut(Self),
+            ) -> Result<(), crate::ColumnError> {
+                if let Some(array) = column.as_any().downcast_ref::<arrow_array::$array>() {
+                    for (row, value) in array.iter().enumerate() {
+                        emit(value.ok_or_else(|| crate::ColumnError::null(row))?);
+                    }
+                    Ok(())
+                } else {
+                    crate::parquet_source::parse_arrow_into(column, Self::load, emit)
+                }
+            }
         }
     )* };
 }
@@ -192,6 +207,29 @@ impl<const SCALE: u32> Load for Decimal<SCALE> {
             crate::parquet_source::parse_arrow(column, Self::load)
         }
     }
+
+    #[cfg(feature = "parquet")]
+    fn load_arrow_into(
+        column: &dyn arrow_array::Array,
+        mut emit: impl FnMut(Self),
+    ) -> Result<(), crate::ColumnError> {
+        if let (Some(array), arrow_schema::DataType::Decimal128(_, scale)) = (
+            column.as_any().downcast_ref::<arrow_array::Decimal128Array>(),
+            column.data_type(),
+        ) {
+            for (row, value) in array.iter().enumerate() {
+                let value = value.ok_or_else(|| crate::ColumnError::null(row))?;
+                emit(Self::rescale(value, *scale).map_err(|message| crate::ColumnError {
+                    row,
+                    value: crate::parquet_source::decimal_text(value, *scale),
+                    message,
+                })?);
+            }
+            Ok(())
+        } else {
+            crate::parquet_source::parse_arrow_into(column, Self::load, emit)
+        }
+    }
 }
 
 impl<const SCALE: u32> FromStr for Decimal<SCALE> {
@@ -309,6 +347,21 @@ impl Load for Date {
         } else {
             // DECODE ?: Date Arrow fallback reconstructs logical dates via the generic parser.
             crate::parquet_source::parse_arrow(column, Self::load)
+        }
+    }
+
+    #[cfg(feature = "parquet")]
+    fn load_arrow_into(
+        column: &dyn arrow_array::Array,
+        mut emit: impl FnMut(Self),
+    ) -> Result<(), crate::ColumnError> {
+        if let Some(array) = column.as_any().downcast_ref::<arrow_array::Date32Array>() {
+            for (row, value) in array.iter().enumerate() {
+                emit(Self(value.ok_or_else(|| crate::ColumnError::null(row))?));
+            }
+            Ok(())
+        } else {
+            crate::parquet_source::parse_arrow_into(column, Self::load, emit)
         }
     }
 }

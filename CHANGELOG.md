@@ -214,6 +214,16 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   at 16 bits and otherwise retains plain native-width ordinals. Runtime law
   tests cover inverse decoding, enclosure and predicate preservation; no
   compiler selection or source migration is part of this slice.
+- P5 S2 adds incremental block builders, validated `ScanTable` column tuples,
+  and explicit-family columnar Arrow/Parquet/CSV loaders, including interned
+  string-code columns whose final remap is the block encode pass. Payload and
+  optional summaries share input traversal, without an eager tuple vector.
+  Columnar loader macros preserve existing row-loader declarations. The zone
+  Parquet diagnostic and TPC-H example use encoded scan columns; the obsolete
+  `ZoneRows::from_batches` API and fourteen P5-owned decode violations are
+  retired. CSV hash/btree grouping still awaits P4 encoded keys. Loader laws
+  cover round-trip, batch independence and summary enclosure; compiler
+  selection is unchanged.
 - GPU TPC-H source authoring moves to 26 explicit `queries/*.stages` programs.
   The checked, printable frontend records table/dictionary/host producers,
   captures, stage dependencies, owned publications and terminal projections.

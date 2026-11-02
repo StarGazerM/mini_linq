@@ -3,6 +3,7 @@ use cq_planning::PlanOptions;
 use proc_macro::TokenStream;
 use syn::parse::{Parse, ParseStream};
 
+mod columnar_load;
 mod load;
 mod observation;
 mod workload;
@@ -380,6 +381,13 @@ pub fn relation_loaders(input: TokenStream) -> TokenStream {
     load::expand(input, false)
 }
 
+/// Generate scan-table readers with an explicit `@ bytes` or `@ plain` family
+/// on every field. This does not change query planning or ordinary loaders.
+#[proc_macro]
+pub fn columnar_relation_loaders(input: TokenStream) -> TokenStream {
+    columnar_load::expand(input, false)
+}
+
 /// Generate typed readers with explicit load-time string interning support.
 ///
 /// Accepts the same relation declarations or CQ callback as `relation_loaders`.
@@ -388,7 +396,11 @@ pub fn relation_loaders(input: TokenStream) -> TokenStream {
 /// change query syntax or inspect Rust field type spellings.
 #[proc_macro]
 pub fn interned_relation_loaders(input: TokenStream) -> TokenStream {
-    load::expand(input, true)
+    if matches!(input.clone().into_iter().next(), Some(proc_macro::TokenTree::Ident(ident)) if ident.to_string() == "columnar") {
+        columnar_load::expand(input, true)
+    } else {
+        load::expand(input, true)
+    }
 }
 
 /// Capture authored CQ and export a callback invoking a public consumer macro.

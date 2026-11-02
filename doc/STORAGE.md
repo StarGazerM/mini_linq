@@ -808,8 +808,34 @@ predicate variant dispatch are outside the row loop; byte/word range masks use
 branch-free native-width comparisons (release x86-64 assembly contains packed
 byte min/max and packed word comparison/pack loops). RT-ScanCodec,
 RT-ScanSummary and RT-Translate also check masks against decoded oracles.
-This slice does not select blocks in the compiler or migrate any source;
-ScanTable integration, loaders and late materialization remain later slices.
+S1 does not select blocks in the compiler. S2 adds the runtime loader below;
+compiler selection, positional traits and late materialization are later slices.
+ 
+**P5 S2 columnar input boundary.** `ScanColumnBuilder<T, F>` retains at most
+one block of ordinals per ordinary column and collects extrema while accepting
+input. A full block flushes directly into the S1 payload; a partial block
+continues across Arrow/Parquet or CSV batch boundaries. `ScanTable` validates
+equal column lengths and block sizes. No tuple vector or post-load summary pass
+is needed. The source's Parquet statistics are not trusted as converted-value
+bounds.
+
+`columnar_relation_loaders!` and `interned_relation_loaders! { columnar; ... }`
+declare each field's family explicitly (`day: Date @ bytes`, `id: i64 @ plain`);
+they generate `ColumnarRelation` implementations and typed `ColumnarLoader`
+aliases. Block rows and optional summaries are explicit loader arguments.
+`ColumnarField` trait dispatch, not Rust type-name recognition, selects ordinary
+scalar loading or string-code interning. Interned columns retain temporary
+integer codes plus distinct dictionary entries until sorting finalizes the
+domain. The remap pass writes final codes into block payloads and computes
+their summaries; it never materializes row tuples or resolves codes to strings.
+Dictionary publication happens only after all source batches succeed.
+
+`zone_parquet` and `zone_tpch` now load scan columns and compare predicates in
+the encoded domain. `ZoneRows::from_batches` is removed; existing row hosts
+retain `ZoneRows::from_rows` until their later cutover. The three CSV
+hash/btree decode violations still await P4 encoded index keys; CSV scan loads
+have a direct columnar route. No query compiler or workload-default selection
+changes in S2.
 
 S1 microbenchmark (`experiments/storage-bench/scan_bench.py`, raw
 `results/p5-s1-scan-vectorized.json`): 4,194,304 and 67,108,864 u64 values,

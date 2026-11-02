@@ -77,7 +77,8 @@
 //! loader methods without changing query syntax or the plain macro expansion.
 //!
 pub use mini_linq_macros::{
-    compile, interned_relation_loaders, mini_linq, relation_loaders, workload_query,
+    columnar_relation_loaders, compile, interned_relation_loaders, mini_linq, relation_loaders,
+    workload_query,
 };
 
 /// Shared checked default planning composition and its authored options.

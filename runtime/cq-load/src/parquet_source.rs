@@ -36,11 +36,12 @@ impl Default for ParquetOptions {
     }
 }
 
-/// Arrow-backed source yielding bounded decoded batches in file row order.
+/// Arrow-backed source supporting row batches or direct column ingestion.
 pub struct Parquet<S> {
     reader: ParquetRecordBatchReader,
     file: PathBuf,
     mapping: Vec<usize>,
+    columns: &'static [&'static str],
     next_row: u64,
     finished: bool,
     schema: PhantomData<S>,
@@ -48,6 +49,16 @@ pub struct Parquet<S> {
 
 impl<S: Relation> Parquet<S> {
     pub fn open(path: impl AsRef<Path>, options: ParquetOptions) -> Result<Self> {
+        Self::open_columns(path, options, S::COLUMNS)
+    }
+}
+
+impl<S> Parquet<S> {
+    pub(crate) fn open_columns(
+        path: impl AsRef<Path>,
+        options: ParquetOptions,
+        columns: &'static [&'static str],
+    ) -> Result<Self> {
         let file = path.as_ref();
         if options.batch_size == 0 {
             return Err(Error::new(
@@ -68,7 +79,7 @@ impl<S: Relation> Parquet<S> {
             .iter()
             .map(|field| field.name().as_str())
             .collect::<Vec<_>>();
-        let mapping = column_mapping(file, &names, S::COLUMNS)?;
+        let mapping = column_mapping(file, &names, columns)?;
         let reader = builder
             .with_batch_size(options.batch_size)
             .build()
@@ -77,6 +88,7 @@ impl<S: Relation> Parquet<S> {
             reader,
             file: file.to_path_buf(),
             mapping,
+            columns,
             next_row: 1,
             finished: false,
             schema: PhantomData,
@@ -84,7 +96,7 @@ impl<S: Relation> Parquet<S> {
     }
 }
 
-impl<S: Relation> Parquet<S> {
+impl<S> Parquet<S> {
     pub(crate) fn next_with<T>(
         &mut self,
         decode: impl FnOnce(&Batch<'_>) -> Result<T>,
@@ -111,11 +123,11 @@ impl<S: Relation> Parquet<S> {
         };
         let source = Batch {
             file: &self.file,
-            columns: S::COLUMNS,
+            columns: self.columns,
             mapping: &self.mapping,
             data: BatchData::Parquet(&batch, self.next_row),
         };
-        // DECODE V: zone_tpch feeds these owned decoded tuples to membership scans; P5 must retain columnar payloads and materialize late.
+        // The callback consumes borrowed arrays directly for columnar loading.
         let decoded = decode(&source);
         self.next_row += batch.num_rows() as u64;
         if decoded.is_err() {
@@ -159,24 +171,33 @@ pub(crate) fn native_values<T>(
 // DECODE ?: string_values invokes caller parsing over Arrow strings without a recorded logical consumer.
 pub(crate) fn string_values<T>(
     column: &dyn Array,
-    mut parse: impl FnMut(&str) -> std::result::Result<T, String>,
+    parse: impl FnMut(&str) -> std::result::Result<T, String>,
 ) -> std::result::Result<Vec<T>, ColumnError> {
+    let mut values = Vec::with_capacity(column.len());
+    parse_arrow_into(column, parse, |value| values.push(value))?;
+    Ok(values)
+}
+
+pub(crate) fn parse_arrow_into<T>(
+    column: &dyn Array,
+    mut parse: impl FnMut(&str) -> std::result::Result<T, String>,
+    mut emit: impl FnMut(T),
+) -> std::result::Result<(), ColumnError> {
     macro_rules! string_column {
         ($array:ty) => {
             if let Some(array) = column.as_any().downcast_ref::<$array>() {
                 return array
                     .iter()
                     .enumerate()
-                    .map(|(row, value)| {
+                    .try_for_each(|(row, value)| {
                         let value = value.ok_or_else(|| ColumnError::null(row))?;
                         // DECODE ?: this Arrow string entry is converted by an arbitrary parser; publication or Rust-read evidence is absent.
                         parse(value).map_err(|message| ColumnError {
                             row,
                             value: value.into(),
                             message,
-                        })
-                    })
-                    .collect();
+                        }).map(&mut emit)
+                    });
             }
         };
     }
@@ -184,7 +205,7 @@ pub(crate) fn string_values<T>(
     string_column!(LargeStringArray);
     string_column!(StringViewArray);
     // DECODE ?: nonstring Arrow fallback delegates reconstruction with the same unknown consumer as string_values.
-    parse_arrow_nonstring(column, parse)
+    parse_arrow_nonstring(column, parse, emit)
 }
 
 // DECODE ?: parse_arrow is a generic logical reconstruction adapter, not an established publication boundary.
@@ -200,15 +221,16 @@ pub(crate) fn parse_arrow<T>(
 fn parse_arrow_nonstring<T>(
     column: &dyn Array,
     mut parse: impl FnMut(&str) -> std::result::Result<T, String>,
-) -> std::result::Result<Vec<T>, ColumnError> {
+    mut emit: impl FnMut(T),
+) -> std::result::Result<(), ColumnError> {
     macro_rules! primitive {
         ($($array:ident),* $(,)?) => {$ (
             if let Some(array) = column.as_any().downcast_ref::<arrow_array::$array>() {
-                return array.iter().enumerate().map(|(row, value)| {
+                return array.iter().enumerate().try_for_each(|(row, value)| {
                     let value = value.ok_or_else(|| ColumnError::null(row))?.to_string();
                     // DECODE ?: primitive Arrow text is parsed into caller T before its runtime use is known.
-                    parse(&value).map_err(|message| ColumnError { row, value, message })
-                }).collect();
+                    parse(&value).map_err(|message| ColumnError { row, value, message }).map(&mut emit)
+                });
             }
         )* };
     }
@@ -229,7 +251,7 @@ fn parse_arrow_nonstring<T>(
         return array
             .iter()
             .enumerate()
-            .map(|(row, value)| {
+            .try_for_each(|(row, value)| {
                 // DECODE ?: Arrow epoch days become Date for fallback rendering, with no opaque-read or answer fact.
                 let value =
                     Date::from_days(value.ok_or_else(|| ColumnError::null(row))?).to_string();
@@ -238,9 +260,8 @@ fn parse_arrow_nonstring<T>(
                     row,
                     value,
                     message,
-                })
-            })
-            .collect();
+                }).map(&mut emit)
+            });
     }
     if let (Some(array), arrow_schema::DataType::Decimal128(_, scale)) = (
         column
@@ -251,7 +272,7 @@ fn parse_arrow_nonstring<T>(
         return array
             .iter()
             .enumerate()
-            .map(|(row, value)| {
+            .try_for_each(|(row, value)| {
                 // DECODE ?: Decimal128 coefficient and scale become logical decimal text for generic fallback loading.
                 let value = decimal_text(value.ok_or_else(|| ColumnError::null(row))?, *scale);
                 // DECODE ?: decimal text is reconstructed as caller T with no recorded final consumer.
@@ -259,9 +280,8 @@ fn parse_arrow_nonstring<T>(
                     row,
                     value,
                     message,
-                })
-            })
-            .collect();
+                }).map(&mut emit)
+            });
     }
     Err(ColumnError {
         row: 0,

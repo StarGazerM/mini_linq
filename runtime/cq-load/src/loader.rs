@@ -41,7 +41,7 @@ impl<S: Relation> Loader<S> {
         S: Group<PREFIX>,
         S::Key: Eq + Hash,
     {
-        // DECODE V: CSV batch decoding precedes hash grouping; P4 builds indexes over retained representations and P5 loads columnar scans directly.
+        // DECODE V: CSV row decoding precedes hash grouping; P4 owns retained index keys.
         collect_hash::<S, PREFIX>(Self::csv_batches(path, options)?)
     }
 
@@ -54,7 +54,7 @@ impl<S: Relation> Loader<S> {
         S: Group<PREFIX>,
         S::Key: Ord,
     {
-        // DECODE V: CSV batch decoding precedes ordered grouping; P4 retains encoded index keys and P5 avoids eager logical scan tuples.
+        // DECODE V: CSV row decoding precedes ordered grouping; P4 owns retained index keys.
         collect_btree::<S, PREFIX>(Self::csv_batches(path, options)?)
     }
 

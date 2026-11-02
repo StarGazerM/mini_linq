@@ -17,10 +17,9 @@
 //! assert_eq!((&host).rows().filter(|r| r.2.is_nan()).count(), 1);
 //! ```
 //!
-//! Batches from `Loader::<Relation>::csv_batches` or `parquet_batches` feed
-//! `ZoneRows::from_batches::<Schema, _, _>` directly. Block alignment does not
-//! depend on their batch size. No source statistics are assumed compatible;
-//! all bounds come from decoded values, including converted Date/Decimal data.
+//! Source batches now load directly into `cq_storage::scan::ScanTable` through
+//! the columnar loader. `ZoneRows` only wraps existing row vectors; it no longer
+//! offers a batch decoder that materializes rows before building summaries.
 //!
 //! Unknown ordered types fall back to exact per-row tests:
 //!

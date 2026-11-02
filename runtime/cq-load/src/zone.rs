@@ -197,35 +197,6 @@ impl<T, M: ZoneMetadata> ZoneRows<T, M> {
         }
     }
 
-    /// Decode/consume batches once, preserving order and duplicates. A partial
-    /// block continues into the next batch; empty batches do not split blocks.
-    /// On an error, release partial rows/metadata and stop consuming the source.
-    pub fn from_batches<S, E, I>(batches: I, block_rows: NonZeroUsize) -> Result<Self, E>
-    where
-        S: ZoneSchema<T, Metadata = M>,
-        I: IntoIterator<Item = Result<Vec<T>, E>>,
-    {
-        let mut host = Self {
-            rows: Vec::new(),
-            metadata: Vec::new(),
-            block_rows,
-        };
-        let mut summarized = 0;
-        // DECODE V: consuming Csv/Parquet batches drives eager tuple decoding before summary scans; P5 must build encoded columns and materialize survivors.
-        for batch in batches {
-            host.rows.extend(batch?);
-            while host.rows.len() - summarized >= block_rows.get() {
-                let end = summarized + block_rows.get();
-                host.metadata
-                    .push(S::summarize(&host.rows[summarized..end]));
-                summarized = end;
-            }
-        }
-        if summarized < host.rows.len() {
-            host.metadata.push(S::summarize(&host.rows[summarized..]));
-        }
-        Ok(host)
-    }
 
     pub fn block_rows(&self) -> NonZeroUsize {
         self.block_rows

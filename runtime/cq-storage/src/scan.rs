@@ -164,61 +164,95 @@ pub struct ScanColumn<T: OrdinalDecode, F: Family> {
     summary: Option<Vec<MinMax>>,
     marker: PhantomData<(T, F)>,
 }
+/// Incremental column encoder. Only one block of ordinals is buffered; extrema
+/// are collected with input, never reconstructed from the encoded payload.
+pub struct ScanColumnBuilder<T: OrdinalDecode, F: Family> {
+    column: ScanColumn<T, F>,
+    tail: Vec<u64>,
+    extrema: MinMax,
+}
+
+impl<T: OrdinalDecode, F: Family> ScanColumnBuilder<T, F> {
+    pub fn new(block_rows: BlockRows, summaries: bool) -> Self {
+        Self {
+            column: ScanColumn {
+                rows: 0,
+                block_rows,
+                headers: Vec::new(),
+                payload: AlignedBytes::default(),
+                summary: summaries.then(Vec::new),
+                marker: PhantomData,
+            },
+            tail: Vec::with_capacity(block_rows.get()),
+            extrema: MinMax { lo: u64::MAX, hi: 0 },
+        }
+    }
+
+    pub fn push(&mut self, value: T) {
+        let ordinal = value.ordinal();
+        self.extrema.lo = self.extrema.lo.min(ordinal);
+        self.extrema.hi = self.extrema.hi.max(ordinal);
+        self.tail.push(ordinal);
+        self.column.rows += 1;
+        if self.tail.len() == self.column.block_rows.get() {
+            self.flush();
+        }
+    }
+
+    pub fn extend(&mut self, values: impl IntoIterator<Item = T>) {
+        for value in values {
+            self.push(value);
+        }
+    }
+
+    pub fn finish(mut self) -> ScanColumn<T, F> {
+        self.flush();
+        self.column
+    }
+
+    fn flush(&mut self) {
+        if self.tail.is_empty() {
+            return;
+        }
+        let span = self.extrema.hi - self.extrema.lo;
+        let compressed = if span == 0 {
+            Width::W0
+        } else if span <= u8::MAX as u64 {
+            Width::W8
+        } else {
+            Width::W16
+        };
+        let use_for = F::ID == FamilyId::Bytes
+            && span <= u16::MAX as u64
+            && (compressed as u8) < T::WIDTH as u8;
+        let (base, width, codec) = if use_for {
+            (self.extrema.lo, compressed, CodecId::For)
+        } else {
+            (0, T::WIDTH, CodecId::Plain)
+        };
+        self.column.headers.push(BlockHeader {
+            offset: self.column.payload.len as u64,
+            base,
+            rows: self.tail.len() as u32,
+            width,
+            codec,
+        });
+        self.column.payload.append_block(&self.tail, base, width);
+        // Formal rule RT-ScanSummary: extrema enclose exactly the payload's
+        // input block; collect once, never summarize a decoded column copy.
+        if let Some(summary) = &mut self.column.summary {
+            summary.push(self.extrema);
+        }
+        self.tail.clear();
+        self.extrema = MinMax { lo: u64::MAX, hi: 0 };
+    }
+}
+
 impl<T: OrdinalDecode, F: Family> ScanColumn<T, F> {
     pub fn new(values: &[T], block_rows: BlockRows, summaries: bool) -> Self {
-        let blocks = values.len().div_ceil(block_rows.get());
-        let mut result = Self {
-            rows: values.len(),
-            block_rows,
-            headers: Vec::with_capacity(blocks),
-            payload: AlignedBytes::default(),
-            summary: summaries.then(|| Vec::with_capacity(blocks)),
-            marker: PhantomData,
-        };
-        let mut scratch = Vec::with_capacity(values.len().min(block_rows.get()));
-        for block in values.chunks(block_rows.get()) {
-            scratch.clear();
-            let mut extrema = MinMax {
-                lo: u64::MAX,
-                hi: 0,
-            };
-            // Formal rule RT-ScanSummary: extrema enclose exactly the payload's
-            // input block; collect once, never summarize a decoded column copy.
-            for value in block {
-                let ordinal = value.ordinal();
-                extrema.lo = extrema.lo.min(ordinal);
-                extrema.hi = extrema.hi.max(ordinal);
-                scratch.push(ordinal);
-            }
-            let span = extrema.hi - extrema.lo;
-            let compressed = if span == 0 {
-                Width::W0
-            } else if span <= u8::MAX as u64 {
-                Width::W8
-            } else {
-                Width::W16
-            };
-            let use_for = F::ID == FamilyId::Bytes
-                && span <= u16::MAX as u64
-                && (compressed as u8) < T::WIDTH as u8;
-            let (base, width, codec) = if use_for {
-                (extrema.lo, compressed, CodecId::For)
-            } else {
-                (0, T::WIDTH, CodecId::Plain)
-            };
-            result.headers.push(BlockHeader {
-                offset: result.payload.len as u64,
-                base,
-                rows: block.len() as u32,
-                width,
-                codec,
-            });
-            result.payload.append_block(&scratch, base, width);
-            if let Some(summary) = &mut result.summary {
-                summary.push(extrema);
-            }
-        }
-        result
+        let mut builder = ScanColumnBuilder::new(block_rows, summaries);
+        builder.extend(values.iter().copied());
+        builder.finish()
     }
     pub fn len(&self) -> usize {
         self.rows
@@ -481,5 +515,75 @@ impl TranslatedPredicate {
             Self::Range(r) => r.matches(code),
             Self::Membership(keys) => keys.contains(&code),
         }
+    }
+}
+
+/// Tuple metadata used to enforce a shared row count and block partition.
+pub trait ScanColumns {
+    fn layout(&self) -> (usize, BlockRows);
+}
+
+macro_rules! scan_columns {
+    ($first:ident $family:ident $index:tt $(, $ty:ident $other:ident $slot:tt)*) => {
+        impl<$first: OrdinalDecode, $family: Family, $($ty: OrdinalDecode, $other: Family),*>
+            ScanColumns for (ScanColumn<$first, $family>, $(ScanColumn<$ty, $other>,)*)
+        {
+            fn layout(&self) -> (usize, BlockRows) {
+                let rows = self.$index.len();
+                let block_rows = self.$index.block_rows();
+                $(
+                    assert_eq!(self.$slot.len(), rows, "scan columns have different row counts");
+                    assert_eq!(self.$slot.block_rows(), block_rows, "scan columns have different block sizes");
+                )*
+                (rows, block_rows)
+            }
+        }
+    };
+}
+
+scan_columns!(T0 F0 0);
+scan_columns!(T0 F0 0, T1 F1 1);
+scan_columns!(T0 F0 0, T1 F1 1, T2 F2 2);
+scan_columns!(T0 F0 0, T1 F1 1, T2 F2 2, T3 F3 3);
+scan_columns!(T0 F0 0, T1 F1 1, T2 F2 2, T3 F3 3, T4 F4 4);
+scan_columns!(T0 F0 0, T1 F1 1, T2 F2 2, T3 F3 3, T4 F4 4, T5 F5 5);
+scan_columns!(T0 F0 0, T1 F1 1, T2 F2 2, T3 F3 3, T4 F4 4, T5 F5 5, T6 F6 6);
+scan_columns!(T0 F0 0, T1 F1 1, T2 F2 2, T3 F3 3, T4 F4 4, T5 F5 5, T6 F6 6, T7 F7 7);
+scan_columns!(T0 F0 0, T1 F1 1, T2 F2 2, T3 F3 3, T4 F4 4, T5 F5 5, T6 F6 6, T7 F7 7, T8 F8 8);
+scan_columns!(T0 F0 0, T1 F1 1, T2 F2 2, T3 F3 3, T4 F4 4, T5 F5 5, T6 F6 6, T7 F7 7, T8 F8 8, T9 F9 9);
+scan_columns!(T0 F0 0, T1 F1 1, T2 F2 2, T3 F3 3, T4 F4 4, T5 F5 5, T6 F6 6, T7 F7 7, T8 F8 8, T9 F9 9, T10 F10 10);
+scan_columns!(T0 F0 0, T1 F1 1, T2 F2 2, T3 F3 3, T4 F4 4, T5 F5 5, T6 F6 6, T7 F7 7, T8 F8 8, T9 F9 9, T10 F10 10, T11 F11 11);
+
+/// Immutable columns sharing one occurrence order and block partition.
+pub struct ScanTable<C> {
+    columns: C,
+    rows: usize,
+    block_rows: BlockRows,
+}
+
+impl<C: ScanColumns> ScanTable<C> {
+    pub fn new(columns: C) -> Self {
+        let (rows, block_rows) = columns.layout();
+        Self { columns, rows, block_rows }
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows == 0
+    }
+
+    pub fn block_rows(&self) -> BlockRows {
+        self.block_rows
+    }
+
+    pub fn columns(&self) -> &C {
+        &self.columns
+    }
+
+    pub fn into_columns(self) -> C {
+        self.columns
     }
 }

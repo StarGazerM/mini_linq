@@ -1,3 +1,4 @@
+mini_linq_macros::columnar_relation_loaders	{"proc_macro":{"helpers":[],"kind":"bang"}}
 mini_linq_macros::compile	{"proc_macro":{"helpers":[],"kind":"bang"}}
 mini_linq_macros::index_demands	{"proc_macro":{"helpers":[],"kind":"bang"}}
 mini_linq_macros::interned_relation_loaders	{"proc_macro":{"helpers":[],"kind":"bang"}}

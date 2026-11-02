@@ -73,6 +73,7 @@
 //! [`cq_storage::dedup::ordered_ref`] to sort and unique within prefix runs;
 //! no unchecked sortedness or uniqueness declaration is accepted.
 
+mod columnar;
 mod csv_source;
 mod intern;
 mod loader;
@@ -83,6 +84,7 @@ mod zone_docs;
 #[cfg(feature = "parquet")]
 mod parquet_source;
 
+pub use columnar::{ColumnarField, ColumnarLoader, ColumnarRelation};
 pub use cq_storage::dedup::{PrefixOrderError, PrefixOrdered, verify_prefix_order};
 pub use csv_source::{Csv, CsvOptions, read_csv};
 pub use intern::{
@@ -158,6 +160,30 @@ pub trait Load: Sized {
     fn load_arrow(column: &dyn arrow_array::Array) -> std::result::Result<Vec<Self>, ColumnError> {
         parquet_source::parse_arrow(column, Self::load)
     }
+
+    /// Stream Arrow values into a column builder. Built-in scalar types avoid a
+    /// temporary value vector; custom decoders retain their `load_arrow` behavior.
+    #[cfg(feature = "parquet")]
+    fn load_arrow_into(
+        column: &dyn arrow_array::Array,
+        mut emit: impl FnMut(Self),
+    ) -> std::result::Result<(), ColumnError> {
+        let values = Self::load_arrow(column)?;
+        if values.len() != column.len() {
+            return Err(ColumnError {
+                row: 0,
+                value: "<batch>".into(),
+                message: format!(
+                    "Load::load_arrow returned {} values for {} source rows",
+                    values.len(), column.len()
+                ),
+            });
+        }
+        for value in values {
+            emit(value);
+        }
+        Ok(())
+    }
 }
 
 /// Schema and typed batch decoder emitted from an authored relation declaration.
@@ -193,6 +219,68 @@ impl Batch<'_> {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    // DESIGN contract8-columnar-loader
+    // Formal rule LD-ScanBlocks: source columns feed bounded tails; payload and
+    // optional summary are emitted together, without a tuple-vector host.
+    /// Append source values directly into their bounded scan block builder.
+    pub fn append_column<T, F>(
+        &self,
+        index: usize,
+        builder: &mut cq_storage::scan::ScanColumnBuilder<T, F>,
+    ) -> Result<()>
+    where
+        T: Load + cq_storage::scan::OrdinalDecode,
+        F: cq_storage::scan::Family,
+    {
+        let Some((&column, &source)) = self.columns.get(index).zip(self.mapping.get(index)) else {
+            return Err(Error::new(self.file, 0, "<schema>", index.to_string(), "column index outside schema"));
+        };
+        match self.data {
+            BatchData::Csv(records) => {
+                for record in records {
+                    let value = &record[source];
+                    let value = T::load(value).map_err(|message| Error::new(
+                        self.file, record.position().map_or(1, csv::Position::line),
+                        column, value, message,
+                    ))?;
+                    builder.push(value);
+                }
+                Ok(())
+            }
+            #[cfg(feature = "parquet")]
+            BatchData::Parquet(batch, first_row) => {
+                T::load_arrow_into(batch.column(source).as_ref(), |value| builder.push(value))
+                    .map_err(|error| Error::new(
+                        self.file, first_row + error.row as u64, column,
+                        error.value, error.message,
+                    ))
+            }
+        }
+    }
+
+    fn visit_strings(&self, index: usize, mut visit: impl FnMut(&str)) -> Result<()> {
+        let Some((&_column, &source)) = self.columns.get(index).zip(self.mapping.get(index)) else {
+            return Err(Error::new(self.file, 0, "<schema>", index.to_string(), "column index outside schema"));
+        };
+        match self.data {
+            BatchData::Csv(records) => {
+                for record in records {
+                    visit(&record[source]);
+                }
+                Ok(())
+            }
+            #[cfg(feature = "parquet")]
+            BatchData::Parquet(batch, first_row) => {
+                parquet_source::parse_arrow_into(
+                    batch.column(source).as_ref(), |value| { visit(value); Ok(()) }, |_| {},
+                ).map_err(|error| Error::new(
+                    self.file, first_row + error.row as u64, _column,
+                    error.value, error.message,
+                ))
+            }
+        }
     }
 
     /// Visit borrowed source text while its batch is alive. The closure returns

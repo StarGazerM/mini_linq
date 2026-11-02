@@ -134,6 +134,23 @@ impl Dictionaries {
         }
     }
 
+    /// Publish a complete load atomically. Conflicting domains are reported
+    /// before any dictionary is inserted, so existing encoded hosts stay valid.
+    pub(crate) fn commit(&mut self, pending: Self) -> Result<()> {
+        for (column, dictionary) in &pending.columns {
+            if self.columns.get(column).is_some_and(|existing| existing != dictionary) {
+                return Err(crate::Error::new(
+                    std::path::Path::new("<dictionaries>"), 0, column, "<domain>",
+                    "dictionary column changed",
+                ));
+            }
+        }
+        for (column, dictionary) in pending.columns {
+            self.columns.entry(column).or_insert(dictionary);
+        }
+        Ok(())
+    }
+
     /// Borrow a registered dictionary for generated load-time field encoding.
     pub fn get(&self, column: &str) -> Option<&StringDictionary> {
         self.columns.get(column)
@@ -300,6 +317,42 @@ impl InternedField for StringCode {
     }
     fn remap(&mut self, state: &StringInterner) {
         self.0 = state.remap[self.0 as usize];
+    }
+}
+
+/// Provisional dictionary codes; no source strings or tuple rows are retained.
+pub struct InternedColumnBuilder<F: cq_storage::scan::Family> {
+    state: StringInterner,
+    codes: Vec<StringCode>,
+    output: cq_storage::scan::ScanColumnBuilder<StringCode, F>,
+}
+
+impl<F: cq_storage::scan::Family> crate::ColumnarField<F> for StringCode {
+    type Builder = InternedColumnBuilder<F>;
+
+    fn builder(block_rows: cq_storage::scan::BlockRows, summaries: bool) -> Self::Builder {
+        InternedColumnBuilder {
+            state: StringInterner::default(),
+            codes: Vec::new(),
+            output: cq_storage::scan::ScanColumnBuilder::new(block_rows, summaries),
+        }
+    }
+
+    fn append(batch: &Batch<'_>, index: usize, builder: &mut Self::Builder) -> Result<()> {
+        batch.visit_strings(index, |value| builder.codes.push(builder.state.encode(value)))
+    }
+
+    fn finish(
+        column: &str,
+        dictionaries: &mut Dictionaries,
+        mut builder: Self::Builder,
+    ) -> cq_storage::scan::ScanColumn<Self, F> {
+        dictionaries.register(column, builder.state.finish());
+        // Remapping is the final encode pass, not a rewrite of a decoded host.
+        builder.output.extend(builder.codes.into_iter().map(|code| {
+            StringCode(builder.state.remap[code.0 as usize])
+        }));
+        builder.output.finish()
     }
 }
 

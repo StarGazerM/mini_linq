@@ -273,6 +273,20 @@ capability is a rustc error at its one typed build, never a hash fallback;
 integer aliases and user implementations obey the same capability law. The
 provider's Rust type carries the ordinal capability, so each membership probe
 has no indirect codec call.
+
+\paragraph{Columnar loading.}
+Source batches feed one bounded block tail per ordinary column. Interned
+columns finalize the dictionary first; their temporary-code remap feeds that
+same block encoder. Neither route constructs an intermediate vector of rows.
+\[
+\Rule{LD-ScanBlocks}{R=\mathsf{concat}(batches)\quad
+ C=\mathsf{loadColumns}_{F,B}(batches)}
+ {\alpha(C)=R\quad
+  \mathsf{summary}(C_j)=\mathsf{extrema}(\mathsf{ord}(R_j))}
+\]
+The summary equation applies only when requested. Payload and extrema consume
+the same input occurrences, independent of source batch boundaries; source
+errors do not publish partial dictionaries.
 The capability also records an associated unsigned word type: ordinary
 integer and string-code ordinals use \code{u64}; wide custom ordinals may use
 \code{u128}. Bounds and offsets use that word without a universal widening.

@@ -85,6 +85,26 @@ answer fact or duplicating P4/P5/P6 implementation. No new root/regression,
 TPC-H, expanded-code gate, timing, or formal-check result is claimed here.
 
 
+## P5 S2 columnar-loader cutover
+
+Fourteen P5-owned V sites are retired: the Parquet tuple-only call attribution,
+`ZoneRows::from_batches`, and the eager decoders/consumers in `zone_parquet`
+and `zone_tpch`. The latter now load `ScanTable` columns directly and run
+predicates on residuals; diagnostic vector decoding is only an independent
+answer oracle, not the scan input. The obsolete batch-to-row-summary API is
+removed, rather than reclassified.
+
+`ScanColumnBuilder` collects block ordinals and extrema together, independent
+of source batch boundaries. Columnar Arrow/Parquet and CSV readers write each
+column directly without an intermediate tuple vector. Interned text retains
+temporary codes until dictionary finalization, then remaps into final encoded
+blocks; summaries describe final codes, never temporary insertion order.
+
+The three CSV hash/btree V markers remain: their scan half has a columnar
+route, but grouping still requires P4 encoded index keys. Generic row-loading
+`?` primitives remain available and still require caller-use authorization.
+No compiler selection or workload default is changed by this runtime slice.
+
 ## Violations ranked by likely cost
 
 **[INFERENCE]** This ranking is an investigation order, not measured site timings. Whole-relation materialization and string allocation rank above scalar reconstruction; actual invocation counts/selectivity can reverse the order. Existing storage evidence (§12) motivates prioritizing encoded execution, but does not establish a speedup for any individual site below. Diagnostic-only paths are ranked last regardless of their small-fixture implementation cost.
@@ -99,11 +119,9 @@ Every V marker is listed below, sorted by those tiers and then path; ties are no
 
 | Priority tier | File:line | Class | Reason / plan step | Owner / required recorded fact |
 |---|---|---|---|---|
-| 1 | `runtime/cq-load/src/csv_source.rs:135` | V | Loader::csv_hash/csv_btree group these decoded rows; P4 keeps index keys encoded and P5 builds scan columns directly. | P5 / Load+Read (P4 / Index also for csv_hash/csv_btree) |
-| 1 | `runtime/cq-load/src/loader.rs:44` | V | CSV batch decoding precedes hash grouping; P4 builds indexes over retained representations and P5 loads columnar scans directly. | P5 / Load+Read (P4 / Index also for csv_hash/csv_btree) |
-| 1 | `runtime/cq-load/src/loader.rs:57` | V | CSV batch decoding precedes ordered grouping; P4 retains encoded index keys and P5 avoids eager logical scan tuples. | P5 / Load+Read (P4 / Index also for csv_hash/csv_btree) |
-| 1 | `runtime/cq-load/src/parquet_source.rs:117` | V | zone_tpch feeds these owned decoded tuples to membership scans; P5 must retain columnar payloads and materialize late. | P5 / Load+Read |
-| 1 | `runtime/cq-load/src/zone.rs:214` | V | consuming Csv/Parquet batches drives eager tuple decoding before summary scans; P5 must build encoded columns and materialize survivors. | P5 / Load+Read |
+| 1 | `runtime/cq-load/src/csv_source.rs:160` | V | Row-mode CSV decoding precedes hash/btree grouping; columnar scans bypass this decoder. | P4 / Index |
+| 1 | `runtime/cq-load/src/loader.rs:44` | V | CSV row decoding precedes hash grouping; P4 owns retained index keys. | P4 / Index |
+| 1 | `runtime/cq-load/src/loader.rs:57` | V | CSV row decoding precedes ordered grouping; P4 owns retained index keys. | P4 / Index |
 | 2 | `experiments/gpu/sequence-runtime/src/canon.rs:565` | V | into_columns invokes device expansion before host publication; P6 preserve the packed view. | P6 / Carrier+Read |
 | 2 | `experiments/gpu/sequence-runtime/src/canon.rs:584` | V | packed_rows wrapper dispatches device expansion before publication; P6 defer logical inversion. | P6 / Carrier+Read |
 | 2 | `experiments/gpu/sequence-runtime/src/canon.rs:661` | V | canonical output adapter expands packed values before possible chained relations; P6 retain encoded fields. | P6 / Carrier+Read |
@@ -183,18 +201,6 @@ Every V marker is listed below, sorted by those tiers and then path; ties are no
 | 5 | `experiments/gpu/h05-reference/src/main.rs:190` | V | full index key reconstruction precedes sorting; P6 retain encoded keys. | P6 / Carrier+Read; P4 / Index law |
 | 5 | `experiments/gpu/h05-reference/src/main.rs:192` | V | selected index key reconstruction precedes sorting; P6 compare recorded codes. | P6 / Carrier+Read; P4 / Index law |
 | 5 | `experiments/gpu/h05-reference/src/main.rs:217` | V | index builder launches whole-key decode before lexicographic sort; P6 retain encoded keys. | P6 / Carrier+Read; P4 / Index law |
-| 5 | `runtime/cq-load/examples/zone_tpch.rs:13` | V | this benchmark decoder materializes lineitem before membership selection; P5 requires encoded scan columns and late materialization. | P5 / Load+Read |
-| 5 | `runtime/cq-load/examples/zone_tpch.rs:16` | V | order keys are decoded before membership tests; P5 evaluates preserved predicates in the scan representation. | P5 / Load+Read |
-| 5 | `runtime/cq-load/examples/zone_tpch.rs:19` | V | part keys are materialized before row selection despite no query read; P5 must retain them encoded. | P5 / Load+Read |
-| 5 | `runtime/cq-load/examples/zone_tpch.rs:21` | V | supplier keys are materialized before membership selection; P5 materializes only demanded survivor columns. | P5 / Load+Read |
-| 5 | `runtime/cq-load/examples/zone_tpch.rs:44` | V | the benchmark loads all logical tuples before zone pruning; P5 must replace eager row loading with columnar scan storage. | P5 / Load+Read |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:15` | V | the zone diagnostic builds logical tuples before relational selections; P5 must build summaries with encoded scan columns. | P5 / Load+Read |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:18` | V | the zone diagnostic reconstructs id before Point selection; P5 keeps preserved predicates in the encoded scan domain. | P5 / Load+Read |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:21` | V | the zone diagnostic reconstructs dates before building bounds; P5 builds payload and summaries together. | P5 / Load+Read |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:23` | V | the zone diagnostic reconstructs Decimal before building bounds; P5 requires columnar payload plus summaries. | P5 / Load+Read |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:25` | V | the zone diagnostic owns strings before subsequent selection; P5 delays reconstruction to demanded survivors. | P5 / Load+Read |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:89` | V | this test consumes decoding batches before zone predicates; P5 retains encoded columns through selection. | P5 / Load+Read |
-| 5 | `runtime/cq-load/tests/zone_parquet.rs:91` | V | the expected zone host also eagerly loads tuples before relational reads; P5 builds scan payload and bounds together. | P5 / Load+Read |
 
 ## Nineteen i64 input columns
 
@@ -587,12 +593,7 @@ The table distinguishes current authored Rust reads from relational-only uses. M
 | `features/datalog/doop/shared/src/loader.rs:98` | R | method_descriptors reads parameter text in opaque format! before interning the computed descriptor. |
 | `features/datalog/doop/shared/src/loader.rs:131` | P | exact_columns_and_empty_strings exposes the parsed name for a diagnostic answer assertion. |
 | `features/datalog/doop/shared/src/loader.rs:133` | P | exact_columns_and_empty_strings exposes the empty symbol for a diagnostic answer assertion. |
-| `runtime/cq-load/examples/zone_tpch.rs:13` | V | this benchmark decoder materializes lineitem before membership selection; P5 requires encoded scan columns and late materialization. |
-| `runtime/cq-load/examples/zone_tpch.rs:16` | V | order keys are decoded before membership tests; P5 evaluates preserved predicates in the scan representation. |
-| `runtime/cq-load/examples/zone_tpch.rs:19` | V | part keys are materialized before row selection despite no query read; P5 must retain them encoded. |
-| `runtime/cq-load/examples/zone_tpch.rs:21` | V | supplier keys are materialized before membership selection; P5 materializes only demanded survivor columns. |
-| `runtime/cq-load/examples/zone_tpch.rs:44` | V | the benchmark loads all logical tuples before zone pruning; P5 must replace eager row loading with columnar scan storage. |
-| `runtime/cq-load/src/csv_source.rs:135` | V | Loader::csv_hash/csv_btree group these decoded rows; P4 keeps index keys encoded and P5 builds scan columns directly. |
+| `runtime/cq-load/src/csv_source.rs:160` | V | Row-mode CSV decoding precedes hash/btree grouping; P4 must retain encoded index keys. Columnar scans bypass this decoder. |
 | `runtime/cq-load/src/csv_source.rs:146` | ? | read_csv collects the logical batch decoder for arbitrary callers without a recorded final-use boundary. |
 | `runtime/cq-load/src/csv_source.rs:148` | ? | try_fold drives Csv::next reconstruction; caller-specific relational and diagnostic uses are classified at their sites. |
 | `runtime/cq-load/src/lib.rs:125` | ? | Load is a generic source-to-logical conversion contract with no consumer boundary evidence. |
@@ -602,10 +603,9 @@ The table distinguishes current authored Rust reads from relational-only uses. M
 | `runtime/cq-load/src/lib.rs:187` | ? | CSV field parsing invokes arbitrary T::load without a recorded downstream read boundary. |
 | `runtime/cq-load/src/lib.rs:201` | ? | Arrow column reconstruction invokes arbitrary T::load_arrow before its consumer is known. |
 | `runtime/cq-load/src/loader.rs:31` | ? | read_csv reconstructs the entire host relation; this generic convenience API records no final consumer. |
-| `runtime/cq-load/src/loader.rs:44` | V | CSV batch decoding precedes hash grouping; P4 builds indexes over retained representations and P5 loads columnar scans directly. |
-| `runtime/cq-load/src/loader.rs:57` | V | CSV batch decoding precedes ordered grouping; P4 retains encoded index keys and P5 avoids eager logical scan tuples. |
+| `runtime/cq-load/src/loader.rs:44` | V | CSV row decoding precedes hash grouping; P4 owns retained index keys. |
+| `runtime/cq-load/src/loader.rs:57` | V | CSV row decoding precedes ordered grouping; P4 owns retained index keys. |
 | `runtime/cq-load/src/loader.rs:73` | ? | read_parquet reconstructs a tuple-vector host but this generic loader records no publication or Rust-read boundary. |
-| `runtime/cq-load/src/parquet_source.rs:117` | V | zone_tpch feeds these owned decoded tuples to membership scans; P5 must retain columnar payloads and materialize late. |
 | `runtime/cq-load/src/parquet_source.rs:129` | ? | read_parquet collects logical rows for arbitrary hosts without a caller publication or opaque-read fact. |
 | `runtime/cq-load/src/parquet_source.rs:134` | ? | this fold drives Parquet::next reconstruction before the generic caller's downstream use is known. |
 | `runtime/cq-load/src/parquet_source.rs:150` | ? | string_values invokes caller parsing over Arrow strings without a recorded logical consumer. |
@@ -642,7 +642,6 @@ The table distinguishes current authored Rust reads from relational-only uses. M
 | `runtime/cq-load/src/scalar.rs:268` | ? | Date32 epoch-day values become Date wrappers without opaque-read or publication facts. |
 | `runtime/cq-load/src/scalar.rs:271` | ? | Date Arrow fallback reconstructs logical dates via the generic parser. |
 | `runtime/cq-load/src/scalar.rs:280` | ? | Date FromStr delegates reconstruction with no evidence about subsequent operations. |
-| `runtime/cq-load/src/zone.rs:214` | V | consuming Csv/Parquet batches drives eager tuple decoding before summary scans; P5 must build encoded columns and materialize survivors. |
 | `runtime/cq-load/tests/loading.rs:35` | P | Typed reconstructs rows solely for CSV/Parquet loading diagnostics and answer assertions. |
 | `runtime/cq-load/tests/loading.rs:37` | P | the Typed diagnostic exposes decoded ids to its expected-row oracle. |
 | `runtime/cq-load/tests/loading.rs:39` | P | the Typed diagnostic exposes decoded names to its expected-row oracle. |
@@ -711,13 +710,6 @@ The table distinguishes current authored Rust reads from relational-only uses. M
 | `runtime/cq-load/tests/loading.rs:572` | P | InvalidSchema invokes reconstruction only to expose a diagnostic column-length error. |
 | `runtime/cq-load/tests/loading.rs:575` | P | the InvalidSchema column conversion exposes the malformed decoder result to its error oracle. |
 | `runtime/cq-load/tests/loading.rs:586` | P | the invalid-length diagnostic invokes Parquet reconstruction solely to expose its contract error. |
-| `runtime/cq-load/tests/zone_parquet.rs:15` | V | the zone diagnostic builds logical tuples before relational selections; P5 must build summaries with encoded scan columns. |
-| `runtime/cq-load/tests/zone_parquet.rs:18` | V | the zone diagnostic reconstructs id before Point selection; P5 keeps preserved predicates in the encoded scan domain. |
-| `runtime/cq-load/tests/zone_parquet.rs:21` | V | the zone diagnostic reconstructs dates before building bounds; P5 builds payload and summaries together. |
-| `runtime/cq-load/tests/zone_parquet.rs:23` | V | the zone diagnostic reconstructs Decimal before building bounds; P5 requires columnar payload plus summaries. |
-| `runtime/cq-load/tests/zone_parquet.rs:25` | V | the zone diagnostic owns strings before subsequent selection; P5 delays reconstruction to demanded survivors. |
-| `runtime/cq-load/tests/zone_parquet.rs:89` | V | this test consumes decoding batches before zone predicates; P5 retains encoded columns through selection. |
-| `runtime/cq-load/tests/zone_parquet.rs:91` | V | the expected zone host also eagerly loads tuples before relational reads; P5 builds scan payload and bounds together. |
 | `runtime/cq-storage/src/sequence.rs:46` | ? | SequenceCodec exposes a generic logical boundary without caller Rust-read or publication facts. |
 | `runtime/cq-storage/src/sequence.rs:58` | ? | Identity implements the generic decode boundary as a no-op; caller purpose is not recorded. |
 | `runtime/cq-storage/src/sequence.rs:90` | ? | Dense resolves a dictionary ordinal to T; mixed generic callers supply no boundary evidence. |

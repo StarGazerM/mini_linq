@@ -1,6 +1,35 @@
 use cq_storage::{OrderKey, scan::*};
 use std::ops::Bound::{Excluded, Included, Unbounded};
 
+#[test]
+fn incremental_encoding_is_batch_independent() {
+    let values: Vec<i64> = (0..5117).map(|i| (i % 1300) - 700).collect();
+    for summaries in [false, true] {
+        for size in [1024, 2048] {
+            let block_rows = BlockRows::new(size).unwrap();
+            let expected = ScanColumn::<i64, Bytes>::new(&values, block_rows, summaries);
+            for batch_size in [1, 333, 1024, 3000, 6000] {
+                let mut builder = ScanColumnBuilder::<i64, Bytes>::new(block_rows, summaries);
+                builder.extend(std::iter::empty());
+                for batch in values.chunks(batch_size) {
+                    builder.extend(batch.iter().copied());
+                    builder.extend(std::iter::empty());
+                }
+                let actual = builder.finish();
+                assert_eq!(actual.len(), values.len());
+                assert_eq!(actual.headers(), expected.headers());
+                assert_eq!(actual.payload(), expected.payload());
+                assert_eq!(actual.summaries(), expected.summaries());
+            }
+        }
+    }
+    let empty = ScanColumnBuilder::<i64, Plain>::new(BlockRows::new(1024).unwrap(), true)
+        .finish();
+    assert!(empty.is_empty());
+    assert!(empty.headers().is_empty());
+    assert_eq!(empty.summaries(), Some([].as_slice()));
+}
+
 fn laws<T: OrdinalDecode + std::fmt::Debug>(values: &[T]) {
     check::<T, Plain>(values);
     check::<T, Bytes>(values);
