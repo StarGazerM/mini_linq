@@ -777,10 +777,10 @@ Paths and lines refer to the reviewed `17a14b93` tree.
    completed direct-call cutover.
 3. **CQ → VO / elaboration owners — ElabFix in progress.** Branch spanning
    trees are deleted and predicate attachment targets are recorded in VO by
-   `cq-order` (`passes/cq-order/src/restrict.rs`, O-Restrict); lowering applies
-   only recorded restrictions. H-Local still keeps the written-before rule
-   (3b makes it order-independent), and a hoisted block's finite domain is
-   still joined in written order in elaboration.
+   `cq-order` (`passes/cq-order/src/restrict.rs`, O-Restrict) under the
+   order-independent H-Local rule; lowering applies only recorded
+   restrictions. A hoisted block's finite domain is still joined in written
+   order in elaboration.
 4. **GPU runtime owners — unrecorded runtime work.** Datalog run kernels
    still choose occupancy grids and 256-thread launches in the runtime
    (`experiments/gpu/datalog-runtime/src/runs.rs:377-379,411-413,480-489`).

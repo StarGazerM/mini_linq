@@ -75,11 +75,12 @@ pub struct LocalPredicate {
 /// The local relational predicates of one scope and their target occurrences.
 /// `hoisted` lists the scope's block clauses recorded as Hoisted.
 ///
-/// A target is a positive atom written before the predicate whose variables
-/// include every predicate variable, with no hoisted block needing a finite
-/// prefix domain between them (that domain is a separate proof of the written
-/// prefix). Predicates over let- or for-bound names have no target.
-/// Formal rule H-Local: Target each relational predicate and implied domain at the earlier covering positive atoms of its scope, excluding Rust-bound names and hoisted-domain cuts.
+/// A target is a positive atom of the scope, written before or after the
+/// predicate, whose variables include every predicate variable. A hoisted
+/// block needing a finite prefix domain cuts an atom written before it from a
+/// predicate written after it: that domain is a separate proof of the written
+/// prefix. Predicates over let- or for-bound names have no target.
+/// Formal rule H-Local: Target each relational predicate and implied domain at every covering positive atom of its scope, excluding Rust-bound names and hoisted-domain cuts from a later predicate.
 pub fn local_predicates(
     body: &super::CommaList<BodyItem>,
     context: &BTreeSet<String>,
@@ -111,16 +112,15 @@ pub fn local_predicates(
             _ => (),
         }
     }
-    let targets = |predicate: &cq_syntax::Constraint, before: usize| -> BTreeSet<usize> {
+    let targets = |predicate: &cq_syntax::Constraint, at: usize| -> BTreeSet<usize> {
         let variables: BTreeSet<String> = predicate.variables().map(symbol_name).collect();
         if variables.is_empty() || !variables.is_disjoint(&let_bound) {
             return BTreeSet::new();
         }
         body.iter()
             .enumerate()
-            .take(before)
             .filter(|(clause, item)| {
-                domain_cuts.range(clause + 1..before).next().is_none()
+                (at <= *clause || domain_cuts.range(clause + 1..at).next().is_none())
                     && matches!(item, BodyItem::Positive { atom }
                         if variables.is_subset(&atom.variables().map(symbol_name).collect()))
             })

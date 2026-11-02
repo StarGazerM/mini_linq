@@ -600,9 +600,9 @@ fn fine_tree_reduced_filtered_split_read_passes_its_own_elaboration_check() {
 }
 
 #[test]
-fn masks_never_reduces_by_an_occurrence_its_filter_does_not_restrict() {
-    // `where x < 5` restricts B@1 (written before it), never C@3, so C@3 is
-    // not a filtered Masks support.
+fn masks_reduces_only_by_supports_its_restrictions_filter() {
+    // `where x < 5` restricts both covering atoms, B@1 written before it and
+    // C@3 written after it, so every Masks support is actually filtered.
     let source: cq::Program = syn::parse_quote! {
         struct Q; relation A(a: i32, b: i32); relation B(b: i32, x: i32);
         relation C(x: i32, d: i32); relation answer(a: i32, d: i32);
@@ -615,24 +615,60 @@ fn masks_never_reduces_by_an_occurrence_its_filter_does_not_restrict() {
     };
     let reduced = cq_reduce::compile(&ordered, &options).unwrap();
     cq_reduce::check(&ordered, &reduced, &options).unwrap();
-    let restricted: Vec<_> = reduced
-        .valuation
-        .steps
-        .iter()
-        .filter_map(|step| match step {
-            cq_lang_vo::Step::Restrict(restrict, _) => Some(restrict.clause()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(restricted, [1]);
-    assert!(
-        !reduced
+    let mut restricted = std::collections::BTreeSet::new();
+    let mut supports = Vec::new();
+    for step in &reduced.valuation.steps {
+        match step {
+            cq_lang_vo::Step::Restrict(restrict, _) => {
+                restricted.insert(restrict.clause());
+            }
+            cq_lang_vo::Step::Reduce(reduce, _) => {
+                let cq_lang_vo::Reduction::With(_, support) = &reduce.reduction;
+                supports.push(support.clause());
+            }
+            _ => (),
+        }
+    }
+    assert_eq!(restricted, [1, 3].into());
+    assert!(!supports.is_empty());
+    assert!(supports.iter().all(|support| restricted.contains(support)));
+    let target = cq_elaborate::compile(&reduced).unwrap();
+    cq_elaborate::check(&reduced, &target).unwrap();
+}
+
+#[test]
+fn restrictions_do_not_depend_on_the_predicate_written_position() {
+    // The same query with `where x < 5` written after or before `S(x, b)`
+    // restricts the same occurrences.
+    for body in [
+        quote::quote!(R(a, x), S(x, b), where x < 5, T(b)),
+        quote::quote!(R(a, x), where x < 5, S(x, b), T(b)),
+    ] {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q; relation R(a: i32, x: i32); relation S(x: i32, b: i32);
+            relation T(b: i32); relation answer(a: i32, b: i32);
+            answer(a, b) :- #body;
+        };
+        let normal = cq::normal::normalize(&source).unwrap();
+        let ordered = cq_order::compile(&normal, &Default::default()).unwrap();
+        let restricted: Vec<_> = ordered
             .valuation
             .steps
             .iter()
-            .any(|step| matches!(step, cq_lang_vo::Step::Reduce(..))),
-        "no occurrence is a filtered support of another"
-    );
-    let target = cq_elaborate::compile(&reduced).unwrap();
-    cq_elaborate::check(&reduced, &target).unwrap();
+            .filter_map(|step| match step {
+                cq_lang_vo::Step::Restrict(restrict, _) => Some(restrict.relation.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(restricted, ["R", "S"]);
+        assert!(
+            !ordered
+                .valuation
+                .steps
+                .iter()
+                .any(|step| matches!(step, cq_lang_vo::Step::Constraint(..)))
+        );
+        let target = cq_elaborate::compile(&ordered).unwrap();
+        cq_elaborate::check(&ordered, &target).unwrap();
+    }
 }

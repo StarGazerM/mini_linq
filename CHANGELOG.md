@@ -7,6 +7,15 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Elaboration redesign slice 3b: H-Local is order-independent. A relational
+  predicate restricts every covering positive atom of its scope, written
+  before or after it; the only positional premise left is the domain cut (a
+  predicate written after a hoisted domain-needing block does not restrict the
+  atoms before that block). Ordering, H-FilterRank, Masks and lowering share
+  the rule, so `R(a,x), where x < 5, S(x,b)` and `R(a,x), S(x,b), where x < 5`
+  restrict the same occurrences, and `A(a,b), B(b,x), where x < 5, C(x,d)`
+  now restricts `C`, the Masks support its rank names.
+
 - Datalog Source interns code-domain identities across its full declaration
   table before producing Storage/Round or individual CQ holes. Hole subsets
   preserve those recorded ids instead of assigning new local identities;

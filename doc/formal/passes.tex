@@ -276,9 +276,14 @@ and the default planner remain unchanged.
 \Rule{H-Local}{P\text{ a top-level }\mathsf{where}\text{ predicate or literal equality at clause }k,
  \text{ or an E-Domain }D_x\text{ of one}\\
  \vars(P)\ne\emptyset\quad\vars(P)\cap\mathsf{RustBound}=\emptyset}
- {\mathsf{targets}(P)=\{i<k\mid c_i=R(\bar x)\text{ positive},\ \vars(P)\subseteq\bar x,\
-  \text{no hoisted domain-needing block in }(i,k)\}}
+ {\mathsf{targets}(P)=\{i\ne k\mid c_i=R(\bar x)\text{ positive},\ \vars(P)\subseteq\bar x,\
+  i>k\lor\text{no hoisted domain-needing block in }(i,k)\}}
 \]
+H-Local is independent of where $P$ is written: an atom written after $P$
+is a target exactly like one written before it. The only positional premise
+is the domain cut: a hoisted block needing a finite prefix domain takes that
+domain from the atoms written before it, so a predicate written after the
+block does not restrict them.
 \[
 \Rule{H-FilterRank}{P_i=\{P\mid i\in\mathsf{targets}(P)\}\quad
  L_i=\{0\mid O_i\text{ has a literal argument}\}}

@@ -262,7 +262,7 @@ fn constant_only_atoms_keep_their_occurrence_and_point_rank() {
 }
 
 #[test]
-fn local_predicates_target_earlier_covering_atoms_and_rank_through_them() {
+fn local_predicates_target_every_covering_atom_and_rank_through_them() {
     let source: cq::Program = syn::parse_quote! {
         struct Q; relation R(a:i32,b:i32); relation S(a:i32); relation T(a:i32,b:i32);
         answer(x,y,z) :- R(x,y), where y < 5, S(z), where x == 3,
@@ -271,17 +271,41 @@ fn local_predicates_target_earlier_covering_atoms_and_rank_through_them() {
     let normal = cq::normal::normalize(&source).unwrap();
     let body = &normal.query.body;
     let local = cq::hypergraph::local_predicates(body, &Default::default(), &Default::default());
-    // Only covering atoms written before a predicate are its targets.
-    assert!(
-        local
+    let targets = |clause: usize, written: bool| -> Vec<usize> {
+        let entry = local
             .iter()
-            .all(|entry| entry.targets.iter().all(|&target| target < entry.clause))
-    );
-    // The implied domain of `z` restricts `S`; the disjunction itself spans
-    // two atoms and restricts none.
-    let implied: Vec<_> = local.iter().filter(|entry| !entry.written).collect();
-    assert_eq!(implied.len(), 1);
-    assert_eq!(implied[0].targets.iter().copied().collect::<Vec<_>>(), [2]);
+            .find(|entry| entry.clause == clause && entry.written == written)
+            .unwrap();
+        entry.targets.iter().copied().collect()
+    };
+    // Covering atoms written before and after a predicate are its targets.
+    assert_eq!(targets(1, true), [0]);
+    assert_eq!(targets(3, true), [0, 5]);
+    // The disjunction restricts the later `T`; its implied domain of `z`
+    // restricts `S` and `T`.
+    assert_eq!(targets(4, true), [5]);
+    assert_eq!(targets(4, false), [2, 5]);
     let ranks = cq::hypergraph::filter_ranks(body, &Analysis::of(&normal), &local);
-    assert_eq!((ranks[&0], ranks[&2], ranks[&5]), (0, 2, 3));
+    assert_eq!((ranks[&0], ranks[&2], ranks[&5]), (0, 2, 0));
+}
+
+#[test]
+fn a_domain_needing_hoisted_block_cuts_earlier_atoms_from_later_predicates() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(a:i32); relation S(a:i32,b:i32); relation T(a:i32);
+        answer(x) :- R(x), {S(x, b)} | {if arm(x)}, where x < 5, T(x);
+    };
+    let normal = cq::normal::normalize(&source).unwrap();
+    let body = &normal.query.body;
+    let block = body
+        .iter()
+        .position(|item| matches!(item, cq::BodyItem::Block(_)))
+        .unwrap();
+    let hoisted = std::collections::BTreeSet::from([block]);
+    let local = cq::hypergraph::local_predicates(body, &Default::default(), &hoisted);
+    let entry = local.iter().find(|entry| entry.written).unwrap();
+    assert_eq!(entry.targets.iter().copied().collect::<Vec<_>>(), [3]);
+    let free = cq::hypergraph::local_predicates(body, &Default::default(), &Default::default());
+    let entry = free.iter().find(|entry| entry.written).unwrap();
+    assert_eq!(entry.targets.iter().copied().collect::<Vec<_>>(), [0, 3]);
 }
