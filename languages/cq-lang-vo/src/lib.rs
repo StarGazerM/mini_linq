@@ -135,8 +135,8 @@ impl syn::parse::Parse for Step {
 }
 
 /// A restriction of one clause's relation, normally before its first subatom.
-/// A finite block domain that requires prefix Rust delays reductions until
-/// that context exists; a late reduction also filters the current prefix.
+/// A hoisted block's finite prefix domain delays reductions until VO binds
+/// that block's free columns; a late reduction also filters the current prefix.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Reduce {
     pub reduce_token: kw::reduce,
@@ -199,7 +199,9 @@ impl Subatom {
 #[derive(Clone, Debug, Default)]
 pub struct Analysis {
     pub branches: BTreeMap<usize, Vec<Analysis>>,
-    /// Rust-produced free columns required before a finite block domain exists.
+    /// For each hoisted block that takes a finite prefix domain: its free
+    /// columns not bound by the scope context. VO binds them before the block
+    /// and before any reduction that reads it.
     pub domain_requires: BTreeMap<usize, BTreeSet<String>>,
     /// Variables bound before each step, in binding order.
     pub bound_before: Vec<Vec<String>>,
@@ -247,7 +249,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
 }
 
 /// Formal rule WF-VO-Rust: Place each unchanged Rust expression exactly once where its free variables are bound.
-/// Formal rule WF-BlockPlacement: Hoisted arms are Rust-free; correlated arms require their free prefix, and repeated reads preserve placement.
+/// Formal rule WF-BlockPlacement: Hoisted arms are Rust-free and a hoisted block taking a finite prefix domain follows its free columns; correlated arms require their free prefix, and repeated reads preserve placement.
 fn analyze_steps(
     body: &cq_syntax::CommaList<cq::BodyItem>,
     steps: &[Step],
@@ -299,35 +301,19 @@ fn analyze_steps(
                 };
                 analysis.atoms.insert(clause, atom);
                 if !facts.rust
+                    && block.needs_domain(&facts)
                     && steps.iter().any(|step| {
                         matches!(step, Step::Block(planned, _)
                             if planned.source.clause() == clause
                                 && planned.placement == blocks::Placement::Hoisted)
                     })
                 {
-                    let missing: BTreeSet<_> = block
-                        .branches
-                        .iter()
-                        .flat_map(|arm| {
-                            let generated: BTreeSet<_> = cq::blocks::walk(&arm.body)
-                                .into_iter()
-                                .filter_map(cq::BodyItem::atom)
-                                .flat_map(cq_syntax::Atom::variables)
-                                .map(symbol_name)
-                                .collect();
-                            let negative_context = cq::blocks::walk(&arm.body).into_iter().any(|item| {
-                                matches!(item, cq::BodyItem::Negation(n)
-                                    if n.atom.variables().any(|v| facts.free.contains_key(&symbol_name(v))))
-                            });
-                            facts
-                                .free
-                                .keys()
-                                .filter(|name| negative_context || !generated.contains(*name))
-                                .cloned()
-                                .collect::<Vec<_>>()
-                        })
+                    let required: BTreeSet<_> = facts
+                        .free
+                        .keys()
+                        .filter(|name| !context.contains(*name))
+                        .cloned()
                         .collect();
-                    let required: BTreeSet<_> = missing.intersection(&let_bound).cloned().collect();
                     if !required.is_empty() {
                         analysis.domain_requires.insert(clause, required);
                     }
@@ -434,6 +420,13 @@ fn analyze_steps(
                         block,
                         "correlated block requires every free prefix variable",
                     );
+                }
+                if analysis
+                    .domain_requires
+                    .get(&clause)
+                    .is_some_and(|names| names.iter().any(|name| !bound.contains(name)))
+                {
+                    return error(block, "hoisted block precedes its finite prefix domain");
                 }
                 let branch_context: Vec<_> = facts.free.keys().cloned().collect();
                 let mut branches = Vec::new();

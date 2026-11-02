@@ -196,6 +196,7 @@ dependencies = [
  "cq-lang-vo",
  "cq-order",
  "cq-planning",
+ "cq-ra-rewrites",
  "cq-reduce",
  "proc-macro2",
  "quote",
@@ -237,6 +238,14 @@ dependencies = [
  "cq-lang-structures",
  "proc-macro2",
  "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-ra-rewrites"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
  "syn 2.0.119",
 ]
 

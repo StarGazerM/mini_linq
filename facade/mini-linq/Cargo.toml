@@ -25,6 +25,7 @@ cq-lang-sequence.workspace = true
 cq-order.workspace = true
 cq-reduce.workspace = true
 cq-elaborate.workspace = true
+cq-ra-rewrites.workspace = true
 cq-index-policy.workspace = true
 cq-physical-lowering.workspace = true
 cq-structure-selection.workspace = true

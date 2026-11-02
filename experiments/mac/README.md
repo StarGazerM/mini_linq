@@ -693,7 +693,7 @@ times are SF1 medians of five plain executions, with construction included:
 | H08 | 22.271 | 27.446 | 22.270 |
 
 The temporary absorption configuration applies the existing checked
-`cq_elaborate::simplify_reductions` after Transfer and verifies CQ correspondence.
+`simplify_reductions` (now `cq_ra_rewrites::simplify_reductions`) after Transfer and verifies CQ correspondence.
 Production Transfer currently does not take that path. The ablation removes
 backward support versions, restores useful scan filters, and avoids retaining
 fact intermediates needed only by those versions. No compiler fix was applied.

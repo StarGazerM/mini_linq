@@ -324,7 +324,7 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
         children.entry(parent).or_default().push(child);
     }
     let mut filtered: std::collections::BTreeSet<usize> =
-        cq_reduce::filter_ranks(body, steps, &analysis, &graph)
+        cq_reduce::filter_ranks(body, steps, &graph)
             .into_iter()
             .filter(|&(_, rank)| rank < 3)
             .map(|(clause, _)| clause)
@@ -384,14 +384,15 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
 /// CQ→RA′ through the public order, reduce and elaborate APIs. Relational
 /// predicate placement is recorded by ordering (O-Restrict) and applied by
 /// elaboration; opaque Rust always stays in its chain.
-/// Hypergraph and Transfer share the facade's checked redundant-support absorption.
+/// Hypergraph and Transfer then apply the checked redundant-support absorption
+/// and LE the dead-expansion elimination of `cq-ra-rewrites`.
 pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Program> {
     let valuation = compile_valuation(source, planner)?;
     let target = cq_elaborate::compile(&valuation)?;
     cq_elaborate::check(&valuation, &target)?;
     let target = match planner {
-        Planner::Hypergraph | Planner::Transfer => cq_elaborate::simplify_reductions(&target)?,
-        Planner::Le => cq_elaborate::simplify_expansions(&target)?,
+        Planner::Hypergraph | Planner::Transfer => cq_ra_rewrites::simplify_reductions(&target)?,
+        Planner::Le => cq_ra_rewrites::simplify_expansions(&target)?,
         _ => target,
     };
     check(source, &target)?;

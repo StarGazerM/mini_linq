@@ -28,7 +28,7 @@ fn scope(
         Some((path, branch)) => path.child(*branch, clause),
         None => valuation::Occurrence::new(clause),
     };
-    let local = valuation::restrict::local_predicates(body, context, &steps);
+    let local = cq::hypergraph::local_predicates(body);
     let mut result = Vec::with_capacity(steps.len());
     for predicate in &local {
         for &target in &predicate.targets {

@@ -21,6 +21,7 @@ cq-lang-ra = { version = "0.1.0", path = "../../languages/cq-lang-ra" }
 cq-order = { version = "0.1.0", path = "../../passes/cq-order" }
 cq-reduce = { version = "0.1.0", path = "../../passes/cq-reduce" }
 cq-elaborate = { version = "0.1.0", path = "../../passes/cq-elaborate" }
+cq-ra-rewrites = { version = "0.1.0", path = "../../passes/cq-ra-rewrites" }
 cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
 cq-planning = { version = "0.1.0", path = "../../facade/cq-planning" }
 cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }

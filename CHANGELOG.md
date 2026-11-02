@@ -17,6 +17,28 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   mutations use typed column metadata. Formal and conformance inventories
   describe the current rewrite, retention, planning and provider rules.
 
+- Elaboration redesign slice 4: a hoisted block that takes a finite prefix
+  domain (an arm lacks a generator for a free column) now takes it from the VO
+  prefix that binds its free columns. VO records this as `domain_requires`
+  (all free columns outside the scope context, no longer only Rust-produced
+  ones); WF-BlockPlacement requires the block, and every reduction naming it,
+  to follow those columns; `cq-order` waits for them and `cq-reduce` places
+  reductions at that boundary. Lowering and CK-BlockPlacement no longer join
+  the written prefix in written order. H-Local loses its hoisted-domain cut
+  (and `local_predicates` its `context`/`hoisted` parameters): a predicate
+  written after such a block restricts the atoms before it, since the domain
+  is the restricted prefix. The checked RA→RA rewrites `simplify_reductions`
+  and `simplify_expansions` move from `cq-elaborate` to the new pass crate
+  `cq-ra-rewrites`. `cq_reduce::filter_ranks` (Masks, Hypergraph, planner
+  transfer and their checkers) ranks through the scope's recorded
+  `restrict` steps instead of rerunning H-Local, so a VO with fewer
+  restrictions (the written reference) never ranks a support as filtered;
+  `hypergraph::filter_ranks` takes `(target, predicate, written)` triples.
+  Fix F6: an equality-class reduction (repeated atom argument, Fine split +
+  Tree) now joins the support projected to its recorded subatom columns, the
+  wiring CK-Elaborate states, so `stage_differential -- --ignored` passes for
+  seeds 557/877/941 (regression test in `pass_contracts`).
+
 - F5: task decomposition recognizes independent union arms beneath unary
   consumers (including the canonicalization of lowered set union), publishes
   each arm separately, and concatenates/canonicalizes at host. The dispatch

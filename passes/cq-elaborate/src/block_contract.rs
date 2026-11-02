@@ -176,44 +176,10 @@ impl Body<'_, '_> {
                     .expect("VO block coverage");
                 let correlated = planned.placement == vo::blocks::Placement::Correlated;
                 let over = correlated.then(|| self.seed());
+                // The finite domain is the current prefix projected to F: VO
+                // binds F before the block and before any reduction reading it.
                 let domain = (!correlated && block.needs_domain(&facts)).then(|| {
-                    let saved = self.prefix;
-                    if !facts.free.keys().all(|name| self.heading.contains(name)) {
-                        let mut input = None;
-                        for (c, item) in self.body.iter().take(clause).enumerate() {
-                            match item {
-                                cq::BodyItem::Positive { .. } => {
-                                    let right = self.relation(c);
-                                    input = Some(match input {
-                                        None => right,
-                                        Some(left) => self.schedule.join(left, right, false),
-                                    });
-                                }
-                                cq::BodyItem::Equality(eq) => {
-                                    if let Some(left) = input {
-                                        input = Some(self.schedule.select(
-                                            left,
-                                            &ra::Theta {
-                                                equalities: [eq.clone()].into_iter().collect(),
-                                                constraints: Default::default(),
-                                            },
-                                        ));
-                                    }
-                                }
-                                cq::BodyItem::Constraint(c) => {
-                                    if let Some(left) = input {
-                                        let mut theta = ra::Theta::default();
-                                        theta.push_constraint(c.clone());
-                                        input = Some(self.schedule.select(left, &theta));
-                                    }
-                                }
-                                _ => (),
-                            }
-                        }
-                        self.prefix = input;
-                    }
                     let input = self.seed();
-                    self.prefix = saved;
                     self.schedule
                         .project(input, &facts.free.values().cloned().collect::<Vec<_>>())
                 });

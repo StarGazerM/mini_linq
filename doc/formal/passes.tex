@@ -251,8 +251,11 @@ the `plan(order(..))` fallback. Filtered/Coarse serves external planners
 and R-Masks' sibling order. Under H-FilterRank, $f_i$ is
 $0$ for an occurrence containing a literal or a local constant equality, $1$ for a local constant range,
 $2$ for a derived domain, relational predicate or finite relational block,
-and $3$ otherwise. Locality is H-Local, shared with O-Restrict and the
-reducers, so a filtered rank always names a restriction the lowering applies.
+and $3$ otherwise. Ordering ranks through H-Local, the same targets O-Restrict
+records; the reducers and their checkers rank through the VO scope's recorded
+restrictions, so a filtered rank always names a restriction the lowering
+applies and a VO without restrictions (the written reference) ranks nothing as
+filtered by a predicate.
 Rust guards never
 improve a rank, regardless of their syntax or types. This is a syntax-only priority, not a cardinality
 estimate. Written remains available to explicit planner clients.
@@ -276,16 +279,17 @@ and the default planner remain unchanged.
 \Rule{H-Local}{P\text{ a top-level }\mathsf{where}\text{ predicate or literal equality at clause }k,
  \text{ or an E-Domain }D_x\text{ of one}\\
  \vars(P)\ne\emptyset\quad\vars(P)\cap\mathsf{RustBound}=\emptyset}
- {\mathsf{targets}(P)=\{i\ne k\mid c_i=R(\bar x)\text{ positive},\ \vars(P)\subseteq\bar x,\
-  i>k\lor\text{no hoisted domain-needing block in }(i,k)\}}
+ {\mathsf{targets}(P)=\{i\mid c_i=R(\bar x)\text{ positive},\ \vars(P)\subseteq\bar x\}}
 \]
 H-Local is independent of where $P$ is written: an atom written after $P$
-is a target exactly like one written before it. The only positional premise
-is the domain cut: a hoisted block needing a finite prefix domain takes that
-domain from the atoms written before it, so a predicate written after the
-block does not restrict them.
+is a target exactly like one written before it. A hoisted block that takes a
+finite prefix domain imposes no positional premise either: its domain is the
+VO prefix that binds its free columns (WF-BlockPlacement), which already
+carries every restriction of that prefix and still contains the free values of
+every answer.
 \[
-\Rule{H-FilterRank}{P_i=\{P\mid i\in\mathsf{targets}(P)\}\quad
+\Rule{H-FilterRank}{P_i=\{P\mid i\in\mathsf{targets}(P)\}\ \text{(ordering) or }
+ \{P\mid\mathsf{restrict}\ R@i\ \mathsf{where}\ P\in t\}\ \text{(reducers)}\quad
  L_i=\{0\mid O_i\text{ has a literal argument}\}}
  {f_i=\min(\{3\}\cup L_i\cup\{\mathsf{strength}(p)\mid p\in P_i\})}
 \]
@@ -382,8 +386,8 @@ and $\mathsf{red}(i,j)$ the reduction of $i$ by $j$ on their shared classes:
 \Rule{R-Tree}{J=\mathsf{analysis}(q).\mathsf{join\_tree}\ne\mathsf{None}}
  {\mathsf{Tree}(VO)=\mathsf{insertAtReadyPrefix}(VO,\mathsf{up}(J)\concat\mathsf{down}(J))}
 \end{mathpar}
-The insertion point is the first atom/block, or the earliest prefix providing
-the Rust bindings a finite block domain needs. \code{Hypergraph} uses the
+The insertion point is the first atom/block, or, when a hoisted block takes a
+finite prefix domain, the earliest prefix binding its free columns. \code{Hypergraph} uses the
 filtered reducer only on acyclic scopes, but exact atom-to-block cuts on any
 scope: each atom sharing columns with a finite Rust-free block is semijoined
 through that block's derived relation. Each branch is analyzed independently.
@@ -448,8 +452,8 @@ local filter or a target of a cut in $C$. Each edge of $C\cup M$ occurs once
 and no other edge occurs. Cuts precede tree edges; every reduction of a
 support precedes its use; tree siblings run by subtree filter rank then
 written clause. Independent subtrees may interleave. Reductions precede the
-first stream step, or, for finite domains requiring Rust-produced columns,
-the first source boundary with all those columns available (VO checks
+first stream step, or, when a hoisted block takes a finite prefix domain,
+the first source boundary binding all its free columns (VO checks
 readiness). The outer exclusion includes a block used as the outer.
 \begin{mathpar}
 \Rule{H-SpanningCore}{T_0=\mathsf{GYOEars}(q)\quad
@@ -579,15 +583,18 @@ A full subatom always joins; a partial check uses the whole clause relation.
 $\mathsf{unitize}$ emits Unit when no prefix exists; binds copy pattern,
 annotation and expression. In E-ReduceWith, $\ltimes_\equiv$ matches every
 support column with the target's class; when A-Alias left two names of one
-class unsolved (protected Rust or head names) it is realized as
-join/select/project. Elaboration consumes recorded predicate placement: a
+class unsolved (protected Rust or head names, or a repeated atom argument) it
+is realized as join/select/project over the support projected to its recorded
+subatom columns, the same wiring CK-Elaborate states. Elaboration consumes recorded predicate placement: a
 recorded restriction selects its occurrence (E-Restrict) and every other
 predicate is a prefix step (E-Constraint). It computes no predicate targets,
 pushes nothing that VO does not record, and chooses no joins.
 CK-ElaborateRestrict checks that each restriction selects its own occurrence.
 It never renames variables: aliases are solved in CQ$_{\rm NF}$.
-Recorded hoisted blocks form a derived relation over $F\cup I$, using a named
-finite prefix domain for missing generators; recorded correlated blocks run
+Recorded hoisted blocks form a derived relation over $F\cup I$, using the
+current prefix projected to $F$ as the finite domain for missing generators
+(VO binds $F$ before the block and before every reduction reading it; there
+is no written-order domain); recorded correlated blocks run
 per row over the prefix. Elaboration never chooses this alternative. The
 written-reference ordering entry \code{cq_order::compile_written} records
 correlated placement recursively and no restriction, so
@@ -624,7 +631,7 @@ match by occurrence footprint, fallback siblings in order, negated references by
 original branch. \emph{Refinement:} occurrences, constraints, Rust expressions
 and their recorded placements are those of the source; totality and the
 representation laws establish equal answers.
-For pure positive targets produced by \code{simplify_expansions},
+For pure positive targets produced by \code{cq_ra_rewrites::simplify_expansions},
 CK-Elaborate also permits an inverse dead-expansion certificate. Starting
 only from the supplied RA target, it tentatively replaces a semijoin by a
 natural join. Independent demand analysis of that \emph{expanded source}
@@ -1129,7 +1136,7 @@ reduction keep the same restricted witness alive.
 The rewrite is checked against the original RA and does not alter the reduction
 algorithm.
 
-For LE's checked RA \code{simplify_expansions} pass, let $H_L,H_R$ be the
+For LE's checked RA \code{cq_ra_rewrites::simplify_expansions} pass, let $H_L,H_R$ be the
 source operand headings, $K=H_L\cap H_R$, and $D_s(r)$ the demanded columns of source result
 $r$. Under set canonicalization the additional local laws are
 \[

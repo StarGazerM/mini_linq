@@ -121,7 +121,7 @@ per-route siblings listed below.
 | `cq-syntax guard::term` (retired) | Rust recognition and field-path parameters | replaced by explicit `where` and query-closed `Term::Closed(syn::Expr)` (contract 7) |
 | `cq-order Written` | identity sequence, cross products kept | explicit reference retained; Connected/Coarse facade default done (contract 2) |
 | `cq-reduce Masks` | reduce only filter-ranked subtrees, never the root | retained default policy (contract 2/6); full reduction is an optional P8 cost question |
-| `cq-elaborate` | predicate binder choice (branch join topology deleted) | predicate placement recorded in VO as `restrict R@i where P;` by `cq-order`; lowering applies only recorded restrictions. H-Local is order-independent within its domain cut (ElabFix 3b complete); a later predicate does not cross a hoisted-block domain boundary. |
+| `cq-elaborate` | predicate binder choice (branch join topology deleted) | predicate placement recorded in VO as `restrict R@i where P;` by `cq-order` (O-Restrict, order-independent H-Local shared with H-FilterRank and the reducers); lowering applies only recorded restrictions; a hoisted block's finite domain is the VO prefix binding its free columns; RA rewrites live in `cq-ra-rewrites`. Open: rename to `cq-relational-lowering` (ElabFix 5) |
 | CQ `normalize` | computed head becomes `Bind` | retain original Rust; placement uses free variables, not expression classification (contract 7) |
 | `cq-physical-lowering` | probe first / eager / Let vs Pipe | representation choices only; point/range supply and join keys are consumed from matched, checked IX requirements |
 | Sequence decomposition | preserves recorded relational construction | P3.3-lite removes automatic replanning; ordering belongs to VO |
@@ -779,8 +779,10 @@ Paths and lines refer to the reviewed `17a14b93` tree.
    trees are deleted and predicate attachment targets are recorded in VO by
    `cq-order` (`passes/cq-order/src/restrict.rs`, O-Restrict) under the
    order-independent H-Local rule; lowering applies only recorded
-   restrictions. A hoisted block's finite domain is still joined in written
-   order in elaboration.
+   restrictions. A hoisted block's finite domain is the VO prefix that binds
+   its free columns (WF-BlockPlacement), not a written-order join, and the
+   checked RA rewrites moved to `cq-ra-rewrites`. Remaining: the
+   `cq-relational-lowering` rename.
 4. **GPU runtime owners — unrecorded runtime work.** Datalog run kernels
    still choose occupancy grids and 256-thread launches in the runtime
    (`experiments/gpu/datalog-runtime/src/runs.rs:377-379,411-413,480-489`).

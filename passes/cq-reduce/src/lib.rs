@@ -117,25 +117,27 @@ pub fn rooted(tree: &[(usize, Option<usize>)], root: usize) -> BTreeMap<usize, u
     parents
 }
 
-/// H-FilterRank of one VO scope through its H-Local predicates, with the
-/// scope's recorded block placements.
+/// H-FilterRank of one VO scope through the restrictions its steps record, so
+/// an occurrence ranks as filtered exactly when lowering will filter it. A
+/// restriction carrying a written predicate of the scope ranks by that
+/// predicate; an implied domain ranks as a derived domain.
 pub fn filter_ranks(
     body: &cq::CommaList<valuation::cq::BodyItem>,
     steps: &[Step],
-    analysis: &valuation::Analysis,
     graph: &valuation::cq::hypergraph::Analysis,
 ) -> BTreeMap<usize, u8> {
-    let context = analysis
-        .bound_before
-        .first()
-        .into_iter()
-        .flatten()
-        .cloned()
-        .collect();
     valuation::cq::hypergraph::filter_ranks(
         body,
         graph,
-        &valuation::restrict::local_predicates(body, &context, steps),
+        steps.iter().filter_map(|step| match step {
+            Step::Restrict(restrict, _) => Some((
+                restrict.clause(),
+                &restrict.predicate,
+                body.iter()
+                    .any(|item| valuation::restrict::states(item, &restrict.predicate)),
+            )),
+            _ => None,
+        }),
     )
 }
 
@@ -236,7 +238,7 @@ fn mask_steps(
         .into_iter()
         .filter(|&(atom, block)| atom != root && block != root)
         .collect();
-    let ranks = filter_ranks(body, steps, analysis, graph);
+    let ranks = filter_ranks(body, steps, graph);
     for edge in mask_edges(graph, body, root, &ranks) {
         if body[edge.0].atom().is_some() && !edges.contains(&edge) {
             edges.push(edge);
@@ -403,7 +405,7 @@ fn compile_steps(
             .ok_or_else(|| {
                 syn::Error::new_spanned(
                     body,
-                    "block finite domain requires its written Rust context",
+                    "block finite domain requires its free columns to be bound",
                 )
             })?;
         let reductions = std::mem::take(&mut before)
@@ -547,7 +549,7 @@ fn filtered_tree(
     let Some(root) = root else {
         return Ok(Vec::new());
     };
-    let local = filter_ranks(body, steps, analysis, graph);
+    let local = filter_ranks(body, steps, graph);
     let mut ranks = local.clone();
     fn summarize(
         node: usize,

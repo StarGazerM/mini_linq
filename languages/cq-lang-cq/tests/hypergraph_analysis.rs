@@ -222,7 +222,7 @@ fn literal_columns_are_not_hypergraph_vertices() {
     assert_eq!(normal, module);
     assert_eq!(analysis.clauses[&0], ["x"]);
     assert_eq!(
-        cq::hypergraph::filter_ranks(&normal.query.body, &analysis, &[])[&0],
+        cq::hypergraph::filter_ranks(&normal.query.body, &analysis, [])[&0],
         0
     );
     assert!(analysis.acyclic);
@@ -256,7 +256,7 @@ fn constant_only_atoms_keep_their_occurrence_and_point_rank() {
     let graph = Analysis::of(&source);
     assert!(graph.clauses[&0].is_empty());
     assert_eq!(graph.clauses[&1], ["x"]);
-    let ranks = cq::hypergraph::filter_ranks(&source.query.body, &graph, &[]);
+    let ranks = cq::hypergraph::filter_ranks(&source.query.body, &graph, []);
     assert_eq!(ranks[&0], 0);
     assert_eq!(ranks[&1], 3);
 }
@@ -270,7 +270,7 @@ fn local_predicates_target_every_covering_atom_and_rank_through_them() {
     };
     let normal = cq::normal::normalize(&source).unwrap();
     let body = &normal.query.body;
-    let local = cq::hypergraph::local_predicates(body, &Default::default(), &Default::default());
+    let local = cq::hypergraph::local_predicates(body);
     let targets = |clause: usize, written: bool| -> Vec<usize> {
         let entry = local
             .iter()
@@ -285,27 +285,12 @@ fn local_predicates_target_every_covering_atom_and_rank_through_them() {
     // restricts `S` and `T`.
     assert_eq!(targets(4, true), [5]);
     assert_eq!(targets(4, false), [2, 5]);
-    let ranks = cq::hypergraph::filter_ranks(body, &Analysis::of(&normal), &local);
+    let ranks = cq::hypergraph::filter_ranks(
+        body,
+        &Analysis::of(&normal),
+        local
+            .iter()
+            .flat_map(cq::hypergraph::LocalPredicate::restrictions),
+    );
     assert_eq!((ranks[&0], ranks[&2], ranks[&5]), (0, 2, 0));
-}
-
-#[test]
-fn a_domain_needing_hoisted_block_cuts_earlier_atoms_from_later_predicates() {
-    let source: cq::Program = syn::parse_quote! {
-        struct Q; relation R(a:i32); relation S(a:i32,b:i32); relation T(a:i32);
-        answer(x) :- R(x), {S(x, b)} | {if arm(x)}, where x < 5, T(x);
-    };
-    let normal = cq::normal::normalize(&source).unwrap();
-    let body = &normal.query.body;
-    let block = body
-        .iter()
-        .position(|item| matches!(item, cq::BodyItem::Block(_)))
-        .unwrap();
-    let hoisted = std::collections::BTreeSet::from([block]);
-    let local = cq::hypergraph::local_predicates(body, &Default::default(), &hoisted);
-    let entry = local.iter().find(|entry| entry.written).unwrap();
-    assert_eq!(entry.targets.iter().copied().collect::<Vec<_>>(), [3]);
-    let free = cq::hypergraph::local_predicates(body, &Default::default(), &Default::default());
-    let entry = free.iter().find(|entry| entry.written).unwrap();
-    assert_eq!(entry.targets.iter().copied().collect::<Vec<_>>(), [0, 3]);
 }

@@ -89,48 +89,7 @@ pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
 
 mod block_contract;
 mod negation;
-mod reductions;
 mod structural;
-
-/// Simplify already elaborated reductions using exact named-result lineage.
-///
-/// In either operand of a semijoin or natural join, `R semijoin T`
-/// may be replaced by `R` when the other operand is contained in `T` on
-/// every column shared by `R` and `T`. Right-side support pruning takes
-/// precedence; a left-side bypass must be justified by the surviving RHS.
-/// This is a local pass, not a maximal fixed-point guarantee.
-/// Containment follows only the same
-/// named result through projections, selections, semijoin left inputs and
-/// natural-join inputs; it never identifies independent projected witnesses
-/// or infers facts from types, data, predicates or source occurrence numbers.
-/// A shared restricted support is bypassed only when every bypassed result
-/// becomes unreachable. Otherwise its consumers keep the same materialized
-/// row witness, preserving independent projections' correlation obligations.
-///
-/// Opaque Rust operators and negative-operand ancestry are not rewritten.
-/// Reductions containing Rust are not bypassed, and all remaining operator
-/// payloads, result names and block dependencies are retained. Only definitions
-/// made unreachable by these identities are pruned. The result is checked with
-/// [`ra::check_rewrite`]; the separate VO-to-RA named-reduction obligation in
-/// [`crate::check`] is deliberately unchanged.
-pub fn simplify_reductions(source: &ra::Program) -> syn::Result<ra::Program> {
-    reductions::simplify(source)
-}
-
-/// Eliminate expansions already witnessed by an earlier named-result lookup.
-///
-/// In positive relational scopes, an expansion whose introduced columns have
-/// no observer is replaced by a semijoin. Under canon this preserves answers,
-/// not intermediate bag multiplicities. Exact named-result lineage can then
-/// remove a semijoin whose support is already witnessed by its left input.
-/// This explicit pass is used by LE, not by the default or Hypergraph pipeline.
-///
-/// The identity does not cross Rust, negative, or block boundaries. Only
-/// definitions made unreachable by checked identities are pruned. Each local
-/// rewrite is checked with [`ra::check_rewrite`].
-pub fn simplify_expansions(source: &ra::Program) -> syn::Result<ra::Program> {
-    reductions::eliminate_expansions(source.clone())
-}
 
 /// The RA definitions refine the supplied VO schedule, retaining its unchanged
 /// Rust payloads and relational constraints.
@@ -347,52 +306,12 @@ impl<'a> State<'a> {
             .chain(facts.interface.keys())
             .cloned()
             .collect();
-        // If an arm has no generator for an F column, its finite domain is
-        // supplied by the written prefix's projected context relation.
-        let needs_domain = hoisted && written.needs_domain(&facts);
-        let domain = needs_domain.then(|| {
-            let saved_prefix = self.prefix.clone();
-            let saved_heading = self.heading.clone();
-            if !facts.free.keys().all(|name| self.heading.contains(name)) {
-                // A reducer may request D before the valuation prefix. Build
-                // its finite domain from the original named prefix relations;
-                // their renames are reused by subsequent reductions/reads.
-                self.prefix = None;
-                self.heading = self.context.clone();
-                for (c, item) in self.body.iter().take(clause).enumerate() {
-                    match item {
-                        valuation::cq::BodyItem::Positive { atom } => {
-                            let right = self.relation(c);
-                            self.prefix = Some(match self.prefix.take() {
-                                None => right,
-                                Some(left) => self.emit(ra::Operator::NaturalJoin(Box::new(
-                                    ra::NaturalJoin {
-                                        natural_join_token: Default::default(),
-                                        left,
-                                        with_token: Default::default(),
-                                        right,
-                                    },
-                                ))),
-                            });
-                            self.heading.extend(atom.variables().map(symbol_name));
-                        }
-                        valuation::cq::BodyItem::Equality(eq)
-                            if self.prefix_step(&cq::Constraint::from_equality(eq)) =>
-                        {
-                            self.equality(eq)
-                        }
-                        valuation::cq::BodyItem::Constraint(c) if self.prefix_step(c) => {
-                            self.constraint(c)
-                        }
-                        _ => (),
-                    }
-                }
-            }
+        // If an arm has no generator for an F column, its finite domain is the
+        // current prefix projected to F: WF-BlockPlacement and the reduction
+        // premises place every request after VO binds F.
+        let domain = (hoisted && written.needs_domain(&facts)).then(|| {
             let prefix = self.prefix_or_unit();
-            let domain = self.project(prefix, facts.free.values().cloned().collect());
-            self.prefix = saved_prefix;
-            self.heading = saved_heading;
-            domain
+            self.project(prefix, facts.free.values().cloned().collect())
         });
         let parent_restrictions = std::mem::take(&mut self.restrictions);
         let parent_atoms = self.atoms;
@@ -733,13 +652,20 @@ impl<'a> State<'a> {
                 } else {
                     // Opaque Rust may protect both names in an equality class.
                     // A natural semijoin would then check only support existence.
-                    // Express the equality-class semijoin as join/select/project,
-                    // without renaming Rust inputs or adding a Rust expression.
+                    // Express the equality-class semijoin as join/select/project
+                    // over the support's recorded columns, without renaming Rust
+                    // inputs or adding a Rust expression.
+                    let support = if subatom.variables().count() == subatom.columns.len() {
+                        right
+                    } else {
+                        let columns = subatom.variables().map(|(_, v)| v.clone()).collect();
+                        self.project(right, columns)
+                    };
                     let joined = self.emit(ra::Operator::NaturalJoin(Box::new(ra::NaturalJoin {
                         natural_join_token: Default::default(),
                         left,
                         with_token: Default::default(),
-                        right,
+                        right: support,
                     })));
                     let matched = self.select(joined, equalities);
                     let attributes = self.atoms[&clause].variables().cloned().collect();
@@ -790,14 +716,6 @@ impl<'a> State<'a> {
             condition_paren: Default::default(),
             condition,
         })))
-    }
-
-    /// Whether the scope keeps a prefix step for this written predicate; one
-    /// without a step is placed only by its restrictions.
-    fn prefix_step(&self, predicate: &cq::Constraint) -> bool {
-        self.steps
-            .iter()
-            .any(|step| valuation::restrict::step_states(step, predicate))
     }
 
     /// Formal rule E-Constraint: Select the prefix by a recorded prefix constraint.

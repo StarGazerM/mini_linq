@@ -108,7 +108,7 @@ fn check_steps(
         .flatten()
         .filter_map(|(child, parent)| parent.map(|p| (child, p)))
         .collect();
-    let local_ranks = super::filter_ranks(body, source_steps, source_info, &graph);
+    let local_ranks = super::filter_ranks(body, source_steps, &graph);
     let mut subtree_ranks = local_ranks.clone();
     // Independent ancestor closure, rather than the constructor's DFS.
     for (&node, &rank) in &local_ranks {
@@ -416,7 +416,7 @@ fn check_masks(
                 .map(move |block| (atom, block))
         })
         .collect();
-    let mut local = super::filter_ranks(body, source, source_info, graph);
+    let mut local = super::filter_ranks(body, source, graph);
     for &(atom, _) in &cuts {
         local.entry(atom).and_modify(|rank| *rank = (*rank).min(2));
     }

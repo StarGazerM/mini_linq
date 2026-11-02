@@ -60,28 +60,6 @@ pub fn step_states(step: &Step, predicate: &cq::Constraint) -> bool {
     }
 }
 
-/// The scope's block clauses recorded as Hoisted.
-pub fn hoisted(steps: &[Step]) -> BTreeSet<usize> {
-    steps
-        .iter()
-        .filter_map(|step| match step {
-            Step::Block(block, _) if block.placement == super::Placement::Hoisted => {
-                Some(block.source.clause())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// H-Local of a VO scope, with its recorded block placements.
-pub fn local_predicates(
-    body: &cq_syntax::CommaList<cq::BodyItem>,
-    context: &BTreeSet<String>,
-    steps: &[Step],
-) -> Vec<cq::hypergraph::LocalPredicate> {
-    cq::hypergraph::local_predicates(body, context, &hoisted(steps))
-}
-
 /// Formal rule WF-Restrict: A restriction names a positive atom occurrence of its scope, carries a written relational predicate or one of its implied domains over that atom's columns, and precedes every other step of the scope.
 ///
 /// Returns the written predicate clauses whose predicate this restriction

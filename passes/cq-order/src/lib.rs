@@ -11,6 +11,7 @@
 //! Ordering plans each block recursively.
 //! A Rust-free block is one hyperedge over its free/interface heading at its CQ clause index.
 //! A Rust block requires its free variables and provides its interface after all arms.
+//! A Rust-free block that takes a finite prefix domain also requires its free variables.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
@@ -143,10 +144,13 @@ fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) ->
                             .cloned()
                             .collect()
                     };
+                    // A Rust block, or a hoisted block taking a finite prefix
+                    // domain, waits for its free columns.
+                    let domain = !facts.rust && block.needs_domain(&facts);
                     let requires = facts
                         .free
                         .keys()
-                        .filter(|name| facts.rust || let_bound.contains(*name))
+                        .filter(|name| facts.rust || domain || let_bound.contains(*name))
                         .cloned()
                         .collect();
                     (provides, requires)
@@ -1034,14 +1038,14 @@ fn compile_body(
     let hypergraph = cq::hypergraph::Analysis::of_body(&query.body, context);
     let (sequence, mut variables) = match options.heuristic {
         Heuristic::Filtered => {
-            let hoisted = clauses
-                .iter()
-                .enumerate()
-                .filter(|(_, facts)| matches!(facts.item, BodyItem::Block(_)) && !facts.rust)
-                .map(|(clause, _)| clause)
-                .collect();
-            let local = cq::hypergraph::local_predicates(&query.body, context, &hoisted);
-            let filters = cq::hypergraph::filter_ranks(&query.body, &hypergraph, &local);
+            let local = cq::hypergraph::local_predicates(&query.body);
+            let filters = cq::hypergraph::filter_ranks(
+                &query.body,
+                &hypergraph,
+                local
+                    .iter()
+                    .flat_map(cq::hypergraph::LocalPredicate::restrictions),
+            );
             let sequence = schedule(query, &clauses, context, filtered_rank(&clauses, &filters))?;
             let variables = binding_order(&clauses, &sequence);
             (sequence, variables)
@@ -1317,8 +1321,14 @@ fn check_steps(
                 .collect();
             let facts = clauses(body, &context);
             let graph = cq::hypergraph::Analysis::of_body(body, &context);
-            let local = valuation::restrict::local_predicates(body, &context, steps);
-            let filters = cq::hypergraph::filter_ranks(body, &graph, &local);
+            let local = cq::hypergraph::local_predicates(body);
+            let filters = cq::hypergraph::filter_ranks(
+                body,
+                &graph,
+                local
+                    .iter()
+                    .flat_map(cq::hypergraph::LocalPredicate::restrictions),
+            );
             let mut bound = context;
             let mut pending = placed;
             for clause in written {

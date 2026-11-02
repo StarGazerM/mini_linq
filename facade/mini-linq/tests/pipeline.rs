@@ -248,7 +248,7 @@ fn default_omits_unfiltered_reductions_and_opt_out_preserves_relational_plan() {
     .unwrap();
     let expected = cq_elaborate::compile(&reduced).unwrap();
     cq_elaborate::check(&reduced, &expected).unwrap();
-    let expected = cq_elaborate::simplify_reductions(&expected).unwrap();
+    let expected = cq_ra_rewrites::simplify_reductions(&expected).unwrap();
     let default: cq_lang_ra::Program = syn::parse_str(default).unwrap();
     let opted_out: cq_lang_ra::Program = syn::parse_str(opted_out).unwrap();
     assert_eq!(

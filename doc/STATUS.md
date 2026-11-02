@@ -403,9 +403,9 @@ work is lower on H09 and D72.
    membership `build/key`, fixed `join_filter` fields): drop or keep.
 3. **Knob freeze.** No new out-of-band knobs (`plan(..)` options, batch size,
    Bloom size) until plan control is designed.
-4. **Pass ownership.** Move `simplify_reductions` to an RA rewrite home; expose
-   the default plan chain as a library fn so planners/fixtures stop restating
-   it.
+4. **Pass ownership.** Expose the default plan chain as a library fn so
+   planners/fixtures stop restating it. (The checked RA rewrites
+   `simplify_reductions`/`simplify_expansions` now live in `cq-ra-rewrites`.)
 5. **Artifacts.** Regenerate `features/workloads/data` (26.7k CSV lines) at test
    time unless handouts need browsable CSV; stop committing feature
    `Cargo.lock`s (ignored by `check_external.py`); drop or narrow API snapshots

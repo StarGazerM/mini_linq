@@ -32,11 +32,15 @@ there is no additional written-order or relational-predecessor restriction;
 (4)~a reduction names a different atom or Rust-free hoisted block and lists
 exactly the shared equality classes at its support's column positions; it
 precedes the target's first subatom, except that a target already read to
-supply a finite block domain restricts the retained prefix instead;
+supply a finite block domain restricts the retained prefix instead; a
+reduction naming a hoisted block that takes a finite prefix domain follows
+that block's free columns;
 no Rust guard, scalar bind, generator or negation is a reduction target or support;
 the reduction graph need not be acyclic;
 (5)~blocks recursively check kind, paths, interface coverage, arm schedules and
-the required placement field. Hoisted blocks contain no Rust steps; correlated
+the required placement field. Hoisted blocks contain no Rust steps, and one
+taking a finite prefix domain (an arm lacks a generator for a free column)
+follows its free columns; correlated
 blocks require every free prefix variable. Repeated reads retain placement;
 (6)~a restriction (WF-Restrict) names a positive atom occurrence of its scope,
 carries a written relational predicate other than a variable identity (a
@@ -54,6 +58,8 @@ $\sigma_P(R)\bowtie p=\sigma_P(R\bowtie p)$ since $\vars(P)\subseteq\vars(R)$.
 
 \Rule{WF-BlockPlacement}{b.placement\in\{\mathsf{hoisted},\mathsf{correlated}\}\\
  b.placement=\mathsf{hoisted}\Longrightarrow\neg\mathsf{Rust}(b)\\
+ b.placement=\mathsf{hoisted}\land\mathsf{needsDomain}(b)\Longrightarrow F_b\subseteq B
+  \text{ at }b\text{ and at every reduction naming }b\\
  b.placement=\mathsf{correlated}\Longrightarrow F_b\subseteq B\\
  \mathsf{RepeatedReadsAgree}(b.placement)\quad
  \mathsf{ReductionOperands}(t)\cap\mathsf{CorrelatedBlocks}(t)=\emptyset}

@@ -21,6 +21,7 @@ members = [
     "passes/cq-order",
     "passes/cq-reduce",
     "passes/cq-elaborate",
+    "passes/cq-ra-rewrites",
     "passes/cq-index-policy",
     "passes/cq-physical-lowering",
     "passes/cq-structure-selection",
@@ -65,6 +66,7 @@ cq-storage = { path = "runtime/cq-storage", version = "0.1.0" }
 cq-load = { path = "runtime/cq-load", version = "0.1.0" }
 cq-order = { path = "passes/cq-order", version = "0.1.0", default-features = false }
 cq-elaborate = { path = "passes/cq-elaborate", version = "0.1.0", default-features = false }
+cq-ra-rewrites = { path = "passes/cq-ra-rewrites", version = "0.1.0", default-features = false }
 cq-reduce = { path = "passes/cq-reduce", version = "0.1.0", default-features = false }
 cq-index-policy = { path = "passes/cq-index-policy", version = "0.1.0", default-features = false }
 cq-structure-selection = { path = "passes/cq-structure-selection", version = "0.1.0", default-features = false }

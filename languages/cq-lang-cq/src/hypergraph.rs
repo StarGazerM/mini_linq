@@ -72,57 +72,41 @@ pub struct LocalPredicate {
     pub targets: BTreeSet<usize>,
 }
 
+impl LocalPredicate {
+    /// `(target, predicate, written)` for each target, as [`filter_ranks`] reads them.
+    pub fn restrictions(&self) -> impl Iterator<Item = (usize, &cq_syntax::Constraint, bool)> {
+        self.targets
+            .iter()
+            .map(|&target| (target, &self.predicate, self.written))
+    }
+}
+
 /// The local relational predicates of one scope and their target occurrences.
-/// `hoisted` lists the scope's block clauses recorded as Hoisted.
 ///
 /// A target is a positive atom of the scope, written before or after the
-/// predicate, whose variables include every predicate variable. A hoisted
-/// block needing a finite prefix domain cuts an atom written before it from a
-/// predicate written after it: that domain is a separate proof of the written
-/// prefix. Predicates over let- or for-bound names have no target.
-/// Formal rule H-Local: Target each relational predicate and implied domain at every covering positive atom of its scope, excluding Rust-bound names and hoisted-domain cuts from a later predicate.
-pub fn local_predicates(
-    body: &super::CommaList<BodyItem>,
-    context: &BTreeSet<String>,
-    hoisted: &BTreeSet<usize>,
-) -> Vec<LocalPredicate> {
-    let mut let_bound = BTreeSet::new();
-    let mut domain_cuts = BTreeSet::new();
-    let mut prefix = context.clone();
-    for (clause, item) in body.iter().enumerate() {
-        match item {
-            BodyItem::Positive { atom } => prefix.extend(atom.variables().map(symbol_name)),
-            BodyItem::Let(binding) => {
-                let names = crate::rust::bindings(&binding.pattern);
-                let_bound.extend(names.iter().map(symbol_name));
-                prefix.extend(names.iter().map(symbol_name));
-            }
-            BodyItem::For(binding) => {
-                let names = crate::rust::bindings(&binding.pattern);
-                let_bound.extend(names.iter().map(symbol_name));
-                prefix.extend(names.iter().map(symbol_name));
-            }
-            BodyItem::Block(block) => {
-                let facts = block.analyze(&prefix);
-                if hoisted.contains(&clause) && block.needs_domain(&facts) {
-                    domain_cuts.insert(clause);
-                }
-                prefix.extend(facts.interface.into_keys());
-            }
-            _ => (),
-        }
-    }
-    let targets = |predicate: &cq_syntax::Constraint, at: usize| -> BTreeSet<usize> {
+/// predicate, whose variables include every predicate variable. Predicates
+/// over let- or for-bound names have no target.
+/// Formal rule H-Local: Target each relational predicate and implied domain at every covering positive atom of its scope, excluding Rust-bound names.
+pub fn local_predicates(body: &super::CommaList<BodyItem>) -> Vec<LocalPredicate> {
+    let let_bound: BTreeSet<String> = body
+        .iter()
+        .flat_map(|item| match item {
+            BodyItem::Let(binding) => crate::rust::bindings(&binding.pattern),
+            BodyItem::For(binding) => crate::rust::bindings(&binding.pattern),
+            _ => Vec::new(),
+        })
+        .map(|name| symbol_name(&name))
+        .collect();
+    let targets = |predicate: &cq_syntax::Constraint| -> BTreeSet<usize> {
         let variables: BTreeSet<String> = predicate.variables().map(symbol_name).collect();
         if variables.is_empty() || !variables.is_disjoint(&let_bound) {
             return BTreeSet::new();
         }
         body.iter()
             .enumerate()
-            .filter(|(clause, item)| {
-                (at <= *clause || domain_cuts.range(clause + 1..at).next().is_none())
-                    && matches!(item, BodyItem::Positive { atom }
-                        if variables.is_subset(&atom.variables().map(symbol_name).collect()))
+            .filter(|(_, item)| {
+                matches!(item, BodyItem::Positive { atom }
+                    if variables.is_subset(&atom.variables().map(symbol_name).collect()))
             })
             .map(|(clause, _)| clause)
             .collect()
@@ -149,7 +133,7 @@ pub fn local_predicates(
         {
             result.push(LocalPredicate {
                 clause,
-                targets: targets(&predicate, clause),
+                targets: targets(&predicate),
                 predicate,
                 written: is_written,
             });
@@ -160,12 +144,15 @@ pub fn local_predicates(
 
 /// Static occurrence priorities, never estimates of data cardinality.
 /// Smaller ranks mean point, range, derived/total/block, then unfiltered.
-/// Opaque Rust filters are deliberately excluded.
-/// Formal rule H-FilterRank: Rank occurrences by the H-Local predicates that restrict them, without data statistics.
-pub fn filter_ranks(
+/// Opaque Rust filters are deliberately excluded. `restrictions` lists
+/// `(target clause, predicate, written)`: the H-Local targets of a producer
+/// ([`LocalPredicate::restrictions`]) or a VO scope's recorded restrictions;
+/// an implied domain (`written == false`) ranks as a derived domain.
+/// Formal rule H-FilterRank: Rank occurrences by the predicates that restrict them, without data statistics.
+pub fn filter_ranks<'a>(
     body: &super::CommaList<BodyItem>,
     graph: &Analysis,
-    local: &[LocalPredicate],
+    restrictions: impl IntoIterator<Item = (usize, &'a cq_syntax::Constraint, bool)>,
 ) -> BTreeMap<usize, u8> {
     use cq_syntax::constraint::{Comparison, Constraint, Term};
     let mut ranks: BTreeMap<_, _> = graph
@@ -186,9 +173,9 @@ pub fn filter_ranks(
             )
         })
         .collect();
-    for local in local {
-        let rank = match &local.predicate {
-            _ if !local.written => 2,
+    for (target, predicate, written) in restrictions {
+        let rank = match predicate {
+            _ if !written => 2,
             Constraint::Compare {
                 left,
                 comparison: Comparison::Eq(_),
@@ -206,9 +193,7 @@ pub fn filter_ranks(
             } if low.constant() && high.constant() => 1,
             _ => 2,
         };
-        for target in &local.targets {
-            ranks.entry(*target).and_modify(|r| *r = (*r).min(rank));
-        }
+        ranks.entry(target).and_modify(|r| *r = (*r).min(rank));
     }
     ranks
 }

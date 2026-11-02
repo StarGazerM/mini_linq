@@ -402,7 +402,7 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
 "#;
     let normal = cq_lang_cq::normal::normalize(&syn::parse_str(source).unwrap()).unwrap();
     let (_, reference, target) = hypergraph_programs(&normal);
-    let target = cq_elaborate::simplify_reductions(&target).unwrap();
+    let target = cq_ra_rewrites::simplify_reductions(&target).unwrap();
     cq_lang_ra::check_rewrite(&reference, &target).unwrap();
     let ix = cq_index_policy::compile(&target).unwrap();
     cq_index_policy::check(&target, &ix).unwrap();

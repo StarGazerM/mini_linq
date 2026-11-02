@@ -460,6 +460,8 @@ fn filtered_supports_run_point_before_domain_and_propagate_to_unfiltered_parents
         };
         source.valuation.steps.insert(clause, step);
     }
+    // Ranks read recorded restrictions: record them as `cq-order` does.
+    cq_order::restrict(&mut source).unwrap();
     let target = compile(&source, &HYPERGRAPH).unwrap();
     check(&source, &target, &HYPERGRAPH).unwrap();
     let reductions = direct_reductions(&target.valuation.steps);
@@ -476,11 +478,17 @@ fn filtered_supports_run_point_before_domain_and_propagate_to_unfiltered_parents
     assert_eq!(supports[0], "Point");
     assert_eq!(supports[1], "Domain");
     assert!(!supports.contains(&"Empty".to_string()));
+    let first = target
+        .valuation
+        .steps
+        .iter()
+        .position(|step| matches!(step, valuation::Step::Reduce(..)))
+        .unwrap();
     let mut wrong = target.clone();
-    wrong.valuation.steps.swap(0, 1);
+    wrong.valuation.steps.swap(first, first + 1);
     assert!(check(&source, &wrong, &HYPERGRAPH).is_err());
     let mut missing = target.clone();
-    missing.valuation.steps.remove(0);
+    missing.valuation.steps.remove(first);
     assert!(check(&source, &missing, &HYPERGRAPH).is_err());
     for seed in 0..16 {
         let database = databases::binary_database(&source.cq, seed);
@@ -503,6 +511,7 @@ fn leaf_only_filter_never_flows_back_into_its_own_subtree() {
         other => panic!("expected relational predicate: {other:?}"),
     };
     source.valuation.steps.insert(1, step);
+    cq_order::restrict(&mut source).unwrap();
     let target = compile(&source, &HYPERGRAPH).unwrap();
     check(&source, &target, &HYPERGRAPH).unwrap();
     let reductions = direct_reductions(&target.valuation.steps);
@@ -531,17 +540,24 @@ fn range_side_streams_against_point_driving_component_without_reverse_index() {
         };
         source.valuation.steps.insert(clause, step);
     }
+    cq_order::restrict(&mut source).unwrap();
     let target = compile(&source, &HYPERGRAPH).unwrap();
     check(&source, &target, &HYPERGRAPH).unwrap();
     assert_eq!(
         direct_reductions(&target.valuation.steps),
         vec![syn::parse_quote!(reduce R@2 with P@0(k,_);)]
     );
+    let first = target
+        .valuation
+        .steps
+        .iter()
+        .position(|step| matches!(step, valuation::Step::Reduce(..)))
+        .unwrap();
     let mut reverse = target.clone();
     reverse
         .valuation
         .steps
-        .insert(1, syn::parse_quote!(reduce P@0 with R@2(k,_);));
+        .insert(first + 1, syn::parse_quote!(reduce P@0 with R@2(k,_);));
     assert!(check(&source, &reverse, &HYPERGRAPH).is_err());
     for seed in 0..16 {
         let database = databases::binary_database(&source.cq, seed);

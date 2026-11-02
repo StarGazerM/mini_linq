@@ -634,6 +634,18 @@ fn masks_reduces_only_by_supports_its_restrictions_filter() {
     assert!(supports.iter().all(|support| restricted.contains(support)));
     let target = cq_elaborate::compile(&reduced).unwrap();
     cq_elaborate::check(&reduced, &target).unwrap();
+    // Ranks read the recorded restrictions: the written reference keeps the
+    // predicate as a prefix step, so no support ranks as filtered.
+    let written = cq_order::compile_written(&normal).unwrap();
+    let unrestricted = cq_reduce::compile(&written, &options).unwrap();
+    cq_reduce::check(&written, &unrestricted, &options).unwrap();
+    assert!(
+        !unrestricted
+            .valuation
+            .steps
+            .iter()
+            .any(|step| matches!(step, cq_lang_vo::Step::Reduce(..)))
+    );
 }
 
 #[test]
@@ -670,5 +682,175 @@ fn restrictions_do_not_depend_on_the_predicate_written_position() {
         );
         let target = cq_elaborate::compile(&ordered).unwrap();
         cq_elaborate::check(&ordered, &target).unwrap();
+    }
+}
+
+#[test]
+fn a_hoisted_block_domain_is_read_only_after_vo_binds_its_free_columns() {
+    use cq_lang_vo::Step;
+    // The arm `where x == 1` generates no `x`: the block takes its finite
+    // domain from the prefix, so neither the block nor a reduction reading
+    // it may precede the read binding `x`.
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(x: i32); relation S(x: i32); relation T(x: i32);
+        answer(x) :- R(x), {where x == 1} | {S(x)}, T(x);
+    };
+    let normal = cq::normal::normalize(&source).unwrap();
+    for semijoins in [
+        cq_reduce::Reductions::Masks,
+        cq_reduce::Reductions::Hypergraph,
+    ] {
+        let ordered = cq_order::compile(&normal, &Default::default()).unwrap();
+        let options = cq_reduce::Options { semijoins };
+        let reduced = cq_reduce::compile(&ordered, &options).unwrap();
+        cq_reduce::check(&ordered, &reduced, &options).unwrap();
+        let steps = &reduced.valuation.steps;
+        let read = steps
+            .iter()
+            .position(|step| matches!(step, Step::Atom(atom, _) if atom.clause() == 0))
+            .unwrap();
+        let reads_block = |step: &Step| match step {
+            Step::Block(..) => true,
+            Step::Reduce(reduce, _) => {
+                let cq_lang_vo::Reduction::With(_, support) = &reduce.reduction;
+                reduce.clause() == 1 || support.clause() == 1
+            }
+            _ => false,
+        };
+        assert!(!steps[..read].iter().any(reads_block), "{semijoins:?}");
+        let target = cq_elaborate::compile(&reduced).unwrap();
+        cq_elaborate::check(&reduced, &target).unwrap();
+        for seed in 0..16 {
+            let database = cq_testkit::databases::binary_database(&source, seed);
+            assert_eq!(
+                oracle::evaluate_ra(&target, &database).output,
+                cq_testkit::cq_semantics::evaluate_cq(&source, &database),
+                "{semijoins:?}/{seed}"
+            );
+        }
+        // WF-BlockPlacement and the reduction premises reject moving the
+        // block, or a reduction reading it, before the read binding `x`.
+        let block = steps
+            .iter()
+            .position(|step| matches!(step, Step::Block(..)))
+            .unwrap();
+        let reduction = steps
+            .iter()
+            .position(|step| matches!(step, Step::Reduce(..)) && reads_block(step))
+            .unwrap();
+        for (moved, message) in [
+            (block, "hoisted block precedes its finite prefix domain"),
+            (reduction, "reduction precedes its block context domain"),
+        ] {
+            let mut early = reduced.clone();
+            let step = early.valuation.steps.remove(moved);
+            let head = early
+                .valuation
+                .steps
+                .iter()
+                .take_while(|step| matches!(step, Step::Restrict(..)))
+                .count();
+            early.valuation.steps.insert(head, step);
+            let error = cq_lang_vo::contract::check(&early).unwrap_err();
+            assert!(
+                error.to_string().contains(message),
+                "{semijoins:?}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_predicate_after_a_domain_needing_block_restricts_earlier_atoms() {
+    use cq_lang_vo::Step;
+    // `where x < 5` is written after a hoisted block whose arm `where x == 1`
+    // generates no `x`; it still restricts `R@0`, written before the block,
+    // and the block's domain is then the restricted prefix.
+    for choice in ["|", "else"] {
+        let source: cq::Program = syn::parse_str(&format!(
+            "struct Q; relation R(x: i32); relation S(x: i32); relation T(x: i32);
+             answer(x) :- R(x), {{ where x == 1 }} {choice} {{ S(x) }}, where x < 5, T(x);"
+        ))
+        .unwrap();
+        let planned = cq_planning::prefix_valuation(&source, &Default::default()).unwrap();
+        let restricted: Vec<_> = planned
+            .valuation
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Restrict(restrict, _) => Some(restrict.clause()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(restricted, [0, 3], "{choice}");
+        let target = cq_elaborate::compile(&planned).unwrap();
+        cq_elaborate::check(&planned, &target).unwrap();
+        let normal = cq::normal::normalize(&source).unwrap();
+        let written = cq_order::compile_written(&normal).unwrap();
+        let reference = cq_elaborate::compile(&written).unwrap();
+        for seed in 0..32 {
+            let database = cq_testkit::databases::binary_database(&source, seed);
+            assert_eq!(
+                oracle::evaluate_ra(&target, &database).output,
+                oracle::evaluate_ra(&reference, &database).output,
+                "{choice}/{seed}"
+            );
+        }
+    }
+}
+
+#[test]
+fn fine_tree_repeated_occurrences_pass_their_own_elaboration_check() {
+    // Test-layer finding F6 (stage differential seeds 557/877/941, minimized).
+    let elimination = cq_order::Options {
+        heuristic: cq_order::Heuristic::Elimination,
+        split: cq_order::Split::Fine,
+    };
+    let connected = cq_order::Options {
+        heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+        split: cq_order::Split::Fine,
+    };
+    let cases: [(cq::Program, cq_order::Options); 3] = [
+        (
+            syn::parse_quote! {
+                struct Q; relation R(a:i32,b:i32); relation answer(a:i32);
+                answer(a) :- R(a,b), R(b,b), where b <= b;
+            },
+            elimination.clone(),
+        ),
+        (
+            syn::parse_quote! {
+                struct Q; relation R(a:i32,b:i32,c:i32); relation S(a:i32,b:i32);
+                relation answer(a:i32);
+                answer(a) :- R(a,b,a), R(a,d,_), S(c,d);
+            },
+            elimination,
+        ),
+        (
+            syn::parse_quote! {
+                struct Q; relation R(a:i32,b:i32,c:i32); relation S(a:i32);
+                relation answer(a:i32);
+                answer(z) :- R(a,b,a), S(a), R(c,b,d), R(c,b,z);
+            },
+            connected,
+        ),
+    ];
+    let options = cq_reduce::Options {
+        semijoins: cq_reduce::Reductions::Tree,
+    };
+    for (source, order) in cases {
+        let normal = cq::normal::normalize(&source).unwrap();
+        let ordered = cq_order::compile(&normal, &order).unwrap();
+        cq_order::check(&normal, &ordered, &order).unwrap();
+        let reduced = cq_reduce::compile(&ordered, &options).unwrap();
+        cq_reduce::check(&ordered, &reduced, &options).unwrap();
+        let target = cq_elaborate::compile(&reduced).unwrap();
+        cq_elaborate::check(&reduced, &target).unwrap_or_else(|error| {
+            panic!(
+                "{error}\n{}\n{}",
+                quote::ToTokens::to_token_stream(&reduced),
+                quote::ToTokens::to_token_stream(&target)
+            )
+        });
     }
 }
